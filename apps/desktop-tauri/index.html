@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="./favicon-48.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./favicon-180.png" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Hermix Desktop</title>
+    <script>
+      // Theme bootstrap (runs before React to avoid FOUC)
+      (function() {
+        try {
+          var t = localStorage.getItem("hermes.desktop.theme");
+          if (t === "dark" || (t !== "light" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+            document.documentElement.classList.add("dark");
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <style>
+      /* ── Splash tokens — aligned to Cool Slate design system ── */
+      :root {
+        --sp-bg: #f5f5f7;
+        --sp-ink: #2e2e2e;
+        --sp-ink-soft: #71717a;
+        --sp-accent: #475569;
+        --sp-accent-hover: #334155;
+        --sp-accent-glow: rgba(71, 85, 105, 0.12);
+        --sp-surface: rgba(255, 255, 255, 0.72);
+        --sp-border: #e4e4e7;
+        --sp-border-subtle: #ececef;
+      }
+      html.dark {
+        --sp-bg: #0f0f12;
+        --sp-ink: #fafafa;
+        --sp-ink-soft: #a1a1aa;
+        --sp-accent: #cbd5e1;
+        --sp-accent-hover: #e2e8f0;
+        --sp-accent-glow: rgba(203, 213, 225, 0.14);
+        --sp-surface: rgba(28, 28, 32, 0.72);
+        --sp-border: #2e2e32;
+        --sp-border-subtle: #2c2c32;
+      }
+
+      html, body, #root { height: 100%; margin: 0; }
+      body {
+        background: var(--sp-bg);
+        color: var(--sp-ink);
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ── Splash root ── */
+      #splash {
+        position: fixed; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--sp-bg);
+        z-index: 9999;
+        transition: opacity .5s cubic-bezier(0.16, 1, 0.3, 1),
+                    transform .5s cubic-bezier(0.16, 1, 0.3, 1);
+        overflow: hidden;
+      }
+      #splash.hide {
+        opacity: 0;
+        transform: scale(1.02);
+        pointer-events: none;
+      }
+
+      /* ── Animated mesh gradient background (温和) ── */
+      .sp-mesh {
+        position: absolute; inset: 0;
+        background:
+          radial-gradient(ellipse 80% 60% at 20% 30%, var(--sp-accent-glow) 0%, transparent 80%),
+          radial-gradient(ellipse 60% 80% at 80% 70%, var(--sp-accent-glow) 0%, transparent 80%);
+        opacity: 0;
+        animation: sp-mesh-in 3s ease-out 0s forwards;
+        pointer-events: none;
+      }
+
+      /* ── Floating orbs (克制: 只在背景微微透出色调) ── */
+      .sp-orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(80px);
+        opacity: 0;
+        pointer-events: none;
+      }
+      .sp-orb--1 {
+        width: 180px; height: 180px;
+        top: 12%; left: 18%;
+        background: var(--sp-accent);
+        opacity: 0.015;
+        animation: sp-orb-float 14s ease-in-out infinite, sp-mesh-in 1.5s ease-out 0.2s forwards;
+      }
+      .sp-orb--2 {
+        width: 120px; height: 120px;
+        bottom: 22%; right: 22%;
+        background: var(--sp-accent);
+        opacity: 0.010;
+        animation: sp-orb-float 17s ease-in-out 3s infinite reverse, sp-mesh-in 1.5s ease-out 0.5s forwards;
+      }
+
+      /* ── Stage ── */
+      .sp-stage {
+        position: relative;
+        display: flex; flex-direction: column;
+        align-items: center;
+        text-align: center;
+        z-index: 1;
+      }
+
+      /* ── Logo with glow ring ── */
+      .sp-logo-wrap {
+        position: relative;
+        width: 140px; height: 140px;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .sp-logo-ring {
+        position: absolute; inset: -4px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        border-top-color: var(--sp-accent);
+        opacity: 0;
+        /* 主人反馈 "启动界面阴影/动画太强" → ring 缩窄 1px，旋转放慢 4s */
+        animation: sp-ring-spin 4s linear infinite, sp-mesh-in 0.6s ease-out 0.3s forwards;
+      }
+      .sp-logo {
+        width: 120px; height: 120px;
+        display: block;
+        /* Soft drop-shadow kept very gentle — the heavy glow comes from
+           the floating orbs + mesh, not from the logo itself. */
+        filter: drop-shadow(0 1px 3px var(--sp-accent-glow));
+        opacity: 0;
+        transform: scale(0.9);
+        animation: sp-logo-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.1s forwards;
+      }
+
+      /* ── Wordmark ── */
+      .sp-word {
+        margin-top: 24px;
+        font-size: 32px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: var(--sp-ink);
+        opacity: 0;
+        transform: translateY(8px);
+        animation: sp-word-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.25s forwards;
+      }
+
+      /* ── Tagline ── */
+      .sp-tagline {
+        margin-top: 4px;
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.15em;
+        color: var(--sp-ink-soft);
+        text-transform: uppercase;
+        opacity: 0;
+        animation: sp-fade-up 0.6s ease-out 0.4s forwards;
+      }
+
+      /* ── Step indicators ── */
+      .sp-steps {
+        margin-top: 36px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        opacity: 0;
+        animation: sp-fade-up 0.6s ease-out 0.5s forwards;
+      }
+      .sp-step {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12.5px;
+        color: var(--sp-ink-soft);
+        transition: color 0.3s ease;
+      }
+      .sp-step.active { color: var(--sp-ink); font-weight: 500; }
+      .sp-step.done { color: var(--sp-accent); }
+      .sp-step-icon {
+        width: 16px; height: 16px;
+        border-radius: 50%;
+        border: 1.5px solid var(--sp-border);
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+        transition: all 0.3s ease;
+      }
+      .sp-step.active .sp-step-icon {
+        border-color: var(--sp-accent);
+        background: var(--sp-accent-glow);
+      }
+      .sp-step.active .sp-step-icon::after {
+        content: "";
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: var(--sp-accent);
+        animation: sp-pulse-dot 1.2s ease-in-out infinite;
+      }
+      .sp-step.done .sp-step-icon {
+        border-color: var(--sp-accent);
+        background: var(--sp-accent);
+      }
+      .sp-step.done .sp-step-icon::after {
+        content: "✓";
+        font-size: 10px;
+        color: white;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      /* ── Progress track ── */
+      .sp-progress {
+        margin-top: 20px;
+        width: 240px; height: 3px;
+        background: var(--sp-border);
+        border-radius: 999px;
+        overflow: hidden;
+        opacity: 0;
+        animation: sp-fade-up 0.5s ease-out 0.6s forwards;
+      }
+      .sp-progress-bar {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, var(--sp-accent), var(--sp-accent) 80%, transparent 100%);
+        border-radius: 999px;
+        transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      /* ── Footer ── */
+      .sp-foot {
+        position: absolute;
+        bottom: 24px;
+        left: 50%; transform: translateX(-50%);
+        font-size: 10.5px;
+        letter-spacing: 0.12em;
+        color: var(--sp-ink-soft);
+        opacity: 0;
+        animation: sp-fade-up 0.5s ease-out 0.8s forwards;
+        text-transform: uppercase;
+      }
+
+      /* ── Splash Titlebar (same height/feel as main UI) ── */
+      .sp-titlebar {
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        display: flex;
+        align-items: center;
+        height: 40px;
+        background: transparent;
+        flex-shrink: 0;
+        user-select: none;
+        z-index: 10;
+        -webkit-app-region: drag;
+      }
+      .sp-titlebar-brand {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding-left: 10px;
+        -webkit-app-region: no-drag;
+      }
+      .sp-titlebar-logo {
+        width: 22px;
+        height: 22px;
+        flex-shrink: 0;
+        pointer-events: none;
+        shape-rendering: geometricPrecision;
+      }
+      .sp-titlebar-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--sp-ink-soft);
+        letter-spacing: -0.01em;
+        pointer-events: none;
+      }
+
+      /* ── Keyframes ── */
+      @keyframes sp-mesh-in { to { opacity: 1; } }
+      @keyframes sp-orb-float {
+        0%, 100% { transform: translate(0, 0); }
+        33% { transform: translate(30px, -20px); }
+        66% { transform: translate(-20px, 15px); }
+      }
+      @keyframes sp-ring-spin { to { transform: rotate(360deg); } }
+      @keyframes sp-logo-in {
+        to { opacity: 1; transform: scale(1); }
+      }
+      @keyframes sp-logo-breathe {
+        0%, 100% { transform: translateY(0) scale(1); }
+        50% { transform: translateY(-2px) scale(1.01); }
+      }
+      @keyframes sp-word-in {
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes sp-fade-up {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes sp-pulse-dot {
+        0%, 100% { opacity: 0.4; transform: scale(0.8); }
+        50% { opacity: 1; transform: scale(1.2); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-delay: 0ms !important;
+          transition-duration: 0.01ms !important;
+        }
+        .sp-logo, .sp-word, .sp-tagline, .sp-steps,
+        .sp-progress, .sp-foot, .sp-mesh, .sp-orb,
+        .sp-logo-ring { opacity: 1 !important; transform: none !important; }
+        .sp-progress-bar { width: 60%; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="splash" role="status" aria-label="Hermix Desktop 正在启动">
+        <!-- Title bar (matches main UI, no sidebar/theme buttons) -->
+        <div class="sp-titlebar">
+          <div class="sp-titlebar-brand">
+            <img
+              class="sp-titlebar-logo"
+              src="./mascot-avatar-bg-round-24.png"
+              alt="" width="22" height="22" draggable="false"
+            />
+            <span class="sp-titlebar-title">Hermix</span>
+          </div>
+        </div>
+
+        <!-- Animated background -->
+        <div class="sp-mesh" aria-hidden="true"></div>
+        <div class="sp-orb sp-orb--1" aria-hidden="true"></div>
+        <div class="sp-orb sp-orb--2" aria-hidden="true"></div>
+
+        <div class="sp-stage">
+          <!-- Logo with spinning ring -->
+          <div class="sp-logo-wrap">
+            <div class="sp-logo-ring" aria-hidden="true"></div>
+            <img class="sp-logo" src="./mascot-256.png"
+                 alt="Hermix" width="120" height="120" draggable="false" />
+          </div>
+
+          <div class="sp-word">Hermix</div>
+          <div class="sp-tagline">Desktop · v0.1.0</div>
+
+          <!-- Step-by-step status indicators -->
+          <div class="sp-steps" id="sp-steps">
+            <div class="sp-step active" data-step="0">
+              <span class="sp-step-icon"></span>
+              <span>正在启动后端服务</span>
+            </div>
+            <div class="sp-step" data-step="1">
+              <span class="sp-step-icon"></span>
+              <span>正在初始化引擎</span>
+            </div>
+            <div class="sp-step" data-step="2">
+              <span class="sp-step-icon"></span>
+              <span>正在加载配置</span>
+            </div>
+            <div class="sp-step" data-step="3">
+              <span class="sp-step-icon"></span>
+              <span>正在准备工具</span>
+            </div>
+            <div class="sp-step" data-step="4">
+              <span class="sp-step-icon"></span>
+              <span>即将就绪</span>
+            </div>
+          </div>
+
+          <!-- Progress bar -->
+          <div class="sp-progress" aria-hidden="true">
+            <div class="sp-progress-bar" id="sp-progress-bar"></div>
+          </div>
+        </div>
+
+        <div class="sp-foot">
+          <span>Hermix</span> · <span class="v" id="sp-foot-v">v0.1.0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Real startup status: polls /health and advances steps. -->
+    <script>
+      (function() {
+        var steps = document.querySelectorAll(".sp-step");
+        var bar = document.getElementById("sp-progress-bar");
+        if (!steps.length) return;
+
+        var startTime = Date.now();
+        var currentStep = 0;
+
+        // Phase thresholds (ms) — map elapsed time to step index
+        var phases = [0, 2000, 5000, 8000, 12000];
+
+        function updateStep(idx) {
+          if (idx === currentStep && idx > 0) return;
+          // Mark previous steps as done
+          for (var i = 0; i < idx; i++) {
+            steps[i].classList.remove("active");
+            steps[i].classList.add("done");
+          }
+          // Mark current step
+          if (idx < steps.length) {
+            steps[idx].classList.add("active");
+          }
+          // Update progress bar
+          var pct = Math.min(((idx + 1) / steps.length) * 100, 100);
+          if (bar) bar.style.width = pct + "%";
+          currentStep = idx;
+        }
+
+        function checkPhase() {
+          var elapsed = Date.now() - startTime;
+          for (var i = phases.length - 1; i >= 0; i--) {
+            if (elapsed >= phases[i]) {
+              updateStep(i);
+              return;
+            }
+          }
+        }
+
+        var phaseTimer = setInterval(checkPhase, 300);
+
+        // Poll /health — on success, mark all done
+        var pollTimer = setInterval(function() {
+          fetch("http://127.0.0.1:3000/health", { mode: "no-cors" })
+            .then(function() {
+              clearInterval(pollTimer);
+              clearInterval(phaseTimer);
+              // Mark all steps done
+              for (var i = 0; i < steps.length; i++) {
+                steps[i].classList.remove("active");
+                steps[i].classList.add("done");
+              }
+              if (bar) bar.style.width = "100%";
+            })
+            .catch(function() {});
+        }, 500);
+
+        // Clean up if splash is removed
+        var observer = new MutationObserver(function() {
+          if (!document.getElementById("splash")) {
+            clearInterval(pollTimer);
+            clearInterval(phaseTimer);
+            observer.disconnect();
+          }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      })();
+    </script>
+
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

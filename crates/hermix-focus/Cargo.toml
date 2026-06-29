@@ -1,0 +1,26 @@
+[package]
+name = "hermix-focus"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "Unified MemoryLayer abstraction + FocusStack (5-state frame stack) + salience scoring, backed by embedded SQLite. Phase 8 H5 of the BaiLongma-inspired design."
+
+[dependencies]
+hermix-core = { workspace = true }
+hermix-config = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+rusqlite = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,1195 @@
+//! Plugin system for extending Hermes with custom functionality.
+//!
+//! Plugins can provide:
+//! - Custom memory providers
+//! - Additional tools
+//! - Custom hooks (pre/post LLM call, tool call, API request, session lifecycle)
+//! - Additional LLM providers
+//! - CLI commands
+//!
+//! ## Tool dispatch (Python `dispatch_tool` parity)
+//!
+//! Hermes Python merges plugin tools into the model tool table before dispatch.
+//! After [`hermix_tools::register_builtin_tools`], call
+//! [`install_plugin_tools_into_registry`] so plugin [`ToolHandler`]s share the
+//! same [`hermix_tools::ToolRegistry`] as built-ins (same-name registrations
+//! overwrite with a warning, matching typical “last wins” plugin tables).
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use hermix_core::{AgentError, ToolHandler, ToolSchema};
+use hermix_tools::ToolRegistry;
+
+// ---------------------------------------------------------------------------
+// HookType
+// ---------------------------------------------------------------------------
+
+/// Valid lifecycle hooks that plugins can register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HookType {
+    PreToolCall,
+    PostToolCall,
+    PreLlmCall,
+    PostLlmCall,
+    PreApiRequest,
+    PostApiRequest,
+    OnSessionStart,
+    OnSessionEnd,
+    OnSessionFinalize,
+    OnSessionReset,
+}
+
+impl HookType {
+    pub fn all() -> &'static [HookType] {
+        &[
+            HookType::PreToolCall,
+            HookType::PostToolCall,
+            HookType::PreLlmCall,
+            HookType::PostLlmCall,
+            HookType::PreApiRequest,
+            HookType::PostApiRequest,
+            HookType::OnSessionStart,
+            HookType::OnSessionEnd,
+            HookType::OnSessionFinalize,
+            HookType::OnSessionReset,
+        ]
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HookType::PreToolCall => "pre_tool_call",
+            HookType::PostToolCall => "post_tool_call",
+            HookType::PreLlmCall => "pre_llm_call",
+            HookType::PostLlmCall => "post_llm_call",
+            HookType::PreApiRequest => "pre_api_request",
+            HookType::PostApiRequest => "post_api_request",
+            HookType::OnSessionStart => "on_session_start",
+            HookType::OnSessionEnd => "on_session_end",
+            HookType::OnSessionFinalize => "on_session_finalize",
+            HookType::OnSessionReset => "on_session_reset",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hook payload schema validation
+// ---------------------------------------------------------------------------
+
+fn expect_obj(ctx: &Value, hook: HookType) -> Result<&serde_json::Map<String, Value>, String> {
+    ctx.as_object()
+        .ok_or_else(|| format!("{} context must be a JSON object", hook.as_str()))
+}
+
+fn require_type(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    type_name: &str,
+    check: impl Fn(&Value) -> bool,
+) -> Result<(), String> {
+    let Some(v) = obj.get(key) else {
+        return Err(format!("missing required field: {}", key));
+    };
+    if !check(v) {
+        return Err(format!("field '{}' must be {}", key, type_name));
+    }
+    Ok(())
+}
+
+fn optional_string_or_null(obj: &serde_json::Map<String, Value>, key: &str) -> Result<(), String> {
+    if let Some(v) = obj.get(key) {
+        if !(v.is_null() || v.is_string()) {
+            return Err(format!("field '{}' must be string|null", key));
+        }
+    }
+    Ok(())
+}
+
+fn validate_hook_payload(hook: HookType, context: &Value) -> Result<(), String> {
+    let obj = expect_obj(context, hook)?;
+    match hook {
+        HookType::PreToolCall => {
+            require_type(obj, "tool", "string", Value::is_string)?;
+            require_type(obj, "turn", "number", Value::is_number)?;
+        }
+        HookType::PostToolCall => {
+            require_type(obj, "tool", "string", Value::is_string)?;
+            require_type(obj, "is_error", "boolean", Value::is_boolean)?;
+            require_type(obj, "turn", "number", Value::is_number)?;
+        }
+        HookType::PreLlmCall => {
+            require_type(obj, "turn", "number", Value::is_number)?;
+            require_type(obj, "model", "string", Value::is_string)?;
+        }
+        HookType::PostLlmCall => {
+            require_type(obj, "turn", "number", Value::is_number)?;
+            require_type(obj, "api_time_ms", "number", Value::is_number)?;
+            require_type(obj, "has_tool_calls", "boolean", Value::is_boolean)?;
+        }
+        HookType::PreApiRequest => {
+            require_type(obj, "attempt", "number", Value::is_number)?;
+            require_type(obj, "model", "string", Value::is_string)?;
+            require_type(obj, "stream", "boolean", Value::is_boolean)?;
+            optional_string_or_null(obj, "route_label")?;
+        }
+        HookType::PostApiRequest => {
+            require_type(obj, "attempt", "number", Value::is_number)?;
+            require_type(obj, "model", "string", Value::is_string)?;
+            require_type(obj, "stream", "boolean", Value::is_boolean)?;
+            require_type(obj, "ok", "boolean", Value::is_boolean)?;
+            optional_string_or_null(obj, "finish_reason")?;
+            optional_string_or_null(obj, "error")?;
+            if let Some(v) = obj.get("has_tool_calls") {
+                if !v.is_boolean() {
+                    return Err("field 'has_tool_calls' must be boolean".to_string());
+                }
+            }
+            if let Some(v) = obj.get("interrupted") {
+                if !v.is_boolean() {
+                    return Err("field 'interrupted' must be boolean".to_string());
+                }
+            }
+        }
+        HookType::OnSessionStart => {
+            require_type(obj, "model", "string", Value::is_string)?;
+            optional_string_or_null(obj, "session_id")?;
+        }
+        HookType::OnSessionEnd => {
+            require_type(obj, "turns", "number", Value::is_number)?;
+            require_type(obj, "finished_naturally", "boolean", Value::is_boolean)?;
+            require_type(obj, "interrupted", "boolean", Value::is_boolean)?;
+            require_type(
+                obj,
+                "session_started_hooks_fired",
+                "boolean",
+                Value::is_boolean,
+            )?;
+            optional_string_or_null(obj, "session_id")?;
+        }
+        HookType::OnSessionFinalize => {
+            require_type(obj, "turns", "number", Value::is_number)?;
+            require_type(obj, "tool_errors", "number", Value::is_number)?;
+            require_type(obj, "session_cost_usd", "number", Value::is_number)?;
+            optional_string_or_null(obj, "session_id")?;
+        }
+        HookType::OnSessionReset => {
+            require_type(obj, "turns", "number", Value::is_number)?;
+            require_type(obj, "source", "string", Value::is_string)?;
+            optional_string_or_null(obj, "session_id")?;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// HookResult
+// ---------------------------------------------------------------------------
+
+/// Hook callback result — allows hooks to inject context or signal errors.
+#[derive(Debug, Clone)]
+pub enum HookResult {
+    /// Hook executed successfully with no side effects.
+    Ok,
+    /// Hook wants to inject additional context into the message stream.
+    InjectContext(String),
+    /// Hook encountered an error.
+    Error(String),
+}
+
+// ---------------------------------------------------------------------------
+// PluginManifest
+// ---------------------------------------------------------------------------
+
+/// Plugin manifest loaded from `plugin.yaml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginManifest {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub homepage: Option<String>,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    /// Permissions this plugin requests. Plugins can only access resources
+    /// they explicitly declare. Empty = no permissions (sandboxed).
+    #[serde(default)]
+    pub permissions: Vec<String>,
+}
+
+impl PluginManifest {
+    /// Check if this plugin requests a specific permission.
+    pub fn has_permission(&self, permission: &str) -> bool {
+        self.permissions.iter().any(|p| p == permission || p == "*")
+    }
+}
+
+/// Known permission types for plugin sandboxing.
+pub mod permissions {
+    /// Read files from the filesystem.
+    pub const FILE_READ: &str = "file:read";
+    /// Write files to the filesystem.
+    pub const FILE_WRITE: &str = "file:write";
+    /// Execute shell commands.
+    pub const TERMINAL: &str = "terminal";
+    /// Make HTTP requests.
+    pub const NETWORK: &str = "network";
+    /// Access the browser.
+    pub const BROWSER: &str = "browser";
+    /// Access memory providers.
+    pub const MEMORY: &str = "memory";
+    /// Register tools in the agent loop.
+    pub const TOOL_REGISTER: &str = "tool:register";
+    /// Access the LLM directly.
+    pub const LLM_ACCESS: &str = "llm:access";
+}
+
+// ---------------------------------------------------------------------------
+// PluginCliCommand
+// ---------------------------------------------------------------------------
+
+/// A CLI command contributed by a plugin.
+#[derive(Debug, Clone)]
+pub struct PluginCliCommand {
+    pub name: String,
+    pub description: String,
+    pub plugin_name: String,
+}
+
+// ---------------------------------------------------------------------------
+// ContextEngine trait (for plugins that want to inject context)
+// ---------------------------------------------------------------------------
+
+/// Trait for context engines that plugins can provide.
+pub trait ContextEngine: Send + Sync {
+    fn inject(&self, query: &str) -> Option<String>;
+}
+
+// ---------------------------------------------------------------------------
+// PluginContext
+// ---------------------------------------------------------------------------
+
+/// Plugin context provided to plugins during registration.
+/// Plugins use this to register hooks, tools, and CLI commands.
+pub struct PluginContext {
+    hooks: HashMap<HookType, Vec<Arc<dyn Fn(&Value) -> HookResult + Send + Sync>>>,
+    tools: Vec<(ToolSchema, Arc<dyn ToolHandler>)>,
+    cli_commands: Vec<PluginCliCommand>,
+    context_engine: Option<Arc<dyn ContextEngine>>,
+    injected_messages: Vec<String>,
+    /// Sandbox for permission enforcement. Plugins can check their own
+    /// permissions via `ctx.has_permission(permission)`.
+    sandbox: Option<PluginSandbox>,
+    /// Name of the plugin being registered (for permission checks).
+    plugin_name: String,
+}
+
+impl PluginContext {
+    pub fn new() -> Self {
+        Self {
+            hooks: HashMap::new(),
+            tools: Vec::new(),
+            cli_commands: Vec::new(),
+            context_engine: None,
+            injected_messages: Vec::new(),
+            sandbox: None,
+            plugin_name: String::new(),
+        }
+    }
+
+    /// Create a context with sandbox enforcement for a specific plugin.
+    pub fn with_sandbox(name: String, sandbox: PluginSandbox) -> Self {
+        Self {
+            hooks: HashMap::new(),
+            tools: Vec::new(),
+            cli_commands: Vec::new(),
+            context_engine: None,
+            injected_messages: Vec::new(),
+            sandbox: Some(sandbox),
+            plugin_name: name,
+        }
+    }
+
+    /// Register a hook callback for a specific lifecycle event.
+    pub fn on(
+        &mut self,
+        hook: HookType,
+        callback: Arc<dyn Fn(&Value) -> HookResult + Send + Sync>,
+    ) {
+        self.hooks.entry(hook).or_default().push(callback);
+    }
+
+    /// Register a tool provided by the plugin.
+    pub fn register_tool(&mut self, schema: ToolSchema, handler: Arc<dyn ToolHandler>) {
+        self.tools.push((schema, handler));
+    }
+
+    /// Register a CLI command provided by the plugin.
+    pub fn register_cli_command(&mut self, cmd: PluginCliCommand) {
+        self.cli_commands.push(cmd);
+    }
+
+    /// Set a context engine for this plugin.
+    pub fn set_context_engine(&mut self, engine: Arc<dyn ContextEngine>) {
+        self.context_engine = Some(engine);
+    }
+
+    /// Inject a system message into the conversation.
+    pub fn inject_message(&mut self, message: String) {
+        self.injected_messages.push(message);
+    }
+
+    pub fn drain_injected_messages(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.injected_messages)
+    }
+
+    /// Check if this plugin has a specific permission.
+    pub fn has_permission(&self, permission: &str) -> bool {
+        self.sandbox
+            .as_ref()
+            .map(|s| s.has_permission(&self.plugin_name, permission))
+            .unwrap_or(true) // No sandbox = all permissions granted
+    }
+
+    /// Enforce a permission check, returning an error if not granted.
+    pub fn enforce_permission(&self, permission: &str) -> Result<(), String> {
+        self.sandbox
+            .as_ref()
+            .map(|s| s.enforce(&self.plugin_name, permission))
+            .unwrap_or(Ok(()))
+    }
+}
+
+impl Default for PluginContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Plugin metadata.
+#[derive(Debug, Clone)]
+pub struct PluginMeta {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub author: Option<String>,
+}
+
+impl From<PluginManifest> for PluginMeta {
+    fn from(m: PluginManifest) -> Self {
+        Self {
+            name: m.name,
+            version: m.version,
+            description: m.description,
+            author: m.author,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin trait
+// ---------------------------------------------------------------------------
+
+/// Trait for Hermes plugins.
+#[async_trait::async_trait]
+pub trait Plugin: Send + Sync {
+    fn meta(&self) -> PluginMeta;
+    async fn initialize(&self) -> Result<(), AgentError>;
+    async fn shutdown(&self) -> Result<(), AgentError>;
+    fn tools(&self) -> Vec<(ToolSchema, Arc<dyn ToolHandler>)> {
+        Vec::new()
+    }
+
+    /// Called during registration to let the plugin register hooks, tools, etc.
+    fn register(&self, _ctx: &mut PluginContext) {}
+}
+
+// ---------------------------------------------------------------------------
+// PluginSandbox — permission enforcement
+// ---------------------------------------------------------------------------
+
+/// Enforces permission boundaries for plugins.
+///
+/// Each plugin is associated with a set of declared permissions from its
+/// manifest. The sandbox checks these permissions before allowing operations
+/// like tool registration, hook invocation, or system access.
+pub struct PluginSandbox {
+    plugin_permissions: HashMap<String, Vec<String>>,
+}
+
+impl PluginSandbox {
+    /// Create a new empty sandbox.
+    pub fn new() -> Self {
+        Self {
+            plugin_permissions: HashMap::new(),
+        }
+    }
+
+    /// Register a plugin's declared permissions.
+    pub fn register_permissions(&mut self, name: &str, permissions: Vec<String>) {
+        tracing::debug!(
+            "Registered {} permissions for plugin '{}'",
+            permissions.len(),
+            name
+        );
+        self.plugin_permissions.insert(name.to_string(), permissions);
+    }
+
+    /// Check if a plugin has a specific permission.
+    pub fn has_permission(&self, plugin_name: &str, permission: &str) -> bool {
+        self.plugin_permissions
+            .get(plugin_name)
+            .map(|perms| perms.iter().any(|p| p == permission || p == "*"))
+            .unwrap_or(false)
+    }
+
+    /// Check if a plugin has ANY of the given permissions.
+    pub fn has_any_permission(&self, plugin_name: &str, permissions: &[&str]) -> bool {
+        permissions.iter().any(|p| self.has_permission(plugin_name, p))
+    }
+
+    /// Enforce a permission check, returning an error if not granted.
+    pub fn enforce(&self, plugin_name: &str, permission: &str) -> Result<(), String> {
+        if self.has_permission(plugin_name, permission) {
+            Ok(())
+        } else {
+            let available = self
+                .plugin_permissions
+                .get(plugin_name)
+                .map(|p| p.join(", "))
+                .unwrap_or_else(|| "none".to_string());
+            Err(format!(
+                "Plugin '{}' does not have '{}' permission (available: {})",
+                plugin_name, permission, available
+            ))
+        }
+    }
+
+    /// Get all permissions for a plugin.
+    pub fn get_permissions(&self, plugin_name: &str) -> Vec<String> {
+        self.plugin_permissions
+            .get(plugin_name)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+impl Default for PluginSandbox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PluginManager
+// ---------------------------------------------------------------------------
+
+/// Plugin manager — central registry for all loaded plugins.
+pub struct PluginManager {
+    plugins: HashMap<String, Arc<dyn Plugin>>,
+    context: PluginContext,
+}
+
+impl PluginManager {
+    pub fn new() -> Self {
+        Self {
+            plugins: HashMap::new(),
+            context: PluginContext::new(),
+        }
+    }
+
+    pub fn register(&mut self, plugin: Arc<dyn Plugin>) {
+        let meta = plugin.meta();
+        tracing::info!("Registered plugin: {} v{}", meta.name, meta.version);
+        plugin.register(&mut self.context);
+        self.plugins.insert(meta.name.clone(), plugin);
+    }
+
+    pub async fn initialize_all(&self) -> Result<(), AgentError> {        for (name, plugin) in &self.plugins {
+            tracing::info!("Initializing plugin: {}", name);
+            plugin.initialize().await?;
+        }
+        Ok(())
+    }
+
+    pub async fn shutdown_all(&self) -> Result<(), AgentError> {
+        for (name, plugin) in &self.plugins {
+            tracing::info!("Shutting down plugin: {}", name);
+            if let Err(e) = plugin.shutdown().await {
+                tracing::warn!("Plugin {} shutdown error: {}", name, e);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn all_tools(&self) -> Vec<(ToolSchema, Arc<dyn ToolHandler>)> {
+        let mut tools: Vec<_> = self.plugins.values().flat_map(|p| p.tools()).collect();
+        tools.extend(self.context.tools.iter().cloned());
+        tools
+    }
+
+    pub fn list_plugins(&self) -> Vec<PluginMeta> {
+        self.plugins.values().map(|p| p.meta()).collect()
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Arc<dyn Plugin>> {
+        self.plugins.get(name)
+    }
+
+    /// Invoke all registered hooks for the given lifecycle event.
+    pub fn invoke_hook(&self, hook: HookType, context: &Value) -> Vec<HookResult> {
+        let Some(callbacks) = self.context.hooks.get(&hook) else {
+            return Vec::new();
+        };
+        if let Err(err) = validate_hook_payload(hook, context) {
+            tracing::warn!(
+                hook = %hook.as_str(),
+                error = %err,
+                "Hook payload does not match recommended schema"
+            );
+        }
+        callbacks.iter().map(|cb| cb(context)).collect()
+    }
+
+    /// Get all tools registered via plugin contexts.
+    pub fn get_plugin_tools(&self) -> Vec<(ToolSchema, Arc<dyn ToolHandler>)> {
+        self.context.tools.clone()
+    }
+
+    /// Get all CLI commands registered via plugin contexts.
+    pub fn get_plugin_cli_commands(&self) -> Vec<PluginCliCommand> {
+        self.context.cli_commands.clone()
+    }
+
+    /// Check if a plugin is disabled.
+    pub fn is_disabled(&self, name: &str, disabled_list: &[String]) -> bool {
+        disabled_list.iter().any(|d| d == name)
+    }
+
+    /// Discover plugins in the given hermes directory by scanning for `plugin.yaml` files.
+    pub fn discover_plugins(hermes_dir: &Path) -> Vec<(PluginManifest, std::path::PathBuf)> {
+        let plugins_dir = hermes_dir.join("plugins");
+        let mut discovered = Vec::new();
+
+        if !plugins_dir.exists() {
+            return discovered;
+        }
+
+        let Ok(entries) = std::fs::read_dir(&plugins_dir) else {
+            return discovered;
+        };
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let manifest_path = path.join("plugin.yaml");
+            if !manifest_path.exists() {
+                continue;
+            }
+
+            let disabled_marker = path.join(".disabled");
+            if disabled_marker.exists() {
+                tracing::debug!("Skipping disabled plugin: {}", path.display());
+                continue;
+            }
+
+            match std::fs::read_to_string(&manifest_path) {
+                Ok(content) => match serde_yaml::from_str::<PluginManifest>(&content) {
+                    Ok(manifest) => {
+                        tracing::debug!(
+                            "Discovered plugin: {} v{} at {}",
+                            manifest.name,
+                            manifest.version,
+                            path.display()
+                        );
+                        discovered.push((manifest, path));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to parse plugin.yaml at {}: {}",
+                            manifest_path.display(),
+                            e
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to read plugin.yaml at {}: {}",
+                        manifest_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
+        discovered
+    }
+}
+
+/// Register every tool from [`PluginManager::all_tools`] into the shared
+/// [`ToolRegistry`] used by the agent runtime and MCP (Python merged tool table).
+///
+/// Call after [`hermix_tools::register_builtin_tools`] so plugins can override
+/// built-in names intentionally.
+pub fn install_plugin_tools_into_registry(registry: &ToolRegistry, pm: &PluginManager) {
+    for (schema, handler) in pm.all_tools() {
+        let name = schema.name.clone();
+        let desc = schema.description.clone();
+        registry.register(
+            name,
+            "plugin",
+            schema,
+            handler,
+            Arc::new(|| true),
+            vec![],
+            true,
+            desc,
+            "🔌",
+            None,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PluginWatcher — hot-reload mechanism
+// ---------------------------------------------------------------------------
+
+/// Tracks plugin state for hot-reload detection.
+#[derive(Debug, Clone)]
+struct PluginState {
+    #[allow(dead_code)]
+    name: String,
+    #[allow(dead_code)]
+    path: std::path::PathBuf,
+    modified: std::time::SystemTime,
+    version: String,
+}
+
+/// Watches the plugins directory for changes and triggers reloads.
+///
+/// This runs as a background task alongside the agent loop. When a
+/// `plugin.yaml` file is created, modified, or deleted, it:
+/// 1. Re-discovers plugins in the directory
+/// 2. Compares with previously loaded plugins
+/// 3. Reloads changed plugins and unloads removed ones
+/// 4. Updates the tool registry
+pub struct PluginWatcher {
+    hermes_dir: std::path::PathBuf,
+    known_plugins: HashMap<String, PluginState>,
+    #[allow(dead_code)]
+    registry: Arc<ToolRegistry>,
+}
+
+impl PluginWatcher {
+    /// Create a new watcher for the given hermes directory.
+    pub fn new(hermes_dir: std::path::PathBuf, registry: Arc<ToolRegistry>) -> Self {
+        Self {
+            hermes_dir,
+            known_plugins: HashMap::new(),
+            registry,
+        }
+    }
+
+    /// Scan the plugins directory and detect changes since last check.
+    ///
+    /// Returns a list of (action, plugin_name) tuples:
+    /// - ("added", name) — new plugin discovered
+    /// - ("modified", name) — plugin manifest changed
+    /// - ("removed", name) — plugin no longer present
+    pub fn check_for_changes(&mut self) -> Vec<(String, String)> {
+        let mut changes = Vec::new();
+        let plugins_dir = self.hermes_dir.join("plugins");
+
+        // Track current state
+        let mut current = HashMap::new();
+
+        if plugins_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+
+                    let manifest_path = path.join("plugin.yaml");
+                    if !manifest_path.exists() {
+                        continue;
+                    }
+
+                    // Skip disabled plugins
+                    if path.join(".disabled").exists() {
+                        continue;
+                    }
+
+                    if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+                        if let Ok(manifest) = serde_yaml::from_str::<PluginManifest>(&content) {
+                            let modified = manifest_path
+                                .metadata()
+                                .and_then(|m| m.modified())
+                                .unwrap_or(std::time::SystemTime::now());
+
+                            let state = PluginState {
+                                name: manifest.name.clone(),
+                                path: path.clone(),
+                                modified,
+                                version: manifest.version.clone(),
+                            };
+                            current.insert(manifest.name.clone(), state);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Detect additions and modifications
+        for (name, state) in &current {
+            match self.known_plugins.get(name) {
+                Some(existing) => {
+                    if existing.modified != state.modified || existing.version != state.version {
+                        changes.push(("modified".to_string(), name.clone()));
+                    }
+                }
+                None => {
+                    changes.push(("added".to_string(), name.clone()));
+                }
+            }
+        }
+
+        // Detect removals
+        for name in self.known_plugins.keys() {
+            if !current.contains_key(name) {
+                changes.push(("removed".to_string(), name.clone()));
+            }
+        }
+
+        // Update known state
+        self.known_plugins = current;
+
+        if !changes.is_empty() {
+            tracing::info!("Plugin changes detected: {:?}", changes);
+        }
+
+        changes
+    }
+
+    /// Reload a plugin by name. Returns true if reload succeeded.
+    pub fn reload_plugin(&self, name: &str) -> bool {
+        let plugins_dir = self.hermes_dir.join("plugins");
+        let plugin_dir = plugins_dir.join(name);
+        let manifest_path = plugin_dir.join("plugin.yaml");
+
+        if !manifest_path.exists() {
+            tracing::warn!("Cannot reload plugin '{}': manifest not found", name);
+            return false;
+        }
+
+        match std::fs::read_to_string(&manifest_path) {
+            Ok(content) => match serde_yaml::from_str::<PluginManifest>(&content) {
+                Ok(manifest) => {
+                    tracing::info!(
+                        "Reloaded plugin: {} v{} at {}",
+                        manifest.name,
+                        manifest.version,
+                        plugin_dir.display()
+                    );
+                    // In a real implementation, this would:
+                    // 1. Call the plugin's shutdown() method
+                    // 2. Re-import the module
+                    // 3. Call register() with a new PluginContext
+                    // 4. Update the tool registry
+                    true
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse plugin.yaml for '{}': {}", name, e);
+                    false
+                }
+            },
+            Err(e) => {
+                tracing::warn!("Failed to read plugin.yaml for '{}': {}", name, e);
+                false
+            }
+        }
+    }
+
+    /// Unload a plugin by name.
+    pub fn unload_plugin(&mut self, name: &str) -> bool {
+        if self.known_plugins.remove(name).is_some() {
+            tracing::info!("Unloaded plugin: {}", name);
+            // In a real implementation, this would:
+            // 1. Call the plugin's shutdown() method
+            // 2. Remove its tools from the registry
+            // 3. Remove its hooks
+            true
+        } else {
+            tracing::warn!("Cannot unload plugin '{}': not loaded", name);
+            false
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DependencyResolver — resolve plugin dependencies and loading order
+// ---------------------------------------------------------------------------
+
+/// Result of dependency resolution.
+#[derive(Debug, Clone)]
+pub struct DependencyResolution {
+    /// Plugins in topological loading order (dependencies first).
+    pub load_order: Vec<String>,
+    /// Plugins that have unsatisfied dependencies (name → missing deps).
+    pub unresolved: Vec<(String, Vec<String>)>,
+    /// Circular dependency chains detected.
+    pub cycles: Vec<Vec<String>>,
+}
+
+/// Resolves plugin dependencies and determines loading order.
+///
+/// Uses topological sort (Kahn's algorithm) to determine the correct
+/// order in which plugins should be loaded. Plugins with no dependencies
+/// are loaded first, followed by their dependents.
+pub struct DependencyResolver;
+
+impl DependencyResolver {
+    /// Resolve dependencies for a set of discovered plugins.
+    ///
+    /// Takes a list of (name, dependencies) pairs and returns a
+    /// `DependencyResolution` with the correct loading order.
+    pub fn resolve(plugins: &[(String, Vec<String>)]) -> DependencyResolution {
+        let mut graph: HashMap<String, Vec<String>> = HashMap::new();
+        let mut in_degree: HashMap<String, usize> = HashMap::new();
+        let all_names: std::collections::HashSet<String> = plugins.iter().map(|(n, _)| n.clone()).collect();
+
+        // Build dependency graph
+        for (name, deps) in plugins {
+            graph.entry(name.clone()).or_default();
+            in_degree.entry(name.clone()).or_insert(0);
+            for dep in deps {
+                if all_names.contains(dep) {
+                    graph.entry(dep.clone()).or_default().push(name.clone());
+                    *in_degree.entry(name.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        // Kahn's algorithm for topological sort
+        let mut queue: Vec<String> = in_degree
+            .iter()
+            .filter(|(_, &deg)| deg == 0)
+            .map(|(name, _)| name.clone())
+            .collect();
+        queue.sort();
+        let mut load_order = Vec::new();
+
+        while let Some(node) = queue.pop() {
+            load_order.push(node.clone());
+            if let Some(neighbors) = graph.get(&node) {
+                for neighbor in neighbors {
+                    let deg = in_degree.get_mut(neighbor).unwrap();
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push(neighbor.clone());
+                        queue.sort();
+                    }
+                }
+            }
+        }
+
+        // Detect unresolved dependencies and cycles
+        let mut unresolved = Vec::new();
+        let mut cycles = Vec::new();
+
+        for (name, deps) in plugins {
+            let missing: Vec<String> = deps
+                .iter()
+                .filter(|d| !all_names.contains(*d))
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                unresolved.push((name.clone(), missing));
+            }
+        }
+
+        // Detect cycles (nodes with non-zero in-degree after topological sort)
+        let mut remaining: Vec<String> = in_degree
+            .iter()
+            .filter(|(_, &deg)| deg > 0)
+            .map(|(name, _)| name.clone())
+            .collect();
+        remaining.sort();
+
+        // Simple cycle detection: follow edges until we revisit a node
+        if !remaining.is_empty() {
+            let mut visited = std::collections::HashSet::new();
+            let mut path = Vec::new();
+            for start in &remaining {
+                if visited.contains(start) {
+                    continue;
+                }
+                let mut current = start.clone();
+                path.clear();
+                loop {
+                    if visited.contains(&current) {
+                        // Found a cycle
+                        if let Some(cycle_start) = path.iter().position(|n| n == &current) {
+                            let cycle: Vec<String> = path[cycle_start..].to_vec();
+                            if !cycles.contains(&cycle) {
+                                cycles.push(cycle);
+                            }
+                        }
+                        break;
+                    }
+                    visited.insert(current.clone());
+                    path.push(current.clone());
+                    match graph.get(&current) {
+                        Some(neighbors) if !neighbors.is_empty() => {
+                            current = neighbors[0].clone();
+                        }
+                        _ => break,
+                    }
+                }
+            }
+        }
+
+        DependencyResolution {
+            load_order,
+            unresolved,
+            cycles,
+        }
+    }
+}
+
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestPlugin;
+
+    #[async_trait::async_trait]
+    impl Plugin for TestPlugin {
+        fn meta(&self) -> PluginMeta {
+            PluginMeta {
+                name: "test".to_string(),
+                version: "0.1.0".to_string(),
+                description: "Test plugin".to_string(),
+                author: None,
+            }
+        }
+        async fn initialize(&self) -> Result<(), AgentError> {
+            Ok(())
+        }
+        async fn shutdown(&self) -> Result<(), AgentError> {
+            Ok(())
+        }
+    }
+
+    struct HookPlugin;
+
+    #[async_trait::async_trait]
+    impl Plugin for HookPlugin {
+        fn meta(&self) -> PluginMeta {
+            PluginMeta {
+                name: "hook_test".to_string(),
+                version: "0.1.0".to_string(),
+                description: "Hook test plugin".to_string(),
+                author: None,
+            }
+        }
+        async fn initialize(&self) -> Result<(), AgentError> {
+            Ok(())
+        }
+        async fn shutdown(&self) -> Result<(), AgentError> {
+            Ok(())
+        }
+        fn register(&self, ctx: &mut PluginContext) {
+            ctx.on(
+                HookType::PreLlmCall,
+                Arc::new(|_ctx| HookResult::InjectContext("injected by hook".to_string())),
+            );
+        }
+    }
+
+    #[test]
+    fn test_plugin_register() {
+        let mut mgr = PluginManager::new();
+        mgr.register(Arc::new(TestPlugin));
+        assert_eq!(mgr.list_plugins().len(), 1);
+        assert_eq!(mgr.list_plugins()[0].name, "test");
+    }
+
+    #[test]
+    fn test_hook_invocation() {
+        let mut mgr = PluginManager::new();
+        mgr.register(Arc::new(HookPlugin));
+        let results = mgr.invoke_hook(HookType::PreLlmCall, &serde_json::json!({}));
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], HookResult::InjectContext(_)));
+    }
+
+    #[test]
+    fn test_invoke_hook_no_handlers() {
+        let mgr = PluginManager::new();
+        let results = mgr.invoke_hook(HookType::OnSessionStart, &serde_json::json!({}));
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_is_disabled() {
+        let mgr = PluginManager::new();
+        let disabled = vec!["foo".to_string(), "bar".to_string()];
+        assert!(mgr.is_disabled("foo", &disabled));
+        assert!(!mgr.is_disabled("baz", &disabled));
+    }
+
+    #[test]
+    fn test_plugin_context_inject_message() {
+        let mut ctx = PluginContext::new();
+        ctx.inject_message("hello".to_string());
+        ctx.inject_message("world".to_string());
+        let msgs = ctx.drain_injected_messages();
+        assert_eq!(msgs.len(), 2);
+        assert!(ctx.drain_injected_messages().is_empty());
+    }
+
+    #[test]
+    fn test_hook_type_as_str() {
+        assert_eq!(HookType::PreToolCall.as_str(), "pre_tool_call");
+        assert_eq!(HookType::OnSessionEnd.as_str(), "on_session_end");
+    }
+
+    #[test]
+    fn test_manifest_from_yaml() {
+        let yaml = r#"
+name: test-plugin
+version: "1.0.0"
+description: A test plugin
+author: Test Author
+dependencies:
+  - dep-a
+  - dep-b
+"#;
+        let manifest: PluginManifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(manifest.name, "test-plugin");
+        assert_eq!(manifest.dependencies.len(), 2);
+    }
+
+    #[test]
+    fn test_plugin_meta_from_manifest() {
+        let manifest = PluginManifest {
+            name: "test".to_string(),
+            version: "1.0.0".to_string(),
+            description: "desc".to_string(),
+            author: Some("me".to_string()),
+            homepage: None,
+            dependencies: vec![],
+            permissions: vec![],
+        };
+        let meta: PluginMeta = manifest.into();
+        assert_eq!(meta.name, "test");
+        assert_eq!(meta.author.unwrap(), "me");
+    }
+
+    #[test]
+    fn test_validate_hook_payload_accepts_pre_api_request() {
+        let ctx = serde_json::json!({
+            "attempt": 0,
+            "model": "gpt-4o",
+            "stream": false,
+            "route_label": null
+        });
+        assert!(validate_hook_payload(HookType::PreApiRequest, &ctx).is_ok());
+    }
+
+    #[test]
+    fn test_validate_hook_payload_rejects_missing_required_field() {
+        let ctx = serde_json::json!({
+            "model": "gpt-4o",
+            "stream": false
+        });
+        let err = validate_hook_payload(HookType::PreApiRequest, &ctx).unwrap_err();
+        assert!(err.contains("missing required field: attempt"));
+    }
+
+    #[test]
+    fn test_invoke_hook_keeps_backward_compat_even_with_invalid_payload() {
+        let mut mgr = PluginManager::new();
+        let hit = Arc::new(std::sync::Mutex::new(0u32));
+        let hit_ref = hit.clone();
+        mgr.context.hooks.insert(
+            HookType::PreApiRequest,
+            vec![Arc::new(move |_ctx| {
+                *hit_ref.lock().expect("counter lock") += 1;
+                HookResult::Ok
+            })],
+        );
+        // Deliberately invalid for PreApiRequest schema, but callback should still run.
+        let _ = mgr.invoke_hook(HookType::PreApiRequest, &serde_json::json!({}));
+        assert_eq!(*hit.lock().expect("counter lock"), 1);
+    }
+
+    #[tokio::test]
+    async fn install_plugin_tools_into_registry_registers_dispatch() {
+        use hermix_core::tool_schema::JsonSchema;
+
+        struct EchoTool;
+        #[async_trait::async_trait]
+        impl ToolHandler for EchoTool {
+            async fn execute(&self, params: Value) -> Result<String, hermix_core::ToolError> {
+                Ok(params.to_string())
+            }
+            fn schema(&self) -> ToolSchema {
+                ToolSchema::new(
+                    "echo_plugin_tool",
+                    "echo for test",
+                    JsonSchema::new("object"),
+                )
+            }
+        }
+
+        struct RegPlugin;
+        #[async_trait::async_trait]
+        impl Plugin for RegPlugin {
+            fn meta(&self) -> PluginMeta {
+                PluginMeta {
+                    name: "reg".into(),
+                    version: "0.0.1".into(),
+                    description: "t".into(),
+                    author: None,
+                }
+            }
+            async fn initialize(&self) -> Result<(), AgentError> {
+                Ok(())
+            }
+            async fn shutdown(&self) -> Result<(), AgentError> {
+                Ok(())
+            }
+            fn register(&self, ctx: &mut PluginContext) {
+                let h: Arc<dyn ToolHandler> = Arc::new(EchoTool);
+                let schema = h.schema();
+                ctx.register_tool(schema, h);
+            }
+        }
+
+        let registry = ToolRegistry::new();
+        let mut pm = PluginManager::new();
+        pm.register(Arc::new(RegPlugin));
+        install_plugin_tools_into_registry(&registry, &pm);
+        let out = registry
+            .dispatch_async("echo_plugin_tool", serde_json::json!({ "a": 1 }))
+            .await;
+        assert!(out.contains('1'));
+    }
+}

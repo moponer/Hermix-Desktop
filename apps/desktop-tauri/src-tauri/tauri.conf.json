@@ -1,0 +1,54 @@
+{
+  "productName": "Hermix Desktop",
+  "version": "0.1.0",
+  "identifier": "com.hermix.desktop",
+  "build": {
+    "frontendDist": "../../../release/frontend",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev:vite",
+    "beforeBuildCommand": "npm run build:vite"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hermix Desktop",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 980,
+        "minHeight": 680,
+        "decorations": false,
+        "center": true,
+        "incognito": true,
+        "additionalBrowserArgs": "--disable-features=msSmartScreenProtection,EdgeFeed,CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,RendererCodeIntegrity --disable-renderer-backgrounding --disable-background-timer-throttling --disk-cache-size=20971520 --js-flags=--max-old-space-size=1024"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:3000 ws://127.0.0.1:3000 https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self' asset: file:;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": false,
+    "externalBin": [
+      "binaries/hermix",
+      "binaries/officecli"
+    ],
+    "publisher": "Hermix",
+    "shortDescription": "Hermix Desktop portable AI agent (Windows)",
+    "longDescription": "A fully portable AI agent desktop app. All user data lives next to the executable, no system-wide writes, no C drive bloat. Zip, copy, run.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}

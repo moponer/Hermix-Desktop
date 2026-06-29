@@ -1,0 +1,125 @@
+/target
+# 第三方参考仓库通常放在上级目录 ~/workspace/research/GEO-AI
+GEO-AI/
+**/node_modules/
+**/*.rs.bk
+*.pdb
+.DS_Store
+.env
+.env.cloud.local
+.env.local
+*.log
+vout-endianness-analysis.md
+
+dist
+.hermes/
+.playwright-mcp/
+# 团队默认可提交 `.vscode/settings.json`；其余仍忽略
+.vscode/*
+!.vscode/settings.json
+
+
+deploy
+.kiro
+.vscode
+
+refs
+
+# Local artifacts for web/mobile app dev
+apps/mobile-app/.expo/
+apps/mobile-app/.metadata
+apps/web-app/.env.local
+
+# Tauri auto-generated + build outputs
+apps/desktop-tauri/src-tauri/gen/
+# 2026-06-26: sidecar binaries (hermix + officecli) 由 build.rs / 手工放置,
+# 不再进 git. 详见 apps/desktop-tauri/src-tauri/build.rs.
+apps/desktop-tauri/src-tauri/binaries/
+# Tauri sub-workspace 的 .cargo 目录 (2026-06-20 新建). 只有
+# config.toml 是**源码** (引导 Tauri target-dir 到 release/target),
+# 其它 cargo 自动生成的指纹文件全部 ignore.
+apps/desktop-tauri/src-tauri/.cargo/*
+!apps/desktop-tauri/src-tauri/.cargo/config.toml
+
+# 2026-06-20: build artifacts 全部迁移到 repo root/release/, 旧的
+# src-tauri/target/ 和 apps/desktop-tauri/dist/ 路径如果未来还出现
+# (例如有人本地漏改 env), 这里继续 ignore 避免误提交.
+apps/desktop-tauri/src-tauri/target/
+apps/desktop-tauri/dist/
+
+# 2026-06-20: 外层 release/ 目录统一存放所有 build 输出:
+# - release/target/    — cargo workspace 全量编译产物
+# - release/frontend/  — vite 打包的前端静态资源
+# - release/bundle/    — Tauri NSIS 安装包
+# - release/build-logs/ — 编译日志 (给 CI 排查用)
+# 不要提交 — 整目录 ignore, 但 docs/architecture/ 这种**纯文档**目录
+# 不在这里 (单独 ignore 下方).
+# 注意: 必须用 /** 才能只匹配 release 根目录的子文件, 不然 Git 的
+# fnmatch 会把 docs/architecture/release/ 这类同名的子目录也忽略.
+# 实测踩坑: 单写 /release/ 会让 docs/architecture/ 被忽略 (因为 git
+# 内部 fnmatch 模式), 必须用带锚点的 release/** 才能精准锁定.
+/release/**
+/release/
+!/release/.gitkeep
+!/release/build.sh
+
+# 2026-06-20: 严禁生成 *-staging/ 空目录.
+# cargo (registry staging), npm/pnpm (某些脚本), 或本地 hand-rolled
+# sh scripts 都会尝试创建同名 -staging 目录用于临时占位. 实测这些目录
+# 一旦生成就再也不会被清理, 永远停留在 repo 里. 已全删, 现在 ignore
+# 杜绝再生. 如果未来真有合理需求 (例如 build 中间产物), 把对应行
+# 注释掉并改用 .gitignore.d/ 局部 ignore.
+**/*-staging/
+
+# WorkBuddy / mimocode (agent runtime plan docs + agent memory)
+.mimocode/
+.workbuddy/
+# 注意: 必须用 /.workbuddy-* 而不是 .workbuddy-* 或 **/.workbuddy-* —
+# git 的 fnmatch 对 leading-dot 的 glob 处理有 quirk:
+# 不加 / 锚点时 .workbuddy-* 和 **/.workbuddy-* 都不会匹配
+# .workbuddy-cargo.bat 这种 root-level 隐藏文件. 必须在前面加
+# / 才能让 git 当作"绝对路径"模式去匹配. 实测过 *workbuddy-*
+# 和 **workbuddy* 也能 work, 但 / 前缀最直观.
+# (实测于 core.autocrlf=true + git for windows 2.42+)
+#
+# 而且千万不能在 pattern 行末加 # 内联注释 —— gitignore 的 #
+# 注释只认行首, 行内 # 会和 pattern 一起被当成匹配字符串. 例如
+# "/.workbuddy-*  # foo" 会被解析为字面 pattern "/.workbuddy-*  # foo",
+# 永远匹配不上任何文件. (实测于 git 2.54.0.windows.1)
+/.workbuddy-*
+
+# 2026-06-26: AI editor / IDE helper 目录一律 ignore.
+# 这些目录是 IDE 工具自己生成的 (跟人开的工具有关),
+# 不属于源码, 不应该进 git. 当前 repo 没有已追踪的,
+# 这里写死防御: 以后用哪个 IDE 都自动脱钩.
+.idea/
+.cursor/
+.claude/
+.aider/
+.windsurf/
+.trae/
+.qoder/
+.kiro/
+.playwright-cli/
+.playwright-mcp/
+*.swp
+*.swo
+*~
+.idea_modules/
+*.iml
+
+# Dev-mode data directories — must NOT be committed. These are
+# runtime artifacts created by `pnpm tauri dev` (now disabled via
+# find_dev_data_dir) or by cargo test subdir-creation. All persistent
+# data lives in ~/.hermix/data/ on the user's C drive.
+hermix-data/
+hermix-data-*/
+hermix-stderr.log
+hermix-stdout.log
+backend_stderr.txt
+backend_stdout.txt
+data/
+cache/
+logs/
+webview-cache/
+.hermix-data/

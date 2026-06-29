@@ -1,0 +1,63 @@
+//! # hermes-core
+//!
+//! Foundation crate defining all shared types, traits, and error types
+//! used across the hermes-agent-rust workspace.
+
+pub mod acui;
+pub mod errors;
+pub mod tool_call_parser;
+pub mod tool_call_sanitizer;
+pub mod tool_schema;
+pub mod traits;
+pub mod types;
+// Cross-platform helpers added in the Windows-first hardening pass
+// (2026-06-07). `path_security` is a no-dep stdlib module;
+// `console_decode` always compiles but its GBK fallback is gated to
+// Windows where CP936 / OEM encoding is the dominant mojibake source.
+pub mod path_security;
+pub mod console_decode;
+pub mod text_utils;
+
+#[cfg(test)]
+pub mod test_generators;
+
+// Re-export all error types
+pub use errors::{AgentError, ConfigError, GatewayError, ToolError};
+
+// Re-export all core types
+pub use types::{
+    AgentResult, BudgetConfig, CacheControl, CacheType, CommandOutput, FunctionCall,
+    FunctionCallDelta, LlmResponse, Message, MessageRole, ReasoningContent, ReasoningFormat, Skill,
+    SkillMeta, StreamChunk, StreamDelta, ToolCall, ToolCallDelta, ToolErrorRecord, ToolResult,
+    UsageStats,
+};
+
+// Re-export tool schema types
+pub use tool_schema::{tool_schema, JsonSchema, ToolCatalogEntry, ToolSchema};
+
+// Re-export trait definitions
+pub use traits::{
+    AgentService, LlmProvider, MemoryProvider, PlatformAdapter, PlatformSender, SkillProvider,
+    TerminalBackend, ToolHandler,
+};
+
+// Re-export AgentService supporting types
+pub use traits::{AgentOverrides, AgentReply};
+
+// Re-export tool call parser public API
+pub use tool_call_parser::{
+    format_tool_calls, get_parser, parse_tool_calls, register_parser, separate_text_and_calls,
+    HermesToolCallParser, ToolCallParser,
+};
+
+// Re-export the streaming tool-call XML sanitizer
+pub use tool_call_sanitizer::ToolCallSanitizer;
+
+// Re-export ACUI directive types
+pub use acui::{AcuiDirective, AcuiHide, AcuiPosition, AcuiShow, AcuiState, AcuiUpdate};
+
+// Re-export ParseMode from traits
+pub use traits::ParseMode;
+
+// Re-export text utilities
+pub use text_utils::{format_token_count, truncate_chars};

@@ -1,0 +1,537 @@
+//! File tools: read, write, patch, and search
+
+use async_trait::async_trait;
+use indexmap::IndexMap;
+use serde_json::{json, Value};
+
+use hermix_core::{tool_schema, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema};
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::credential_guard::CredentialGuard;
+
+/// Resolve a path to an absolute string for display in LLM-visible tool
+/// output. The rule is **literal pass-through**: the path the user typed or
+/// configured is the path we report. We deliberately do NOT canonicalize.
+///
+/// Why no canonicalize: on Windows, `std::fs::canonicalize` follows
+/// junctions / symlinks AND prepends the `\\?\` long-path prefix. So if the
+/// user is in `D:\data` (a junction) and the LLM calls `read_file("D:\\qcc\\foo")`,
+/// the OS opens the file fine, but `canonicalize` would surface
+/// `\\?\F:\...` instead of `D:\data\foo` — the junction target, not what
+/// the user typed. The LLM would then echo the wrong path back into
+/// subsequent reasoning and tool calls, and `subdirectory_hints` /
+/// `_files.txt` would all drift. The user's configured workspace root and
+/// the path they typed are the source of truth.
+///
+/// For relative paths we still need a base directory to make the result
+/// absolute, so we fall back to:
+///
+/// 1. `TERMINAL_CWD` env var (set by `LocalAgentService::send_message_stream`
+///    from the per-turn `AgentOverrides::workspace`, i.e. the desktop
+///    "工作区" picker).
+/// 2. Server process current working directory.
+///
+/// The cwd itself is not canonicalized — same reason.
+///
+/// Trade-off: `..` segments are not resolved in the display string. This is
+/// fine; the OS resolves `..` on actual file open, and the LLM-visible
+/// header doesn't need to be "lexically resolved".
+pub fn to_absolute_path(path: &str) -> String {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return p.to_string_lossy().to_string();
+    }
+    let cwd = std::env::var("TERMINAL_CWD")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    cwd.join(p).to_string_lossy().to_string()
+}
+
+// ---------------------------------------------------------------------------
+// ReadFileHandler
+// ---------------------------------------------------------------------------
+
+/// Tool for reading file contents via the terminal backend.
+pub struct ReadFileHandler {
+    backend: Arc<dyn TerminalBackend>,
+}
+
+impl ReadFileHandler {
+    pub fn new(backend: Arc<dyn TerminalBackend>) -> Self {
+        Self { backend }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for ReadFileHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let path = params
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'path' parameter".into()))?;
+
+        CredentialGuard::new().check_read_access(Path::new(path))?;
+
+        let offset = params.get("offset").and_then(|v| v.as_u64());
+
+        let limit = params.get("limit").and_then(|v| v.as_u64());
+
+        self.backend
+            .read_file(path, offset, limit)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+            .map(|content| {
+                // Prefix the content with an absolute-path header so the LLM
+                // (and the front-end artifact extractor) can unambiguously
+                // reference the file later. Format mirrors write_file.
+                let abs = to_absolute_path(path);
+                format!("[file: {abs}]\n{content}")
+            })
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "path".into(),
+            json!({
+                "type": "string",
+                "description": "The file path to read"
+            }),
+        );
+        props.insert(
+            "offset".into(),
+            json!({
+                "type": "integer",
+                "description": "Line number to start reading from (1-indexed)"
+            }),
+        );
+        props.insert(
+            "limit".into(),
+            json!({
+                "type": "integer",
+                "description": "Maximum number of lines to read"
+            }),
+        );
+
+        tool_schema(
+            "read_file",
+            "Read file contents with optional offset and line limit. Returns the file content as a string with line numbers.",
+            JsonSchema::object(props, vec!["path".into()]),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WriteFileHandler
+// ---------------------------------------------------------------------------
+
+/// Tool for writing content to files via the terminal backend.
+pub struct WriteFileHandler {
+    backend: Arc<dyn TerminalBackend>,
+}
+
+impl WriteFileHandler {
+    pub fn new(backend: Arc<dyn TerminalBackend>) -> Self {
+        Self { backend }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for WriteFileHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let path = params
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'path' parameter".into()))?;
+
+        let content = params
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'content' parameter".into()))?;
+
+        CredentialGuard::new().check_write_access(Path::new(path), content)?;
+
+        self.backend
+            .write_file(path, content)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+
+        // Always report the absolute path so the LLM and front-end can
+        // refer back to it without re-deriving. `to_absolute_path` falls back
+        // to a non-canonicalized form if the file is on a path that can't be
+        // canonicalized (rare, but happens with bind-mounts / junctions).
+        let abs = to_absolute_path(path);
+        Ok(format!(
+            "Successfully wrote {} bytes to {}",
+            content.len(),
+            abs
+        ))
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "path".into(),
+            json!({
+                "type": "string",
+                "description": "The file path to write to"
+            }),
+        );
+        props.insert(
+            "content".into(),
+            json!({
+                "type": "string",
+                "description": "The content to write to the file"
+            }),
+        );
+
+        tool_schema(
+            "write_file",
+            "Write content to a file. Creates the file and parent directories if they don't exist. Overwrites existing content.",
+            JsonSchema::object(props, vec!["path".into(), "content".into()]),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PatchHandler
+// ---------------------------------------------------------------------------
+
+/// Backend trait for file patching operations.
+#[async_trait]
+pub trait PatchBackend: Send + Sync {
+    /// Apply a patch to a file using fuzzy matching.
+    async fn patch_file(
+        &self,
+        path: &str,
+        old_string: &str,
+        new_string: &str,
+        replace_all: bool,
+    ) -> Result<String, ToolError>;
+}
+
+/// Tool for patching files with fuzzy matching (find-and-replace).
+pub struct PatchHandler {
+    backend: Arc<dyn PatchBackend>,
+}
+
+impl PatchHandler {
+    pub fn new(backend: Arc<dyn PatchBackend>) -> Self {
+        Self { backend }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for PatchHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let path = params
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'path' parameter".into()))?;
+
+        let old_string = params
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'old_string' parameter".into()))?;
+
+        let new_string = params
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let replace_all = params
+            .get("replace_all")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        self.backend
+            .patch_file(path, old_string, new_string, replace_all)
+            .await
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "path".into(),
+            json!({
+                "type": "string",
+                "description": "The file path to patch"
+            }),
+        );
+        props.insert(
+            "old_string".into(),
+            json!({
+                "type": "string",
+                "description": "The text to find in the file (fuzzy matching supported)"
+            }),
+        );
+        props.insert(
+            "new_string".into(),
+            json!({
+                "type": "string",
+                "description": "The replacement text (use empty string to delete)"
+            }),
+        );
+        props.insert("replace_all".into(), json!({
+            "type": "boolean",
+            "description": "Replace all occurrences instead of requiring a unique match (default: false)",
+            "default": false
+        }));
+
+        tool_schema(
+            "patch",
+            "Apply targeted find-and-replace edits to a file using fuzzy matching. Minor whitespace/indentation differences won't break matching.",
+            JsonSchema::object(props, vec!["path".into(), "old_string".into()]),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SearchFilesHandler
+// ---------------------------------------------------------------------------
+
+/// Backend trait for file search operations.
+#[async_trait]
+pub trait SearchBackend: Send + Sync {
+    /// Search file contents by regex pattern.
+    async fn search_content(
+        &self,
+        pattern: &str,
+        path: &str,
+        file_glob: Option<&str>,
+        max_results: Option<usize>,
+    ) -> Result<String, ToolError>;
+
+    /// Search files by name (glob pattern).
+    async fn search_files(&self, pattern: &str, path: &str) -> Result<String, ToolError>;
+}
+
+/// Tool for searching files by content or filename.
+pub struct SearchFilesHandler {
+    backend: Arc<dyn SearchBackend>,
+}
+
+impl SearchFilesHandler {
+    pub fn new(backend: Arc<dyn SearchBackend>) -> Self {
+        Self { backend }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for SearchFilesHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let pattern = params
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'pattern' parameter".into()))?;
+
+        let path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+
+        let target = params
+            .get("target")
+            .and_then(|v| v.as_str())
+            .unwrap_or("content");
+
+        let file_glob = params.get("file_glob").and_then(|v| v.as_str());
+
+        let max_results = params
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+
+        match target {
+            "content" => {
+                self.backend
+                    .search_content(pattern, path, file_glob, max_results)
+                    .await
+            }
+            "files" => self.backend.search_files(pattern, path).await,
+            other => Err(ToolError::InvalidParams(format!(
+                "Unknown target: '{}'. Use 'content' or 'files'.",
+                other
+            ))),
+        }
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "pattern".into(),
+            json!({
+                "type": "string",
+                "description": "Regex pattern to search for (content) or glob pattern (files)"
+            }),
+        );
+        props.insert(
+            "path".into(),
+            json!({
+                "type": "string",
+                "description": "Directory or file to search in (default: '.')"
+            }),
+        );
+        props.insert("target".into(), json!({
+            "type": "string",
+            "description": "Search target: 'content' for file contents or 'files' for filenames",
+            "enum": ["content", "files"],
+            "default": "content"
+        }));
+        props.insert(
+            "file_glob".into(),
+            json!({
+                "type": "string",
+                "description": "Filter files by glob pattern when searching content (e.g. '*.py')"
+            }),
+        );
+        props.insert(
+            "limit".into(),
+            json!({
+                "type": "integer",
+                "description": "Maximum number of results to return"
+            }),
+        );
+
+        tool_schema(
+            "search_files",
+            "Search file contents (ripgrep-backed regex) or find files by glob pattern.\n\
+             \n\
+             ## When to reach for this tool\n\
+             - **Find files by name** (e.g. \"where is the config?\" / \"show me the .toml files\") → use `target: \"files\"` or the `list_files` alias.\n\
+             - **Search inside files** (e.g. \"where is the `effective_model` resolved?\" / \"grep TODO\") → use `target: \"content\"` (the default).\n\
+             Much cheaper and more precise than `computer_use.screenshot` of an editor with Find-open.",
+            JsonSchema::object(props, vec!["pattern".into()]),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hermix_core::{AgentError, CommandOutput};
+
+    struct MockBackend;
+    #[async_trait]
+    impl TerminalBackend for MockBackend {
+        async fn execute_command(
+            &self,
+            _cmd: &str,
+            _timeout: Option<u64>,
+            _workdir: Option<&str>,
+            _bg: bool,
+            _pty: bool,
+        ) -> Result<CommandOutput, AgentError> {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+        async fn read_file(
+            &self,
+            path: &str,
+            _offset: Option<u64>,
+            _limit: Option<u64>,
+        ) -> Result<String, AgentError> {
+            Ok(format!("contents of {}", path))
+        }
+        async fn write_file(&self, _path: &str, _content: &str) -> Result<(), AgentError> {
+            Ok(())
+        }
+        async fn file_exists(&self, _path: &str) -> Result<bool, AgentError> {
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_handler() {
+        let handler = ReadFileHandler::new(Arc::new(MockBackend));
+        // Use the cross-platform temp dir instead of hardcoding
+        // `/tmp/test.txt` — that path is Unix-only and was the
+        // reason the test silently passed on Linux but always
+        // errored on Windows. The MockBackend ignores the path
+        // argument, so the only thing under test is "the
+        // handler formats the success response correctly".
+        let path = std::env::temp_dir().join("hermix_test_read.txt");
+        let path_str = path.to_string_lossy().to_string();
+        let result = handler
+            .execute(json!({"path": path_str}))
+            .await
+            .unwrap();
+        assert!(result.contains("contents of"));
+    }
+
+    #[tokio::test]
+    async fn test_write_file_handler() {
+        let handler = WriteFileHandler::new(Arc::new(MockBackend));
+        let path = std::env::temp_dir().join("hermix_test_write.txt");
+        let path_str = path.to_string_lossy().to_string();
+        let result = handler
+            .execute(json!({"path": path_str, "content": "hello"}))
+            .await
+            .unwrap();
+        assert!(result.contains("Successfully wrote"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_schema() {
+        let handler = ReadFileHandler::new(Arc::new(MockBackend));
+        let schema = handler.schema();
+        assert_eq!(schema.name, "read_file");
+    }
+
+    #[tokio::test]
+    async fn test_write_file_schema() {
+        let handler = WriteFileHandler::new(Arc::new(MockBackend));
+        let schema = handler.schema();
+        assert_eq!(schema.name, "write_file");
+    }
+
+    // -- to_absolute_path: literal pass-through contract -----------------
+    //
+    // The path the user typed (or configured as workspace root) is the
+    // path that must appear in LLM-visible tool output. No junction
+    // resolution, no `\\?\` prefix, no `..` resolution.
+
+    #[test]
+    fn to_absolute_path_keeps_absolute_path_literal() {
+        // Even when the path doesn't exist on disk (so canonicalize would
+        // fail and the old code would have fallen through to is_absolute,
+        // which is the behavior we preserve), the literal input is
+        // returned as-is.
+        let out = to_absolute_path("D:\\qcc\\never_existed\\foo.txt");
+        assert_eq!(out, "D:\\qcc\\never_existed\\foo.txt");
+    }
+
+    #[test]
+    fn to_absolute_path_does_not_canonicalize_junction() {
+        // D:\data is a junction on this machine. The old code would call
+        // canonicalize() and surface the junction target. The new code
+        // must keep the user's literal path.
+        let out = to_absolute_path("D:\\qcc\\Cargo.toml");
+        assert_eq!(out, "D:\\qcc\\Cargo.toml");
+        // The junction target prefix must NOT appear.
+        assert!(!out.contains("F:\\spiker\\hemix-desktop"));
+        assert!(!out.starts_with("\\\\?\\"));
+    }
+
+    #[test]
+    fn to_absolute_path_relative_uses_terminal_cwd() {
+        // Pin TERMINAL_CWD so the test is hermetic. This is the only
+        // place we read the env var in the function, so cleanup is local.
+        let prev = std::env::var("TERMINAL_CWD").ok();
+        // SAFETY: tests in this module run on a single thread (cargo
+        // test's default for `--test-threads=1` is opt-in; we rely on
+        // the function reading TERMINAL_CWD on each call, not caching).
+        std::env::set_var("TERMINAL_CWD", "D:\\qcc");
+        let out = to_absolute_path("src\\main.rs");
+        assert_eq!(out, "D:\\qcc\\src\\main.rs");
+        match prev {
+            Some(v) => std::env::set_var("TERMINAL_CWD", v),
+            None => std::env::remove_var("TERMINAL_CWD"),
+        }
+    }
+}

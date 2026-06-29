@@ -1,0 +1,56 @@
+[package]
+name = "hermix-tools"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "Tool registry, toolsets, and tool implementations for Hermix Agent"
+
+[dependencies]
+hermix-core = { workspace = true }
+hermix-config = { workspace = true }
+hermix-cua = { workspace = true }
+tokio = { workspace = true }
+once_cell = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true, features = ["json", "multipart", "stream"] }
+rusqlite = { workspace = true }
+futures = { workspace = true }
+tokio-tungstenite = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+indexmap = { workspace = true }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+serde_yaml = { workspace = true }
+rand = "0.8"
+url = { workspace = true }
+which = "6"
+walkdir = "2"
+lopdf = "0.34"
+# `fs4` is the maintained fork of `fs2` — provides
+# `lock_exclusive()` (Windows `LockFileEx` / Unix `flock`) for the
+# FileMemoryBackend. Picked over `fs2` because `fs2` hasn't shipped
+# since 2017 and `fs4` is the de-facto replacement.
+fs4 = "0.13"
+# Phase 18: cross-platform desktop automation tool (`computer_use`)
+enigo = { workspace = true }
+xcap = { workspace = true }
+arboard = { workspace = true }
+# `image` is re-exported by xcap but we use the codec APIs directly
+# (`PngEncoder`, `ExtendedColorType`) so declare it explicitly to keep
+# the surface stable across xcap minor versions.
+image = { workspace = true }
+# Link-time plugin/extension registration. See
+# `hermix_tools::factory::ToolFactory` for the usage pattern.
+inventory = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = "3"
+hermix-config = { workspace = true, features = ["test-helpers"] }

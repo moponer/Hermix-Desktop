@@ -1,0 +1,60 @@
+[package]
+name = "hermix-server"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "HTTP/WebSocket API server for Hermix Agent"
+
+[features]
+default = []
+otlp = ["hermix-telemetry/otlp"]
+# Internal: exposes `pub mod test_state` for integration tests and the
+# in-process dashboard test harness. Off by default; enable with
+# `cargo test -p hermix-server --features test-helpers`.
+test-helpers = []
+
+[[bin]]
+name = "hermix"
+path = "src/main.rs"
+
+[dependencies]
+hermix-core = { workspace = true }
+hermix-transport = { workspace = true }
+hermix-agent = { workspace = true }
+hermix-tools = { workspace = true }
+hermix-config = { workspace = true }
+hermix-cron = { workspace = true }
+hermix-gateway = { workspace = true }
+hermix-skills = { workspace = true }
+hermix-environments = { workspace = true }
+hermix-telemetry = { workspace = true }
+hermix-runtime = { workspace = true }
+hermix-voice = { workspace = true }
+hermix-mcp = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+tracing = { workspace = true }
+futures = { workspace = true }
+async-stream = "0.3"
+chrono = { workspace = true }
+cron = { workspace = true }
+uuid = { workspace = true }
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "limit", "fs"] }
+libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls", "multipart"] }
+base64 = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tracing-subscriber = { workspace = true }
+proptest = { workspace = true }
+tempfile = "3"
+walkdir = "2"

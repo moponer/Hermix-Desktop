@@ -1,0 +1,183 @@
+/* ════════════════════════════════════════════════════════════════════
+   tokens.css — Design system primitives
+   ──────────────────────────────────────────────────────────────────
+   All colors, type scale, spacing, radius, shadow, animation tokens.
+   Swap this file to re-skin the entire app.
+
+   Light default + .dark override follows the "Classic Gray/White" system
+   the user picked on 2026-06-03:
+     · Light: sidebar/right = #f4f4f5 gray, main = #ffffff pure white
+     · Dark:  sidebar = #27272a, main = #18181b
+     · No blue, no purple, no gradients
+   ════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* ── Surfaces ── */
+  /* bg-app = page canvas (主区淡灰,卡片白底浮在上面)
+     bg-primary = 卡片/内层白色容器 (替代旧的"主区纯白"语义)
+     这样 body 用 bg-app 淡灰,卡片用 bg-primary 白底,有清晰层次 */
+  --color-bg-app: #f5f5f7;            /* page canvas: light gray (主区背景) */
+  --color-bg-primary: #ffffff;        /* card / inner white container (浮在 app 上) */
+  --color-bg-secondary: #fafafa;      /* subtle alt surface */
+  --color-bg-tertiary: #ededee;       /* controls, chips, inline code */
+  --color-bg-hover: #f0f0f2;          /* hover over white */
+  --color-bg-active: #e8e8eb;         /* active/selected over white */
+  --color-bg-card: #ffffff;
+  --color-bg-card-hover: #fafafa;
+  --color-bg-elevated: #ffffff;       /* popovers, modals: white over cream */
+  --color-bg-code: #fafafa;          /* 浅色独立代码块:白卡感(不是纯白,避免与气泡背景对比太弱) */
+  --color-bg-code-header: #ffffff;   /* 比 code 亮一档:header 视觉上"浮"在代码区之上 */
+  --color-bg-code-border: #e4e4e7;   /* 用 border-primary:清晰但不抢眼 */
+
+  /* ── Borders ── */
+  --color-border-primary: #e4e4e7;    /* main divider */
+  --color-border-secondary: #d4d4d8;  /* input outline */
+  --color-border-strong: #18181b;     /* strong emphasis */
+  --color-border-subtle: #ececef;     /* very light hint */
+
+  /* ── Text (4 级层次) ── */
+  --color-text-primary: #2e2e2e;      /* body text: mid-gray, comfortable reading */
+  --color-text-secondary: #52525b;
+  --color-text-tertiary: #6a6a6a;
+  --color-text-muted: #71717a;
+  --color-text-faint: #a1a1aa;
+  --color-text-on-code: #3a3a3c;
+
+  /* ── Accent (v3 Cool Slate 偏蓝灰) ── */
+  --color-accent: #475569;
+  --color-accent-hover: #334155;
+  --color-accent-soft: rgba(71, 85, 105, 0.10);
+  --color-accent-soft-strong: rgba(71, 85, 105, 0.16);
+  --color-accent-on-text: #ffffff;
+
+  /* ── Link (blue, for prose hyperlinks) ── */
+  --color-link: #2563eb;
+  --color-link-hover: #1d4ed8;
+
+  /* ── Link-soft: 辅助色用蓝色（更淡，用于文件变更、引用等不抢重心的场景） ── */
+  --color-link-soft: #6f93d4;
+  --color-link-soft-hover: #4f7bc2;
+
+  /* ── Semantic (必要且无蓝紫) ── */
+  --color-success: #16a34a;
+  --color-success-soft: rgba(22, 163, 74, 0.10);
+  --color-error: #dc2626;
+  --color-error-soft: rgba(220, 38, 38, 0.10);
+  --color-warning: #d97706;
+  --color-warning-soft: rgba(217, 119, 6, 0.12);
+  /* v5: 主操作色 = info 蓝（hover 才出底色）。
+     之前 info = success (绿)，跟成功色冲突。这里独立成蓝色。 */
+  --color-info: #3b82f6;
+  --color-info-soft: rgba(59, 130, 246, 0.10);
+
+  /* ── Buttons (v3 Cool Slate 工具感,无饱和填充) ── */
+  --color-btn-primary-bg: #475569;
+  --color-btn-primary-text: #ffffff;
+  --color-btn-primary-hover: #334155;
+  --color-btn-secondary-bg: #e2e8f0;
+  --color-btn-secondary-text: #334155;
+  --color-btn-secondary-hover: #cbd5e1;
+  --color-btn-ghost-bg: transparent;
+  --color-btn-ghost-text: #475569;
+  --color-btn-ghost-hover: rgba(71, 85, 105, 0.08);
+
+  /* ── Type scale (对标 WorkBuddy) ── */
+  --font-size-display: 22px;
+  --font-size-h1: 16px;
+  --font-size-h2: 14px;
+  --font-size-body: 14px;
+  --font-size-meta: 12px;
+  --font-size-tiny: 11px;
+
+  /* ── Spacing (8/12/16/20/24 px 为主) ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ── Radius ── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-2xl: 12px;
+  --radius-full: 999px;
+
+  /* ── Shadow (克制:默认无,只在 modal/elevated 上有) ── */
+  --shadow-card: none;
+  --shadow-pop: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.15), 0 8px 24px rgba(0, 0, 0, 0.08);
+
+  /* ── Animation ── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 160ms;
+  --duration-slow: 240ms;
+}
+
+.dark {
+  --color-bg-app: #0f0f12;            /* page canvas: deep dark */
+  --color-bg-primary: #1c1c20;        /* card: lighter than canvas (clear lift) */
+  --color-bg-secondary: #232328;
+  --color-bg-tertiary: #2e2e34;
+  --color-bg-hover: #2a2a30;
+  --color-bg-active: #353539;
+  --color-bg-card: #1c1c20;
+  --color-bg-card-hover: #232328;
+  --color-bg-elevated: #25252a;
+  --color-bg-code: #1a1d23;          /* deeper than --color-bg-card (#232328) */
+  --color-bg-code-border: rgba(0, 0, 0, 0.35);
+  --color-bg-code-header: #1a1d23;
+
+  --color-border-primary: #2e2e32;
+  --color-border-secondary: #3f3f46;
+  --color-border-strong: #fafafa;
+  --color-border-subtle: #2c2c32;
+
+  --color-text-primary: #fafafa;
+  --color-text-secondary: #d4d4d8;
+  --color-text-tertiary: #a1a1aa;
+  --color-text-muted: #71717a;
+  --color-text-faint: #52525b;
+  --color-text-on-code: #d4d4d8;
+
+  --color-accent: #cbd5e1;
+  --color-accent-hover: #e2e8f0;
+  --color-accent-soft: rgba(203, 213, 225, 0.14);
+  --color-accent-soft-strong: rgba(203, 213, 225, 0.22);
+  --color-accent-on-text: #0f172a;
+
+  /* ── Link (dark mode) ── */
+  --color-link: #60a5fa;
+  --color-link-hover: #93c5fd;
+
+  /* ── Link-soft: 暗模式下柔和蓝（文件变更等辅助场景） ── */
+  --color-link-soft: #7d9bce;
+  --color-link-soft-hover: #95b0dc;
+
+  --color-success: #22c55e;
+  --color-success-soft: rgba(34, 197, 94, 0.12);
+  --color-error: #ef4444;
+  --color-error-soft: rgba(239, 68, 38, 0.12);
+  --color-warning: #f59e0b;
+  --color-warning-soft: rgba(245, 158, 11, 0.15);
+  --color-info: #60a5fa;
+  --color-info-soft: rgba(96, 165, 250, 0.14);
+
+  --color-btn-primary-bg: #cbd5e1;
+  --color-btn-primary-text: #0f172a;
+  --color-btn-primary-hover: #e2e8f0;
+  --color-btn-secondary-bg: #27272a;
+  --color-btn-secondary-text: #d4d4d8;
+  --color-btn-secondary-hover: #3f3f46;
+  --color-btn-ghost-bg: transparent;
+  --color-btn-ghost-text: #a1a1aa;
+  --color-btn-ghost-hover: #27272a;
+
+  --shadow-card: none;
+  --shadow-pop: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.25);
+}

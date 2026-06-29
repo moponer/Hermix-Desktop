@@ -1,0 +1,658 @@
+use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// MessageRole
+// ---------------------------------------------------------------------------
+
+/// Role of a message participant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageRole {
+    System,
+    #[default]
+    User,
+    Assistant,
+    Tool,
+}
+
+// ---------------------------------------------------------------------------
+// CacheControl
+// ---------------------------------------------------------------------------
+
+/// Cache hint type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheType {
+    Ephemeral,
+    Persistent,
+}
+
+/// Cache control annotation for a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheControl {
+    pub cache_type: CacheType,
+}
+
+// ---------------------------------------------------------------------------
+// FunctionCall / ToolCall
+// ---------------------------------------------------------------------------
+
+/// A function call within a tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
+/// A tool call emitted by the assistant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolCall {
+    #[serde(default)]
+    pub id: String,
+    #[serde(flatten)]
+    pub function: FunctionCall,
+}
+
+// ---------------------------------------------------------------------------
+// ReasoningContent
+// ---------------------------------------------------------------------------
+
+/// Format of the reasoning content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningFormat {
+    Simple,
+    Details,
+}
+
+/// Reasoning content parsed from the LLM response.
+///
+/// Supports multiple formats used by different providers:
+/// - `reasoning_content` (simple string)
+/// - `reasoning` (simple string)
+/// - `reasoning_details` (structured array)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReasoningContent {
+    pub text: String,
+    pub format: ReasoningFormat,
+}
+
+impl ReasoningContent {
+    /// Parse reasoning content from a raw JSON value.
+    ///
+    /// Accepts:
+    /// - A plain string (from `reasoning_content` or `reasoning`)
+    /// - An object with a `text` field
+    /// - An array of objects with `text` fields (from `reasoning_details`)
+    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
+        match value {
+            serde_json::Value::String(s) => Some(ReasoningContent {
+                text: s.clone(),
+                format: ReasoningFormat::Simple,
+            }),
+            serde_json::Value::Object(map) => {
+                map.get("text")
+                    .and_then(|v| v.as_str())
+                    .map(|text| ReasoningContent {
+                        text: text.to_string(),
+                        format: ReasoningFormat::Details,
+                    })
+            }
+            serde_json::Value::Array(arr) => {
+                let text = arr
+                    .iter()
+                    .filter_map(|item| item.get("text").and_then(|v| v.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(ReasoningContent {
+                        text,
+                        format: ReasoningFormat::Details,
+                    })
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ContentPart (for vision / multimodal messages)
+// ---------------------------------------------------------------------------
+
+/// A single content part in a multimodal message.
+///
+/// Serializes to the OpenAI / Claude / MiniMax vision format:
+/// `{"type":"text","text":"..."}` or
+/// `{"type":"image_url","image_url":{"url":"data:image/..."}}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ImageUrl {
+    pub url: String,
+}
+
+// ---------------------------------------------------------------------------
+// Message
+// ---------------------------------------------------------------------------
+
+/// A single message in a conversation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Message {
+    pub role: MessageRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// Multimodal content (text + image for vision models).
+    /// When this is `Some(...)`, the provider serializes `content`
+    /// as a JSON array; `content` (string) is ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_parts: Option<Vec<ContentPart>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
+    /// Execution timeline events emitted during this assistant turn
+    /// (tool_start / tool_stdout / tool_complete / status /
+    /// file_change). Persisted by the agent loop so that a session
+    /// reload rebuilds the same inline tool cards the user saw
+    /// mid-stream, including correct "已完成" / "失败" status,
+    /// arguments, and stdout output.
+    ///
+    /// v4 (2026-06-22): added — previously the timeline was only
+    /// streamed over WS, so on reload the frontend had no way to
+    /// know whether a tool call was running, succeeded or failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_timeline: Option<Vec<ExecutionTimelineEvent>>,
+}
+
+/// One entry in an assistant message's execution timeline.
+///
+/// Mirrors the frontend `ExecutionTimelineEvent` interface 1:1 so
+/// the chat layer can feed them straight into
+/// `expandTimelineToMessages` / `groupTimeline` without
+/// per-field translation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExecutionTimelineEvent {
+    /// Event kind.
+    #[serde(rename = "type")]
+    pub event_type: String,
+    /// Tool name (for `tool_start` / `tool_stdout` / `tool_complete`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// Event payload — tool_start args, tool_stdout chunk,
+    /// tool_complete result, status text, etc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// JSON-encoded tool arguments (for `tool_start`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
+    /// Stdout chunk index (for `tool_stdout`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_index: Option<u64>,
+    /// Stdout chunk total (for `tool_stdout`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_total: Option<u64>,
+    /// Server-side event timestamp (RFC3339).
+    pub created_at: String,
+    /// Stable WS `tool_call_id`; used by the timeline parser to
+    /// group stdout chunks with their parent invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// file_change-only fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_summary: Option<String>,
+}
+
+impl Message {
+    /// Create a system message.
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::System,
+            content: Some(content.into()),
+            content_parts: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+        }
+    }
+
+    /// Create a user message.
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::User,
+            content: Some(content.into()),
+            content_parts: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+        }
+    }
+
+    /// Create an assistant message with text content.
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: MessageRole::Assistant,
+            content: Some(content.into()),
+            content_parts: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+        }
+    }
+
+    /// Create an assistant message with tool calls.
+    pub fn assistant_with_tool_calls(content: Option<String>, tool_calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: MessageRole::Assistant,
+            content,
+            content_parts: None,
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+        }
+    }
+
+    /// Create a tool result message.
+    pub fn tool_result(
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+        name: Option<impl Into<String>>,
+    ) -> Self {
+        Self {
+            role: MessageRole::Tool,
+            content: Some(content.into()),
+            content_parts: None,
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+            // Persist the originating tool name alongside the
+            // tool result so reloaded sessions can rebuild
+            // `ToolMessageMeta` with the real label (terminal /
+            // read_file / list_files / etc.) instead of falling
+            // back to a generic "tool". The argument
+            // `name: Some("terminal")` is a cheap one-line
+            // `Option<String>` rather than a `String` so legacy
+            // call sites that don't know the name can pass
+            // `None`.
+            name: name.map(Into::into),
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+        }
+    }
+
+    /// Create a user message with text + inline image (vision support).
+    /// `image_base64` is the raw base64 string (without the data URI prefix);
+    /// we wrap it as `data:<mime>;base64,<...>` for the LLM API.
+    pub fn user_with_image(text: &str, image_base64: &str, mime_type: &str) -> Self {
+        let url = format!("data:{mime_type};base64,{image_base64}");
+        Self {
+            role: MessageRole::User,
+            content: None,
+            content_parts: Some(vec![
+                ContentPart::Text { text: text.to_string() },
+                ContentPart::ImageUrl { image_url: ImageUrl { url } },
+            ]),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+        }
+    }
+
+    /// Create a user message with text + multiple inline images (2026-06-25).
+    /// Each tuple is `(mime_type, base64_data)`. The LLM receives a
+    /// multimodal content array: one Text part followed by N ImageUrl parts.
+    pub fn user_with_images(text: &str, images: &[(&str, &str)]) -> Self {
+        let mut parts = vec![ContentPart::Text { text: text.to_string() }];
+        for (mime_type, base64) in images {
+            let url = format!("data:{mime_type};base64,{base64}");
+            parts.push(ContentPart::ImageUrl { image_url: ImageUrl { url } });
+        }
+        Self {
+            role: MessageRole::User,
+            content: None,
+            content_parts: Some(parts),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ToolResult
+// ---------------------------------------------------------------------------
+
+/// Result from executing a tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolResult {
+    pub tool_call_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+impl ToolResult {
+    /// Create a successful tool result.
+    pub fn ok(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            is_error: false,
+        }
+    }
+
+    /// Create an error tool result.
+    pub fn err(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            is_error: true,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UsageStats / ToolErrorRecord / AgentResult
+// ---------------------------------------------------------------------------
+
+/// Token usage statistics from an LLM response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UsageStats {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost: Option<f64>,
+}
+
+/// Record of a tool error during execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolErrorRecord {
+    pub tool_name: String,
+    pub error: String,
+    pub turn: u32,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+/// Final result of an agent run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct AgentResult {
+    pub messages: Vec<Message>,
+    pub finished_naturally: bool,
+    pub total_turns: u32,
+    #[serde(default)]
+    pub tool_errors: Vec<ToolErrorRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<UsageStats>,
+    /// Set when the loop stopped due to [`crate::AgentError::Interrupted`] (Python parity).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub interrupted: bool,
+    /// Estimated session spend in USD when cost tracking is active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_cost_usd: Option<f64>,
+    /// Hook / plugin parity: `on_session_start` ran this run (new session, not restored prompt).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub session_started_hooks_fired: bool,
+    /// Most recent streaming finish_reason from the last model call.
+    /// `"stop"` / `"length"` / `"tool_calls"` / `"interrupted"` / `None`.
+    /// Lets the WS handler emit a single `StreamEvent::Stop` so the UI
+    /// can show a "已截断 / 已中断 / 已完成" chip without re-parsing chunks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    /// Compressed context summary from the most recent compaction.
+    /// Persisted to the session DB so it survives across sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed_summary: Option<String>,
+    /// 2026-06-26 (A): raw turns that the most recent compression
+    /// folded into `compressed_summary`. Persisted to the
+    /// `compression_archives` table by
+    /// `SessionPersistence::archive_compressed_turns` so the original
+    /// wording survives even after `flush_messages` wipes those rows
+    /// from `messages`. `None` when no compression has run this turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression_archived_turns: Option<Vec<Message>>,
+    /// 2026-06-26 (B): metrics from the most recent compression —
+    /// original/compressed turns + tokens + savings. Persisted to
+    /// `compression_summary_history` so the full compaction arc is
+    /// queryable (the `sessions.compressed_summary` column only holds
+    /// the latest).
+    ///
+    /// Field-for-field mirror of
+    /// `hermix_agent::compression::CompressionMetrics`. We can't
+    /// reference the upstream type directly because `hermix-core`
+    /// must not depend on `hermix-agent` (the dep arrow is the other
+    /// way), and a wrapper type lets `AgentResult` stay in this
+    /// crate without dragging in the compressor implementation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression_metrics: Option<CompressionMetricsSnapshot>,
+}
+
+/// 2026-06-26 (B): field-for-field mirror of
+/// `hermix_agent::compression::CompressionMetrics`. Lives in
+/// `hermix-core` so `AgentResult` can carry compression metrics
+/// without creating a circular `hermix-core` → `hermix-agent`
+/// dependency.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct CompressionMetricsSnapshot {
+    pub original_tokens: u64,
+    pub compressed_tokens: u64,
+    pub tokens_saved: u64,
+    pub compression_ratio: f64,
+    pub original_turns: usize,
+    pub compressed_turns: usize,
+    pub turns_removed: usize,
+    pub tool_results_pruned: usize,
+    pub deduplication_count: usize,
+    pub summary_api_calls: u32,
+    pub summary_errors: u32,
+    pub anti_thrashing_triggered: bool,
+}
+
+// ---------------------------------------------------------------------------
+// BudgetConfig
+// ---------------------------------------------------------------------------
+
+/// Budget configuration for constraining output sizes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BudgetConfig {
+    pub max_result_size_chars: usize,
+    pub max_aggregate_chars: usize,
+}
+
+impl Default for BudgetConfig {
+    fn default() -> Self {
+        Self {
+            max_result_size_chars: 100_000,
+            max_aggregate_chars: 1_000_000,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LlmResponse
+// ---------------------------------------------------------------------------
+
+/// Complete response from an LLM provider.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LlmResponse {
+    pub message: Message,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<UsageStats>,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Streaming types
+// ---------------------------------------------------------------------------
+
+/// Delta for a function call within a streaming tool call.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FunctionCallDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
+}
+
+/// Delta for a tool call within a streaming response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolCallDelta {
+    pub index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function: Option<FunctionCallDelta>,
+}
+
+/// Delta content in a streaming chunk.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StreamDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallDelta>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<serde_json::Value>,
+}
+
+/// A single chunk from a streaming LLM response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StreamChunk {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<StreamDelta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<UsageStats>,
+}
+
+// ---------------------------------------------------------------------------
+// Skill and Memory types (referenced by trait definitions)
+// ---------------------------------------------------------------------------
+
+/// Metadata for a skill listing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SkillMeta {
+    pub name: String,
+    pub category: Option<String>,
+    pub description: Option<String>,
+}
+
+/// A skill definition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Skill {
+    pub name: String,
+    pub content: String,
+    pub category: Option<String>,
+    pub description: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// CommandOutput (referenced by TerminalBackend trait)
+// ---------------------------------------------------------------------------
+
+/// Output from a terminal command execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommandOutput {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_message_construction() {
+        let msg = Message::user("Hello");
+        assert_eq!(msg.role, MessageRole::User);
+        assert_eq!(msg.content.as_deref(), Some("Hello"));
+
+        let msg = Message::system("You are helpful");
+        assert_eq!(msg.role, MessageRole::System);
+    }
+
+    #[test]
+    fn test_tool_result() {
+        let ok = ToolResult::ok("call_1", "result text");
+        assert!(!ok.is_error);
+
+        let err = ToolResult::err("call_2", "failed");
+        assert!(err.is_error);
+    }
+
+    #[test]
+    fn test_reasoning_content_from_string() {
+        let val = serde_json::Value::String("thinking...".to_string());
+        let rc = ReasoningContent::from_value(&val).unwrap();
+        assert_eq!(rc.text, "thinking...");
+        assert_eq!(rc.format, ReasoningFormat::Simple);
+    }
+
+    #[test]
+    fn test_reasoning_content_from_array() {
+        let val = serde_json::json!([
+            {"text": "step 1"},
+            {"text": "step 2"}
+        ]);
+        let rc = ReasoningContent::from_value(&val).unwrap();
+        assert_eq!(rc.text, "step 1\nstep 2");
+        assert_eq!(rc.format, ReasoningFormat::Details);
+    }
+
+    #[test]
+    fn test_serde_message_role() {
+        let json = serde_json::to_string(&MessageRole::Assistant).unwrap();
+        assert_eq!(json, "\"assistant\"");
+        let role: MessageRole = serde_json::from_str(&json).unwrap();
+        assert_eq!(role, MessageRole::Assistant);
+    }
+
+    #[test]
+    fn test_budget_config_default() {
+        let bc = BudgetConfig::default();
+        assert_eq!(bc.max_result_size_chars, 100_000);
+        assert_eq!(bc.max_aggregate_chars, 1_000_000);
+    }
+}

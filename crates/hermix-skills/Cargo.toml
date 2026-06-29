@@ -1,0 +1,30 @@
+[package]
+name = "hermix-skills"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "Skills system for Hermix Agent"
+
+[dependencies]
+hermix-core = { workspace = true }
+hermix-config = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+jsonwebtoken = { workspace = true }
+minijinja = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+sha2 = "0.10"
+regex = { workspace = true }
+directories = { workspace = true }
+notify = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

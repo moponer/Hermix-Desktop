@@ -1,0 +1,529 @@
+import { useCallback, useEffect, useState } from "react";
+import {
+  Plus,
+  Trash2,
+  Play,
+  Power,
+  X,
+  Pencil,
+} from "lucide-react";
+import * as api from "../api";
+import type { AutomationTask } from "../types";
+import { AiGenerateButton } from "./AiGenerateButton";
+
+/** A small set of cron presets the editor offers as quick-pick chips.
+ *  Each entry: [label, cronExpression, humanDescription]. */
+const CRON_PRESETS: Array<[string, string, string]> = [
+  ["每 15 分钟", "*/15 * * * *", "Quarter-hour cadence"],
+  ["每小时", "0 * * * *", "Top of every hour"],
+  ["每天 08:00", "0 8 * * *", "Morning brief"],
+  ["每天 21:00", "0 21 * * *", "End-of-day review"],
+  ["工作日 09:00", "0 9 * * 1-5", "Weekday standup"],
+  ["每周一 09:00", "0 9 * * 1", "Weekly plan"],
+  ["每周五 17:00", "0 17 * * 5", "Friday wrap-up"],
+  ["每月 1 日 10:00", "0 10 1 * *", "Monthly report"],
+];
+
+export function AutomationView() {
+  const [tasks, setTasks] = useState<AutomationTask[]>([]);
+  const [editing, setEditing] = useState<AutomationTask | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const list = await api.getAutomationTasks();
+      setTasks(list);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const onSave = useCallback(
+    async (task: AutomationTask, isCreate: boolean) => {
+      const saved = isCreate
+        ? await api.createAutomationTask(task)
+        : await api.updateAutomationTask(task.id, task);
+      if (saved) {
+        await refresh();
+        setEditing(null);
+        setCreating(false);
+      } else {
+        setError("保存失败，请检查 schedule 表达式或后端日志");
+      }
+    },
+    [refresh],
+  );
+
+  const onDelete = useCallback(
+    async (id: string) => {
+      if (!confirm("确定要删除这条自动化任务吗？历史运行记录会一并清掉。")) return;
+      if (await api.deleteAutomationTask(id)) {
+        await refresh();
+      } else {
+        setError("删除失败");
+      }
+    },
+    [refresh],
+  );
+
+  const onToggle = useCallback(
+    async (task: AutomationTask) => {
+      const updated = await api.updateAutomationTask(task.id, {
+        enabled: !task.enabled,
+      });
+      if (updated) {
+        setTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
+      }
+    },
+    [],
+  );
+
+  const onTrigger = useCallback(
+    async (id: string) => {
+      if (await api.triggerAutomationTask(id)) {
+        // Optimistic UI — the actual run is async on the server.
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.id === id ? { ...t, last_status: "running" } : t,
+          ),
+        );
+        // Refresh in a moment to pick up the post-run status.
+        setTimeout(() => void refresh(), 1500);
+      } else {
+        setError("触发失败");
+      }
+    },
+    [refresh],
+  );
+
+  // Group by category (use "未分类" for tasks without a category).
+  const grouped = tasks.reduce<Record<string, AutomationTask[]>>(
+    (acc, task) => {
+      const cat = task.category ?? "未分类";
+      if (!acc[cat]) acc[cat] = [];
+      acc[cat].push(task);
+      return acc;
+    },
+    {},
+  );
+  const categories = Object.keys(grouped).sort((a, b) =>
+    a === "未分类" ? 1 : b === "未分类" ? -1 : a.localeCompare(b, "zh"),
+  );
+
+  return (
+    <div className="flex-1 overflow-y-auto px-8 py-6">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="flex items-start justify-between mb-6 gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold text-text-primary">自动化</h1>
+            <p className="text-sm text-text-muted mt-1">
+              通过设置定期聊天，实现工作自动化。后端每 30 秒检查一次，
+              到点自动用当前会话的 agent 跑 prompt。
+            </p>
+            {error && (
+              <p className="text-[12px] text-error mt-2">⚠️ {error}</p>
+            )}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setCreating(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-bg-primary text-[12px] font-medium hover:bg-accent-hover"
+            >
+              <Plus size={13} /> 新建自动化
+            </button>
+          </div>
+        </div>
+
+        {loading && tasks.length === 0 ? (
+          <p className="text-[12px] text-text-faint py-8 text-center">加载中…</p>
+        ) : tasks.length === 0 ? (
+          <p className="text-[12px] text-text-faint py-8 text-center">
+            还没有任何自动化任务，点击右上「新建自动化」开始
+          </p>
+        ) : (
+          categories.map((cat) => (
+            <div key={cat} className="mb-6">
+              <h2 className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
+                {cat} · {grouped[cat].length}
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {grouped[cat].map((t) => (
+                  <TaskCard
+                    key={t.id}
+                    task={t}
+                    onEdit={() => setEditing(t)}
+                    onDelete={() => void onDelete(t.id)}
+                    onToggle={() => void onToggle(t)}
+                    onTrigger={() => void onTrigger(t.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Editor modal */}
+      {(editing || creating) && (
+        <TaskEditor
+          initial={editing ?? blankDraft()}
+          isCreate={creating}
+          onCancel={() => {
+            setEditing(null);
+            setCreating(false);
+          }}
+          onSave={(t) => void onSave(t, creating)}
+        />
+      )}
+    </div>
+  );
+}
+
+function blankDraft(): AutomationTask {
+  return {
+    id: "",
+    name: "",
+    prompt: "",
+    schedule: "0 9 * * 1-5",
+    enabled: false,
+    category: "工作",
+    icon: "✨",
+    run_count: 0,
+    history: [],
+    created_at: "",
+    updated_at: "",
+  };
+}
+
+function TaskCard({
+  task,
+  onEdit,
+  onDelete,
+  onToggle,
+  onTrigger,
+}: {
+  task: AutomationTask;
+  onEdit: () => void;
+  onDelete: () => void;
+  onToggle: () => void;
+  onTrigger: () => void;
+}) {
+  return (
+    <div
+      className={`relative flex flex-col gap-2 p-3.5 rounded-xl border group ${
+        task.enabled
+          ? "bg-bg-card border-border-secondary"
+          : "bg-bg-card/60 border-border-primary opacity-80"
+      }`}
+    >
+      <div className="flex items-start gap-2.5">
+        <span className="text-base shrink-0 mt-0.5 leading-none">
+          {task.icon ?? "⏰"}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <p className="text-[12.5px] font-semibold text-text-primary truncate">
+              {task.name}
+            </p>
+            {task.last_status === "running" && (
+              <span className="text-[9px] text-info animate-pulse">
+                运行中
+              </span>
+            )}
+            {task.last_status === "failed" && (
+              <span className="text-[9px] text-error">失败</span>
+            )}
+          </div>
+          {task.description && (
+            <p className="text-[10.5px] text-text-muted leading-relaxed mt-0.5 line-clamp-2">
+              {task.description}
+            </p>
+          )}
+          <div className="flex items-center gap-2 mt-1.5 text-[10px] text-text-faint">
+            <span className="font-mono">{task.schedule}</span>
+            {task.schedule_label && <span>· {task.schedule_label}</span>}
+          </div>
+          <div className="flex items-center gap-2 mt-1 text-[10px] text-text-faint">
+            <span>累计 {task.run_count} 次</span>
+            {task.last_run_at && (
+              <span>
+                · 上次{" "}
+                {new Date(task.last_run_at).toLocaleString("zh-CN", {
+                  month: "numeric",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Action row */}
+      <div className="flex items-center gap-1.5 -mb-1 mt-1">
+        <button
+          onClick={onTrigger}
+          disabled={task.last_status === "running"}
+          className="flex items-center gap-1 px-2 py-1 text-[10.5px] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded disabled:opacity-40"
+          title="立刻跑一次"
+        >
+          <Play size={10} /> 立即运行
+        </button>
+        <button
+          onClick={onEdit}
+          className="flex items-center gap-1 px-2 py-1 text-[10.5px] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded"
+          title="编辑"
+        >
+          <Pencil size={10} /> 编辑
+        </button>
+        <button
+          onClick={onDelete}
+          className="flex items-center gap-1 px-2 py-1 text-[10.5px] text-text-faint hover:text-error hover:bg-bg-hover rounded"
+          title="删除"
+        >
+          <Trash2 size={10} />
+        </button>
+        <div className="flex-1" />
+        <button
+          onClick={onToggle}
+          className={`flex items-center gap-1 px-2 py-1 text-[10.5px] rounded ${
+            task.enabled
+              ? "text-success hover:bg-bg-hover"
+              : "text-text-faint hover:text-text-secondary hover:bg-bg-hover"
+          }`}
+          title={task.enabled ? "点击停用" : "点击启用"}
+        >
+          <Power size={10} />
+          {task.enabled ? "已启用" : "已停用"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TaskEditor({
+  initial,
+  isCreate,
+  onCancel,
+  onSave,
+}: {
+  initial: AutomationTask;
+  isCreate: boolean;
+  onCancel: () => void;
+  onSave: (t: AutomationTask) => void;
+}) {
+  const [draft, setDraft] = useState<AutomationTask>(initial);
+  const update = <K extends keyof AutomationTask>(k: K, v: AutomationTask[K]) =>
+    setDraft((p) => ({ ...p, [k]: v }));
+
+  const submit = () => {
+    if (!draft.name.trim() || !draft.prompt.trim() || !draft.schedule.trim()) {
+      alert("名称、prompt 和 schedule 都是必填的");
+      return;
+    }
+    onSave(draft);
+  };
+
+  return (
+    <div
+      className="modal-backdrop"
+      onClick={onCancel}
+    >
+      <div
+        className="modal-card modal-card-lg flex flex-col max-h-[90vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <div className="modal-title-block">
+            <h3 className="modal-title">
+              {isCreate ? "新建自动化" : `编辑 · ${draft.name || "未命名"}`}
+            </h3>
+          </div>
+          <button
+            onClick={onCancel}
+            className="modal-close"
+            aria-label="关闭"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="modal-form">
+          <Field label="名称" hint="给任务起个名字（卡片标题）">
+            <input
+              type="text"
+              value={draft.name}
+              onChange={(e) => update("name", e.target.value)}
+              className="modal-input"
+              placeholder="每日早报"
+            />
+          </Field>
+          <Field label="描述" hint="（可选）一句话讲清任务目的">
+            <input
+              type="text"
+              value={draft.description ?? ""}
+              onChange={(e) => update("description", e.target.value)}
+              className="modal-input"
+              placeholder="每天早上整理昨天的工作进展"
+            />
+          </Field>
+          <Field
+            label="Prompt"
+            hint="到点会原样发给 agent 的内容"
+            rightAction={
+              <AiGenerateButton
+                draft={draft.prompt}
+                onResult={(generated) => update("prompt", generated)}
+                triggerKind="cron"
+                scheduleHint={draft.schedule}
+              />
+            }
+          >
+            <textarea
+              value={draft.prompt}
+              onChange={(e) => update("prompt", e.target.value)}
+              rows={4}
+              className="modal-textarea"
+              placeholder="请帮我整理昨天的工作进展：&#10;1) 关键成果&#10;2) 阻塞项&#10;3) 今日建议"
+            />
+          </Field>
+          <Field
+            label="Schedule（cron 表达式）"
+            hint="5 字段：分 时 日 月 周。例：0 9 * * 1-5 = 工作日 9 点"
+          >
+            <div className="flex flex-wrap gap-1 mb-2">
+              {CRON_PRESETS.map(([label, expr, desc]) => (
+                <button
+                  key={expr}
+                  onClick={() => update("schedule", expr)}
+                  className={`px-2 py-0.5 text-[10.5px] rounded ${
+                    draft.schedule === expr
+                      ? "bg-accent text-bg-primary"
+                      : "bg-bg-secondary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                  }`}
+                  title={desc}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              value={draft.schedule}
+              onChange={(e) => update("schedule", e.target.value)}
+              className="modal-input font-mono"
+              placeholder="0 9 * * 1-5"
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="分类" hint="（可选）用于卡片分组">
+              <input
+                type="text"
+                value={draft.category ?? ""}
+                onChange={(e) => update("category", e.target.value)}
+                className="modal-input"
+                placeholder="工作"
+              />
+            </Field>
+            <Field label="图标" hint="（可选）emoji">
+              <input
+                type="text"
+                value={draft.icon ?? ""}
+                onChange={(e) => update("icon", e.target.value)}
+                maxLength={2}
+                className="modal-input"
+                placeholder="✨"
+              />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="模型" hint="（可选）provider:model">
+              <input
+                type="text"
+                value={draft.model ?? ""}
+                onChange={(e) => update("model", e.target.value || undefined)}
+                className="modal-input font-mono"
+                placeholder="openai:gpt-4o"
+              />
+            </Field>
+            <Field label="权限" hint="default 触发审批 / full 自动批准">
+              <select
+                value={draft.permission_level ?? "default"}
+                onChange={(e) =>
+                  update(
+                    "permission_level",
+                    e.target.value as "default" | "full",
+                  )
+                }
+                className="modal-input"
+              >
+                <option value="default">default（危险工具需审批）</option>
+                <option value="full">full（自动批准）</option>
+              </select>
+            </Field>
+          </div>
+          <label className="flex items-center gap-2 text-[12px] text-text-secondary cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={draft.enabled}
+              onChange={(e) => update("enabled", e.target.checked)}
+              className="rounded border-border-primary"
+            />
+            创建后立即启用
+          </label>
+        </div>
+
+        <div className="modal-footer">
+          <button
+            onClick={onCancel}
+            className="modal-btn modal-btn-secondary"
+          >
+            取消
+          </button>
+          <button
+            onClick={submit}
+            className="modal-btn modal-btn-primary"
+          >
+            保存
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+  rightAction,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+  /** PLAN_UI_ENHANCEMENT §7.1: 标签右侧的动作按钮（如 "AI 生成"）。 */
+  rightAction?: React.ReactNode;
+}) {
+  return (
+    <div className="modal-field">
+      <div className="flex items-center justify-between mb-1.5">
+        <label className="modal-field-label" style={{ marginBottom: 0 }}>{label}</label>
+        {rightAction}
+      </div>
+      {children}
+      {hint && <p className="modal-field-hint">{hint}</p>}
+    </div>
+  );
+}

@@ -1,0 +1,56 @@
+/* ════════════════════════════════════════════════════════════════════
+   base.css — Reset, body, scrollbar, global rules
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Body ────────────────────────────────────────────────────────── */
+body {
+  overflow: hidden;
+  user-select: text;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Microsoft YaHei UI", "Source Han Sans CN",
+    "Noto Sans CJK SC", Roboto, "Helvetica Neue", sans-serif;
+  font-size: var(--font-size-body);
+  line-height: 1.5;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  transition: background-color var(--duration-base) ease,
+              color var(--duration-base) ease;
+}
+
+/* ── Scrollbar (克制:窄+中性) ───────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-tertiary);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-faint);
+}
+
+::selection {
+  background: var(--color-accent-soft-strong);
+  color: var(--color-text-primary);
+}
+
+/* ── Focus (主人强规则:无焦点边框色) ────────────────────────────── */
+:focus,
+:focus-visible {
+  outline: none;
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Tauri drag region helpers ──────────────────────────────────── */
+[data-tauri-drag-region] { -webkit-app-region: drag; }
+[data-tauri-no-drag] { -webkit-app-region: no-drag; }

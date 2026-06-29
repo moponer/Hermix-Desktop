@@ -1,0 +1,671 @@
+/* ════════════════════════════════════════════════════════════════════
+   code-view.css — v7 彻底重写
+   ──────────────────────────────────────────────────────────────────
+   v6 → v7 的关键变化（主人："渲染的方式肯定要重写，给我删除重写"）：
+     · 抛弃 <table><tr><td> 结构
+     · 抛弃每行一个 <SyntaxHighlighter> 的 N×调用
+     · 新结构：1 个滚动容器 + 1 个 flex 行容器
+       ┌─────────────────────────────────────────────┐
+       │ .code-viewport (overflow:auto)             │
+       │ ┌─────────────────────────────────────────┐ │
+       │ │ .code-flex (display: flex)              │ │
+       │ │ ┌──────┐  ┌───────────────────────────┐ │ │
+       │ │ │gutter│  │ .code-pre > .code-body    │ │ │
+       │ │ │1     │  │ highlighted token tree     │ │ │
+       │ │ │2     │  │ highlighted token tree     │ │ │
+       │ │ │3     │  │ highlighted token tree     │ │ │
+       │ │ └──────┘  └───────────────────────────┘ │ │
+       │ └─────────────────────────────────────────┘ │
+       └─────────────────────────────────────────────┘
+     · 行号和代码天然 baseline 对齐（同一 font / line-height / box）
+     · 行号当前行高亮 = CSS-only：[data-active-line="N"] ~ .code-ln[data-line="N"]
+
+   参照：lucide-react 官网代码区 / shadcn-ui-docs / Linear。
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 文件图标磁贴（保留） ──────────────────────────────────────── */
+.file-icon-tile {
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  color: #fff;
+  position: relative;
+}
+.file-icon-tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: transparent;
+}
+.file-icon-tile svg { color: #fff !important; }
+
+/* ════════════════════════════════════════════════════════════════════
+   头部 — 保留 v4 两行结构
+   ════════════════════════════════════════════════════════════════════ */
+
+.preview-pane .preview-head {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+  padding: 18px 22px 14px !important;
+  /* Gradient header — auto-adapts: in dark mode bg-code-header is
+     a deeper shade, in light mode it's a soft cream. The 1px
+     bottom border uses a slightly tinted color so it reads as
+     "soft divider" not "hard line". */
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-bg-code-header) 100%, transparent) 0%,
+    color-mix(in srgb, var(--color-bg-code-header) 88%, var(--color-bg-primary)) 100%
+  ) !important;
+  border-bottom: 1px solid color-mix(
+    in srgb,
+    var(--color-border-subtle) 70%,
+    transparent
+  );
+  font-family: var(--font-family-primary, "Inter", system-ui, sans-serif) !important;
+  flex-shrink: 0;
+  position: relative;
+}
+/* Hairline accent strip on top of the header — picks up the
+   primary brand color in both themes. In dark mode it shows as a
+   cool blue glow; in light mode it's a quiet blue band that ties
+   the modal back to the global accent. */
+.preview-pane .preview-head::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--color-accent, var(--color-info)) 35%, transparent) 50%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+.preview-pane .preview-head.is-fullscreen {
+  padding: 14px 28px !important;
+}
+
+/* Row 1: icon · name · lang · spacer · close */
+.preview-pane .preview-head-row1 {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  min-height: 32px;
+}
+.preview-pane .preview-head-spacer { flex: 1 1 auto !important; min-width: 8px; }
+
+/* 文件名 — 升级到 14px / 600，对齐 VS Code 标签栏字号
+   保留字重对比但不再"小字"——主人要"显示的标题信息都美化" */
+.preview-pane .preview-filename {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: var(--color-text-primary);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+  font-family: inherit !important;
+  min-width: 0;
+}
+
+/* 语言徽章 — 升级为带边框的精致 chip */
+.preview-pane .preview-lang {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 3px 9px 3px 7px !important;
+  margin: 0 !important;
+  background: color-mix(in srgb, var(--color-info) 12%, transparent) !important;
+  color: var(--color-info) !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-info) 22%, transparent);
+  font-family: inherit !important;
+  flex-shrink: 0;
+  line-height: 1.3;
+  /* subtle inner highlight for premium feel */
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 8%, transparent);
+}
+.preview-pane .preview-lang-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
+/* Row 2: path · action group */
+.preview-pane .preview-head-row2 {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  margin-top: 8px !important;
+  min-height: 24px;
+}
+
+/* 路径：单行省略 + 改进 hover */
+.preview-pane .preview-path {
+  flex: 1 1 auto !important;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  color: color-mix(in srgb, var(--color-info) 78%, var(--color-text-muted)) !important;
+  text-decoration: none !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color var(--duration-fast) ease;
+}
+.preview-pane .preview-path::before {
+  content: "›";
+  color: color-mix(in srgb, var(--color-text-faint) 80%, transparent);
+  font-size: 12px;
+  line-height: 1;
+}
+.preview-pane .preview-path:hover {
+  color: var(--color-info) !important;
+  text-decoration: underline !important;
+  text-decoration-color: color-mix(in srgb, var(--color-info) 50%, transparent);
+  text-underline-offset: 3px;
+}
+
+/* 操作按钮组 */
+.preview-pane .preview-head-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  flex-shrink: 0;
+}
+
+/* 行数/大小 元信息 */
+.preview-pane .preview-stats {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  font-size: 10px !important;
+  font-weight: 400 !important;
+  color: var(--color-text-faint);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace !important;
+  letter-spacing: 0.01em;
+  margin-right: 4px;
+}
+.preview-pane .preview-stats-dot { opacity: 0.6; }
+
+/* 头部动作按钮 */
+.preview-pane .head-action {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+  font-family: inherit !important;
+}
+.preview-pane .head-action:hover {
+  background: color-mix(in srgb, var(--color-text-faint) 18%, transparent);
+  color: var(--color-text-primary);
+  transform: translateY(-1px);
+}
+.preview-pane .head-action:active {
+  transform: translateY(0);
+}
+.preview-pane .head-action.is-active {
+  background: color-mix(in srgb, var(--color-info) 18%, transparent);
+  color: var(--color-info);
+}
+.preview-pane .head-action.is-danger:hover {
+  background: color-mix(in srgb, var(--color-error) 18%, transparent);
+  color: var(--color-error);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   代码视图 — v7 全新结构
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 滚动容器 ──────────────────────────────────────────────────── */
+.preview-pane .code-viewport {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--color-bg-code);
+  font-family: "JetBrains Mono", "JetBrainsMono NF", "Cascadia Mono",
+    "Cascadia Code", Consolas, "Source Code Pro", Menlo, ui-monospace,
+    monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--color-text-on-code);
+  overflow: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Flex 行容器：gutter + 代码主体 ─────────────────────────────── */
+.preview-pane .code-flex {
+  display: flex;
+  min-width: 100%;
+  align-items: stretch;
+}
+
+/* ── 行号 gutter ───────────────────────────────────────────────── */
+.preview-pane .code-gutter {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+  border-right: 1px solid color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
+  background: color-mix(in srgb, var(--color-bg-code) 92%, var(--color-bg-primary));
+  user-select: none;
+}
+
+.preview-pane .code-ln {
+  display: block;
+  padding: 0 10px 0 12px;
+  font-size: 10px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: color-mix(in srgb, var(--color-text-faint) 60%, transparent);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+
+.preview-pane .code-ln:hover {
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-text-faint) 8%, transparent);
+}
+
+/* 当前激活行高亮 —— CSS only，零 JS */
+.preview-pane .code-viewport[data-active-line] .code-ln[data-active="true"] {
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-info) 14%, transparent);
+  font-weight: 500;
+}
+
+/* ── 代码主体 ──────────────────────────────────────────────────── */
+.preview-pane .code-pre {
+  margin: 0;
+  padding: 4px 12px 4px 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.preview-pane .is-wrap .code-pre {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.preview-pane .code-body {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  background: transparent;
+  display: block;
+  white-space: inherit;
+}
+
+/* ── 当前行背景（CSS-only）：行号和代码主体联动 ──────────────── */
+/* 这一段用 :has() 让 gutter 跟代码同步高亮当前行 — 现代浏览器全部支持 */
+.preview-pane .code-viewport[data-active-line] .code-flex {
+  --active-line: attr(data-active-line number); /* 兼容性 fallback */
+}
+
+/* ── token 颜色（oneDark 主题，由 CodeView 内联 style 提供） ── */
+/* 颜色值在 CodeView.tsx 的 ONE_DARK map 里 */
+
+.preview-pane .code-empty {
+  padding: 32px 16px;
+  font-size: 11px;
+  color: var(--color-text-faint);
+  text-align: center;
+  font-family: "JetBrains Mono", monospace;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   状态栏
+   ════════════════════════════════════════════════════════════════════ */
+.preview-pane .code-status {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  height: 22px !important;
+  padding: 0 12px !important;
+  background: var(--color-bg-code-header, var(--color-bg-tertiary)) !important;
+  border-top: 1px solid var(--color-border-subtle);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10px !important;
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+}
+.preview-pane .cs-item { display: inline-flex; align-items: center; gap: 4px; }
+.preview-pane .cs-lang {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: var(--color-info);
+}
+.preview-pane .cs-spacer { flex: 1 1 auto; }
+
+/* ════════════════════════════════════════════════════════════════════
+   全屏覆盖层
+   ════════════════════════════════════════════════════════════════════ */
+.preview-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 60 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: var(--color-bg-primary) !important;
+}
+
+/* Body of the preview pane — slight top-shadow to visually
+   detach the header from the code surface. Works in both
+   themes: dark uses a soft black; light uses a barely-there
+   gray that reads as "header is closer to the viewer". */
+.preview-pane .preview-body {
+  position: relative;
+  box-shadow: inset 0 8px 12px -8px rgba(0, 0, 0, 0.18);
+}
+.preview-pane .preview-body::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--color-border-subtle) 50%, transparent) 30%,
+    color-mix(in srgb, var(--color-border-subtle) 50%, transparent) 70%,
+    transparent
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Loading state — center-stage with a soft pulse. The
+   parent preview-body has the gradient already, so we just
+   add a subtle inner highlight ring around the loader. */
+.preview-pane .preview-loading {
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--color-info) 5%, transparent) 0%,
+    transparent 60%
+  );
+  animation: preview-loading-pulse 2.4s ease-in-out infinite;
+}
+@keyframes preview-loading-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+.preview-fullscreen-body {
+  flex: 1 1 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+}
+.preview-fullscreen-scroll {
+  flex: 1 1 auto !important;
+  overflow: auto !important;
+  min-height: 0 !important;
+}
+
+/* Office iframe must fill its flex parent — block + height:100% defeats
+   the inline-baseline gap that would otherwise leave a 4px strip. */
+.preview-fullscreen-scroll > div,
+.preview-pane-inner > div:has(> iframe) {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+.preview-fullscreen-scroll iframe,
+.preview-pane-inner iframe {
+  display: block !important;
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   图片预览 — 居中、可缩放、棋盘格背景显示透明通道
+   ════════════════════════════════════════════════════════════════════ */
+.preview-pane .preview-image-stage {
+  flex: 1 1 auto !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  /* Checkered background — exposes alpha channel for PNG/WebP,
+     common case for screenshots / icons.  12px squares are a
+     good balance between visible alpha and not-busy. */
+  background-color: var(--color-bg-code);
+  background-image:
+    linear-gradient(45deg,
+      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 25%,
+      transparent 25%),
+    linear-gradient(-45deg,
+      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 25%,
+      transparent 25%),
+    linear-gradient(45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 75%),
+    linear-gradient(-45deg,
+      transparent 75%,
+      color-mix(in srgb, var(--color-text-faint) 12%, transparent) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  padding: 24px !important;
+  overflow: auto !important;
+  min-height: 0 !important;
+}
+.preview-pane .preview-image-img {
+  /* `max-width: 100%` so wide screenshots don't blow out the
+     modal; `max-height: 100%` so portraits don't push the
+     status bar off-screen.  Object-fit keeps aspect ratio. */
+  max-width: 100% !important;
+  max-height: 100% !important;
+  width: auto !important;
+  height: auto !important;
+  display: block !important;
+  border-radius: 4px;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.12);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Markdown 预览 — 阅读体验而非代码视图
+   仿 GitHub README 排版，但主题色直接走 modal 文本色
+   ════════════════════════════════════════════════════════════════════ */
+.preview-pane .preview-md-host {
+  flex: 1 1 auto !important;
+  overflow: auto !important;
+  min-height: 0 !important;
+  background: var(--color-bg-code);
+}
+.preview-pane .preview-md-body {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 32px 40px 64px;
+  font-family: var(--font-family-primary, "Inter", system-ui, sans-serif);
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--color-text-primary);
+  word-wrap: break-word;
+}
+/* Headings */
+.preview-pane .preview-md-body h1,
+.preview-pane .preview-md-body h2,
+.preview-pane .preview-md-body h3,
+.preview-pane .preview-md-body h4,
+.preview-pane .preview-md-body h5,
+.preview-pane .preview-md-body h6 {
+  margin: 28px 0 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--color-text-primary);
+}
+.preview-pane .preview-md-body h1 {
+  font-size: 26px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
+}
+.preview-pane .preview-md-body h2 {
+  font-size: 21px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border-subtle) 50%, transparent);
+}
+.preview-pane .preview-md-body h3 { font-size: 17px; }
+.preview-pane .preview-md-body h4 { font-size: 15px; }
+.preview-pane .preview-md-body h5,
+.preview-pane .preview-md-body h6 { font-size: 14px; color: var(--color-text-secondary); }
+/* Paragraphs & lists */
+.preview-pane .preview-md-body p {
+  margin: 0 0 14px;
+}
+.preview-pane .preview-md-body ul,
+.preview-pane .preview-md-body ol {
+  margin: 0 0 14px;
+  padding-left: 28px;
+}
+.preview-pane .preview-md-body li {
+  margin: 4px 0;
+}
+.preview-pane .preview-md-body li > p {
+  margin-bottom: 6px;
+}
+/* Inline code */
+.preview-pane .preview-md-body code {
+  font-family: "JetBrains Mono", "JetBrainsMono NF", ui-monospace, monospace;
+  font-size: 12.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-info) 10%, transparent);
+  color: color-mix(in srgb, var(--color-info) 80%, var(--color-text-primary));
+  border: 1px solid color-mix(in srgb, var(--color-info) 18%, transparent);
+}
+/* Code blocks */
+.preview-pane .preview-md-body pre {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.preview-pane .preview-md-body pre code {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-primary);
+  font-size: inherit;
+}
+/* Blockquote */
+.preview-pane .preview-md-body blockquote {
+  margin: 0 0 14px;
+  padding: 6px 16px;
+  border-left: 3px solid var(--color-accent, var(--color-info));
+  background: color-mix(in srgb, var(--color-accent, var(--color-info)) 6%, transparent);
+  color: var(--color-text-secondary);
+  border-radius: 0 4px 4px 0;
+}
+.preview-pane .preview-md-body blockquote > :first-child { margin-top: 0; }
+.preview-pane .preview-md-body blockquote > :last-child { margin-bottom: 0; }
+/* Tables (GFM) */
+.preview-pane .preview-md-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0 0 16px;
+  font-size: 13px;
+  display: block;
+  overflow-x: auto;
+}
+.preview-pane .preview-md-body th,
+.preview-pane .preview-md-body td {
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-subtle);
+  text-align: left;
+}
+.preview-pane .preview-md-body th {
+  background: color-mix(in srgb, var(--color-bg-primary) 60%, var(--color-bg-code));
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.preview-pane .preview-md-body tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--color-bg-primary) 40%, var(--color-bg-code));
+}
+/* Links */
+.preview-pane .preview-md-body a {
+  color: var(--color-info);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-info) 35%, transparent);
+  transition: border-color 120ms ease;
+}
+.preview-pane .preview-md-body a:hover {
+  border-bottom-color: var(--color-info);
+}
+/* HR */
+.preview-pane .preview-md-body hr {
+  border: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--color-border-subtle) 70%, transparent);
+  margin: 24px 0;
+}
+/* Task list (GFM checkboxes) */
+.preview-pane .preview-md-body input[type="checkbox"] {
+  margin-right: 6px;
+  cursor: pointer;
+  accent-color: var(--color-info);
+}
+/* Images inside markdown */
+.preview-pane .preview-md-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  display: block;
+  margin: 8px 0;
+}

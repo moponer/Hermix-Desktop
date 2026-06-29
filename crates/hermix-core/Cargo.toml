@@ -1,0 +1,31 @@
+[package]
+name = "hermix-core"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "Core types, traits, and error types for Hermix Agent"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+url = { workspace = true }
+bytes = { workspace = true }
+indexmap = { workspace = true }
+futures = { workspace = true }
+# `encoding_rs` is only used by the `console_decode` module on
+# Windows (gated via `#[cfg(windows)]` in `src/console_decode.rs`).
+# Declared as a regular dep so Cargo.lock stays stable across
+# platforms.
+encoding_rs = "0.8"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = "3"

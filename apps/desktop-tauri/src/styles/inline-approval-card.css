@@ -1,0 +1,60 @@
+/* ── InlineApprovalCard — countdown pill ─────────────────────────
+   Two visual states, sharing the same DOM shape so the layout
+   never shifts when the urgency flips:
+     • neutral (>= 30s remaining)  :  gray text + soft gray
+                                       background, Timer icon
+     • danger  (<= 30s remaining)  :  red text + error-soft
+                                       background, Timer icon
+                                       pulses (1Hz) to mirror the
+                                       cadence of the per-second
+                                       re-render.
+   30s is the threshold (NOT 60s / 5s / etc) because that's the
+   point at which a quick read-or-skip judgment feels appropriate
+   — half a minute of remaining time is the human attention
+   boundary for "decide now or wait for the next request". */
+
+/* ── Neutral state ────────────────────────────────────────────── */
+.approval-pill-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--color-text-tertiary, #6a6a6a);
+  background: var(--color-bg-tertiary, #ededee);
+  border: 1px solid var(--color-border-subtle, #ececef);
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;   /* digits don't shift width as the seconds tick over */
+}
+
+/* ── Danger state (≤30s remaining) ───────────────────────────── */
+.approval-pill-countdown--danger {
+  color: var(--color-error, #dc2626);
+  background: var(--color-error-soft, rgba(220, 38, 38, 0.10));
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.approval-pill-countdown--danger .approval-countdown-icon {
+  animation: h-approval-countdown-pulse 1s ease-in-out infinite;
+}
+
+@keyframes h-approval-countdown-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.25);
+    opacity: 0.6;
+  }
+}
+
+/* ── Reduced motion ───────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .approval-pill-countdown--danger .approval-countdown-icon {
+    animation: none;
+  }
+}

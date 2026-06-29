@@ -1,0 +1,47 @@
+/* ════════════════════════════════════════════════════════════════════
+   utilities.css — Small helpers for edge cases Tailwind doesn't cover.
+   Use sparingly — prefer semantic component classes from components.css.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Cursor helpers ── */
+.cursor-col-resize { cursor: col-resize; }
+.cursor-row-resize { cursor: row-resize; }
+
+/* ── Layout helpers (only for places where semantic class is overkill) ── */
+.stack-h { display: flex; align-items: center; }
+.stack-v { display: flex; flex-direction: column; }
+.grow   { flex: 1; min-width: 0; min-height: 0; }
+.no-shrink { flex-shrink: 0; }
+.center { display: flex; align-items: center; justify-content: center; }
+
+/* ── No-drag for Tauri titlebar items ── */
+.no-drag { -webkit-app-region: no-drag; }
+.drag   { -webkit-app-region: drag; }
+
+/* ── Truncate text ── */
+.truncate-1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.truncate-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.truncate-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── Hide scrollbar but keep scrollable ── */
+.scrollbar-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}

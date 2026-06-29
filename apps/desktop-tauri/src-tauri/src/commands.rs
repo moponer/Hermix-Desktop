@@ -1,0 +1,633 @@
+use crate::AppState;
+use crate::officecli;
+use crate::portable_env;
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+/// Local re-implementation of `hermix_config::env_compat`.
+///
+/// The `hermix-desktop` crate is built standalone (it has its own
+/// `[workspace]` table, opting out of the root workspace), so it
+/// cannot depend on the `hermix-config` workspace crate. To keep the
+/// build self-contained we inline a 1:1 copy of the helper here.
+///
+/// Semantics:
+/// - Returns the value of the **new** env var (`HERMIX_*`) if set and
+///   non-empty.
+/// - Otherwise returns the value of the **old** env var (`HERMES_*`)
+///   if set and non-empty, and prints a one-shot stderr deprecation
+///   notice the first time a particular `(new, old)` pair falls back.
+/// - Returns `None` if neither is set or both are empty.
+///
+/// SAFETY: `seen_keys` is initialized at most once via `OnceLock` and
+/// is only ever written from `.get_or_init(...)`, which the std
+/// library guarantees is race-free. We then mutate the returned
+/// `Vec` via a non-atomic `push` — this is safe because
+/// `get_or_init` guarantees only one thread runs the closure, and
+/// after that all other threads see a `&mut` borrow of the same Vec
+/// for the duration of the call (they wait for the closure to
+/// finish). Once the closure returns, `seen_keys` is shared, but
+/// we never push to it again. So the "mutable after shared borrow"
+/// problem never arises.
+fn env_compat(new_name: &str, old_name: &str) -> Option<String> {
+    use std::sync::Mutex;
+
+    static SEEN: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(Vec::new()));
+
+    if let Ok(v) = std::env::var(new_name) {
+        if !v.is_empty() {
+            return Some(v);
+        }
+    }
+    let old_value = std::env::var(old_name).ok().filter(|v| !v.is_empty())?;
+
+    // One-shot deprecation notice, keyed on the (new, old) pair so
+    // different env vars don't share a "did we already warn" bit.
+    let key = (new_name.to_string(), old_name.to_string());
+    let already_warned = {
+        let guard = seen.lock().expect("env_compat deprecation table poisoned");
+        guard.iter().any(|k| k == &key)
+    };
+    if !already_warned {
+        let mut guard = seen.lock().expect("env_compat deprecation table poisoned");
+        guard.push(key);
+        eprintln!(
+            "[hermix-compat] env var {old_name} is deprecated, use {new_name} instead \
+             (will keep falling back for one release)"
+        );
+    }
+
+    Some(old_value)
+}
+
+/// Resolve the canonical data directory for the desktop app.
+///
+/// 1. `$HERMIX_PORTABLE_DATA_DIR` (set in dev mode only)
+/// 2. `$HERMIX_HOME` (explicit override)
+/// 3. Dev-mode: `hermix-data/` at workspace root
+/// 4. Last-ditch: `<install_root>/data`
+fn resolve_data_dir() -> PathBuf {
+    if let Some(p) = portable_env::portable_data_dir() {
+        return p;
+    }
+    if let Some(p) = std::env::var_os("HERMIX_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+    {
+        return p;
+    }
+    // Dev-mode: detect hermix-data/ at workspace root.
+    if portable_env::is_tauri_app_binary() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let hermix_data = manifest_dir.join("../../../hermix-data");
+        if hermix_data.is_dir() {
+            return hermix_data;
+        }
+    }
+    // Last-ditch: next to the executable.
+    if let Ok(install_root) = portable_env::compute_install_root() {
+        return install_root.join("data");
+    }
+    PathBuf::from(".")
+}
+
+/// Return the current effective data directory for the running
+/// desktop app.
+///
+/// **Preferred command** (Phase 10 — Portable Desktop):
+/// `invoke<string>("get_data_dir")` returns the absolute path to the
+/// directory where user data (config, memory, skills, sessions,
+/// auth tokens) currently lives. In portable mode this is
+/// `<install_root>/data`; in non-portable mode it falls back to the
+/// platform config dir.
+///
+/// Front-end code should call this (not `get_settings_dir`) when it
+/// needs to show the user "your data is here" — the value is the
+/// single source of truth for "where does Hermix Desktop store my
+/// stuff on this machine?".
+#[tauri::command]
+pub fn get_data_dir() -> Result<String, String> {
+    let path = resolve_data_dir();
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// **Deprecated**: kept for one release as an alias for [`get_data_dir`].
+///
+/// Phase 9 callers (and any third-party code that wired itself to
+/// `get_settings_dir`) continue to work — the implementation now
+/// resolves to the same place as `get_data_dir` instead of
+/// `%APPDATA%\\hermix\\` (which would silently scatter data outside
+/// the install root, defeating the whole portable-mode promise).
+///
+/// Front-end code MUST migrate to `get_data_dir`. The companion
+/// `openSettingsDir` in `desktopBridge.ts` is also deprecated.
+#[tauri::command]
+pub fn get_settings_dir() -> Result<String, String> {
+    eprintln!(
+        "[Hermix] WARNING: 'get_settings_dir' is deprecated, use 'get_data_dir' instead"
+    );
+    get_data_dir()
+}
+
+#[tauri::command]
+pub async fn pick_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let result = app
+        .dialog()
+        .file()
+        .set_title("选择目录")
+        .blocking_pick_folder();
+    // FilePath implements Display, so use .to_string() instead of to_string_lossy()
+    Ok(result.map(|p| p.to_string()))
+}
+
+#[tauri::command]
+pub async fn open_external_url(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn restart_app(app: tauri::AppHandle) {
+    app.restart();
+}
+
+#[tauri::command]
+pub async fn get_server_status(state: tauri::State<'_, AppState>) -> Result<ServerStatus, String> {
+    // Extract values under lock, then drop lock before await
+    let (running, base_url) = {
+        let sb = state.sidecar.lock().map_err(|e| e.to_string())?;
+        (sb.is_running(), sb.base_url())
+    };
+
+    let healthy = if running {
+        // Clone base_url, drop lock, then do async health check
+        let url = format!("{base_url}/health");
+        match reqwest::get(&url).await {
+            Ok(resp) => resp.status().is_success(),
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+
+    Ok(ServerStatus {
+        running,
+        healthy,
+        port: 3000,
+        base_url,
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct ServerStatus {
+    pub running: bool,
+    pub healthy: bool,
+    pub port: u16,
+    pub base_url: String,
+}
+
+/// Read a file for the "产物" (artifact) preview pane in the right sidebar or
+/// the in-chat inline preview popover.
+///
+/// Security: only files under the configured allowed roots can be read. Roots
+/// come from `HERMES_DESKTOP_ARTIFACT_ROOTS` (comma-separated absolute paths)
+/// and fall back to the user's home directory. Symlinks and `..` are resolved
+/// before the check, so a path like `/root/../etc/passwd` is rejected.
+///
+/// Relative paths: if `path` is not absolute, it's resolved against
+/// `workspace_root` (if provided) → `HERMES_DESKTOP_WORKSPACE_ROOT` env →
+/// `HERMES_DESKTOP_ARTIFACT_ROOTS`[0] → `~/`. This is the fix for the bug
+/// where the LLM says "保存到 tmp/xx/方案.md" but the path is relative and
+/// can't be opened on the user's machine.
+///
+/// Returns:
+/// - `kind = "text"`   → content is the decoded UTF-8 string
+/// - `kind = "binary"` → content is `null`; UI shows a binary placeholder
+/// - `kind = "empty"`  → content is `""`; UI shows an empty-state hint
+/// - `resolved_path`   → the canonical absolute path (so the front-end can
+///                       display it back to the user and update its records)
+#[tauri::command]
+pub async fn read_artifact_file(
+    path: String,
+    workspace_root: Option<String>,
+) -> Result<ArtifactContent, String> {
+    const MAX_BYTES: u64 = 2 * 1024 * 1024; // 2 MiB
+
+    let raw = PathBuf::from(&path);
+    if raw.as_os_str().is_empty() {
+        return Err("empty path".to_string());
+    }
+
+    // If relative, anchor against the best available base. This makes the
+    // artifact pane robust to LLM output like "tmp/xx/方案.md" or
+    // "tmp\\xx\\方案.md" by joining it onto the user's workspace.
+    let anchored: PathBuf = if raw.is_absolute() {
+        raw
+    } else {
+        let base = workspace_root
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| env_compat("HERMIX_DESKTOP_WORKSPACE_ROOT", "HERMES_DESKTOP_WORKSPACE_ROOT").map(PathBuf::from))
+            .or_else(|| allowed_roots().into_iter().next())
+            .or_else(dirs::home_dir)
+            .ok_or_else(|| "no workspace base available for relative path".to_string())?;
+        base.join(&raw)
+    };
+
+    // Canonicalize resolves `..` and symlinks; fails if the file doesn't exist.
+    let canonical = anchored
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve path '{}': {e}", anchored.display()))?;
+
+    if !is_under_allowed_root_with(&canonical, workspace_root.as_deref()) {
+        return Err(format!(
+            "path '{}' is outside the allowed artifact roots",
+            canonical.display()
+        ));
+    }
+
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|e| format!("cannot stat file: {e}"))?;
+    if !metadata.is_file() {
+        return Err("not a regular file".to_string());
+    }
+    if metadata.len() > MAX_BYTES {
+        return Err(format!(
+            "file too large: {} bytes (max {})",
+            metadata.len(),
+            MAX_BYTES
+        ));
+    }
+
+    let bytes = std::fs::read(&canonical).map_err(|e| format!("cannot read file: {e}"))?;
+    let size = bytes.len() as u64;
+
+    let resolved = strip_unc_prefix(canonical.as_os_str());
+
+    if bytes.is_empty() {
+        return Ok(ArtifactContent {
+            kind: "empty",
+            content: None,
+            size,
+            resolved_path: Some(resolved),
+        });
+    }
+
+    match String::from_utf8(bytes) {
+        Ok(s) => Ok(ArtifactContent {
+            kind: "text",
+            content: Some(s),
+            size,
+            resolved_path: Some(resolved),
+        }),
+        Err(_) => Ok(ArtifactContent {
+            kind: "binary",
+            content: None,
+            size,
+            resolved_path: Some(resolved),
+        }),
+    }
+}
+
+/// Read an artifact's **raw bytes** as base64. Used by the front-end
+/// for binary formats (xlsx, xls, csv-as-bytes for SheetJS, docx
+/// later) where parsing needs the original byte stream rather than a
+/// UTF-8 string. Without this the front-end would either have to
+/// shell out to a sidecar (LibreOffice) or re-implement the
+/// allowlist / size cap, and we already do that work here.
+///
+/// Size cap is **10 MiB** (vs 2 MiB for the text path) because a
+/// 5 MiB .xlsx with embedded images is normal in real workflows.
+/// Returns `base64Content` plus the canonical `resolvedPath` so the
+/// UI can update its artifact record with the real on-disk path.
+#[tauri::command]
+pub async fn read_artifact_file_bytes(
+    path: String,
+    workspace_root: Option<String>,
+) -> Result<ArtifactBytesContent, String> {
+    const MAX_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
+
+    let raw = PathBuf::from(&path);
+    if raw.as_os_str().is_empty() {
+        return Err("empty path".to_string());
+    }
+
+    let anchored: PathBuf = if raw.is_absolute() {
+        raw
+    } else {
+        let base = workspace_root
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| env_compat("HERMIX_DESKTOP_WORKSPACE_ROOT", "HERMES_DESKTOP_WORKSPACE_ROOT").map(PathBuf::from))
+            .or_else(|| allowed_roots().into_iter().next())
+            .or_else(dirs::home_dir)
+            .ok_or_else(|| "no workspace base available for relative path".to_string())?;
+        base.join(&raw)
+    };
+
+    let canonical = anchored
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve path '{}': {e}", anchored.display()))?;
+
+    if !is_under_allowed_root_with(&canonical, workspace_root.as_deref()) {
+        return Err(format!(
+            "path '{}' is outside the allowed artifact roots",
+            canonical.display()
+        ));
+    }
+
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|e| format!("cannot stat file: {e}"))?;
+    if !metadata.is_file() {
+        return Err("not a regular file".to_string());
+    }
+    if metadata.len() > MAX_BYTES {
+        return Err(format!(
+            "file too large: {} bytes (max {})",
+            metadata.len(),
+            MAX_BYTES
+        ));
+    }
+
+    let bytes = std::fs::read(&canonical).map_err(|e| format!("cannot read file: {e}"))?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let resolved = strip_unc_prefix(canonical.as_os_str());
+
+    Ok(ArtifactBytesContent {
+        kind: "bytes",
+        content_base64: b64,
+        size: bytes.len() as u64,
+        resolved_path: Some(resolved),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactBytesContent {
+    pub kind: &'static str, // always "bytes"
+    pub content_base64: String,
+    pub size: u64,
+    pub resolved_path: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactContent {
+    pub kind: &'static str, // "text" | "binary" | "empty"
+    pub content: Option<String>,
+    pub size: u64,
+    /// The canonical absolute path that was actually read. Helps the front-end
+    /// display "found at <path>" when the original request was relative, and
+    /// lets the artifact list update its records with the real path.
+    pub resolved_path: Option<String>,
+}
+
+/// Check whether `canonical` lives under one of the allowed artifact roots.
+/// When `workspace_root` is provided by the caller, that workspace is also
+/// trusted — the user explicitly told the agent to work there, so files
+/// inside that directory are obviously in-scope, even when the global
+/// allowed-roots list is the conservative `~/` default and the workspace
+/// lives on another drive (e.g. `D:\_hermix_tmp`).
+fn is_under_allowed_root_with(canonical: &Path, workspace_root: Option<&str>) -> bool {
+    let roots = effective_allowed_roots(workspace_root);
+    if roots.is_empty() {
+        return false;
+    }
+    roots.iter().any(|r| canonical.starts_with(r))
+}
+
+fn strip_unc_prefix(s: &std::ffi::OsStr) -> String {
+    let lossy = s.to_string_lossy();
+    if lossy.starts_with(r"\\?\") {
+        lossy[4..].to_string()
+    } else {
+        lossy.to_string()
+    }
+}
+
+fn allowed_roots() -> Vec<PathBuf> {
+    if let Some(raw) = env_compat("HERMIX_DESKTOP_ARTIFACT_ROOTS", "HERMES_DESKTOP_ARTIFACT_ROOTS") {
+        let parsed: Vec<PathBuf> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .filter(|p| p.exists())
+            .filter_map(|p| p.canonicalize().ok())
+            .collect();
+        if !parsed.is_empty() {
+            return parsed;
+        }
+    }
+    // Default: user home directory (covers typical dev projects).
+    dirs::home_dir()
+        .and_then(|p| p.canonicalize().ok())
+        .into_iter()
+        .collect()
+}
+
+/// Per-call allowed roots, augmenting [`allowed_roots`] with the workspace
+/// root passed by the caller. The workspace root is the directory the user
+/// explicitly told the agent to work in (via the "工作目录" chip or the
+/// Tauri-launched sidecar) — files there are obviously in-scope, but the
+/// global allowed_roots list might be the conservative `~/` default and
+/// would reject a workspace on another drive (e.g. `D:\_hermix_tmp`).
+fn effective_allowed_roots(workspace_root: Option<&str>) -> Vec<PathBuf> {
+    let mut roots = allowed_roots();
+    if let Some(ws) = workspace_root {
+        let p = PathBuf::from(ws);
+        if let Ok(canonical) = p.canonicalize() {
+            if !roots.iter().any(|r| r == &canonical) {
+                roots.push(canonical);
+            }
+        }
+    }
+    roots
+}
+
+#[tauri::command]
+pub fn restart_sidecar(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let mut sb = state.sidecar.lock().map_err(|e| format!("lock: {e}"))?;
+    sb.restart()?;
+    Ok("restarted".to_string())
+}
+
+const OFFICE_EXTENSIONS: &[&str] = &["docx", "doc", "xlsx", "xls", "pptx", "ppt"];
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficePreviewResult {
+    pub html_path: String,
+    pub html_content: String,
+    pub file_name: String,
+}
+
+/// Render an Office document (.docx/.xlsx/.pptx) to HTML using the
+/// bundled `officecli` binary, and return the path to the generated
+/// HTML file for preview in an iframe.
+///
+/// The HTML is cached in `$APP_DATA/preview_cache/` keyed by a hash
+/// of the input path + modification time, so repeated previews of
+/// the same unchanged file are instant.
+#[tauri::command]
+pub async fn render_office_preview(
+    file_path: String,
+    workspace_root: Option<String>,
+) -> Result<OfficePreviewResult, String> {
+    let raw = PathBuf::from(&file_path);
+    if raw.as_os_str().is_empty() {
+        return Err("empty path".to_string());
+    }
+
+    // Resolve relative paths against workspace root.
+    let anchored: PathBuf = if raw.is_absolute() {
+        raw
+    } else {
+        let base = workspace_root
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| dirs::home_dir())
+            .ok_or_else(|| "no workspace base for relative path".to_string())?;
+        base.join(&raw)
+    };
+
+    let canonical = anchored
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve '{}': {e}", anchored.display()))?;
+
+    // Validate extension.
+    let ext = canonical
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !OFFICE_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(format!(
+            "unsupported file type '.{ext}'; supported: docx, doc, xlsx, xls, pptx, ppt"
+        ));
+    }
+
+    let file_name = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("document")
+        .to_string();
+
+    // Resolve officecli binary.
+    let officecli_bin = officecli::ensure_officecli()?;
+
+    // Build output path in preview_cache.
+    let data_dir = resolve_data_dir();
+    let cache_dir = data_dir.join("preview_cache");
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|e| format!("cannot create preview cache: {e}"))?;
+
+    // Use a deterministic hash: file path + last modified time.
+    let meta = std::fs::metadata(&canonical)
+        .map_err(|e| format!("cannot stat file: {e}"))?;
+    let modified = meta
+        .modified()
+        .map(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    let hash_input = format!("{}:{}", canonical.display(), modified);
+    let hash = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        hash_input.hash(&mut h);
+        format!("{:016x}", h.finish())
+    };
+    let html_path = cache_dir.join(format!("{hash}.html"));
+
+    // If cached HTML exists and is newer than the source, skip re-render.
+    let needs_render = if html_path.exists() {
+        html_path
+            .metadata()
+            .map(|m| m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH) < meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+            .unwrap_or(true)
+    } else {
+        true
+    };
+
+    if needs_render {
+        // officecli view <file> html outputs to stdout.
+        // Capture it and write to the cache file.
+        let output = tokio::process::Command::new(&officecli_bin)
+            .args([
+                "view",
+                canonical.to_str().unwrap_or(""),
+                "html",
+            ])
+            .env("OFFICECLI_NO_AUTO_RESIDENT", "1")
+            .output()
+            .await
+            .map_err(|e| format!("failed to run officecli: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("officecli failed: {}", stderr.trim()));
+        }
+
+        // Write stdout (HTML content) to the cache file.
+        std::fs::write(&html_path, &output.stdout)
+            .map_err(|e| format!("cannot write preview HTML: {e}"))?;
+    }
+
+    let resolved = strip_unc_prefix(html_path.as_os_str());
+    // Read the cached HTML so the front-end can render via srcDoc
+    // (avoids Tauri 2 asset-protocol scope complexity entirely).
+    let html_content = std::fs::read_to_string(&html_path)
+        .map_err(|e| format!("cannot read cached preview: {e}"))?;
+    Ok(OfficePreviewResult {
+        html_path: resolved,
+        html_content,
+        file_name,
+    })
+}
+
+/// Check whether an artifact path resolves to an existing regular file.
+/// Uses the same anchoring / canonicalization logic as `read_artifact_file`
+/// so relative paths are resolved against workspace_root and symlinks are
+/// followed.
+#[tauri::command]
+pub async fn artifact_path_exists(
+    path: String,
+    workspace_root: Option<String>,
+) -> bool {
+    let raw = PathBuf::from(&path);
+    if raw.as_os_str().is_empty() {
+        return false;
+    }
+
+    let anchored: PathBuf = if raw.is_absolute() {
+        raw
+    } else {
+        let base = workspace_root
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| env_compat("HERMIX_DESKTOP_WORKSPACE_ROOT", "HERMES_DESKTOP_WORKSPACE_ROOT").map(PathBuf::from))
+            .or_else(|| allowed_roots().into_iter().next())
+            .or_else(dirs::home_dir);
+        match base {
+            Some(b) => b.join(&raw),
+            None => return false,
+        }
+    };
+
+    // canonicalize fails if the path doesn't exist
+    let canonical = match anchored.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    // Must be under allowed roots AND a regular file
+    is_under_allowed_root_with(&canonical, workspace_root.as_deref())
+        && std::fs::metadata(&canonical).map(|m| m.is_file()).unwrap_or(false)
+}

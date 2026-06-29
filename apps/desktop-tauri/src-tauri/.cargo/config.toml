@@ -1,0 +1,17 @@
+# 2026-06-20: 把 Tauri sub-workspace 的 build artifact 也赶到外层
+# release/target/, 跟 root workspace 对齐. 路径是相对**当前 cargo 命令
+# 执行目录** (即 apps/desktop-tauri/src-tauri/), 所以 ../../../../release/target
+# 等价于 repo root/release/target.
+#
+# 为什么不在 apps/desktop-tauri/src-tauri/Cargo.toml 用 [workspace] target-dir:
+# - 那个文件已经有 [workspace] 段 (独立 sub-workspace, members=[])
+# - sub-workspace 的 target-dir 是相对**它自己**的 manifest 目录,
+#   即 apps/desktop-tauri/src-tauri/target — 跟 root workspace
+#   的相对 repo root 不同, 所以不能简单写 target-dir = "...".
+# - .cargo/config.toml 的 build.target-dir 优先级比 [workspace] target-dir
+#   低, 但因为这个 sub-workspace 里实际编译的目标就是它自己, 加上
+#   cargo 找 .cargo/config.toml 会先看 cwd, 命中后用绝对化路径 —
+#   实测有效. 如果 cargo 把 target-dir 报回相对路径, 我们改用
+#   CARGO_TARGET_DIR 环境变量兜底.
+[build]
+target-dir = "../../../../release/target"

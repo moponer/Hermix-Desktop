@@ -1,0 +1,949 @@
+use serde::{Deserialize, Serialize};
+
+// Re-export the core `ToolCall` shape so the wire-format
+// `ProtocolMessage::tool_calls` field (and any other payload that
+// round-trips a tool call) can name the type without forcing every
+// consumer to import `hermix_core` directly. The `transport` crate
+// already depends on `hermix_core` for shared types (role enum,
+// message role); surfacing `ToolCall` here keeps the wire schema
+// self-contained.
+pub use hermix_core::ToolCall;
+// v4 (2026-06-22): re-export `ExecutionTimelineEvent` alongside
+// `ToolCall` so the wire-format `ProtocolMessage::execution_timeline`
+// field can name the type without forcing consumers to import
+// `hermix_core::types` directly. Mirrors the rationale for `ToolCall`
+// above — keeping the wire schema self-contained.
+pub use hermix_core::types::ExecutionTimelineEvent;
+
+pub type SessionId = String;
+pub type MessageId = String;
+
+/// A single prefetch result entry sent over the wire.
+/// Lightweight version of `hermix_intelligence::PrefetchResult`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrefetchResultEntry {
+    /// Tool name (e.g. "weather", "read_file").
+    pub tool: String,
+    /// Arguments passed to the tool (JSON-serializable).
+    pub args: serde_json::Value,
+    /// Tool output (opaque string).
+    pub output: String,
+    /// Whether the tool execution errored.
+    pub errored: bool,
+    /// Execution time in milliseconds.
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    User,
+    Assistant,
+    System,
+    Tool,
+    /// UI-only: an inline approval card sandwiched between assistant
+    /// messages. Never sent to the LLM — the server filters these out
+    /// when constructing conversation context (see
+    /// `SessionPersistence::load_session`).
+    Approval,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProtocolMessage {
+    pub id: MessageId,
+    pub role: Role,
+    pub content: String,
+    pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Persisted tool-calls payload from the assistant message —
+    /// mirrors `Message::tool_calls`. The desktop client uses this
+    /// to rebuild the inline tool cards (with the original tool
+    /// name + arguments) on session reload. Populated for
+    /// `role == "assistant"` only; `None` for user / system /
+    /// tool / approval rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<crate::ToolCall>>,
+    /// Tool name on `role == "tool"` rows — mirrors
+    /// `Message::name`. The desktop client uses this to label
+    /// reloaded tool messages (e.g. "terminal" instead of the
+    /// generic "tool" fallback). `None` for other roles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    /// Tool arguments (JSON string) on `role == "tool"` rows —
+    /// reconstructed from the linked assistant message's
+    /// `tool_calls[].function.arguments` when the session is
+    /// reloaded. Without this, the desktop client renders every
+    /// reloaded tool message with a generic "调用工具" verb and
+    /// no primary-arg preview. `None` for other roles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_arguments: Option<String>,
+    /// Free-form JSON for non-message rows (e.g. approval cards carry
+    /// `request_id` / `tool` / `args` / `risk` / `decision` / `decided_at`).
+    /// Always `None` for user / assistant / system / tool messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<serde_json::Value>,
+    /// The model's raw reasoning (thinking monologue) for this turn,
+    /// stripped from `content` by `ThinkBlockParser` on the agent
+    /// side. Persisted as `Message::reasoning_content`. The desktop
+    /// client uses this to restore the collapsible "思考过程" block
+    /// on session reload — without it the user sees the reply but
+    /// not the thinking that produced it.
+    ///
+    /// Populated for `role == "assistant"` only; `None` for all
+    /// other roles (user, system, tool, approval).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    /// Execution timeline (tool_start / tool_stdout / tool_complete
+    /// / status / file_change events) emitted by the agent during
+    /// this assistant turn. Mirrors `Message::execution_timeline`,
+    /// which the server persists to `messages.execution_timeline`
+    /// on flush.
+    ///
+    /// The desktop client feeds these straight into
+    /// `expandTimelineToMessages` / `groupTimeline` to redraw the
+    /// inline tool cards the user saw mid-stream — same status
+    /// (running/done/error), same arguments, same stdout. Without
+    /// it the reloaded session renders every tool call as a stale
+    /// "运行中" pill.
+    ///
+    /// v4 (2026-06-22): added — previous reloads had no way to
+    /// reconstruct tool state because the WS stream wasn't
+    /// persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_timeline: Option<Vec<ExecutionTimelineEvent>>,
+}
+
+/// User's choice on a `RequestApproval` card.
+///
+/// Mirrors the upstream Hermes 4-state approval model
+/// (`once / session / always / deny`):
+///
+/// - `Once`   — approve this single invocation. Server resolves to
+///   `approved`; nothing is persisted.
+/// - `Session` — approve for the rest of this session (or until the
+///   agent process restarts, whichever comes first). Server resolves
+///   to `approved` AND records the command in a per-session in-memory
+///   set so subsequent same-shape tool calls bypass the prompt.
+/// - `Always` — approve for all future sessions. Server resolves to
+///   `approved` AND appends the command to the persistent
+///   `$HERMIX_HOME/approval_allowlist.json` so it's loaded next
+///   startup.
+/// - `Deny`   — refuse this invocation. Server resolves to `denied`;
+///   nothing is persisted. (The user can still click "always deny"
+///   via the explicit `Deny` button in some clients, but the WS
+///   protocol's `Deny` is single-shot — a future v3 protocol can add
+///   `deny_session` / `deny_always` if needed.)
+///
+/// Free-form `String` on the wire so future variants (e.g.
+/// `smart_skip` after an LLM risk-evaluation pass) don't require a
+/// protocol bump. Server-side, unknown values are logged and
+/// downgraded to `Deny` (fail-closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ApprovalChoice {
+    Once,
+    Session,
+    Always,
+    Deny,
+}
+
+impl ApprovalChoice {
+    /// Parse from a free-form string (`"once"` / `"session"` /
+    /// `"always"` / `"deny"`, case-insensitive). Unknown values
+    /// return `None` so the caller can log + downgrade to deny.
+    pub fn from_decision_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "once" => Some(Self::Once),
+            "session" => Some(Self::Session),
+            "always" => Some(Self::Always),
+            "deny" | "denied" | "no" | "false" => Some(Self::Deny),
+            // Legacy 2-state + common boolean variants: all downgrade
+            // to single-shot Once (fail-open for known-good intents,
+            // fail-closed only for explicit Deny variants).
+            "approved" | "yes" | "true" => Some(Self::Once),
+            _ => None,
+        }
+    }
+
+    /// True if the choice grants the current tool call (so the agent
+    /// can proceed). `Once`, `Session`, `Always` all do; `Deny`
+    /// does not.
+    pub fn is_approved(&self) -> bool {
+        !matches!(self, Self::Deny)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionSummary {
+    pub id: SessionId,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub message_count: usize,
+    /// The model used for this session (from sessions.model column).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The workspace path selected for this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// The expert ID selected for this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expert_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListSessionsResponse {
+    pub sessions: Vec<SessionSummary>,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionMessagesResponse {
+    pub session_id: SessionId,
+    pub messages: Vec<ProtocolMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateSessionRequest {
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenameSessionRequest {
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SendMessageRequest {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<String>,
+    /// Override the system prompt for this turn (used when an "expert" persona
+    /// injects custom instructions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    /// Whitelist of tool names the agent may call this turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<String>>,
+    /// Canonical working directory for this turn. Tools that touch the
+    /// filesystem (terminal, file) constrain operations to this root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    /// `default` = ask before risk-bearing tool calls; `full` = auto-approve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// Optional images for vision-enabled models (2026-06-25: 多图支持).
+    /// When present, the agent passes each image to the provider so the LLM
+    /// can "see" them. Binary `Vec<u8>` straight from the client — no base64
+    /// round-trip across the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<ImageAttachment>>,
+    /// Legacy single-image fields (kept for backward compat with older
+    /// clients). Use `images` for new code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_mime_type: Option<String>,
+    /// Names of skills to enable for this turn (ephemeral override of
+    /// the server-side skill_store enabled-set). Backend feeds these into
+    /// `skills_system_prompt` on top of any server-enabled skills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SendMessageResponse {
+    pub session_id: SessionId,
+    pub reply: String,
+    pub message_count: usize,
+    pub trace_id: String,
+}
+
+/// One image attached to a chat turn (2026-06-25).
+/// `bytes` is the raw image file (PNG/JPEG/WebP), already compressed by
+/// the client. Server-side decoding is a no-op since `Vec<u8>` is
+/// directly usable as the data URL body for vision APIs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageAttachment {
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WsEnvelope {
+    pub version: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    pub trace_id: String,
+    pub event: StreamEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StreamEvent {
+    Connected { session_id: SessionId },
+    Text { content: String },
+    Thinking { content: String },
+    ToolStart {
+        /// Stable id for this tool invocation. Server may emit
+        /// several `ToolChunk` events carrying the same id before a
+        /// matching `ToolComplete`. Frontend uses it to route chunks
+        /// to the right `tool_calls[id].output` buffer.
+        tool_call_id: String,
+        tool: String,
+        content: String,
+    },
+    ToolComplete {
+        tool_call_id: String,
+        tool: String,
+        content: String,
+    },
+    /// A live chunk of tool output (stdout / stderr). Replaces the
+    /// old ad-hoc `[tool: x] y (n/m)` text wrap. Carries enough
+    /// metadata for the front-end to reassemble chunks in order and
+    /// detect partial vs. final flushes.
+    ToolChunk {
+        tool_call_id: String,
+        tool: String,
+        content: String,
+        chunk_index: u64,
+        chunk_total: u64,
+    },
+    /// Server → client: a mutating tool (write_file / patch) just
+    /// completed successfully. The chat UI uses this to render the
+    /// WorkBuddy-style "文件变更 (N个)" summary row inline in the
+    /// conversation. Carries the absolute file path, the change
+    /// classification, and an optional one-line summary extracted
+    /// from the tool output. See `agent_loop.rs::extract_file_change`.
+    FileChange {
+        tool_call_id: String,
+        file_path: String,
+        change_type: String, // "created" | "modified" | "deleted" | "renamed"
+        file_summary: Option<String>,
+    },
+    Status { content: String },
+    Activity { content: String },
+    /// Server → client: "the agent is about to run a risk-bearing tool;
+    /// tell me whether to proceed." The client echoes back via
+    /// [`WsClientMessage::ApprovalResponse`] with the same `request_id`.
+    RequestApproval {
+        request_id: String,
+        tool: String,
+        arguments: serde_json::Value,
+        /// "safe" | "caution" | "dangerous" (matches [`RiskLevel::as_str`]).
+        risk: String,
+        reason: Option<String>,
+        /// Wall-clock deadline (Unix milliseconds) when the server
+        /// will auto-deny this request. Drives the front-end
+        /// countdown UI so the user always knows the budget they
+        /// have left. The server always sends this (5 minutes by
+        /// default — see `hermix_server::DEFAULT_APPROVAL_TIMEOUT`),
+        /// but the field is `Option` for back-compat with older
+        /// servers that pre-date the countdown feature
+        /// (2026-06-14). New clients should fall back to a sensible
+        /// default (60s upstream-mirrored) if absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<i64>,
+        /// Available choices for the user. The 4-state model
+        /// (`once / session / always / deny`) is the upstream
+        /// canonical set. The server picks which subset to send:
+        /// `deny` is always included; `session` / `always` are
+        /// omitted if they wouldn't make sense (e.g. `always` for
+        /// a one-off `read_file` call). The client should render a
+        /// button per entry; clicking emits a
+        /// [`WsClientMessage::ApprovalResponse`] whose `decision`
+        /// matches the choice's `value`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        choices: Vec<ApprovalChoice>,
+    },
+    /// Server → client: the user resolved a pending approval request.
+    /// Emitted right before tool dispatch so the UI can dismiss the dialog
+    /// deterministically.
+    ApprovalResolved {
+        request_id: String,
+        /// The [`ApprovalChoice`] the user picked (serialized as
+        /// `"once" | "session" | "always" | "deny"`). Older clients
+        /// that only know the 2-state `approved` / `denied` will
+        /// see `"once"` for an approved run and `"deny"` for a
+        /// refused run, which preserves their existing semantics.
+        decision: String,
+    },
+    /// Server → client: the agent called the `clarify` tool and is now
+    /// blocked waiting for the user to answer. The client renders a
+    /// question card and replies via [`WsClientMessage::ClarifyResponse`]
+    /// with the same `request_id`.
+    ClarifyRequest {
+        request_id: String,
+        question: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        choices: Vec<String>,
+    },
+    /// Server → client: the user answered a pending clarify request.
+    /// Emitted right after the user responds so the UI can clear the
+    /// pending card deterministically.
+    ClarifyResolved { request_id: String },
+    /// H3: The agent's prefetcher identified a user intent and ran
+    /// safe tools speculatively. Sent before LLM reasoning starts so
+    /// the UI can display a "prefetch intent" chip.
+    PrefetchIntent {
+        /// Prefetch intent name (e.g. "weather_query", "daily_report").
+        intent: String,
+        /// Confidence in [0, 1]. Below 0.4 the agent loop skips prefetch.
+        confidence: f32,
+        /// Tools that were dispatched speculatively and their output.
+        results: Vec<PrefetchResultEntry>,
+    },
+    /// M5: ACUI (Agent-Controlled UI) directive.
+    ///
+    /// Agent 主动推送结构化 UI 卡片给前端。前端按 directive.id 维护
+    /// 一组"已 show 未 hide"的卡片，按 `directive.kind` 查注册表渲染。
+    ///
+    /// 协议层独立于渲染实现（可换 React / Vue / Web Components）。
+    Acui {
+        /// The directive itself (`AcuiShow` / `AcuiUpdate` / `AcuiHide`).
+        /// Tag is `"op"`; on the wire the inner variant is flattened.
+        directive: hermix_core::AcuiDirective,
+    },
+    // ── GroupChat streaming ──────────────────────────────
+    /// Text chunk for a specific agent in a group chat room.
+    /// Frontend routes by `(room_id, agent_id)` to update the
+    /// correct message bubble in real time.
+    GroupChatChunk {
+        room_id: String,
+        agent_id: String,
+        agent_name: String,
+        content: String,
+    },
+    /// Reasoning/thinking chunk for a group chat agent (collapsible).
+    GroupChatThinking {
+        room_id: String,
+        agent_id: String,
+        agent_name: String,
+        content: String,
+    },
+    /// The agent named by `agent_id` has finished streaming its reply.
+    GroupChatAgentDone {
+        room_id: String,
+        agent_id: String,
+    },
+    /// All agents in the room have finished.
+    GroupChatDone {
+        room_id: String,
+    },
+    // ── Task engine events (S5 wire-up) ────────────────────
+    /// A task node entered a new phase (planning/executing/review/...).
+    TaskPhaseChange {
+        room_id: String,
+        node_id: String,
+        description: String,
+        phase: String,
+        assigned_agent: String,
+    },
+    /// A bus message addressed to (room, agent). Frontend renders as
+    /// a transient toast / status line.
+    BusDelivered {
+        room_id: String,
+        agent_id: String,
+        message_kind: String, // "Dispatch" | "Penalty" | "Expelled" | "RoomCompleted" | ...
+        text: String,
+    },
+    /// Audit verdict for a single agent. Frontend may show a "⚖" badge.
+    AuditVerdict {
+        room_id: String,
+        agent_id: String,
+        /// P4 — unique violation id so the frontend can dispute/overturn.
+        violation_id: String,
+        level: String,        // "Warning" | "Severe" | "Critical" | "RedLine"
+        score_delta: i32,
+        score_after: i32,
+        reason: String,
+    },
+    /// Agent was expelled (score hit zero or RedLine fired).
+    AgentExpelled {
+        room_id: String,
+        agent_id: String,
+        agent_name: String,
+        reason: String,
+    },
+    /// All task nodes for the room completed. Frontend closes the
+    /// task panel timeline. Sent as the final event before the WS
+    /// sender task exits.
+    RoomCompleted {
+        room_id: String,
+    },
+    /// P1.4 — a member voted on another member, rank score adjusted.
+    VoteApplied {
+        room_id: String,
+        voter_agent_id: String,
+        target_agent_id: String,
+        direction: VoteKind,
+        delta: i32,
+        new_score: i32,
+        /// P1.5 — tier before the adjustment, set only when the tier
+        /// actually changed (升段/掉段). Frontend shows a celebration
+        /// toast when this is present.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_tier: Option<String>,
+        /// P1.5 — tier after the adjustment (always present).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_tier: Option<String>,
+    },
+    Error { code: String, message: String },
+    Done {
+        content: String,
+        /// Why the stream ended. Mirrors `AgentResult.finish_reason`.
+        /// `None` when the reason is unknown (e.g. non-streaming path).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        finish_reason: Option<String>,
+    },
+}
+
+/// Inbound message from the client over the streaming WebSocket. The server
+/// handler must distinguish between a fresh user prompt ([`Self::Send`])
+/// and an out-of-band response to a previously-issued approval request
+/// ([`Self::ApprovalResponse`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WsClientMessage {
+    /// A new user message to dispatch (matches [`SendMessageRequest`]).
+    Send {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        personality: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        system_prompt: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tools: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission: Option<String>,
+        #[serde(default)]
+        user_id: Option<String>,
+        #[serde(default)]
+        request_id: Option<String>,
+        /// Optional images (2026-06-25: 多图支持). Binary直传 — 客户端不做 base64。
+        /// Server 接收后由 agent_loop 传给 provider。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        images: Option<Vec<ImageAttachment>>,
+        /// Legacy single-image fields (kept for backward compat).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image_mime_type: Option<String>,
+        /// Names of skills to enable for this turn (ephemeral override of
+        /// the server-side skill_store enabled-set). Server feeds these
+        /// into `skills_system_prompt` on top of any server-enabled skills.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        skills: Option<Vec<String>>,
+    },
+    /// Response to a [`StreamEvent::RequestApproval`].
+    ///
+    /// The `decision` field is a free-form string that maps to
+    /// [`ApprovalChoice`]: `"once"`, `"session"`, `"always"`, or
+    /// `"deny"` (case-insensitive). The legacy 2-state values
+    /// `"approved"` and `"denied"` are also accepted for backward
+    /// compatibility with older desktop clients — `"approved"` maps
+    /// to `ApprovalChoice::Once` (single-shot approve) and
+    /// `"denied"` maps to `Deny`. Anything else is downgraded to
+    /// `Deny` on the server side (fail-closed).
+    ApprovalResponse {
+        request_id: String,
+        decision: String,
+    },
+    /// Response to a [`StreamEvent::ClarifyRequest`]. The free-form `answer`
+    /// is what the user typed (or the choice they picked) and is fed back
+    /// to the agent loop as the tool result.
+    ClarifyResponse { request_id: String, answer: String },
+    // ── Task engine client commands (S5) ───────────────────
+    /// Update a task node's spec mid-flight. Server rebroadcasts as
+    /// `TaskPhaseChange` so all clients converge.
+    GroupChatSpecUpdate {
+        room_id: String,
+        node_id: String,
+        new_spec: String,
+    },
+    /// Submit a review verdict from the leader / human reviewer.
+    GroupChatReviewVerdict {
+        room_id: String,
+        node_id: String,
+        passed: bool,
+        comment: String,
+    },
+    /// Cancel one node or whole room.
+    GroupChatCancel {
+        room_id: String,
+        node_id: Option<String>,
+    },
+    /// Submit a leader's plan (list of subtask specs).
+    GroupChatPlanSubmitted {
+        room_id: String,
+        parent_node_id: String,
+        subtasks: Vec<GroupChatSubtaskSpec>,
+    },
+    /// P1.4 — thumbs-up / thumbs-down a fellow member.
+    GroupChatVote {
+        room_id: String,
+        target_agent_id: String,
+        direction: VoteKind,
+    },
+    /// P4 — agent disputes a penalty from the Yanluo auditor.
+    GroupChatDispute {
+        room_id: String,
+        violation_id: String,
+        reason: String,
+    },
+    /// P4 — leader overturns a disputed violation.
+    GroupChatOverturn {
+        room_id: String,
+        violation_id: String,
+        agent_id: String,
+        comment: String,
+    },
+}
+
+/// P1.4 — vote direction for member-to-member feedback.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VoteKind {
+    Up,
+    Down,
+}
+
+/// Subtask spec in a `GroupChatPlanSubmitted` client message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct GroupChatSubtaskSpec {
+    pub node_id: String,
+    pub description: String,
+    pub spec: String,
+    pub assigned_agent: String,
+}
+
+pub fn ws_schema_json() -> serde_json::Value {
+    serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "HermesWsEnvelope",
+        "type": "object",
+        "required": ["version", "trace_id", "event"],
+        "properties": {
+            "version": { "type": "integer", "const": 1 },
+            "request_id": { "type": "string" },
+            "trace_id": { "type": "string" },
+            "event": {
+                "oneOf": [
+                    { "type": "object", "required": ["type", "session_id"], "properties": { "type": { "const": "connected" }, "session_id": { "type": "string" } } },
+                    { "type": "object", "required": ["type", "content"], "properties": { "type": { "const": "text" }, "content": { "type": "string" } } },
+                    { "type": "object", "required": ["type", "content"], "properties": { "type": { "const": "thinking" }, "content": { "type": "string" } } },
+                    { "type": "object", "required": ["type", "tool", "content"], "properties": { "type": { "const": "tool_start" }, "tool": { "type": "string" }, "content": { "type": "string" } } },
+                    { "type": "object", "required": ["type", "tool", "content"], "properties": { "type": { "const": "tool_complete" }, "tool": { "type": "string" }, "content": { "type": "string" } } },
+                    { "type": "object", "required": ["type", "content"], "properties": { "type": { "const": "status" }, "content": { "type": "string" } } },
+                    { "type": "object", "required": ["type", "content"], "properties": { "type": { "const": "activity" }, "content": { "type": "string" } } },
+                    { "type": "object", "required": ["type", "request_id", "tool", "arguments", "risk"], "properties": { "type": { "const": "request_approval" }, "request_id": { "type": "string" }, "tool": { "type": "string" }, "arguments": { "type": "object" }, "risk": { "type": "string" }, "reason": { "type": ["string", "null"] }, "choices": { "type": "array", "items": { "type": "string", "enum": ["once", "session", "always", "deny"] } } } },
+                    { "type": "object", "required": ["type", "request_id", "decision"], "properties": { "type": { "const": "approval_resolved" }, "request_id": { "type": "string" }, "decision": { "type": "string" } } },
+                    { "type": "object", "required": ["type", "code", "message"], "properties": { "type": { "const": "error" }, "code": { "type": "string" }, "message": { "type": "string" } } },
+                    { "type": "object", "required": ["type", "content"], "properties": { "type": { "const": "done" }, "content": { "type": "string" } } }
+                ]
+            }
+        }
+    })
+}
+
+pub fn new_trace_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_event_serialization_uses_tagged_union() {
+        let event = StreamEvent::Text {
+            content: "hello".into(),
+        };
+        let value = serde_json::to_value(event).expect("serialize stream event");
+        assert_eq!(value["type"], "text");
+        assert_eq!(value["content"], "hello");
+    }
+
+    #[test]
+    fn envelope_contains_trace_and_version() {
+        let envelope = WsEnvelope {
+            version: 1,
+            request_id: Some("req-1".into()),
+            trace_id: "trace-1".into(),
+            event: StreamEvent::Done {
+                content: "ok".into(),
+                finish_reason: None,
+            },
+        };
+        let value = serde_json::to_value(envelope).expect("serialize envelope");
+        assert_eq!(value["version"], 1);
+        assert_eq!(value["request_id"], "req-1");
+        assert_eq!(value["trace_id"], "trace-1");
+        assert_eq!(value["event"]["type"], "done");
+    }
+
+    #[test]
+    fn request_approval_event_round_trips() {
+        let event = StreamEvent::RequestApproval {
+            request_id: "req-42".into(),
+            tool: "terminal".into(),
+            arguments: serde_json::json!({"command": "rm -rf /tmp/foo"}),
+            risk: "dangerous".into(),
+            reason: Some("destructive command".into()),
+            expires_at: Some(1_700_000_000_000),
+            choices: vec![],
+        };
+        let value = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(value["type"], "request_approval");
+        assert_eq!(value["request_id"], "req-42");
+        assert_eq!(value["tool"], "terminal");
+        assert_eq!(value["risk"], "dangerous");
+        assert_eq!(value["reason"], "destructive command");
+        // `expires_at` is always present when the server populates it
+        // (the countdown UI depends on it). The unit is Unix
+        // milliseconds — picked because the front-end renders it
+        // against `Date.now()` which is also ms.
+        assert_eq!(value["expires_at"], 1_700_000_000_000_i64);
+        // Empty `choices` is `skip_serializing_if = "Vec::is_empty"`.
+        assert!(value.get("choices").is_none());
+
+        let parsed: StreamEvent = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(parsed, event);
+    }
+
+    /// `RequestApproval::choices` round-trips the 4-state approval
+    /// model — once / session / always / deny — over the wire.
+    #[test]
+    fn request_approval_event_with_choices_round_trips() {
+        let event = StreamEvent::RequestApproval {
+            request_id: "req-42".into(),
+            tool: "terminal".into(),
+            arguments: serde_json::json!({"command": "sudo apt install foo"}),
+            risk: "caution".into(),
+            reason: Some("requires confirmation".into()),
+            expires_at: Some(1_700_000_300_000),
+            choices: vec![
+                ApprovalChoice::Once,
+                ApprovalChoice::Session,
+                ApprovalChoice::Always,
+                ApprovalChoice::Deny,
+            ],
+        };
+        let value = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(value["choices"], serde_json::json!(["once", "session", "always", "deny"]));
+        assert_eq!(value["expires_at"], 1_700_000_300_000_i64);
+
+        let parsed: StreamEvent = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(parsed, event);
+    }
+
+    /// When the server omits `expires_at` (skip_serializing_if), the
+    /// front-end still has to deserialize the event without crashing.
+    /// The `#[serde(default)]` on the field keeps backwards compat
+    /// with pre-2026-06-14 servers (the field didn't exist before the
+    /// countdown feature was added).
+    #[test]
+    fn request_approval_event_without_expires_at_round_trips() {
+        let event = StreamEvent::RequestApproval {
+            request_id: "req-42".into(),
+            tool: "terminal".into(),
+            arguments: serde_json::json!({"command": "ls"}),
+            risk: "safe".into(),
+            reason: None,
+            expires_at: None,
+            choices: vec![],
+        };
+        let value = serde_json::to_value(&event).expect("serialize");
+        // `None` is `skip_serializing_if` — the field is absent on the
+        // wire, exactly mimicking a pre-countdown server response.
+        assert!(value.get("expires_at").is_none());
+
+        let parsed: StreamEvent = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(parsed, event);
+        assert!(matches!(parsed, StreamEvent::RequestApproval { expires_at: None, .. }));
+    }
+
+    #[test]
+    fn approval_resolved_event_round_trips() {
+        let event = StreamEvent::ApprovalResolved {
+            request_id: "req-42".into(),
+            decision: "session".into(),
+        };
+        let value = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(value["type"], "approval_resolved");
+        assert_eq!(value["decision"], "session");
+
+        let parsed: StreamEvent = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(parsed, event);
+    }
+
+    /// `ApprovalChoice::from_decision_str` accepts the canonical
+    /// 4-state names, the legacy 2-state names (`approved` / `denied`),
+    /// and common boolean variants (`yes` / `no`, `true` / `false`).
+    /// Unknown / empty / mismatched inputs return `None` so the
+    /// caller can fail-closed.
+    #[test]
+    fn approval_choice_parsing() {
+        // Canonical 4-state.
+        assert_eq!(
+            ApprovalChoice::from_decision_str("once"),
+            Some(ApprovalChoice::Once)
+        );
+        assert_eq!(
+            ApprovalChoice::from_decision_str("session"),
+            Some(ApprovalChoice::Session)
+        );
+        assert_eq!(
+            ApprovalChoice::from_decision_str("always"),
+            Some(ApprovalChoice::Always)
+        );
+        assert_eq!(
+            ApprovalChoice::from_decision_str("deny"),
+            Some(ApprovalChoice::Deny)
+        );
+        // Case-insensitive.
+        assert_eq!(
+            ApprovalChoice::from_decision_str("ALWAYS"),
+            Some(ApprovalChoice::Always)
+        );
+        assert_eq!(
+            ApprovalChoice::from_decision_str("  Deny  "),
+            Some(ApprovalChoice::Deny)
+        );
+        // Legacy 2-state back-compat.
+        assert_eq!(
+            ApprovalChoice::from_decision_str("approved"),
+            Some(ApprovalChoice::Once),
+            "legacy `approved` must downgrade to single-shot Once"
+        );
+        assert_eq!(
+            ApprovalChoice::from_decision_str("denied"),
+            Some(ApprovalChoice::Deny)
+        );
+        // Common boolean / natural-language forms.
+        assert_eq!(
+            ApprovalChoice::from_decision_str("yes"),
+            Some(ApprovalChoice::Once)
+        );
+        assert_eq!(
+            ApprovalChoice::from_decision_str("no"),
+            Some(ApprovalChoice::Deny)
+        );
+        assert_eq!(
+            ApprovalChoice::from_decision_str("true"),
+            Some(ApprovalChoice::Once)
+        );
+        assert_eq!(
+            ApprovalChoice::from_decision_str("false"),
+            Some(ApprovalChoice::Deny)
+        );
+        // Unknown / empty → None (caller should fail-closed).
+        assert_eq!(ApprovalChoice::from_decision_str(""), None);
+        assert_eq!(ApprovalChoice::from_decision_str("maybe"), None);
+        assert_eq!(ApprovalChoice::from_decision_str("alwaysdeny"), None);
+
+        // `is_approved` is true for everything except Deny.
+        assert!(ApprovalChoice::Once.is_approved());
+        assert!(ApprovalChoice::Session.is_approved());
+        assert!(ApprovalChoice::Always.is_approved());
+        assert!(!ApprovalChoice::Deny.is_approved());
+    }
+
+    /// Wire-level: `WsClientMessage::ApprovalResponse` with the new
+    /// 4-state `decision` values round-trips, and the legacy
+    /// `approved` / `denied` values still parse (so an old desktop
+    /// client can still drive a new server).
+    #[test]
+    fn approval_response_4state_wire_round_trip() {
+        for decision in ["once", "session", "always", "deny", "approved", "denied", "ALWAYS"] {
+            let msg = WsClientMessage::ApprovalResponse {
+                request_id: "req-1".into(),
+                decision: decision.into(),
+            };
+            let value = serde_json::to_value(&msg).expect("serialize");
+            assert_eq!(value["type"], "approval_response");
+            assert_eq!(value["decision"], decision);
+
+            let parsed: WsClientMessage =
+                serde_json::from_value(value).expect("deserialize");
+            assert_eq!(parsed, msg, "round-trip failed for `{}`", decision);
+        }
+    }
+
+    #[test]
+    fn ws_client_message_approval_response_round_trips() {
+        let msg = WsClientMessage::ApprovalResponse {
+            request_id: "req-1".into(),
+            decision: "denied".into(),
+        };
+        let value = serde_json::to_value(&msg).expect("serialize");
+        assert_eq!(value["type"], "approval_response");
+        assert_eq!(value["request_id"], "req-1");
+        assert_eq!(value["decision"], "denied");
+
+        let parsed: WsClientMessage = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(parsed, msg);
+    }
+
+    #[test]
+    fn ws_client_message_send_round_trips() {
+        let msg = WsClientMessage::Send {
+            text: "hi".into(),
+            model: Some("gpt-4o".into()),
+            provider: None,
+            personality: None,
+            system_prompt: None,
+            tools: None,
+            workspace: None,
+            permission: Some("full".into()),
+            user_id: None,
+            request_id: Some("req-2".into()),
+            images: None,
+            image: None,
+            image_mime_type: None,
+            skills: Some(vec!["git".into(), "code-review".into()]),
+        };
+        let value = serde_json::to_value(&msg).expect("serialize");
+        assert_eq!(value["type"], "send");
+        assert_eq!(value["text"], "hi");
+        assert_eq!(value["permission"], "full");
+        // None fields should be skipped
+        assert!(value.get("provider").is_none());
+
+        let parsed: WsClientMessage = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(parsed, msg);
+    }
+
+    #[test]
+    fn fixtures_round_trip_across_protocol_matrix() {
+        let fixtures = include_str!("../../../sdk/protocol-fixtures/ws_envelopes.json");
+        let parsed: Vec<WsEnvelope> =
+            serde_json::from_str(fixtures).expect("parse protocol fixtures");
+        assert_eq!(parsed.len(), 4);
+        assert!(matches!(parsed[0].event, StreamEvent::Connected { .. }));
+        assert!(matches!(parsed[1].event, StreamEvent::Text { .. }));
+        assert!(matches!(parsed[2].event, StreamEvent::Error { .. }));
+        assert!(matches!(parsed[3].event, StreamEvent::Done { .. }));
+    }
+}

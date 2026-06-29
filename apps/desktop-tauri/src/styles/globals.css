@@ -1,0 +1,15 @@
+/* ════════════════════════════════════════════════════════════════════
+   globals.css — Entry point. Imports modular stylesheets.
+   ──────────────────────────────────────────────────────────────────
+   To re-skin the entire app, edit tokens.css.
+   To add a new component, add a class to components.css.
+   To add a utility, add it to utilities.css.
+   ════════════════════════════════════════════════════════════════════ */
+
+@import "tailwindcss";
+@import "./tokens.css";
+@import "./base.css";
+@import "./components.css";
+@import "./inline-thinking-dot.css";
+@import "./code-view.css";
+@import "./utilities.css";

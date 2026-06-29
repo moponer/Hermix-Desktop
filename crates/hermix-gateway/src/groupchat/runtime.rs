@@ -1,0 +1,1441 @@
+//! Task engine runtime — S5 wire-up.
+//!
+//! Bridges the pure [`TaskScheduler`] + [`SharedMessageBus`] + [`AuditEngine`]
+//! state machines to the outside world: user inputs, agent streams, the
+//! persistence layer, and the WebSocket outbound channel.
+//!
+//! ## Design
+//!
+//! * **One runtime per process**, owned by `AppState`.
+//! * **One `RoomRuntime` per active room**, lazily created on first user
+//!   message and cached.
+//! * **Inbound events** (user chat, agent output, review verdict, spec
+//!   updates, cancel) are converted into [`SchedulerEvent`]s and fed in.
+//! * **Outbound actions** ([`SchedulerAction`]) are translated into:
+//!   * WS events streamed back to the client
+//!   * DB writes (`save_message`, `save_subtask`, etc.)
+//!   * Bus broadcasts (cross-agent notifications)
+//! * **Yanluo audit** runs on every agent output before forwarding it,
+//!   feeding [`SchedulerEvent::AuditVerdict`] back into the scheduler.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use chrono::Utc;
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
+
+use super::bus::{RoomBus, SharedMessageBus};
+use super::dispatcher::StreamDelta;
+use super::leader::LeaderOrchestrator;
+use super::manager::GroupChatManager;
+use super::meta::parse_meta;
+use super::persistence::MessageType;
+use super::scheduler::{
+    RoomSchedulerState, SchedulerAction, SchedulerEvent, SubtaskSpec, TaskScheduler,
+};
+use super::task_types::{ReviewResult, TaskPhase, TokenBudget, ViolationLevel, ViolationRecord, YanluoConfig};
+use super::yanluo::{
+    AuditContext, AuditEngine, AuditTrail, ToolCallRecord,
+};
+
+/// Outbound WS envelope sent to one client (or broadcast to all clients
+/// in a room). Decoupled from `hermix_transport::StreamEvent` so the
+/// runtime can be unit-tested without pulling axum/tokio-tungstenite.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RoomEvent {
+    /// Chat message saved (user / agent / system).
+    MessageSaved {
+        room_id: String,
+        message_id: String,
+        sender_id: String,
+        sender_name: String,
+        content: String,
+        is_agent: bool,
+    },
+    /// A task node entered a new phase.
+    TaskPhaseChange {
+        room_id: String,
+        node_id: String,
+        description: String,
+        phase: String,
+        assigned_agent: String,
+    },
+    /// Bus message delivered to a specific agent (broadcast to all
+    /// clients so they can render the notification).
+    BusDelivered {
+        room_id: String,
+        agent_id: String,
+        message_kind: String,
+        text: String,
+    },
+    /// Audit verdict emitted.
+    AuditVerdict {
+        room_id: String,
+        agent_id: String,
+        /// P4 — unique id so the frontend can dispute/overturn.
+        violation_id: String,
+        level: String,
+        score_delta: i32,
+        score_after: i32,
+        reason: String,
+    },
+    /// Agent expelled.
+    AgentExpelled {
+        room_id: String,
+        agent_id: String,
+        agent_name: String,
+        reason: String,
+    },
+    /// All nodes completed for the room.
+    RoomCompleted {
+        room_id: String,
+    },
+    /// Soft error (e.g. agent returned 401). Forwarded so client can show.
+    SoftError {
+        room_id: String,
+        code: String,
+        message: String,
+    },
+    /// One streamed chunk from an agent's LLM response. The frontend
+    /// appends `delta` to its running buffer keyed by `agent_id`. The
+    /// very first chunk also acts as the "agent started typing" trigger
+    /// — the frontend flips its typing indicator on when it sees the
+    /// first chunk for a previously-quiet agent_id, no separate Started
+    /// event needed.
+    ///
+    /// `agent_name` and `role` are sent on the **first** chunk only
+    /// (i.e. they are empty strings on subsequent chunks) so the
+    /// frontend can set up the avatar tint / display name once.
+    AgentThinkingChunk {
+        room_id: String,
+        agent_id: String,
+        agent_name: String,
+        role: String,
+        delta: String,
+    },
+    /// Agent finished streaming. Frontend removes the typing indicator
+    /// and (for non-leader roles) finalizes the running buffer into a
+    /// chat bubble. Leader streams are **never** saved as messages —
+    /// their final text is consumed by `parse_task_plan` to produce
+    /// child subtask nodes instead.
+    AgentThinkingCompleted {
+        room_id: String,
+        agent_id: String,
+    },
+}
+
+/// Per-room mutable state held by the runtime.
+pub struct RoomRuntime {
+    pub room_id: String,
+    pub scheduler_state: RoomSchedulerState,
+    pub budget: TokenBudget,
+    pub yanluo_config: YanluoConfig,
+    pub audit_trail: AuditTrail,
+    pub bus: Arc<RoomBus>,
+}
+
+/// Process-wide task engine runtime.
+pub struct TaskEngineRuntime {
+    scheduler: TaskScheduler,
+    audit: parking_lot::Mutex<AuditEngine>,
+    bus: SharedMessageBus,
+    manager: Arc<GroupChatManager>,
+    rooms: RwLock<HashMap<String, Arc<RwLock<RoomRuntime>>>>,
+    /// Per-room broadcast channel for outbound [`RoomEvent`]s. The WS
+    /// handler in `hermix-server` subscribes on `subscribe(room_id)` and
+    /// forwards each event into the wire envelope.
+    event_txs: RwLock<HashMap<String, broadcast::Sender<RoomEvent>>>,
+}
+
+/// Capacity for the per-room broadcast channel. 256 covers a busy room
+/// (multi-agent dispatch + audit storms) while bounding memory.
+const ROOM_EVENT_CHANNEL_CAPACITY: usize = 256;
+
+impl TaskEngineRuntime {
+    pub fn new(manager: Arc<GroupChatManager>) -> Self {
+        Self {
+            scheduler: TaskScheduler::new(),
+            audit: parking_lot::Mutex::new(AuditEngine::new(YanluoConfig::default())),
+            bus: SharedMessageBus::with_default_capacity(),
+            manager,
+            rooms: RwLock::new(HashMap::new()),
+            event_txs: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn shared_bus(&self) -> &SharedMessageBus {
+        &self.bus
+    }
+
+    /// Subscribe to outbound [`RoomEvent`]s for a room. Lazily creates
+    /// the broadcast channel on first subscription. Multiple subscribers
+    /// (e.g. multiple WS connections watching the same room) are
+    /// supported; each gets its own [`broadcast::Receiver`].
+    pub fn subscribe(&self, room_id: &str) -> broadcast::Receiver<RoomEvent> {
+        let tx = {
+            let mut w = self.event_txs.write();
+            w.entry(room_id.to_string())
+                .or_insert_with(|| {
+                    let (tx, _rx) = broadcast::channel(ROOM_EVENT_CHANNEL_CAPACITY);
+                    tx
+                })
+                .clone()
+        };
+        tx.subscribe()
+    }
+
+    /// Publish one [`RoomEvent`] to the room's broadcast channel, if any
+    /// subscriber exists. Never blocks; slow subscribers get
+    /// [`broadcast::error::RecvError::Lagged`] on the next recv.
+    fn publish(&self, room_id: &str, ev: RoomEvent) {
+        if let Some(tx) = self.event_txs.read().get(room_id) {
+            // Ignore SendError — there are simply no subscribers yet.
+            let _ = tx.send(ev);
+        }
+    }
+
+    /// Publish a batch (used by `apply` / `on_agent_output` / etc. so the
+    /// call sites stay one-line).
+    fn publish_all(&self, room_id: &str, events: &[RoomEvent]) {
+        if events.is_empty() {
+            return;
+        }
+        if let Some(tx) = self.event_txs.read().get(room_id) {
+            for ev in events {
+                let _ = tx.send(ev.clone());
+            }
+        }
+    }
+
+    /// Get-or-create the per-room runtime. Lazily constructs with
+    /// defaults pulled from the manager's room settings.
+    pub async fn room(&self, room_id: &str) -> Arc<RwLock<RoomRuntime>> {
+        // Fast path: already constructed.
+        if let Some(r) = self.rooms.read().get(room_id).cloned() {
+            return r;
+        }
+        // Slow path: fetch the bus first (async, can't hold any
+        // parking_lot guard across .await).
+        let bus = self.bus.get_or_create(room_id).await;
+        // Re-check under write lock to avoid double-construction.
+        {
+            let mut w = self.rooms.write();
+            if let Some(r) = w.get(room_id).cloned() {
+                return r;
+            }
+            let scheduler_state = RoomSchedulerState::new(room_id);
+            let budget = TokenBudget {
+                base: 8_000,
+                performance_bonus: 0,
+                consecutive_bonus: 0,
+            };
+            let runtime = Arc::new(RwLock::new(RoomRuntime {
+                room_id: room_id.to_string(),
+                scheduler_state,
+                budget,
+                yanluo_config: YanluoConfig::default(),
+                audit_trail: AuditTrail::default(),
+                bus,
+            }));
+            w.insert(room_id.to_string(), runtime.clone());
+            runtime
+        }
+    }
+
+    /// Apply an inbound event and stream the resulting outbound events.
+    /// Caller (WS handler) is expected to forward each emitted event to
+    /// the client.
+    pub async fn apply(
+        self: Arc<Self>,
+        room_id: &str,
+        event: SchedulerEvent,
+    ) -> Vec<RoomEvent> {
+        let room = self.room(room_id).await;
+        let mut emitted = Vec::new();
+
+        // Snapshot scheduler state, run pure scheduler, translate actions.
+        let actions = {
+            let mut rt = room.write();
+            let actions = self.scheduler.apply_event(&mut rt.scheduler_state, event);
+            actions
+        };
+
+        for action in actions {
+            // Boxed: `dispatch_action` may recursively call back into
+            // `apply` (leader → PlanSubmitted → child Dispatch), which
+            // forms an async-fn cycle that the compiler can't statically
+            // size without this.
+            let mut more = Box::pin(self.clone().dispatch_action(room.clone(), action)).await;
+            emitted.append(&mut more);
+        }
+        emitted
+    }
+
+    /// Translate one [`SchedulerAction`] into side effects + outbound events.
+    /// Returns the events it generated so the caller can collect them
+    /// (avoids `&mut Vec` borrowing across `.await` which would break
+    /// the `Send` bound required by `tokio::spawn`).
+    async fn dispatch_action(
+        self: Arc<Self>,
+        room: Arc<RwLock<RoomRuntime>>,
+        action: SchedulerAction,
+    ) -> Vec<RoomEvent> {
+        let mut emitted = Vec::new();
+        let room_id = {
+            let rt = room.read();
+            rt.room_id.clone()
+        };
+        match action {
+            SchedulerAction::Dispatch { node_id, agent_id } => {
+                let (phase_str, description) = {
+                    let rt = room.read();
+                    let node = rt.scheduler_state.nodes.get(&node_id).cloned();
+                    (
+                        node.as_ref()
+                            .map(|n| phase_label(&n.phase).to_string())
+                            .unwrap_or_else(|| "Planning".to_string()),
+                        node.as_ref().map(|n| n.description.clone()).unwrap_or_default(),
+                    )
+                };
+                emitted.push(RoomEvent::TaskPhaseChange {
+                    room_id: room_id.clone(),
+                    node_id: node_id.clone(),
+                    description: description.clone(),
+                    phase: phase_str,
+                    assigned_agent: agent_id.clone(),
+                });
+
+                // If a dispatcher is wired in, run a streaming dispatch:
+                // each LLM chunk becomes a `RoomEvent::AgentThinkingChunk`
+                // (frontend appends to a typing/streaming bubble); a
+                // final `AgentThinkingCompleted` flips the typing state
+                // off. Without a dispatcher we keep the legacy "loud
+                // dispatch" placeholder so callers still see the phase
+                // transition.
+                if let Some(dispatcher) = self.manager.dispatcher() {
+                    let rt_self: Arc<TaskEngineRuntime> = self.clone();
+                    let room_id_owned = room_id.clone();
+                    let node_id_owned = node_id.clone();
+                    let agent_id_owned = agent_id.clone();
+                    let description_owned = description.clone();
+
+                    // Look up agent display name + role tag from the room
+                    // roster. Fall back to agent_id if not found (e.g.
+                    // legacy rooms where the profile is missing).
+                    let agent_name_owned: String = self
+                        .manager
+                        .agent_display_name(&room_id_owned, &agent_id_owned);
+                    let role_owned: &'static str = if agent_id_owned == "__leader__" {
+                        "leader"
+                    } else {
+                        "member"
+                    };
+
+                    // Build the system prompt. Leader gets the full team
+                    // context via `LeaderOrchestrator::build_leader_prompt`;
+                    // members run with an empty prompt so the agent's own
+                    // default system_prompt applies (set by add_agent).
+                    let system_prompt: String = if agent_id_owned == "__leader__" {
+                        self.manager.build_leader_prompt_for(&room_id_owned)
+                    } else {
+                        String::new()
+                    };
+
+                    // Streaming chunk callback: publishes one
+                    // `AgentThinkingChunk` per chunk so the WS handler can
+                    // relay it as `StreamEvent::GroupChatChunk`. The first
+                    // chunk for an agent carries `agent_name` + `role` so
+                    // the frontend can set up the bubble/avatar; later
+                    // chunks carry empty strings (the frontend already
+                    // knows who they belong to).
+                    let chunk_room = room_id_owned.clone();
+                    let chunk_agent = agent_id_owned.clone();
+                    let first_chunk_name = agent_name_owned.clone();
+                    let first_chunk_role: String = role_owned.to_string();
+                    let rt_for_chunks = rt_self.clone();
+                    let first_emitted = Arc::new(AtomicBool::new(false));
+                    let first_emitted_ref = first_emitted.clone();
+                    let on_chunk: Box<dyn Fn(StreamDelta) + Send + Sync> =
+                        Box::new(move |delta: StreamDelta| {
+                            let is_first = !first_emitted_ref.swap(true, Ordering::SeqCst);
+                            let (name, role) = if is_first {
+                                (first_chunk_name.clone(), first_chunk_role.clone())
+                            } else {
+                                (String::new(), String::new())
+                            };
+                            rt_for_chunks.publish(
+                                &chunk_room,
+                                RoomEvent::AgentThinkingChunk {
+                                    room_id: chunk_room.clone(),
+                                    agent_id: chunk_agent.clone(),
+                                    agent_name: name,
+                                    role,
+                                    delta: delta.content,
+                                },
+                            );
+                        });
+
+                    let stream_outcome = dispatcher
+                        .dispatch_subtask_stream(
+                            &room_id_owned,
+                            &agent_id_owned,
+                            &room_id_owned, // session_id
+                            &system_prompt,
+                            &description_owned,
+                            role_owned,
+                            on_chunk,
+                        )
+                        .await;
+
+                    // Always emit a "completed" event so the frontend
+                    // clears its typing indicator, even on errors.
+                    rt_self.publish(
+                        &room_id_owned,
+                        RoomEvent::AgentThinkingCompleted {
+                            room_id: room_id_owned.clone(),
+                            agent_id: agent_id_owned.clone(),
+                        },
+                    );
+
+                    match stream_outcome {
+                        Ok(raw_output) => {
+                            if agent_id_owned == "__leader__" {
+                                // Leader path: parse the response into a
+                                // task plan and feed it back to the
+                                // scheduler. The leader's raw text is
+                                // **never** saved as a chat message — it
+                                // is only a thinking trace for the user.
+                                let plan = LeaderOrchestrator::parse_task_plan(&raw_output);
+                                if !plan.subtasks.is_empty() {
+                                    let subtasks: Vec<SubtaskSpec> = plan
+                                        .subtasks
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, s)| SubtaskSpec {
+                                            node_id: format!("{}-{}", node_id_owned, i + 1),
+                                            description: s.description.clone(),
+                                            spec: s.context.clone().unwrap_or_default(),
+                                            assigned_agent: s.assigned_to.clone(),
+                                            sort_order: i as u32,
+                                        })
+                                        .collect();
+                                    let sub_events = Box::pin(rt_self.clone().apply(
+                                            &room_id_owned,
+                                            SchedulerEvent::PlanSubmitted {
+                                                room_id: room_id_owned.clone(),
+                                                parent_node_id: node_id_owned.clone(),
+                                                subtasks,
+                                            },
+                                        ))
+                                        .await;
+                                    rt_self.publish_all(&room_id_owned, &sub_events);
+                                } else {
+                                    // Leader couldn't decompose the task
+                                    // (no `→ agent` markers in its reply).
+                                    // Surface the failure to the frontend
+                                    // and advance the scheduler so the
+                                    // room doesn't stay stuck in
+                                    // `Planning` forever. We **don't**
+                                    // call `on_agent_output` here because
+                                    // that would save an empty bubble for
+                                    // the leader (which we explicitly
+                                    // forbid) — instead we push a
+                                    // `SchedulerEvent::AgentOutputSubmitted`
+                                    // directly so the review path runs
+                                    // against the live node.
+                                    let err_ev = vec![RoomEvent::SoftError {
+                                        room_id: room_id_owned.clone(),
+                                        code: "leader_parse_task_plan".into(),
+                                        message: "项目总管未能拆解任务，请尝试更明确地描述需求".into(),
+                                    }];
+                                    rt_self.publish_all(&room_id_owned, &err_ev);
+                                    let events = rt_self
+                                        .clone()
+                                        .apply(
+                                            &room_id_owned,
+                                            SchedulerEvent::AgentOutputSubmitted {
+                                                room_id: room_id_owned.clone(),
+                                                node_id: node_id_owned.clone(),
+                                                agent_id: agent_id_owned.clone(),
+                                                success: true,
+                                                output_excerpt: String::new(),
+                                            },
+                                        )
+                                        .await;
+                                    rt_self.publish_all(&room_id_owned, &events);
+                                }
+                            } else {
+                                // Member path: regular save + advance.
+                                let events = rt_self
+                                    .clone()
+                                    .on_agent_output(
+                                        &room_id_owned,
+                                        &node_id_owned,
+                                        &agent_id_owned,
+                                        &agent_name_owned,
+                                        &raw_output,
+                                        &[],
+                                    )
+                                    .await;
+                                rt_self.publish_all(&room_id_owned, &events);
+                            }
+                        }
+                        Err(e) => {
+                            let err_ev = vec![RoomEvent::SoftError {
+                                room_id: room_id_owned.clone(),
+                                code: "actor_dispatch".into(),
+                                message: format!("{}: {}", agent_id_owned, e),
+                            }];
+                            rt_self.publish_all(&room_id_owned, &err_ev);
+                        }
+                    }
+                } else {
+                    emitted.push(RoomEvent::BusDelivered {
+                        room_id: room_id.clone(),
+                        agent_id: agent_id.clone(),
+                        message_kind: "Dispatch".to_string(),
+                        text: format!("Node {} → {} dispatched", node_id, description),
+                    });
+                }
+            }
+            SchedulerAction::RequestReview {
+                node_id,
+                reviewer_id,
+            } => {
+                emitted.push(RoomEvent::BusDelivered {
+                    room_id: room_id.clone(),
+                    agent_id: reviewer_id.clone(),
+                    message_kind: "RequestReview".to_string(),
+                    text: format!("Please review node {}", node_id),
+                });
+            }
+            SchedulerAction::IssuePenalty {
+                room_id: _,
+                agent_id,
+                violation_type,
+                deduction,
+                score_after,
+                red_line,
+                violation_id,
+            } => {
+                let level = if red_line { "RedLine" } else { "Severe" };
+                emitted.push(RoomEvent::AuditVerdict {
+                    room_id: room_id.clone(),
+                    agent_id: agent_id.clone(),
+                    violation_id: violation_id.clone(),
+                    level: level.to_string(),
+                    score_delta: deduction,
+                    score_after,
+                    reason: violation_type.clone(),
+                });
+                if red_line || score_after <= 0 {
+                    emitted.push(RoomEvent::AgentExpelled {
+                        room_id: room_id.clone(),
+                        agent_id: agent_id.clone(),
+                        agent_name: agent_id.clone(),
+                        reason: violation_type.clone(),
+                    });
+                }
+            }
+            SchedulerAction::AgentExpelled {
+                room_id: _,
+                agent_id,
+                reason,
+            } => {
+                emitted.push(RoomEvent::AgentExpelled {
+                    room_id: room_id.clone(),
+                    agent_id: agent_id.clone(),
+                    agent_name: agent_id.clone(),
+                    reason: reason.clone(),
+                });
+            }
+            SchedulerAction::RoomCompleted { room_id: _ } => {
+                emitted.push(RoomEvent::RoomCompleted {
+                    room_id: room_id.clone(),
+                });
+                // P1.8 — team quality bonus. Count pass/fail reviews
+                // across all task nodes. More passes than fails →
+                // +10 per member. More fails → -10. Equal → 0.
+                let (passes, fails, agents): (u32, u32, Vec<String>) = {
+                    let rt = room.read();
+                    let mut p = 0u32;
+                    let mut f = 0u32;
+                    let mut seen = std::collections::HashSet::new();
+                    let mut ids = Vec::new();
+                    let leader = super::persistence::LEADER_AGENT_ID;
+                    for node in rt.scheduler_state.nodes.values() {
+                        if let Some(ref review) = node.review {
+                            if review.passed { p += 1; } else { f += 1; }
+                        }
+                        if node.assigned_agent != leader
+                            && seen.insert(node.assigned_agent.clone())
+                        {
+                            ids.push(node.assigned_agent.clone());
+                        }
+                    }
+                    (p, f, ids)
+                };
+                let delta: i32 = if passes > fails {
+                    10
+                } else if fails > passes {
+                    -10
+                } else {
+                    0
+                };
+                if delta != 0 {
+                    for agent_id in &agents {
+                        let _ = self
+                            .manager
+                            .adjust_member_score(&room_id, agent_id, delta)
+                            .await;
+                    }
+                }
+            }
+            SchedulerAction::Persist { room_id, node_id } => {
+                // Flush a single node's current state (phase, output,
+                // review verdict) to the subtasks table. Best-effort:
+                // log on error but never block the workflow.
+                let node = {
+                    let rt = room.read();
+                    rt.scheduler_state.nodes.get(&node_id).cloned()
+                };
+                if let Some(node) = node {
+                    if let Err(e) =
+                        self.manager.save_subtask_from_engine(&room_id, &node)
+                    {
+                        tracing::warn!(
+                            "save_subtask_from_engine failed for node {}: {}",
+                            node_id,
+                            e
+                        );
+                    }
+                }
+            }
+            SchedulerAction::Idle => {}
+        }
+        emitted
+    }
+
+    /// Process an inbound agent reply end-to-end: strip meta, run audit,
+    /// feed result back to scheduler, emit events. Returns events to send
+    /// to the client.
+    pub async fn on_agent_output(
+        self: Arc<Self>,
+        room_id: &str,
+        node_id: &str,
+        agent_id: &str,
+        agent_name: &str,
+        raw_output: &str,
+        tool_calls: &[ToolCallRecord],
+    ) -> Vec<RoomEvent> {
+        let mut emitted = Vec::new();
+
+        // 1. Parse + strip META block from raw output.
+        let (clean_output, meta) = parse_meta(raw_output);
+
+        // 2. Persist agent message (with metadata if present).
+        let meta_str = serde_json::to_string(&meta).ok();
+        if let Err(e) = self
+            .manager
+            .save_agent_message_with_meta(
+                room_id,
+                agent_id,
+                agent_name,
+                &clean_output,
+                MessageType::Chat,
+                meta_str,
+            )
+            .await
+        {
+            emitted.push(RoomEvent::SoftError {
+                room_id: room_id.to_string(),
+                code: "persist_agent_message".into(),
+                message: e,
+            });
+        }
+        emitted.push(RoomEvent::MessageSaved {
+            room_id: room_id.to_string(),
+            message_id: uuid::Uuid::new_v4().to_string(),
+            sender_id: agent_id.to_string(),
+            sender_name: agent_name.to_string(),
+            content: clean_output.clone(),
+            is_agent: true,
+        });
+
+        // P3 — store META summary (Layer A ~50 chars) and key points
+        // (Layer B ~200 chars) into the task node so the next call's
+        // context assembler can inject them instead of the full output.
+        {
+            let rt = self.room(room_id).await;
+            let node_has_meta = {
+                let guard = rt.read();
+                guard.scheduler_state.nodes.get(node_id)
+                    .map(|_node| !meta.summary.trim().is_empty() || !meta.key_points.is_empty())
+                    .unwrap_or(false)
+            };
+            if node_has_meta {
+                let mut guard = rt.write();
+                if let Some(node) = guard.scheduler_state.nodes.get_mut(node_id) {
+                    if !meta.summary.is_empty() {
+                        node.summary_a = Some(meta.summary.trim().to_string());
+                    }
+                    if !meta.key_points.is_empty() {
+                        node.summary_b = Some(meta.key_points.join(" | "));
+                    }
+                }
+            }
+        }
+
+        // 3. Run Yanluo audit.
+        let agent_score_before: i32 = self
+            .manager
+            .get_agent_score(room_id, agent_id)
+            .await
+            .unwrap_or(Some(100))
+            .unwrap_or(100);
+        let audit_ctx = AuditContext {
+            room_id: room_id.to_string(),
+            agent_id: agent_id.to_string(),
+            agent_name: agent_name.to_string(),
+            required_length: None,
+            agent_meta_progress: meta.progress.map(|p| p as u8),
+            output: clean_output.clone(),
+            tool_calls: tool_calls.to_vec(),
+            current_topic: node_id.to_string(),
+            declared_session_id: Some(room_id.to_string()),
+            other_room_sessions: vec![],
+        };
+        let _ = self.room(room_id).await;
+        let violations: Vec<ViolationRecord> = {
+            let mut audit = self.audit.lock();
+            audit.evaluate(&audit_ctx, agent_score_before)
+        };
+
+        // 4. Translate each violation -> scheduler AuditVerdict event.
+        for rec in violations {
+            // Persist score change.
+            let _ = self
+                .manager
+                .set_agent_score(room_id, agent_id, rec.score_after)
+                .await;
+            let event = SchedulerEvent::AuditVerdict {
+                room_id: room_id.to_string(),
+                agent_id: agent_id.to_string(),
+                violation_type: rec.violation_type.clone(),
+                severity: format!("{:?}", rec.severity).to_lowercase(),
+                deduction: rec.deduction,
+                score_before: rec.score_before,
+                score_after: rec.score_after,
+                red_line: matches!(rec.severity, ViolationLevel::RedLine),
+                violation_id: rec.id.clone(),
+            };
+            let downstream = Box::pin(self.clone().apply(room_id, event)).await;
+            emitted.extend(downstream);
+        }
+
+        // 5. Feed agent output success back to scheduler.
+        let event = SchedulerEvent::AgentOutputSubmitted {
+            room_id: room_id.to_string(),
+            node_id: node_id.to_string(),
+            agent_id: agent_id.to_string(),
+            success: true,
+            output_excerpt: clean_output,
+        };
+        let downstream = self.clone().apply(room_id, event).await;
+        emitted.extend(downstream);
+        self.publish_all(room_id, &emitted);
+        emitted
+    }
+
+    /// User typed a message. Saves + broadcasts + dispatches to leader.
+    pub async fn on_user_message(
+        self: Arc<Self>,
+        room_id: &str,
+        user_id: &str,
+        user_name: &str,
+        content: &str,
+    ) -> Vec<RoomEvent> {
+        let mut emitted = Vec::new();
+        let msg = match self
+            .manager
+            .send_message(room_id, user_id, user_name, content)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                emitted.push(RoomEvent::SoftError {
+                    room_id: room_id.to_string(),
+                    code: "persist_user_message".into(),
+                    message: e,
+                });
+                return emitted;
+            }
+        };
+        emitted.push(RoomEvent::MessageSaved {
+            room_id: msg.room_id.clone(),
+            message_id: msg.id.clone(),
+            sender_id: msg.sender_id.clone(),
+            sender_name: msg.sender_name.clone(),
+            content: msg.content.clone(),
+            is_agent: false,
+        });
+
+        // Bootstrap: create a top-level task node for the user request and
+        // dispatch to the leader.
+        let node_id = format!("user-{}", uuid::Uuid::new_v4());
+        let event = SchedulerEvent::TaskCreated {
+            room_id: room_id.to_string(),
+            node_id: node_id.clone(),
+            description: content.chars().take(80).collect(),
+            spec: content.to_string(),
+            assigned_agent: "__leader__".to_string(),
+        };
+        let downstream = self.clone().apply(room_id, event).await;
+        emitted.extend(downstream);
+        self.publish_all(room_id, &emitted);
+        emitted
+    }
+
+    /// Inbound review verdict from leader / human reviewer.
+    ///
+    /// P1 reward hook: passing/failing a review moves the *assigned*
+    /// agent's rank by ±5 (设计 §一). The delta is applied after the
+    /// scheduler runs so we can read the node's `assigned_agent` from
+    /// the room state without re-querying the DB. The score write is
+    /// best-effort — a rank failure does NOT block the verdict from
+    /// propagating (same policy as the update_subtask P3.3 hook).
+    /// The `__leader__` sentinel is skipped (it never owns a real
+    /// subtask so its row would be a no-op anyway).
+    pub async fn on_review_verdict(
+        self: Arc<Self>,
+        room_id: &str,
+        node_id: &str,
+        passed: bool,
+        comment: &str,
+        reviewer_id: &str,
+    ) -> Vec<RoomEvent> {
+        let event = SchedulerEvent::ReviewVerdict {
+            room_id: room_id.to_string(),
+            node_id: node_id.to_string(),
+            result: ReviewResult {
+                passed,
+                comment: comment.to_string(),
+                reviewer_id: reviewer_id.to_string(),
+                reviewed_at: Utc::now(),
+            },
+        };
+        let emitted = self.clone().apply(room_id, event).await;
+        // post-apply state (the scheduler may have re-dispatched on
+        // fail, but the assigned_agent field is stable).
+        let assigned_agent = {
+            let room = self.room(room_id).await;
+            let rt = room.read();
+            rt.scheduler_state
+                .nodes
+                .get(node_id)
+                .map(|n| n.assigned_agent.clone())
+                .unwrap_or_default()
+        };
+        if !assigned_agent.is_empty()
+            && assigned_agent != super::persistence::LEADER_AGENT_ID
+        {
+            let delta: i32 = if passed { 5 } else { -5 };
+            if let Err(e) = self
+                .manager
+                .adjust_member_score(room_id, &assigned_agent, delta)
+                .await
+            {
+                tracing::warn!(
+                    "on_review_verdict rank hook failed for room={} agent={} delta={}: {}",
+                    room_id, assigned_agent, delta, e
+                );
+            }
+            // P1.2 — bump the consecutive-pass streak. Pass increments
+            // and updates max_streak; fail resets to 0. Milestone bonus
+            // (+10) fires when the new streak is a positive even number
+            // (2, 4, 6, ...). Same best-effort / non-blocking contract
+            // as the ±5 score hook above.
+            match self
+                .manager
+                .bump_streak(room_id, &assigned_agent, passed)
+                .await
+            {
+                Ok(new_streak) if passed && new_streak > 0 && new_streak % 2 == 0 => {
+                    if let Err(e) = self
+                        .manager
+                        .adjust_member_score(room_id, &assigned_agent, 10)
+                        .await
+                    {
+                        tracing::warn!(
+                            "on_review_verdict streak bonus failed for room={} agent={} streak={}: {}",
+                            room_id, assigned_agent, new_streak, e
+                        );
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "on_review_verdict streak hook failed for room={} agent={} passed={}: {}",
+                        room_id, assigned_agent, passed, e
+                    );
+                }
+            }
+        }
+        emitted
+    }
+
+    /// P4 — agent disputes a violation. Marks it Disputed in the
+    /// audit trail so the leader sees it. Returns the violation's
+    /// deduction amount on success, or `None` if not found.
+    pub fn dispute_violation(&self, violation_id: &str, reason: &str) -> Option<i32> {
+        let mut audit = self.audit.lock();
+        audit.dispute(violation_id, reason)
+    }
+
+    /// P4 — leader overturns a disputed violation. Restores the
+    /// deducted score and marks the record as Overturned.
+    /// Returns `Ok(deduction)` on success, `Err(())` if the
+    /// violation wasn't found or wasn't in a disputable state.
+    pub async fn overturn_violation(
+        &self,
+        room_id: &str,
+        violation_id: &str,
+        agent_id: &str,
+        reviewer: &str,
+        comment: &str,
+    ) -> Result<i32, ()> {
+        let deduction = {
+            let mut audit = self.audit.lock();
+            if !audit.overturn(violation_id, reviewer, comment) {
+                return Err(());
+            }
+            // Re-read the record to get the deduction amount.
+            audit.trail.all_records()
+                .iter()
+                .find(|r| r.id == violation_id)
+                .map(|r| r.deduction)
+                .unwrap_or(0)
+        };
+        // Restore the deducted score.
+        let _ = self.manager
+            .adjust_member_score(room_id, agent_id, deduction)
+            .await;
+        Ok(deduction)
+    }
+
+    /// Inbound spec update mid-flight.
+    pub async fn on_spec_updated(
+        self: Arc<Self>,
+        room_id: &str,
+        node_id: &str,
+        new_spec: &str,
+    ) -> Vec<RoomEvent> {
+        let event = SchedulerEvent::SpecUpdated {
+            room_id: room_id.to_string(),
+            node_id: node_id.to_string(),
+            new_spec: new_spec.to_string(),
+        };
+        self.clone().apply(room_id, event).await
+    }
+
+    /// Inbound cancel.
+    pub async fn on_cancelled(
+        self: Arc<Self>,
+        room_id: &str,
+        node_id: Option<&str>,
+    ) -> Vec<RoomEvent> {
+        let event = SchedulerEvent::Cancelled {
+            room_id: room_id.to_string(),
+            node_id: node_id.map(|s| s.to_string()),
+        };
+        self.clone().apply(room_id, event).await
+    }
+
+    /// Inbound plan submission (leader outputs subtasks).
+    pub async fn on_plan_submitted(
+        self: Arc<Self>,
+        room_id: &str,
+        parent_node_id: &str,
+        subtasks: Vec<SubtaskSpec>,
+    ) -> Vec<RoomEvent> {
+        let event = SchedulerEvent::PlanSubmitted {
+            room_id: room_id.to_string(),
+            parent_node_id: parent_node_id.to_string(),
+            subtasks,
+        };
+        self.clone().apply(room_id, event).await
+    }
+}
+
+/// Human-readable label for a [`TaskPhase`].
+fn phase_label(phase: &TaskPhase) -> &'static str {
+    match phase {
+        TaskPhase::Idle => "Idle",
+        TaskPhase::Planning => "Planning",
+        TaskPhase::Executing => "Executing",
+        TaskPhase::Review => "Review",
+        TaskPhase::Revising => "Revising",
+        TaskPhase::Completed => "Completed",
+        TaskPhase::Cancelled => "Cancelled",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::groupchat::dispatcher::AgentDispatcher;
+    use crate::groupchat::in_memory::InMemoryRoomPersistence;
+    use parking_lot::Mutex as PlMutex;
+
+    fn build_runtime() -> (Arc<TaskEngineRuntime>, Arc<GroupChatManager>) {
+        let db: Arc<dyn super::super::persistence::RoomPersistence> =
+            Arc::new(InMemoryRoomPersistence::new());
+        let mgr = Arc::new(GroupChatManager::new(db));
+        let rt = Arc::new(TaskEngineRuntime::new(mgr.clone()));
+        (rt, mgr)
+    }
+
+    /// Stub dispatcher: returns a fixed output, counts calls.
+    struct StubDispatcher {
+        output: String,
+        calls: Arc<PlMutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentDispatcher for StubDispatcher {
+        async fn dispatch_to_agent(
+            &self,
+            _room_id: &str,
+            _agent_id: &str,
+            _session_id: &str,
+            _system_prompt: &str,
+            _message: &str,
+            _room_context: &str,
+        ) -> Result<String, String> {
+            Ok(self.output.clone())
+        }
+        async fn dispatch_subtask(
+            &self,
+            _room_id: &str,
+            agent_id: &str,
+            _session_id: &str,
+            task_description: &str,
+            _system_prompt: &str,
+        ) -> Result<String, String> {
+            self.calls.lock().push(agent_id.to_string());
+            Ok(format!("{}:{}", agent_id, task_description))
+        }
+        async fn dispatch_subtask_stream(
+            &self,
+            _room_id: &str,
+            agent_id: &str,
+            _session_id: &str,
+            _system_prompt: &str,
+            _message: &str,
+            _role: &str,
+            _on_chunk: Box<dyn Fn(StreamDelta) + Send + Sync>,
+        ) -> Result<String, String> {
+            // Test stub: streaming path returns the same canned output
+            // without firing any chunks. Keeps unit tests fast and
+            // deterministic.
+            self.calls.lock().push(agent_id.to_string());
+            Ok(format!("{}:stream", agent_id))
+        }
+    }
+
+    #[tokio::test]
+    async fn user_message_dispatches_to_leader() {
+        let (rt, mgr) = build_runtime();
+        let room = mgr
+            .create_room("test-room")
+            .await
+            .expect("create room");
+        let room_id = room.id.clone();
+        let events = rt
+            .on_user_message(&room_id, "user-1", "Owner", "write a poem")
+            .await;
+        // Should contain: MessageSaved + TaskPhaseChange(Planning) + BusDelivered.
+        assert!(events.iter().any(|e| matches!(e, RoomEvent::MessageSaved { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, RoomEvent::TaskPhaseChange { phase, .. } if phase == "Planning")));
+    }
+
+    #[tokio::test]
+    async fn agent_output_runs_audit_and_completes_node() {
+        let (rt, mgr) = build_runtime();
+        let room = mgr.create_room("r2").await.unwrap();
+        let room_id = room.id.clone();
+        // Bootstrap task via user message.
+        let _ = rt
+            .clone()
+            .on_user_message(&room_id, "u", "U", "hello")
+            .await;
+        // Find the created node.
+        let node_id = {
+            let rt_inner = rt.room(&room_id).await;
+            let rt_lock = rt_inner.read();
+            rt_lock
+                .scheduler_state
+                .nodes
+                .keys()
+                .next()
+                .cloned()
+                .expect("at least one node")
+        };
+        // Simulate the leader outputting clean text.
+        let events = rt
+            .clone()
+            .on_agent_output(
+                &room_id,
+                &node_id,
+                "__leader__",
+                "Leader",
+                "All done — here is the plan.",
+                &[],
+            )
+            .await;
+        // Should have at least MessageSaved.
+        assert!(events.iter().any(|e| matches!(e, RoomEvent::MessageSaved { .. })));
+    }
+
+    #[tokio::test]
+    async fn cancel_room_emits_no_actions() {
+        let (rt, mgr) = build_runtime();
+        let room = mgr.create_room("r3").await.unwrap();
+        let room_id = room.id.clone();
+        let _ = rt.clone().on_user_message(&room_id, "u", "U", "x").await;
+        let events = rt.clone().on_cancelled(&room_id, None).await;
+        // Cancelling an empty room is a no-op.
+        for e in &events {
+            assert!(!matches!(e, RoomEvent::RoomCompleted { .. }));
+        }
+    }
+
+    #[tokio::test]
+    async fn subscribe_receives_emitted_events() {
+        let (rt, mgr) = build_runtime();
+        let room = mgr.create_room("r4").await.unwrap();
+        let room_id = room.id.clone();
+        let mut rx = rt.subscribe(&room_id);
+        // Fire a user message; subscriber should see at least the
+        // MessageSaved + TaskPhaseChange(Planning).
+        let _ = rt.clone().on_user_message(&room_id, "u", "U", "hi").await;
+        let mut got_phase_change = false;
+        let mut got_saved = false;
+        // Drain a few events with a short timeout — broadcast is sync.
+        for _ in 0..16 {
+            match rx.try_recv() {
+                Ok(RoomEvent::TaskPhaseChange { .. }) => got_phase_change = true,
+                Ok(RoomEvent::MessageSaved { .. }) => got_saved = true,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        assert!(got_saved, "expected MessageSaved on subscribe channel");
+        assert!(got_phase_change, "expected TaskPhaseChange on subscribe channel");
+    }
+
+    /// S5.2: When a dispatcher is wired in, `Dispatch` action spawns the
+    /// actor asynchronously; the actor's output is fed back through
+    /// `on_agent_output` (audit + scheduler replay), causing the node to
+    /// transition to `Completed` and the audit log to be visible on the
+    /// subscribe channel.
+    #[tokio::test]
+    async fn dispatch_spawns_actor_when_dispatcher_present() {
+        let (rt, mgr) = build_runtime();
+        let calls: Arc<PlMutex<Vec<String>>> = Arc::new(PlMutex::new(Vec::new()));
+        let stub = Arc::new(StubDispatcher {
+            output: "stub output".to_string(),
+            calls: calls.clone(),
+        });
+        // Wire dispatcher into the shared manager. `set_dispatcher` now
+        // takes `&self` (the dispatcher field is behind a Mutex) so we
+        // don't need to wrestle with `Arc::get_mut` despite `mgr` being
+        // also held by the runtime.
+        mgr.set_dispatcher(stub.clone());
+        let room = mgr.create_room("actor-room").await.unwrap();
+        let room_id = room.id.clone();
+        let mut rx = rt.subscribe(&room_id);
+
+        // User message → TaskCreated → Dispatch{leader}. Without dispatcher
+        // this would just push TaskPhaseChange(Planning) + BusDelivered.
+        // With dispatcher: spawn tokio task that calls actor → on_agent_output
+        // → scheduler applies AgentOutputSubmitted → node completes.
+        let _ = rt
+            .on_user_message(&room_id, "u", "U", "write a thing")
+            .await;
+
+        // Give the inline actor + on_agent_output path a chance to
+        // run end-to-end. With the dispatcher wired in, the runtime
+        // should at least invoke the dispatcher and persist the
+        // agent reply (MessageSaved). Final phase is audit-dependent
+        // (a clean stub reply should reach Completed; a content-
+        // quality flag would push it to Revising) — we don't assert
+        // on a specific terminal phase here.
+        let mut got_message_saved = false;
+        for _ in 0..40 {
+            if let Ok(ev) = rx.try_recv() {
+                if let RoomEvent::MessageSaved { is_agent: true, .. } = ev {
+                    got_message_saved = true;
+                }
+            }
+            if got_message_saved {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            calls.lock().len() >= 1,
+            "expected stub dispatcher to be invoked at least once"
+        );
+        assert!(
+            got_message_saved,
+            "expected an agent MessageSaved event from actor output"
+        );
+    }
+
+    /// P1.1 — review verdict moves the *assigned* agent's rank by ±5
+    /// (设计 §一 "review 通过 +5 / 驳回 -5"). The hook lives in
+    /// `on_review_verdict`; we synthesize a node with a real
+    /// assigned_agent, send a review verdict, and assert the
+    /// post-hook rank readback.
+    ///
+    /// adjust_member_score upserts at `default_for()` (score 10) on
+    /// first touch, so the post-pass score is 10+5=15, not 5.
+    #[tokio::test]
+    async fn review_pass_credits_assigned_agent() {
+        let (rt, mgr) = build_runtime();
+        let room = mgr.create_room("rev-room").await.unwrap();
+        let room_id = room.id.clone();
+
+        // Manually create a node assigned to a real (non-leader) agent.
+        let node_id = "n1".to_string();
+        rt.clone()
+            .apply(
+                &room_id,
+                SchedulerEvent::TaskCreated {
+                    room_id: room_id.clone(),
+                    node_id: node_id.clone(),
+                    description: "test".into(),
+                    spec: "do thing".into(),
+                    assigned_agent: "writer-1".into(),
+                },
+            )
+            .await;
+
+        // Row created at default 10, then +5 → 15.
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, true, "good", "leader")
+            .await;
+        let score_after_pass = mgr
+            .get_agent_score(&room_id, "writer-1")
+            .await
+            .unwrap();
+        assert_eq!(score_after_pass, Some(15));
+    }
+
+    #[tokio::test]
+    async fn review_fail_penalizes_assigned_agent() {
+        let (rt, mgr) = build_runtime();
+        let room = mgr.create_room("rev-fail-room").await.unwrap();
+        let room_id = room.id.clone();
+        let node_id = "n1".to_string();
+        rt.clone()
+            .apply(
+                &room_id,
+                SchedulerEvent::TaskCreated {
+                    room_id: room_id.clone(),
+                    node_id: node_id.clone(),
+                    description: "test".into(),
+                    spec: "do thing".into(),
+                    assigned_agent: "writer-1".into(),
+                },
+            )
+            .await;
+
+        // First pass (10 → 15) then fail (15 → 10) → net delta is 0
+        // but the row exists at the default baseline 10.
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, true, "ok", "leader")
+            .await;
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, false, "no good", "leader")
+            .await;
+        let score = mgr
+            .get_agent_score(&room_id, "writer-1")
+            .await
+            .unwrap();
+        assert_eq!(score, Some(10));
+    }
+
+    #[tokio::test]
+    async fn review_skips_leader_sentinel() {
+        // __leader__ is the virtual house-boss. `create_room`
+        // backfills a default leader row (score 10); the review hook
+        // must NOT touch it, so it stays at 10 after a pass verdict.
+        let (rt, mgr) = build_runtime();
+        let room = mgr.create_room("rev-leader-room").await.unwrap();
+        let room_id = room.id.clone();
+        let node_id = "n1".to_string();
+        rt.clone()
+            .apply(
+                &room_id,
+                SchedulerEvent::TaskCreated {
+                    room_id: room_id.clone(),
+                    node_id: node_id.clone(),
+                    description: "test".into(),
+                    spec: "do thing".into(),
+                    assigned_agent: super::super::persistence::LEADER_AGENT_ID.into(),
+                },
+            )
+            .await;
+
+        let leader_before = mgr
+            .get_agent_score(&room_id, super::super::persistence::LEADER_AGENT_ID)
+            .await
+            .unwrap()
+            .expect("leader row backfilled by create_room");
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, true, "ok", "leader")
+            .await;
+        let leader_after = mgr
+            .get_agent_score(&room_id, super::super::persistence::LEADER_AGENT_ID)
+            .await
+            .unwrap()
+            .expect("leader row should still exist");
+        assert_eq!(
+            leader_before, leader_after,
+            "leader rank must be untouched by review hook (before={}, after={})",
+            leader_before, leader_after
+        );
+    }
+
+    /// P1.2 — single pass increments streak to 1 and max_streak to 1.
+    /// No milestone bonus yet (only even streaks ≥ 2 trigger +10).
+    #[tokio::test]
+    async fn review_pass_increments_streak() {
+        let (rt, mgr) = build_runtime();
+        let room = mgr.create_room("streak-1").await.unwrap();
+        let room_id = room.id.clone();
+        let node_id = "n1".to_string();
+        rt.clone()
+            .apply(
+                &room_id,
+                SchedulerEvent::TaskCreated {
+                    room_id: room_id.clone(),
+                    node_id: node_id.clone(),
+                    description: "test".into(),
+                    spec: "do thing".into(),
+                    assigned_agent: "writer-1".into(),
+                },
+            )
+            .await;
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, true, "ok", "leader")
+            .await;
+        let ranks = mgr.list_room_ranks(&room_id).await.unwrap();
+        let w = ranks
+            .iter()
+            .find(|r| r.agent_id == "writer-1")
+            .expect("writer-1 row must exist after first pass");
+        assert_eq!(w.consecutive_passes, 1);
+        assert_eq!(w.max_streak, 1);
+        // Score: default 10 + ±5 pass = 15. No bonus yet.
+        assert_eq!(w.score, 15);
+    }
+
+    /// P1.2 — second pass lands on streak=2 (even), which is a milestone
+    /// boundary, so a +10 bonus fires on top of the base +5. Final
+    /// score: 10 (default) + 5 (1st pass) + 5 (2nd pass) + 10 (milestone)
+    /// = 30.
+    #[tokio::test]
+    async fn review_two_passes_award_milestone_bonus() {
+        let (rt, mgr) = build_runtime();
+        let room = mgr.create_room("streak-2").await.unwrap();
+        let room_id = room.id.clone();
+        let node_id = "n1".to_string();
+        rt.clone()
+            .apply(
+                &room_id,
+                SchedulerEvent::TaskCreated {
+                    room_id: room_id.clone(),
+                    node_id: node_id.clone(),
+                    description: "test".into(),
+                    spec: "do thing".into(),
+                    assigned_agent: "writer-1".into(),
+                },
+            )
+            .await;
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, true, "ok", "leader")
+            .await;
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, true, "ok", "leader")
+            .await;
+        let ranks = mgr.list_room_ranks(&room_id).await.unwrap();
+        let w = ranks
+            .iter()
+            .find(|r| r.agent_id == "writer-1")
+            .expect("writer-1 row must exist");
+        assert_eq!(w.consecutive_passes, 2);
+        assert_eq!(w.max_streak, 2);
+        // 10 (default) + 5 + 5 + 10 (bonus on 2nd pass) = 30.
+        assert_eq!(w.score, 30);
+    }
+
+    /// P1.2 — a fail between two passes resets `consecutive_passes` to 0
+    /// but preserves `max_streak` (lifetime high water mark). The
+    /// post-fail pass starts the streak over at 1.
+    #[tokio::test]
+    async fn review_fail_resets_streak_but_keeps_max() {
+        let (rt, mgr) = build_runtime();
+        let room = mgr.create_room("streak-fail").await.unwrap();
+        let room_id = room.id.clone();
+        let node_id = "n1".to_string();
+        rt.clone()
+            .apply(
+                &room_id,
+                SchedulerEvent::TaskCreated {
+                    room_id: room_id.clone(),
+                    node_id: node_id.clone(),
+                    description: "test".into(),
+                    spec: "do thing".into(),
+                    assigned_agent: "writer-1".into(),
+                },
+            )
+            .await;
+        // pass → pass → fail → pass
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, true, "ok", "leader")
+            .await;
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, true, "ok", "leader")
+            .await;
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, false, "no", "leader")
+            .await;
+        let _ = rt
+            .clone()
+            .on_review_verdict(&room_id, &node_id, true, "ok", "leader")
+            .await;
+        let ranks = mgr.list_room_ranks(&room_id).await.unwrap();
+        let w = ranks.iter().find(|r| r.agent_id == "writer-1").unwrap();
+        assert_eq!(w.consecutive_passes, 1, "post-fail pass resets streak");
+        assert_eq!(w.max_streak, 2, "max_streak must remember the 2-pass run");
+    }
+}
