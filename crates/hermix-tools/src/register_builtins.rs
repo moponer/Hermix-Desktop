@@ -811,15 +811,7 @@ pub fn register_builtin_tools(
     // -- OSV Check -----------------------------------------------------------
 
     // -- URL Safety ----------------------------------------------------------
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "security",
-        Arc::new(crate::tools::url_safety::UrlSafetyHandler::default()),
-        "🔒",
-        vec![],
-        RiskLevel::Safe,
-    );
+    // url_safety tool migrated to tools/url_safety.rs::register (P1.2, 2026-06-30)
 
     // -- Env passthrough -----------------------------------------------------
 

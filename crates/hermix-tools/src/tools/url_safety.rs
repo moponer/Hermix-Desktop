@@ -32,7 +32,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
 // ---------------------------------------------------------------------------
 // Policy types
@@ -2021,4 +2021,26 @@ mod tests {
         let _g3: SsrfGuard = g; // and copies (Copy)
         let _g4: SsrfGuard = SsrfGuard::default();
     }
+}
+
+use crate::ToolRegistry;
+
+/// Register this tool with the registry (P1.2 migration).
+pub fn register(registry: &ToolRegistry) {
+    let handler = Arc::new(UrlSafetyHandler::default());
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "url_safety",
+        "security",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Check URL safety against website policy (whitelist/blacklist + SSRF guard)",
+        "🔒",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
 }
