@@ -264,28 +264,7 @@ pub fn register_builtin_tools(
         RiskLevel::Safe,
     );
 
-    // -- Vision --------------------------------------------------------------
-    {
-        let backend =
-            crate::backends::vision::OpenAiVisionBackend::from_env().unwrap_or_else(|_| {
-                crate::backends::vision::OpenAiVisionBackend::new(
-                    String::new(),
-                    "https://api.openai.com/v1".into(),
-                    "gpt-4o".into(),
-                )
-            });
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "vision",
-            Arc::new(crate::tools::vision::VisionAnalyzeHandler::new(Arc::new(
-                backend,
-            ))),
-            "👁️",
-            vec!["OPENAI_API_KEY".into()],
-            RiskLevel::Safe,
-        );
-    }
+    // vision tool migrated to tools/vision.rs::register (P1.2, 2026-06-30)
 
     // -- Image generation (fal.ai) -------------------------------------------
     {

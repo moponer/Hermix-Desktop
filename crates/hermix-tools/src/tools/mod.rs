@@ -60,5 +60,6 @@ use crate::ToolRegistry;
 /// Once all tools are migrated, `register_builtins.rs` is deleted.
 pub fn register_all(registry: &ToolRegistry) {
     disk_cleanup::register(registry);
+    vision::register(registry);
     // TODO: migrate more tools here as they get their `register()` fn
 }

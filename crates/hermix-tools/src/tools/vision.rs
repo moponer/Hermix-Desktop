@@ -4,9 +4,37 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
+use crate::ToolRegistry;
 use std::sync::Arc;
+
+/// Register this tool with the registry (P1.2 per-tool migration).
+pub fn register(registry: &ToolRegistry) {
+    let backend = crate::backends::vision::OpenAiVisionBackend::from_env().unwrap_or_else(|_| {
+        crate::backends::vision::OpenAiVisionBackend::new(
+            String::new(),
+            "https://api.openai.com/v1".into(),
+            "gpt-4o".into(),
+        )
+    });
+    let handler = Arc::new(VisionAnalyzeHandler::new(Arc::new(backend)));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "vision",
+        "vision",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec!["OPENAI_API_KEY".into()],
+        false,
+        "Analyze an image using vision AI. Provide an image URL and an optional question about the image.",
+        "👁️",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // VisionBackend trait
