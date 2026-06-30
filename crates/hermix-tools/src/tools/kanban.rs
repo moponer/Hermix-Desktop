@@ -5,10 +5,33 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, traits::RiskLevel, JsonSchema, ToolError, ToolHandler, ToolSchema};
 
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use crate::ToolRegistry;
+
+/// Register the kanban tool with the registry (P1.2 per-tool migration).
+pub fn register(registry: &ToolRegistry) {
+    let kanban_path = hermix_config::paths::hermix_home().join("kanban.json");
+    let handler = Arc::new(KanbanHandler::new(Arc::new(FileKanbanBackend::new(kanban_path))));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "kanban",
+        "kanban",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Create boards, add/move/list cards",
+        "📌",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Data model

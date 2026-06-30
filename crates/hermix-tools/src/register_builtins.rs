@@ -479,20 +479,7 @@ pub fn register_builtin_tools(
     // Migrated to tools/todo.rs::register (P1.2 per-tool migration).
 
     // -- Kanban --------------------------------------------------------------
-    {
-        let kanban_path = hermix_config::paths::hermix_home().join("kanban.json");
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "kanban",
-            Arc::new(crate::tools::kanban::KanbanHandler::new(Arc::new(
-                crate::tools::kanban::FileKanbanBackend::new(kanban_path),
-            ))),
-            "📌",
-            vec![],
-            RiskLevel::Safe,
-        );
-    }
+    // Migrated to tools/kanban.rs::register (P1.2 per-tool migration).
 
     // -- Model Providers -----------------------------------------------------
     {

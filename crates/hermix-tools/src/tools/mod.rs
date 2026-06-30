@@ -72,5 +72,6 @@ pub fn register_all(registry: &ToolRegistry) {
     homeassistant::register(registry);
     session_search::register(registry);
     hermix_achievements::register(registry);
+    kanban::register(registry);
     // TODO: migrate more tools here as they get their `register()` fn
 }
