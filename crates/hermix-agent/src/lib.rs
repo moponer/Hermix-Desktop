@@ -17,6 +17,7 @@
 
 pub mod agent_builder;
 pub mod agent_config;
+pub mod agent_helpers;
 pub mod agent_loop;
 pub mod archive;
 pub mod api_bridge;
