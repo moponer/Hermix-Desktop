@@ -12,7 +12,31 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, traits::RiskLevel, JsonSchema, ToolError, ToolHandler, ToolSchema};
+
+use std::sync::Arc;
+
+use crate::ToolRegistry;
+
+/// Register the hermix_achievements tool with the registry (P1.2 per-tool migration).
+pub fn register(registry: &ToolRegistry) {
+    let handler = Arc::new(HermixAchievementsHandler::new());
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "hermix_achievements",
+        "hermix_achievements",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Track agent milestones and unlock decorative badges",
+        "🏆",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Built-in badge catalog

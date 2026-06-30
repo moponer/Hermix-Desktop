@@ -470,15 +470,7 @@ pub fn register_builtin_tools(
     );
 
     // -- Hermes achievements -------------------------------------------------
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "hermix_achievements",
-        Arc::new(crate::tools::hermix_achievements::HermixAchievementsHandler::new()),
-        "🏆",
-        vec![],
-        RiskLevel::Safe,
-    );
+    // Migrated to tools/hermix_achievements.rs::register (P1.2 per-tool migration).
 
     // -- Session search ------------------------------------------------------
     // Migrated to tools/session_search.rs::register (P1.2 per-tool migration).
