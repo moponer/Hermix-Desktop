@@ -73,5 +73,6 @@ pub fn register_all(registry: &ToolRegistry) {
     session_search::register(registry);
     hermix_achievements::register(registry);
     kanban::register(registry);
+    model_providers::register(registry);
     // TODO: migrate more tools here as they get their `register()` fn
 }

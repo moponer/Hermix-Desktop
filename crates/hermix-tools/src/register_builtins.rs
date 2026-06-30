@@ -482,22 +482,7 @@ pub fn register_builtin_tools(
     // Migrated to tools/kanban.rs::register (P1.2 per-tool migration).
 
     // -- Model Providers -----------------------------------------------------
-    {
-        let providers_path = hermix_config::paths::hermix_home().join("model_providers.json");
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "model_providers",
-            Arc::new(crate::tools::model_providers::ModelProvidersHandler::new(
-                Arc::new(crate::tools::model_providers::FileModelProvidersBackend::new(
-                    providers_path,
-                )),
-            )),
-            "🔧",
-            vec![],
-            RiskLevel::Safe,
-        );
-    }
+    // Migrated to tools/model_providers.rs::register (P1.2 per-tool migration).
 
     // -- Platforms -----------------------------------------------------------
     // platforms migrated to tools/platforms.rs::register (P1.2, 2026-06-30)

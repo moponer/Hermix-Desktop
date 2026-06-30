@@ -5,10 +5,35 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, traits::RiskLevel, JsonSchema, ToolError, ToolHandler, ToolSchema};
 
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use crate::ToolRegistry;
+
+/// Register the model_providers tool with the registry (P1.2 per-tool migration).
+pub fn register(registry: &ToolRegistry) {
+    let providers_path = hermix_config::paths::hermix_home().join("model_providers.json");
+    let handler = Arc::new(ModelProvidersHandler::new(Arc::new(
+        FileModelProvidersBackend::new(providers_path),
+    )));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "model_providers",
+        "model_providers",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "List and configure LLM providers",
+        "🔧",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Data model
