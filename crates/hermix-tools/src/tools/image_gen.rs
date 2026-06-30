@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
 use std::sync::Arc;
 
@@ -125,5 +125,69 @@ mod tests {
             .await
             .unwrap();
         assert!(result.contains("sunset"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P1.2 register shim — migrated from register_builtins.rs (2026-06-30)
+// ---------------------------------------------------------------------------
+
+use crate::ToolRegistry;
+
+/// Register image_gen (Fal.ai) + gpt_image (OpenAI gpt-image-1) tools.
+///
+/// Both backends live in the same `image_gen` toolset and stay registered
+/// even when no API key is configured; the env_deps gate the pre-exec
+/// approval hook instead of removing the tool.
+pub fn register(registry: &ToolRegistry) {
+    // Fal.ai image generation
+    {
+        let backend = crate::backends::image_gen::FalImageGenBackend::from_env()
+            .unwrap_or_else(|_| {
+                crate::backends::image_gen::FalImageGenBackend::new(String::new())
+            });
+        let handler = Arc::new(ImageGenerateHandler::new(Arc::new(backend)));
+        let schema = handler.schema();
+        registry.register_with_risk(
+            "fal_image_gen",
+            "image_gen",
+            schema,
+            handler,
+            Arc::new(|| true),
+            vec!["FAL_KEY".into()],
+            true,
+            "Generate an image from a text prompt using fal.ai",
+            "🎨",
+            None,
+            RiskLevel::Caution,
+            false,
+        );
+    }
+
+    // OpenAI gpt-image-1
+    {
+        let backend = crate::backends::gpt_image::OpenAiGptImageBackend::from_env_or_managed()
+            .unwrap_or_else(|_| {
+                crate::backends::gpt_image::OpenAiGptImageBackend::new(
+                    String::new(),
+                    "https://api.openai.com/v1".into(),
+                )
+            });
+        let handler = Arc::new(crate::tools::gpt_image::GptImageHandler::new(Arc::new(backend)));
+        let schema = handler.schema();
+        registry.register_with_risk(
+            "gpt_image",
+            "image_gen",
+            schema,
+            handler,
+            Arc::new(|| true),
+            vec!["OPENAI_API_KEY".into()],
+            true,
+            "Generate an image using OpenAI gpt-image-1",
+            "🖼️",
+            None,
+            RiskLevel::Caution,
+            false,
+        );
     }
 }

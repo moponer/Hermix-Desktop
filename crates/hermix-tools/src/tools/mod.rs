@@ -67,5 +67,6 @@ pub fn register_all(registry: &ToolRegistry) {
     todo::register(registry);
     tts::register(registry);
     messaging::register(registry);
+    image_gen::register(registry);
     // TODO: migrate more tools here as they get their `register()` fn
 }

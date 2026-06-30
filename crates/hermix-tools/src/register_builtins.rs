@@ -257,41 +257,7 @@ pub fn register_builtin_tools(
     // read_pdf tool migrated to tools/pdf.rs::register (P1.2, 2026-06-30)
 
     // -- Image generation (fal.ai) -------------------------------------------
-    {
-        let backend = crate::backends::image_gen::FalImageGenBackend::from_env()
-            .unwrap_or_else(|_| crate::backends::image_gen::FalImageGenBackend::new(String::new()));
-        reg(
-                    &enabled_toolsets,
-                    registry,
-            "image_gen",
-            Arc::new(crate::tools::image_gen::ImageGenerateHandler::new(
-                Arc::new(backend),
-            )),
-            "🎨",
-            vec!["FAL_KEY".into()],
-        );
-    }
-
-    // -- GPT Image (OpenAI gpt-image-1) -------------------------------------
-    {
-        let backend = crate::backends::gpt_image::OpenAiGptImageBackend::from_env_or_managed()
-            .unwrap_or_else(|_| {
-                crate::backends::gpt_image::OpenAiGptImageBackend::new(
-                    String::new(),
-                    "https://api.openai.com/v1".into(),
-                )
-            });
-        reg(
-                    &enabled_toolsets,
-                    registry,
-            "image_gen",
-            Arc::new(crate::tools::gpt_image::GptImageHandler::new(Arc::new(
-                backend,
-            ))),
-            "🖼️",
-            vec!["OPENAI_API_KEY".into()],
-        );
-    }
+    // image_gen + gpt_image migrated to tools/image_gen.rs::register (P1.2, 2026-06-30)
 
     // -- Video generation (SeedDance2) ---------------------------------------
     {
