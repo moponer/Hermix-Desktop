@@ -4,9 +4,41 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, traits::RiskLevel, JsonSchema, ToolError, ToolHandler, ToolSchema};
 
 use std::sync::Arc;
+
+use crate::ToolRegistry;
+
+/// Register the session_search tool with the registry (P1.2 per-tool migration).
+pub fn register(registry: &ToolRegistry) {
+    let db_path = hermix_config::paths::sessions_db_path();
+    match crate::backends::session_search::SqliteSessionSearchBackend::new(
+        &db_path.to_string_lossy(),
+    ) {
+        Ok(backend) => {
+            let handler = Arc::new(SessionSearchHandler::new(Arc::new(backend)));
+            let schema = handler.schema();
+            registry.register_with_risk(
+                "session_search",
+                "session_search",
+                schema,
+                handler,
+                Arc::new(|| true),
+                vec![],
+                true,
+                "Search past conversation sessions using FTS5",
+                "🔍",
+                None,
+                RiskLevel::Safe,
+                false,
+            );
+        }
+        Err(e) => {
+            tracing::warn!("Failed to initialise session search DB: {e}; skipping session_search tool");
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // SessionSearchBackend trait

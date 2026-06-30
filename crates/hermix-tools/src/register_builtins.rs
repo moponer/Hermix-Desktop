@@ -481,26 +481,7 @@ pub fn register_builtin_tools(
     );
 
     // -- Session search ------------------------------------------------------
-    {
-        let db_path = hermix_config::paths::sessions_db_path();
-        if let Ok(backend) = crate::backends::session_search::SqliteSessionSearchBackend::new(
-            &db_path.to_string_lossy(),
-        ) {
-            reg_risk(
-                        &enabled_toolsets,
-                        registry,
-                "session_search",
-                Arc::new(crate::tools::session_search::SessionSearchHandler::new(
-                    Arc::new(backend),
-                )),
-                "🔍",
-                vec![],
-                RiskLevel::Safe,
-            );
-        } else {
-            tracing::warn!("Failed to initialise session search DB; skipping session_search tool");
-        }
-    }
+    // Migrated to tools/session_search.rs::register (P1.2 per-tool migration).
 
     // -- Todo ----------------------------------------------------------------
     // Migrated to tools/todo.rs::register (P1.2 per-tool migration).

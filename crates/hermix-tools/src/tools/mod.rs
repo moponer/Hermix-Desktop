@@ -70,5 +70,6 @@ pub fn register_all(registry: &ToolRegistry) {
     image_gen::register(registry);
     video_gen::register(registry);
     homeassistant::register(registry);
+    session_search::register(registry);
     // TODO: migrate more tools here as they get their `register()` fn
 }
