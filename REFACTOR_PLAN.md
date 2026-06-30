@@ -101,26 +101,54 @@ re-added their `pub mod` lines, then redid `cargo check` →
 **EXIT 0**. **Lesson recorded in §6**: never trust `TOOL_CLEANUP.md`
 markers — always grep for callers before deleting.
 
-### 1.2 `register_builtins.rs` split — NOT STARTED
+### 1.2 `register_builtins.rs` split — IN PROGRESS (2026-06-30 pm)
 
-Still 1618 lines. The function body itself is 957 lines; tests +
-helpers account for the rest. The right next step (next session) is
-**per-tool migration** to `tools/*.rs::register(registry)`:
+**Status (2026-06-30 ~14:00)**: 4 tools migrated, `register_builtins.rs` now
+1615 → 1566 lines (-49).
+
+Migrated to date:
+
+| Tool | Commit | Notes |
+|---|---|---|
+| `disk_cleanup` | `02a1d90` | pioneered the pattern (P1.1) |
+| `vision` | `7acaf21` | needs OPENAI_API_KEY env_deps |
+| `security_guidance` | `a5807a0` | reads `security_guidance.json` |
+| `platforms` | `70e5e40` | reads `platforms.json` |
+
+**Next candidates** (low-coupling, no backend injection required):
+
+1. `cronjob`, `tts`, `image_gen`, `gpt_image`, `video_gen`, `homeassistant`,
+   `messaging`, `session_search`, `url_safety`, `tool_search`, `todo`,
+   `skill_utils`, `skill_commands`, `pdf`, `terminal`, `cua`, `model_providers`,
+   `code_execution` — each reads its own file / has a self-contained backend.
+2. `clarify`, `delegation` — need their `register` signatures to accept
+   an externally-injected `Arc<dyn ClarifyBackend>` / agent list. Defer
+   until a generic DI pass on `register_builtin_tools` lands.
+3. `terminal`, `computer_use`, `cua` — heavy backends with env-driven
+   constructors; migrate last so any DI plumbing changes are absorbed.
+
+Once all 30+ tools are out, `register_builtins.rs` becomes a 50-line
+"register-all-migrated-plus-stub-a-few-DI-ones" wrapper.
+
+**Migration ritual** (one tool per commit, gated on `cargo check`):
 
 ```
 For each tool currently `reg_risk(...)`d in register_builtins.rs:
-  1. Create (or use) `tools/<name>.rs::register(&ToolRegistry)`
-  2. Call it from `tools/mod.rs::register_all`
-  3. Remove the `reg_risk` call from `register_builtins.rs`
-  4. `cargo check --workspace --all-targets`
+  1. Add `pub fn register(registry: &ToolRegistry)` to `tools/<name>.rs`
+     that calls `registry.register_with_risk(...)` with the same args
+     the inline `reg_risk(...)` did (handler, emoji, env_deps, risk).
+  2. Add `<name>::register(registry);` to `tools/mod.rs::register_all`.
+  3. Remove the `reg_risk` call from `register_builtins.rs`, leaving a
+     one-line comment for archaeology.
+  4. `cargo check --workspace --all-targets` (must stay green).
+  5. `cargo test -p hermix-tools --lib <name>` (module tests pass).
 ```
 
 This is **risk-medium** (one slip and a tool disappears from the
-LLM-visible set). **Do not batch**: migrate one tool per commit, gate
-each commit on the full `cargo check`.
+LLM-visible set). **Do not batch**: one tool, one commit, one gate.
 
-**Estimated effort**: 30 tools × 5 min = 2.5 h, plus 30 min buffer
-for the inevitable `serde_json::json!` typo that breaks a schema.
+**Estimated effort**: remaining 26 tools × 5 min = 2 h, plus 30 min
+buffer for the inevitable `serde_json::json!` typo that breaks a schema.
 
 ### 1.3 `ToolRegistry::coerce_args` (P1.2.2) — ✅ DONE 2026-06-30
 
