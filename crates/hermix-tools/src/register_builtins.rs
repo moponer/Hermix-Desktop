@@ -566,20 +566,7 @@ pub fn register_builtin_tools(
     }
 
     // -- Todo ----------------------------------------------------------------
-    {
-        let todo_path = hermix_config::paths::hermix_home().join("todos.json");
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "todo",
-            Arc::new(crate::tools::todo::TodoHandler::new(Arc::new(
-                crate::backends::todo::FileTodoBackend::new(todo_path),
-            ))),
-            "📋",
-            vec![],
-            RiskLevel::Safe,
-        );
-    }
+    // Migrated to tools/todo.rs::register (P1.2 per-tool migration).
 
     // -- Kanban --------------------------------------------------------------
     {

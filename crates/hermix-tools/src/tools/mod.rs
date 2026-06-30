@@ -64,5 +64,6 @@ pub fn register_all(registry: &ToolRegistry) {
     security_guidance::register(registry);
     platforms::register(registry);
     cronjob::register(registry);
+    todo::register(registry);
     // TODO: migrate more tools here as they get their `register()` fn
 }

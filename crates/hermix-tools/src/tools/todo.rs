@@ -4,9 +4,33 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
+use crate::ToolRegistry;
 use std::sync::Arc;
+
+/// Register this tool with the registry (P1.2 per-tool migration).
+pub fn register(registry: &ToolRegistry) {
+    let todo_path = hermix_config::paths::hermix_home().join("todos.json");
+    let handler = Arc::new(TodoHandler::new(Arc::new(
+        crate::backends::todo::FileTodoBackend::new(todo_path),
+    )));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "todo",
+        "todo",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        false,
+        "Manage todo items: create, list, update, complete, or delete tasks.",
+        "📋",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // TodoBackend trait
