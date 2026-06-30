@@ -5,10 +5,34 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
+use crate::ToolRegistry;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Register this tool with the registry (P1.2 per-tool migration).
+pub fn register(registry: &ToolRegistry) {
+    let platforms_path = hermix_config::paths::hermix_home().join("platforms.json");
+    let handler = Arc::new(PlatformsHandler::new(Arc::new(
+        FilePlatformsBackend::new(platforms_path),
+    )));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "platforms",
+        "platforms",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        false,
+        "List or switch the active terminal backend platform.",
+        "🖥️",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Data model

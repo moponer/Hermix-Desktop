@@ -616,20 +616,7 @@ pub fn register_builtin_tools(
     }
 
     // -- Platforms -----------------------------------------------------------
-    {
-        let platforms_path = hermix_config::paths::hermix_home().join("platforms.json");
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "platforms",
-            Arc::new(crate::tools::platforms::PlatformsHandler::new(Arc::new(
-                crate::tools::platforms::FilePlatformsBackend::new(platforms_path),
-            ))),
-            "🖥️",
-            vec![],
-            RiskLevel::Safe,
-        );
-    }
+    // platforms migrated to tools/platforms.rs::register (P1.2, 2026-06-30)
 
     // -- Security Guidance ---------------------------------------------------
     // security_guidance migrated to tools/security_guidance.rs::register (P1.2, 2026-06-30)

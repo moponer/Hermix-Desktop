@@ -62,5 +62,6 @@ pub fn register_all(registry: &ToolRegistry) {
     disk_cleanup::register(registry);
     vision::register(registry);
     security_guidance::register(registry);
+    platforms::register(registry);
     // TODO: migrate more tools here as they get their `register()` fn
 }
