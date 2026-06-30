@@ -44,10 +44,16 @@ const PROVIDERS: ProviderDef[] = [
 
 const MODEL_CONFIG_KEY = STORAGE_KEYS.modelConfig;
 const MODEL_CACHE_KEY = STORAGE_KEYS.modelCache;
-interface ModelConfigData { enabled: { providerId: string; modelId: string }[]; defaultModel: string }
-function loadModelConfig(): ModelConfigData { try { const r = storage.getItem(MODEL_CONFIG_KEY); if (r) return JSON.parse(r); } catch {} return { enabled: [], defaultModel: "" }; }
+interface ModelConfigData { enabled: { providerId: string; modelId: string }[]; defaultModel: string; modelContexts: Record<string, number> }
+function loadModelConfig(): ModelConfigData { try { const r = storage.getItem(MODEL_CONFIG_KEY); if (r) return { modelContexts: {}, ...JSON.parse(r) }; } catch {} return { enabled: [], defaultModel: "", modelContexts: {} }; }
 function loadModelCache(): Record<string, string[]> { try { const r = storage.getItem(MODEL_CACHE_KEY); if (r) return JSON.parse(r); } catch {} return {}; }
 function saveModelCache(cache: Record<string, string[]>) { storage.setItem(MODEL_CACHE_KEY, JSON.stringify(cache)); }
+
+const CONTEXT_WINDOW_OPTIONS = [
+  { label: "128K", value: 128_000 },
+  { label: "200K", value: 200_000 },
+  { label: "1M", value: 1_000_000 },
+] as const;
 
 // ── Tabs ───────────────────────────────────────────
 
@@ -215,7 +221,7 @@ function ModelTab() {
                   if (!existing.has(`${p.id}:${modelId}`)) newEnabled.push({ providerId: p.id, modelId });
                 });
                 const newDefault = prev.defaultModel || (newEnabled.length > 0 ? `${p.id}:${models[0]}` : "");
-                const next = { enabled: newEnabled, defaultModel: newDefault };
+                const next = { enabled: newEnabled, defaultModel: newDefault, modelContexts: prev.modelContexts ?? {} };
                 writeModelConfigAndNotify(next);
                 return next;
               });
@@ -266,7 +272,7 @@ function ModelTab() {
                     models.forEach((mid) => {
                       if (!existing.has(`${p.id}:${mid}`)) newEnabled.push({ providerId: p.id, modelId: mid });
                     });
-                    const next = { enabled: newEnabled, defaultModel: prev.defaultModel || `${p.id}:${models[0]}` };
+                    const next = { enabled: newEnabled, defaultModel: prev.defaultModel || `${p.id}:${models[0]}`, modelContexts: prev.modelContexts ?? {} };
                     writeModelConfigAndNotify(next);
                     return next;
                   });
@@ -333,7 +339,7 @@ function ModelTab() {
         ? prev.enabled.filter((m) => `${m.providerId}:${m.modelId}` !== key)
         : [...prev.enabled, { providerId, modelId }];
       const defaultCleared = exists && prev.defaultModel === key;
-      const newConfig = { enabled: newEnabled, defaultModel: defaultCleared ? "" : prev.defaultModel };
+      const newConfig: ModelConfigData = { enabled: newEnabled, defaultModel: defaultCleared ? "" : prev.defaultModel, modelContexts: prev.modelContexts ?? {} };
       // Auto-save every toggle immediately — no separate "save" step.
       setTimeout(async () => {
         writeModelConfigAndNotify(newConfig);
@@ -600,16 +606,41 @@ function ModelTab() {
                       const fullId = `${selectedProvider.id}:${modelId}`;
                       const isEnabled = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === fullId);
                       const isDefault = config.defaultModel === fullId;
+                      const ctx = config.modelContexts?.[fullId];
                       return (
                         <div key={modelId} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
                           <button onClick={() => toggleModel(selectedProvider.id, modelId)} className={`w-4 h-4 rounded border flex items-center justify-center ${isEnabled ? "bg-accent border-accent text-white" : "border-border-secondary hover:border-accent"}`}>
                             {isEnabled && <Check size={10} />}
                           </button>
-                          <span className={`flex-1 font-mono ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
+                          <span className={`flex-1 font-mono min-w-0 truncate ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
                           {isEnabled && (
-                            <button onClick={() => setDefault(fullId)} className={`px-2 py-0.5 rounded text-[10px] ${isDefault ? "bg-accent text-white" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
-                              {isDefault ? "默认" : "设为默认"}
-                            </button>
+                            <>
+                              <select
+                                value={ctx ?? ""}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setConfig((prev) => {
+                                    const next = { ...prev, modelContexts: { ...(prev.modelContexts ?? {}), [fullId]: v ? Number(v) : 0 } };
+                                    storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
+                                    return next;
+                                  });
+                                  // Sync to backend for custom providers
+                                  if (selectedProvider?.id.startsWith("custom-")) {
+                                    const allCtx = { ...config.modelContexts, [fullId]: v ? Number(v) : 0 };
+                                    api.updateCustomProviderModelContexts(selectedProvider.id, allCtx).catch(() => {});
+                                  }
+                                }}
+                                className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[10px] text-text-muted outline-none"
+                              >
+                                <option value="">默认</option>
+                                {CONTEXT_WINDOW_OPTIONS.map((o) => (
+                                  <option key={o.value} value={o.value}>{o.label}</option>
+                                ))}
+                              </select>
+                              <button onClick={() => setDefault(fullId)} className={`px-2 py-0.5 rounded text-[10px] ${isDefault ? "bg-accent text-white" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
+                                {isDefault ? "默认" : "设为默认"}
+                              </button>
+                            </>
                           )}
                         </div>
                       );
@@ -903,6 +934,7 @@ function CustomProviderSection({
                   const fullId = `${providerId}:${modelId}`;
                   const isEnabled = config.enabled.some((m) => `${m.providerId}:${m.modelId}` === fullId);
                   const isDefault = config.defaultModel === fullId;
+                  const ctx = config.modelContexts?.[fullId];
                   return (
                     <div key={`${providerId}-${modelId}`} className={`flex items-center gap-1.5 px-2 py-1 rounded text-[11px] ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
                       <button onClick={() => toggleModel(providerId, modelId)} className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${isEnabled ? "bg-accent border-accent text-white" : "border-border-secondary hover:border-accent"}`}>
@@ -910,9 +942,33 @@ function CustomProviderSection({
                       </button>
                       <span className={`flex-1 min-w-0 truncate font-mono ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
                       {isEnabled && (
-                        <button onClick={() => setDefault(fullId)} className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] ${isDefault ? "bg-accent text-white" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
-                          {isDefault ? "默认" : "设为默认"}
-                        </button>
+                        <>
+                          <select
+                            value={ctx ?? ""}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setConfig((prev) => {
+                                const next = { ...prev, modelContexts: { ...(prev.modelContexts ?? {}), [fullId]: v ? Number(v) : 0 } };
+                                storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
+                                return next;
+                              });
+                              // Sync to backend
+                              if (providerId.startsWith("custom-")) {
+                                const ctx = { ...config.modelContexts, [fullId]: v ? Number(v) : 0 };
+                                api.updateCustomProviderModelContexts(providerId, ctx).catch(() => {});
+                              }
+                            }}
+                            className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[9px] text-text-muted outline-none"
+                          >
+                            <option value="">默认</option>
+                            {CONTEXT_WINDOW_OPTIONS.map((o) => (
+                              <option key={o.value} value={o.value}>{o.label}</option>
+                            ))}
+                          </select>
+                          <button onClick={() => setDefault(fullId)} className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] ${isDefault ? "bg-accent text-white" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
+                            {isDefault ? "默认" : "设为默认"}
+                          </button>
+                        </>
                       )}
                     </div>
                   );
@@ -1090,6 +1146,182 @@ function BackendTab() {
             />
           </button>
         </div>
+      </div>
+      <PythonRuntimePanel />
+    </div>
+  );
+}
+
+// ── Python Runtime Panel (Phase L1.4, 2026-06-29) ──────────────────────
+//
+// Probe only — does NOT auto-bundle Python. The sister slot reserved by
+// `python_detect` (`<hermix-dir>/python/`) is left empty by default; the
+// installer can opt into bundling later via `build-tauri.bat BUNDLED=1`
+// + `tauri.conf.json::bundle.resources`. The UI mirrors the resolver in
+// `apps/desktop-tauri/src-tauri/src/commands.rs::python_detect`.
+
+interface PythonProbeEntry {
+  source: string;
+  path: string;
+  exists: boolean;
+  version: string | null;
+}
+interface PythonProbeResult {
+  entries: PythonProbeEntry[];
+  selected: string | null;
+}
+
+const PYTHON_OVERRIDE_STORAGE_KEY = "hermix.python.override";
+
+function PythonRuntimePanel() {
+  const [probe, setProbe] = useState<PythonProbeResult | null>(null);
+  const [probeLoading, setProbeLoading] = useState(false);
+  const [probeErr, setProbeErr] = useState("");
+  const [overrideInput, setOverrideInput] = useState("");
+  const [overrideSaving, setOverrideSaving] = useState(false);
+  const [overrideStatus, setOverrideStatus] = useState("");
+
+  // Load persisted override from localStorage on mount + refresh.
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY) ?? "";
+      setOverrideInput(stored);
+    } catch {}
+  }, []);
+
+  const runProbe = useCallback(async () => {
+    setProbeLoading(true);
+    setProbeErr("");
+    try {
+      const override = overrideInput.trim() || null;
+      const result = (await (window as unknown as {
+        __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+      }).__TAURI_INTERNALS__.invoke("python_detect", { overridePath: override })) as PythonProbeResult;
+      setProbe(result);
+    } catch (e) {
+      setProbeErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProbeLoading(false);
+    }
+  }, [overrideInput]);
+
+  // Probe once on mount so the user sees the truth without clicking.
+  useEffect(() => {
+    runProbe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSaveOverride = useCallback(async () => {
+    const value = overrideInput.trim();
+    setOverrideSaving(true);
+    setOverrideStatus("");
+    try {
+      await (window as unknown as {
+        __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+      }).__TAURI_INTERNALS__.invoke("set_python_override", { path: value || null });
+      try {
+        if (value) {
+          window.localStorage.setItem(PYTHON_OVERRIDE_STORAGE_KEY, value);
+        } else {
+          window.localStorage.removeItem(PYTHON_OVERRIDE_STORAGE_KEY);
+        }
+      } catch {}
+      setOverrideStatus(value ? "已保存覆盖路径，下次 `execute_code` 调用立即生效" : "已清除覆盖路径，恢复默认探测顺序");
+      await runProbe();
+    } catch (e) {
+      setOverrideStatus(`保存失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setOverrideSaving(false);
+    }
+  }, [overrideInput, runProbe]);
+
+  const selectedRow = probe?.entries.find((e) => e.path === probe.selected);
+
+  return (
+    <div className="rounded-xl border border-border-primary bg-bg-card p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <div className="text-sm font-medium text-text-primary">Python 运行时</div>
+          <p className="text-xs text-text-muted mt-0.5">
+            `execute_code(language="python")` 和 PDF fallback 都会从这里选解释器。
+            顺序：override → env → 同目录 sibling → PATH。
+          </p>
+        </div>
+        <button
+          onClick={runProbe}
+          disabled={probeLoading}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-secondary text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 shrink-0"
+        >
+          <RefreshCw size={12} className={probeLoading ? "animate-spin" : ""} />
+          {probeLoading ? "检测中" : "重新检测"}
+        </button>
+      </div>
+
+      {/* Status badge */}
+      <div className="mt-3 flex items-center gap-2">
+        <div className={`w-2 h-2 rounded-full ${selectedRow ? "bg-green-400" : probe === null ? "bg-yellow-400" : "bg-red-400"}`} />
+        <span className="text-xs text-text-muted">
+          {selectedRow
+            ? `已选中：${selectedRow.path}${selectedRow.version ? ` (${selectedRow.version})` : ""}`
+            : probe === null
+              ? "尚未检测"
+              : "未找到可用的 Python（请安装或设置 override）"}
+        </span>
+      </div>
+
+      {/* Probe results table */}
+      {probe && (
+        <div className="mt-3 space-y-1">
+          {probe.entries.map((e, i) => (
+            <div
+              key={i}
+              className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] font-mono ${
+                probe.selected === e.path
+                  ? "bg-accent/10 border border-accent/30"
+                  : "bg-bg-tertiary/30 border border-border-secondary/40"
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full shrink-0 ${e.exists ? "bg-green-400" : "bg-border-secondary"}`}
+                title={e.exists ? "exists" : "missing"}
+              />
+              <span className="text-text-muted w-28 shrink-0">[{e.source}]</span>
+              <span className="text-text-primary truncate flex-1" title={e.path}>{e.path}</span>
+              {e.version && <span className="text-text-muted shrink-0">{e.version}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {probeErr && (
+        <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-400">
+          {probeErr}
+        </div>
+      )}
+
+      {/* Override input */}
+      <div className="mt-4 pt-3 border-t border-border-primary space-y-2">
+        <label className="block text-xs font-medium text-text-primary">
+          自定义 Python 路径（可选）
+        </label>
+        <div className="flex gap-2">
+          <input
+            value={overrideInput}
+            onChange={(e) => setOverrideInput(e.target.value)}
+            placeholder="例如 C:\Python311\python.exe"
+            className="flex-1 bg-bg-tertiary border border-border-primary rounded-lg px-3 py-1.5 text-xs text-text-primary placeholder-text-muted outline-none font-mono"
+          />
+          <button
+            onClick={handleSaveOverride}
+            disabled={overrideSaving}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-accent hover:bg-accent-hover text-white disabled:opacity-40 shrink-0"
+          >
+            <Save size={12} />
+            {overrideSaving ? "保存中" : "保存"}
+          </button>
+        </div>
+        {overrideStatus && (
+          <div className="text-[11px] text-text-muted">{overrideStatus}</div>
+        )}
       </div>
     </div>
   );

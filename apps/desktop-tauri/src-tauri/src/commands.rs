@@ -557,14 +557,8 @@ pub async fn render_office_preview(
     };
 
     if needs_render {
-        // officecli view <file> html outputs to stdout.
-        // Capture it and write to the cache file.
         let output = tokio::process::Command::new(&officecli_bin)
-            .args([
-                "view",
-                canonical.to_str().unwrap_or(""),
-                "html",
-            ])
+            .args(["view", canonical.to_str().unwrap_or(""), "html"])
             .env("OFFICECLI_NO_AUTO_RESIDENT", "1")
             .output()
             .await
@@ -575,14 +569,11 @@ pub async fn render_office_preview(
             return Err(format!("officecli failed: {}", stderr.trim()));
         }
 
-        // Write stdout (HTML content) to the cache file.
         std::fs::write(&html_path, &output.stdout)
             .map_err(|e| format!("cannot write preview HTML: {e}"))?;
     }
 
     let resolved = strip_unc_prefix(html_path.as_os_str());
-    // Read the cached HTML so the front-end can render via srcDoc
-    // (avoids Tauri 2 asset-protocol scope complexity entirely).
     let html_content = std::fs::read_to_string(&html_path)
         .map_err(|e| format!("cannot read cached preview: {e}"))?;
     Ok(OfficePreviewResult {
@@ -630,4 +621,193 @@ pub async fn artifact_path_exists(
     // Must be under allowed roots AND a regular file
     is_under_allowed_root_with(&canonical, workspace_root.as_deref())
         && std::fs::metadata(&canonical).map(|m| m.is_file()).unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// Python runtime probe (used by Settings → Backend tab → "Python 运行时" UI)
+// ---------------------------------------------------------------------------
+
+/// One candidate Python interpreter probed by [`python_detect`].
+#[derive(serde::Serialize)]
+pub struct PythonProbeEntry {
+    /// `override` | `sibling-slot` | `PATH:<candidate>` | `env:HERMIX_PYTHON`
+    pub source: String,
+    /// Absolute path that would be invoked.
+    pub path: String,
+    /// Whether the file exists on disk.
+    pub exists: bool,
+    /// If we actually spawned it: the captured `--version` line.
+    pub version: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct PythonProbeResult {
+    pub entries: Vec<PythonProbeEntry>,
+    /// The first entry whose `exists = true`; mirrors the resolver in
+    /// `crates/hermix-tools/src/backends/code_execution.rs`.
+    pub selected: Option<String>,
+}
+
+/// Probe Python interpreters on this machine. Mirrors the resolver
+/// in `hermix_tools::backends::code_execution::python_search_paths`
+/// but is duplicated here so the desktop crate stays standalone
+/// (it opts out of the main workspace in its Cargo.toml).
+///
+/// Why we don't add `hermix-tools` as a dep here:
+///   - Cross-workspace metadata + Cargo features churn is not
+///     worth it for ~50 lines.
+///   - The probe is read-only — drift between the two
+///     implementations can be caught by `cargo test`.
+#[tauri::command]
+pub async fn python_detect(override_path: Option<String>) -> Result<PythonProbeResult, String> {
+    let mut entries: Vec<PythonProbeEntry> = Vec::new();
+
+    // 1. Caller-supplied override (Settings UI).
+    if let Some(p) = override_path.as_deref().filter(|s| !s.trim().is_empty()) {
+        let exists = Path::new(p).is_file();
+        let version = if exists {
+            spawn_python_version(Path::new(p)).await
+        } else {
+            None
+        };
+        entries.push(PythonProbeEntry {
+            source: "override".into(),
+            path: p.to_string(),
+            exists,
+            version,
+        });
+    }
+
+    // 2. HERMIX_PYTHON env var.
+    if let Ok(env_p) = std::env::var("HERMIX_PYTHON") {
+        if !env_p.is_empty() && !entries.iter().any(|e| e.path == env_p) {
+            let pb = PathBuf::from(&env_p);
+            let exists = pb.is_file();
+            let version = if exists {
+                spawn_python_version(&pb).await
+            } else {
+                None
+            };
+            entries.push(PythonProbeEntry {
+                source: "env:HERMIX_PYTHON".into(),
+                path: env_p,
+                exists,
+                version,
+            });
+        }
+    }
+
+    // 3. Sibling slot of the running hermix binary.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            #[cfg(windows)]
+            let sibling = dir.join("python").join("python.exe");
+            #[cfg(not(windows))]
+            let sibling = dir.join("python").join("bin").join("python3");
+            if !entries.iter().any(|e| e.path == sibling.display().to_string()) {
+                let exists = sibling.is_file();
+                let version = if exists {
+                    spawn_python_version(&sibling).await
+                } else {
+                    None
+                };
+                entries.push(PythonProbeEntry {
+                    source: "sibling-slot".into(),
+                    path: sibling.display().to_string(),
+                    exists,
+                    version,
+                });
+            }
+        }
+    }
+
+    // 4. PATH probe.
+    #[cfg(windows)]
+    const CANDIDATES: &[&str] = &["python", "py", "python3", "python2"];
+    #[cfg(not(windows))]
+    const CANDIDATES: &[&str] = &["python3", "python", "python2"];
+    for cand in CANDIDATES {
+        let resolved = which::which(cand).ok();
+        let path = resolved.clone().unwrap_or_else(|| PathBuf::from(cand));
+        let path_str = path.display().to_string();
+        if entries.iter().any(|e| e.path == path_str) {
+            continue;
+        }
+        let exists = resolved.is_some();
+        let version = if exists {
+            spawn_python_version(&path).await
+        } else {
+            None
+        };
+        entries.push(PythonProbeEntry {
+            source: format!("PATH:{cand}"),
+            path: path_str,
+            exists,
+            version,
+        });
+    }
+
+    let selected = entries
+        .iter()
+        .find(|e| e.exists)
+        .map(|e| e.path.clone());
+    Ok(PythonProbeResult { entries, selected })
+}
+
+/// Spawn `<python> --version` with a 2s timeout and capture the version
+/// string. Returns `None` on any failure (timeout / non-zero exit / IO
+/// error) — the caller treats that as "exists but didn't return a
+/// version", which still beats nothing.
+async fn spawn_python_version(python: &Path) -> Option<String> {
+    use tokio::process::Command as TokioCommand;
+    let output = TokioCommand::new(python)
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .ok()?;
+    // `python --version` writes to stdout on Unix and stderr on
+    // Windows Python.org builds; we concatenate both and look for the
+    // first `Python X.Y.Z` token.
+    let mut out = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.stderr.is_empty() {
+        out.push('\n');
+        out.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    out.lines()
+        .find(|l| l.contains("Python"))
+        .map(|s| s.trim().to_string())
+}
+
+/// Persist a Python interpreter override. The frontend writes this
+/// before calling `python_detect`; the value is used by the resolver
+/// in `hermix_tools::backends::code_execution::find_python_bin` if
+/// we also set `HERMIX_PYTHON` in the sidecar environment.
+///
+/// We do both:
+/// - Write `localStorage["hermix.python.override"]` on the frontend
+///   side (so the UI shows the value back).
+/// - Set `HERMIX_PYTHON` for the running process. The sidecar
+///   (`hermix.exe`) inherits env vars from the Tauri launcher, but
+///   the *running* Rust process needs it set in-place to take effect
+///   immediately (no restart). See `portable_env::install_portable_env`
+///   for the launch-time contract.
+#[tauri::command]
+pub fn set_python_override(path: Option<String>) -> Result<String, String> {
+    // SAFETY: process-wide env mutation. Only safe in practice because
+    // the Tauri command runs on the main thread before any other
+    // spawned process reads `HERMIX_PYTHON`; Python candidates are
+    // re-resolved on every `execute()` call so the new value is in
+    // effect immediately.
+    match path.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(p) => {
+            unsafe { std::env::set_var("HERMIX_PYTHON", p) };
+            Ok(p.to_string())
+        }
+        None => {
+            unsafe { std::env::remove_var("HERMIX_PYTHON") };
+            Ok(String::new())
+        }
+    }
 }

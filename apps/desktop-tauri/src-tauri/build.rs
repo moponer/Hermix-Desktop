@@ -7,7 +7,7 @@ use std::path::PathBuf;
 /// officecli 仍是手工放置的外部预编译二进制, 不在 workspace 内.
 fn copy_sidecar(manifest_dir: &PathBuf, profile: &str, src_name: &str) -> Option<()> {
     let src = manifest_dir
-        .join("../../../../release/target")
+        .join("../../../release/target")
         .join(profile)
         .join(src_name);
     let dst = manifest_dir.join("binaries").join(format!(

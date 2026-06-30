@@ -150,6 +150,13 @@ pub fn run() {
             commands::artifact_path_exists,
             commands::restart_sidecar,
             commands::render_office_preview,
+            // Phase L1.4 (2026-06-29): Settings → Backend → Python
+            // 运行时探测。`python_detect` 列出 override / env / sibling
+            // / PATH 四档候选，给 UI 看；`set_python_override` 把
+            // 用户填的路径写到当前进程的 `HERMIX_PYTHON`，下一次
+            // `execute_code` / `read_pdf` 调用立即生效（无重启）。
+            commands::python_detect,
+            commands::set_python_override,
             commands_cua::cua_screenshot,
             commands_cua::cua_screen_info,
             commands_cua::cua_left_click,

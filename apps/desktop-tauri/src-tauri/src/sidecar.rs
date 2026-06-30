@@ -184,6 +184,15 @@ impl HermixSidecar {
         for (k, v) in crate::portable_env::current_portable_env() {
             cmd.env(k, v);
         }
+        // DirectML fallback for target machines without DirectML runtime.
+        // `ort` (via fastembed) pulls in ONNX Runtime, which on Windows
+        // tries to load DirectML at process startup. If the target
+        // machine lacks the DirectML redistributable or a recent
+        // D3D12/DirectML driver, hermix.exe fails with "entry point
+        // DMLCreateDevice1 not found" before our code even runs.
+        // Setting this tells ONNX Runtime to skip DirectML and use
+        // the CPU execution provider instead.
+        cmd.env("ORT_DISABLE_DML", "1");
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn hermix: {e}"))?;

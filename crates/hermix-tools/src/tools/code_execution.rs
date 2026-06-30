@@ -33,6 +33,21 @@ pub trait CodeExecutionBackend: Send + Sync {
         language: Option<&str>,
         timeout: Option<u64>,
     ) -> Result<String, ToolError>;
+
+    /// Languages this backend can serve **right now** on this host.
+    ///
+    /// Used by [`ExecuteCodeHandler::schema`] to populate the `language`
+    /// enum (and the description) with what's actually available, so
+    /// the LLM doesn't keep calling `language="typescript"` on a host
+    /// without `npx`. Synchronous because it's a cheap probe (PATH
+    /// only); keeping it sync avoids forcing the trait into a
+    /// second async layer.
+    fn available_languages(&self) -> Vec<String> {
+        // Default: trust the static catalog. Real backends
+        // (e.g. `LocalCodeExecutionBackend`) override this with live
+        // PATH probes so the LLM sees the truth.
+        vec!["python".to_string()]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +220,12 @@ impl ToolHandler for ExecuteCodeHandler {
     }
 
     fn schema(&self) -> ToolSchema {
+        // Probe at schema-time so the LLM sees a *live* enum, not a
+        // stale static one. The backend trait is `Arc<dyn ...>` so
+        // this is one virtual call per `tools/list` request — cheap.
+        let langs = self.backend.available_languages();
+        let lang_labels = langs.clone();
+
         let mut props = IndexMap::new();
         props.insert(
             "code".into(),
@@ -217,8 +238,14 @@ impl ToolHandler for ExecuteCodeHandler {
             "language".into(),
             json!({
                 "type": "string",
-                "description": "Programming language (default: 'python')",
-                "enum": ["python", "javascript", "typescript"],
+                // Description is dynamic: tells the LLM exactly which
+                // languages are usable right now, instead of a stale
+                // list that may overlap with what's actually on PATH.
+                "description": format!(
+                    "Programming language (default: 'python'). Only pick from languages currently available: [{}].",
+                    lang_labels.join(", ")
+                ),
+                "enum": langs,
                 "default": "python"
             }),
         );
@@ -233,7 +260,12 @@ impl ToolHandler for ExecuteCodeHandler {
 
         tool_schema(
             "execute_code",
-            "Execute code in a local interpreter. Supports Python, JavaScript, and TypeScript.",
+            &format!(
+                "Execute code in a local interpreter. Available languages on this host: [{}]. \
+                 The `language` enum reflects the live probe (sync), so picking an unavailable \
+                 language at call-time will fail with an error listing the searched paths.",
+                lang_labels.join(", ")
+            ),
             JsonSchema::object(props, vec!["code".into()]),
         )
     }

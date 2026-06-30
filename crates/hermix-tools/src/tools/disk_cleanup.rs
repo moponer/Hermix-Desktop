@@ -9,6 +9,7 @@
 //! All destructive operations honour `dry_run` (defaults to `true`).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -16,7 +17,29 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
+
+use crate::ToolRegistry;
+
+/// Register this tool with the registry (P1.1 migration).
+pub fn register(registry: &ToolRegistry) {
+    let handler = Arc::new(DiskCleanupHandler::new());
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "disk_cleanup",
+        "disk_cleanup",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Scan and prune stale files under HERMIX_HOME",
+        "🧹",
+        None,
+        RiskLevel::Caution,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Data model
