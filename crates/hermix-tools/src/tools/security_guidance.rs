@@ -5,9 +5,33 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
+use crate::ToolRegistry;
 use std::sync::Arc;
+
+/// Register this tool with the registry (P1.2 per-tool migration).
+pub fn register(registry: &ToolRegistry) {
+    let guidance_path = hermix_config::paths::hermix_home().join("security_guidance.json");
+    let handler = Arc::new(SecurityGuidanceHandler::new(Arc::new(
+        FileSecurityGuidanceBackend::new(guidance_path),
+    )));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "security_guidance",
+        "security_guidance",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        false,
+        "Read or update the security-guidance policy used by the runtime guard.",
+        "🛡️",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Data model

@@ -632,22 +632,7 @@ pub fn register_builtin_tools(
     }
 
     // -- Security Guidance ---------------------------------------------------
-    {
-        let guidance_path = hermix_config::paths::hermix_home().join("security_guidance.json");
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "security_guidance",
-            Arc::new(crate::tools::security_guidance::SecurityGuidanceHandler::new(
-                Arc::new(crate::tools::security_guidance::FileSecurityGuidanceBackend::new(
-                    guidance_path,
-                )),
-            )),
-            "🛡️",
-            vec![],
-            RiskLevel::Safe,
-        );
-    }
+    // security_guidance migrated to tools/security_guidance.rs::register (P1.2, 2026-06-30)
 
     // -- Clarify -------------------------------------------------------------
     let clarify_backend: Arc<dyn ClarifyBackend> = match clarify_backend {
