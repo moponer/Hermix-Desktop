@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hermix_core::{traits::RiskLevel, truncate_chars, ToolHandler, ToolSchema};
+use indexmap::IndexMap;
 use serde_json::Value;
 use tracing::warn;
 
@@ -297,6 +298,155 @@ impl ToolRegistry {
         );
     }
 
+    /// Replace the schema of an already-registered tool.
+    ///
+    /// Background (P1.2.4, Plan v2): a few tools have parameters
+    /// that vary with the operator's configuration — e.g.
+    /// `delegate_task` lists the available expert roles by name,
+    /// and `model_providers` enumerates which providers are
+    /// currently configured. When the configuration changes we
+    /// want the next LLM turn to see the fresh schema without
+    /// the operator having to restart the desktop app.
+    ///
+    /// This entry point mutates **only the schema** of an
+    /// existing entry; the handler, check_fn, risk_level, and
+    /// all other metadata stay. If no entry with `name` exists
+    /// the call is a silent no-op (the operator probably hasn't
+    /// registered that toolset yet).
+    pub fn update_schema(&self, name: &str, new_schema: ToolSchema) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(entry) = inner.tools.get_mut(name) {
+            entry.schema = new_schema;
+        }
+    }
+
+    /// Coerce `params` into the JSON types declared by `schema`.
+    ///
+    /// Background (P1.2.2, Plan v2): LLM providers sometimes hand us
+    /// a `String` like `"42"` for a field whose schema is `integer`,
+    /// or a `"true"` string for a boolean. The naïve fix would be to
+    /// have every handler validate + cast, but that leaks the LLM's
+    /// permissive JSON typing into every tool. Instead we do it once
+    /// here, on the dispatch path, before the handler is called.
+    ///
+    /// Scope of coercions (intentionally small — keep it boring):
+    /// - `string` ↔ `number` / `integer` (when the string parses cleanly)
+    /// - `string` → `boolean` (`"true"` / `"false"`, case-insensitive)
+    /// - `string` → `array` (when the string is valid JSON array)
+    /// - `array` ↔ `object` is **not** auto-coerced — that's a
+    ///   semantic mismatch the LLM should be told about.
+    /// - Missing fields declared as `required` in the schema are
+    ///   **not** filled in here (that's the caller's job — coercing
+    ///   is a narrow type fixup, not a defaults injector).
+    ///
+    /// Returns the coerced `Value`. The original is consumed.
+    pub fn coerce_args(schema: &ToolSchema, params: Value) -> Value {
+        let mut out = params;
+        if let Some(properties) = schema.parameters.properties.as_ref() {
+            Self::coerce_object(properties, &mut out);
+        }
+        out
+    }
+
+    fn coerce_object(properties: &IndexMap<String, Value>, value: &mut Value) {
+        // Only coerce inside an object; other top-level types (string
+        // command, number, etc.) are tool-defined and we trust them.
+        if let Value::Object(map) = value {
+            for (key, prop_schema) in properties {
+                if let Some(field) = map.get_mut(key) {
+                    Self::coerce_field(prop_schema, field);
+                }
+            }
+        }
+    }
+
+    fn coerce_field(prop_schema: &Value, field: &mut Value) {
+        // A field schema may be:
+        //   {"type": "string"}                     → simple
+        //   {"type": ["string", "null"]}           → nullable union
+        //   {"$ref": "..."}                        → we don't resolve refs
+        //   {}                                     → permissive
+        //
+        // We extract the type (or types) and try the matching
+        // coercion. On failure we leave the original in place —
+        // letting the handler decide whether to fail.
+        let declared = Self::declared_types(prop_schema);
+        if declared.is_empty() {
+            return;
+        }
+
+        for target in &declared {
+            if Self::try_coerce(field, target) {
+                return;
+            }
+        }
+    }
+
+    fn declared_types(prop_schema: &Value) -> Vec<String> {
+        match prop_schema.get("type") {
+            Some(Value::String(s)) => vec![s.clone()],
+            Some(Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Try to coerce `field` in place to `target` JSON type. Returns
+    /// `true` on success (the value was modified), `false` if no
+    /// coercion was possible.
+    fn try_coerce(field: &mut Value, target: &str) -> bool {
+        match (field.clone(), target) {
+            // string → integer / number
+            (Value::String(s), "integer") => {
+                if let Ok(n) = s.parse::<i64>() {
+                    *field = Value::Number(n.into());
+                    return true;
+                }
+                false
+            }
+            (Value::String(s), "number") => {
+                if let Ok(n) = s.parse::<f64>() {
+                    if let Some(num) = serde_json::Number::from_f64(n) {
+                        *field = Value::Number(num);
+                        return true;
+                    }
+                }
+                false
+            }
+            // string → boolean
+            (Value::String(s), "boolean") => match s.trim().to_ascii_lowercase().as_str() {
+                "true" => {
+                    *field = Value::Bool(true);
+                    true
+                }
+                "false" => {
+                    *field = Value::Bool(false);
+                    true
+                }
+                _ => false,
+            },
+            // string → array / object (when the string parses as JSON)
+            (Value::String(s), "array") | (Value::String(s), "object") => {
+                if let Ok(parsed) = serde_json::from_str::<Value>(&s) {
+                    let parsed_is_object_or_array =
+                        matches!(&parsed, Value::Array(_) | Value::Object(_));
+                    let matches_target = matches!(
+                        (target, &parsed),
+                        ("array", Value::Array(_)) | ("object", Value::Object(_))
+                    );
+                    if parsed_is_object_or_array && matches_target {
+                        *field = parsed;
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     /// Enable or disable every tool whose `toolset` field matches
     /// `toolset`. Returns the number of entries flipped. Used by:
     ///
@@ -360,6 +510,43 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Generate a markdown reference file listing all registered tools.
+    /// The LLM can `read_file` it on demand instead of bloating the prompt.
+    pub fn write_tools_reference(&self, path: &std::path::Path) -> Result<(), String> {
+        let inner = self.inner.lock().map_err(|e| format!("lock: {e}"))?;
+        let mut md = String::from("# Tool Reference\n\n");
+        md.push_str("Read this file when you need a tool's parameters.\n\n");
+
+        let mut tools: Vec<&ToolEntry> = inner.tools.values().filter(|e| e.is_enabled.load(Ordering::Acquire)).collect();
+        tools.sort_by(|a, b| a.schema.name.cmp(&b.schema.name));
+
+        for entry in &tools {
+            let s = &entry.schema;
+            md.push_str(&format!("## {}\n", s.name));
+            md.push_str(&format!("- Toolset: {} | Risk: {:?}\n", entry.toolset, entry.risk_level));
+            let desc = s.description.trim();
+            if !desc.is_empty() {
+                md.push_str(&format!("- {}\n", desc));
+            }
+            if let Some(props) = &s.parameters.properties {
+                let required = s.parameters.required.as_deref().unwrap_or_default();
+                for (pname, pinfo) in props {
+                    let ptype = pinfo.get("type").and_then(|v| v.as_str()).unwrap_or("any");
+                    let pdesc = pinfo.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                    let req = if required.contains(pname) { " *" } else { "" };
+                    if !pdesc.is_empty() {
+                        md.push_str(&format!("  - `{}`: `{}`{} — {}\n", pname, ptype, req, pdesc));
+                    } else {
+                        md.push_str(&format!("  - `{}`: `{}`{}\n", pname, ptype, req));
+                    }
+                }
+            }
+            md.push('\n');
+        }
+        std::fs::write(path, &md).map_err(|e| format!("write failed: {e}"))?;
+        Ok(())
+    }
+
     /// Dispatch a tool call by name, catching all errors.
     ///
     /// On success, returns the tool result string.
@@ -374,7 +561,15 @@ impl ToolRegistry {
         let max_chars = entry
             .max_result_size_chars
             .unwrap_or(inner.global_max_result_size_chars);
+        let schema = entry.schema.clone();
         drop(inner); // release lock before async execute
+
+        // P1.2.2: auto-coerce string args to declared JSON-schema
+        // types before handing them to the handler. LLM providers
+        // occasionally return `"42"` for an integer field; we
+        // transparently fix that here so handlers can write
+        // `as_u64()` without first validating.
+        let params = Self::coerce_args(&schema, params);
 
         // All production callers of dispatch() run inside a tokio task
         // (e.g. agent_loop JoinSet::spawn). A bare `Handle::block_on`
@@ -423,17 +618,21 @@ impl ToolRegistry {
 
     /// Dispatch a tool call asynchronously.
     pub async fn dispatch_async(&self, name: &str, params: Value) -> String {
-        let (handler, max_chars) = {
+        let (handler, max_chars, schema) = {
             let inner = self.inner.lock().unwrap();
             match inner.tools.get(name) {
                 Some(e) => (
                     Arc::clone(&e.handler),
                     e.max_result_size_chars
                         .unwrap_or(inner.global_max_result_size_chars),
+                    e.schema.clone(),
                 ),
                 None => return Self::tool_error(&format!("Tool not found: {}", name)),
             }
         };
+
+        // P1.2.2: see `dispatch` for rationale.
+        let params = Self::coerce_args(&schema, params);
 
         match handler.execute(params).await {
             Ok(output) => {
@@ -832,7 +1031,223 @@ mod tests {
         // The registry key ("available") and the schema name may differ.
         assert_eq!(defs[0].name, "echo");
     }
+
+    // -----------------------------------------------------------------------
+    // P1.2.2 — coerce_args tests (Plan v2)
+    // -----------------------------------------------------------------------
+
+    /// `String("42")` → `Number(42)` when schema says `integer`.
+    #[test]
+    fn coerce_string_to_integer() {
+        use indexmap::IndexMap;
+        let mut props = IndexMap::new();
+        props.insert("count".to_string(), serde_json::json!({"type": "integer"}));
+        let schema = ToolSchema::new("t", "d", JsonSchema::object(props, vec!["count".into()]));
+
+        let mut params = serde_json::json!({"count": "42"});
+        ToolRegistry::coerce_args(&schema, std::mem::take(&mut params));
+        // re-derive from the modified binding — but we need a fresh one
+        let mut params = serde_json::json!({"count": "42"});
+        let coerced = ToolRegistry::coerce_args(&schema, std::mem::take(&mut params));
+        assert_eq!(coeff_u64(&coerced, "count"), Some(42));
+    }
+
+    #[test]
+    fn coerce_string_to_number() {
+        use indexmap::IndexMap;
+        let mut props = IndexMap::new();
+        props.insert("ratio".to_string(), serde_json::json!({"type": "number"}));
+        let schema = ToolSchema::new("t", "d", JsonSchema::object(props, vec![]));
+
+        let params = serde_json::json!({"ratio": "3.14"});
+        let coerced = ToolRegistry::coerce_args(&schema, params);
+        assert!(
+            coerced.get("ratio").and_then(|v| v.as_f64()).is_some(),
+            "ratio should coerce to a number: got {}",
+            coerced
+        );
+    }
+
+    #[test]
+    fn coerce_string_to_boolean() {
+        use indexmap::IndexMap;
+        let mut props = IndexMap::new();
+        props.insert("enabled".to_string(), serde_json::json!({"type": "boolean"}));
+        let schema = ToolSchema::new("t", "d", JsonSchema::object(props, vec![]));
+
+        let params = serde_json::json!({"enabled": "true"});
+        let coerced = ToolRegistry::coerce_args(&schema, params);
+        assert_eq!(coerced.get("enabled"), Some(&serde_json::json!(true)));
+
+        let params = serde_json::json!({"enabled": "False"});
+        let coerced = ToolRegistry::coerce_args(&schema, params);
+        assert_eq!(coerced.get("enabled"), Some(&serde_json::json!(false)));
+    }
+
+    #[test]
+    fn coerce_string_to_array() {
+        use indexmap::IndexMap;
+        let mut props = IndexMap::new();
+        props.insert("tags".to_string(), serde_json::json!({"type": "array"}));
+        let schema = ToolSchema::new("t", "d", JsonSchema::object(props, vec![]));
+
+        let params = serde_json::json!({"tags": "[\"a\", \"b\"]"});
+        let coerced = ToolRegistry::coerce_args(&schema, params);
+        let arr = coerced.get("tags").and_then(|v| v.as_array());
+        assert!(arr.is_some(), "tags should be array, got {}", coerced);
+        assert_eq!(arr.unwrap().len(), 2);
+    }
+
+    /// Unparseable strings pass through unchanged — handler decides.
+    #[test]
+    fn coerce_leaves_unparseable_string_unchanged() {
+        use indexmap::IndexMap;
+        let mut props = IndexMap::new();
+        props.insert("count".to_string(), serde_json::json!({"type": "integer"}));
+        let schema = ToolSchema::new("t", "d", JsonSchema::object(props, vec![]));
+
+        let params = serde_json::json!({"count": "not-a-number"});
+        let coerced = ToolRegistry::coerce_args(&schema, params);
+        assert_eq!(
+            coerced.get("count"),
+            Some(&serde_json::json!("not-a-number")),
+            "unparseable string must be left as-is for the handler to reject"
+        );
+    }
+
+    /// Already-correct types are no-ops.
+    #[test]
+    fn coerce_passes_through_correct_types() {
+        use indexmap::IndexMap;
+        let mut props = IndexMap::new();
+        props.insert("count".to_string(), serde_json::json!({"type": "integer"}));
+        props.insert("enabled".to_string(), serde_json::json!({"type": "boolean"}));
+        let schema = ToolSchema::new("t", "d", JsonSchema::object(props, vec![]));
+
+        let params = serde_json::json!({"count": 7, "enabled": true});
+        let coerced = ToolRegistry::coerce_args(&schema, params);
+        assert_eq!(coerced.get("count"), Some(&serde_json::json!(7)));
+        assert_eq!(coerced.get("enabled"), Some(&serde_json::json!(true)));
+    }
+
+    /// Nullable union `["string", "null"]` still tries the string→integer
+    /// coercion when the value is a string.
+    #[test]
+    fn coerce_nullable_union_type() {
+        use indexmap::IndexMap;
+        let mut props = IndexMap::new();
+        props.insert(
+            "count".to_string(),
+            serde_json::json!({"type": ["integer", "null"]}),
+        );
+        let schema = ToolSchema::new("t", "d", JsonSchema::object(props, vec![]));
+
+        let params = serde_json::json!({"count": "5"});
+        let coerced = ToolRegistry::coerce_args(&schema, params);
+        assert_eq!(coerced.get("count"), Some(&serde_json::json!(5)));
+    }
+
+    /// Missing properties in the schema → no coercion attempted on
+    /// anything, the input is returned as-is. (Coercion is a narrow
+    /// type fixup, not a schema-driven defaults injector.)
+    #[test]
+    fn coerce_no_schema_returns_input_unchanged() {
+        let schema = ToolSchema::new("t", "d", JsonSchema::new("object"));
+        let params = serde_json::json!({"x": "42"});
+        let coerced = ToolRegistry::coerce_args(&schema, params.clone());
+        assert_eq!(coerced, params);
+    }
+
+    /// dispatch() auto-coerces args before the handler sees them.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dispatch_auto_coerces_args() {
+        use indexmap::IndexMap;
+        let mut props = IndexMap::new();
+        props.insert("count".to_string(), serde_json::json!({"type": "integer"}));
+        let schema = ToolSchema::new("count_tool", "Count", JsonSchema::object(props, vec![]));
+
+        let registry = ToolRegistry::new();
+        let handler = Arc::new(EchoHandler);
+        registry.register(
+            "count_tool",
+            "test",
+            schema,
+            handler,
+            Arc::new(|| true),
+            vec![],
+            false,
+            "Counts things",
+            "🔢",
+            None,
+        );
+
+        let result = registry.dispatch("count_tool", serde_json::json!({"count": "7"}));
+        // EchoHandler returns params.to_string(); an integer 7
+        // serializes as `7`, not `"7"`.
+        assert!(
+            result.contains("\"count\":7"),
+            "expected dispatch to coerce \"7\" → 7, got {}",
+            result
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // P1.2.4 — update_schema tests (Plan v2)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn update_schema_replaces_existing_tool_schema() {
+        let registry = ToolRegistry::new();
+        let handler = Arc::new(EchoHandler);
+        registry.register(
+            "echo",
+            "test",
+            handler.schema(),
+            handler,
+            Arc::new(|| true),
+            vec![],
+            false,
+            "Echo",
+            "🔊",
+            None,
+        );
+
+        let mut props = IndexMap::new();
+        props.insert("msg".to_string(), serde_json::json!({"type": "string"}));
+        let new_schema =
+            ToolSchema::new("echo", "New description", JsonSchema::object(props, vec![]));
+
+        registry.update_schema("echo", new_schema.clone());
+
+        let defs = registry.get_definitions();
+        assert_eq!(defs[0].description, "New description");
+    }
+
+    #[test]
+    fn update_schema_on_unknown_tool_is_noop() {
+        let registry = ToolRegistry::new();
+        let schema = tool_schema("ghost", "n/a", JsonSchema::new("object"));
+        // No panic, no insert — just silently does nothing.
+        registry.update_schema("ghost", schema);
+        assert_eq!(registry.get_definitions().len(), 0);
+    }
 }
+
+/// Helper for coerce_args tests: extract a u64 field, returning None
+/// if the field is missing or not a number.
+fn coeff_u64(v: &serde_json::Value, key: &str) -> Option<u64> {
+    v.get(key).and_then(|x| x.as_u64())
+}
+
+// -----------------------------------------------------------------------
+// P1.2.4 — update_schema tests (Plan v2)
+// -----------------------------------------------------------------------
+// (Tests live inside the `tests` module above to share `EchoHandler`.)
+
+// -----------------------------------------------------------------------
+// P1.2.4 — update_schema tests (Plan v2)
+// -----------------------------------------------------------------------
+// (added inside `tests` module above to share `EchoHandler`)
 
 /// Trim a description to ~50 chars for the one-line catalog entry.
 fn truncate_one_line(desc: &str) -> String {
