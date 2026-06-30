@@ -11,6 +11,8 @@
 //! - `ErrorClass`, `classify_error`, `jittered_backoff`, `rand_u64_range` (was agent_loop.rs:695-755)
 //! - `truncate_tool_result`, `compute_prompt_cache_key`, `default_max_autonomous_nudges` (was agent_loop.rs:493-550)
 //! - `TOOL_RESULT_CHAR_LIMIT` constant (was agent_loop.rs:493-494)
+//! - `is_interactive_tool` (P2.4, 2026-06-30) — names of tools that must run
+//!   sequentially in the caller's task rather than the parallel `JoinSet`.
 //!
 //! All public items are also re-exported from `agent_loop` (via
 //! `pub use agent_helpers::...`) so existing callers like
@@ -394,5 +396,47 @@ pub fn rand_u64_range(min: u64, max: u64) -> u64 {
         min
     } else {
         min + h % (max - min)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Interactive tools (P2.4, 2026-06-30)
+// ---------------------------------------------------------------------------
+
+/// Tools that must run **sequentially in the caller's task** rather than
+/// in the parallel `JoinSet`.
+///
+/// Why interactive tools exist: a batch like
+/// `[clarify, write_file, terminal_run]` would, under parallel dispatch,
+/// kick off `write_file` and `terminal_run` *before* the user has answered
+/// `clarify`. When the answer comes back, those results are now stale
+/// context the LLM has to wade through. Running `clarify` first lets the
+/// model pick better tool calls based on the user's reply.
+///
+/// `delegate_task` is already sequential by virtue of the
+/// `SubAgentOrchestrator` path in `execute_tool_calls`; it is included
+/// here so callers that ask "is this interactive?" get the full answer
+/// without duplicating the orchestrator's logic.
+pub fn is_interactive_tool(name: &str) -> bool {
+    matches!(name, "clarify" | "delegate_task")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interactive_set_includes_clarify_and_delegate() {
+        assert!(is_interactive_tool("clarify"));
+        assert!(is_interactive_tool("delegate_task"));
+    }
+
+    #[test]
+    fn batched_tools_are_not_interactive() {
+        assert!(!is_interactive_tool("write_file"));
+        assert!(!is_interactive_tool("terminal"));
+        assert!(!is_interactive_tool("read_file"));
+        assert!(!is_interactive_tool("list_files"));
+        assert!(!is_interactive_tool(""));
     }
 }

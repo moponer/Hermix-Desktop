@@ -82,7 +82,7 @@ use tracing::{info, instrument};
 
 pub use crate::agent_config::{AgentConfig, RetryConfig, RuntimeProviderConfig};
 pub use crate::agent_helpers::{
-    classify_error, compute_prompt_cache_key, default_max_autonomous_nudges,
+    classify_error, compute_prompt_cache_key, default_max_autonomous_nudges, is_interactive_tool,
     jittered_backoff, rand_u64_range, truncate_tool_result, AgentCallbacks, ErrorClass,
     EvolutionCounters, ToolDispatchDecision, ToolEntry, ToolRegistry, TurnMetrics,
     TOOL_RESULT_CHAR_LIMIT,
@@ -6572,9 +6572,78 @@ impl AgentLoop {
             }
         }
 
+        // P2.4 (2026-06-30): run remaining interactive tools (currently
+        // just `clarify`) sequentially in the caller's task BEFORE
+        // launching the JoinSet. This blocks the parallel work until the
+        // user has answered the clarifying question — otherwise we'd
+        // race the user response and accumulate stale tool results in
+        // the LLM context. delegate_task is already handled above by
+        // the orchestrator path and is filtered out of this loop.
+        for tc in tool_calls {
+            if !is_interactive_tool(&tc.function.name)
+                || tc.function.name == "delegate_task"
+            {
+                continue;
+            }
+            // Honor pre-dispatch decisions (Allow/Deny/AwaitApproval).
+            if let Some(Err(reason)) = pre_dispatch.get(&tc.id) {
+                orchestrated.push(ToolResult::err(&tc.id, reason.clone()));
+                continue;
+            }
+            let tool_call_id = tc.id.clone();
+            let tool_name = tc.function.name.clone();
+            let raw_args = tc.function.arguments.clone();
+            let registry = self.tool_registry.clone();
+            let result = match registry.get(&tool_name) {
+                Some(entry) => {
+                    let params: Value = match serde_json::from_str(&raw_args) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let err = ToolResult::err(
+                                &tool_call_id,
+                                format!(
+                                    "Invalid JSON params for tool '{}': {}. \
+                                     Please check your parameters and retry with valid JSON.",
+                                    tool_name, e
+                                ),
+                            );
+                            orchestrated.push(err);
+                            continue;
+                        }
+                    };
+                    let handler_result = (entry.handler)(params);
+                    match handler_result {
+                        Ok(output) => ToolResult::ok(&tool_call_id, output),
+                        Err(e) => ToolResult::err(&tool_call_id, e.to_string()),
+                    }
+                }
+                None => {
+                    let available = registry.names().join(", ");
+                    ToolResult::err(
+                        &tool_call_id,
+                        format!(
+                            "Unknown tool '{}'. Available tools: [{}]",
+                            tool_name, available
+                        ),
+                    )
+                }
+            };
+            orchestrated.push(result);
+        }
+
         for tc in tool_calls {
             // Skip `delegate_task` when an orchestrator already handled it.
             if orchestrator.is_some() && tc.function.name == "delegate_task" {
+                continue;
+            }
+            // P2.4 (2026-06-30): interactive tools run sequentially in
+            // the orchestrator pass above (delegate_task) or — for clarify
+            // — never enter this JoinSet at all. We extract and handle
+            // them right after the orchestrator loop. Skipping them here
+            // keeps the JoinSet reserved for genuinely-independent work.
+            if is_interactive_tool(&tc.function.name)
+                && !matches!(tc.function.name.as_str(), "delegate_task")
+            {
                 continue;
             }
             // M1.6.2: push a focus-stack frame for non-orchestrated
