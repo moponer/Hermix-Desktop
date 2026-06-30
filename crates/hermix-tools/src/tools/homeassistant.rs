@@ -4,9 +4,102 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
 use std::sync::Arc;
+
+use crate::ToolRegistry;
+
+/// Register all 4 Home Assistant tools (list/get/list_services/call_service)
+/// with the registry (P1.2 per-tool migration).
+///
+/// Shares one `HaRestBackend` across the four handlers. Tools stay
+/// registered even when HASS_URL/HASS_TOKEN are missing; the env_deps
+/// gate the pre-exec approval hook instead of removing the tools.
+pub fn register(registry: &ToolRegistry) {
+    let ha_backend: Arc<dyn HomeAssistantBackend> =
+        match crate::backends::homeassistant::HaRestBackend::from_env() {
+            Ok(b) => Arc::new(b),
+            Err(_) => Arc::new(crate::backends::homeassistant::HaRestBackend::new(
+                String::new(),
+                String::new(),
+            )),
+        };
+    let deps = vec!["HASS_URL".into(), "HASS_TOKEN".into()];
+    let check = Arc::new(|| true);
+
+    // homeassistant__list (Safe)
+    let handler = Arc::new(HaListEntitiesHandler::new(ha_backend.clone()));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "homeassistant__list",
+        "homeassistant",
+        schema,
+        handler,
+        check.clone(),
+        deps.clone(),
+        false,
+        "List Home Assistant entities",
+        "🏠",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+
+    // homeassistant__get (Safe)
+    let handler = Arc::new(HaGetStateHandler::new(ha_backend.clone()));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "homeassistant__get",
+        "homeassistant",
+        schema,
+        handler,
+        check.clone(),
+        deps.clone(),
+        false,
+        "Get the state of a Home Assistant entity",
+        "🏠",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+
+    // homeassistant__list_services (Safe)
+    let handler = Arc::new(HaListServicesHandler::new(ha_backend.clone()));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "homeassistant__list_services",
+        "homeassistant",
+        schema,
+        handler,
+        check.clone(),
+        deps.clone(),
+        false,
+        "List Home Assistant services",
+        "🏠",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+
+    // homeassistant__call_service (Dangerous)
+    let handler = Arc::new(HaCallServiceHandler::new(ha_backend));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "homeassistant__call_service",
+        "homeassistant",
+        schema,
+        handler,
+        check,
+        deps,
+        false,
+        "Call a Home Assistant service (e.g. turn on a light)",
+        "🏠",
+        None,
+        RiskLevel::Dangerous,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // HomeAssistantBackend trait

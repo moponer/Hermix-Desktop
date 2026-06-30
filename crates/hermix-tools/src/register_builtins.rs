@@ -592,61 +592,7 @@ pub fn register_builtin_tools(
     // Migrated to tools/messaging.rs::register (P1.2 per-tool migration).
 
     // -- Home Assistant (4 tools) --------------------------------------------
-    {
-        let ha_backend: Arc<dyn crate::tools::homeassistant::HomeAssistantBackend> =
-            match crate::backends::homeassistant::HaRestBackend::from_env() {
-                Ok(b) => Arc::new(b),
-                Err(_) => Arc::new(crate::backends::homeassistant::HaRestBackend::new(
-                    String::new(),
-                    String::new(),
-                )),
-            };
-        let deps = vec!["HASS_URL".into(), "HASS_TOKEN".into()];
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "homeassistant",
-            Arc::new(crate::tools::homeassistant::HaListEntitiesHandler::new(
-                ha_backend.clone(),
-            )),
-            "🏠",
-            deps.clone(),
-            RiskLevel::Safe,
-        );
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "homeassistant",
-            Arc::new(crate::tools::homeassistant::HaGetStateHandler::new(
-                ha_backend.clone(),
-            )),
-            "🏠",
-            deps.clone(),
-            RiskLevel::Safe,
-        );
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "homeassistant",
-            Arc::new(crate::tools::homeassistant::HaListServicesHandler::new(
-                ha_backend.clone(),
-            )),
-            "🏠",
-            deps.clone(),
-            RiskLevel::Safe,
-        );
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "homeassistant",
-            Arc::new(crate::tools::homeassistant::HaCallServiceHandler::new(
-                ha_backend,
-            )),
-            "🏠",
-            deps,
-            RiskLevel::Dangerous,
-        );
-    }
+    // homeassistant migrated to tools/homeassistant.rs::register (P1.2, 2026-06-30)
 
     // -- TTS -----------------------------------------------------------------
     // Migrated to tools/tts.rs::register (P1.2 per-tool migration).

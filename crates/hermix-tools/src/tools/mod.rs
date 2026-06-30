@@ -69,5 +69,6 @@ pub fn register_all(registry: &ToolRegistry) {
     messaging::register(registry);
     image_gen::register(registry);
     video_gen::register(registry);
+    homeassistant::register(registry);
     // TODO: migrate more tools here as they get their `register()` fn
 }
