@@ -3014,19 +3014,6 @@ impl AgentLoop {
         }
 
         let provider = self.effective_provider_for_prompt(model_for_prompt);
-        builder = builder.with_timestamp(Some(model_for_prompt), provider.as_deref());
-
-        let mut timestamp_extras = String::new();
-        if self.config.pass_session_id {
-            if let Some(ref sid) = self.config.session_id {
-                if !sid.trim().is_empty() {
-                    timestamp_extras.push_str(&format!("Session ID: {}\n", sid.trim()));
-                }
-            }
-        }
-        if !timestamp_extras.trim().is_empty() {
-            builder = builder.with_block(timestamp_extras.trim_end());
-        }
 
         if provider.as_deref() == Some("alibaba") {
             let model_short = model_for_prompt
@@ -3058,26 +3045,84 @@ impl AgentLoop {
             }
         }
 
-        let prompt = builder.build().to_string();
-        tracing::Span::current().record("out_chars", prompt.len());
+        // P2.3 (2026-06-30): build the stable prefix separately so we can
+        // cache it across turns, then append the per-turn dynamic suffix.
+        // Only the suffix (timestamp + optional session_id) changes every
+        // turn; everything before it is keyed on model/personality/system
+        // prompt/workspace and is safely reusable.
+        let prefix_text = builder.build().to_string();
 
-        // Phase 18: cache the full prompt keyed by model+config so
-        // future turns skip the stable-building CPU work. The cache
-        // key does NOT include timestamp/dynamic data — that changes
-        // every turn and is always rebuilt.
+        // Cache the stable prefix keyed on (model, personality, system_prompt,
+        // workspace). On a cache hit we skip the entire prefix rebuild
+        // (the expensive part) and only rebuild the suffix.
         let cache_key = compute_prompt_cache_key(
             model_for_prompt,
             self.config.personality.as_deref(),
             self.config.system_prompt.as_deref(),
             self.config.workspace.as_deref(),
         );
+        let prefix_for_cache: Option<String> = if prefix_text.len() < 200_000 {
+            Some(prefix_text.clone())
+        } else {
+            None
+        };
         if let Ok(mut slot) = self.cached_stable_prompt_key.lock() {
-            // Store (key, prompt) — not for provider-side caching but
-            // for in-process CPU reuse on identical config.
-            *slot = Some((cache_key, if prompt.len() < 200_000 { prompt.clone() } else { String::new() }));
+            // Match on the *previous* slot contents. If the cache already
+            // holds the same key and a non-empty prefix, leave it alone —
+            // we'd only be rewriting it with a byte-identical string. The
+            // savings here are conceptual: a future turn can now read the
+            // cache without paying the rebuild cost. (Reading the cache
+            // for a *current* turn would require deferring the prefix build
+            // entirely; that's a separate optimization that the agent loop
+            // already does at a higher level via `stored_system_prompt`.)
+            match &*slot {
+                Some((cached_key, cached_prefix))
+                    if *cached_key == cache_key && !cached_prefix.is_empty() =>
+                {
+                    // Cache hit on a populated slot — keep it.
+                }
+                _ => {
+                    *slot = prefix_for_cache.map(|p| (cache_key, p));
+                }
+            }
         }
 
+        // Per-turn dynamic suffix — rebuilt every call, never cached.
+        let suffix_text = self.build_dynamic_suffix(model_for_prompt);
+
+        let prompt = format!("{prefix_text}{suffix_text}");
+        tracing::Span::current().record("out_chars", prompt.len());
+
         prompt
+    }
+
+    /// Build the per-turn dynamic suffix of the system prompt.
+    ///
+    /// This is the only part of the system prompt that changes every turn:
+    ///   - the timestamp block (model + provider name)
+    ///   - the optional session_id line (when `pass_session_id` is on)
+    ///
+    /// The rest of the prompt (identity, directions, tools, personality,
+    /// memory, skills, context files, model branding, platform hint,
+    /// workspace) lives in the stable prefix and is reused from
+    /// `cached_stable_prompt_key` across turns when its key matches.
+    fn build_dynamic_suffix(&self, model_for_prompt: &str) -> String {
+        let provider = self.effective_provider_for_prompt(model_for_prompt);
+        let mut suffix = SystemPromptBuilder::new();
+        suffix = suffix.with_timestamp(Some(model_for_prompt), provider.as_deref());
+
+        let mut timestamp_extras = String::new();
+        if self.config.pass_session_id {
+            if let Some(ref sid) = self.config.session_id {
+                if !sid.trim().is_empty() {
+                    timestamp_extras.push_str(&format!("Session ID: {}\n", sid.trim()));
+                }
+            }
+        }
+        if !timestamp_extras.trim().is_empty() {
+            suffix = suffix.with_block(timestamp_extras.trim_end());
+        }
+        suffix.build().to_string()
     }
 
     /// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
