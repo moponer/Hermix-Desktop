@@ -25,7 +25,31 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
+
+use crate::ToolRegistry;
+
+/// Register this tool with the registry (P1.2 per-tool migration).
+pub fn register(registry: &ToolRegistry) {
+    let handler = Arc::new(SendMessageHandler::new(Arc::new(
+        crate::backends::messaging::SignalMessagingBackend::new(),
+    )));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "messaging",
+        "messaging",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        false,
+        "Send a message to a user on a configured channel (Telegram, Discord, Signal, etc.).",
+        "💬",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Channel resolution

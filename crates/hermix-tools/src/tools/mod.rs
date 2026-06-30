@@ -66,5 +66,6 @@ pub fn register_all(registry: &ToolRegistry) {
     cronjob::register(registry);
     todo::register(registry);
     tts::register(registry);
+    messaging::register(registry);
     // TODO: migrate more tools here as they get their `register()` fn
 }

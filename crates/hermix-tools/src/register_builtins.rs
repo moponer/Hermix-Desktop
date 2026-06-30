@@ -652,16 +652,7 @@ pub fn register_builtin_tools(
     // Migrated to tools/cronjob.rs::register (P1.2 per-tool migration).
 
     // -- Messaging -----------------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "messaging",
-        Arc::new(crate::tools::messaging::SendMessageHandler::new(Arc::new(
-            crate::backends::messaging::SignalMessagingBackend::new(),
-        ))),
-        "💬",
-        vec![],
-    );
+    // Migrated to tools/messaging.rs::register (P1.2 per-tool migration).
 
     // -- Home Assistant (4 tools) --------------------------------------------
     {
