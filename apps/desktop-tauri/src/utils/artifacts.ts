@@ -52,7 +52,7 @@ const CODE_EXTS = new Set([
   "rb", "php", "sh", "bash", "zsh", "ps1", "css", "scss", "sass", "less",
   "html", "vue", "svelte", "lua", "sql", "ino",
 ]);
-const DOC_EXTS = new Set(["md", "mdx", "txt", "rst", "adoc", "tex"]);
+const DOC_EXTS = new Set(["md", "mdx", "txt", "rst", "adoc", "tex", "pdf"]);
 const DATA_EXTS = new Set(["json", "yaml", "yml", "toml", "xml", "csv", "tsv", "ini", "conf", "env"]);
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "bmp", "tiff"]);
 const OFFICE_EXTS = new Set(["docx", "doc", "xlsx", "xls", "pptx", "ppt", "odt", "ods", "odp"]);

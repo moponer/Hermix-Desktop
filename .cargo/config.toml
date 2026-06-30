@@ -24,6 +24,10 @@ target-dir = "release/target"
 #
 # 反 Git Bash link.exe 坑仍然存在: 不要恢复 `link` (无路径), 必须用
 # MSVC 绝对路径或 rust-lld.exe (后者在 rustup toolchain PATH 里).
+#
+# 2026-06-29 临时切到 MSVC link.exe 试验失败 → 切回 rust-lld.exe。
+# 失败原因: MSVC link.exe 在 build script 链接阶段 (libsqlite3-sys / moxcms
+# / ravif / hermix-config / http) 报 exit code: 1 但 stderr 被 cargo
+# 吞掉, 看不到具体缺什么 .lib。rust-lld 是链接 Rust 标准产物经过验证的,
+# build script 一般不挑。
 linker = "rust-lld.exe"
-# 保留 MSVC 路径作为注释备查 (回退时用):
-# linker = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/link.exe"

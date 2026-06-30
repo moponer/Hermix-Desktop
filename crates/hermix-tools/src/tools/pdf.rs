@@ -111,8 +111,22 @@ impl ReadPdfHandler {
 
     /// Fallback tier 3: extract PDF text via Python's pdfminer.six.
     async fn extract_via_python(&self, path: &str) -> Result<String, ToolError> {
-        // Find a usable Python interpreter.
-        let python = Self::resolve_python_interpreter()?;
+        // Use the shared find_python_bin from the code_execution backend
+        // (3-tier resolution: HERMIX_PYTHON / sibling-slot / PATH probe)
+        // so the PDF fallback and the `execute_code` tool can never
+        // disagree about which interpreter is "the one".
+        let python = match crate::backends::code_execution::find_python_bin(None) {
+            Some(p) => p,
+            None => {
+                let entries = crate::backends::code_execution::python_search_paths(None);
+                return Err(ToolError::ExecutionFailed(
+                    crate::backends::code_execution::format_missing_python_error(&entries)
+                        + "\n\n(Needed for tier-3 PDF fallback. Tier 1/2 of the read_pdf chain — \
+                          pdftotext and lopdf — work without Python.)",
+                ));
+            }
+        };
+        let python_label = python.display().to_string();
         let script = format!(
             r#"
 import sys, json
@@ -131,11 +145,11 @@ except Exception as e:
         let output = cmd
             .output()
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn {python}: {e}")))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn {python_label}: {e}")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(ToolError::ExecutionFailed(format!(
-                "{python} exited with status {}: {}",
+                "{python_label} exited with status {}: {}",
                 output.status,
                 stderr.trim()
             )));
@@ -170,25 +184,6 @@ except Exception as e:
         }
         let abs = to_absolute_path(path);
         Ok(format!("[file: {abs}]\n{out}"))
-    }
-
-    /// Resolve a usable Python interpreter path.
-    fn resolve_python_interpreter() -> Result<String, ToolError> {
-        // 1. Explicit env var override.
-        if let Ok(py) = std::env::var("HERMIX_PYTHON") {
-            if Path::new(&py).exists() {
-                return Ok(py);
-            }
-        }
-        // 2. Check `python3` then `python` on PATH.
-        for candidate in &["python3", "python"] {
-            if let Ok(p) = which::which(candidate) {
-                return Ok(p.to_string_lossy().to_string());
-            }
-        }
-        Err(ToolError::ExecutionFailed(
-            "No Python interpreter found for PDF fallback. Install python3 or set HERMIX_PYTHON.".into(),
-        ))
     }
 }
 

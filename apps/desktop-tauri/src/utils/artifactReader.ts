@@ -149,13 +149,6 @@ export async function tryReadArtifact(
   return { kind: "error", message: lastRaw };
 }
 
-export type OfficePreviewResult = {
-  htmlPath: string;
-  htmlContent: string;
-  fileName: string;
-  resolvedPath: string;
-};
-
 /** Same retry chain as tryReadArtifact but for the cheap "does the
  * file exist?" probe used by the artifact panel. Without this the
  * panel can stay empty even though the user can still click into a
@@ -183,6 +176,13 @@ export async function tryArtifactPathExists(
   }
   return false;
 }
+
+export type OfficePreviewResult = {
+  htmlPath: string;
+  htmlContent: string;
+  fileName: string;
+  resolvedPath: string;
+};
 
 /** Office variants don't go through the text-reader retry — they
  * invoke a separate `render_office_preview` Tauri command that
