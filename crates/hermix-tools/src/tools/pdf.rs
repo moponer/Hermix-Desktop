@@ -6,15 +6,37 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 use tokio::process::Command;
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
 use crate::tools::file::to_absolute_path;
+use crate::ToolRegistry;
+
+/// Register this tool with the registry (P1.2 migration).
+pub fn register(registry: &ToolRegistry) {
+    let handler = Arc::new(ReadPdfHandler::new());
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "read_pdf",
+        "file",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Read a PDF file via pdftotext/lopdf/pdfminer fallback chain",
+        "📕",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 /// Trimmed-down re-export: we only need `Document::load` + `extract_text`.
 use lopdf::Document;

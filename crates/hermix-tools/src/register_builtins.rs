@@ -254,17 +254,7 @@ pub fn register_builtin_tools(
         vec![],
         RiskLevel::Safe,
     );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "file",
-        Arc::new(crate::tools::pdf::ReadPdfHandler::new()),
-        "📕",
-        vec![],
-        RiskLevel::Safe,
-    );
-
-    // vision tool migrated to tools/vision.rs::register (P1.2, 2026-06-30)
+    // read_pdf tool migrated to tools/pdf.rs::register (P1.2, 2026-06-30)
 
     // -- Image generation (fal.ai) -------------------------------------------
     {
