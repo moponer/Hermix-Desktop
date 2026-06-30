@@ -1040,30 +1040,43 @@ impl EmbeddedMemoryBackend {
         k: usize,
         min_score: f32,
         model_filter: &str,
+        session_id: Option<&str>,
     ) -> Result<Vec<(MemoryHit, f32)>> {
         if query.is_empty() {
             return Ok(Vec::new());
         }
         let qdim = query.len() as i64;
-        // Pre-normalize the query once so the per-row inner loop
-        // can use simple dot products (||q|| * ||v|| is a known
-        // constant after the first frame we visit, but cache
-        // re-normalizing once is cheaper than re-allocating a
-        // Vec each row).
         let q_norm = l2_normalize(query);
         let conn = self.conn.lock();
-        // SELECT only the columns we need: id, payload, dim, blob, model, ts.
-        // We re-load payload to fill MemoryHit; the BLOB is the
-        // hot path so we want a tight projection.
-        let mut stmt = conn.prepare(
-            "SELECT id, payload, state, salience, created_at, updated_at,
-                    parent_id, tags, pin_count, touch_count,
-                    embedding, embedding_dim, embedding_model
-             FROM frames
-             WHERE embedding IS NOT NULL
-               AND embedding_dim = ?1",
-        )?;
-        let mut rows = stmt.query(params![qdim])?;
+        let (sql, has_sid) = if session_id.is_some() {
+            (
+                "SELECT id, payload, state, salience, created_at, updated_at,
+                        parent_id, tags, pin_count, touch_count,
+                        embedding, embedding_dim, embedding_model
+                 FROM frames
+                 WHERE embedding IS NOT NULL
+                   AND embedding_dim = ?1
+                   AND source = ?2",
+                true,
+            )
+        } else {
+            (
+                "SELECT id, payload, state, salience, created_at, updated_at,
+                        parent_id, tags, pin_count, touch_count,
+                        embedding, embedding_dim, embedding_model
+                 FROM frames
+                 WHERE embedding IS NOT NULL
+                   AND embedding_dim = ?1",
+                false,
+            )
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let mut rows = if has_sid {
+            let sid = session_id.unwrap_or("");
+            stmt.query(params![qdim, sid])?
+        } else {
+            stmt.query(params![qdim])?
+        };
         let mut scored: Vec<(MemoryHit, f32)> = Vec::new();
         while let Some(row) = rows.next()? {
             let model_s: Option<String> = row.get(12)?;
@@ -1188,14 +1201,26 @@ impl EmbeddedMemoryBackend {
     }
 
 
-    fn fts_search_visible(&self, text: &str, limit: usize) -> Result<Vec<String>> {
+    fn fts_search_visible(&self, text: &str, limit: usize, session_id: Option<&str>) -> Result<Vec<String>> {
         let conn = self.conn.lock();
-        let mut stmt = match conn.prepare(
-            "SELECT f.id FROM frames_fts f
-             JOIN frames fr ON fr.id = f.id
-             WHERE frames_fts MATCH ?1 AND fr.visibility = 1
-             LIMIT ?2",
-        ) {
+        let (sql, session_param) = if session_id.is_some() {
+            (
+                "SELECT f.id FROM frames_fts f
+                 JOIN frames fr ON fr.id = f.id
+                 WHERE frames_fts MATCH ?1 AND fr.visibility = 1 AND fr.source = ?2
+                 LIMIT ?3",
+                true,
+            )
+        } else {
+            (
+                "SELECT f.id FROM frames_fts f
+                 JOIN frames fr ON fr.id = f.id
+                 WHERE frames_fts MATCH ?1 AND fr.visibility = 1
+                 LIMIT ?2",
+                false,
+            )
+        };
+        let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
             Err(_) => return Ok(Vec::new()),
         };
@@ -1219,9 +1244,17 @@ impl EmbeddedMemoryBackend {
             return Ok(Vec::new());
         }
         let q = tokens.join(" OR ");
-        let mut rows = match stmt.query(params![q, limit as i64]) {
-            Ok(r) => r,
-            Err(_) => return Ok(Vec::new()),
+        let mut rows = if session_param {
+            let sid = session_id.unwrap_or("");
+            match stmt.query(params![q, sid, limit as i64]) {
+                Ok(r) => r,
+                Err(_) => return Ok(Vec::new()),
+            }
+        } else {
+            match stmt.query(params![q, limit as i64]) {
+                Ok(r) => r,
+                Err(_) => return Ok(Vec::new()),
+            }
         };
         let mut ids = Vec::new();
         while let Some(row) = rows.next()? {
@@ -1232,15 +1265,31 @@ impl EmbeddedMemoryBackend {
     }
 
 
-    fn like_search_visible(&self, text: &str, limit: usize) -> Result<Vec<String>> {
+    fn like_search_visible(&self, text: &str, limit: usize, session_id: Option<&str>) -> Result<Vec<String>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
-            "SELECT id FROM frames WHERE visibility = 1
-             AND (payload LIKE ?1 OR tags LIKE ?1)
-             LIMIT ?2",
-        )?;
+        let (sql, session_param) = if session_id.is_some() {
+            (
+                "SELECT id FROM frames WHERE visibility = 1 AND source = ?1
+                 AND (payload LIKE ?2 OR tags LIKE ?2)
+                 LIMIT ?3",
+                true,
+            )
+        } else {
+            (
+                "SELECT id FROM frames WHERE visibility = 1
+                 AND (payload LIKE ?1 OR tags LIKE ?1)
+                 LIMIT ?2",
+                false,
+            )
+        };
+        let mut stmt = conn.prepare(sql)?;
         let pattern = format!("%{}%", text);
-        let mut rows = stmt.query(params![pattern, limit as i64])?;
+        let mut rows = if session_param {
+            let sid = session_id.unwrap_or("");
+            stmt.query(params![sid, pattern, limit as i64])?
+        } else {
+            stmt.query(params![pattern, limit as i64])?
+        };
         let mut ids = Vec::new();
         while let Some(row) = rows.next()? {
             let id: String = row.get(0)?;
@@ -1252,14 +1301,26 @@ impl EmbeddedMemoryBackend {
     /// L2 Semantic: search the `facts` table for keyword hits.
     /// Same MATCH expression builder as `fts_search_visible` but
     /// against `facts_fts`.
-    fn fts_facts_visible(&self, text: &str, limit: usize) -> Result<Vec<String>> {
+    fn fts_facts_visible(&self, text: &str, limit: usize, session_id: Option<&str>) -> Result<Vec<String>> {
         let conn = self.conn.lock();
-        let mut stmt = match conn.prepare(
-            "SELECT fa.id FROM facts_fts fa
-             JOIN facts f ON f.id = fa.id
-             WHERE facts_fts MATCH ?1 AND f.visibility = 1
-             LIMIT ?2",
-        ) {
+        let (sql, session_param) = if session_id.is_some() {
+            (
+                "SELECT fa.id FROM facts_fts fa
+                 JOIN facts f ON f.id = fa.id
+                 WHERE facts_fts MATCH ?1 AND f.visibility = 1 AND f.source = ?2
+                 LIMIT ?3",
+                true,
+            )
+        } else {
+            (
+                "SELECT fa.id FROM facts_fts fa
+                 JOIN facts f ON f.id = fa.id
+                 WHERE facts_fts MATCH ?1 AND f.visibility = 1
+                 LIMIT ?2",
+                false,
+            )
+        };
+        let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
             Err(_) => return Ok(Vec::new()),
         };
@@ -1279,9 +1340,17 @@ impl EmbeddedMemoryBackend {
             return Ok(Vec::new());
         }
         let q = tokens.join(" OR ");
-        let mut rows = match stmt.query(params![q, limit as i64]) {
-            Ok(r) => r,
-            Err(_) => return Ok(Vec::new()),
+        let mut rows = if session_param {
+            let sid = session_id.unwrap_or("");
+            match stmt.query(params![q, sid, limit as i64]) {
+                Ok(r) => r,
+                Err(_) => return Ok(Vec::new()),
+            }
+        } else {
+            match stmt.query(params![q, limit as i64]) {
+                Ok(r) => r,
+                Err(_) => return Ok(Vec::new()),
+            }
         };
         let mut ids = Vec::new();
         while let Some(row) = rows.next()? {
@@ -1842,13 +1911,14 @@ impl MemoryLayer for EmbeddedMemoryBackend {
         // 1. Text leg — FTS5 first, LIKE fallback. We over-fetch
         //    (limit * 2) so a later merge with the vector leg has
         //    material to dedupe against.
-        let mut ids = self.fts_search_visible(&query.text, query.limit * 2)?;
+        let sid = query.session_id.as_deref();
+        let mut ids = self.fts_search_visible(&query.text, query.limit * 2, sid)?;
         if ids.is_empty() {
-            ids = self.like_search_visible(&query.text, query.limit * 2)?;
+            ids = self.like_search_visible(&query.text, query.limit * 2, sid)?;
         }
         // 1b. Fact leg — query the `facts` table too so L2 Semantic
         //     memory is part of the unified recall.
-        let fact_ids = self.fts_facts_visible(&query.text, query.limit)?;
+        let fact_ids = self.fts_facts_visible(&query.text, query.limit, sid)?;
         for fid in fact_ids {
             if !ids.contains(&fid) {
                 ids.push(fid);
@@ -1875,7 +1945,7 @@ impl MemoryLayer for EmbeddedMemoryBackend {
         if let Some(qe) = query.embedding.as_deref() {
             if !qe.is_empty() {
                 let vec_hits = self
-                    .cosine_topk_impl(qe, query.limit * 2, -1.0, "")?
+                    .cosine_topk_impl(qe, query.limit * 2, -1.0, "", sid)?
                     .into_iter()
                     .map(|(h, _)| h);
                 for vh in vec_hits {
@@ -1955,7 +2025,7 @@ impl MemoryLayer for EmbeddedMemoryBackend {
         min_score: f32,
         model: &str,
     ) -> Result<Vec<MemoryHit>> {
-        let pairs = self.cosine_topk_impl(query, k, min_score, model)?;
+        let pairs = self.cosine_topk_impl(query, k, min_score, model, None)?;
         Ok(pairs.into_iter().map(|(h, _)| h).collect())
     }
 }
@@ -2173,7 +2243,7 @@ mod tests {
         // we can prove roundtrip by querying the same vector back
         // and asserting self-cosine == 1.0.
         let hits = b
-            .cosine_topk_impl(&vec, 1, 0.99, "bge-small")
+            .cosine_topk_impl(&vec, 1, 0.99, "bge-small", None)
             .unwrap();
         assert_eq!(hits.len(), 1);
         let score = hits[0].1;
@@ -2196,7 +2266,7 @@ mod tests {
         // Query is [1, 0, 0] — f1 and f3 are exact matches
         // (cosine = 1.0), f2 is close (cosine = 0.9*sqrt(...) ≈ 0.99).
         let hits = b
-            .cosine_topk_impl(&[1.0, 0.0, 0.0], 3, 0.0, "test")
+            .cosine_topk_impl(&[1.0, 0.0, 0.0], 3, 0.0, "test", None)
             .unwrap();
         assert_eq!(hits.len(), 3);
         // The two exact matches tie at 1.0; we accept either at the
@@ -2219,7 +2289,7 @@ mod tests {
         b.upsert_embedding(&f_long.id.to_string(), &[0.5, 0.5, 0.5, 0.5], "test").unwrap();
         // Query has 4 dims — only f_long should be in the result.
         let hits = b
-            .cosine_topk_impl(&[0.5, 0.5, 0.5, 0.5], 10, 0.0, "test")
+            .cosine_topk_impl(&[0.5, 0.5, 0.5, 0.5], 10, 0.0, "test", None)
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].0.id, f_long.id.to_string());
@@ -2238,7 +2308,7 @@ mod tests {
         b.upsert_embedding(&f_b.id.to_string(), &[1.0, 0.0, 0.0], "model-b").unwrap();
         // Filter to model-a only.
         let hits = b
-            .cosine_topk_impl(&[1.0, 0.0, 0.0], 10, 0.0, "model-a")
+            .cosine_topk_impl(&[1.0, 0.0, 0.0], 10, 0.0, "model-a", None)
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].0.id, f_a.id.to_string());
@@ -2257,7 +2327,7 @@ mod tests {
         // min_score=0.5 keeps the parallel hit (cos=1) and drops
         // the orthogonal one (cos=0).
         let hits = b
-            .cosine_topk_impl(&[1.0, 0.0, 0.0], 10, 0.5, "t")
+            .cosine_topk_impl(&[1.0, 0.0, 0.0], 10, 0.5, "t", None)
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].0.id, f_sim.id.to_string());

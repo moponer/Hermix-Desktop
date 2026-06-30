@@ -129,6 +129,7 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/custom-providers/{id}", delete(custom_providers::delete_custom_provider))
         .route("/api/custom-providers/{id}/fetch-models", post(custom_providers::fetch_models))
         .route("/api/custom-providers/{id}/test-connection", post(custom_providers::test_connection))
+        .route("/api/custom-providers/{id}/model-contexts", put(custom_providers::update_model_contexts))
         // Persona management: SOUL / system prompt / personalities / memory.
         // See `dashboard/persona.rs` for the file layout and the agent-loop
         // code that consumes these files.

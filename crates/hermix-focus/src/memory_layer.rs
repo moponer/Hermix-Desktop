@@ -82,6 +82,10 @@ pub struct MemoryQuery {
     /// 2. The router constructs the embedding once and passes the
     ///    same Vec into multiple backends' recognize calls.
     pub embedding: Option<Vec<f32>>,
+    /// Phase 18 (session isolation): when set, backends scope recall
+    /// to entries whose `source` matches this session id. `None`
+    /// means global recall (all sessions) — the legacy behaviour.
+    pub session_id: Option<String>,
 }
 
 impl MemoryQuery {
@@ -92,6 +96,7 @@ impl MemoryQuery {
             time_window: None,
             limit: 10,
             embedding: None,
+            session_id: None,
         }
     }
 
@@ -107,6 +112,12 @@ impl MemoryQuery {
 
     pub fn with_intent(mut self, intent: Intent) -> Self {
         self.intent = intent;
+        self
+    }
+
+    /// Scope recall to entries from a specific session.
+    pub fn with_session_id(mut self, sid: String) -> Self {
+        self.session_id = Some(sid);
         self
     }
 

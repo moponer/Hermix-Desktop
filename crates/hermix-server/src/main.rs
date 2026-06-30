@@ -13,7 +13,7 @@ async fn main() -> Result<(), AgentError> {
     let addr: SocketAddr = env_compat("HERMIX_SERVER_ADDR", "HERMES_SERVER_ADDR")
         .or_else(|| env_compat("HERMIX_DASHBOARD_ADDR", "HERMES_DASHBOARD_ADDR"))
         .or_else(|| env_compat("HERMIX_HTTP_ADDR", "HERMES_HTTP_ADDR"))
-        .unwrap_or_else(|| "127.0.0.1:8787".to_string())
+        .unwrap_or_else(|| "127.0.0.1:3000".to_string())
         .parse()
         .map_err(|e| AgentError::Config(format!("invalid server addr: {}", e)))?;
 

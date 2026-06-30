@@ -467,8 +467,15 @@ function useModelSelector() {
   }, [models]);
 
   const currentDisplay = useMemo(() => {
+    // v2 (2026-06-29): 未配置模型时显示明确的中文提示 + 给用户
+    // 一个清晰的行动入口（点击 → 跳设置 → 模型管理）。之前显示
+    // "选择模型" 用户以为只是个 placeholder，没有"未配置"的紧迫感，
+    // 也不知道点哪里去配。
+    if (!models || models.length === 0) {
+      return "未配置，请先配置模型";
+    }
     const found = models.find((m) => m.id === selectedModel);
-    return found ? found.display : (selectedModel || "选择模型");
+    return found ? found.display : (selectedModel || "未配置，请先配置模型");
   }, [models, selectedModel]);
 
   return { models, byProvider, availableExtras, selectedModel, setSelectedModel, currentDisplay };
@@ -751,6 +758,8 @@ interface ChatViewProps {
   onOpenSessionSettings?: () => void;
   onShareSession?: () => void;
   onOpenExperts?: () => void;
+  /** 跳转到「设置」页（模型未配置时点击 chip 用） */
+  onOpenSettings?: () => void;
   onUndo?: () => void;
   onRestore?: () => void;
   /** 停止当前流式生成 */
@@ -837,9 +846,7 @@ interface ChatViewProps {
   streamingPhase?: StreamPhase | null;
   /** Transient status text from backend (e.g. "Still waiting for the model…"). */
   streamingStatus?: string | null;
-  /** Day 1-B placeholder. Day 2 will wire this up to a real
-   *  `compaction_status` WS event from the backend. Until then
-   *  it's always `null` and the banner renders nothing. */
+  /** Compaction pipeline status from backend's `compaction_status` WS event. */
   compactionStatus?: CompactionStatus | null;
   /** Number of `role="tool"` messages currently in `running` state
    *  in the active session. Drives the post-stream "执行工具中…"
@@ -868,6 +875,7 @@ export function ChatView({
   streamingPhase,
   isStreaming,
   onOpenExperts,
+  onOpenSettings,
   onUndo,
   onRestore,
   onStop,
@@ -1156,7 +1164,12 @@ useEffect(() => {
   if (session.model) {
     setSelectedModel(session.model);
   }
-}, [session?.id, session?.workspace, session?.expert_id, session?.model]);
+// v2 (2026-06-29): 主人反馈「对话中 agent 不看工作区目录」。
+// 同时监听 session.workspace 字段本身变化（user 在其他 tab 选了目录 →
+// 后端 PATCH 改了 session.workspace → 但 React state 不会自动更新），
+// 把后端最新值拉回前端 state。否则会出现"后端显示绑了目录，但前端
+// 渲染没绑、handleSubmit 也不传 overrides.workspace"的撕裂。
+}, [session?.id, session?.workspace, session?.expert_id, session?.model, setWorkspaceRaw, setExpert, setSelectedModel]);
 
 const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
 
@@ -1355,7 +1368,35 @@ const clearPendingImages = useCallback(() => {
       }
       void expert?.toolset; // expert.toolset is shown in UI / used by
                             // backend routing but not as a filter here.
-      if (workspace) overrides.workspace = workspace;
+      // v2 (2026-06-29): 主人反馈「选了目录对话时 agent 还是只找 C 盘」。
+      // 根因：useSessionWorkspace 的 state 在 session 切换、welcome ↔ chat 切换、
+      // HMR 重置等时机下可能短暂为 null，但 localStorage / session.workspace / draft 槽位
+      // 已经有真实路径。state 为空时直接放过 → overrides.workspace 没传 → 后端
+      // 落回 server process CWD（C 盘）。
+      //
+      // 修法：state 为空时，按优先级回退到最权威的"该用哪个目录"信号：
+      //   1. useSessionWorkspace 自己的 state（最优先，UI 即时反馈）
+      //   2. session?.workspace （后端持久化值，可能比 localStorage 更新）
+      //   3. window.localStorage 直接读（兜底，应对 useState 初始化竞态）
+      //   4. useWorkspaceRoot 全局值（用户顶部导航设过的工作区）
+      // 任意一个非空就传给后端，让 LLM 在系统 prompt 看到 "## Active Workspace"，
+      // 文件/终端工具也走 `TERMINAL_CWD` 而不是 server CWD。
+      const fallbackWorkspace =
+        (workspace && workspace.trim()) ||
+        (session?.workspace && session.workspace.trim()) ||
+        (() => {
+          try {
+            const raw = storage.getItem(
+              sessionId
+                ? `hermix.session.${sessionId}.workspace`
+                : STORAGE_KEYS.draftWorkspace,
+            );
+            return raw && raw.trim() ? raw : null;
+          } catch {
+            return null;
+          }
+        })();
+      if (fallbackWorkspace) overrides.workspace = fallbackWorkspace;
       if (activeSkills.length > 0) overrides.skills = activeSkills;
       if (pendingImages.length > 0) {
         // 二进制直传：Vec<u8> 不走 base64 字符串
@@ -1437,6 +1478,37 @@ const clearPendingImages = useCallback(() => {
     );
   }
 
+  // v2 (2026-06-29): 主人反馈「点停止跳到欢迎页，回不去」。
+  // 根因：停止流后 500ms re-fetch 在 server 那边偶尔返回空数组（cancel
+  // 时机太早 user_msg 还没持久化），setSessions 把内存 messages 替换成
+  // 空数组 → `session.messages.length === 0` → 下面那个 Empty State
+  // 判断条件满足 → ChatView 渲染吉祥物欢迎页。视觉上像"被踢出去"。
+  //
+  // 修法（双保险）：
+  //   1) App.tsx 那边 v31 已经在 re-fetch 返回空且内存有数据时跳过覆盖；
+  //   2) 这里再加一层：session 是 truthy 但 messages 暂时为 0 时，
+  //      不要渲染欢迎页，而是显示一个"消息加载中"的占位。等下一次
+  //      getSessionMessages 成功或 setSessions 写入真正的 messages 后，
+  //      才会渲染真正的对话视图。这样即使 server 异常返回空数组，
+  //      用户也看不到欢迎页（视觉撕裂），而是看到加载占位，
+  //      下次侧边栏切回来还能 reload 出完整对话。
+  if (session && session.messages.length === 0) {
+    return (
+      <div
+        className="flex-1 flex flex-col items-center justify-center px-8 min-h-0"
+        style={{ background: "var(--color-bg-primary)" }}
+      >
+        <div className="flex flex-col items-center gap-3 text-center">
+          <div
+            className="w-9 h-9 rounded-full border-2 border-border-primary border-t-text-muted animate-spin"
+            aria-hidden="true"
+          />
+          <p className="text-[13px] text-text-muted">正在恢复对话...</p>
+        </div>
+      </div>
+    );
+  }
+
   // Empty state — show welcome when no session or session has no messages
   if (!session || session.messages.length === 0) {
     return (
@@ -1480,6 +1552,7 @@ const clearPendingImages = useCallback(() => {
               onPickRecent={(id) => { markRecentUsed(id); setExpertWithCutoff(id); }}
               permissionLevel={permissionLevel} setPermissionLevel={setPermissionLevel}
               onOpenExperts={onOpenExperts}
+              onOpenSettings={onOpenSettings}
               onUndo={onUndo}
               onRestore={onRestore}
               onStop={onStop}
@@ -1820,6 +1893,7 @@ const clearPendingImages = useCallback(() => {
             onPickRecent={(id) => { markRecentUsed(id); setExpertWithCutoff(id); }}
             permissionLevel={permissionLevel} setPermissionLevel={setPermissionLevel}
             onOpenExperts={onOpenExperts}
+            onOpenSettings={onOpenSettings}
             onUndo={onUndo}
             onRestore={onRestore}
             onStop={onStop}
@@ -1869,6 +1943,8 @@ interface ComposerProps {
   categories: import("../data/builtinExperts").ExpertCategory[];
   byCategory: Record<string, import("../data/builtinExperts").ExpertDef[]>;
   onOpenExperts?: () => void;
+  /** 跳转到「设置」页（模型未配置时点击 chip 用） */
+  onOpenSettings?: () => void;
   onPickRecent?: (id: string) => void;
   onUndo?: () => void;
   onRestore?: () => void;
@@ -2419,13 +2495,13 @@ function Composer(p: ComposerProps) {
           <div className="relative">
             <button
               ref={modelTriggerRef as React.RefObject<HTMLButtonElement>}
-              onClick={modelToggle}
+              onClick={(p.byProvider && p.byProvider.length > 0) ? modelToggle : () => { p.onOpenSettings?.(); setModelOpen(false); }}
               className={`flex items-center gap-1.5 px-2 py-1 text-[12.5px] transition-colors rounded-md max-w-[240px] ${
                 (p.byProvider && p.byProvider.length > 0)
-                  ? "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-                  : "text-text-muted"
+                  ? "text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer"
+                  : "text-[#993C1D] hover:bg-[#FAECE7]/60 cursor-pointer"
               }`}
-              title={(p.byProvider && p.byProvider.length > 0) ? "切换模型" : "暂无可用模型，请到 设置 → 模型管理 添加"}
+              title={(p.byProvider && p.byProvider.length > 0) ? "切换模型" : "未配置模型，点击前往 设置 → 模型管理"}
             >
               <ProviderIcon providerId={p.selectedModel?.split(":")[0] || "custom"} size={14} title={p.selectedModel} />
               <span className="truncate">{p.currentDisplay}</span>

@@ -487,3 +487,37 @@ pub async fn test_connection(
         })),
     }
 }
+
+// ---------------------------------------------------------------------------
+// PUT /api/custom-providers/{id}/model-contexts
+// ---------------------------------------------------------------------------
+
+/// Request body for updating per-model context windows.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateModelContextsRequest {
+    /// Key = model_id, value = context window in tokens (0 to clear).
+    pub model_contexts: HashMap<String, u64>,
+}
+
+/// Set per-model context window overrides for a custom provider.
+/// Persists to `config.yaml` → `llm_providers.{id}.model_contexts`.
+pub async fn update_model_contexts(
+    State(state): State<HttpServerState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<UpdateModelContextsRequest>,
+) -> Result<Json<OkResponse>, HttpError> {
+    if !id.starts_with("custom-") {
+        return Err(HttpError { status: axum::http::StatusCode::BAD_REQUEST, message: "Provider ID must start with 'custom-'".to_string() });
+    }
+    let config_path = state.hermix_home.join("config.yaml");
+    let mut config = read_gateway_config(&state)?;
+    let model_contexts: HashMap<String, u64> = req.model_contexts.into_iter().filter(|(_, v)| *v > 0).collect();
+    let count = model_contexts.len();
+    config.llm_providers.entry(id.clone()).or_insert_with(hermix_config::LlmProviderConfig::default).model_contexts = model_contexts;
+    let mut to_save = config.clone();
+    to_save.home_dir = None;
+    let yaml = serde_yaml::to_string(&to_save).map_err(|e| HttpError { status: axum::http::StatusCode::INTERNAL_SERVER_ERROR, message: format!("failed to serialize config: {}", e) })?;
+    std::fs::write(&config_path, yaml).map_err(|e| HttpError { status: axum::http::StatusCode::INTERNAL_SERVER_ERROR, message: format!("failed to write config: {}", e) })?;
+    tracing::info!(provider = %id, count, "model_contexts updated");
+    Ok(Json(OkResponse { ok: true }))
+}

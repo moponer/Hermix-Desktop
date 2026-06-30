@@ -1495,6 +1495,17 @@ export const testCustomProviderConnection = async (
     { method: "POST" },
   );
 
+export const updateCustomProviderModelContexts = async (
+  id: string,
+  modelContexts: Record<string, number>,
+): Promise<boolean> => {
+  await fetchJSON(`/api/custom-providers/${encodeURIComponent(id)}/model-contexts`, {
+    method: "PUT",
+    body: JSON.stringify({ model_contexts: modelContexts }),
+  });
+  return true;
+};
+
 // ── TickLoop ───────────────────────────────────────
 
 export interface TickLoopStatus {
