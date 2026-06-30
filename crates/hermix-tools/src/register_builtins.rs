@@ -662,16 +662,7 @@ pub fn register_builtin_tools(
     );
 
     // -- Cronjob -------------------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "cronjob",
-        Arc::new(crate::tools::cronjob::CronjobHandler::new(Arc::new(
-            crate::backends::cronjob::SignalCronjobBackend::new(),
-        ))),
-        "⏰",
-        vec![],
-    );
+    // Migrated to tools/cronjob.rs::register (P1.2 per-tool migration).
 
     // -- Messaging -----------------------------------------------------------
     reg(
