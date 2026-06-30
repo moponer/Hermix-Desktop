@@ -7,9 +7,39 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
 use std::sync::Arc;
+
+use crate::ToolRegistry;
+
+/// Register video_gen tool with the registry (P1.2 per-tool migration).
+pub fn register(registry: &ToolRegistry) {
+    let backend = crate::backends::video_gen::SeedDance2Backend::from_env()
+        .unwrap_or_else(|_| {
+            crate::backends::video_gen::SeedDance2Backend::new(
+                String::new(),
+                "https://api.seeddance.com/v2".into(),
+            )
+        });
+    let backend = Arc::new(backend);
+    let handler = Arc::new(VideoGenerateHandler::new(backend));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "video",
+        "video",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec!["SEEDDANCE_API_KEY".into()],
+        true,
+        "Generate a video from a text prompt or reference image (SeedDance2)",
+        "🎬",
+        None,
+        RiskLevel::Caution,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // VideoGenBackend trait

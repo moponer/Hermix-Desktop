@@ -260,26 +260,7 @@ pub fn register_builtin_tools(
     // image_gen + gpt_image migrated to tools/image_gen.rs::register (P1.2, 2026-06-30)
 
     // -- Video generation (SeedDance2) ---------------------------------------
-    {
-        let backend =
-            crate::backends::video_gen::SeedDance2Backend::from_env().unwrap_or_else(|_| {
-                crate::backends::video_gen::SeedDance2Backend::new(
-                    String::new(),
-                    "https://api.seeddance.com/v2".into(),
-                )
-            });
-        let backend = Arc::new(backend);
-        reg(
-                    &enabled_toolsets,
-                    registry,
-            "video",
-            Arc::new(crate::tools::video_gen::VideoGenerateHandler::new(
-                backend.clone(),
-            )),
-            "🎬",
-            vec!["SEEDDANCE_API_KEY".into()],
-        );
-    }
+    // video_gen migrated to tools/video_gen.rs::register (P1.2, 2026-06-30)
 
     // -- Audio generation (music, SFX, voice cloning) ------------------------
 
