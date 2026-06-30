@@ -82,10 +82,10 @@ use tracing::{info, instrument};
 
 pub use crate::agent_config::{AgentConfig, RetryConfig, RuntimeProviderConfig};
 pub use crate::agent_helpers::{
-    classify_error, compute_prompt_cache_key, default_max_autonomous_nudges, is_interactive_tool,
-    jittered_backoff, rand_u64_range, truncate_tool_result, AgentCallbacks, ErrorClass,
-    EvolutionCounters, ToolDispatchDecision, ToolEntry, ToolRegistry, TurnMetrics,
-    TOOL_RESULT_CHAR_LIMIT,
+    classify_error, classify_tool_error, compute_prompt_cache_key, default_max_autonomous_nudges,
+    is_interactive_tool, jittered_backoff, rand_u64_range, truncate_tool_result, AgentCallbacks,
+    ErrorClass, EvolutionCounters, ToolDispatchDecision, ToolEntry, ToolErrorClass, ToolRecovery,
+    ToolRegistry, TurnMetrics, TOOL_RESULT_CHAR_LIMIT,
 };
 
 // ---------------------------------------------------------------------------

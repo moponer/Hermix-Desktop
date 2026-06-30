@@ -13,6 +13,10 @@
 //! - `TOOL_RESULT_CHAR_LIMIT` constant (was agent_loop.rs:493-494)
 //! - `is_interactive_tool` (P2.4, 2026-06-30) — names of tools that must run
 //!   sequentially in the caller's task rather than the parallel `JoinSet`.
+//! - `ToolErrorClass`, `classify_tool_error`, `ToolRecovery` (P2.5,
+//!   2026-06-30) — classify a tool-call failure so the agent loop can pick
+//!   the right recovery policy (re-prompt / swap tool / retry / backoff)
+//!   without bespoke string matching at every error site.
 //!
 //! All public items are also re-exported from `agent_loop` (via
 //! `pub use agent_helpers::...`) so existing callers like
@@ -421,6 +425,95 @@ pub fn is_interactive_tool(name: &str) -> bool {
     matches!(name, "clarify" | "delegate_task")
 }
 
+// ---------------------------------------------------------------------------
+// ToolErrorClass (P2.5, 2026-06-30)
+// ---------------------------------------------------------------------------
+
+/// Classification of a tool-call failure for recovery-policy routing.
+///
+/// Each variant maps to a default recovery strategy the agent loop can
+/// take without bespoke string-matching in `agent_loop.rs`:
+/// - `ArgumentsCorrupted`     → re-prompt the LLM with the JSON parse
+///                               error, do NOT count toward tool retry
+///                               budget (LLM can usually self-correct).
+/// - `ToolNotAvailable`       → send the LLM the available-tools list
+///                               and let it pick a different tool.
+/// - `ExecutionFailed`        → count toward retry budget; surface the
+///                               error verbatim and let the LLM adapt.
+/// - `Timeout`                → count toward retry budget; the LLM can
+///                               pick a smaller-scope variant next time.
+/// - `RateLimited`            → back off, retry same call after delay;
+///                               do NOT surface to the LLM as a tool
+///                               error (it isn't a logic problem).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolErrorClass {
+    ArgumentsCorrupted,
+    ToolNotAvailable,
+    ExecutionFailed,
+    Timeout,
+    RateLimited,
+}
+
+impl ToolErrorClass {
+    /// Recommended recovery action for this class.
+    pub fn recovery_action(self) -> ToolRecovery {
+        match self {
+            ToolErrorClass::ArgumentsCorrupted => ToolRecovery::Reprompt,
+            ToolErrorClass::ToolNotAvailable => ToolRecovery::SwapTool,
+            ToolErrorClass::ExecutionFailed => ToolRecovery::Retry,
+            ToolErrorClass::Timeout => ToolRecovery::Retry,
+            ToolErrorClass::RateLimited => ToolRecovery::Backoff,
+        }
+    }
+}
+
+/// Recovery action an agent loop should take for a classified tool error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolRecovery {
+    /// Re-feed the LLM with the parse error so it can re-issue valid JSON.
+    Reprompt,
+    /// Tell the LLM which tools *are* available so it can pick another.
+    SwapTool,
+    /// Retry the same call (count toward `invalid_tool_call_max_retries`).
+    Retry,
+    /// Back off for a `RateLimit`-style duration before retrying.
+    Backoff,
+}
+
+/// Classify a tool-call error message into a [`ToolErrorClass`].
+///
+/// The classification is heuristic — it inspects the human-readable
+/// error string the agent loop currently writes into `ToolResult::err`
+/// and into the `tool_errors` log. Patterns are chosen to match the
+/// actual error messages produced by:
+///   - `serde_json::from_str` failures (ArgumentsCorrupted)
+///   - `Unknown tool 'X'` from the registry (ToolNotAvailable)
+///   - handlers' `Err(e.to_string())` (ExecutionFailed)
+///   - per-tool timeouts (Timeout)
+///   - HTTP 429 / "rate limit" from providers (RateLimited)
+pub fn classify_tool_error(err: &str) -> ToolErrorClass {
+    let lower = err.to_lowercase();
+    if lower.contains("rate limit") || lower.contains("429") || lower.contains("too many requests")
+    {
+        ToolErrorClass::RateLimited
+    } else if lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("deadline exceeded")
+    {
+        ToolErrorClass::Timeout
+    } else if lower.starts_with("unknown tool") || lower.contains("not registered") {
+        ToolErrorClass::ToolNotAvailable
+    } else if lower.starts_with("invalid json params")
+        || lower.contains("expected value")
+        || lower.contains("expected `")
+        || lower.contains("trailing characters")
+    {
+        ToolErrorClass::ArgumentsCorrupted
+    } else {
+        ToolErrorClass::ExecutionFailed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,5 +531,72 @@ mod tests {
         assert!(!is_interactive_tool("read_file"));
         assert!(!is_interactive_tool("list_files"));
         assert!(!is_interactive_tool(""));
+    }
+
+    #[test]
+    fn classify_tool_error_recognises_rate_limit() {
+        assert_eq!(
+            classify_tool_error("HTTP 429 Too Many Requests"),
+            ToolErrorClass::RateLimited
+        );
+        assert_eq!(
+            classify_tool_error("upstream rate limit hit"),
+            ToolErrorClass::RateLimited
+        );
+    }
+
+    #[test]
+    fn classify_tool_error_recognises_timeout() {
+        assert_eq!(
+            classify_tool_error("connection timed out after 30s"),
+            ToolErrorClass::Timeout
+        );
+        assert_eq!(
+            classify_tool_error("deadline exceeded"),
+            ToolErrorClass::Timeout
+        );
+    }
+
+    #[test]
+    fn classify_tool_error_recognises_unknown_tool() {
+        assert_eq!(
+            classify_tool_error("Unknown tool 'foo'. Available tools: [bar, baz]"),
+            ToolErrorClass::ToolNotAvailable
+        );
+    }
+
+    #[test]
+    fn classify_tool_error_recognises_bad_json() {
+        assert_eq!(
+            classify_tool_error(
+                "Invalid JSON params for tool 'write_file': expected value at line 1"
+            ),
+            ToolErrorClass::ArgumentsCorrupted
+        );
+        assert_eq!(
+            classify_tool_error("trailing characters at line 5"),
+            ToolErrorClass::ArgumentsCorrupted
+        );
+    }
+
+    #[test]
+    fn classify_tool_error_defaults_to_execution_failed() {
+        assert_eq!(
+            classify_tool_error("io error: file not found"),
+            ToolErrorClass::ExecutionFailed
+        );
+        assert_eq!(
+            classify_tool_error("permission denied"),
+            ToolErrorClass::ExecutionFailed
+        );
+    }
+
+    #[test]
+    fn recovery_action_matches_class() {
+        assert_eq!(ToolErrorClass::ArgumentsCorrupted.recovery_action(), ToolRecovery::Reprompt);
+        assert_eq!(ToolErrorClass::ToolNotAvailable.recovery_action(), ToolRecovery::SwapTool);
+        assert_eq!(ToolErrorClass::ExecutionFailed.recovery_action(), ToolRecovery::Retry);
+        assert_eq!(ToolErrorClass::Timeout.recovery_action(), ToolRecovery::Retry);
+        assert_eq!(ToolErrorClass::RateLimited.recovery_action(), ToolRecovery::Backoff);
     }
 }
