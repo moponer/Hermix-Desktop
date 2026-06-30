@@ -3,8 +3,13 @@
 //! Each submodule provides a concrete implementation of a backend trait
 //! defined in the `tools` module, connecting to real APIs, file systems,
 //! databases, and external services.
+//!
+//! Cleanup history (2026-06-30, Plan v2):
+//! - voice_mode / audio_gen are NOT dead — they're shared infrastructure
+//!   used by the `hermix-voice` crate (`transcribe_audio`, `VoicePipeline`).
+//!   They were mistakenly marked ❌ in TOOL_CLEANUP.md and we initially
+//!   deleted them, which broke the voice crate. Restored via `git restore`.
 
-pub mod audio_gen;
 pub mod browser;
 pub mod cua_backend;
 pub mod clarify;

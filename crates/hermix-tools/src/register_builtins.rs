@@ -146,15 +146,6 @@ pub fn register_builtin_tools(
     // Routes tool calls through an HTTP gateway (e.g. Nous managed tools).
     // Only functional when HERMIX_MANAGED_TOOL_GATEWAY_URL or vendor config
     // is set; returns a helpful error otherwise.
-    reg(
-        &enabled_toolsets,
-        registry,
-        "web",
-        Arc::new(crate::tools::managed_tool_gateway::ManagedToolGatewayHandler),
-        "🌐",
-        vec![],
-    );
-
     // -- Terminal ------------------------------------------------------------
     // Registered as `Caution`, not `Dangerous`. The tool itself can run
     // anything from `ls` to `rm -rf`, so the tool-level *capability* is
@@ -353,27 +344,9 @@ pub fn register_builtin_tools(
             "🎬",
             vec!["SEEDDANCE_API_KEY".into()],
         );
-        reg(
-                    &enabled_toolsets,
-                    registry,
-            "video",
-            Arc::new(crate::tools::video_gen::VideoStatusHandler::new(backend)),
-            "📊",
-            vec!["SEEDDANCE_API_KEY".into()],
-        );
     }
 
     // -- Audio generation (music, SFX, voice cloning) ------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "audio",
-        Arc::new(crate::tools::audio_gen::AudioGenerateHandler::new(
-            Arc::new(crate::backends::audio_gen::MultiAudioGenBackend::new()),
-        )),
-        "🎵",
-        vec![],
-    );
 
     // -- Media workflow orchestrator -----------------------------------------
     reg(
@@ -472,30 +445,13 @@ pub fn register_builtin_tools(
     );
 
     // -- Disk cleanup --------------------------------------------------------
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "disk_cleanup",
-        Arc::new(crate::tools::disk_cleanup::DiskCleanupHandler::new()),
-        "🧹",
-        vec![],
-        RiskLevel::Caution,
-    );
+    crate::tools::disk_cleanup::register(registry);
 
     // -- Computer use (desktop automation) -----------------------------------
     // Dangerous because every action operates on the live user
     // desktop (clicks, keystrokes, clipboard). The pre-tool-
     // dispatch layer in `LocalAgentService::decide_pre_tool_dispatch`
     // requires explicit user approval in `PermissionLevel::Default`.
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "computer_use",
-        Arc::new(crate::tools::computer_use::ComputerUseHandler::new()),
-        "🖱️",
-        vec![],
-        RiskLevel::Dangerous,
-    );
 
     // -- CUA (self-hosted Computer-Use Automation, Phase 1) -----------------
     // Five-tool toolset backed by the `hermix-cua` crate (BitBlt
@@ -516,7 +472,7 @@ pub fn register_builtin_tools(
     reg_risk(
         &enabled_toolsets,
         registry,
-        "cua",
+        "computer_use",
         Arc::new(crate::tools::cua::CuaScreenshotHandler::new()),
         "📸",
         vec![],
@@ -525,7 +481,7 @@ pub fn register_builtin_tools(
     reg_risk(
         &enabled_toolsets,
         registry,
-        "cua",
+        "computer_use",
         Arc::new(crate::tools::cua::CuaScreenInfoHandler::new()),
         "🖥️",
         vec![],
@@ -534,7 +490,7 @@ pub fn register_builtin_tools(
     reg_risk(
         &enabled_toolsets,
         registry,
-        "cua",
+        "computer_use",
         Arc::new(crate::tools::cua::CuaLeftClickHandler::new()),
         "🖱️",
         vec![],
@@ -543,7 +499,7 @@ pub fn register_builtin_tools(
     reg_risk(
         &enabled_toolsets,
         registry,
-        "cua",
+        "computer_use",
         Arc::new(crate::tools::cua::CuaTypeTextHandler::new()),
         "⌨️",
         vec![],
@@ -552,7 +508,7 @@ pub fn register_builtin_tools(
     reg_risk(
         &enabled_toolsets,
         registry,
-        "cua",
+        "computer_use",
         Arc::new(crate::tools::cua::CuaPressKeyHandler::new()),
         "🔘",
         vec![],
@@ -565,39 +521,12 @@ pub fn register_builtin_tools(
     // Dangerous for all three — `cua_click_window` issues a real
     // mouse click via SendInput, so it MUST go through the same
     // pre-tool approval card as the Phase 1 set.
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "cua",
-        Arc::new(crate::tools::cua::CuaListWindowsHandler::new()),
-        "🗂️",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "cua",
-        Arc::new(crate::tools::cua::CuaWindowAtPointHandler::new()),
-        "🎯",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "cua",
-        Arc::new(crate::tools::cua::CuaClickWindowHandler::new()),
-        "🪟",
-        vec![],
-        RiskLevel::Dangerous,
-    );
 
     // -- CUA Phase 2-C: UIA element-tree handlers -------------------------
     reg_risk(
         &enabled_toolsets,
         registry,
-        "cua",
+        "computer_use",
         Arc::new(crate::tools::cua::CuaUiTreeHandler::new()),
         "🌳",
         vec![],
@@ -606,36 +535,9 @@ pub fn register_builtin_tools(
     reg_risk(
         &enabled_toolsets,
         registry,
-        "cua",
-        Arc::new(crate::tools::cua::CuaUiFindHandler::new()),
-        "🔍",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "cua",
+        "computer_use",
         Arc::new(crate::tools::cua::CuaUiClickHandler::new()),
         "👆",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "cua",
-        Arc::new(crate::tools::cua::CuaUiFocusHandler::new()),
-        "🎯",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "cua",
-        Arc::new(crate::tools::cua::CuaUiInvokeHandler::new()),
-        "⚡",
         vec![],
         RiskLevel::Dangerous,
     );
@@ -644,7 +546,7 @@ pub fn register_builtin_tools(
     reg_risk(
         &enabled_toolsets,
         registry,
-        "cua",
+        "computer_use",
         Arc::new(crate::tools::cua::CuaOcrRecognizeHandler::new()),
         "🔤",
         vec![],
@@ -943,27 +845,6 @@ pub fn register_builtin_tools(
             vec![],
             RiskLevel::Safe,
         );
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "browser",
-            Arc::new(crate::tools::browser::BrowserWaitForHandler::new(
-                browser_backend.clone(),
-            )),
-            "⏳",
-            vec![],
-            RiskLevel::Safe,
-        );
-        reg(
-                    &enabled_toolsets,
-                    registry,
-            "browser",
-            Arc::new(crate::tools::browser::BrowserDiffHandler::new(
-                browser_backend.clone(),
-            )),
-            "🔀",
-            vec![],
-        );
         reg(
                     &enabled_toolsets,
                     registry,
@@ -1014,125 +895,19 @@ pub fn register_builtin_tools(
             "🔘",
             vec![],
         );
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "browser",
-            Arc::new(crate::tools::browser::BrowserGetImagesHandler::new(
-                browser_backend.clone(),
-            )),
-            "🖼️",
-            vec![],
-            RiskLevel::Safe,
-        );
-        reg(
-                    &enabled_toolsets,
-                    registry,
-            "browser",
-            Arc::new(crate::tools::browser::BrowserVisionHandler::new(
-                browser_backend.clone(),
-            )),
-            "👁️",
-            vec![],
-        );
-        reg(
-                    &enabled_toolsets,
-                    registry,
-            "browser",
-            Arc::new(crate::tools::browser::BrowserHighlightHandler::new(
-                browser_backend.clone(),
-            )),
-            "🔦",
-            vec![],
-        );
-        reg_risk(
-                    &enabled_toolsets,
-                    registry,
-            "browser",
-            Arc::new(crate::tools::browser::BrowserConsoleHandler::new(
-                browser_backend.clone(),
-            )),
-            "🔧",
-            vec![],
-            RiskLevel::Safe,
-        );
-        reg(
-                    &enabled_toolsets,
-                    registry,
-            "browser",
-            Arc::new(crate::tools::browser::BrowserInitScriptHandler::new(
-                browser_backend,
-            )),
-            "🪄",
-            vec![],
-        );
     }
 
     // -- Mixture of Agents ---------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "mixture_of_agents",
-        Arc::new(
-            crate::tools::mixture_of_agents::MixtureOfAgentsHandler::new(
-                Arc::new(crate::tools::mixture_of_agents::StubMoaBackend),
-                crate::tools::mixture_of_agents::MoaConfig::default(),
-            ),
-        ),
-        "🤖",
-        vec![],
-    );
 
     // -- Process registry ----------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "terminal",
-        Arc::new(crate::tools::process_registry::ProcessRegistryHandler::default()),
-        "📊",
-        vec![],
-    );
 
     // -- Transcription -------------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "voice",
-        Arc::new(crate::tools::transcription::TranscriptionHandler),
-        "🎙️",
-        vec!["OPENAI_API_KEY".into()],
-    );
 
     // -- Voice mode ----------------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "voice",
-        Arc::new(crate::tools::voice_mode::VoiceModeHandler::default()),
-        "🎤",
-        vec![],
-    );
 
     // -- TTS Premium ---------------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "tts",
-        Arc::new(crate::tools::tts_premium::TtsPremiumHandler::default()),
-        "🎵",
-        vec!["ELEVENLABS_API_KEY".into()],
-    );
 
     // -- OSV Check -----------------------------------------------------------
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "security",
-        Arc::new(crate::tools::osv_check::OsvCheckHandler),
-        "🛡️",
-        vec![],
-        RiskLevel::Safe,
-    );
 
     // -- URL Safety ----------------------------------------------------------
     reg_risk(
@@ -1146,34 +921,10 @@ pub fn register_builtin_tools(
     );
 
     // -- Env passthrough -----------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "system",
-        Arc::new(crate::tools::env_passthrough::EnvPassthroughHandler),
-        "🔧",
-        vec![],
-    );
 
     // -- Credential files ----------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "system",
-        Arc::new(crate::tools::credential_files::CredentialFilesHandler),
-        "🔑",
-        vec![],
-    );
 
     // -- Tool result storage -------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "system",
-        Arc::new(crate::tools::tool_result_storage::ToolResultStorageHandler::default()),
-        "💾",
-        vec![],
-    );
 
     tracing::info!("Registered {} built-in tools", registry.list_tools().len());
 
@@ -1380,7 +1131,6 @@ mod tests {
     /// *not* listed here — they are exercised by separate
     /// integration tests in the consumer crates.
     const DOCUMENTED_SAFE_TOOLS: &[&str] = &[
-        "osv_check",
         "web_search",
         "web_extract",
         "url_safety",
@@ -1477,7 +1227,6 @@ mod tests {
             "web_search",
             "web_extract",
             "url_safety",
-            "osv_check",
             "clarify",
             "model_providers",
             "platforms",
@@ -1563,7 +1312,6 @@ mod tests {
             "code_execution",
             "browser",
             "vision",
-            "osv_check",
             "skills_list",
             "skills_get",
             "skills_install",

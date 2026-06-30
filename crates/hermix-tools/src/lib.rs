@@ -54,25 +54,18 @@ pub use credential_guard::CredentialGuard;
 
 // Re-export all tool handler implementations and their backend traits
 pub use tools::browser::{
-    BrowserBackHandler, BrowserBackend, BrowserClickHandler, BrowserConsoleHandler,
-    BrowserDiffHandler, BrowserGetImagesHandler, BrowserHighlightHandler,
-    BrowserInitScriptHandler, BrowserNavigateHandler, BrowserPressHandler,
-    BrowserScrollHandler, BrowserSnapshotHandler, BrowserTypeHandler, BrowserVisionHandler,
-    BrowserWaitForHandler,
+    BrowserBackend, BrowserClickHandler, BrowserNavigateHandler, BrowserPressHandler,
+    BrowserScrollHandler, BrowserSnapshotHandler, BrowserTypeHandler,
 };
 pub use tools::clarify::{ClarifyBackend, ClarifyHandler};
 pub use tools::code_execution::{CodeExecutionBackend, ExecuteCodeHandler};
-pub use tools::credential_files::CredentialFilesHandler;
 pub use tools::cronjob::{CronjobBackend, CronjobHandler};
 pub use tools::cua::{
-    CuaClickWindowHandler, CuaLeftClickHandler, CuaListWindowsHandler, CuaPressKeyHandler,
-    CuaScreenInfoHandler, CuaScreenshotHandler, CuaTypeTextHandler,
-    CuaUiClickHandler, CuaUiFindHandler, CuaUiFocusHandler, CuaUiInvokeHandler,
-    CuaUiTreeHandler, CuaWindowAtPointHandler,
+    CuaLeftClickHandler, CuaPressKeyHandler, CuaScreenInfoHandler,
+    CuaScreenshotHandler, CuaTypeTextHandler, CuaUiClickHandler, CuaUiTreeHandler,
     CuaOcrRecognizeHandler,
 };
 pub use tools::delegation::{DelegateTaskHandler, DelegationBackend};
-pub use tools::env_passthrough::EnvPassthroughHandler;
 pub use tools::file::{
     PatchBackend, PatchHandler, ReadFileHandler, SearchBackend, SearchFilesHandler,
     WriteFileHandler,
@@ -82,29 +75,21 @@ pub use tools::homeassistant::{
     HomeAssistantBackend,
 };
 pub use tools::image_gen::{ImageGenBackend, ImageGenerateHandler};
-pub use tools::managed_tool_gateway::ManagedToolGatewayHandler;
 pub use tools::memory::{MemoryBackend, MemoryHandler};
 pub use tools::messaging::{MessagingBackend, SendMessageHandler};
-pub use tools::mixture_of_agents::MixtureOfAgentsHandler;
-pub use tools::osv_check::OsvCheckHandler;
-pub use tools::process_registry::ProcessRegistryHandler;
 pub use tools::session_search::{SessionSearchBackend, SessionSearchHandler};
 pub use tools::skill_commands;
 pub use tools::skill_utils;
 pub use tools::skills::{SkillManageHandler, SkillViewHandler, SkillsListHandler};
 pub use tools::terminal::{ProcessBackend, ProcessHandler, TerminalHandler};
 pub use tools::todo::{TodoBackend, TodoHandler};
-pub use tools::tool_result_storage::ToolResultStorageHandler;
 pub use tools::tool_search::{
     assemble_tool_schemas, classify_tools, is_bridge, AssemblyResult,
     ToolCallHandler, ToolDescribeHandler, ToolSearchHandler,
 };
-pub use tools::transcription::TranscriptionHandler;
 pub use tools::tts::{TextToSpeechHandler, TtsBackend};
-pub use tools::tts_premium::TtsPremiumHandler;
 pub use tools::url_safety::{TirithAction, TirithCheckResult, TirithConfig, TirithRule, TirithSecurity, UrlSafetyHandler};
 pub use tools::vision::{VisionAnalyzeHandler, VisionBackend};
-pub use tools::voice_mode::VoiceModeHandler;
 pub use tools::web::{WebExtractBackend, WebExtractHandler, WebSearchBackend, WebSearchHandler};
 
 // Re-export real backend implementations
