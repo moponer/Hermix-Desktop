@@ -721,16 +721,7 @@ pub fn register_builtin_tools(
     }
 
     // -- TTS -----------------------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "tts",
-        Arc::new(crate::tools::tts::TextToSpeechHandler::new(Arc::new(
-            crate::backends::tts::MultiTtsBackend::new(),
-        ))),
-        "🔊",
-        vec![],
-    );
+    // Migrated to tools/tts.rs::register (P1.2 per-tool migration).
 
     // -- Browser (10 tools) --------------------------------------------------
     {
