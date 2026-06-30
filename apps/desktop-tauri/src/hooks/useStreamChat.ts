@@ -172,6 +172,32 @@ interface StreamCallbacks {
    */
   onReasoningChunk?: (piece: string) => void;
   /**
+   * 2026-06-29 (C3 marker protocol): the backend's `SectionGate`
+   * ran on `resolve_initial_system_prompt` and forwarded the
+   * resulting `SectionGateReport` to the `on_section_gate`
+   * callback, which serialised it as a `section_gate` WS event.
+   * We forward the parsed report here so the caller (ChatView)
+   * can append a `section_gate` entry to the execution timeline
+   * and render the per-section chips using `Section::label()`.
+   *
+   * `patched` lists sections the gate auto-spliced in (i.e. the
+   * upstream code path *would* have skipped them silently);
+   * `pending` lists optional sections absent under the current
+   * `RouteContext` and are surfaced for diagnostics only.
+   */
+  onSectionGate?: (info: {
+    patched: Array<{
+      section: "identity" | "tool_list" | "tool_enforce" | "working_dir" | "timestamp";
+      applied: boolean;
+      reason: string;
+    }>;
+    pending: Array<{
+      section: "identity" | "tool_list" | "tool_enforce" | "working_dir" | "timestamp";
+      applied: boolean;
+      reason: string;
+    }>;
+  }) => void;
+  /**
    * H3: The prefetcher resolved with a user-intent prediction and
    * ran safe tools speculatively. Sent before LLM reasoning starts.
    */
@@ -750,6 +776,72 @@ export function useStreamChat() {
                       toNumber(snap.consecutive_llm_failures) ?? undefined,
                     lastFailureReason,
                     lastChangedAt,
+                  });
+                }
+                return;
+              }
+
+              // 2026-06-29 (C3 marker protocol): the backend's
+              // `SectionGate` runs on every `resolve_initial_system_prompt`
+              // and forwards the resulting `SectionGateReport` to the
+              // `on_section_gate` callback, which serialises it as a
+              // `section_gate` WS event. We append it to the
+              // execution_timeline stream so the trace panel can
+              // render "SectionGate patched 2 required sections:
+              // Working directory, Current time" inline with the
+              // tool cards the user already sees.
+              //
+              // Wire shape (top-level OR nested under `event`):
+              //   {
+              //     "event": "section_gate",
+              //     "report": {
+              //       "patched": [{ "section": "working_dir", "applied": true, "reason": "..." }],
+              //       "pending": [{ "section": "tool_list", "applied": false, "reason": "..." }]
+              //     }
+              //   }
+              if (evtType === "section_gate" || evtType === "SectionGate") {
+                const reportRaw =
+                  data?.report ?? data?.event?.report ?? null;
+                if (reportRaw && typeof reportRaw === "object") {
+                  const report = reportRaw as {
+                    patched?: Array<{
+                      section: string;
+                      applied?: boolean;
+                      reason?: string;
+                    }>;
+                    pending?: Array<{
+                      section: string;
+                      applied?: boolean;
+                      reason?: string;
+                    }>;
+                  };
+                  callbacks.onSectionGate?.({
+                    patched: Array.isArray(report.patched)
+                      ? report.patched.map((g) => ({
+                          section:
+                            (g?.section as
+                              | "identity"
+                              | "tool_list"
+                              | "tool_enforce"
+                              | "working_dir"
+                              | "timestamp") ?? "identity",
+                          applied: !!g?.applied,
+                          reason: typeof g?.reason === "string" ? g.reason : "",
+                        }))
+                      : [],
+                    pending: Array.isArray(report.pending)
+                      ? report.pending.map((g) => ({
+                          section:
+                            (g?.section as
+                              | "identity"
+                              | "tool_list"
+                              | "tool_enforce"
+                              | "working_dir"
+                              | "timestamp") ?? "identity",
+                          applied: !!g?.applied,
+                          reason: typeof g?.reason === "string" ? g.reason : "",
+                        }))
+                      : [],
                   });
                 }
                 return;

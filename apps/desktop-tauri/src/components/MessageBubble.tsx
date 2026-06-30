@@ -1,7 +1,7 @@
 import React from "react";
 import {
   ChevronDown, ChevronRight, ListTodo, Terminal, Globe, Wrench,
-  AlertCircle, CheckCircle2, Circle, Loader2, Copy, Check,
+  AlertCircle, AlertTriangle, CheckCircle2, Circle, Loader2, Copy, Check,
   ShieldCheck, ShieldAlert, HelpCircle, X, Sparkles, Brain,
   FileText, FilePlus, ArrowRight,
   CheckCheck, Search, FolderOpen, Edit3, Trash2, Eye,
@@ -1224,14 +1224,32 @@ function ToolMessageCard({
               )}
             </span>
           )}
+          {/* 2026-06-29 主人反馈: "已完成" / "失败" 用蓝/红色字符太刺眼,
+              全部改成小图标 + 文字形式, 颜色统一调到 muted/success/warning
+              (蓝/红色字符完全不渲染). 已完成 → ✓; 失败 → ⚠; 运行中 → ⏵;
+              已中断 → ⚠. */}
           <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
-            {isRunning && !meta.completedAt
-              ? "运行中"
-              : isError
-                ? "失败"
-                : isRunning
-                  ? "已中断"
-                  : "已完成"}
+            {isRunning && !meta.completedAt ? (
+              <>
+                <Loader2 size={11} className="animate-spin shrink-0" />
+                运行中
+              </>
+            ) : isError ? (
+              <>
+                <AlertCircle size={11} className="shrink-0" />
+                失败
+              </>
+            ) : isRunning ? (
+              <>
+                <AlertTriangle size={11} className="shrink-0" />
+                已中断
+              </>
+            ) : (
+              <>
+                <Check size={11} className="shrink-0" />
+                已完成
+              </>
+            )}
           </span>
           {hasOutput && (
             <span className="tw-msg-chev">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
@@ -1239,11 +1257,11 @@ function ToolMessageCard({
         </span>
       </button>
 
-      {/* Error snippet — inline result peek for errors. Shown
-          when the tool failed, showing what went wrong. This
-          replaces the old "error hint" row which only showed
-          on close — now it's always visible. */}
-      {isError && resultPeek && (
+      {/* Error snippet — shown only when the primary text doesn't
+          already contain the error summary. This prevents duplicate
+          red text (primary shows "Binary file detected..." and the
+          err-hint below shows the same string). */}
+      {isError && resultPeek && primary !== resultPeek && (
         <div
           className="tw-msg-err-hint"
           onClick={() => setOpen(true)}

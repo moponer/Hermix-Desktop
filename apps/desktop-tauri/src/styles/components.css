@@ -44,7 +44,7 @@
      还占 200px 宽, main 不扩张 → 视觉上留下一条空白, 看起来像
      "sidebar 没真正折叠"。现在用 data-left-open 跟 data-right-open
      一样的模式把第一列归零. */
-  --col-left:  minmax(200px, var(--ab-left-w, 200px));
+  --col-left:  minmax(var(--left-min, 200px), var(--ab-left-w, 200px));
   --col-right: minmax(0px, var(--ab-right-w, 640px));
   grid-template-columns:
     var(--col-left)
@@ -2140,9 +2140,17 @@
   letter-spacing: -0.01em;
 }
 
-/* Status text — small label, NO background, NO border, NO pill.
-   Color is the only differentiator. */
+/* Status text — small icon + label, NO background, NO border, NO pill.
+   2026-06-29 主人反馈: 蓝/红色字符很难看, 改为图标 + 文字.
+     - 已完成 → ✓ + 绿色 (success, 不用 info 蓝)
+     - 失败   → ⚠ + 琥珀色 (warning, 不用 error 红)
+     - 运行中 → ⏵ + 转圈 + accent (品牌色, 不变)
+     - 已中断 → ⚠ + warning 琥珀色
+   Color 只作用图标 + 文字, 没有 chip 背景. */
 .tw-msg-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11.5px;
   font-weight: 400;
   line-height: 1;
@@ -2150,17 +2158,17 @@
   letter-spacing: 0;
   color: var(--color-text-faint);
 }
-.tw-msg-state--done { color: var(--color-info); }
+.tw-msg-state--done { color: var(--color-success); }
 .tw-msg-state--run  { color: var(--color-accent); }
-.tw-msg-state--err  { color: var(--color-error); }
+.tw-msg-state--err  { color: var(--color-warning); }
 
 /* Status pill — used in the ACUI right panel (ToolEventCard) to
-   surface the run state in a small icon+text chip. 2026-06-18
-   主人反馈: 之前 "成功" 徽章贴在所有正常完成的工具上, 不管
-   执行结果是否真正成功 (e.g. exit code != 0 也报"成功")。改为
-   "已完成" + 蓝色 (`--color-info`), 中性"工具执行完毕",
-   不再断言 success。success/failure 由结果内容决定,
-   不与本徽章视觉重叠。 */
+   surface the run state in a small icon+text chip. 2026-06-30
+   主人反馈: 蓝/红色字符很难看, 改为图标 + 文字 chip, 颜色统一
+   调到 muted/success/warning (蓝/红色字符完全不渲染). 已完成 →
+   Check + 绿色; 失败 → AlertTriangle + warning 琥珀; 运行中 →
+   Loader2 + accent (品牌色, 不变); 已中断 → AlertTriangle +
+   warning 琥珀. */
 .tw-msg-badge {
   display: inline-flex;
   align-items: center;
@@ -2179,15 +2187,16 @@
   background: var(--color-accent-soft);
 }
 .tw-msg-err-badge {
-  color: var(--color-error);
-  background: var(--color-error-soft);
+  /* 2026-06-30 主人反馈: 红色字符刺眼, 改 warning 琥珀. */
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
 }
 .tw-msg-done-badge {
-  /* "已完成" — blue (info) instead of green (success). The badge
-     no longer claims success; it just says "the run completed".
-     Actual success/failure lives in the result panel. */
-  color: var(--color-info);
-  background: var(--color-info-soft);
+  /* 2026-06-30 主人反馈: 蓝色字符难看, 改 success 绿 (中性"工具
+     执行完毕", 仍不断言 success, 真正的 success/failure 状态由
+     结果内容决定, e.g. exit code 1, 错误文本). */
+  color: var(--color-success);
+  background: var(--color-success-soft);
 }
 
 /* ── Git-style diff stats (+62 / −3) ─────────────────────────────

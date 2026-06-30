@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Terminal, Globe, Wrench, Loader2,
   ChevronDown, ChevronRight,
-  X as XIcon, Copy, CheckCheck, Circle,
+  AlertTriangle, Copy, CheckCheck, Check,
 } from "lucide-react";
 import { formatDuration } from "../utils/time";
 import type { ExecutionTimelineEvent } from "../types";
@@ -536,19 +536,17 @@ function ToolRow({ group }: { group: ToolGroup }) {
             </span>
           ) : isError ? (
             <span className="tw-msg-badge tw-msg-err-badge">
-              <XIcon size={9} />
+              {/* 2026-06-30 主人反馈: 红色字符太刺眼, 改 warning 琥珀 +
+                  三角警告图标, 中性"工具执行中断"语义, 不再用 error 红。 */}
+              <AlertTriangle size={10} className="shrink-0" />
               {group.statusNote?.startsWith("执行已中断") ? "已中断" : "失败"}
             </span>
           ) : (
             <span className="tw-msg-badge tw-msg-done-badge">
-              {/* 2026-06-18 主人反馈: 之前用绿色 ✓ + "成功"
-                  会贴在所有正常完成的工具上, 不管执行结果是否
-                  真正成功 (e.g. exit code != 0 也报 "成功")。
-                  改为蓝色填充小圆 + "已完成" — 中性"工具执行完毕",
-                  不再断言 success。真正的 success/failure 状态由
-                  结果内容决定 (e.g. exit code 1, 错误文本),
-                  不与本徽章视觉重叠。 */}
-              <Circle size={8} fill="currentColor" strokeWidth={0} />
+              {/* 2026-06-30 主人反馈: 蓝色字符难看, 改 success 绿 +
+                  Check 对勾图标, 仍是中性"工具执行完毕"语义, 不再
+                  断言 success (success/failure 由结果内容决定). */}
+              <Check size={10} className="shrink-0" />
               已完成
             </span>
           )}

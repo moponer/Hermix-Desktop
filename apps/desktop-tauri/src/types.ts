@@ -187,7 +187,7 @@ export interface ToolCall {
 }
 
 export interface ExecutionTimelineEvent {
-  type: "tool_start" | "tool_stdout" | "tool_complete" | "status" | "file_change";
+  type: "tool_start" | "tool_stdout" | "tool_complete" | "status" | "file_change" | "section_gate";
   tool?: string;
   content?: string;
   arguments?: string;
@@ -202,6 +202,30 @@ export interface ExecutionTimelineEvent {
   file_path?: string;
   change_type?: "created" | "modified" | "deleted" | "renamed";
   file_summary?: string;
+  /** 2026-06-29 (C3 marker protocol): section_gate-only payload.
+   *  Carries the serialised `SectionGateReport` from the backend.
+   *  `patched` lists sections the gate auto-spliced in;
+   *  `pending` lists optional sections absent under the current
+   *  `RouteContext`. The trace panel renders one chip per entry
+   *  using `Section::label()` from the backend, so the front-end
+   *  never has to maintain a hard-coded label table. */
+  section_gate_report?: SectionGateReport;
+}
+
+/** 2026-06-29 (C3 marker protocol): wire-mirror of the backend's
+ *  `SectionGateReport`. Field names match the `serde(rename=...)`
+ *  tags emitted by `crates/hermix-agent/src/context.rs`. */
+export interface SectionGateReport {
+  patched: SectionGapWire[];
+  pending: SectionGapWire[];
+}
+
+export interface SectionGapWire {
+  section: "identity" | "tool_list" | "tool_enforce" | "working_dir" | "timestamp";
+  /** Backend `SectionGap::patched` is renamed to `applied` on the
+   *  wire (see `SectionGap`'s `#[serde(rename = "applied")]`). */
+  applied: boolean;
+  reason: string;
 }
 
 export interface Session {

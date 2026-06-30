@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, startTransition } from "react";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
@@ -132,10 +132,40 @@ const RIGHT_DEFAULT = 640;
 // "装不下就少一列" 不冲突: resize 拖小窗口仍然自动关, 用户**主动**想看才扩.
 // appWindow setSize 失败时降级 (仍 setRightOpen(true), 让 layout 走 v22 退化路径).
 // 默认视口 1920 时: 左 200 + 主 1080 + 右 640 = 1920.
-const MAIN_MIN_WIDTH = 580;
+/* v27: 自适应 MAIN_MIN_WIDTH — 不再硬编码 580px。
+   在小视口下允许缩小到 360px（还能装约 30 个中文字符 + 气泡容差），
+   大视口保持 580px 的舒适阅读宽度。
+   阈值规则：
+   - 视口 ≥ 1400px: MAIN_MIN_WIDTH = 580（舒适宽）
+   - 视口 1000~1399px: MAIN_MIN_WIDTH = 480（中等）
+   - 视口 800~999px: MAIN_MIN_WIDTH = 400（紧凑）
+   - 视口 < 800px: MAIN_MIN_WIDTH = 360（最小可读）
+   同时 LEFT_MIN 也从 200 适当降低, 避免在窄窗口下左列 + 主列
+   合计最小宽度 > 视口。
+   对应的三列共存阈值从 1140 降到 920. */
+function computeMainMinWidth(vw: number): number {
+  if (vw >= 1400) return 580;
+  if (vw >= 1000) return 480;
+  if (vw >= 800) return 400;
+  return 360;
+}
+function computeLeftMin(vw: number): number {
+  if (vw >= 1200) return 200;
+  if (vw >= 900) return 160;
+  return 120;
+}
+
+// v27: 分辨率自适应 — 不再用 const，改为 state + resize listener
+// 在 App 组件内初始化，这样 setup 时窗口已经确定，准确拿到实际视口宽度。
+// eslint-disable-next-line prefer-const
+// (上面保留 computeMainMinWidth / computeLeftMin 供 typing 引用)
+
 
 export default function App() {
   const [page, setPageRaw] = useState<NavPage>("chat");
+  // v27: 视口自适应面板最小宽度 — 窗口缩小时缩小主列/左列最小宽
+  const [mainMinWidth, setMainMinWidth] = useState(() => computeMainMinWidth(window.innerWidth));
+  const [leftMin, setLeftMin] = useState(() => computeLeftMin(window.innerWidth));
   // 包装 setPage: 切到非 chat 页时主动关闭产物栏 (右栏是 chat 专属 UI)
   // 2026-06-18 主人要求: 在右栏展开时切到 agents/experts/settings/plugins/
   // automation/search/groupchat 任何非对话页 → 自动 setRightOpen(false)
@@ -163,6 +193,44 @@ export default function App() {
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const isCreatingSessionRef = useRef(false);
 
+  // v27: 视口自适应 — 窗口尺寸变化时重算面板最小宽度
+  // 对应 computeMainMinWidth / computeLeftMin 的分档逻辑。
+  // 放在这里（useEffect 最前面），确保每次 resize 都更新。
+  useEffect(() => {
+    const onResize = () => {
+      setMainMinWidth(computeMainMinWidth(window.innerWidth));
+      setLeftMin(computeLeftMin(window.innerWidth));
+    };
+    onResize(); // 初始化执行一次
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // v28: 窗口高度自适应屏幕 — Tauri 默认 860px 高，在 768p 屏幕（1366×768 笔记本）
+  // 上窗口底部 92px 落到屏幕外。启动时检测窗口高度是否超出屏幕可用高度，
+  // 超出则缩到刚好适配。注意：outerSize 返回的是物理像素，需要除以 scaleFactor
+  // 换算成逻辑像素再跟 screen.availHeight 比较。
+  //
+  // 同时处理 Windows 任务栏/系统栏占用的情况（availHeight < screen.height）。
+  // 不阻塞启动流程 — 失败了也不影响 app 正常运行。
+  useEffect(() => {
+    const fit = async () => {
+      try {
+        const outer = await appWindow.outerSize();
+        const factor = await appWindow.scaleFactor();
+        const logicalH = Math.max(1, Math.round(outer.height / factor));
+        // 用 screen.availHeight 而不是 screen.height，避开任务栏/系统栏高度。
+        // 额外留 40px 底边距让用户能托动窗口边缘。
+        const maxH = window.screen.availHeight - 40;
+        if (logicalH > maxH) {
+          await appWindow.setSize(new LogicalSize(DEFAULT_WINDOW_WIDTH, maxH));
+        }
+      } catch {
+        // best-effort: 启动流程不因窗口适配失败而阻塞
+      }
+    };
+    fit();
+  }, []);
   // One-shot: copy any `hermes.*` localStorage entries forward to
   // `hermix.*` so users on a pre-rename install keep their settings.
   // Idempotent: gated by `hermix.compat.migrated` flag inside the helper.
@@ -236,6 +304,12 @@ export default function App() {
     setActiveSessionIdRaw(id);
     try { id ? storage.setItem(ACTIVE_SESSION_KEY, id) : storage.removeItem(ACTIVE_SESSION_KEY); } catch {}
   }, []);
+
+  // v31 (2026-06-29): sessions 的最新值镜像到 ref，给异步回调（onDone 后的
+  // 500ms re-fetch）一个同步读 sessions 的入口。setState 之后 useEffect
+  // 链上的 closure 会拿到陈旧值，但 ref 永远跟最新值同步。
+  const sessionsRef = useRef<typeof sessions>([]);
+  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -451,16 +525,16 @@ export default function App() {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  // Viewport-aware layout: 视口 < 1140 → 自动关右栏, 退回两列.
+  // Viewport-aware layout: 三列共存阈值从 state 读取, 不再硬编码 1140.
   //
   // 主人反馈 v20: "拖动边框缩小时右栏换行/弹遮罩". 改用最简方案 —
   // 视口装不下三列就关掉右栏, 不挤不变形, 也不弹 modal 遮罩 (跟 workbuddy
   // "三列就三列, 装不下就少一列" 的行为一致). 拉宽后不会自动重开 —
   // 用户需要手动点 TitleBar 上的右栏按钮.
   //
-  // 阈值: 1140 = LEFT_MIN(200) + MAIN_MIN_WIDTH(580) + RIGHT_MIN(360).
-  // 视口 < 1140 → setRightOpen(false) → grid 退化成两列
-  // ([data-right-open="false"] CSS 把第三列 track 归零, 主列吃满).
+  // v27: 阈值从 state (leftMin + mainMinWidth + RIGHT_MIN) 实时计算,
+  // 不再硬编码 1140. 窗口缩小时主列和左列最小宽度都会缩, 临界阈值随之降低,
+  // 右栏可以在更小的窗口下保持打开.
   //
   // recompute 触发条件: window.resize / rightOpen 切换 / 用户拖动 resizer.
   // 三列共存时再 clamp 各自列到静态边界 (LEFT_MAX / RIGHT_MIN..RIGHT_MAX).
@@ -472,9 +546,11 @@ export default function App() {
   useEffect(() => {
     const recompute = () => {
       const vw = window.innerWidth;
-      // 视口 < 1140 → 自动关右栏, 退回两列布局.
-      // 三列物理下限 200 + 580 + 360 = 1140, 装不下就关, 不挤不变形.
-      if (vw < 1140 && rightOpen) {
+      // 三列共存下限 = state 中的 leftMin + mainMinWidth + RIGHT_MIN(360).
+      // v27 改为动态计算: 视口缩小时 leftMin 和 mainMinWidth 都缩,
+      // 临界阈值随之降低, 右栏可以在更小的窗口下保持打开.
+      const minThreeCol = leftMin + mainMinWidth + RIGHT_MIN;
+      if (vw < minThreeCol && rightOpen) {
         setRightOpen(false);
         return;
       }
@@ -490,7 +566,7 @@ export default function App() {
     recompute();
     window.addEventListener("resize", recompute);
     return () => window.removeEventListener("resize", recompute);
-  }, [rightOpen, left.setWidth, right.setWidth]);
+  }, [rightOpen, left.setWidth, right.setWidth, leftMin, mainMinWidth]);
 
   // Load sessions
   useEffect(() => { api.getSessions().then(setSessions).catch(() => {}); }, []);
@@ -732,20 +808,19 @@ export default function App() {
     setActiveSessionId(id);
     setPage("chat");
     if (window.innerWidth < 768) setSidebarOpen(false);
-    // The `useEffect` above is the authoritative loader — it watches
-    // `activeSessionId` + `sessions` and will trigger a fetch if the
-    // session's `messages` is still empty. But on a *re-click* of the
-    // same session (e.g. user pressing the "重试" button in the inline
-    // error card after a failed load) the effect's guard
-    // `session.messages.length > 0` won't fire because messages is
-    // still empty — and `activeSessionId` + `sessions` references don't
-    // change, so the effect won't re-run. The unconditional fetch below
-    // is the explicit-user-click path: it always re-fetches, regardless
-    // of whether the effect would have already kicked off a load.
+
+    // v29: 切换到已有 session 时，如果在内存中已经有 messages（比如刚结束的
+    // 流式对话），直接保留内存数据，不重新从服务器拉取。服务器可能还没完成
+    // 持久化（见 onDone 注释：为了消除闪烁，流结束后不再主动 re-fetch），
+    // 此时拉回来的数据会比内存状态短，导致消息丢失。
     //
-    // Two parallel fetches (one from the effect, one from this handler)
-    // for the same `id` are harmless — the responses are identical and
-    // `setSessions` is a no-op on duplicate writes.
+    // 只有 session.messages 为空时才去服务器拉（首次加载 / 加载失败的会话）。
+    const existing = sessions.find((s) => s.id === id);
+    if (existing && existing.messages.length > 0) {
+      console.log("[nav] session", id, "already has", existing.messages.length, "messages in memory, skipping server fetch");
+      return;
+    }
+
     try {
       const rawMessages = await api.getSessionMessages(id);
       clearLoadError(id);
@@ -756,7 +831,7 @@ export default function App() {
       console.error(`[chat] handleSelectSession(${id}) failed:`, msg);
       setLoadError(id, msg);
     }
-  }, [setLoadError, clearStreamError, cancelStream, setActiveSessionId, setPage]);
+  }, [setLoadError, clearStreamError, cancelStream, setActiveSessionId, setPage, sessions]);
 
   const handleDeleteSession = useCallback(async (id: string) => {
     // 2026-06-26: the previous implementation called `api.deleteSession`
@@ -1449,6 +1524,38 @@ export default function App() {
             // the id is informational only here.
             void toolCallId;
           },
+          // 2026-06-29 (C3 marker protocol): append a
+          // `section_gate` event to the active assistant
+          // message's `execution_timeline` so the trace panel
+          // can render the `SectionGateRow` inline with the
+          // tool cards. Mirrors `onFileChange`'s shape: locate
+          // the current assistant message via the ref, mutate
+          // the session state, persist through `execution_timeline`.
+          onSectionGate: (info) => {
+            const target = currentAssistantIdRef.current;
+            if (!target) return;
+            const event: import("./types").ExecutionTimelineEvent = {
+              type: "section_gate",
+              tool: "section_gate",
+              content: `SectionGate: patched=${info.patched.length} pending=${info.pending.length}`,
+              created_at: new Date().toISOString(),
+              section_gate_report: info,
+            };
+            setSessions((prev) => prev.map((s) => {
+              if (s.id !== sessionId) return s;
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== target) return m;
+                  const timeline = m.execution_timeline ?? [];
+                  return {
+                    ...m,
+                    execution_timeline: [...timeline, event],
+                  };
+                }),
+              };
+            }));
+          },
           onReasoningChunk: (piece) => {
             // Live `<think>...</think>` text from the LLM. Append to
             // the currently-active assistant message's
@@ -1560,6 +1667,63 @@ export default function App() {
             // of truth on next session reload, handled by the
             // useEffect watching activeSessionId.
             //
+            // v30: 流结束后延迟 500ms 从服务端重新拉取消息，替换为
+            // expandTimelineToMessages 产出的标准结构。两条路径从此
+            // 走同一个逻辑，渲染完全一致。
+            //
+            // 之前为了避免闪烁（替换整个数组导致 React 重新挂载
+            // MessageBubble）去掉了 re-fetch，代价是内存中的流式消息
+            // 结构与服务端重载后的结构不同——tool 消息的字段、状态、
+            // errorReason 等推导方式不一致，导致"切回来渲染更好看"。
+            //
+            // 现在延迟 500ms 执行：此时用户已经看到流结束的状态，
+            // 替换数组触发的单次 re-render 在延迟后不会造成明显闪烁。
+            //
+            // 如果 re-fetch 失败（网络问题），保留当前内存状态不走进一步，
+            // 下次侧边栏切回来时依靠 getSessionMessages 重新加载。
+            // 用 startTransition 包裹 setSessions，避免 React 的紧急
+            // 更新路径（导致后续交互卡顿）。
+            const fetchSid = sessionId;
+            setTimeout(async () => {
+              try {
+                const rawMessages = await api.getSessionMessages(fetchSid);
+                // v31 (2026-06-29): 主人反馈「停止后切到欢迎页」。
+                // 根因：流结束后 re-fetch，server 偶尔返回空数组（cancel 来不及
+                // 持久化 user_msg / agent 写库还在路上），空数组覆盖内存 messages
+                // → session.messages.length === 0 → ChatView 跳 Empty State
+                // → 用户视觉上"切到了欢迎页"。同样的撕裂也会发生在 server
+                // 因为 schema migration 失败 / DB lock / 任何"返回 0 条"
+                // 的边角情况。
+                //
+                // 修复：内存中已经有消息，但 server 这次返回 0 条 → 不覆盖，
+                // 保留内存数据，下次切回 session 时再尝试 reload。
+                if (
+                  Array.isArray(rawMessages) &&
+                  rawMessages.length === 0
+                ) {
+                  const hasInMemory = sessionsRef.current.some(
+                    (s) => s.id === fetchSid && s.messages.length > 0,
+                  );
+                  if (hasInMemory) {
+                    console.warn(
+                      "[chat] onDone re-fetch returned 0 messages for",
+                      fetchSid,
+                      "but memory has data — preserving in-memory messages",
+                    );
+                    return;
+                  }
+                }
+                const messages = expandTimelineToMessages(rawMessages);
+                startTransition(() => {
+                  setSessions((prev) => prev.map((s) =>
+                    s.id === fetchSid ? { ...s, messages } : s
+                  ));
+                });
+              } catch {
+                // re-fetch failed → 保留内存状态, 下次切回来再拉
+              }
+            }, 500);
+
             // Stream is done — drop the assistant id ref so a stale
             // value can't route chunks into the wrong message if
             // the user fires off a new turn later.
@@ -1737,7 +1901,8 @@ export default function App() {
         style={{
           "--ab-left-w": `${left.width}px`,
           "--ab-right-w": rightOpen ? `${right.width}px` : "0px",
-          "--pane-main-min": `${MAIN_MIN_WIDTH}px`,
+          "--pane-main-min": `${mainMinWidth}px`,
+          "--left-min": `${leftMin}px`,
         } as React.CSSProperties}
       >
         {sidebarOpen && <div className="pane-overlay md:hidden" onClick={() => setSidebarOpen(false)} />}
@@ -1779,6 +1944,7 @@ export default function App() {
               onSendMessage={handleSendMessage}
               onNewChat={handleNewChat}
               onOpenExperts={() => setPage("experts")}
+              onOpenSettings={() => setPage("settings")}
               onUndo={handleUndo}
               onRestore={handleRestore}
               onStop={cancelStream}
