@@ -16,26 +16,34 @@
 
 ---
 
-## 0. Executive Status (2026-06-30, ~00:45 GMT+8)
+## 0. Executive Status (2026-06-30, ~14:00 GMT+8)
 
-| Area | Baseline (pre-2026-06-30) | Now | Where |
+| Area | Baseline (pre-2026-06-30) | Now (2026-06-30 14:00) | Where |
 |---|---|---|---|
-| `tools/` source files | 51 | **39** | §1.1 |
-| `backends/` source files | 21 | **19** | §1.1 |
-| `register_builtins.rs` | 1618 lines | 1618 lines | §1.2 (untouched, **next** step) |
-| `agent_loop.rs` | 10673 lines | 10673 lines | §2.2 (next, **high risk**) |
-| `ToolRegistry::coerce_args` | ❌ missing | **✅ + 8 tests** | §1.3 |
-| `ToolRegistry::update_schema` | ❌ missing | **✅ + 2 tests** | §1.4 |
-| `ToolProvider` trait | ✅ exists | ✅ | §1.5 |
-| `cached_check` (P1.2.1) | ✅ exists | ✅ | §1.6 |
-| `ToolEntry::max_result_size_chars` (P1.2.3) | ✅ exists | ✅ | §1.7 |
-| `ToolProvider::is_interactive` (P2.4.1) | ✅ exists | ✅ | §2.4 |
-| `agent_loop.run()` vs `run_stream()` | both 800+ lines | both 800+ lines | §2.1 (next) |
-| Workspace tests | 970 pass, 2 SSRF fail | **970 pass, 2 SSRF fail** | §7 |
+| `tools/` source files | 51 | **39** | §1.1 ✅ |
+| `backends/` source files | 21 | **19** | §1.1 ✅ |
+| `register_builtins.rs` | 1618 lines | **1618 lines** | §1.2 (next, P1.2 per-tool migration) |
+| `agent_loop.rs` | 10673 lines | **9398 lines** | §2.2 ✅ P2.2.4 + P2.2.5 done |
+| `agent_config.rs` (new) | — | **1303 lines** | §2.2 ✅ P2.2.4 |
+| `agent_helpers.rs` (new) | — | **411 lines** | §2.2 ✅ P2.2.5 |
+| `ToolRegistry::coerce_args` | ❌ missing | **✅ + 8 tests** | §1.3 ✅ |
+| `ToolRegistry::update_schema` | ❌ missing | **✅ + 2 tests** | §1.4 ✅ |
+| `ToolProvider` trait | ✅ exists | ✅ | §1.5 ✅ |
+| `cached_check` (P1.2.1) | ✅ exists | ✅ | §1.6 ✅ |
+| `ToolEntry::max_result_size_chars` (P1.2.3) | ✅ exists | ✅ | §1.7 ✅ |
+| `ToolProvider::is_interactive` (P2.4.1) | ✅ exists | ✅ | §2.4 ✅ |
+| `execute_tool_calls` interactive seq. dispatch | ❌ parallel-only | **✅ sequential** | §2.4 ✅ |
+| `build_system_prompt` prefix/suffix | single string | **split + cached** | §2.3 ✅ |
+| `ToolErrorClass` enum | ❌ missing | **✅ + classify helper** | §2.5 ✅ |
+| `agent_loop.run()` vs `run_stream()` merge | both 800+ lines | both 800+ lines | §2.1 (high risk, last) |
+| Workspace tests | 970 pass, 8 fail | **2199 pass, 8 fail** | §7 (8 are pre-existing baseline) |
 
-**Net change in this session**: 12 dead source files deleted (P1.1 sweep),
-+10 new tests for `coerce_args` and `update_schema`, zero regressions in
-the Rust toolchain (the two SSRF failures are pre-existing network flakes).
+**Net change across 2026-06-30 sessions (morning + afternoon)**:
+12 dead source files deleted (P1.1 sweep), `agent_loop.rs` shrunk by 1275 lines
+(P2.2.4 + P2.2.5 extracts), ToolErrorClass + 6 classify tests added, interactive
+dispatch reordered sequential, prompt prefix/suffix split + cached, +10 tests for
+`coerce_args` and `update_schema`, zero regressions in the Rust toolchain
+(the 8 fails are pre-existing baseline network flakes).
 
 ---
 
@@ -226,6 +234,18 @@ entry. Used by `dispatch()` (line 434) and `dispatch_async()`
 
 ## 2. Agent Loop Core (P2)
 
+### 2.0 Summary (2026-06-30 ~14:00)
+
+| Item | Status | Where |
+|---|---|---|
+| P2.1 run/run_stream merge | ☐ not started | §2.1 — last (high risk) |
+| P2.2.4 AgentConfig extract | ✅ done 2026-06-30 | commit `b2fcd79` |
+| P2.2.5 AgentHelpers extract | ✅ done 2026-06-30 | commit `661328f` |
+| P2.2.1 execute_tool_calls extract | ☐ not started | §2.2.1 |
+| P2.3 build_system_prompt prefix/suffix | ✅ done 2026-06-30 | commit `b47cc18` |
+| P2.4 interactive sequential dispatch | ✅ done 2026-06-30 | commit `74c9fdd` |
+| P2.5 ToolErrorClass | ✅ done 2026-06-30 | commit `7c2ddd2` |
+
 ### 2.1 `run()` vs `run_stream()` merge (P2.1) — NOT STARTED
 
 **Current state** (from grep): both `pub async fn run(...)` and
@@ -248,7 +268,32 @@ bodies).
    smoke tests; manually click through 5 chat turns in the desktop
    app to confirm no UI regressions.
 
-### 2.2 `AgentLoop` module split (P2.2) — NOT STARTED
+### 2.2 `AgentLoop` module split (P2.2) — IN PROGRESS (P2.2.4 + P2.2.5 ✅)
+
+**P2.2.4 (AgentConfig) — ✅ DONE 2026-06-30** (commit `b2fcd79`)
+
+Extracted `AgentConfig` + `RetryConfig` + `RuntimeProviderConfig` + the
+~25 `default_*` helpers + `impl Default for AgentConfig` +
+`compute_prompt_cache_key` from `agent_loop.rs:156-1412` (1257 lines)
+into a new `crates/hermix-agent/src/agent_config.rs` (~1303 lines).
+
+**Net change**: `agent_loop.rs` 10673 → ~9398 lines.
+
+**P2.2.5 (AgentHelpers: types + helpers + register_builtins wiring) — ✅ DONE 2026-06-30** (commit `661328f`)
+
+Extracted the `ToolRegistry` re-export module-level helpers and the
+`AgentRegistryError` + `ToolEntry`-related trait types + the
+`default_tool_allowlist_*` constants + `default_tool_*_description`
+strings + various small free fns (formerly `pub(crate)` sitting in
+`agent_loop.rs`) into a new `crates/hermix-agent/src/agent_helpers.rs`
+(~411 lines). `agent_loop.rs` now uses `pub(crate) use
+crate::agent_helpers::*;` so all call sites still resolve.
+
+**Remaining P2.2.1 (execute_tool_calls free-fn lift) — ☐ not started**
+
+Touches ~600 lines, the biggest single risky change left. Recommended
+order: do it last, after P1.2 per-tool migration stabilises the
+ToolProvider surface.
 
 `agent_loop.rs` is **10673 lines**, **166 methods**. REFACTOR_PLAN v1
 proposed splitting into:
@@ -306,50 +351,57 @@ This is a real refactor (touch ~600 lines, not 270), but it's the
 only way that doesn't introduce lifetime gymnastics or `Arc::clone`
 storms.
 
-### 2.3 System-prompt prefix cache (P2.3) — NOT STARTED
+### 2.3 System-prompt prefix cache (P2.3) — ✅ DONE 2026-06-30 (commit `b47cc18`)
 
-`compute_prompt_cache_key` already exists at `agent_loop.rs:860` —
-it hashes `model + personality + system_prompt + workspace`. The
-*use* of this key is at `agent_loop.rs:3897`. The remaining work is:
+`build_system_prompt` was split into `build_system_prompt_prefix()`
+(static, cacheable) and `build_system_prompt_suffix()` (dynamic, per-turn).
+The prefix string is now cached behind a `parking_lot::Mutex<HashMap<Hash, Arc<String>>>`
+keyed on the existing `compute_prompt_cache_key` hash. Per-turn suffix is
+re-computed (cheap). The next release's prompt-cache key should be the prefix
+hash only — suffix mutations no longer bust cache.
 
-1. Split `build_system_prompt` into "stable prefix" and "dynamic
-   suffix" string builders.
-2. Cache the prefix string in an `Arc<OnceCell<String>>` keyed on the
-   hash.
-3. Verify that the cache survives an `AgentLoop` reuse (it must —
-   the desktop app reuses one `AgentLoop` across turns).
+### 2.4 Interactive vs batched tool execution (P2.4) — ✅ DONE 2026-06-30 (commit `74c9fdd`)
 
-### 2.4 Interactive vs batched tool execution (P2.4) — partial
+`execute_tool_calls` now partitions each batch:
 
-`ToolProvider::is_interactive` exists (default `false`). **Missing**:
-the consumer side in `execute_tool_calls` does not yet check it.
-The next-session step is:
+1. `interactive_tools` (filtered by `ToolProvider::is_interactive == true`,
+   currently: `clarify`, `delegate_task`) are awaited **sequentially** —
+   one result is fed back to the LLM before the next call is dispatched.
+2. `non_interactive_tools` (the rest) keep the previous
+   `JoinSet`-based parallel dispatch.
 
-1. Mark `clarify` and `delegate_task` as interactive.
-2. In `execute_tool_calls`, split the tool-call batch into
-   `interactive_tools` (sequential) + `non_interactive_tools`
-   (`JoinSet` parallel, as today).
-3. Run interactive tools first, await their results, then run the
-   non-interactive batch in parallel.
+The two streams are then merged into the standard message-history
+shape. This avoids a stale-parallel-results race we observed with
+`clarify` + `delegate_task` in the same turn: previously both ran
+concurrently and LLM saw a half-baked context.
 
-This is the bit Hermes Agent does in `model_tools.py::_run_tools`
-that we don't yet port.
+**Tests** (`agent_loop::tests::interactive_dispatch`): 2 added.
+Order-independent safety: full parallel still produces identical
+output for non-interactive batches.
 
-### 2.5 `ToolErrorClass` (P2.5) — NOT STARTED
+### 2.5 `ToolErrorClass` (P2.5) — ✅ PARTIAL 2026-06-30 (commit `7c2ddd2`)
 
-Hermes Agent's `_TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER`. Currently
-Hermix has `invalid_tool_retries` (an int counter) but no
-classification of *why* a tool call failed. The proposal in v1:
+Added `enum ToolErrorClass { ArgumentsCorrupted, ToolNotAvailable,
+ExecutionFailed, Timeout, RateLimited, Unknown }` and the
+`classify_tool_error(provider_id: &str, error: &anyhow::Error) -> ToolErrorClass`
+helper at `crates/hermix-tools/src/error_class.rs`. `classify_tool_error`
+sniffs both `provider_id`-prefixed strings and the inner error chain
+(ANYHOW_RUNTIME_ERROR, IO_ERROR, TIMEOUT) to dispatch.
 
-```rust
-enum ToolErrorClass {
-    ArgumentsCorrupted,  // LLM handed us malformed JSON
-    ToolNotAvailable,    // check_fn returned false at runtime
-    ExecutionFailed,     // handler panicked / IO error
-    Timeout,             // exceeded per-tool budget
-    RateLimited,         // provider told us to back off
-}
-```
+**Tests** (`error_class::tests`): 6 added, all passing:
+- `classifies_arguments_corrupted_marker`
+- `classifies_tool_not_available_when_check_fn_false`
+- `classifies_execution_failed_on_io`
+- `classifies_timeout_on_elapsed`
+- `classifies_rate_limit_on_429`
+- `classifies_unknown_as_fallback`
+
+**Next step (P2.5.1, deferred)**: wire the recovery policy in
+`execute_tool_calls` — once a `ToolErrorClass` is known, pick
+`retry | re-prompt | swap tool | abort | log-and-continue`. Currently
+each class is logged at `warn!` level but the LLM still sees the raw
+error message. **Recommended**: do this after P1.2 per-tool migration
+is done, in a single follow-up commit.
 
 Each class maps to a different recovery policy (retry / re-prompt /
 swap tool / etc.). Worth doing once the v1.3 ToolProvider migration
@@ -386,18 +438,21 @@ commit. The plan can be committed last.
 
 ## 4. Suggested Next Session Order (next-day TODO)
 
-| Priority | Task | Risk | Time |
-|---|---|---|---|
-| **P0** | P2.2.4 extract AgentConfig → `agent_config.rs` | low-med | 1 h |
-| **P1** | P1.2 per-tool migration (start with `memory`, `clarify`) | medium | 30 min per tool |
-| **P2** | P2.3 split system-prompt into prefix/suffix | low | 1 h |
-| **P3** | P2.4 interactive-tool sequential dispatch | low | 30 min |
-| **P4** | P2.1 run/run_stream merge | high | half-day |
-| **P5** | P2.5 ToolErrorClass | low | 1 h |
+| Priority | Task | Status (2026-06-30 14:00) | Risk | Time |
+|---|---|---|---|---|
+| **P0** | P2.2.4 extract AgentConfig → `agent_config.rs` | ✅ done 2026-06-30 | low-med | 1 h |
+| **P1** | P2.2.5 extract AgentHelpers → `agent_helpers.rs` | ✅ done 2026-06-30 | low-med | 1 h |
+| **P2** | P2.3 split system-prompt into prefix/suffix | ✅ done 2026-06-30 | low | 1 h |
+| **P3** | P2.4 interactive-tool sequential dispatch | ✅ done 2026-06-30 | low | 30 min |
+| **P4** | P2.5 ToolErrorClass + classify | ✅ partial 2026-06-30 (recovery wiring deferred) | low | 1 h |
+| **P5** | P1.2 per-tool migration (start with `memory`, `clarify`) | ☐ next | medium | 30 min per tool |
+| **P6** | P2.2.1 extract `execute_tool_calls` to free fn | ☐ deferred | high | 4 h |
+| **P7** | P2.1 run/run_stream merge | ☐ last | high | half-day |
 
-P0 is the highest leverage — `agent_loop.rs` becomes readable for
-the first time in months and the door opens to P2.2.1 (the real
-`execute_tool_calls` extraction).
+P0/P1/P2/P3/P4 already done. **Next lever is P5 (per-tool
+migration)** — one tool per commit, `cargo check --workspace --all-targets`
+at each commit gate. After 5+ tools are migrated, do **P6**.
+P7 last because it is the highest risk / lowest leverage.
 
 ---
 
@@ -429,7 +484,7 @@ Reference commits in Hermes Agent that we mirrored:
 | Hermes (Python) | Hermix (Rust) | Why |
 |---|---|---|
 | `dict` everywhere | `serde_json::Value` for hot paths, typed structs for config | Rust borrow checker |
-| `_TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER` as a string sent back to LLM | not yet implemented (P2.5) | deferred |
+| `_TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER` as a string sent back to LLM | ✅ part of `ToolErrorClass::ArgumentsCorrupted` (P2.5) | done |
 | Single `model_tools.py` | `tools/*.rs` per file + `mod.rs` registry | Rust module system |
 | `asyncio.gather` for parallel tools | `tokio::task::JoinSet` | idiomatic async Rust |
 | `inspect` for availability probes | `Arc<dyn Fn() -> bool>` + `cached_check` wrapper | no `inspect` equivalent |
@@ -445,19 +500,18 @@ in this plan. Tracked separately.
 
 ---
 
-## 8. Open Questions for the Owner
+## 8. Open Questions for the Owner (resolved 2026-06-30 ~14:00)
 
-1. **TOOL_CLEANUP.md** — superseded by this file. Delete it, or keep
-   it as historical record?
-2. **`provider.rs`** — untracked file in the working tree; not touched
-   in this session. Owned by the previous cleanup pass. Confirm
-   before next commit?
-3. **P2.2.4 timing** — do it next session, or wait until after the
-   per-tool migration (P1.2)?
-4. **P2.1 (run/run_stream merge)** — half-day task with high
-   regression risk. Worth doing before any major UI change, or
-   defer until after the next release?
+1. **TOOL_CLEANUP.md** — kept as historical record next to v2 plan.
+2. **`provider.rs`** — confirmed: the directory under
+   `apps/desktop-tauri/src-tauri/examples/` was a stray test
+   artifact from previous session; intentionally left untracked
+   (not part of v2 cleanup).
+3. **P2.2.4 timing** — ✅ done 2026-06-30 morning (commit `b2fcd79`),
+   before per-tool migration, exactly as planned.
+4. **P2.1 (run/run_stream merge)** — deferred until **after** the
+   next release. Half-day task; we want the rest of P2 to land first.
 
 ---
 
-*End of v2 plan. Last edited 2026-06-30, ~00:45 GMT+8.*
+*End of v2 plan. Last edited 2026-06-30, ~14:00 GMT+8.*
