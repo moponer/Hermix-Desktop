@@ -9,7 +9,7 @@ description = "Agent loop engine for Hermix Agent"
 [dependencies]
 hermix-core = { workspace = true }
 hermix-config = { workspace = true }
-hermix-intelligence = { workspace = true, features = ["fastembed"] }
+hermix-intelligence = { workspace = true }
 hermix-focus = { workspace = true }
 hermix-tools = { workspace = true }
 tokio = { workspace = true }

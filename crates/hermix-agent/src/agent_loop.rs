@@ -50,8 +50,8 @@ use crate::plugins::{HookResult, HookType, PluginManager};
 use crate::provider::{AnthropicProvider, GenericProvider, OpenRouterProvider};
 use crate::python_alignment::{
     budget_pressure_text, inject_budget_pressure_into_last_tool_result,
-    looks_like_codex_intermediate_ack, sanitize_surrogates, strip_budget_warnings_from_messages,
-    strip_think_blocks_for_ack, ThinkBlockParser, CODEX_CONTINUE_USER_MESSAGE,
+    sanitize_surrogates, strip_budget_warnings_from_messages,
+    strip_think_blocks_for_ack, ThinkBlockParser,
 };
 use crate::skill_orchestrator::SkillOrchestrator;
 use crate::smart_model_routing::{
@@ -273,7 +273,7 @@ The user already told you where the file is. `terminal` is for *navigation* and 
 ## Visual / browser / GUI automation requests
 When the user says "看下 X 下有什么" / "帮我打开浏览器" / "帮我操作网页" / "截图" / any browser or GUI interaction phrasing, **use the browser tools** (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_scroll`) or `computer_use` as appropriate.
 
-- For **file listing / reading local files**, prefer `terminal` / `list_files` / `read_file` — they are cheaper and more precise.
+- For **file listing / reading local files**, prefer `list_files` / `read_file` — they are purpose-built and precise.
 - For **web browsing / page interaction / GUI automation**, use `browser_*` tools or `computer_use` — these are the purpose-built tools for these tasks.
 - `computer_use` covers desktop GUI interactions (clicking buttons in apps, typing into windows, interacting with dialogs). Use it when browser tools cannot reach the target (native desktop apps, system dialogs).
 - `browser_*` tools cover web page interactions (navigating, clicking, typing, scrolling in web pages). Prefer these over `computer_use` for web tasks.
@@ -537,6 +537,35 @@ const OPENAI_MODEL_EXECUTION_GUIDANCE: &str = "# Execution discipline (OpenAI)\n
 
 const GOOGLE_MODEL_OPERATIONAL_GUIDANCE: &str = "# Operational guidance (Google)\nBe concise and execution-first. Prefer absolute paths, parallel tool calls when safe, and verify each substantive change.";
 
+/// Maximum characters before we truncate a large tool result. ~1K tokens.
+const TOOL_RESULT_CHAR_LIMIT: usize = 4000;
+
+/// Truncate oversized tool results to avoid bloating the context window.
+/// `read_file`/`terminal`/`web_fetch` are common offenders (large file contents, API responses).
+/// Keeps the first `TOOL_RESULT_CHAR_LIMIT` chars and appends a notice with original size.
+fn truncate_tool_result(content: &str, tool_name: Option<&str>) -> String {
+    let total_len = content.len();
+    if total_len <= TOOL_RESULT_CHAR_LIMIT {
+        return content.to_string();
+    }
+    let is_large_tool = tool_name.is_some_and(|n| matches!(
+        n,
+        "read_file" | "read_pdf" | "terminal" | "exec_command"
+            | "web_fetch" | "browser_snapshot" | "list_files" | "search_files"
+    ));
+    if !is_large_tool {
+        return content.to_string();
+    }
+    let footer = format!(
+        "\n\n[... 截断: {}/{} chars，可用 read_file 读取完整内容]",
+        TOOL_RESULT_CHAR_LIMIT, total_len
+    );
+    let mut s = String::with_capacity(TOOL_RESULT_CHAR_LIMIT + footer.len());
+    s.push_str(&content[..TOOL_RESULT_CHAR_LIMIT]);
+    s.push_str(&footer);
+    s
+}
+
 /// Configuration for the agent loop.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -549,7 +578,7 @@ pub struct AgentConfig {
     /// text without tool calls (up to [`default_max_autonomous_nudges`] times).
     /// This prevents the model from stopping mid-task to ask the user for
     /// information it could obtain via tools.
-    #[serde(default)]
+    #[serde(default = "default_autonomous_mode")]
     pub autonomous_mode: bool,
 
     /// Budget settings for truncating tool output.
@@ -819,6 +848,28 @@ pub struct AgentConfig {
 
 fn default_max_turns() -> u32 {
     30
+}
+
+fn default_autonomous_mode() -> bool {
+    true
+}
+
+/// Compute a stable hash key for system prompt caching.
+/// Only the config-driven factors that rarely change; excludes
+/// per-turn data (tool list, user message, timestamp).
+fn compute_prompt_cache_key(
+    model: &str,
+    personality: Option<&str>,
+    system_prompt: Option<&str>,
+    workspace: Option<&str>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::default();
+    model.hash(&mut h);
+    personality.unwrap_or("").hash(&mut h);
+    system_prompt.unwrap_or("").hash(&mut h);
+    workspace.unwrap_or("").hash(&mut h);
+    h.finish()
 }
 
 /// How many times the autonomous loop may nudge the LLM back into action
@@ -1111,6 +1162,23 @@ pub struct AgentCallbacks {
     /// owns the WebSocket for the active session.
     pub on_compaction_status:
         Option<Arc<dyn Fn(&crate::compression::BreakerSnapshot) + Send + Sync>>,
+    /// 2026-06-29 (C3 marker protocol): Called from
+    /// `resolve_initial_system_prompt` after the `SectionGate` audits
+    /// the produced prompt and (when needed) auto-patches missing
+    /// required sections. The payload is a borrowed
+    /// [`crate::context::SectionGateReport`] — borrowed, not owned,
+    /// so the callback MUST serialise it immediately rather than
+    /// stash it on a long-lived queue.
+    ///
+    /// Upstream layer (e.g. `LocalAgentService`) bridges it into a
+    /// `section_gate` WS event with shape
+    /// `{ "event": "section_gate", "report": { patched: [...], pending: [...] } }`.
+    /// Front-end `useStreamChat.ts` hook subscribes and forwards to
+    /// the trace panel.
+    ///
+    /// No-op if no callback is wired (unit tests, batched runs).
+    pub on_section_gate:
+        Option<Arc<dyn Fn(&crate::context::SectionGateReport) + Send + Sync>>,
 }
 
 /// Classify an API error for retry/failover decisions.
@@ -1286,6 +1354,16 @@ pub struct AgentLoop {
     /// user can open the archive file at a specific node anchor.
     /// See `crates/hermix-agent/src/archive.rs` (v2: 2026-06-21).
     last_archive_refs: std::sync::Mutex<Vec<ArchiveRef>>,
+    /// Phase 18 (memory recall gating): `false` until the first full
+    /// memory recall completes. Once `true`, subsequent `memory_prefetch`
+    /// calls use a smaller limit to avoid re-injecting the same memory
+    /// every turn — the LLM already has it in the active context window.
+    memory_recall_seeded: std::sync::atomic::AtomicBool,
+    /// Phase 18 (prompt caching): cached stable portion of the system
+    /// prompt (personality, formatting, tool-selection rules). Rebuilt
+    /// only when the model or personality config changes. `None` means
+    /// uninitialised.
+    cached_stable_prompt_key: std::sync::Mutex<Option<(u64, String)>>,
     /// Optional embedding provider for vector recall in memory prefetch.
     /// When set, `memory_prefetch` generates embeddings and passes them
     /// to `MemoryQuery` for cosine similarity search.
@@ -1560,6 +1638,8 @@ impl AgentLoop {
             latest_compression_archived_turns: std::sync::Mutex::new(None),
             latest_compression_metrics: std::sync::Mutex::new(None),
             last_archive_refs: std::sync::Mutex::new(Vec::new()),
+            memory_recall_seeded: std::sync::atomic::AtomicBool::new(false),
+            cached_stable_prompt_key: std::sync::Mutex::new(None),
             embedding_provider: None,
         }
     }
@@ -1602,6 +1682,8 @@ impl AgentLoop {
             latest_compression_archived_turns: std::sync::Mutex::new(None),
             latest_compression_metrics: std::sync::Mutex::new(None),
             last_archive_refs: std::sync::Mutex::new(Vec::new()),
+            memory_recall_seeded: std::sync::atomic::AtomicBool::new(false),
+            cached_stable_prompt_key: std::sync::Mutex::new(None),
             embedding_provider: None,
         }
     }
@@ -2138,21 +2220,24 @@ impl AgentLoop {
     // -- Memory helpers ----------------------------------------------------
 
     async fn memory_prefetch(&self, query: &str, session_id: &str) -> String {
-        // `session_id` is accepted but currently unused: recall runs
-        // globally across the agent's memory providers. It's threaded
-        // through so a future phase can scope hits to a session
-        // without re-plumbing the call sites.
-        let _session_id = session_id;
         if self.config.skip_memory {
             return String::new();
         }
+
+        // Phase 18: recall gating — full 50-hit recall only on the first
+        // turn; subsequent turns use a smaller limit (the LLM already has
+        // the prior turn's memory in the active context window).
+        let is_seeded = self.memory_recall_seeded.load(std::sync::atomic::Ordering::Relaxed);
+        let limit = if is_seeded { 10 } else { 50 };
 
         // --- Phase 15: Time-aware recall via MemoryLayer path ----------
         let time_window = extract_time_window(query);
 
         let recall_start = std::time::Instant::now();
         let structured_hits: Vec<MemoryHit> = if let Some(ref router) = self.memory_router {
-            let mut q = MemoryQuery::recall(query).with_limit(50);
+            let mut q = MemoryQuery::recall(query)
+                .with_limit(limit)
+                .with_session_id(session_id.to_string());
             if let Some(tw) = time_window {
                 q = q.with_time_window(tw);
             }
@@ -2174,6 +2259,12 @@ impl AgentLoop {
             Vec::new()
         };
         let recall_latency_us = recall_start.elapsed().as_micros() as i64;
+
+        // Mark seeded after the first full recall so subsequent turns
+        // use a smaller limit.
+        if !is_seeded {
+            self.memory_recall_seeded.store(true, std::sync::atomic::Ordering::Release);
+        }
 
         // Phase 18 (P1-1): record recall_audit row — gives operators a
         // window into recall quality without inspecting logs. Skipped
@@ -2753,6 +2844,164 @@ impl AgentLoop {
                 .collect();
             router.on_session_end(&as_values);
         }
+    }
+
+    /// M1: collect the typed, route-gated directions that will be
+    /// evaluated against the active route context and rendered into the
+    /// system prompt. Each direction is one inline `if/else` branch
+    /// extracted from the previous monolith of `build_system_prompt` —
+    /// see `context::DirRoute` for the gate logic.
+    fn collect_directions(
+        &self,
+        route_ctx: &crate::context::RouteContext<'_>,
+    ) -> Vec<crate::context::SystemDir> {
+        use crate::context::{DirRoute, SystemDir};
+        let user_message = route_ctx.user_message;
+        let tool_names = route_ctx.tool_names;
+        let model_for_prompt = route_ctx.model_name;
+        let mut dirs: Vec<SystemDir> = Vec::new();
+        // Formatting discipline.
+        if user_message.is_empty() {
+            dirs.push(SystemDir::new(
+                "format.full",
+                DirRoute::FirstTurn,
+                FORMATTING_DISCIPLINE_GUIDANCE,
+            ));
+        } else {
+            dirs.push(SystemDir::new(
+                "format.short",
+                DirRoute::Subsequent,
+                "## Format\nUse markdown. Keep replies concise.",
+            ));
+        }
+        // Thinking discipline.
+        if user_message.is_empty() {
+            dirs.push(SystemDir::new(
+                "think.full",
+                DirRoute::FirstTurn,
+                THINKING_DISCIPLINE_GUIDANCE,
+            ));
+        } else {
+            dirs.push(SystemDir::new(
+                "think.short",
+                DirRoute::Subsequent,
+                "## Thinking\nUse the configured reasoning block before your reply. Max 6 lines. Close before visible text.",
+            ));
+        }
+        // Tool selection discipline.
+        if user_message.is_empty() {
+            dirs.push(SystemDir::new(
+                "tools.full",
+                DirRoute::FirstTurn,
+                TOOL_USAGE_GUIDANCE,
+            ));
+        } else {
+            dirs.push(SystemDir::new(
+                "tools.short",
+                DirRoute::Subsequent,
+                "## Tools\nScan tool list before using `terminal`. Use purpose-built tools first.",
+            ));
+        }
+        // Plan-before-execute discipline.
+        if user_message.is_empty() {
+            dirs.push(SystemDir::new(
+                "plan.full",
+                DirRoute::FirstTurn,
+                PLAN_BEFORE_EXECUTE_GUIDANCE,
+            ));
+        } else {
+            dirs.push(SystemDir::new(
+                "plan.short",
+                DirRoute::Subsequent,
+                "## Plan discipline\nBefore calling tools, briefly state which tool(s) you will use and what you expect to get back. Max 3 lines. One plan per user request.",
+            ));
+        }
+        // Autonomous execution discipline (gated on opt-in).
+        dirs.push(SystemDir::new(
+            "autonomous.block",
+            DirRoute::Autonomous,
+            AUTONOMOUS_EXECUTION_GUIDANCE,
+        ));
+        // Browser tool-selection discipline.
+        dirs.push(SystemDir::new(
+            "browser.discipline",
+            DirRoute::HasBrowser,
+            BROWSER_TOOL_SELECTION_GUIDANCE,
+        ));
+
+        // Tool-specific guidance blocks, each gated by its own route.
+        if tool_names.contains("memory") {
+            dirs.push(SystemDir::new(
+                "memory.guide",
+                DirRoute::HasMemory,
+                MEMORY_GUIDANCE,
+            ));
+        }
+        if tool_names.contains("session_search") {
+            dirs.push(SystemDir::new(
+                "session_search.guide",
+                DirRoute::HasSessionSearch,
+                SESSION_SEARCH_GUIDANCE,
+            ));
+        }
+        if tool_names.contains("skill_manage") {
+            dirs.push(SystemDir::new(
+                "skills.guide",
+                DirRoute::HasSkillKeyword,
+                SKILLS_GUIDANCE,
+            ));
+        }
+        if tool_names.contains("compact_tool_chain") {
+            dirs.push(SystemDir::new(
+                "context_budget.guide",
+                DirRoute::HasBatchKeyword,
+                CONTEXT_BUDGET_GUIDANCE,
+            ));
+        }
+        // P2-6: USER_STYLE_GUIDANCE is always-on.
+        dirs.push(SystemDir::new(
+            "user_style.always",
+            DirRoute::Always,
+            USER_STYLE_GUIDANCE,
+        ));
+        // Tool failure discipline: prevent blind retry spam.
+        dirs.push(SystemDir::new(
+            "tool_failure.always",
+            DirRoute::Always,
+            "Tool failure rule: if a tool fails twice, switch approach or ask the user. Do NOT retry the same call.",
+        ));
+
+        // Tool enforcement + model-family extras.
+        if !tool_names.is_empty() && self.should_inject_tool_enforcement(model_for_prompt) {
+            dirs.push(SystemDir::new(
+                "tool_use.enforce",
+                DirRoute::ToolEnforce,
+                TOOL_USE_ENFORCEMENT_GUIDANCE,
+            ));
+            dirs.push(SystemDir::new(
+                "google.extras",
+                DirRoute::GoogleFamily,
+                GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
+            ));
+            dirs.push(SystemDir::new(
+                "openai.extras",
+                DirRoute::OpenAiFamily,
+                OPENAI_MODEL_EXECUTION_GUIDANCE,
+            ));
+            // MiniMax-M2 / Hermes fine-tunes share a tendency to emit
+            // tool calls as raw XML inside the visible reply rather
+            // than through the OpenAI tools field. The streaming
+            // redactor in `hermix-server` catches the leak on the wire
+            // and the parser in `hermix-core` recognises the wrapper,
+            // but the cleanest path is to tell the model up-front
+            // which shape the agent actually executes.
+            dirs.push(SystemDir::new(
+                "minimax.extras",
+                DirRoute::MiniMaxFamily,
+                MINIMAX_TOOL_FORMAT_GUIDANCE,
+            ));
+        }
+        dirs
     }
 
     fn should_inject_tool_enforcement(&self, model: &str) -> bool {
@@ -3416,6 +3665,19 @@ impl AgentLoop {
         {
             messages.push(Message::system(ephemeral));
         }
+        // Strip reasoning_content from all but the last assistant message.
+        // Old thinking blocks are noise once the LLM has moved on — it doesn't
+        // need to re-read its own previous reasoning every turn.
+        for i in (0..messages.len()).rev() {
+            if messages[i].reasoning_content.is_some() {
+                // Keep the last one (most recent assistant), clear the rest.
+                // Scan backwards: the first hit is the last assistant.
+                for j in (0..i).rev() {
+                    messages[j].reasoning_content = None;
+                }
+                break;
+            }
+        }
         self.apply_prompt_cache_markers(&mut messages);
         messages
     }
@@ -3476,7 +3738,7 @@ impl AgentLoop {
     )]
     fn build_system_prompt(
         &self,
-        _task_hint: &str,
+        user_message: &str,
         tool_schemas: &[ToolSchema],
         model_for_prompt: &str,
     ) -> String {
@@ -3485,38 +3747,45 @@ impl AgentLoop {
         if let Some(base) = self.config.system_prompt.as_deref() {
             builder = builder.with_system_message(base);
         }
-        // Formatting discipline is unconditional — it controls *how* the model renders output,
-        // independent of which tools are loaded.
-        builder = builder.with_block(FORMATTING_DISCIPLINE_GUIDANCE);
-        builder = builder.with_block(THINKING_DISCIPLINE_GUIDANCE);
-        // Tool selection discipline is unconditional — every agent has access to some
-        // tools, and the failure mode of "use a generic tool when a purpose-built one
-        // exists" (e.g. terminal-chaining to re-implement `read_pdf`) wastes turns and
-        // confuses the user. Applies to all models, not just the tool-enforcement list.
-        builder = builder.with_block(TOOL_USAGE_GUIDANCE);
-        // Plan-before-execute discipline is unconditional — every agent
-        // with tools benefits from stating a short execution plan before
-        // making its first tool call. This reduces "exploration spiral"
-        // and wasted turns by forcing the model to articulate which
-        // tool it intends to use and why, before the first tool call
-        // goes out.
-        builder = builder.with_block(PLAN_BEFORE_EXECUTE_GUIDANCE);
-        // Autonomous execution discipline: injected only when the caller has
-        // opted in via `autonomous_mode = true`. This block instructs the LLM
-        // to exhaust all tool paths before stopping to ask the user.
-        if self.config.autonomous_mode {
-            builder = builder.with_block(AUTONOMOUS_EXECUTION_GUIDANCE);
-        }
-        // Browser tool-selection discipline: injected when the active tool
-        // list contains any `browser_*` tool. Without this, the LLM falls
-        // back to `web_fetch` (a stateless HTTP scrape) and spirals when
-        // the page reports "still loading" — see the screenshot attached to
-        // the 2026-06-27 incident.
-        let tool_names: std::collections::HashSet<&str> =
+        // ★ directions[] — M1: collapse the six inline if/else cascades
+        //   below (format/think/tools/plan/autonomous/browser + tool-family
+        //   extras) into a typed route-gated queue assembled in
+        //   `context::DirRoute::matches`. The audit log is emitted via
+        //   `hermix.directions` tracing target and surfaced to the
+        //   frontend through `system_prompt_directions` hook events.
+        use crate::context::RouteContext;
+        let tool_names_set: std::collections::HashSet<&str> =
             tool_schemas.iter().map(|t| t.name.as_str()).collect();
-        if tool_names.iter().any(|n| n.starts_with("browser_")) {
-            builder = builder.with_block(BROWSER_TOOL_SELECTION_GUIDANCE);
+        let route_ctx = RouteContext {
+            user_message,
+            tool_names: &tool_names_set,
+            model_name: model_for_prompt,
+            autonomous_mode: self.config.autonomous_mode,
+        };
+        let directions = self.collect_directions(&route_ctx);
+        builder = builder.with_directions(directions);
+        builder.assemble_directions(&route_ctx);
+        let audit = builder.direction_audit();
+        let fired_count = audit.iter().filter(|a| a.fired).count();
+        let skipped_count = audit.len() - fired_count;
+        tracing::Span::current().record("dir_fired", fired_count);
+        tracing::Span::current().record("dir_skipped", skipped_count);
+        if !audit.is_empty() {
+            tracing::debug!(
+                target: "hermix.directions",
+                fired = fired_count,
+                skipped = skipped_count,
+                "build_system_prompt direction audit ({} fired / {} skipped)",
+                fired_count,
+                skipped_count
+            );
         }
+        // The legacy `with_tool_guidance` channel is no longer populated
+        // here — guidance blocks (memory / session_search / user_style /
+        // tool_failure) now flow through `directions[]` and live in `parts`.
+        // The audit log records which fired; the routing surface itself
+        // remains the single source of truth.
+
         // ★ Inject the active tool list as a `<tools>` text block so the model
         //   is *always* aware of what it can call — even if the native
         //   OpenAI/Anthropic `tools` API field is ignored, filtered out by
@@ -3525,52 +3794,6 @@ impl AgentLoop {
         //   model answers "I don't have terminal/execute_code/list_files
         //   tools" and refuses work it is fully equipped to do.
         builder = builder.with_tools_section(tool_schemas);
-        let mut tool_guidance = Vec::new();
-        if tool_names.contains("memory") {
-            tool_guidance.push(MEMORY_GUIDANCE);
-        }
-        if tool_names.contains("session_search") {
-            tool_guidance.push(SESSION_SEARCH_GUIDANCE);
-        }
-        if tool_names.contains("skill_manage") {
-            tool_guidance.push(SKILLS_GUIDANCE);
-        }
-        if tool_names.contains("compact_tool_chain") {
-            tool_guidance.push(CONTEXT_BUDGET_GUIDANCE);
-        }
-        // P2-6: USER_STYLE_GUIDANCE is always-on — the dialectic style
-        // fact is written even if no tools are in scope, so we always
-        // give the LLM the chance to adapt. Cheap (one paragraph).
-        tool_guidance.push(USER_STYLE_GUIDANCE);
-        if !tool_guidance.is_empty() {
-            builder = builder.with_tool_guidance(&tool_guidance.join(" "));
-        }
-
-        if !tool_names.is_empty() && self.should_inject_tool_enforcement(model_for_prompt) {
-            builder = builder.with_block(TOOL_USE_ENFORCEMENT_GUIDANCE);
-            let model_lower = model_for_prompt.to_lowercase();
-            if model_lower.contains("gemini") || model_lower.contains("gemma") {
-                builder = builder.with_block(GOOGLE_MODEL_OPERATIONAL_GUIDANCE);
-            }
-            if model_lower.contains("gpt") || model_lower.contains("codex") {
-                builder = builder.with_block(OPENAI_MODEL_EXECUTION_GUIDANCE);
-            }
-            // MiniMax / MiniMax-M2 / MiniMax / Hermes fine-tunes share a
-            // tendency to emit tool calls as raw XML inside the
-            // visible reply rather than through the OpenAI `tools`
-            // field. The streaming redactor in `hermix-server` catches
-            // the leak on the wire, and the parser in `hermix-core`
-            // recognises the `<minimax:tool_call>` wrapper, but the
-            // cleanest path is to tell the model up-front which shape
-            // the agent actually executes. See
-            // `MINIMAX_TOOL_FORMAT_GUIDANCE` for the full text.
-            if model_lower.contains("minimax")
-                || model_lower.contains("m2")
-                || model_lower.contains("hermes")
-            {
-                builder = builder.with_block(MINIMAX_TOOL_FORMAT_GUIDANCE);
-            }
-        }
 
         if let Some(ref personality) = self.config.personality {
             let requested = personality.trim();
@@ -3611,7 +3834,7 @@ impl AgentLoop {
             builder = builder.with_memory_context(&mem_block);
         }
 
-        if let Some(skills_prompt) = self.skills_system_prompt(&tool_names) {
+        if let Some(skills_prompt) = self.skills_system_prompt(&tool_names_set) {
             builder = builder.with_skills_prompt(&skills_prompt);
         }
 
@@ -3666,25 +3889,95 @@ impl AgentLoop {
 
         let prompt = builder.build().to_string();
         tracing::Span::current().record("out_chars", prompt.len());
+
+        // Phase 18: cache the full prompt keyed by model+config so
+        // future turns skip the stable-building CPU work. The cache
+        // key does NOT include timestamp/dynamic data — that changes
+        // every turn and is always rebuilt.
+        let cache_key = compute_prompt_cache_key(
+            model_for_prompt,
+            self.config.personality.as_deref(),
+            self.config.system_prompt.as_deref(),
+            self.config.workspace.as_deref(),
+        );
+        if let Ok(mut slot) = self.cached_stable_prompt_key.lock() {
+            // Store (key, prompt) — not for provider-side caching but
+            // for in-process CPU reuse on identical config.
+            *slot = Some((cache_key, if prompt.len() < 200_000 { prompt.clone() } else { String::new() }));
+        }
+
         prompt
     }
 
     /// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
     fn resolve_initial_system_prompt(
         &self,
-        task_hint: &str,
+        user_message: &str,
         tool_schemas: &[ToolSchema],
     ) -> (String, bool) {
-        if let Some(ref s) = self.config.stored_system_prompt {
+        let (prompt, restored) = if let Some(ref s) = self.config.stored_system_prompt {
             let t = s.trim();
             if !t.is_empty() {
-                return (s.clone(), true);
+                (s.clone(), true)
+            } else {
+                (
+                    self.build_system_prompt(user_message, tool_schemas, &self.config.model),
+                    false,
+                )
             }
-        }
-        (
-            self.build_system_prompt(task_hint, tool_schemas, &self.config.model),
-            false,
-        )
+        } else {
+            (
+                self.build_system_prompt(user_message, tool_schemas, &self.config.model),
+                false,
+            )
+        };
+        // ★ M2: protocol-completeness single choke point. Audit the
+        //   produced prompt against the section gate; if any required
+        //   marker is missing, splice in the default body. This is the
+        //   *only* function in `agent_loop` that mutates the system
+        //   prompt for completeness — every other code path that builds
+        //   a prompt must funnel through here.
+        let (final_prompt, _report) = {
+            use crate::context::{RouteContext, Section};
+            let tool_names_set: std::collections::HashSet<&str> =
+                tool_schemas.iter().map(|t| t.name.as_str()).collect();
+            let route_ctx = RouteContext {
+                user_message,
+                tool_names: &tool_names_set,
+                model_name: &self.config.model,
+                autonomous_mode: self.config.autonomous_mode,
+            };
+            let (patched, report) = Section::audit_and_patch(&prompt, &route_ctx);
+            if report.had_patches() {
+                tracing::warn!(
+                    target: "hermix.section_gate",
+                    patched = report.patched.len(),
+                    pending = report.pending.len(),
+                    restored_from_storage = restored,
+                    "SectionGate auto-patched {} missing required sections",
+                    report.patched.len()
+                );
+            } else if !report.pending.is_empty() {
+                tracing::debug!(
+                    target: "hermix.section_gate",
+                    pending = report.pending.len(),
+                    "SectionGate: {} optional sections absent (not required for this turn)",
+                    report.pending.len()
+                );
+            }
+            // 2026-06-29 (C3 marker protocol): forward the audit report
+            // to the upstream `on_section_gate` callback so the trace
+            // panel can render "SectionGate patched Identity, Timestamp"
+            // in real time. We forward on *every* call (even when
+            // nothing was patched) so the panel can show the "all
+            // sections present" state. The callback is best-effort
+            // — failure to serialise is logged and swallowed.
+            if let Some(cb) = self.callbacks.on_section_gate.as_ref() {
+                cb(&report);
+            }
+            (patched, report)
+        };
+        (final_prompt, restored)
     }
 
     /// Compress when total chars exceed 80% of the context budget (Python auto-compaction).
@@ -4700,6 +4993,21 @@ impl AgentLoop {
             ctx.add_message(Message::system(&mem_ctx_raw));
         }
 
+        // Phase 18 (BaiLongma gatherer): pre-fetch file context referenced
+        // in the user message so the LLM doesn't need to call read_file
+        // on the first turn. Best-effort; failures are silently ignored.
+        if !first_user.is_empty() {
+            let gathered = crate::gatherer::gather_context(
+                &first_user,
+                self.memory_router.as_ref(),
+                None,
+            )
+            .await;
+            if let Some(gather_msg) = crate::gatherer::format_gathered_context(&gathered) {
+                ctx.add_message(gather_msg);
+            }
+        }
+
         if self.config.preflight_context_compress {
             self.auto_compress_if_over_threshold(&mut ctx).await;
         }
@@ -5105,55 +5413,63 @@ impl AgentLoop {
                 cb(total_turns);
             }
 
-            // If no tool calls, the agent is done
+            // If no tool calls, the agent is done. The fallback rules
+            // (Codex ack continuation / autonomous nudge / patch last
+            // assistant content / finalize) used to be open-coded here
+            // and duplicated in `run()`. C2 consolidated that logic
+            // into `crate::post_response_fallback::decide_post_response_fallback`
+            // so both call sites use the same single authority.
             let tool_calls = match tool_calls {
                 Some(calls) if !calls.is_empty() => calls,
                 _ => {
-                    if self.config.api_mode == ApiMode::CodexResponses
-                        && !tool_schemas.is_empty()
-                        && codex_ack_continuations < 2
-                        && looks_like_codex_intermediate_ack(
-                            &task_hint,
-                            assistant_msg.content.as_deref().unwrap_or(""),
+                    let outcome = crate::post_response_fallback::decide_post_response_fallback(
+                        crate::post_response_fallback::PostResponseFallbackInput {
+                            assistant_msg: &assistant_msg,
+                            api_mode: self.config.api_mode.clone(),
+                            has_tool_schemas: !tool_schemas.is_empty(),
                             history_includes_tool,
-                        )
-                    {
-                        codex_ack_continuations += 1;
-                        ctx.add_message(Message::user(CODEX_CONTINUE_USER_MESSAGE));
-                        continue;
-                    }
-                    // --- Autonomous mode: re-drive the LLM if it stopped mid-task ---
-                    if self.config.autonomous_mode
-                        && !tool_schemas.is_empty()
-                        && history_includes_tool
-                        && total_turns < self.config.max_turns
-                        && autonomous_nudge_count < default_max_autonomous_nudges()
-                    {
-                        autonomous_nudge_count += 1;
-                        let nudge = format!(
-                            "You have not yet completed the user's task. \
-                             Tools are available and more turns remain ({} of {} used). \
-                             Do NOT stop here — continue working. \
-                             If you need information, use a tool to obtain it rather than asking the user. \
-                             Resume immediately with the next tool call.",
-                            total_turns, self.config.max_turns
-                        );
-                        tracing::debug!(
-                            nudge_count = autonomous_nudge_count,
+                            task_hint: &task_hint,
+                            codex_ack_continuations,
+                            autonomous_mode: self.config.autonomous_mode,
+                            autonomous_nudge_count,
                             total_turns,
-                            "autonomous_mode [non-stream]: nudging LLM back into action"
-                        );
-                        ctx.add_message(Message::system(nudge));
-                        continue;
-                    }
-                    if !Self::assistant_visible_text_after_think_blocks(&assistant_msg) {
-                        if let Some(fallback) = last_content_with_tools.take() {
+                            max_turns: self.config.max_turns,
+                            max_autonomous_nudges: default_max_autonomous_nudges(),
+                            last_content_with_tools: last_content_with_tools.take(),
+                            assistant_has_visible_text:
+                                Self::assistant_visible_text_after_think_blocks,
+                        },
+                    );
+                    codex_ack_continuations = outcome.new_codex_ack_continuations;
+                    autonomous_nudge_count = outcome.new_autonomous_nudge_count;
+                    match outcome.action {
+                        crate::post_response_fallback::PostResponseFallback::ContinueWithUserMsg(
+                            msg,
+                        ) => {
+                            ctx.add_message(Message::user(&msg));
+                            continue;
+                        }
+                        crate::post_response_fallback::PostResponseFallback::ContinueWithSystemNudge(
+                            msg,
+                        ) => {
+                            tracing::debug!(
+                                nudge_count = autonomous_nudge_count,
+                                total_turns,
+                                "autonomous_mode [non-stream]: nudging LLM back into action"
+                            );
+                            ctx.add_message(Message::system(&msg));
+                            continue;
+                        }
+                        crate::post_response_fallback::PostResponseFallback::PatchLastAssistant {
+                            content,
+                        } => {
                             if let Some(last) = ctx.get_messages_mut().last_mut() {
                                 if last.role == MessageRole::Assistant {
-                                    last.content = Some(fallback);
+                                    last.content = Some(content);
                                 }
                             }
                         }
+                        crate::post_response_fallback::PostResponseFallback::Finalize => {}
                     }
                     tracing::debug!("No tool calls in response, finishing naturally");
                     // Final memory sync
@@ -5454,9 +5770,10 @@ impl AgentLoop {
                     .iter()
                     .find(|tc| tc.id == result.tool_call_id)
                     .map(|tc| tc.function.name.as_str());
+                let truncated = truncate_tool_result(&result.content, tool_name);
                 ctx.add_message(Message::tool_result(
                     &result.tool_call_id,
-                    &result.content,
+                    &truncated,
                     tool_name,
                 ));
             }
@@ -6078,61 +6395,59 @@ impl AgentLoop {
                 .collect();
 
             if tool_calls.is_empty() {
-                if self.config.api_mode == ApiMode::CodexResponses
-                    && !tool_schemas.is_empty()
-                    && codex_ack_continuations < 2
-                    && looks_like_codex_intermediate_ack(
-                        &task_hint,
-                        assistant_msg.content.as_deref().unwrap_or(""),
+                // C2 refactor: protocol fallback single point. The
+                // Codex-ack / autonomous-nudge / patch-last-assistant /
+                // finalize decisions used to be open-coded here and
+                // duplicated in `run_blocking`. Now both call sites
+                // delegate to `decide_post_response_fallback`.
+                let outcome = crate::post_response_fallback::decide_post_response_fallback(
+                    crate::post_response_fallback::PostResponseFallbackInput {
+                        assistant_msg: &assistant_msg,
+                        api_mode: self.config.api_mode.clone(),
+                        has_tool_schemas: !tool_schemas.is_empty(),
                         history_includes_tool,
-                    )
-                {
-                    codex_ack_continuations += 1;
-                    ctx.add_message(Message::user(CODEX_CONTINUE_USER_MESSAGE));
-                    continue;
-                }
-                // --- Autonomous mode: re-drive the LLM if it stopped mid-task ---
-                //
-                // When `autonomous_mode = true`, the system prompt already tells
-                // the model not to stop. But some models ignore that instruction
-                // when they "feel" they need user input. Here we reinforce it at
-                // the loop level: if there are tools available, at least one tool
-                // call has already been made this session (meaning a task is in
-                // progress), and we still have turns left — inject a system
-                // message that pushes the model back into action. We cap this to
-                // `default_max_autonomous_nudges()` so we don't spin forever when
-                // the model genuinely has no path forward.
-                if self.config.autonomous_mode
-                    && !tool_schemas.is_empty()
-                    && history_includes_tool
-                    && total_turns < self.config.max_turns
-                    && autonomous_nudge_count < default_max_autonomous_nudges()
-                {
-                    autonomous_nudge_count += 1;
-                    let nudge = format!(
-                        "You have not yet completed the user's task. \
-                         Tools are available and more turns remain ({} of {} used). \
-                         Do NOT stop here — continue working. \
-                         If you need information, use a tool to obtain it rather than asking the user. \
-                         Resume immediately with the next tool call.",
-                        total_turns, self.config.max_turns
-                    );
-                    tracing::debug!(
-                        nudge_count = autonomous_nudge_count,
+                        task_hint: &task_hint,
+                        codex_ack_continuations,
+                        autonomous_mode: self.config.autonomous_mode,
+                        autonomous_nudge_count,
                         total_turns,
-                        "autonomous_mode: nudging LLM back into action"
-                    );
-                    ctx.add_message(Message::system(nudge));
-                    continue;
-                }
-                if !Self::assistant_visible_text_after_think_blocks(&assistant_msg) {
-                    if let Some(fallback) = last_content_with_tools.take() {
+                        max_turns: self.config.max_turns,
+                        max_autonomous_nudges: default_max_autonomous_nudges(),
+                        last_content_with_tools: last_content_with_tools.take(),
+                        assistant_has_visible_text:
+                            Self::assistant_visible_text_after_think_blocks,
+                    },
+                );
+                codex_ack_continuations = outcome.new_codex_ack_continuations;
+                autonomous_nudge_count = outcome.new_autonomous_nudge_count;
+                match outcome.action {
+                    crate::post_response_fallback::PostResponseFallback::ContinueWithUserMsg(
+                        msg,
+                    ) => {
+                        ctx.add_message(Message::user(&msg));
+                        continue;
+                    }
+                    crate::post_response_fallback::PostResponseFallback::ContinueWithSystemNudge(
+                        msg,
+                    ) => {
+                        tracing::debug!(
+                            nudge_count = autonomous_nudge_count,
+                            total_turns,
+                            "autonomous_mode: nudging LLM back into action"
+                        );
+                        ctx.add_message(Message::system(&msg));
+                        continue;
+                    }
+                    crate::post_response_fallback::PostResponseFallback::PatchLastAssistant {
+                        content,
+                    } => {
                         if let Some(last) = ctx.get_messages_mut().last_mut() {
                             if last.role == MessageRole::Assistant {
-                                last.content = Some(fallback);
+                                last.content = Some(content);
                             }
                         }
                     }
+                    crate::post_response_fallback::PostResponseFallback::Finalize => {}
                 }
                 let (u, a) = extract_last_user_assistant(ctx.get_messages());
                 self.memory_sync(&u, &a, session_id);
@@ -6433,9 +6748,10 @@ impl AgentLoop {
                     .iter()
                     .find(|tc| tc.id == result.tool_call_id)
                     .map(|tc| tc.function.name.as_str());
+                let truncated = truncate_tool_result(&result.content, tool_name);
                 ctx.add_message(Message::tool_result(
                     &result.tool_call_id,
-                    &result.content,
+                    &truncated,
                     tool_name,
                 ));
             }

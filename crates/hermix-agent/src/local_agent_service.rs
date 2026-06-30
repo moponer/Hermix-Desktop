@@ -1157,6 +1157,13 @@ impl AgentService for LocalAgentService {
         // is essentially free — it just keeps the two emit paths
         // independent.
         let status_forwarder_for_compaction = status_forwarder.clone();
+        // 2026-06-29 (C3 marker protocol): third clone so the
+        // `on_section_gate` closure can forward the
+        // `SectionGateReport` to the same WS socket without fighting
+        // the `status_callback` / `on_compaction_status` closures
+        // for ownership of `status_forwarder`. Each `Arc::clone` is
+        // a refcount bump, so this is essentially free.
+        let status_forwarder_for_section_gate = status_forwarder.clone();
         // Pre-clone for the empty-response fallback path below. The
         // `on_thinking` closure consumes `on_chunk`, so any later use
         // (e.g. streaming the fallback text) needs its own Arc handle.
@@ -1530,6 +1537,53 @@ impl AgentService for LocalAgentService {
                         extra: Some(serde_json::json!({
                             "event": "compaction_status",
                             "snapshot": payload,
+                        })),
+                    }),
+                    finish_reason: None,
+                    usage: None,
+                });
+            })),
+            // 2026-06-29 (C3 marker protocol): forward the
+            // `SectionGateReport` to the front-end as a dedicated
+            // `section_gate` WS event. The trace panel renders the
+            // "patched N missing required sections" / "pending M
+            // optional sections" state from the report's
+            // `patched` / `pending` arrays. See
+            // `Section::label()` for the per-section display
+            // string.
+            //
+            // Wire shape on the wire:
+            //   {
+            //     "event": "section_gate",
+            //     "report": {
+            //       "patched": [{ "section": "identity", "applied": true, "reason": "..." }],
+            //       "pending": [{ "section": "tool_list", "applied": false, "reason": "..." }]
+            //     }
+            //   }
+            on_section_gate: Some(Arc::new(move |report: &crate::context::SectionGateReport| {
+                // Pre-clone for ownership (see
+                // `status_forwarder_for_section_gate` above). The
+                // closure must be `Send + Sync` and outlive this
+                // stack frame, so anything it captures is moved.
+                let fwd = status_forwarder_for_section_gate.clone();
+                let payload = match serde_json::to_value(report) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "hermix.agent",
+                            error = %e,
+                            "failed to serialise SectionGateReport, dropping section_gate emit"
+                        );
+                        return;
+                    }
+                };
+                fwd(StreamChunk {
+                    delta: Some(StreamDelta {
+                        content: None,
+                        tool_calls: None,
+                        extra: Some(serde_json::json!({
+                            "event": "section_gate",
+                            "report": payload,
                         })),
                     }),
                     finish_reason: None,

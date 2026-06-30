@@ -611,6 +611,165 @@ pub fn load_builtin_memory_snapshot(
 // SystemPromptBuilder
 // ---------------------------------------------------------------------------
 
+/// A single conditional system-prompt *direction* — a text block injected
+/// only when the active route matches its trigger.
+///
+/// Replaces the giant `if user_message.is_empty() { ... } else { ... }`
+/// cascade that used to live inline in `build_system_prompt`. Each direction
+/// is small (~50–200 chars), individually tagged, and trivially auditable
+/// in debug output / frontend panels.
+///
+/// Inspired by BaiLongma's `directions[]` array (src/index.js:860), but
+/// typed and routed by an enum instead of free-form string keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirRoute {
+    /// First turn of a session (no prior user_message) — full block.
+    FirstTurn,
+    /// Any subsequent turn — short reminder.
+    Subsequent,
+    /// Caller opted in via `autonomous_mode = true`.
+    Autonomous,
+    /// Active tool list contains a `browser_*` tool.
+    HasBrowser,
+    /// Active tool list contains `memory`.
+    HasMemory,
+    /// Active tool list contains `session_search`.
+    HasSessionSearch,
+    /// Active tool list contains `skill_manage` AND user message mentions
+    /// a skill-related keyword.
+    HasSkillKeyword,
+    /// Active tool list contains `compact_tool_chain` AND user message
+    /// mentions batch-related keyword.
+    HasBatchKeyword,
+    /// Active tool list is non-empty AND model needs tool enforcement.
+    ToolEnforce,
+    /// Model name contains "gemini" / "gemma" — Google family extras.
+    GoogleFamily,
+    /// Model name contains "gpt" / "codex" — OpenAI family extras.
+    OpenAiFamily,
+    /// Model name contains "minimax" / "m2" / "hermes" — fine-tune extras.
+    MiniMaxFamily,
+    /// Always-on (USER_STYLE_GUIDANCE, tool failure rule).
+    Always,
+}
+
+#[derive(Debug, Clone)]
+pub struct SystemDir {
+    pub tag: &'static str,
+    pub route: DirRoute,
+    pub body: String,
+}
+
+impl SystemDir {
+    pub fn new(tag: &'static str, route: DirRoute, body: impl Into<String>) -> Self {
+        Self { tag, route, body: body.into() }
+    }
+}
+
+/// The slice of decision-relevant state that [`DirRoute::matches`] reads.
+/// Kept as a plain borrowed view — caller fills it from the agent config
+/// + tool list without owning any data.
+#[derive(Debug, Clone)]
+pub struct RouteContext<'a> {
+    pub user_message: &'a str,
+    pub tool_names: &'a std::collections::HashSet<&'a str>,
+    pub model_name: &'a str,
+    pub autonomous_mode: bool,
+}
+
+impl<'a> Default for RouteContext<'a> {
+    fn default() -> Self {
+        Self {
+            user_message: "",
+            tool_names: &EMPTY_TOOL_NAMES,
+            model_name: "",
+            autonomous_mode: false,
+        }
+    }
+}
+
+/// Empty placeholder used only by `RouteContext::default()`. Refers
+/// itself as a `HashSet<&'static str>` so that test code can build a
+/// default route without writing out a fresh HashSet.
+static EMPTY_TOOL_NAMES: std::sync::LazyLock<std::collections::HashSet<&'static str>> =
+    std::sync::LazyLock::new(std::collections::HashSet::new);
+
+impl DirRoute {
+    /// Single source of truth for "does this direction fire this turn?".
+    /// Returns `(fired, skip_reason)` so the audit log can show *why* a
+    /// direction was skipped — useful when debugging "why didn't the
+    /// browser guidance show up?".
+    pub fn matches(&self, ctx: &RouteContext<'_>) -> (bool, Option<String>) {
+        let um = ctx.user_message.to_lowercase();
+        let has = |name: &str| ctx.tool_names.contains(name);
+        let is_g = |s: &str| ctx.model_name.to_lowercase().contains(s);
+        match self {
+            DirRoute::FirstTurn => {
+                if ctx.user_message.is_empty() { (true, None) }
+                else { (false, Some("not first turn".into())) }
+            }
+            DirRoute::Subsequent => {
+                if !ctx.user_message.is_empty() { (true, None) }
+                else { (false, Some("is first turn".into())) }
+            }
+            DirRoute::Autonomous => {
+                if ctx.autonomous_mode { (true, None) }
+                else { (false, Some("caller did not opt in".into())) }
+            }
+            DirRoute::HasBrowser => {
+                if ctx.tool_names.iter().any(|n| n.starts_with("browser_")) { (true, None) }
+                else { (false, Some("no browser_* tool in scope".into())) }
+            }
+            DirRoute::HasMemory => {
+                if has("memory") { (true, None) }
+                else { (false, Some("memory tool not active".into())) }
+            }
+            DirRoute::HasSessionSearch => {
+                if has("session_search") { (true, None) }
+                else { (false, Some("session_search not active".into())) }
+            }
+            DirRoute::HasSkillKeyword => {
+                if !has("skill_manage") {
+                    (false, Some("skill_manage not active".into()))
+                } else if ctx.user_message.is_empty()
+                    || um.contains("skill") || um.contains("技能") || um.contains("技巧")
+                    || um.contains("记忆") || um.contains("记录") || um.contains("记住")
+                    || um.contains("保存") || um.contains("学习")
+                { (true, None) }
+                else { (false, Some("user message has no skill keyword".into())) }
+            }
+            DirRoute::HasBatchKeyword => {
+                if !has("compact_tool_chain") {
+                    (false, Some("compact_tool_chain not active".into()))
+                } else if ctx.user_message.is_empty()
+                    || um.contains("批量") || um.contains("多个") || um.contains("全部")
+                    || um.contains("所有") || um.contains("逐一") || um.contains("依次")
+                    || um.contains("batch") || um.contains("all")
+                { (true, None) }
+                else { (false, Some("user message has no batch keyword".into())) }
+            }
+            DirRoute::ToolEnforce => {
+                let fired = !ctx.tool_names.is_empty();
+                if fired { (true, None) }
+                else { (false, Some("tool list empty".into())) }
+            }
+            DirRoute::GoogleFamily => {
+                if is_g("gemini") || is_g("gemma") { (true, None) }
+                else { (false, Some("not a Google-family model".into())) }
+            }
+            DirRoute::OpenAiFamily => {
+                if is_g("gpt") || is_g("codex") { (true, None) }
+                else { (false, Some("not an OpenAI-family model".into())) }
+            }
+            DirRoute::MiniMaxFamily => {
+                if is_g("minimax") || is_g("m2") { (true, None) }
+                else { (false, Some("not a MiniMax-family fine-tune".into())) }
+            }
+            DirRoute::Always => (true, None),
+        }
+    }
+}
+
 /// Builder for assembling the full system prompt from multiple layers.
 ///
 /// Layers (in order):
@@ -622,10 +781,32 @@ pub fn load_builtin_memory_snapshot(
 /// 6. Context files from `.hermes/context/`
 /// 7. Current date/time
 /// 8. Working directory info
+///
+/// In addition to the static `parts` vector, the builder carries a
+/// separate `directions` vector that holds typed `(tag, route, body)`
+/// records. Each direction is evaluated against the current `RouteContext`
+/// at `assemble()` time and survives as an audit record so the frontend
+/// can show "which direction fired / was skipped and why".
 pub struct SystemPromptBuilder {
     parts: Vec<String>,
+    /// Tagged directions that gate conditionally on `DirRoute`.
+    directions: Vec<SystemDir>,
+    /// Last audit (rendered directions + skip reasons). Cleared on mutation.
+    direction_audit: Vec<DirAuditEntry>,
     /// Cached assembled prompt.
     cached: Option<String>,
+}
+
+/// One row of the direction audit log. Emitted to gateway hooks as
+/// `system_prompt_directions` so the debug panel can show what fired
+/// per turn.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DirAuditEntry {
+    pub tag: String,
+    pub route: String,
+    pub fired: bool,
+    pub skip_reason: Option<String>,
+    pub body_chars: usize,
 }
 
 impl SystemPromptBuilder {
@@ -633,8 +814,73 @@ impl SystemPromptBuilder {
     pub fn new() -> Self {
         Self {
             parts: Vec::new(),
+            directions: Vec::new(),
+            direction_audit: Vec::new(),
             cached: None,
         }
+    }
+
+    /// Queue a typed, route-gated direction.
+    ///
+    /// The direction is *not* appended to the prompt here — that happens
+    /// in [`Self::assemble_directions`] so the builder can also produce an
+    /// audit record of which directions matched the active route and
+    /// which were skipped (and why).
+    pub fn with_direction(mut self, dir: SystemDir) -> Self {
+        self.directions.push(dir);
+        self.cached = None;
+        self
+    }
+
+    /// Append several directions at once.
+    pub fn with_directions(mut self, dirs: impl IntoIterator<Item = SystemDir>) -> Self {
+        for d in dirs {
+            self.directions.push(d);
+        }
+        self.cached = None;
+        self
+    }
+
+    /// Borrow the latest audit log. Cleared by mutation; populated by
+    /// [`Self::assemble_directions`].
+    pub fn direction_audit(&self) -> &[DirAuditEntry] {
+        &self.direction_audit
+    }
+
+    /// Drain the audit log so the caller (gateway/emit_hook_event) can
+    /// forward it to the frontend without taking a long-lived borrow.
+    pub fn take_direction_audit(&mut self) -> Vec<DirAuditEntry> {
+        std::mem::take(&mut self.direction_audit)
+    }
+
+    /// Mark every queued direction as fired / skipped based on `route_ctx`,
+    /// append the fired bodies to `parts` in queued order, and return the
+    /// audit log.
+    ///
+    /// The route context is the *exact* same context `build_system_prompt`
+    /// would have looked at inline — so each direction's "fired?" check
+    /// is the single source of truth.
+    pub fn assemble_directions(&mut self, route_ctx: &RouteContext) -> &[DirAuditEntry] {
+        let mut audit = Vec::with_capacity(self.directions.len());
+        for d in self.directions.drain(..) {
+            let (fired, skip_reason) = d.route.matches(route_ctx);
+            let entry = DirAuditEntry {
+                tag: d.tag.to_string(),
+                route: format!("{:?}", d.route),
+                fired,
+                skip_reason: skip_reason.clone(),
+                body_chars: d.body.chars().count(),
+            };
+            if fired {
+                self.parts.push(d.body);
+            }
+            audit.push(entry);
+        }
+        if !audit.is_empty() {
+            self.cached = None;
+        }
+        self.direction_audit = audit;
+        &self.direction_audit
     }
 
     /// Add the SOUL.md personality or default identity.
@@ -790,91 +1036,16 @@ impl SystemPromptBuilder {
         if tool_schemas.is_empty() {
             return self;
         }
-
-        // Tools that the user-facing regression report
-        // (2026-06-14) called out as "the LLM says it doesn't
-        // have them". Order matters: the first ones are the
-        // most likely to be missed.
-        const PRIORITY_TOOLS: &[&str] = &[
-            "terminal",
-            "code_execution",
-            "execute_code",
-            "list_files",
-            "edit_file",
-            "search_files",
-            "read_file",
-            "write_file",
-            "patch",
-            "read_pdf",
-            "pdf",
-            "list_tools",
-            "memory",
-            "process",
-            "process_list",
-        ];
-
-        const MAX_CHARS: usize = 15_000;
-
-        let priority_set: std::collections::HashSet<&str> =
-            PRIORITY_TOOLS.iter().copied().collect();
-
-        // Stable order: priority tools first (in priority
-        // order), then everything else in input order.
-        let mut priority: Vec<&ToolSchema> = Vec::new();
-        let mut rest: Vec<&ToolSchema> = Vec::new();
-        for s in tool_schemas {
-            if priority_set.contains(s.name.as_str()) {
-                priority.push(s);
-            } else {
-                rest.push(s);
-            }
-        }
-        // Re-order priority list by the PRIORITY_TOOLS array.
-        priority.sort_by_key(|s| {
-            PRIORITY_TOOLS
-                .iter()
-                .position(|n| *n == s.name.as_str())
-                .unwrap_or(usize::MAX)
-        });
-
-        // Strong availability reminder — keep it short so it
-        // doesn't push the tool list out of the cap, but
-        // explicit enough that the model can't claim "no
-        // terminal" without contradicting an instruction.
-        let reminder = format!(
-            "# Tool availability reminder (read first)\n\
-             You HAVE the following tools, registered and ready. If a user \
-             request calls for one of them, call it directly — do not claim \
-             you lack it. In particular: you have `{terminal}` (run shell), \
-             `{code}` (run Python), `{lf}` (list files via search_files \
-             alias), `{ef}` (edit files via patch alias), and `{lt}` \
-             (introspect the full schema). For anything not listed, call \
-             `{lt}` first; it dumps every registered tool's schema.\n\n",
-            terminal = "terminal",
-            code = "code_execution",
-            lf = "list_files",
-            ef = "edit_file",
-            lt = "list_tools",
-        );
-
-        let mut block = String::with_capacity(MAX_CHARS.min(8192));
-        block.push_str(&reminder);
-        block.push_str("# Available tools\n");
-
-        let mut truncated = false;
-        for s in priority.iter().chain(rest.iter()) {
-            let desc = s.description.trim();
-            let short = desc.split_once(". ").map(|(h, _)| h).unwrap_or(desc);
-            let short = if short.len() > 120 { &short[..120] } else { short };
-            block.push_str(&format!("- **{}** — {}\n", s.name, short));
-            if block.len() > MAX_CHARS {
-                truncated = true;
-                break;
-            }
-        }
-        if truncated {
-            block.push_str("... (call `list_tools` for the full list)\n");
-        }
+        // Compact reference: model already has full schemas via the native
+        // `tools` API parameter. This text block is a light fallback +
+        // pointer to the on-disk reference file for detailed usage.
+        let names: Vec<&str> = tool_schemas.iter().map(|s| s.name.as_str()).collect();
+        let mut block = String::from("## Tools\n");
+        block.push_str("Available: ");
+        block.push_str(&names.join(", "));
+        block.push_str("\n\n");
+        block.push_str("For detailed parameters, `read_file` \"$HERMIX_HOME/tools_reference.md\" ");
+        block.push_str("and read the section for the tool you need.\n");
         self.parts.push(block);
         self.cached = None;
         self
@@ -899,6 +1070,211 @@ impl SystemPromptBuilder {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SectionGate — M2: protocol-completeness single choke point
+// ---------------------------------------------------------------------------
+//
+// Every system prompt that goes to the model is *expected* to contain
+// a small, named set of top-level sections. Before M2 these expectations
+// were scattered across `build_system_prompt` (six if/else cascades, four
+// model-family extras, and a hand-rolled `format!("### {}\n{}", ...)`
+// string join). When any one of those branches silently no-op'd — a model
+// that opted out of the tools guidance, a route that returned early, a
+// compile-time `cfg` flag that stripped a whole block — the model would
+// start hallucinating or refusing. The bug was always a "section was
+// missing and nobody noticed".
+//
+// `SectionGate` is the single place that knows which sections *must*
+// appear in a healthy prompt, and the single function that audits the
+// produced text and patches in the missing sections before the model
+// ever sees it. The patch text is identical to the default body the
+// original code path would have produced, so the gate is measure-equivalent
+// to the previous inline behavior — except it can never silently skip a
+// required section.
+
+/// Top-level sections that every system prompt is expected to contain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum Section {
+    /// SOUL.md / default identity (always required).
+    #[serde(rename = "identity")]
+    Identity,
+    /// Tool list (only required when `tool_names` is non-empty).
+    #[serde(rename = "tool_list")]
+    ToolList,
+    /// Tool-enforcement guidance (only required when `tool_names` is non-empty).
+    #[serde(rename = "tool_enforce")]
+    ToolEnforce,
+    /// Working-directory / context-files block.
+    #[serde(rename = "working_dir")]
+    WorkingDir,
+    /// Time / date stamp.
+    #[serde(rename = "timestamp")]
+    Timestamp,
+}
+
+impl Section {
+    /// Stable string marker used by the gate to detect presence in the
+    /// rendered prompt. Matches the heading that the corresponding
+    /// builder code emits for that section.
+    pub fn marker(self) -> &'static str {
+        match self {
+            Section::Identity => "### Identity",
+            Section::ToolList => "### Active tools",
+            Section::ToolEnforce => "### Tool enforcement",
+            Section::WorkingDir => "### Working directory",
+            Section::Timestamp => "### Current time",
+        }
+    }
+
+    /// Short human-readable label, intended for front-end trace UI.
+    /// 2026-06-29 (C3 marker protocol): distinct from `marker()` —
+    /// `marker()` is the *detection* key in the prompt text, `label()`
+    /// is the *display* string for the trace panel / logs.
+    pub fn label(self) -> &'static str {
+        match self {
+            Section::Identity => "Identity",
+            Section::ToolList => "Active tools",
+            Section::ToolEnforce => "Tool enforcement",
+            Section::WorkingDir => "Working directory",
+            Section::Timestamp => "Current time",
+        }
+    }
+
+    /// The default patch text the gate will splice in when the section is
+    /// missing. Intentionally short — this is the *floor* of what a
+    /// healthy prompt must contain, not the full guidance block.
+    pub fn default_body(self) -> &'static str {
+        match self {
+            Section::Identity =>
+                "### Identity\nYou are Hermix, a direct, audit-first assistant.",
+            Section::ToolList =>
+                "### Active tools\nNo tools are active in this turn; answer with prose.",
+            Section::ToolEnforce =>
+                "### Tool enforcement\nTools are active. Prefer tool calls over prose when action is required.",
+            Section::WorkingDir =>
+                "### Working directory\nNo workspace context. Use the conversation for any file references.",
+            Section::Timestamp =>
+                "### Current time\nUse the most recent timestamp from this turn as your time reference.",
+        }
+    }
+}
+
+/// A single gap detected by the gate: which `Section` is missing and
+/// how the gate chose to handle it (`Patched` = auto-spliced the default
+/// body; `Pending` = skipped because the caller's `RouteContext` did not
+/// require it; e.g. `ToolList` with empty `tool_names`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SectionGap {
+    pub section: Section,
+    /// Whether the gate auto-spliced in the default body. 2026-06-29
+    /// (C3 marker protocol): serde-renamed to `applied` for the wire
+    /// so the front-end sees a stable shape.
+    #[serde(rename = "applied")]
+    pub patched: bool,
+    pub reason: String,
+}
+
+/// Result of a single `SectionGate::audit_and_patch` call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SectionGateReport {
+    /// Sections that were missing and have been auto-spliced in.
+    pub patched: Vec<SectionGap>,
+    /// Sections the gate knows about but considers optional under the
+    /// current `RouteContext` (e.g. `ToolList` when no tools are active).
+    /// Surfaced in the audit log so a human can see "yes, the gate saw
+    /// the section, but it wasn't required for this turn".
+    pub pending: Vec<SectionGap>,
+}
+
+impl SectionGateReport {
+    /// True iff the gate had to splice at least one missing section in.
+    /// Frontend can highlight this row in the trace panel.
+    pub fn had_patches(&self) -> bool {
+        !self.patched.is_empty()
+    }
+
+    /// Total number of sections the gate evaluated, regardless of outcome.
+    /// Note: this counts *missing* sections (patched + pending). Sections
+    /// that were present in the prompt are not counted here — the
+    /// "audited" count would be `5 - missing` for the five top-level
+    /// sections. Use `had_patches()` to detect "the gate had to do work".
+    pub fn total_evaluated(&self) -> usize {
+        self.patched.len() + self.pending.len()
+    }
+}
+
+/// Single source of truth for "is this section required for this turn?".
+/// The gate uses this to decide whether a missing marker should trigger
+/// a patch or just be recorded as pending.
+pub fn section_required(section: Section, route_ctx: &RouteContext<'_>) -> bool {
+    match section {
+        Section::Identity => true,
+        Section::Timestamp => true,
+        Section::WorkingDir => true,
+        Section::ToolList => !route_ctx.tool_names.is_empty(),
+        Section::ToolEnforce => !route_ctx.tool_names.is_empty(),
+    }
+}
+
+impl Section {
+    /// Evaluate the prompt text against the gate. Returns a report listing
+    /// any sections that were missing under the current `RouteContext`.
+    /// This function does NOT mutate the prompt; the caller decides what
+    /// to do with the report (auto-patch, abort, or just log).
+    pub fn audit_prompt(prompt: &str, route_ctx: &RouteContext<'_>) -> SectionGateReport {
+        let mut report = SectionGateReport::default();
+        for &section in &[
+            Section::Identity,
+            Section::ToolList,
+            Section::ToolEnforce,
+            Section::WorkingDir,
+            Section::Timestamp,
+        ] {
+            if prompt.contains(section.marker()) {
+                continue;
+            }
+            let gap = SectionGap {
+                section,
+                patched: false,
+                reason: if section_required(section, route_ctx) {
+                    format!("missing required marker {:?}", section.marker())
+                } else {
+                    format!(
+                        "optional under current RouteContext (no active tools / no workspace)"
+                    )
+                },
+            };
+            if section_required(section, route_ctx) {
+                report.patched.push(gap);
+            } else {
+                report.pending.push(gap);
+            }
+        }
+        report
+    }
+
+    /// Audit + auto-patch. The patched prompt is returned by value so
+    /// the caller cannot accidentally drop the splice. If the gate saw
+    /// no gaps, the original string is returned unchanged (no allocation).
+    pub fn audit_and_patch(
+        prompt: &str,
+        route_ctx: &RouteContext<'_>,
+    ) -> (String, SectionGateReport) {
+        let report = Self::audit_prompt(prompt, route_ctx);
+        if report.patched.is_empty() {
+            return (prompt.to_string(), report);
+        }
+        let mut out = String::with_capacity(prompt.len() + 256);
+        out.push_str(prompt);
+        out.push_str("\n\n");
+        for gap in &report.patched {
+            out.push_str(gap.section.default_body());
+            out.push_str("\n\n");
+        }
+        (out, report)
+    }
+}
+
 impl Default for SystemPromptBuilder {
     fn default() -> Self {
         Self::new()
@@ -908,6 +1284,276 @@ impl Default for SystemPromptBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M1: route-gated directions fire only when the corresponding
+    /// `DirRoute` matches the active `RouteContext`, and the audit log
+    /// carries both the fired and skipped entries. This is the single
+    /// source of truth for "why did this prompt block get injected?"
+    #[test]
+    fn directions_first_turn_fires_format_full_not_short() {
+        let mut tool_names = std::collections::HashSet::new();
+        tool_names.insert("browser_navigate");
+        let ctx = RouteContext {
+            user_message: "",
+            tool_names: &tool_names,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+        };
+        let mut b = SystemPromptBuilder::new();
+        b = b.with_directions(vec![
+            SystemDir::new("format.full", DirRoute::FirstTurn, "FULL"),
+            SystemDir::new("format.short", DirRoute::Subsequent, "SHORT"),
+            SystemDir::new("autonomous.block", DirRoute::Autonomous, "AUTO"),
+            SystemDir::new("browser.discipline", DirRoute::HasBrowser, "BROWSER"),
+        ]);
+        b.assemble_directions(&ctx);
+        let audit = b.direction_audit();
+        assert_eq!(audit.len(), 4);
+        let by_tag = |t: &str| audit.iter().find(|a| a.tag == t).unwrap();
+        assert!(by_tag("format.full").fired);
+        assert!(!by_tag("format.short").fired, "first-turn should not fire subsequent");
+        assert!(!by_tag("autonomous.block").fired, "no opt-in → skip autonomous");
+        assert!(by_tag("browser.discipline").fired, "browser_* tool present");
+        let prompt = b.build();
+        assert!(prompt.contains("FULL"));
+        assert!(!prompt.contains("SHORT"));
+        assert!(prompt.contains("BROWSER"));
+    }
+
+    /// M1: an Autonomous direction that does not match still appears
+    /// in the audit log with `fired = false` and a human-readable
+    /// `skip_reason` — the whole point of measure-only mode.
+    #[test]
+    fn directions_autonomous_skip_records_reason() {
+        let tool_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message: "hello",
+            tool_names: &tool_names,
+            model_name: "gemini-1.5-flash",
+            autonomous_mode: false,
+        };
+        let mut b = SystemPromptBuilder::new();
+        b = b.with_directions(vec![
+            SystemDir::new("autonomous.block", DirRoute::Autonomous, "AUTO"),
+            SystemDir::new("google.extras", DirRoute::GoogleFamily, "GOOGLE"),
+        ]);
+        b.assemble_directions(&ctx);
+        let audit = b.direction_audit();
+        let auto = audit.iter().find(|a| a.tag == "autonomous.block").unwrap();
+        assert!(!auto.fired);
+        assert_eq!(auto.skip_reason.as_deref(), Some("caller did not opt in"));
+        let google = audit.iter().find(|a| a.tag == "google.extras").unwrap();
+        assert!(google.fired);
+    }
+
+    /// M1: take_direction_audit drains the log so the caller (gateway
+    /// / emit_hook_event) can forward it without taking a long-lived
+    /// borrow. After drain, the next direction push must still work.
+    #[test]
+    fn directions_take_audit_drains_log() {
+        let _tool_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let ctx = RouteContext::default();
+        let mut b = SystemPromptBuilder::new();
+        b = b.with_directions(vec![
+            SystemDir::new("plan.full", DirRoute::FirstTurn, "PLAN"),
+        ]);
+        b.assemble_directions(&ctx);
+        let drained: Vec<_> = b.take_direction_audit().into_iter().collect();
+        assert_eq!(drained.len(), 1);
+        assert!(b.direction_audit().is_empty(), "after drain the log is empty");
+        // Push a *second* round of directions and verify they still
+        // assemble cleanly (audit, fired, skip_reason all reset).
+        b = b.with_directions(vec![
+            SystemDir::new("plan.full", DirRoute::FirstTurn, "PLAN2"),
+            SystemDir::new("autonomous.block", DirRoute::Autonomous, "AUTO"),
+        ]);
+        b.assemble_directions(&ctx);
+        let audit = b.direction_audit();
+        assert_eq!(audit.len(), 2);
+    }
+
+    // ---------------------------------------------------------------
+    // M2: SectionGate — protocol-completeness single choke point
+    // ---------------------------------------------------------------
+
+    /// M2: a healthy prompt with all five section markers present must
+    /// produce a report with zero patches. The gate is silent on
+    /// healthy input — its sole job is to catch *missing* sections.
+    #[test]
+    fn section_gate_healthy_prompt_yields_zero_patches() {
+        let tool_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message: "hello",
+            tool_names: &tool_names,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+        };
+        let prompt = format!(
+            "{}\n\n{}\n\n{}\n\n{}\n\n{}",
+            Section::Identity.default_body(),
+            Section::Timestamp.default_body(),
+            Section::WorkingDir.default_body(),
+            Section::ToolList.default_body(),
+            Section::ToolEnforce.default_body(),
+        );
+        let report = Section::audit_prompt(&prompt, &ctx);
+        assert!(!report.had_patches(), "healthy prompt must not trigger any patches, got: {:?}", report);
+        // With empty tool_names: required = {Identity, Timestamp, WorkingDir}
+        // (all 3 found in prompt → no patches), optional = {ToolList, ToolEnforce}
+        // (both found in prompt → no pending entries). So the report is
+        // empty — 0 patched, 0 pending.
+        assert_eq!(report.total_evaluated(), 0,
+            "healthy prompt with all markers present must yield 0 missing sections, got: {:?}", report);
+    }
+
+    /// M2: a prompt with the identity marker missing must trigger
+    /// a patch for `Section::Identity` (and any other required markers
+    /// also missing). The patched prompt must contain the marker and
+    /// must preserve the original prose verbatim.
+    #[test]
+    fn section_gate_missing_identity_gets_patched() {
+        let tool_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message: "hello",
+            tool_names: &tool_names,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+        };
+        let prompt = "no identity block at all, just some prose.";
+        let (patched, report) = Section::audit_and_patch(prompt, &ctx);
+        // With empty tool_names, required = {Identity, Timestamp, WorkingDir}.
+        // None of those markers are in the prompt, so all 3 must patch.
+        assert!(report.had_patches());
+        let patched_set: std::collections::HashSet<_> =
+            report.patched.iter().map(|g| g.section).collect();
+        assert!(patched_set.contains(&Section::Identity));
+        assert!(patched_set.contains(&Section::Timestamp));
+        assert!(patched_set.contains(&Section::WorkingDir));
+        // Tool sections go to pending (not required with empty tools)
+        assert!(!patched_set.contains(&Section::ToolList));
+        assert!(!patched_set.contains(&Section::ToolEnforce));
+        // The patched prompt must contain the identity marker AND
+        // preserve the original prose.
+        assert!(patched.contains(Section::Identity.marker()),
+            "patched prompt must contain the identity marker, got: {patched:?}");
+        assert!(patched.contains(prompt),
+            "patched prompt must keep the original prose, got: {patched:?}");
+    }
+
+    /// M2: when `tool_names` is empty, `ToolList` and `ToolEnforce` are
+    /// *optional* under the current `RouteContext` — a missing marker
+    /// must be recorded as `pending`, not `patched`. The audit log is
+    /// the only signal; we do not splice default text for optional
+    /// sections, because that would inject noise ("Tools are active")
+    /// into a prompt the model will read as "no tools are active".
+    #[test]
+    fn section_gate_tool_sections_pending_when_no_tools() {
+        let tool_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message: "hi",
+            tool_names: &tool_names,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+        };
+        // Provide identity + timestamp + working_dir (the three always-
+        // required sections); tool sections deliberately missing.
+        let prompt = format!(
+            "{}\n\n{}\n\n{}",
+            Section::Identity.default_body(),
+            Section::Timestamp.default_body(),
+            Section::WorkingDir.default_body(),
+        );
+        let report = Section::audit_prompt(&prompt, &ctx);
+        // Required markers are present → no patches
+        assert!(!report.had_patches(),
+            "all required markers present must yield zero patches, got: {:?}", report);
+        // The two tool sections should show up as pending
+        let pending_sections: Vec<_> = report.pending.iter().map(|g| g.section).collect();
+        assert!(pending_sections.contains(&Section::ToolList));
+        assert!(pending_sections.contains(&Section::ToolEnforce));
+    }
+
+    /// M2: with active tools, missing tool sections are *required* and
+    /// must be auto-patched. This is the path that was silently
+    /// broken before M2: when a `cfg` flag or a tool-routing early
+    /// return dropped the `<tools>` block, the model lost awareness of
+    /// its own capability. The gate catches that case and patches the
+    /// default text in.
+    #[test]
+    fn section_gate_tool_sections_patched_when_tools_active() {
+        let mut tool_names = std::collections::HashSet::new();
+        tool_names.insert("terminal");
+        tool_names.insert("read_file");
+        let ctx = RouteContext {
+            user_message: "list the project files",
+            tool_names: &tool_names,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+        };
+        // Only identity present, no tool / no working-dir / no timestamp.
+        let prompt = Section::Identity.default_body().to_string();
+        let (patched, report) = Section::audit_and_patch(&prompt, &ctx);
+        assert!(report.had_patches());
+        let patched_set: std::collections::HashSet<_> =
+            report.patched.iter().map(|g| g.section).collect();
+        assert!(patched_set.contains(&Section::ToolList));
+        assert!(patched_set.contains(&Section::ToolEnforce));
+        assert!(patched_set.contains(&Section::WorkingDir));
+        assert!(patched_set.contains(&Section::Timestamp));
+        assert!(patched.contains(Section::ToolList.marker()));
+        assert!(patched.contains(Section::ToolEnforce.marker()));
+    }
+
+    /// C3 marker protocol (2026-06-29): each `Section` has a stable
+    /// human-readable `label()` distinct from its detection
+    /// `marker()`. Locked in here so a refactor that conflates the
+    /// two (e.g. renders `marker()` in the trace panel) is caught by
+    /// CI.
+    #[test]
+    fn section_label_distinct_from_marker() {
+        let cases: &[(Section, &str, &str)] = &[
+            (Section::Identity, "### Identity", "Identity"),
+            (Section::ToolList, "### Active tools", "Active tools"),
+            (Section::ToolEnforce, "### Tool enforcement", "Tool enforcement"),
+            (Section::WorkingDir, "### Working directory", "Working directory"),
+            (Section::Timestamp, "### Current time", "Current time"),
+        ];
+        for (section, expected_marker, expected_label) in cases {
+            assert_eq!(section.marker(), *expected_marker, "marker for {:?}", section);
+            assert_eq!(section.label(), *expected_label, "label for {:?}", section);
+            // Defence in depth: label must not contain the
+            // `### ` heading prefix — the trace panel renders
+            // the label as a chip, not a heading.
+            assert!(!section.label().starts_with("### "), "label leaks heading prefix: {:?}", section.label());
+        }
+    }
+
+    /// C3 wire format (2026-06-29): the front-end trace panel
+    /// deserialises `SectionGap.section` to a `Section` enum and
+    /// uses `Section::label()` to render. This test pins the JSON
+    /// shape so any rename on either side breaks loudly rather than
+    /// silently rendering `"unknown"`.
+    #[test]
+    fn section_gate_report_serializes_to_expected_wire_shape() {
+        let gap = SectionGap {
+            section: Section::WorkingDir,
+            patched: true,
+            reason: "missing required marker".to_string(),
+        };
+        let json = serde_json::to_value(&gap).expect("SectionGap serialises");
+        assert_eq!(json["section"], "working_dir", "Section serde tag");
+        assert_eq!(json["applied"], true, "patched renamed to applied on wire");
+        assert_eq!(json["reason"], "missing required marker");
+
+        let report = SectionGateReport {
+            patched: vec![gap.clone()],
+            pending: vec![],
+        };
+        let report_json = serde_json::to_value(&report).expect("report serialises");
+        assert_eq!(report_json["patched"].as_array().unwrap().len(), 1);
+        assert_eq!(report_json["pending"].as_array().unwrap().len(), 0);
+    }
+
 
     #[test]
     fn test_add_and_get_messages() {
