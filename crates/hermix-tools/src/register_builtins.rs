@@ -317,17 +317,7 @@ pub fn register_builtin_tools(
     // then dispatch any tool already registered, including ones
     // registered *after* this call — the registry's `Clone` is
     // a view, not a snapshot.
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "compact",
-        Arc::new(crate::tools::tool_chain::CompactToolChainHandler::new(
-            Arc::new(registry.clone()),
-        )),
-        "🔗",
-        vec![],
-        RiskLevel::Safe,
-    );
+    crate::tools::tool_chain::register(registry, Arc::new(registry.clone()));
 
     // -- Memory --------------------------------------------------------------
     reg(

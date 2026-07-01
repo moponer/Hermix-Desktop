@@ -64,9 +64,33 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
 use crate::registry::ToolRegistry;
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register this tool with the registry (P1.2 migration).
+pub fn register(registry: &ToolRegistry, dispatch_registry: Arc<ToolRegistry>) {
+    let handler = Arc::new(CompactToolChainHandler::new(dispatch_registry));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "compact",
+        "compact",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "compact_tool_chain — collapse N tool calls into 1 LLM-context entry",
+        "🔗",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Chain DSL
