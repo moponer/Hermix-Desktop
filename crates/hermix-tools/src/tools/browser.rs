@@ -20,10 +20,81 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
 use crate::tools::cdp_bootstrap::{self, BrowserStatus};
 use crate::tools::url_safety::SsrfGuard;
+use crate::ToolRegistry;
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register all browser tool handlers (P1.2 migration).
+pub fn register(registry: &ToolRegistry, backend: Arc<dyn BrowserBackend>) {
+    let register_with = |name: &str, label: &str, risk: RiskLevel, handler: Arc<dyn ToolHandler>| {
+        registry.register_with_risk(
+            name,
+            name,
+            handler.schema(),
+            handler,
+            Arc::new(|| true),
+            vec![],
+            true,
+            "Browser automation tool",
+            label,
+            None,
+            risk,
+            false,
+        );
+    };
+
+    register_with(
+        "browser_navigate",
+        "🌐",
+        RiskLevel::Safe,
+        Arc::new(
+            BrowserNavigateHandler::new(backend.clone())
+                .with_cdp_bootstrap(crate::tools::cdp_bootstrap::DEFAULT_CDP_PORT),
+        ),
+    );
+    register_with(
+        "browser_snapshot",
+        "📸",
+        RiskLevel::Safe,
+        Arc::new(BrowserSnapshotHandler::new(backend.clone())),
+    );
+    register_with(
+        "browser_click",
+        "🖱️",
+        RiskLevel::Safe,
+        Arc::new(BrowserClickHandler::new(backend.clone())),
+    );
+    register_with(
+        "browser_type",
+        "⌨️",
+        RiskLevel::Safe,
+        Arc::new(BrowserTypeHandler::new(backend.clone())),
+    );
+    register_with(
+        "browser_scroll",
+        "📜",
+        RiskLevel::Safe,
+        Arc::new(BrowserScrollHandler::new(backend.clone())),
+    );
+    register_with(
+        "browser_back",
+        "⬅️",
+        RiskLevel::Safe,
+        Arc::new(BrowserBackHandler::new(backend.clone())),
+    );
+    register_with(
+        "browser_press",
+        "🔘",
+        RiskLevel::Safe,
+        Arc::new(BrowserPressHandler::new(backend.clone())),
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
