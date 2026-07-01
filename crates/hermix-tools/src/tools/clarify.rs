@@ -4,9 +4,34 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
+use crate::ToolRegistry;
 use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register this tool with the registry (P1.2 migration).
+pub fn register(registry: &ToolRegistry, backend: Arc<dyn ClarifyBackend>) {
+    let handler = Arc::new(ClarifyHandler::new(backend));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "clarify",
+        "clarify",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Ask the user a clarification question. Optionally provide choices for the user to select from.",
+        "❓",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // ClarifyBackend trait

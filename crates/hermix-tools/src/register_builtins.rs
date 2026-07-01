@@ -495,15 +495,7 @@ pub fn register_builtin_tools(
         Some(b) => b,
         None => Arc::new(crate::backends::clarify::SignalClarifyBackend::new()),
     };
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "clarify",
-        Arc::new(crate::tools::clarify::ClarifyHandler::new(clarify_backend)),
-        "❓",
-        vec![],
-        RiskLevel::Safe,
-    );
+    crate::tools::clarify::register(registry, clarify_backend);
 
     // -- Code execution ------------------------------------------------------
     reg_risk(
