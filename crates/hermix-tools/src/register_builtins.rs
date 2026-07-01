@@ -481,17 +481,9 @@ pub fn register_builtin_tools(
     crate::tools::clarify::register(registry, clarify_backend);
 
     // -- Code execution ------------------------------------------------------
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "code_execution",
-        Arc::new(crate::tools::code_execution::ExecuteCodeHandler::new(
-            Arc::new(crate::backends::code_execution::LocalCodeExecutionBackend::default()),
-        )),
-        "🖥️",
-        vec![],
-        RiskLevel::Caution,
-    );
+    let code_backend: Arc<dyn crate::tools::code_execution::CodeExecutionBackend> =
+        Arc::new(crate::backends::code_execution::LocalCodeExecutionBackend::default());
+    crate::tools::code_execution::register(registry, code_backend);
 
     // -- Delegation ----------------------------------------------------------
     let delegation_backend: Arc<dyn crate::tools::delegation::DelegationBackend> =

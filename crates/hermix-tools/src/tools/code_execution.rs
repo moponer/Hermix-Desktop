@@ -15,9 +15,34 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::sync::LazyLock;
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
+use crate::ToolRegistry;
 use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register this tool with the registry (P1.2 migration).
+pub fn register(registry: &ToolRegistry, backend: Arc<dyn CodeExecutionBackend>) {
+    let handler = Arc::new(ExecuteCodeHandler::new(backend));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "code_execution",
+        "code_execution",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Execute code in a local interpreter (Python etc). Inspects code for dangerous patterns before execution.",
+        "🖥️",
+        None,
+        RiskLevel::Caution,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // CodeExecutionBackend trait
