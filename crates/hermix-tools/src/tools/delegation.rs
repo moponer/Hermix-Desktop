@@ -18,8 +18,8 @@ pub fn register(registry: &ToolRegistry, backend: Arc<dyn DelegationBackend>) {
     let handler = Arc::new(DelegateTaskHandler::new(backend));
     let schema = handler.schema();
     registry.register_with_risk(
-        "delegation",
-        "delegation",
+        "delegate_task",
+        "delegate_task",
         schema,
         handler,
         Arc::new(|| true),
@@ -28,7 +28,7 @@ pub fn register(registry: &ToolRegistry, backend: Arc<dyn DelegationBackend>) {
         "Delegate a task to a sub-agent with an isolated context. The sub-agent will work independently and return results.",
         "🤝",
         None,
-        RiskLevel::Safe,
+        RiskLevel::Caution,
         false,
     );
 }

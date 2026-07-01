@@ -499,6 +499,15 @@ pub fn register_builtin_tools(
             "startup: re-enabled essential toolset floor (whitelist did not contain it)"
         );
     }
+
+    // -- P1.2 per-tool migrated tools ---------------------------------------
+    // Each tool in tools/*.rs now owns a self-registration function.
+    // They are invoked here so a single `register_builtin_tools` call
+    // wires up both the legacy in-file tools and the migrated ones.
+    // Note: the migrated tools do not yet honour `enabled_toolsets`
+    // (that is the planned P1.3 work). Until then they are always
+    // registered.
+    crate::tools::register_all(registry);
 }
 
 // `hermes_data_dir` / `dirs_home` were deleted: they bypassed

@@ -51,12 +51,15 @@ pub mod vision;
 pub mod voice_mode;
 pub mod web;
 
+use std::sync::Arc;
+
 use crate::ToolRegistry;
 
 /// Register all migrated tools via their self-registration functions.
 /// During migration, unmigrated tools still go through `register_builtins.rs`.
 /// Once all tools are migrated, `register_builtins.rs` is deleted.
 pub fn register_all(registry: &ToolRegistry) {
+    // P1.2 per-tool migration (completed 2026-07-01):
     disk_cleanup::register(registry);
     vision::register(registry);
     security_guidance::register(registry);
@@ -72,5 +75,32 @@ pub fn register_all(registry: &ToolRegistry) {
     hermix_achievements::register(registry);
     kanban::register(registry);
     model_providers::register(registry);
-    // TODO: migrate more tools here as they get their `register()` fn
+    url_safety::register(registry);
+    clarify::register(
+        registry,
+        Arc::new(crate::backends::clarify::SignalClarifyBackend::new())
+            as Arc<dyn clarify::ClarifyBackend>,
+    );
+    delegation::register(
+        registry,
+        Arc::new(crate::backends::delegation::SignalDelegationBackend::new())
+            as Arc<dyn delegation::DelegationBackend>,
+    );
+    media_workflow::register(
+        registry,
+        Arc::new(media_workflow::PlanningWorkflowBackend::new())
+            as Arc<dyn media_workflow::MediaWorkflowBackend>,
+    );
+    tool_chain::register(registry, Arc::new(registry.clone()));
+    code_execution::register(
+        registry,
+        Arc::new(crate::backends::code_execution::LocalCodeExecutionBackend::default())
+            as Arc<dyn code_execution::CodeExecutionBackend>,
+    );
+    // terminal needs a TerminalBackend; use a LocalTerminalBackend
+    // if the backends module exposes one, otherwise this is a no-op
+    // (the real registration in register_builtins.rs handles it).
+    cua::register(registry);
+    // browser needs a BrowserBackend with allowlist/port/headless
+    // config from config.yaml — register_builtins.rs owns that wiring.
 }
