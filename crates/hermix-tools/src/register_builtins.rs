@@ -159,17 +159,10 @@ pub fn register_builtin_tools(
     // `Caution` keeps the policy intent ("can affect the system, the
     // command shape decides whether to actually interrupt") aligned
     // with the gate's own design note.
-    reg_risk(
-        &enabled_toolsets,
+    crate::tools::terminal::register(
         registry,
-        "terminal",
-        Arc::new(crate::tools::terminal::TerminalHandler::new(
-            terminal_backend.clone(),
-            registry.terminal_workspace_handle(),
-        )),
-        "💻",
-        vec![],
-        RiskLevel::Caution,
+        terminal_backend.clone(),
+        registry.terminal_workspace_handle(),
     );
 
     // -- File tools ----------------------------------------------------------

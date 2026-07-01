@@ -3,13 +3,49 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 use hermix_core::{
     path_security::{forbidden_win32_prefix, strip_win32_long_path},
     tool_schema, CommandOutput, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema,
+    traits::RiskLevel,
 };
 
 use crate::approval::{ApprovalDecision, ApprovalManager};
+use crate::ToolRegistry;
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register the `terminal` tool with the registry (P1.2 migration).
+///
+/// Pass the same `terminal_workspace` handle used by other terminal-touching
+/// tools (and the agent service) so per-turn workspace updates propagate
+/// here too. Test-only callers without a registry workspace can pass
+/// `Arc::new(RwLock::new(None))`.
+pub fn register(
+    registry: &ToolRegistry,
+    backend: Arc<dyn TerminalBackend>,
+    terminal_workspace: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
+) {
+    let handler = Arc::new(TerminalHandler::new(backend, terminal_workspace));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "terminal",
+        "terminal",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Execute a shell command in a sandboxed process. Per-command risk is decided by an internal ApprovalManager; this tool-level risk is Caution (commands may have side effects).",
+        "💻",
+        None,
+        RiskLevel::Caution,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // TerminalHandler
