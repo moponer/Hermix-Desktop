@@ -37,7 +37,7 @@ use indexmap::IndexMap;
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel as CoreRisk};
 use hermix_cua::{
     action::{self, MouseButton},
     capture::{self, CaptureConfig, MonitorInfo, ScreenshotResult},
@@ -45,6 +45,47 @@ use hermix_cua::{
     safety::{RiskLevel, SafetyGuard},
     trace::{TraceEvent, TraceKind, TraceRecorder},
 };
+
+use crate::ToolRegistry;
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register all CUA (computer-use automation) tool handlers (P1.2 migration).
+pub fn register(registry: &ToolRegistry) {
+    let register_one = |name: &str, label: &str, risk: CoreRisk, handler: Arc<dyn ToolHandler>| {
+        registry.register_with_risk(
+            name,
+            name,
+            handler.schema(),
+            handler,
+            Arc::new(|| true),
+            vec![],
+            true,
+            "Computer-Use Automation tool",
+            label,
+            None,
+            risk,
+            false,
+        );
+    };
+
+    register_one("cua_screenshot", "📸", CoreRisk::Dangerous, Arc::new(CuaScreenshotHandler::new()));
+    register_one("cua_screen_info", "🖥️", CoreRisk::Dangerous, Arc::new(CuaScreenInfoHandler::new()));
+    register_one("cua_left_click", "🖱️", CoreRisk::Dangerous, Arc::new(CuaLeftClickHandler::new()));
+    register_one("cua_type_text", "⌨️", CoreRisk::Dangerous, Arc::new(CuaTypeTextHandler::new()));
+    register_one("cua_press_key", "🔘", CoreRisk::Dangerous, Arc::new(CuaPressKeyHandler::new()));
+    register_one("cua_list_windows", "🪟", CoreRisk::Dangerous, Arc::new(CuaListWindowsHandler::new()));
+    register_one("cua_window_at_point", "🎯", CoreRisk::Dangerous, Arc::new(CuaWindowAtPointHandler::new()));
+    register_one("cua_click_window", "👆", CoreRisk::Dangerous, Arc::new(CuaClickWindowHandler::new()));
+    register_one("cua_ui_tree", "🌳", CoreRisk::Dangerous, Arc::new(CuaUiTreeHandler::new()));
+    register_one("cua_ui_find", "🔎", CoreRisk::Dangerous, Arc::new(CuaUiFindHandler::new()));
+    register_one("cua_ui_click", "👆", CoreRisk::Dangerous, Arc::new(CuaUiClickHandler::new()));
+    register_one("cua_ui_focus", "🎯", CoreRisk::Dangerous, Arc::new(CuaUiFocusHandler::new()));
+    register_one("cua_ui_invoke", "⚙️", CoreRisk::Dangerous, Arc::new(CuaUiInvokeHandler::new()));
+    register_one("cua_ocr_recognize", "🔤", CoreRisk::Safe, Arc::new(CuaOcrRecognizeHandler::new()));
+}
 
 // ---------------------------------------------------------------------------
 // Shared guard + recorder

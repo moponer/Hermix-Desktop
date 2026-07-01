@@ -165,6 +165,9 @@ pub fn register_builtin_tools(
         registry.terminal_workspace_handle(),
     );
 
+    // -- Computer-Use Automation (CUA) tools (P1.2 migrated to tools/cua.rs) --
+    crate::tools::cua::register(registry);
+
     // -- File tools ----------------------------------------------------------
     reg_risk(
         &enabled_toolsets,
@@ -345,105 +348,12 @@ pub fn register_builtin_tools(
     // dispatch layer in `LocalAgentService::decide_pre_tool_dispatch`
     // requires explicit user approval in `PermissionLevel::Default`.
 
-    // -- CUA (self-hosted Computer-Use Automation, Phase 1) -----------------
-    // Five-tool toolset backed by the `hermix-cua` crate (BitBlt
-    // capture + `SendInput` injection, no third-party runtime).
-    // Each tool is independently Dangerous because every call
-    // either exposes the user's desktop (screenshot → privacy)
-    // or mutates input state (click / type / press_key →
-    // destructive if mis-targeted). The pre-tool-dispatch layer
-    // prompts the user in `PermissionLevel::Default`.
-    //
-    // The existing `computer_use` handler above stays registered
-    // — it is the broader 10-action surface (clipboard, scroll,
-    // multi-display) that lives on the `enigo` / `xcap` /
-    // `arboard` stack. The five CUA tools are the lower-cost
-    // sibling toolset for tasks that only need the Phase 1
-    // primitives; the dispatch gate decides which surface an
-    // agent call resolves to based on the tool name.
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "computer_use",
-        Arc::new(crate::tools::cua::CuaScreenshotHandler::new()),
-        "📸",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "computer_use",
-        Arc::new(crate::tools::cua::CuaScreenInfoHandler::new()),
-        "🖥️",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "computer_use",
-        Arc::new(crate::tools::cua::CuaLeftClickHandler::new()),
-        "🖱️",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "computer_use",
-        Arc::new(crate::tools::cua::CuaTypeTextHandler::new()),
-        "⌨️",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "computer_use",
-        Arc::new(crate::tools::cua::CuaPressKeyHandler::new()),
-        "🔘",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-
-    // -- Phase 2-B: UIA element recognition (Win32 layer) -------------------
-    // Three new handlers in the same `cua` toolset so the LLM sees
-    // one cohesive desktop-automation toolset of 8 tools. Risk is
-    // Dangerous for all three — `cua_click_window` issues a real
-    // mouse click via SendInput, so it MUST go through the same
-    // pre-tool approval card as the Phase 1 set.
-
-    // -- CUA Phase 2-C: UIA element-tree handlers -------------------------
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "computer_use",
-        Arc::new(crate::tools::cua::CuaUiTreeHandler::new()),
-        "🌳",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "computer_use",
-        Arc::new(crate::tools::cua::CuaUiClickHandler::new()),
-        "👆",
-        vec![],
-        RiskLevel::Dangerous,
-    );
-
-    // -- CUA Phase 2-D: OCR -----------------------------------------------
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "computer_use",
-        Arc::new(crate::tools::cua::CuaOcrRecognizeHandler::new()),
-        "🔤",
-        vec![],
-        RiskLevel::Safe, // read-only, no mouse/keyboard injection
-    );
+    // -- CUA (self-hosted Computer-Use Automation) --------------------------
+    // Migrated to tools/cua.rs::register (P1.2 per-tool migration, 2026-07-01).
+    // 14 handlers total: Phase 1 primitives (screenshot, screen info,
+    // click, type, press key), Phase 2-A (window list, window at
+    // point, click window), Phase 2-B UIA (ui_tree, ui_find, ui_click,
+    // ui_focus, ui_invoke), Phase 2-D OCR (read-only, Safe).
 
     // -- Hermes achievements -------------------------------------------------
     // Migrated to tools/hermix_achievements.rs::register (P1.2 per-tool migration).
