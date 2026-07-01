@@ -35,8 +35,14 @@ pub fn register(registry: &ToolRegistry) {
         crate::backends::messaging::SignalMessagingBackend::new(),
     )));
     let schema = handler.schema();
+    // Register key MUST equal `schema.name` ("send_message") — the dispatch
+    // gate (`registry.risk_level(name)`), sub-agent safety hooks
+    // (`sub_agent_safety.rs`), and `toolset.rs::TOOLSET_MESSAGING` all look
+    // up the tool by that public-facing name. The `toolset` *category*
+    // stays "messaging" (a Toolset grouping of channel tools); only the
+    // lookup key aligns with `schema.name`.
     registry.register_with_risk(
-        "messaging",
+        "send_message",
         "messaging",
         schema,
         handler,
@@ -46,7 +52,7 @@ pub fn register(registry: &ToolRegistry) {
         "Send a message to a user on a configured channel (Telegram, Discord, Signal, etc.).",
         "💬",
         None,
-        RiskLevel::Safe,
+        RiskLevel::Caution,
         false,
     );
 }
