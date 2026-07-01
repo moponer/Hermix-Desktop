@@ -511,16 +511,9 @@ pub fn register_builtin_tools(
     );
 
     // -- Delegation ----------------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "delegation",
-        Arc::new(crate::tools::delegation::DelegateTaskHandler::new(
-            Arc::new(crate::backends::delegation::SignalDelegationBackend::new()),
-        )),
-        "🤝",
-        vec![],
-    );
+    let delegation_backend: Arc<dyn crate::tools::delegation::DelegationBackend> =
+        Arc::new(crate::backends::delegation::SignalDelegationBackend::new());
+    crate::tools::delegation::register(registry, delegation_backend);
 
     // -- Cronjob -------------------------------------------------------------
     // Migrated to tools/cronjob.rs::register (P1.2 per-tool migration).

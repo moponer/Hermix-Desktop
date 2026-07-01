@@ -4,9 +4,34 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
+use crate::ToolRegistry;
 use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register this tool with the registry (P1.2 migration).
+pub fn register(registry: &ToolRegistry, backend: Arc<dyn DelegationBackend>) {
+    let handler = Arc::new(DelegateTaskHandler::new(backend));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "delegation",
+        "delegation",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Delegate a task to a sub-agent with an isolated context. The sub-agent will work independently and return results.",
+        "🤝",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // DelegationBackend trait
