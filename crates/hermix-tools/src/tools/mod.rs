@@ -15,9 +15,7 @@
 
 pub mod aliases;
 pub mod browser;
-pub mod browser_supervisor;
 pub mod cdp_bootstrap;
-pub mod cdp_supervisor;
 pub mod clarify;
 pub mod code_execution;
 pub mod cronjob;
