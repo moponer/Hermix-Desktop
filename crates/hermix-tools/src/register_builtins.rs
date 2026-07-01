@@ -265,16 +265,9 @@ pub fn register_builtin_tools(
     // -- Audio generation (music, SFX, voice cloning) ------------------------
 
     // -- Media workflow orchestrator -----------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "media",
-        Arc::new(crate::tools::media_workflow::MediaWorkflowHandler::new(
-            Arc::new(crate::tools::media_workflow::PlanningWorkflowBackend::new()),
-        )),
-        "🎞️",
-        vec![],
-    );
+    let media_backend: Arc<dyn crate::tools::media_workflow::MediaWorkflowBackend> =
+        Arc::new(crate::tools::media_workflow::PlanningWorkflowBackend::new());
+    crate::tools::media_workflow::register(registry, media_backend);
 
     // -- Skills (3 tools) ----------------------------------------------------
     reg_risk(

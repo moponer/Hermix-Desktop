@@ -13,9 +13,36 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
+use crate::ToolRegistry;
 use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register this tool with the registry (P1.2 migration).
+pub fn register(registry: &ToolRegistry, backend: Arc<dyn MediaWorkflowBackend>) {
+    let handler = Arc::new(MediaWorkflowHandler::new(backend));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "media",
+        "media",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Plan and execute multimodal media creation workflows. Chains image generation (GPT Image), \
+         video generation (SeedDance2), and audio synthesis (TTS) into end-to-end pipelines. \
+         Returns a structured execution plan with step-by-step results.",
+        "🎞️",
+        None,
+        RiskLevel::Safe,
+        false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // MediaWorkflowBackend trait
