@@ -26,8 +26,10 @@ use std::sync::Arc;
 pub fn register(registry: &ToolRegistry, backend: Arc<dyn MediaWorkflowBackend>) {
     let handler = Arc::new(MediaWorkflowHandler::new(backend));
     let schema = handler.schema();
+    // Register key MUST equal schema.name ("media_workflow") — see messaging.rs
+    // commit for the rationale (dispatch / risk_level lookups by schema.name).
     registry.register_with_risk(
-        "media",
+        "media_workflow",
         "media",
         schema,
         handler,

@@ -149,7 +149,7 @@ pub fn register(registry: &ToolRegistry) {
         let handler = Arc::new(ImageGenerateHandler::new(Arc::new(backend)));
         let schema = handler.schema();
         registry.register_with_risk(
-            "fal_image_gen",
+            "image_generate",
             "image_gen",
             schema,
             handler,
@@ -176,7 +176,7 @@ pub fn register(registry: &ToolRegistry) {
         let handler = Arc::new(crate::tools::gpt_image::GptImageHandler::new(Arc::new(backend)));
         let schema = handler.schema();
         registry.register_with_risk(
-            "gpt_image",
+            "gpt_image_generate",
             "image_gen",
             schema,
             handler,

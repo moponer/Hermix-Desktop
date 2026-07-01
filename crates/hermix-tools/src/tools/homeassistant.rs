@@ -32,7 +32,7 @@ pub fn register(registry: &ToolRegistry) {
     let handler = Arc::new(HaListEntitiesHandler::new(ha_backend.clone()));
     let schema = handler.schema();
     registry.register_with_risk(
-        "homeassistant__list",
+        "ha_list_entities",
         "homeassistant",
         schema,
         handler,
@@ -50,7 +50,7 @@ pub fn register(registry: &ToolRegistry) {
     let handler = Arc::new(HaGetStateHandler::new(ha_backend.clone()));
     let schema = handler.schema();
     registry.register_with_risk(
-        "homeassistant__get",
+        "ha_get_state",
         "homeassistant",
         schema,
         handler,
@@ -68,7 +68,7 @@ pub fn register(registry: &ToolRegistry) {
     let handler = Arc::new(HaListServicesHandler::new(ha_backend.clone()));
     let schema = handler.schema();
     registry.register_with_risk(
-        "homeassistant__list_services",
+        "ha_list_services",
         "homeassistant",
         schema,
         handler,
@@ -86,7 +86,7 @@ pub fn register(registry: &ToolRegistry) {
     let handler = Arc::new(HaCallServiceHandler::new(ha_backend));
     let schema = handler.schema();
     registry.register_with_risk(
-        "homeassistant__call_service",
+        "ha_call_service",
         "homeassistant",
         schema,
         handler,

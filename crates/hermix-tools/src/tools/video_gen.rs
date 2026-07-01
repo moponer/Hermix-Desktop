@@ -23,10 +23,10 @@ pub fn register(registry: &ToolRegistry) {
             )
         });
     let backend = Arc::new(backend);
-    let handler = Arc::new(VideoGenerateHandler::new(backend));
+    let handler = Arc::new(VideoGenerateHandler::new(backend.clone()));
     let schema = handler.schema();
     registry.register_with_risk(
-        "video",
+        "video_generate",
         "video",
         schema,
         handler,
@@ -37,6 +37,26 @@ pub fn register(registry: &ToolRegistry) {
         "🎬",
         None,
         RiskLevel::Caution,
+        false,
+    );
+
+    // VideoStatusHandler was implemented (schema.name = "video_status") but
+    // never registered — P1.2 migration overlooked it. Wire it up so the
+    // LLM can poll task status, matching the canonical schema name.
+    let status_handler = Arc::new(VideoStatusHandler::new(backend.clone()));
+    let status_schema = status_handler.schema();
+    registry.register_with_risk(
+        "video_status",
+        "video",
+        status_schema,
+        status_handler,
+        Arc::new(|| true),
+        vec![],
+        false,
+        "Check the status of a pending video generation task. Returns progress, status, and download URL when complete.",
+        "📊",
+        None,
+        RiskLevel::Safe,
         false,
     );
 }

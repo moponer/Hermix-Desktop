@@ -76,8 +76,12 @@ use crate::registry::ToolRegistry;
 pub fn register(registry: &ToolRegistry, dispatch_registry: Arc<ToolRegistry>) {
     let handler = Arc::new(CompactToolChainHandler::new(dispatch_registry));
     let schema = handler.schema();
+    // Register key MUST equal schema.name ("compact_tool_chain") — see
+    // messaging.rs commit. NOTE: the ACP `/compact` slash command
+    // (hermix-acp/src/handler.rs:59) is an unrelated name; only this
+    // tool uses "compact_tool_chain" as a lookup key.
     registry.register_with_risk(
-        "compact",
+        "compact_tool_chain",
         "compact",
         schema,
         handler,

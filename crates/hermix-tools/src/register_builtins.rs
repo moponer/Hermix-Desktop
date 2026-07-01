@@ -847,10 +847,10 @@ mod tests {
             "skills_get",
             "skills_install",
             "clarify",
-            "homeassistant__list",
-            "homeassistant__get",
-            "homeassistant__list_services",
-            "homeassistant__call_service",
+            "ha_list_entities",
+            "ha_get_state",
+            "ha_list_services",
+            "ha_call_service",
             "platforms",
             "model_providers",
             "security_guidance",
@@ -865,6 +865,12 @@ mod tests {
             "evolution_set",
             "autonomy_guidance",
             "self_restart",
+            "image_generate",
+            "gpt_image_generate",
+            "video_generate",
+            "video_status",
+            "media_workflow",
+            "compact_tool_chain",
         ];
         for name in candidates {
             if let Some(risk) = registry.risk_level(name) {
