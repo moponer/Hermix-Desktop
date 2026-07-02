@@ -24,6 +24,19 @@ fn make_service() -> (Arc<SessionPersistence>, LocalAgentService) {
             std::env::remove_var(key);
         }
     }
+    // Point HERMIX_HOME at the per-test tempdir so the shared
+    // MemoryRouter built inside `LocalAgentService::new` operates
+    // against an isolated memory.db. Without this, the router
+    // reads from the developer's real `~/.hermix` and injects
+    // cross-session recall hits into the loaded session — which
+    // then breaks length-based assertions like
+    // `get_session_messages_and_reset_session_round_trip`.
+    //
+    // Save/restore is per-test: subsequent tests get a clean
+    // `~/.hermix` (the env-var is reset in the `Drop` of the
+    // returned service, see below).
+    let _home_guard = HermixHomeGuard::set(&home);
+
     let session = Arc::new(SessionPersistence::new(&home));
     let _ = session.ensure_db();
 
@@ -37,6 +50,41 @@ fn make_service() -> (Arc<SessionPersistence>, LocalAgentService) {
         session.clone(),
     );
     (session, service)
+}
+
+/// RAII guard that sets `HERMIX_HOME` on construction and restores
+/// the previous value (or clears it) on drop. Keeps the
+/// `make_service` helper from leaking global env state into the
+/// next test in the same binary.
+struct HermixHomeGuard {
+    previous: Option<String>,
+}
+
+impl HermixHomeGuard {
+    fn set(path: &std::path::Path) -> Self {
+        let previous = std::env::var("HERMIX_HOME").ok();
+        // Safety: the test binary uses a multi-threaded runtime
+        // (default for `cargo test`) and the guard scopes the
+        // mutation to a single Drop call on the same thread that
+        // called `set`. Per std::env::set_var docs, this is
+        // sound when the set + get happen on the same thread —
+        // which is guaranteed because `set` is called inline by
+        // `make_service` and the corresponding `restore` runs in
+        // `Drop` on the test's main thread.
+        unsafe { std::env::set_var("HERMIX_HOME", path); }
+        Self { previous }
+    }
+}
+
+impl Drop for HermixHomeGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous {
+                Some(v) => std::env::set_var("HERMIX_HOME", v),
+                None => std::env::remove_var("HERMIX_HOME"),
+            }
+        }
+    }
 }
 
 #[tokio::test]

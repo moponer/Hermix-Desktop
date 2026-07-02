@@ -1940,9 +1940,20 @@ impl AgentService for LocalAgentService {
 /// a missing `memory.db` to break session loading.
 fn build_shared_memory_router(session_label: &'static str) -> Option<Arc<hermix_focus::MemoryRouter>> {
     let hermix_home_str = hermix_config::paths::hermix_home().to_string_lossy().into_owned();
-    let result = tokio::task::block_in_place(|| {
-        crate::memory_layer_adapter::all_plugins_as_router(session_label, &hermix_home_str)
-    });
+    // `block_in_place` panics when called from a current_thread runtime
+    // (which is what `#[tokio::test]` defaults to). Detect the runtime
+    // flavor and fall back to a direct call so test builds work the
+    // same as production. The plugin construction is CPU-bound, so
+    // calling it inline is functionally equivalent to blocking in place
+    // for the multi-thread case.
+    let result = match tokio::runtime::Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread => {
+            crate::memory_layer_adapter::all_plugins_as_router(session_label, &hermix_home_str)
+        }
+        _ => tokio::task::block_in_place(|| {
+            crate::memory_layer_adapter::all_plugins_as_router(session_label, &hermix_home_str)
+        }),
+    };
     let backend_count = result.backend_count();
     tracing::info!(
         target: "hermix.agent",
