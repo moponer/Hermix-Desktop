@@ -123,3 +123,28 @@ cache/
 logs/
 webview-cache/
 .hermix-data/
+
+# 2026-07-02: one-shot refactor helper scripts that survived P1/P2
+# as untracked roots. They were never wired into a Cargo.toml or
+# a CI step. Delete them; if a future migration needs the same
+# pattern, resurrect from git history (commit `b8e21fb`) instead
+# of keeping them around as noise.
+cleanup_lib.py
+cleanup_mods.py
+cleanup_tools.py
+rename_toolset.py
+test_backend.py
+
+# 2026-07-02: stale Tauri template residue. `%BIN_DIR%` was
+# created by an old `pnpm tauri build` attempt that passed an
+# unexpanded Cargo placeholder as a literal directory name; the
+# `src-tauri/$null` is a Windows cmd.exe `>` redirect artifact.
+# Both are zero-byte / out-of-tree — never to be committed.
+apps/desktop-tauri/%BIN_DIR%/
+apps/desktop-tauri/src-tauri/$null
+
+# 2026-07-02: the release zip is always rebuilt by package-zip.ps1;
+# committing the binary would bloat git history. The script writes
+# to repo root for convenience; if it ever needs to move, change
+# both `package-zip.ps1` and this line together.
+/HermixDesktop.zip

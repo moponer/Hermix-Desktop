@@ -1,0 +1,1145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hermix Desktop — Redesign v2 · Dark</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+/* ════════════════════════════════════════════════════════════════════
+   Hermix Desktop — Redesign v2 (DARK)
+   风格: Linear / Raycast 极简工具感
+   配色: 深石墨 (#0E0F12) 底 + 米白强调 + 紫色 accent
+   ════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Surfaces (深色分层，参考 Linear/Raycast) ── */
+  --bg-base: #0E0F12;        /* 整体背景 */
+  --bg-sidebar: #111317;     /* 侧栏，比 base 浅一点 */
+  --bg-main: #0E0F12;        /* 主区 */
+  --bg-right: #111317;      /* 右栏 */
+  --bg-elevated: #18191E;   /* 卡片/输入框 */
+  --bg-elevated-2: #1F2026; /* hover/二级浮层 */
+  --bg-hover: rgba(255,255,255,.04);
+  --bg-active: rgba(255,255,255,.07);
+  --bg-chip: rgba(255,255,255,.06);
+  --bg-input: #18191E;
+
+  /* ── Borders ── */
+  --border-subtle: rgba(255,255,255,.06);
+  --border: rgba(255,255,255,.09);
+  --border-strong: rgba(255,255,255,.14);
+
+  /* ── Text ── */
+  --text-primary: #EDEDEF;
+  --text-secondary: #B5B5BC;
+  --text-tertiary: #7C7C85;
+  --text-muted: #54545C;
+
+  /* ── Accent ── */
+  --accent: #A78BFA;       /* 紫罗兰 (主强调) */
+  --accent-hover: #B89CFC;
+  --accent-on: #1A0F33;    /* accent 上的文字色（深紫） */
+  --accent-soft: rgba(167, 139, 250, .14);
+
+  /* ── Semantic ── */
+  --success: #4ADE80;
+  --success-soft: rgba(74, 222, 128, .12);
+  --warning: #FBBF24;
+  --warning-soft: rgba(251, 191, 36, .12);
+  --error: #F87171;
+  --error-soft: rgba(248, 113, 113, .12);
+  --link: #60A5FA;
+
+  /* ── Radius ── */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 12px;
+  --r-2xl: 16px;
+
+  /* ── Shadows (暗色模式阴影更克制) ── */
+  --shadow-pop: 0 4px 16px rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.3);
+  --shadow-modal: 0 24px 60px rgba(0,0,0,.6), 0 8px 24px rgba(0,0,0,.4);
+  --shadow-glow: 0 0 0 4px var(--accent-soft);
+
+  /* ── Type ── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+
+  /* ── Motion ── */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--text-primary);
+  background: #06070A;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  letter-spacing: -0.01em;
+}
+
+button { font-family: inherit; cursor: pointer; }
+input, textarea { font-family: inherit; }
+
+/* ────────── Window Frame ────────── */
+.window {
+  width: 1440px;
+  height: 900px;
+  margin: 24px auto;
+  background: var(--bg-base);
+  border-radius: 14px;
+  box-shadow:
+    0 30px 100px rgba(0,0,0,.6),
+    0 10px 30px rgba(0,0,0,.3),
+    inset 0 0 0 1px rgba(255,255,255,.04);
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 256px 1fr 320px;
+  grid-template-rows: 44px 1fr;
+  grid-template-areas:
+    "title title title"
+    "side  main  right";
+}
+
+/* ── Title Bar ── */
+.titlebar {
+  grid-area: title;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  position: relative;
+}
+.titlebar-drag {
+  position: absolute; inset: 0;
+  -webkit-app-region: drag;
+}
+.window-controls {
+  display: flex; gap: 8px;
+  -webkit-app-region: no-drag;
+  z-index: 1;
+}
+.window-btn {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 0;
+  cursor: pointer;
+}
+.window-btn.close { background: #FF5F57; }
+.window-btn.min   { background: #FEBC2E; }
+.window-btn.max   { background: #28C840; }
+.titlebar-title {
+  flex: 1; text-align: center;
+  font-size: 12px; font-weight: 500;
+  color: var(--text-tertiary);
+  z-index: 1;
+  -webkit-app-region: no-drag;
+  letter-spacing: 0;
+}
+.titlebar-actions {
+  display: flex; gap: 4px;
+  -webkit-app-region: no-drag;
+  z-index: 1;
+}
+.icon-btn {
+  width: 26px; height: 26px;
+  border: none; background: transparent;
+  border-radius: var(--r-sm);
+  display: grid; place-items: center;
+  cursor: pointer; color: var(--text-tertiary);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ────────── Sidebar ────────── */
+.sidebar {
+  grid-area: side;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-subtle);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+/* Brand */
+.brand {
+  padding: 14px 14px 10px;
+  display: flex; align-items: center; gap: 10px;
+}
+.brand-logo {
+  width: 24px; height: 24px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #A78BFA 0%, #6D5DD3 100%);
+  display: grid; place-items: center;
+  color: white; font-size: 12px; font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(167,139,250,.25), inset 0 1px 0 rgba(255,255,255,.2);
+}
+.brand-name {
+  font-size: 13px; font-weight: 600; letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+.brand-ver {
+  font-size: 10px; font-weight: 500; color: var(--text-tertiary);
+  background: var(--bg-chip);
+  padding: 1px 5px; border-radius: 4px;
+  margin-left: 2px;
+}
+
+/* Primary CTA */
+.new-chat {
+  margin: 4px 10px 12px;
+  padding: 7px 12px;
+  background: var(--accent);
+  color: var(--accent-on);
+  border: none;
+  border-radius: var(--r-md);
+  font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  gap: 6px;
+  box-shadow: 0 0 0 1px rgba(167,139,250,.35), 0 1px 2px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.2);
+  transition: all var(--dur-fast) var(--ease);
+}
+.new-chat:hover { background: var(--accent-hover); transform: translateY(-0.5px); }
+.new-chat-icon { width: 12px; height: 12px; display: grid; place-items: center; }
+kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: rgba(26, 15, 51, .25);
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: auto;
+  color: var(--accent-on);
+  font-weight: 500;
+}
+
+/* Nav */
+.nav-list { padding: 0 8px; margin-bottom: 6px; }
+.nav-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 10px;
+  border-radius: var(--r-md);
+  font-size: 13px; font-weight: 450;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.nav-item:hover { background: var(--bg-hover); }
+.nav-item.active {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.nav-item .icon {
+  width: 16px; height: 16px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.nav-item.active .icon { color: var(--accent); }
+.nav-item .badge {
+  margin-left: auto;
+  background: var(--bg-chip);
+  color: var(--text-secondary);
+  font-size: 10px; font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  min-width: 18px; text-align: center;
+}
+.nav-item.active .badge {
+  background: var(--accent);
+  color: var(--accent-on);
+}
+
+/* Section label */
+.section-label {
+  display: flex; align-items: center;
+  padding: 14px 14px 4px;
+  font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.section-label .add {
+  margin-left: auto; cursor: pointer;
+  display: grid; place-items: center;
+  width: 18px; height: 18px;
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  transition: all var(--dur-fast) var(--ease);
+}
+.section-label .add:hover { opacity: 1; background: var(--bg-hover); color: var(--text-primary); }
+
+/* Session list */
+.session-list { padding: 0 6px; }
+.session-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px;
+  border-radius: var(--r-md);
+  font-size: 12.5px; font-weight: 450;
+  color: var(--text-secondary);
+  cursor: pointer;
+  position: relative;
+}
+.session-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.session-item.active {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.session-item .dot {
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+.session-item.active .dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.session-item .time {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Footer */
+.sidebar-footer {
+  margin-top: auto;
+  border-top: 1px solid var(--border-subtle);
+  padding: 10px 12px;
+  display: flex; align-items: center; gap: 10px;
+}
+.avatar {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
+  display: grid; place-items: center;
+  color: white; font-size: 11px; font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.15);
+}
+.user-info { flex: 1; min-width: 0; }
+.user-name {
+  font-size: 12.5px; font-weight: 500; color: var(--text-primary);
+  display: flex; align-items: center; gap: 5px;
+}
+.user-status {
+  font-size: 10.5px; color: var(--success);
+  display: flex; align-items: center; gap: 4px;
+}
+.user-status::before {
+  content: ''; width: 6px; height: 6px;
+  background: var(--success); border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--success-soft);
+}
+
+/* ────────── Main Chat ────────── */
+.main {
+  grid-area: main;
+  background: var(--bg-main);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 顶栏 */
+.chat-topbar {
+  height: 44px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(14, 15, 18, .7);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  z-index: 2;
+}
+.chat-topbar .crumbs {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+.chat-topbar .crumbs strong {
+  font-weight: 500; color: var(--text-primary);
+}
+.chat-topbar .sep { color: var(--text-muted); }
+.chat-topbar .spacer { flex: 1; }
+.chat-topbar .actions { display: flex; gap: 2px; }
+
+/* Messages */
+.messages {
+  flex: 1; overflow-y: auto;
+  padding: 24px 0 12px;
+  scroll-behavior: smooth;
+}
+.messages::-webkit-scrollbar { width: 8px; }
+.messages::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
+.messages:hover::-webkit-scrollbar-thumb { background: var(--border); }
+
+.msg {
+  max-width: 720px;
+  margin: 0 auto 20px;
+  padding: 0 32px;
+  display: flex; gap: 12px;
+  animation: fadeIn .3s var(--ease);
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.msg-avatar {
+  width: 26px; height: 26px;
+  border-radius: 7px;
+  flex-shrink: 0;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 600;
+  margin-top: 1px;
+}
+.msg-avatar.user {
+  background: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
+  color: white;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.2);
+}
+.msg-avatar.assistant {
+  background: linear-gradient(135deg, #A78BFA 0%, #6D5DD3 100%);
+  color: white;
+  box-shadow: 0 0 0 1px rgba(167,139,250,.25), 0 2px 6px rgba(167,139,250,.2);
+}
+
+.msg-body { flex: 1; min-width: 0; }
+.msg-meta {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 4px;
+}
+.msg-author {
+  font-size: 12.5px; font-weight: 600;
+  color: var(--text-primary);
+}
+.msg-time {
+  font-size: 11px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.msg-content {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  letter-spacing: -0.005em;
+}
+.msg-content p { margin-bottom: 8px; }
+.msg-content p:last-child { margin-bottom: 0; }
+.msg-content code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-chip);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--accent);
+}
+.msg-content .file-link {
+  color: var(--link);
+  font-weight: 500;
+  text-decoration: none;
+}
+.msg-content .file-link:hover { text-decoration: underline; }
+
+/* Tool Card (Linear 风格) */
+.tool-card {
+  margin-top: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  max-width: 580px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.2);
+}
+.tool-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-elevated-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tool-icon {
+  width: 18px; height: 18px;
+  background: var(--accent-soft);
+  border-radius: 5px;
+  display: grid; place-items: center;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px; font-weight: 700;
+}
+.tool-name {
+  font-size: 12px; font-weight: 500;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+.tool-tag {
+  font-size: 10px; font-weight: 500;
+  background: var(--warning-soft);
+  color: var(--warning);
+  padding: 1px 6px; border-radius: 4px;
+  border: 0.5px solid rgba(251, 191, 36, .25);
+}
+.tool-tag.success {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: rgba(74, 222, 128, .25);
+}
+.tool-status {
+  margin-left: auto;
+  font-size: 11px;
+  display: flex; align-items: center; gap: 4px;
+  color: var(--success);
+  font-weight: 500;
+}
+.tool-body {
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.tool-body .key { color: var(--text-tertiary); }
+.tool-body .str { color: #4ADE80; }
+.tool-body .path { color: var(--text-primary); font-weight: 500; }
+
+/* User bubble */
+.msg.user { justify-content: flex-end; }
+.msg.user .msg-body { display: flex; justify-content: flex-end; }
+.msg-bubble {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  border-radius: 12px 12px 4px 12px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  max-width: 480px;
+  color: var(--text-primary);
+}
+
+/* Thinking dots */
+.thinking {
+  display: flex; align-items: center; gap: 4px;
+  padding: 8px 0;
+}
+.thinking span {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s infinite var(--ease);
+}
+.thinking span:nth-child(2) { animation-delay: .15s; }
+.thinking span:nth-child(3) { animation-delay: .3s; }
+@keyframes pulse {
+  0%, 60%, 100% { opacity: .3; transform: scale(.8); }
+  30% { opacity: 1; transform: scale(1); }
+}
+
+/* ────────── Input Area ────────── */
+.input-area {
+  padding: 8px 32px 16px;
+  background: linear-gradient(to bottom, rgba(14,15,18,0) 0%, var(--bg-main) 30%);
+  position: relative;
+}
+.input-wrap {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.composer {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.2);
+  overflow: hidden;
+  transition: all var(--dur-base) var(--ease);
+}
+.composer:focus-within {
+  border-color: rgba(167,139,250,.5);
+  box-shadow: 0 0 0 4px var(--accent-soft), 0 1px 2px rgba(0,0,0,.2);
+}
+.composer textarea {
+  width: 100%;
+  border: none; outline: none;
+  resize: none;
+  padding: 12px 14px 4px;
+  font-size: 13.5px; line-height: 1.55;
+  color: var(--text-primary);
+  background: transparent;
+  min-height: 56px; max-height: 200px;
+}
+.composer textarea::placeholder { color: var(--text-muted); }
+.composer-toolbar {
+  padding: 6px 8px 8px;
+  display: flex; align-items: center;
+  gap: 4px;
+}
+.composer-toolbar .left { display: flex; gap: 2px; align-items: center; }
+.composer-toolbar .right { margin-left: auto; display: flex; gap: 4px; align-items: center; }
+
+.model-pill {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--r-md);
+  font-size: 12px; font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-chip);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.model-pill:hover { background: var(--bg-active); color: var(--text-primary); }
+.model-pill .sparkle {
+  color: var(--accent);
+  display: grid; place-items: center;
+}
+.model-pill .chev { color: var(--text-muted); display: grid; place-items: center; }
+
+.send-btn {
+  width: 30px; height: 30px;
+  border-radius: var(--r-md);
+  border: none;
+  background: var(--bg-chip);
+  color: var(--text-muted);
+  display: grid; place-items: center;
+  cursor: not-allowed;
+  transition: all var(--dur-fast) var(--ease);
+}
+.send-btn.ready {
+  background: var(--accent);
+  color: var(--accent-on);
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(167,139,250,.35), 0 2px 6px rgba(167,139,250,.25);
+}
+.send-btn.ready:hover { background: var(--accent-hover); }
+
+.input-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  display: flex; justify-content: center; gap: 4px;
+}
+.input-hint kbd {
+  font-family: var(--font-mono);
+  background: var(--bg-chip);
+  padding: 0 4px; border-radius: 3px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin: 0 2px;
+}
+
+/* ────────── Right Panel ────────── */
+.right {
+  grid-area: right;
+  background: var(--bg-right);
+  border-left: 1px solid var(--border-subtle);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.right-header {
+  padding: 12px 16px 10px;
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.right-header .title {
+  font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; gap: 6px;
+}
+.right-header .count {
+  font-size: 11px; font-weight: 500;
+  color: var(--text-tertiary);
+  background: var(--bg-chip);
+  padding: 1px 6px; border-radius: 4px;
+}
+.right-header .close { margin-left: auto; }
+.right-tabs {
+  display: flex; padding: 0 8px;
+  gap: 2px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.right-tab {
+  padding: 7px 10px;
+  font-size: 12px; font-weight: 500;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all var(--dur-fast) var(--ease);
+}
+.right-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+.right-tab:hover:not(.active) {
+  color: var(--text-secondary);
+}
+.right-search {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.right-search input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-base) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%237C7C85' stroke-width='2'><circle cx='11' cy='11' r='8'/><path d='m21 21-4.3-4.3'/></svg>") 10px center / 14px no-repeat;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.right-search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.right-search input::placeholder { color: var(--text-muted); }
+
+.right-body {
+  flex: 1; overflow-y: auto;
+  padding: 8px 8px;
+}
+.right-body::-webkit-scrollbar { width: 6px; }
+.right-body::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
+.right-body:hover::-webkit-scrollbar-thumb { background: var(--border); }
+
+.file-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-size: 12.5px;
+  transition: background var(--dur-fast) var(--ease);
+  position: relative;
+}
+.file-row::before {
+  content: ''; position: absolute;
+  left: -8px; top: 50%; transform: translateY(-50%);
+  width: 2px; height: 0; background: var(--accent);
+  border-radius: 0 2px 2px 0;
+  transition: height var(--dur-base) var(--ease);
+}
+.file-row:hover { background: var(--bg-hover); }
+.file-row.active { background: var(--bg-active); }
+.file-row.active::before { height: 60%; }
+.file-icon {
+  width: 24px; height: 24px;
+  border-radius: 6px;
+  background: var(--bg-chip);
+  display: grid; place-items: center;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px; font-weight: 700;
+  color: var(--text-secondary);
+}
+.file-icon.md { background: rgba(96,165,250,.15); color: #93C5FD; }
+.file-icon.py { background: rgba(251,191,36,.15); color: #FCD34D; }
+.file-info { flex: 1; min-width: 0; }
+.file-name {
+  font-weight: 500; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px;
+}
+.file-path {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.file-extra {
+  font-size: 10.5px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 3px;
+}
+
+/* ────────── Annotations ────────── */
+.annotation {
+  position: absolute;
+  display: flex; align-items: center; gap: 6px;
+  z-index: 10;
+  pointer-events: none;
+}
+.annotation .dot {
+  width: 22px; height: 22px;
+  background: var(--accent);
+  color: var(--accent-on);
+  border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 700;
+  box-shadow: 0 0 0 4px var(--accent-soft), 0 4px 12px rgba(167,139,250,.35);
+}
+.annotation .label {
+  background: var(--bg-elevated-2);
+  color: var(--text-primary);
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 11px; font-weight: 500;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+
+.a1 { left: 90px; top: 100px; }
+.a2 { left: 540px; top: 280px; }
+.a3 { left: 880px; top: 720px; }
+.a4 { left: 1210px; top: 180px; }
+
+.page-footer {
+  text-align: center;
+  padding: 16px 0 32px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.page-footer code {
+  background: var(--bg-chip);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+</style>
+</head>
+<body>
+
+<div class="window" role="application">
+
+  <!-- ── Title Bar ── -->
+  <div class="titlebar">
+    <div class="titlebar-drag"></div>
+    <div class="window-controls">
+      <span class="window-btn close"></span>
+      <span class="window-btn min"></span>
+      <span class="window-btn max"></span>
+    </div>
+    <div class="titlebar-title">Hermix Desktop — 开浏览器问问题，搜索 今天天气</div>
+    <div class="titlebar-actions">
+      <button class="icon-btn" aria-label="minimize">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg>
+      </button>
+      <button class="icon-btn" aria-label="maximize">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+      </button>
+      <button class="icon-btn" aria-label="close">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">H</div>
+      <div>
+        <span class="brand-name">Hermix</span>
+        <span class="brand-ver">v2</span>
+      </div>
+    </div>
+
+    <button class="new-chat">
+      <svg class="new-chat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+      新建对话
+      <kbd>⌘N</kbd>
+    </button>
+
+    <nav class="nav-list">
+      <div class="nav-item active">
+        <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        对话
+        <span class="badge">3</span>
+      </div>
+      <div class="nav-item">
+        <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        搜索
+      </div>
+      <div class="nav-item">
+        <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+        扩展
+      </div>
+      <div class="nav-item">
+        <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        自动化
+      </div>
+      <div class="nav-item">
+        <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M3 9h18"/></svg>
+        智能体
+      </div>
+      <div class="nav-item">
+        <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        群聊
+      </div>
+    </nav>
+
+    <div class="section-label">
+      <span>工作区 1</span>
+      <svg class="add" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+    </div>
+    <div class="session-list">
+      <div class="session-item active">
+        <span class="dot"></span>
+        <span>打开浏览器...</span>
+        <span class="time">刚刚</span>
+      </div>
+      <div class="session-item">
+        <span class="dot"></span>
+        <span>节点回...</span>
+        <span class="time">17 条</span>
+      </div>
+      <div class="session-item">
+        <span class="dot"></span>
+        <span>节首页...</span>
+        <span class="time">63 条</span>
+      </div>
+      <div class="session-item">
+        <span class="dot"></span>
+        <span>?</span>
+        <span class="time">79 条</span>
+      </div>
+    </div>
+
+    <div class="section-label">
+      <span>聊天室</span>
+      <svg class="add" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+    </div>
+    <div class="session-list" style="padding: 0 16px 8px;">
+      <div style="font-size: 11.5px; color: var(--text-muted); padding: 4px;">暂不聊天室</div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="avatar">主</div>
+      <div class="user-info">
+        <div class="user-name">主人</div>
+        <div class="user-status">本地已连接</div>
+      </div>
+      <button class="icon-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ── Main Chat ── -->
+  <main class="main">
+    <div class="chat-topbar">
+      <div class="crumbs">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-muted);"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <strong>打开浏览器问问题</strong>
+        <span class="sep">·</span>
+        <span>今天天气</span>
+      </div>
+      <div class="spacer"></div>
+      <div class="actions">
+        <button class="icon-btn" title="分享">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M16 6l-4-4-4 4M12 2v13"/></svg>
+        </button>
+        <button class="icon-btn" title="更多">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="messages">
+      <!-- User -->
+      <div class="msg user">
+        <div class="msg-body">
+          <div class="msg-bubble">写一段代码，随便一个循环，写到py</div>
+        </div>
+      </div>
+
+      <!-- Assistant: weather -->
+      <div class="msg">
+        <div class="msg-avatar assistant">✦</div>
+        <div class="msg-body">
+          <div class="msg-meta">
+            <span class="msg-author">Hermix</span>
+            <span class="msg-time">20:08</span>
+          </div>
+          <div class="msg-content">
+            <p>打开浏览器问问题，搜索 今天天气</p>
+          </div>
+
+          <div class="tool-card">
+            <div class="tool-header">
+              <div class="tool-icon">W</div>
+              <span class="tool-name">write_file</span>
+              <span class="tool-tag">运行中</span>
+              <span class="tool-status" style="color: var(--text-muted);">●</span>
+            </div>
+            <div class="tool-body"><span class="key">"result":</span> <span class="str">"Successfully wrote 610.0 bytes to D:\data\character_design_01.md"</span>
+
+已生成，保存在 <span class="path">D:\data\character_design_01.md</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Assistant: write_file 2 -->
+      <div class="msg">
+        <div class="msg-avatar assistant">✦</div>
+        <div class="msg-body">
+          <div class="msg-meta">
+            <span class="msg-author">Hermix</span>
+            <span class="msg-time">20:09</span>
+          </div>
+          <div class="tool-card">
+            <div class="tool-header">
+              <div class="tool-icon">W</div>
+              <span class="tool-name">write_file</span>
+              <span class="tool-tag success">✓ 已完成</span>
+            </div>
+            <div class="tool-body"><span class="key">"result":</span> <span class="str">"Successfully wrote 54 bytes to D:\data\loop_example.py"</span>
+
+已写入 <span class="path">D:\data\loop_example.py</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- User -->
+      <div class="msg user">
+        <div class="msg-body">
+          <div class="msg-bubble">agin</div>
+        </div>
+      </div>
+
+      <!-- Assistant: write_file 3 -->
+      <div class="msg">
+        <div class="msg-avatar assistant">✦</div>
+        <div class="msg-body">
+          <div class="msg-meta">
+            <span class="msg-author">Hermix</span>
+            <span class="msg-time">20:10</span>
+          </div>
+          <div class="tool-card">
+            <div class="tool-header">
+              <div class="tool-icon">W</div>
+              <span class="tool-name">write_file</span>
+              <span class="tool-tag success">✓ 已完成</span>
+            </div>
+            <div class="tool-body"><span class="key">"result":</span> <span class="str">"Successfully wrote 93 bytes to D:\data\loop_example2.py"</span>
+
+已写入 <span class="path">D:\data\loop_example2.py</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Thinking -->
+      <div class="msg">
+        <div class="msg-avatar assistant">✦</div>
+        <div class="msg-body">
+          <div class="msg-meta">
+            <span class="msg-author">Hermix</span>
+            <span class="msg-time">20:10</span>
+          </div>
+          <div class="thinking">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-wrap">
+        <div class="composer">
+          <textarea placeholder="输入消息... ⌘K 召唤命令面板" rows="2"></textarea>
+          <div class="composer-toolbar">
+            <div class="left">
+              <button class="icon-btn" title="附件">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </button>
+              <button class="icon-btn" title="语音">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
+              </button>
+              <button class="icon-btn" title="图片">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+              </button>
+            </div>
+            <div class="right">
+              <div class="model-pill">
+                <span class="sparkle">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L9.5 8.5 2 12l7.5 3.5L12 22l2.5-6.5L22 12l-7.5-3.5z"/></svg>
+                </span>
+                agnes-2.0-flash
+                <span class="chev">
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
+                </span>
+              </div>
+              <button class="send-btn ready" title="发送">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 22l10-5 10 5L12 2z"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="input-hint">
+          按 <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · <kbd>⌘K</kbd> 命令面板
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── Right Panel ── -->
+  <aside class="right">
+    <div class="right-header">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <div class="title">产物 <span class="count">3</span></div>
+      <button class="icon-btn close">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="right-tabs">
+      <div class="right-tab active">全部</div>
+      <div class="right-tab">代码</div>
+      <div class="right-tab">文档</div>
+      <div class="right-tab">数据</div>
+      <div class="right-tab">图片</div>
+    </div>
+
+    <div class="right-search">
+      <input type="text" placeholder="搜索文件或路径..." />
+    </div>
+
+    <div class="right-body">
+      <div class="file-row active">
+        <div class="file-icon md">M↓</div>
+        <div class="file-info">
+          <div class="file-name">character_design_01.md</div>
+          <div class="file-path">D:\data\character_design_01.md</div>
+        </div>
+        <div class="file-extra">提及</div>
+      </div>
+      <div class="file-row">
+        <div class="file-icon py">Py</div>
+        <div class="file-info">
+          <div class="file-name">loop_example.py</div>
+          <div class="file-path">D:\data\loop_example.py</div>
+        </div>
+        <div class="file-extra">提及</div>
+      </div>
+      <div class="file-row">
+        <div class="file-icon py">Py</div>
+        <div class="file-info">
+          <div class="file-name">loop_example2.py</div>
+          <div class="file-path">D:\data\loop_example2.py</div>
+        </div>
+        <div class="file-extra">提及</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Annotations -->
+  <div class="annotation a1"><div class="dot">1</div><div class="label">品牌头 + 紫色高亮</div></div>
+  <div class="annotation a2"><div class="dot">2</div><div class="label">深色 Tool Card</div></div>
+  <div class="annotation a3"><div class="dot">3</div><div class="label">聚焦光晕的输入框</div></div>
+  <div class="annotation a4"><div class="dot">4</div><div class="label">左 active 指示条</div></div>
+
+</div>
+
+<div class="page-footer">
+  <code>Hermix Desktop — Redesign v2 Dark</code> · Linear / Raycast 风 · 紫罗兰强调 (#A78BFA)
+</div>
+
+</body>
+</html>

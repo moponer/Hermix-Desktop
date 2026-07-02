@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Hermix Desktop · v12 预览区升级</title>
+<style>
+/* ============== RESET ============== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+button { background: none; border: 0; font: inherit; color: inherit; cursor: pointer; }
+input, textarea { background: none; border: 0; outline: 0; font: inherit; color: inherit; }
+ul { list-style: none; }
+::selection { background: #D8D8D8; color: #1F1F1F; }
+
+/* ============== TOKENS ============== */
+:root {
+  --bg-side:    #F5F5F5;
+  --bg-mid:     #FFFFFF;
+  --bg-title:   #F5F5F5;
+
+  --bg-hover:   #ECECEC;
+  --bg-active:  #E2E2E2;
+  --bg-soft:    #F0F0F0;
+  --bg-deep:    #1F1F1F;
+
+  --ink:        #1F1F1F;
+  --ink-2:      #6B6B6B;
+  --ink-3:      #9B9B9B;
+  --ink-4:      #BFBFBF;
+  --ink-inv:    #FFFFFF;
+
+  --info:       #3D5A4F;
+  --info-hover: #324A42;
+  --info-soft:  #E8EFEC;
+
+  --ok:    #4A7A55;
+  --run:   #8A7A2F;
+  --err:   #A04545;
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
+  --s5: 20px; --s6: 24px; --s7: 32px; --s8: 48px;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--bg-mid);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: 36px 1fr;
+  grid-template-columns: 232px 1fr 320px;
+  height: 100vh;
+}
+
+.titlebar {
+  grid-column: 1 / 4;
+  background: var(--bg-title);
+  display: flex; align-items: center;
+  padding: 0 14px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+
+/* ============== LEFT NAV ============== */
+.nav {
+  background: var(--bg-side);
+  padding: 14px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+}
+.new-btn {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 9px 12px;
+  border-radius: 8px; font-size: 13px;
+  color: var(--ink-inv); font-weight: 500;
+  background: var(--bg-deep); margin-bottom: 6px;
+  transition: background .12s;
+}
+.new-btn:hover { background: #2D2D2D; }
+.nav-label {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; font-size: 13px; color: var(--ink);
+  border-radius: 6px; cursor: pointer;
+  transition: background .12s;
+}
+.nav-label:hover { background: var(--bg-hover); }
+.nav-label .ico { width: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--ink-2); font-size: 13px; }
+.workspace-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 16px 10px 6px; font-size: 11.5px;
+  color: var(--ink-3); letter-spacing: 0.02em;
+}
+.workspace-head .plus { margin-left: auto; cursor: pointer; padding: 0 4px; }
+.workspace-head .plus:hover { color: var(--ink); }
+.nav-sub {
+  padding: 0 10px; font-size: 12.5px; color: var(--ink-2);
+  cursor: pointer; border-radius: 6px; height: 28px;
+  display: flex; align-items: center;
+  transition: background .12s, color .12s;
+}
+.nav-sub:hover { background: var(--bg-hover); color: var(--ink); }
+.conv {
+  padding: 6px 10px; font-size: 12.5px; color: var(--ink);
+  border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  transition: background .12s;
+}
+.conv:hover { background: var(--bg-hover); }
+.conv.active { background: var(--bg-active); font-weight: 500; }
+.conv .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex-shrink: 0; }
+.conv.active .dot { background: var(--info); }
+.nav-foot {
+  margin-top: auto; padding-top: 12px;
+  font-size: 11.5px; color: var(--ink-3);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.foot-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; }
+.foot-row .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.foot-user { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; }
+.foot-user:hover { background: var(--bg-hover); }
+.foot-user .avatar {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--ink-2); color: var(--ink-inv);
+  font-size: 11px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+}
+.foot-user .name { font-size: 12.5px; color: var(--ink); }
+
+/* ============== CHAT ============== */
+.chat { background: var(--bg-mid); display: grid; grid-template-rows: 1fr auto; min-width: 0; }
+.messages { overflow-y: auto; padding: 56px 0 24px; }
+.thread { max-width: 720px; margin: 0 auto; padding: 0 32px; }
+.msg { padding: 26px 0; }
+.msg:first-child { padding-top: 8px; }
+.msg-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.avatar-text {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: var(--ink-2);
+}
+.msg.from-ai .avatar-text { color: var(--info); }
+.msg.from-user .msg-head { justify-content: flex-end; }
+.role { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.time { font-size: 11.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.msg-body { font-size: 14px; line-height: 1.75; color: var(--ink); }
+.msg-body p { margin: 0 0 10px; }
+.msg-body p:last-child { margin-bottom: 0; }
+.msg.from-user .msg-body { text-align: right; color: var(--ink); }
+
+.tool { margin: 12px 0; font-size: 13px; color: var(--ink-2); display: flex; flex-direction: column; gap: 4px; }
+.tool-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.tool-row .name { color: var(--ink); font-weight: 500; }
+.tool-row .fn { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-size: 12px; color: var(--ink-2); }
+.tool-row .badge { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: var(--bg-soft); color: var(--ink-2); }
+.tool-row .status { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ink-3); }
+.tool-row .status::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok);
+}
+.tool-row.is-run .status::before { background: var(--run); }
+.tool-row.is-err .status::before { background: var(--err); }
+.tool-row.is-run .status { color: var(--run); }
+.tool-row.is-err .status { color: var(--err); }
+.tool-row.is-ok  .status { color: var(--ok); }
+.tool-result { padding-left: 22px; font-size: 12.5px; color: var(--ink-3); }
+.tool-result code { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-size: 11.5px; color: var(--ink-2); }
+.tool-result .ok  { color: var(--ok); }
+.tool-result .err { color: var(--err); }
+.tool-result a { color: var(--info); text-decoration: none; }
+.tool-result a:hover { text-decoration: underline; }
+.bubble-tag {
+  display: inline-block; padding: 6px 12px;
+  background: var(--bg-soft); border-radius: 8px;
+  color: var(--ink); font-size: 13.5px; text-align: right;
+}
+
+/* 中间代码块 —— 仅用于聊天内的代码片段，保持简洁 */
+.code {
+  margin: 14px 0; background: var(--bg-deep); color: var(--ink-inv);
+  padding: 16px 18px; overflow-x: auto;
+  font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 12.5px; line-height: 1.65;
+}
+.code .k { color: #E8B96A; }
+.code .s { color: #A8C58E; }
+.code .n { color: #D4A86A; }
+.code .c { color: #8A8A8A; font-style: italic; }
+
+/* ============== COMPOSER ============== */
+.composer-wrap { padding: 0 32px 20px; background: var(--bg-mid); }
+.composer { max-width: 720px; margin: 0 auto; }
+.composer-box { padding: 12px 0 8px; font-size: 14px; line-height: 1.6; }
+.composer-box textarea {
+  width: 100%; min-height: 28px; max-height: 220px;
+  resize: none; font: inherit; color: var(--ink);
+  padding: 6px 2px;
+}
+.composer-box textarea::placeholder { color: var(--ink-4); }
+.composer-tools { display: flex; align-items: center; gap: 4px; padding-top: 6px; }
+.tool-btn {
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; color: var(--ink-3); font-size: 14px;
+  transition: background .12s, color .12s;
+}
+.tool-btn:hover { background: var(--bg-hover); color: var(--ink-2); }
+.tool-btn.is-on { color: var(--info); }
+.model-pill {
+  margin-left: 6px; display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px 5px 8px; border-radius: 999px;
+  color: var(--ink-2); font-size: 12px;
+  transition: background .12s;
+}
+.model-pill:hover { background: var(--bg-hover); color: var(--ink); }
+.model-pill .caret { font-size: 10px; color: var(--ink-3); }
+.composer-right { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.send-btn {
+  width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; background: var(--info);
+  color: var(--ink-inv); font-size: 14px; font-weight: 600;
+}
+.send-btn:hover { background: var(--info-hover); }
+
+/* ============== RIGHT PANEL ============== */
+.panel {
+  background: var(--bg-side);
+  padding: 18px 18px 16px;
+  overflow-y: auto;
+}
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.panel-title {
+  font-size: 13.5px; font-weight: 600; color: var(--ink);
+  display: flex; align-items: center; gap: 8px;
+}
+.panel-title .count { font-size: 11.5px; color: var(--ink-3); font-weight: 400; }
+.panel-close {
+  color: var(--ink-3); font-size: 16px;
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; cursor: pointer;
+}
+.panel-close:hover { background: var(--bg-hover); color: var(--ink); }
+.search { margin-bottom: 14px; }
+.search input { width: 100%; padding: 7px 2px; font-size: 13px; color: var(--ink); }
+.search input::placeholder { color: var(--ink-4); }
+.tabs { display: flex; gap: 0; margin-bottom: 10px; }
+.tab {
+  padding: 5px 0; font-size: 12.5px;
+  color: var(--ink-3); margin-right: 14px;
+  position: relative; cursor: pointer;
+}
+.tab.active { color: var(--ink); font-weight: 500; }
+.tab.active::after {
+  content: ""; position: absolute;
+  left: 0; right: 0; bottom: -3px;
+  height: 2px; background: var(--ink);
+}
+.file-list { display: flex; flex-direction: column; gap: 1px; }
+.file {
+  padding: 9px 10px; border-radius: 6px;
+  cursor: pointer;
+  display: flex; align-items: center; gap: 10px;
+  transition: background .12s;
+}
+.file:hover { background: var(--bg-hover); }
+.file.active { background: var(--bg-active); }
+.file .ico { width: 16px; color: var(--ink-3); font-size: 14px; flex-shrink: 0; }
+.file.active .ico { color: var(--info); }
+.file-main { flex: 1; min-width: 0; }
+.file-name {
+  font-size: 13px; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.file.active .file-name { font-weight: 500; }
+.file-path {
+  font-size: 11px; color: var(--ink-3);
+  font-family: "SF Mono", Consolas, monospace;
+  margin-top: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.file .label { font-size: 10.5px; color: var(--ink-3); background: transparent; padding: 1px 5px; }
+.file.active .label { color: var(--info); }
+
+/* ====================================================== */
+/* ============== 预览区（v12 重点升级）=================== */
+/* ====================================================== */
+
+/* 与上方文件列表的分隔 —— 用更克制的淡灰细线 */
+.preview-divider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.06);
+  margin: 16px -18px 0;
+}
+
+/* 预览卡 —— 立体感更轻，靠纯白底色与浅灰侧栏区分 */
+.preview {
+  margin-top: 14px;
+  padding: 0;
+  background: #FFFFFF;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+/* ─── 头部：文件名 / 语言徽章 / 操作 ─── */
+.preview-head {
+  display: flex; align-items: center;
+  padding: 9px 10px 9px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  gap: 8px;
+  min-height: 38px;
+}
+.preview-name {
+  font-size: 12.5px; font-weight: 500; color: var(--ink);
+  display: flex; align-items: center; gap: 7px;
+  flex: 1; min-width: 0;
+}
+.preview-name .file-ico {
+  width: 14px; height: 14px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #3D5A4F;  /* Python 文件图标 —— 用墨绿呼应主色 */
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.preview-name .name-text {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.preview-name .name-text .ext {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+/* 语言徽章 */
+.lang-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px;
+  background: rgba(61, 90, 79, 0.08);   /* 墨绿 8% 透明 */
+  color: var(--info);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  border-radius: 4px;
+  font-family: "SF Mono", Consolas, monospace;
+  flex-shrink: 0;
+}
+.lang-tag::before {
+  content: "";
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--info);
+}
+
+/* 头部右侧操作 */
+.preview-actions {
+  display: flex; gap: 1px;
+  flex-shrink: 0;
+}
+.preview-actions span {
+  color: var(--ink-3); cursor: pointer;
+  width: 24px; height: 24px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 5px;
+  font-size: 13px;
+  transition: background .12s, color .12s;
+}
+.preview-actions span:hover { background: var(--bg-hover); color: var(--ink); }
+
+/* ─── 文件元信息条：路径 + 行数 + 大小 ─── */
+.preview-meta {
+  display: flex; align-items: center;
+  padding: 6px 12px;
+  background: #FAFAFA;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  font-family: "SF Mono", Consolas, monospace;
+  gap: 0;
+}
+.preview-meta .path {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--ink-2);
+}
+.preview-meta .sep {
+  margin: 0 8px;
+  color: var(--ink-4);
+}
+.preview-meta .stat {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.preview-meta .stat strong {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+/* ─── 代码区主体 ─── */
+.code-viewport {
+  max-height: 360px;
+  overflow: auto;
+  background: #1E1E1E;   /* 比 --bg-deep 更柔和 */
+}
+
+/* 代码表格（行号 + 内容两列） */
+.code-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #D4D4D4;
+}
+.code-table td {
+  padding: 0;
+  vertical-align: top;
+}
+.code-table .ln {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+  user-select: none;
+  padding: 0 10px 0 12px;
+  color: #5A5A5A;
+  font-variant-numeric: tabular-nums;
+  border-right: 1px solid #2A2A2A;
+}
+.code-table tr:hover .ln { color: #858585; }
+.code-table .lc {
+  padding: 0 14px;
+  white-space: pre;
+}
+.code-table tr:hover .lc { background: rgba(255, 255, 255, 0.025); }
+
+/* 选中行 —— 高亮当前活动行 */
+.code-table tr.is-active .ln {
+  color: #C8C8C8;
+  background: rgba(255, 255, 255, 0.04);
+}
+.code-table tr.is-active .lc {
+  background: rgba(61, 90, 79, 0.12);   /* 墨绿 12% 透明 —— 选中行 */
+  box-shadow: inset 2px 0 0 var(--info);
+}
+
+/* ─── 语法高亮 token（细分到 8 种）─── */
+.tk-kw  { color: #C586C0; }   /* keyword: for, in, def, return... */
+.tk-fn  { color: #DCDCAA; }   /* function name: print, range, len... */
+.tk-str { color: #CE9178; }   /* string */
+.tk-num { color: #B5CEA8; }   /* number */
+.tk-var { color: #9CDCFE; }   /* variable / identifier */
+.tk-op  { color: #D4D4D4; }   /* operator / punctuation */
+.tk-cmt { color: #6A9955; font-style: italic; }   /* comment */
+.tk-blt { color: #4EC9B0; }   /* builtin: True, False, None */
+
+/* ─── 代码底部状态栏 ─── */
+.code-status {
+  display: flex; align-items: center;
+  padding: 4px 12px;
+  background: #181818;
+  border-top: 1px solid #2A2A2A;
+  font-size: 10.5px;
+  color: #858585;
+  font-family: "SF Mono", Consolas, monospace;
+  gap: 12px;
+}
+.code-status .lang {
+  color: #4EC9B0;
+}
+.code-status .spacer { flex: 1; }
+.code-status .item { display: inline-flex; align-items: center; gap: 4px; }
+.code-status .item::before {
+  content: ""; width: 4px; height: 4px;
+  border-radius: 50%; background: #4A4A4A;
+}
+
+/* ============== SCROLLBAR（代码区专用，深色版） ============== */
+.code-viewport::-webkit-scrollbar { width: 8px; height: 8px; }
+.code-viewport::-webkit-scrollbar-thumb {
+  background: #3A3A3A; border-radius: 999px;
+}
+.code-viewport::-webkit-scrollbar-thumb:hover { background: #4A4A4A; }
+.code-viewport::-webkit-scrollbar-track { background: transparent; }
+
+/* 全局滚动条 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: transparent; }
+:hover::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.15); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.28); }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* 微动效 */
+.msg { animation: rise .35s ease-out; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.preview { animation: fadeIn .3s ease-out; }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="titlebar"></header>
+
+  <!-- LEFT NAV -->
+  <aside class="nav">
+    <button class="new-btn">
+      <span style="font-size:14px;">+</span><span>新建对话</span>
+    </button>
+    <div class="nav-label"><span class="ico">◇</span><span>对话</span></div>
+    <div class="nav-label"><span class="ico">○</span><span>搜索</span></div>
+    <div class="nav-label"><span class="ico">☆</span><span>扩展</span></div>
+    <div class="nav-label"><span class="ico">◷</span><span>自动化</span></div>
+    <div class="nav-label"><span class="ico">◉</span><span>智能体</span></div>
+    <div class="nav-label"><span class="ico">⬢</span><span>群聊</span></div>
+    <div class="workspace-head"><span>工作区 1</span><span class="plus">+</span></div>
+    <div class="conv active"><span class="dot"></span><span>qcc</span></div>
+    <div class="nav-sub">打开浏览器...</div>
+    <div class="nav-sub">节假目...</div>
+    <div class="nav-sub">?</div>
+    <div class="workspace-head"><span>聊天室</span><span class="plus">+</span></div>
+    <div class="nav-sub">暂不聊天室</div>
+    <div class="nav-foot">
+      <div class="foot-row"><span class="dot"></span><span>本地已连接</span></div>
+      <div class="foot-user">
+        <div class="avatar">M</div>
+        <div class="name">Messoa@hermix</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- CHAT -->
+  <main class="chat">
+    <div class="messages">
+      <div class="thread">
+        <section class="msg from-ai">
+          <div class="msg-head">
+            <span class="avatar-text">H</span>
+            <span class="role">Hermix</span>
+            <span class="time">21:38</span>
+          </div>
+          <div class="msg-body">
+            <p>打开浏览器访问哪里，搜看今天天气。</p>
+            <div class="tool">
+              <div class="tool-row is-ok">
+                <span class="name">write_file</span>
+                <span class="badge">运行中</span>
+                <span class="status">成功</span>
+              </div>
+              <div class="tool-result">
+                已执行 <code>{"result":"Successfully wrote 610 bytes to D:\\qcc\\character_design_01.md"}</code><br>
+                已生成，保存在 <a href="#">D:\data\character_design_01.md</a>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="msg from-user">
+          <div class="msg-head">
+            <span class="time">21:39</span>
+            <span class="role">我</span>
+            <span class="avatar-text" style="color:var(--info)">M</span>
+          </div>
+          <div class="msg-body">
+            <span class="bubble-tag">写一段代码，随便一个循环，写到 py</span>
+          </div>
+        </section>
+
+        <section class="msg from-ai">
+          <div class="msg-head">
+            <span class="avatar-text">H</span>
+            <span class="role">Hermix</span>
+            <span class="time">21:39</span>
+          </div>
+          <div class="msg-body">
+            <div class="tool">
+              <div class="tool-row is-ok">
+                <span class="name">write_file</span>
+                <span class="badge">运行中</span>
+                <span class="status">成功</span>
+              </div>
+              <div class="tool-result">
+                已执行 <code>{"result":"Successfully wrote 54 bytes to D:\\qcc\\loop_example.py"}</code><br>
+                已写入 <a href="#">D:\data\loop_example.py</a>
+              </div>
+            </div>
+            <div style="text-align: right; margin-top: 8px;">
+              <span style="font-size:11.5px; color:var(--ink-3); padding:3px 8px; border-radius:6px; cursor:pointer;" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background='transparent'">again ↺</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="msg from-ai">
+          <div class="msg-head">
+            <span class="avatar-text">H</span>
+            <span class="role">Hermix</span>
+            <span class="time">21:40</span>
+          </div>
+          <div class="msg-body">
+            <div class="tool">
+              <div class="tool-row is-ok">
+                <span class="name">write_file</span>
+                <span class="badge">运行中</span>
+                <span class="status">成功</span>
+              </div>
+              <div class="tool-result">
+                已执行 <code>{"result":"Successfully wrote 93 bytes to D:\\qcc\\loop_example2.py"}</code><br>
+                已写入 <a href="#">D:\data\loop_example2.py</a>
+              </div>
+            </div>
+            <p style="color:var(--ink-3); font-size:12.5px; margin-top:14px;">等待您的输入 ···</p>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="composer-wrap">
+      <div class="composer">
+        <div class="composer-box">
+          <textarea placeholder="输入消息..." rows="1"></textarea>
+        </div>
+        <div class="composer-tools">
+          <span class="tool-btn">⊕</span>
+          <span class="tool-btn is-on">◐</span>
+          <span class="tool-btn">◌</span>
+          <button class="model-pill">agnes-2.0-flash <span class="caret">▾</span></button>
+          <div class="composer-right">
+            <span class="tool-btn">↻</span>
+            <span class="tool-btn">⌫</span>
+            <span class="tool-btn">◉</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- RIGHT PANEL -->
+  <aside class="panel">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span>产物</span><span class="count">3</span>
+      </div>
+      <span class="panel-close">×</span>
+    </div>
+
+    <div class="search">
+      <input placeholder="搜索文件或路径段..." />
+    </div>
+
+    <div class="tabs">
+      <div class="tab active">全部</div>
+      <div class="tab">代码</div>
+      <div class="tab">文档</div>
+      <div class="tab">数据</div>
+      <div class="tab">图片</div>
+      <div class="tab">Office</div>
+    </div>
+
+    <div class="file-list">
+      <div class="file active">
+        <span class="ico">◇</span>
+        <div class="file-main">
+          <div class="file-name">character_design_01.md</div>
+          <div class="file-path">D:\data\character_design_01.md</div>
+        </div>
+        <span class="label">提及</span>
+      </div>
+      <div class="file">
+        <span class="ico">⌬</span>
+        <div class="file-main">
+          <div class="file-name">loop_example.py</div>
+          <div class="file-path">D:\data\loop_example.py</div>
+        </div>
+        <span class="label">提及</span>
+      </div>
+      <div class="file">
+        <span class="ico">⌬</span>
+        <div class="file-main">
+          <div class="file-name">loop_example2.py</div>
+          <div class="file-path">D:\data\loop_example2.py</div>
+        </div>
+        <span class="label">提及</span>
+      </div>
+    </div>
+
+    <!-- ============== v12 预览区升级 ============== -->
+    <div class="preview-divider"></div>
+
+    <div class="preview">
+
+      <!-- 头部：图标 + 文件名 + 语言徽章 + 操作 -->
+      <div class="preview-head">
+        <div class="preview-name">
+          <span class="file-ico">⌬</span>
+          <span class="name-text">loop_example2<span class="ext">.py</span></span>
+        </div>
+        <span class="lang-tag">Python 3</span>
+        <div class="preview-actions">
+          <span title="复制">⎘</span>
+          <span title="在系统中打开">↗</span>
+          <span title="关闭">×</span>
+        </div>
+      </div>
+
+      <!-- 元信息条：路径 + 行数 + 大小 -->
+      <div class="preview-meta">
+        <span class="path">D:\data\loop_example2.py</span>
+        <span class="sep">·</span>
+        <span class="stat"><strong>4</strong> 行</span>
+        <span class="sep">·</span>
+        <span class="stat"><strong>93</strong> B</span>
+      </div>
+
+      <!-- 代码主体 -->
+      <div class="code-viewport">
+        <table class="code-table">
+          <tr>
+            <td class="ln">1</td>
+            <td class="lc"><span class="tk-var">names</span> <span class="tk-op">=</span> <span class="tk-op">[</span><span class="tk-str">"Alice"</span><span class="tk-op">,</span> <span class="tk-str">"Bob"</span><span class="tk-op">,</span> <span class="tk-str">"Charlie"</span><span class="tk-op">,</span> <span class="tk-str">"Diana"</span><span class="tk-op">]</span></td>
+          </tr>
+          <tr>
+            <td class="ln">2</td>
+            <td class="lc"></td>
+          </tr>
+          <tr class="is-active">
+            <td class="ln">3</td>
+            <td class="lc"><span class="tk-kw">for</span> <span class="tk-var">name</span> <span class="tk-kw">in</span> <span class="tk-var">names</span><span class="tk-op">:</span></td>
+          </tr>
+          <tr>
+            <td class="ln">4</td>
+            <td class="lc">    <span class="tk-fn">print</span><span class="tk-op">(</span><span class="tk-str">f"Hello, </span><span class="tk-op">{</span><span class="tk-var">name</span><span class="tk-op">}</span><span class="tk-str">!"</span><span class="tk-op">)</span></td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- 底部状态栏 -->
+      <div class="code-status">
+        <span class="item"><span class="lang">Python</span></span>
+        <span class="item">UTF-8</span>
+        <span class="item">LF</span>
+        <span class="spacer"></span>
+        <span class="item">Spaces: 4</span>
+        <span class="item">Ln 3, Col 14</span>
+      </div>
+
+    </div>
+
+  </aside>
+
+</div>
+
+<script>
+  const ta = document.querySelector('.composer-box textarea');
+  ta.addEventListener('input', () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 220) + 'px';
+  });
+  document.querySelectorAll('.file').forEach(f => {
+    f.addEventListener('click', () => {
+      document.querySelectorAll('.file').forEach(x => x.classList.remove('active'));
+      f.classList.add('active');
+    });
+  });
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+    });
+  });
+  document.querySelectorAll('.conv').forEach(c => {
+    c.addEventListener('click', () => {
+      document.querySelectorAll('.conv').forEach(x => x.classList.remove('active'));
+      c.classList.add('active');
+    });
+  });
+  // 代码表格行点击切换 active
+  document.querySelectorAll('.code-table tr').forEach(tr => {
+    tr.addEventListener('click', () => {
+      document.querySelectorAll('.code-table tr').forEach(x => x.classList.remove('is-active'));
+      tr.classList.add('is-active');
+      const ln = tr.querySelector('.ln')?.textContent;
+      const lc = tr.querySelector('.lc')?.textContent.length || 0;
+      const el = document.querySelector('.code-status .item:last-child');
+      if (el && ln) el.textContent = `Ln ${ln}, Col ${Math.min(lc, 99)}`;
+    });
+  });
+</script>
+</body>
+</html>
