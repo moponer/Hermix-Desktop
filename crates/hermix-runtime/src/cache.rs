@@ -34,6 +34,7 @@
 use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use moka::future::Cache;
@@ -60,6 +61,13 @@ where
     ttl: Duration,
     /// Cache metrics for monitoring.
     metrics: Arc<Mutex<CacheMetrics>>,
+    /// Live entry count, tracked in the wrapper.
+    ///
+    /// moka 0.12's `future::Cache::entry_count()` returns a stale estimate
+    /// until `run_pending_tasks()` is awaited. Tracking here gives callers
+    /// an exact, lock-free count that reflects wrapper-mediated insert /
+    /// remove / invalidate operations.
+    live_count: Arc<AtomicU64>,
 }
 
 impl<K, V> CacheManager<K, V>
@@ -70,9 +78,23 @@ where
     /// Create a new cache with the given name, TTL, and max capacity.
     pub fn new(name: impl Into<String>, ttl: Duration, max_capacity: u64) -> Self {
         let name = name.into();
+        let live_count = Arc::new(AtomicU64::new(0));
+        let live_count_for_listener = Arc::clone(&live_count);
         let cache = Cache::builder()
             .max_capacity(max_capacity)
             .time_to_live(ttl)
+            // The eviction listener decrements our tracked live_count when
+            // moka evicts an entry due to capacity pressure or TTL expiry.
+            // This keeps `entry_count()` exact and lock-free for callers
+            // without requiring them to `await run_pending_tasks()` first.
+            .async_eviction_listener(move |_key, _value, _cause| {
+                let counter = Arc::clone(&live_count_for_listener);
+                Box::pin(async move {
+                    counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                        Some(n.saturating_sub(1))
+                    }).ok();
+                })
+            })
             .build();
 
         info!(target: "hermix.runtime.cache", name = %name, ttl_secs = ttl.as_secs(), max_capacity, "CacheManager created");
@@ -82,12 +104,14 @@ where
             cache,
             ttl,
             metrics: Arc::new(Mutex::new(CacheMetrics::default())),
+            live_count,
         }
     }
 
     /// Insert a value into the cache.
     pub async fn insert(&self, key: K, value: V) {
         self.cache.insert(key, value).await;
+        self.live_count.fetch_add(1, Ordering::Relaxed);
         let mut metrics = self.metrics.lock().await;
         metrics.insertions += 1;
         debug!(target: "hermix.runtime.cache", name = %self.name, "Cache entry inserted");
@@ -107,7 +131,13 @@ where
 
     /// Remove a value from the cache.
     pub async fn remove(&self, key: &K) {
-        self.cache.remove(key).await;
+        if self.cache.remove(key).await.is_some() {
+            // Only decrement if the key was actually present, so re-removes
+            // of an absent key don't push the counter negative.
+            self.live_count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                Some(n.saturating_sub(1))
+            }).ok();
+        }
         debug!(target: "hermix.runtime.cache", name = %self.name, "Cache entry removed");
     }
 
@@ -117,13 +147,19 @@ where
     }
 
     /// Get the number of entries in the cache.
+    ///
+    /// This is a wrapper-tracked exact count, updated on every `insert`,
+    /// `remove`, and `invalidate_all` call (see `live_count`). It is
+    /// preferred over the underlying moka `entry_count()`, which only
+    /// returns an accurate value after `run_pending_tasks()` is awaited.
     pub fn entry_count(&self) -> u64 {
-        self.cache.entry_count()
+        self.live_count.load(Ordering::Relaxed)
     }
 
     /// Invalidate all entries in the cache.
     pub async fn invalidate_all(&self) {
         self.cache.invalidate_all();
+        self.live_count.store(0, Ordering::Relaxed);
         info!(target: "hermix.runtime.cache", name = %self.name, "Cache invalidated all entries");
     }
 
@@ -293,6 +329,11 @@ mod tests {
         cache.insert("key1".to_string(), "value1".to_string()).await;
         cache.insert("key2".to_string(), "value2".to_string()).await;
         cache.insert("key3".to_string(), "value3".to_string()).await;
+
+        // moka's eviction is async; flush pending tasks (which also runs
+        // the eviction listener) before asserting. Without this, the
+        // listener hasn't run yet and our tracked count still reads 3.
+        cache.cache.run_pending_tasks().await;
 
         // One entry should be evicted
         assert!(cache.entry_count() <= 2);
