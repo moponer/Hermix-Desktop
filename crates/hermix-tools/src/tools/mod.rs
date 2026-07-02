@@ -128,6 +128,18 @@ pub fn register_all(
     // because they need fuzzy-match + ripgrep semantics that the
     // TerminalBackend trait doesn't expose.
     file::register(registry, terminal_backend.clone());
+    // P1.8 (2026-07-02): office_cli was previously implemented but
+    // never registered. Add it next to `file` and `terminal` so the
+    // `essential::ESSENTIAL_TOOLSETS["office"]` floor finds a real
+    // tool to re-assert and `set_enabled_toolsets("office", false)`
+    // actually disables something.
+    office_cli::register(registry, terminal_backend.clone(), registry.terminal_workspace_handle());
+    // P1.8 (2026-07-02): `read_pdf` was previously tagged
+    // `"file"` and *never wired into `register_all`*, so the LLM
+    // had no PDF-reading tool at all. Re-tag it with the dedicated
+    // `"pdf"` toolset (matches `essential::ESSENTIAL_TOOLSETS`) and
+    // add the call here.
+    pdf::register(registry);
     // P1.3: terminal tool. The workspace handle is owned by the
     // registry (set by `LocalAgentService` per-turn from
     // `AgentOverrides::workspace`) so the terminal tool sees the

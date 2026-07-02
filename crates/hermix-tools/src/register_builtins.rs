@@ -156,6 +156,7 @@ mod tests {
         traits::RiskLevel, AgentError, CommandOutput, Skill, SkillMeta, SkillProvider,
         TerminalBackend,
     };
+    use crate::essential::ESSENTIAL_TOOLSETS;
 
     /// Minimal no-op terminal backend for `register_builtin_tools`. The
     /// backend is only used to wire handlers; we never invoke it in
@@ -493,6 +494,88 @@ mod tests {
                 names.iter().any(|n| n == required),
                 "regression: get_definitions() does not include `{}`",
                 required
+            );
+        }
+    }
+
+    #[test]
+    fn essential_toolset_floor_aligns_with_runtime_registration() {
+        // P1.8 (2026-07-02): regression guard for a class of bugs
+        // where the floor lists a toolset name that no tool is
+        // actually tagged with. The symptom is silent: the floor
+        // calls `set_toolset_enabled(<name>, true)`, the registry
+        // finds zero matching tools, returns count=0, and the LLM
+        // ends up without the supposedly-essential tool. The UI
+        // toggle (`set_enabled_toolsets`) is the symmetric bug:
+        // a user who disables `"browser"` thinks they turned off
+        // every browser_* tool, but the registry only flips the
+        // (non-existent) `"browser"` tag and leaves them all on.
+        //
+        // The fix side of this test lives in `tools::browser`,
+        // `tools::cua`, `tools::pdf`, `tools::office_cli`, and
+        // `essential::ESSENTIAL_TOOLSETS` — together they keep the
+        // floor's expectations and the runtime registration in lockstep.
+        let registry = registry_with_builtins();
+        let runtime_toolsets: std::collections::HashSet<String> =
+            registry.list_toolsets().into_iter().collect();
+
+        let missing: Vec<&&str> = ESSENTIAL_TOOLSETS
+            .iter()
+            .filter(|name| !runtime_toolsets.contains(**name))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "ESSENTIAL_TOOLSETS references toolsets that no tool \
+             is tagged with: {:?}. `set_toolset_enabled` for these \
+             names is a silent no-op — the floor's whole point is \
+             to *re-assert* a tool that's already wired, so a \
+             missing tool means the LLM silently loses the tool \
+             when the user whitelists only a subset. Add a \
+             `register(...)` call that tags a tool with `<name>`, \
+             or drop the entry from `ESSENTIAL_TOOLSETS`.",
+            missing
+        );
+    }
+
+    #[test]
+    fn every_floor_group_toolset_is_a_real_group() {
+        // Symmetric to `essential_toolset_floor_aligns_with_runtime_registration`:
+        // the floor is anchored on *group* names (`"browser"`, `"cua"`),
+        // not on per-tool names. If a future `register_with` call goes
+        // back to tagging each tool with its own name, every browser_*
+        // / cua_* tool would land in its own singleton toolset and the
+        // floor would still pass the previous test (because the
+        // per-tool names *do* exist in `list_toolsets()`), but the
+        // floor would then flip only one tool per call. Pin the
+        // expected group shape so that regression is loud.
+        let registry = registry_with_builtins();
+        let entries = registry.list_tools();
+        let toolsets: std::collections::HashMap<String, usize> = {
+            let mut map: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for e in &entries {
+                *map.entry(e.toolset.clone()).or_insert(0) += 1;
+            }
+            map
+        };
+        // Grouped toolsets the floor relies on.
+        let expected_groups: &[(&str, usize)] = &[
+            ("browser", 7),        // 7 browser_* tools share one group
+            ("cua", 14),           // 14 cua_* tools share one group
+            ("file", 6),           // read/write/patch/search + list_files/edit_file
+            ("pdf", 1),            // read_pdf (P1.8 split out of "file")
+            ("homeassistant", 4),  // ha_* tools
+        ];
+        for (group, min_count) in expected_groups {
+            let actual = toolsets.get(*group).copied().unwrap_or(0);
+            assert!(
+                actual >= *min_count,
+                "toolset `{}` is supposed to be a *group* of at least \
+                 {} tools (floor's whole point is one re-assert call \
+                 covers them all), but only {} tools are tagged with it. \
+                 A regression to per-tool tagging would make the floor \
+                 miss every tool in the group except one.",
+                group, min_count, actual
             );
         }
     }

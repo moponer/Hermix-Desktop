@@ -19,12 +19,18 @@ use crate::tools::file::to_absolute_path;
 use crate::ToolRegistry;
 
 /// Register this tool with the registry (P1.2 migration).
+///
+/// P1.8 (2026-07-02): tag the handler with the dedicated `"pdf"`
+/// toolset instead of the broader `"file"`. `essential::ESSENTIAL_TOOLSETS`
+/// lists `"pdf"` as a distinct floor entry; lumping it into
+/// `"file"` would have made the floor's `set_toolset_enabled("pdf", true)`
+/// call a silent no-op (no tool tagged `"pdf"`).
 pub fn register(registry: &ToolRegistry) {
     let handler = Arc::new(ReadPdfHandler::new());
     let schema = handler.schema();
     registry.register_with_risk(
         "read_pdf",
-        "file",
+        "pdf",
         schema,
         handler,
         Arc::new(|| true),

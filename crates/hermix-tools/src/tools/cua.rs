@@ -54,10 +54,17 @@ use crate::ToolRegistry;
 
 /// Register all CUA (computer-use automation) tool handlers (P1.2 migration).
 pub fn register(registry: &ToolRegistry) {
+    // P1.8 (2026-07-02): tag every CUA handler with the *group* name
+    // `"cua"`, not the per-tool name. `essential::ESSENTIAL_TOOLSETS`
+    // references `"cua"` as a single toolset, and the
+    // `set_enabled_toolsets` UI toggle keys on this tag. Tagging
+    // each handler with its own name would have caused the toggle
+    // to silently miss every CUA tool and the essential floor to
+    // no-op on this group.
     let register_one = |name: &str, label: &str, risk: CoreRisk, handler: Arc<dyn ToolHandler>| {
         registry.register_with_risk(
             name,
-            name,
+            "cua",
             handler.schema(),
             handler,
             Arc::new(|| true),

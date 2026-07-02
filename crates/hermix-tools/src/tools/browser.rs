@@ -32,10 +32,18 @@ use crate::ToolRegistry;
 
 /// Register all browser tool handlers (P1.2 migration).
 pub fn register(registry: &ToolRegistry, backend: Arc<dyn BrowserBackend>) {
+    // P1.8 (2026-07-02): the toolset tag is the *group* name `"browser"`,
+    // not the per-tool name. `essential::ESSENTIAL_TOOLSETS` and
+    // `toolset_distributions::base_weights` both reference `"browser"`
+    // as a single toolset; if each tool tagged itself with its own
+    // name (`"browser_navigate"`, `"browser_click"`, ...) the
+    // `set_enabled_toolsets` UI toggle and the essential floor would
+    // silently miss every browser tool. The handler `name` (first
+    // arg) still carries the unique dispatch identifier.
     let register_with = |name: &str, label: &str, risk: RiskLevel, handler: Arc<dyn ToolHandler>| {
         registry.register_with_risk(
             name,
-            name,
+            "browser",
             handler.schema(),
             handler,
             Arc::new(|| true),

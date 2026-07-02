@@ -9,8 +9,14 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
-use hermix_core::{tool_schema, CommandOutput, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{
+    tool_schema, CommandOutput, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema,
+    traits::RiskLevel,
+};
+
+use crate::ToolRegistry;
 
 pub struct OfficeCliHandler {
     backend: std::sync::Arc<dyn TerminalBackend>,
@@ -361,4 +367,45 @@ impl ToolHandler for OfficeCliHandler {
             JsonSchema::object(props, vec!["action".into(), "file".into()]),
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register the `office_cli` tool with the registry (P1.8 migration).
+///
+/// P1.8 (2026-07-02): this `register` function was previously missing —
+/// the `OfficeCliHandler` was implemented but never wired into the
+/// runtime. The `essential::ESSENTIAL_TOOLSETS` constant already lists
+/// `"office"` as a floor entry; without a registration the floor's
+/// `set_toolset_enabled("office", true)` was a silent no-op and
+/// `list_tools()` never exposed the tool to the LLM. The handler is
+/// tagged with the dedicated `"office"` toolset so the floor and the
+/// `set_enabled_toolsets` UI toggle both find it.
+///
+/// The same `terminal_backend` and `terminal_workspace` handles are
+/// shared with the `terminal` and `file` tools so any code path that
+/// shells out uses one consistent backend.
+pub fn register(
+    registry: &ToolRegistry,
+    terminal_backend: Arc<dyn TerminalBackend>,
+    terminal_workspace: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
+) {
+    let handler = Arc::new(OfficeCliHandler::new(terminal_backend, terminal_workspace));
+    let schema = handler.schema();
+    registry.register_with_risk(
+        "office_cli",
+        "office",
+        schema,
+        handler,
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Create, read, edit, and inspect Office documents (.docx, .xlsx, .pptx) using the bundled officecli binary. No Microsoft Office installation needed.",
+        "📊",
+        None,
+        RiskLevel::Caution,
+        false,
+    );
 }
