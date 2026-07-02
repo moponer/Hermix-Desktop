@@ -694,6 +694,28 @@ impl BrowserConfig {
         }
     }
 
+    /// Test-only entry point: read `config.yaml` from an explicit
+    /// directory. Lets unit tests exercise the disk round-trip
+    /// without mutating the process-global `$HERMIX_HOME` env var.
+    ///
+    /// Why a parallel API: `from_env` reads `HERMIX_HOME` via
+    /// `hermix_config::paths::hermix_home()`, which re-reads the env
+    /// var on every call. Concurrent tests that mutate
+    /// `$HERMIX_HOME` to point at their own temp dir race even when
+    /// they hold `HERMIX_HOME_LOCK` — the lock only serialises the
+    /// test thread, but `hermix_home()` runs on whatever thread the
+    /// caller is on and sees whatever value is in the env at that
+    /// instant. Passing an explicit `home` argument removes the env
+    /// var from the loop entirely.
+    #[cfg(test)]
+    fn from_home(home: &std::path::Path) -> Self {
+        let path = home.join("config.yaml");
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Self::from_yaml(&text),
+            Err(_) => Self::default(),
+        }
+    }
+
     /// Parse the three browser sub-fields out of an already-read YAML
     /// string. Pure function (no IO) — every test exercises this
     /// path so we don't need to set `HERMIX_HOME` per case.
@@ -915,19 +937,16 @@ mod browser_config_tests {
         assert_eq!(cfg.cdp_port, Some(9223));
     }
 
-    /// Live IO test — guarded by `HERMIX_HOME_LOCK` so we don't race
-    /// with other tests that touch the env var.
-    ///
-    /// Points `HERMIX_HOME` at an **empty** tempdir so we don't pick
-    /// up the developer's real `~/.hermix/config.yaml` (which would
-    /// silently override the assertion). This is also the new
-    /// semantic of `from_env()`: the canonical home, no env-only
-    /// bypass.
+    /// Live IO test for the disk round-trip path: when the
+    /// `<home>/config.yaml` file is missing, [`BrowserConfig::from_home`]
+    /// must return `default()` rather than panic. This exercises the
+    /// same code path as `from_env` (`read_to_string` → `from_yaml`),
+    /// just with the home dir passed explicitly so we don't have to
+    /// touch the process-global `$HERMIX_HOME` env var.
     #[test]
-    fn from_env_returns_default_when_config_missing() {
+    fn from_home_returns_default_when_config_missing() {
         use std::sync::atomic::AtomicU64;
         static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let _guard = HERMIX_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
@@ -937,88 +956,29 @@ mod browser_config_tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Note: deliberately do NOT create config.yaml.
 
-        let saved = std::env::var("HERMIX_HOME").ok();
-        std::env::set_var("HERMIX_HOME", &dir);
-        let cfg = BrowserConfig::from_env();
-        if let Some(v) = saved {
-            std::env::set_var("HERMIX_HOME", v);
-        } else {
-            std::env::remove_var("HERMIX_HOME");
-        }
-
+        let cfg = BrowserConfig::from_home(&dir);
         assert_eq!(cfg, BrowserConfig::default());
     }
 
-    /// **P0 regression**: `$HERMES_HOME` is the env var used by the
-    /// original NousResearch `hermes-agent` (a different project).
-    /// `BrowserConfig::from_env` must **not** silently pick it up
-    /// just because the developer happens to have it set — that
-    /// would cause two unrelated agents to share one config dir.
+    /// The "don't silently read `$HERMES_HOME`" semantics are owned
+    /// by `hermix_config::paths::hermix_home()` and exercised there
+    /// in `tests::ignores_legacy_hermes_home`. They are NOT
+    /// duplicated here — `BrowserConfig::from_env` is now just
+    /// `read_home_yaml + from_yaml`, and we want the YAML layer to
+    /// stay testable without touching process-global env state.
+
+    /// Round-trip: write a YAML to `<home>/config.yaml`, point
+    /// [`BrowserConfig::from_home`] at the directory, assert all
+    /// three fields round-tripped. This exercises the same
+    /// `read_to_string → from_yaml` path that `from_env` walks, but
+    /// without mutating `$HERMIX_HOME` so concurrent tests can't
+    /// race us through `hermix_home()`.
     #[test]
-    fn from_env_ignores_legacy_hermes_home() {
-        use std::sync::atomic::AtomicU64;
-        use std::{fs, io::Write};
-
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let _guard = HERMIX_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        // Put a recognisable config under $HERMES_HOME only.
-        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let hermes_dir = std::env::temp_dir().join(format!(
-            "hermix-browser-config-hermes-{}-{n}",
-            std::process::id(),
-        ));
-        fs::create_dir_all(&hermes_dir).unwrap();
-        {
-            let mut f = fs::File::create(hermes_dir.join("config.yaml")).unwrap();
-            f.write_all(b"browser:\n  cdp_port: 1111\n").unwrap();
-        }
-        // And a different (empty) HERMIX_HOME.
-        let hermix_dir = std::env::temp_dir().join(format!(
-            "hermix-browser-config-hermix-{}-{n}",
-            std::process::id(),
-        ));
-        fs::create_dir_all(&hermix_dir).unwrap();
-
-        let saved_hermix = std::env::var("HERMIX_HOME").ok();
-        let saved_hermes = std::env::var("HERMES_HOME").ok();
-        std::env::set_var("HERMIX_HOME", &hermix_dir);
-        std::env::set_var("HERMES_HOME", &hermes_dir);
-
-        let cfg = BrowserConfig::from_env();
-
-        if let Some(v) = saved_hermix {
-            std::env::set_var("HERMIX_HOME", v);
-        } else {
-            std::env::remove_var("HERMIX_HOME");
-        }
-        if let Some(v) = saved_hermes {
-            std::env::set_var("HERMES_HOME", v);
-        } else {
-            std::env::remove_var("HERMES_HOME");
-        }
-
-        // cdp_port from $HERMES_HOME must NOT leak through.
-        assert_eq!(cfg, BrowserConfig::default());
-    }
-
-    /// `HERMIX_HOME` is process-global env state; concurrent tests
-    /// reading/writing it race. Acquire this lock for the entire
-    /// duration of any test that touches `HERMIX_HOME`.
-    static HERMIX_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// Round-trip: write a YAML, point `HERMIX_HOME` at it, call
-    /// `from_env()`, assert all three fields round-tripped. This
-    /// is the only test that exercises the env→disk path; every
-    /// other test goes through `from_yaml` so they don't have to
-    /// juggle env vars.
-    #[test]
-    fn from_env_round_trip_through_disk() {
+    fn from_home_round_trip_through_disk() {
         use std::io::Write;
         use std::sync::atomic::AtomicU64;
 
         static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let _guard = HERMIX_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
@@ -1035,14 +995,7 @@ mod browser_config_tests {
             .unwrap();
         }
 
-        let saved = std::env::var("HERMIX_HOME").ok();
-        std::env::set_var("HERMIX_HOME", &dir);
-        let cfg = BrowserConfig::from_env();
-        if let Some(v) = saved {
-            std::env::set_var("HERMIX_HOME", v);
-        } else {
-            std::env::remove_var("HERMIX_HOME");
-        }
+        let cfg = BrowserConfig::from_home(&dir);
 
         assert_eq!(cfg.allowed_domains, Some(vec!["a.com".to_string()]));
         assert_eq!(cfg.cdp_port, Some(9333));
