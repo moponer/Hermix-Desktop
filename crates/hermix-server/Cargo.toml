@@ -32,6 +32,7 @@ hermix-telemetry = { workspace = true }
 hermix-runtime = { workspace = true }
 hermix-voice = { workspace = true }
 hermix-mcp = { workspace = true }
+hermix-cua = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 rusqlite = { workspace = true }

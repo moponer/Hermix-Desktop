@@ -2124,6 +2124,7 @@ dependencies = [
  "hermix-config",
  "hermix-core",
  "hermix-cron",
+ "hermix-cua",
  "hermix-environments",
  "hermix-gateway",
  "hermix-mcp",

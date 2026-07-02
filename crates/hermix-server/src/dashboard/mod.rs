@@ -5,6 +5,7 @@
 
 pub mod custom_providers;
 pub mod analytics;
+pub mod cua;
 pub mod automation;
 pub mod config;
 pub mod consciousness;
@@ -273,4 +274,13 @@ pub fn router() -> Router<HttpServerState> {
             "/api/polish/automation",
             post(polish::post_polish_automation),
         )
+        // CUA trace panel backend — Stage 4.1. Reads the
+        // JSONL action log that `hermix-tools/tools/cua.rs`
+        // appends to `<HERMIX_HOME>/cua-trace.jsonl` and returns
+        // rows matching the requested session. The front-end trace
+        // panel (Stage 4.2) polls this every few seconds and
+        // renders an action timeline. Until the React component
+        // lands, the endpoint is reachable from `curl` for
+        // debugging.
+        .route("/api/cua/trace/{session_id}", get(cua::get_cua_trace))
 }
