@@ -697,99 +697,96 @@ impl BrowserConfig {
     /// Parse the three browser sub-fields out of an already-read YAML
     /// string. Pure function (no IO) — every test exercises this
     /// path so we don't need to set `HERMIX_HOME` per case.
+    ///
+    /// P1.8 (2026-07-02): rewritten via `serde_yaml` so we get a
+    /// declarative schema instead of a 90-line line scanner. The
+    /// shape is exactly the same as before — `Some(vec)` for a
+    /// populated list, `None` for "absent" — so callers (and the
+    /// 14 test cases below) keep working unchanged.
     fn from_yaml(text: &str) -> Self {
-        let mut cfg = Self::default();
-        let mut in_browser = false;
-        let mut in_domains = false;
-        let lines: Vec<&str> = text.lines().collect();
-        let mut i = 0;
-        while i < lines.len() {
-            let raw = lines[i];
-            // Strip `#` comments before scanning. Don't touch `#`
-            // inside quoted strings — the YAML we accept is too
-            // simple to need that.
-            let line = raw.split('#').next().unwrap_or("");
-            if line.is_empty() {
-                i += 1;
-                continue;
-            }
-            let trimmed = line.trim_end();
-            let trimmed_l = trimmed.trim_start();
+        // Accept the same loose truthy/falsy spellings the previous
+        // hand-rolled parser accepted (true/yes/1/on vs false/no/0/off).
+        // We parse integers as 0/1 too — `serde_yaml` unmarks bare `1`
+        // as i64 by default, so we accept it via the `Int` variant.
+        #[derive(serde::Deserialize, Default)]
+        #[serde(untagged)]
+        enum HeadlessLoose {
+            Bool(bool),
+            Int(i64),
+            Str(HeadlessStr),
+            #[default]
+            Other,
+        }
 
-            if !in_browser {
-                if trimmed_l.starts_with("browser:") || trimmed_l.starts_with("browser :") {
-                    in_browser = true;
-                }
-                i += 1;
-                continue;
-            }
-            // Inside the `browser:` block. A new top-level key ends it.
-            if !line.starts_with(' ') && !line.starts_with('\t') && trimmed.ends_with(':') {
-                in_browser = false;
-                in_domains = false;
-                i += 1;
-                continue;
-            }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum HeadlessStr {
+            True,
+            Yes,
+            On,
+            False,
+            No,
+            Off,
+        }
 
-            if !in_domains {
-                // Not in a list — try each recognised sub-key.
-                let mut handled = true;
-                if let Some(rest) = trimmed_l.strip_prefix("allowed_domains:") {
-                    let rest = rest.trim();
-                    // Inline list form: `allowed_domains: [a, b, c]`.
-                    if let Some(inner) =
-                        rest.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
-                    {
-                        let domains = inner
-                            .split(',')
-                            .map(|s| s.trim().trim_matches(|c| c == '"' || c == '\''))
-                            .filter(|s| !s.is_empty())
-                            .map(|s| s.to_string())
-                            .collect::<Vec<_>>();
-                        if !domains.is_empty() {
-                            cfg.allowed_domains = Some(domains);
-                        }
-                    }
-                    in_domains = true;
-                } else if let Some(rest) = trimmed_l.strip_prefix("cdp_port:") {
-                    if let Ok(n) = rest.trim().parse::<u16>() {
-                        cfg.cdp_port = Some(n);
-                    }
-                } else if let Some(rest) = trimmed_l.strip_prefix("headless:") {
-                    cfg.headless = match rest.trim().to_ascii_lowercase().as_str() {
-                        "true" | "yes" | "1" | "on" => Some(true),
-                        "false" | "no" | "0" | "off" => Some(false),
+        impl HeadlessLoose {
+            fn resolve(self) -> Option<bool> {
+                match self {
+                    HeadlessLoose::Bool(b) => Some(b),
+                    HeadlessLoose::Int(n) => match n {
+                        1 => Some(true),
+                        0 => Some(false),
                         _ => None,
-                    };
-                } else {
-                    handled = false;
-                }
-                let _ = handled; // marker; kept for clarity of the if/else chain
-                i += 1;
-            } else {
-                // Inside an `allowed_domains:` block-list.
-                if let Some(rest) = trimmed_l.strip_prefix("- ") {
-                    let s = rest.trim().trim_matches(|c| c == '"' || c == '\'');
-                    if !s.is_empty() {
-                        cfg.allowed_domains
-                            .get_or_insert_with(Vec::new)
-                            .push(s.to_string());
-                    }
-                    i += 1;
-                } else if trimmed_l.is_empty() {
-                    // Blank line inside the list — keep in_domains.
-                    i += 1;
-                } else {
-                    // Sibling sub-key — exit the list, re-process
-                    // this line under the !in_domains branch by
-                    // not advancing `i`. The next loop iteration
-                    // sees in_domains=false and picks up
-                    // cdp_port / headless / a fresh allowed_domains.
-                    in_domains = false;
+                    },
+                    HeadlessLoose::Str(s) => match s {
+                        HeadlessStr::True | HeadlessStr::Yes | HeadlessStr::On => Some(true),
+                        HeadlessStr::False | HeadlessStr::No | HeadlessStr::Off => Some(false),
+                    },
+                    HeadlessLoose::Other => None,
                 }
             }
         }
-        cfg
+
+        #[derive(serde::Deserialize, Default)]
+        struct BrowserYaml {
+            #[serde(default)]
+            allowed_domains: Option<Vec<String>>,
+            #[serde(default)]
+            cdp_port: Option<u16>,
+            #[serde(default)]
+            headless: Option<HeadlessLoose>,
+        }
+
+        #[derive(serde::Deserialize, Default)]
+        struct RootYaml {
+            #[serde(default)]
+            browser: Option<BrowserYaml>,
+        }
+
+        let root: RootYaml = match serde_yaml::from_str(text) {
+            Ok(v) => v,
+            Err(_) => return Self::default(),
+        };
+        let Some(b) = root.browser else {
+            return Self::default();
+        };
+
+        Self {
+            allowed_domains: b.allowed_domains.and_then(|v| {
+                let cleaned: Vec<String> = v
+                    .into_iter()
+                    .map(|s| s.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if cleaned.is_empty() {
+                    None
+                } else {
+                    Some(cleaned)
+                }
+            }),
+            cdp_port: b.cdp_port,
+            headless: b.headless.and_then(HeadlessLoose::resolve),
+        }
     }
 
     /// Read the canonical `$HERMIX_HOME/config.yaml` (resolved via
