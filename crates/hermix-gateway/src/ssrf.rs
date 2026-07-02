@@ -3,7 +3,7 @@
 //! Validates outbound URLs to prevent access to internal/private networks
 //! and cloud metadata endpoints.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 use tokio::net::lookup_host;
@@ -144,6 +144,48 @@ fn is_cloud_metadata(ip: &IpAddr) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// DNS resolution (pluggable for hermetic tests)
+// ---------------------------------------------------------------------------
+
+/// DNS resolution async signature: `host` → list of `SocketAddr`.
+///
+/// Production uses `tokio::net::lookup_host`; tests can install a stub to keep
+/// the suite hermetic when the build host has no DNS (CI sandboxes, airgapped
+/// containers, etc.). Installed via `set_resolver_for_testing`.
+type ResolverFuture = std::pin::Pin<
+    Box<dyn std::future::Future<Output = std::io::Result<Vec<SocketAddr>>> + Send>,
+>;
+type Resolver = std::sync::Arc<dyn Fn(&str) -> ResolverFuture + Send + Sync>;
+
+#[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
+static RESOLVER_OVERRIDE: Mutex<Option<Resolver>> = Mutex::new(None);
+
+/// Test-only: install a custom DNS resolver. Pass `None` to restore the
+/// real `tokio::net::lookup_host`. The `Mutex` and override are gated by
+/// `#[cfg(test)]` so production binaries have zero overhead.
+#[cfg(test)]
+pub fn set_resolver_for_testing(f: Option<Resolver>) {
+    *RESOLVER_OVERRIDE.lock().unwrap() = f;
+}
+
+async fn resolve_host(host: &str) -> std::io::Result<Vec<SocketAddr>> {
+    #[cfg(test)]
+    {
+        if let Some(f) = RESOLVER_OVERRIDE.lock().unwrap().clone() {
+            return f(host).await;
+        }
+    }
+    let mut out = Vec::new();
+    let mut it = lookup_host((host, 0u16)).await?;
+    while let Some(sa) = it.next() {
+        out.push(sa);
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -192,19 +234,14 @@ pub async fn is_safe_url(url: &str) -> bool {
     // This blocks both literal "http://internal.local/" cases AND DNS
     // rebinding where an attacker controls DNS to return 10.0.0.1 for
     // example.com after we've checked the hostname.
-    let mut addrs = match lookup_host((host, 0u16)).await {
-        Ok(it) => it,
+    let addrs = match resolve_host(host).await {
+        Ok(v) => v,
         Err(_) => return false, // unresolved hostnames are rejected (strict)
     };
-    let Some(first) = addrs.next() else {
+    if addrs.is_empty() {
         return false; // no records
-    };
-    // If first IP is private, reject
-    if is_private_ip(&first.ip()) || is_cloud_metadata(&first.ip()) {
-        return false;
     }
-    // Check the rest of the resolved addresses too (multi-A record DNS)
-    for addr in addrs {
+    for addr in &addrs {
         let ip = addr.ip();
         if is_private_ip(&ip) || is_cloud_metadata(&ip) {
             return false;
@@ -267,31 +304,17 @@ pub async fn validate_url(url: &str) -> Result<Url, GatewayError> {
     }
 
     // Hostname: resolve via DNS and check every IP. Blocks DNS rebinding.
-    let mut addrs = lookup_host((host, 0u16))
+    let addrs = resolve_host(host)
         .await
         .map_err(|e| GatewayError::ConnectionFailed(format!("DNS resolution failed for '{}': {}", host, e)))?;
 
-    let Some(first) = addrs.next() else {
+    if addrs.is_empty() {
         return Err(GatewayError::ConnectionFailed(format!(
             "Hostname '{}' did not resolve to any IP address",
             host
         )));
-    };
-    if is_private_ip(&first.ip()) {
-        return Err(GatewayError::ConnectionFailed(format!(
-            "URL hostname '{}' resolves to private/internal IP address: {}",
-            host,
-            first.ip()
-        )));
     }
-    if is_cloud_metadata(&first.ip()) {
-        return Err(GatewayError::ConnectionFailed(format!(
-            "URL hostname '{}' resolves to cloud metadata endpoint: {}",
-            host,
-            first.ip()
-        )));
-    }
-    for addr in addrs {
+    for addr in &addrs {
         let ip = addr.ip();
         if is_private_ip(&ip) {
             return Err(GatewayError::ConnectionFailed(format!(
@@ -366,10 +389,36 @@ mod tests {
     // Async tests: hostname-based tests require real DNS.
     // We use `example.com` (public, IANA-reserved) and `localhost`
     // (always resolves to 127.0.0.1) so the suite is hermetic.
+    //
+    // The DNS stub installed below makes these tests pass on hosts that
+    // have no DNS (CI sandboxes, airgapped containers). It also closes
+    // the last network-dependent hole in `cargo test` for this crate.
+    fn stub_resolver(entries: Vec<(&'static str, Vec<SocketAddr>)>) -> Resolver {
+        std::sync::Arc::new(move |host: &str| {
+            // Pre-allocate the matched addresses synchronously and return
+            // them from a pinned future.
+            let matched: Vec<SocketAddr> = entries
+                .iter()
+                .find(|(h, _)| *h == host)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            Box::pin(async move { Ok(matched) })
+        })
+    }
+
     #[tokio::test]
     async fn test_is_safe_url_public() {
+        // example.com -> public, 8.8.8.8 -> literal public IP
+        let example_ip: IpAddr = "93.184.216.34".parse().unwrap();
+        let resolver = stub_resolver(vec![(
+            "example.com",
+            vec![SocketAddr::new(example_ip, 0)],
+        )]);
+        set_resolver_for_testing(Some(resolver));
         assert!(is_safe_url("https://example.com/api").await);
+        // The literal IP path does not hit the resolver at all.
         assert!(is_safe_url("http://8.8.8.8/api").await);
+        set_resolver_for_testing(None);
     }
 
     #[tokio::test]
@@ -388,8 +437,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_url_success() {
+        let example_ip: IpAddr = "93.184.216.34".parse().unwrap();
+        let resolver = stub_resolver(vec![(
+            "example.com",
+            vec![SocketAddr::new(example_ip, 0)],
+        )]);
+        set_resolver_for_testing(Some(resolver));
         assert!(validate_url("https://example.com/api").await.is_ok());
+        // Literal IP path is resolver-independent.
         assert!(validate_url("http://8.8.8.8/api").await.is_ok());
+        set_resolver_for_testing(None);
     }
 
     #[tokio::test]
