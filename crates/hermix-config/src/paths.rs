@@ -683,72 +683,89 @@ mod tests {
     /// plays nicely with other tests in the same binary.
     #[test]
     fn hermix_home_ignores_hermes_home() {
-        let tmp = tempfile::tempdir().unwrap();
-        let real_hermix = tmp.path().join("my-hermix");
-        let fake_hermes = tmp.path().join("fake-hermes-home");
-        std::fs::create_dir_all(&real_hermix).unwrap();
-        std::fs::create_dir_all(&fake_hermes).unwrap();
+        // Mutating process-global env vars from concurrent tests
+        // races even when individual tests do their own save/restore
+        // — `hermix_home()` re-reads `$HERMIX_HOME` on every call and
+        // a sister test's `set_var` can land between our `set_var`
+        // and our read. `with_env_lock` serialises this test against
+        // every other env-var-mutating test in the workspace
+        // (`managed_gateway::test_lock`), so the read here is
+        // guaranteed to see our own `set_var` value.
+        with_env_lock(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            let real_hermix = tmp.path().join("my-hermix");
+            let fake_hermes = tmp.path().join("fake-hermes-home");
+            std::fs::create_dir_all(&real_hermix).unwrap();
+            std::fs::create_dir_all(&fake_hermes).unwrap();
 
-        // Save the real env (if any) so we don't trample the user.
-        let saved_hermix = std::env::var("HERMIX_HOME").ok();
-        let saved_hermes = std::env::var("HERMES_HOME").ok();
-        unsafe {
-            std::env::set_var("HERMIX_HOME", &real_hermix);
-            std::env::set_var("HERMES_HOME", &fake_hermes);
-        }
-
-        let h = hermix_home();
-
-        // Restore.
-        unsafe {
-            match saved_hermix {
-                Some(v) => std::env::set_var("HERMIX_HOME", v),
-                None => std::env::remove_var("HERMIX_HOME"),
+            // Save the real env (if any) so we don't trample the user.
+            let saved_hermix = std::env::var("HERMIX_HOME").ok();
+            let saved_hermes = std::env::var("HERMES_HOME").ok();
+            unsafe {
+                std::env::set_var("HERMIX_HOME", &real_hermix);
+                std::env::set_var("HERMES_HOME", &fake_hermes);
             }
-            match saved_hermes {
-                Some(v) => std::env::set_var("HERMES_HOME", v),
-                None => std::env::remove_var("HERMES_HOME"),
-            }
-        }
 
-        // hermix_home() must use HERMIX_HOME (the explicit hermix
-        // value), not HERMES_HOME (the original NousResearch tool's
-        // value).
-        assert_eq!(h, real_hermix);
-        assert_ne!(h, fake_hermes);
+            let h = hermix_home();
+
+            // Restore.
+            unsafe {
+                match saved_hermix {
+                    Some(v) => std::env::set_var("HERMIX_HOME", v),
+                    None => std::env::remove_var("HERMIX_HOME"),
+                }
+                match saved_hermes {
+                    Some(v) => std::env::set_var("HERMES_HOME", v),
+                    None => std::env::remove_var("HERMES_HOME"),
+                }
+            }
+
+            // hermix_home() must use HERMIX_HOME (the explicit hermix
+            // value), not HERMES_HOME (the original NousResearch tool's
+            // value).
+            assert_eq!(h, real_hermix);
+            assert_ne!(h, fake_hermes);
+        })
     }
 
     /// Empty `HERMIX_HOME` should be treated as unset (defensive
     /// against shells that set it to "" accidentally).
     #[test]
     fn hermix_home_treats_empty_as_unset() {
-        let tmp = tempfile::tempdir().unwrap();
-        let real_hermix = tmp.path().join("real-hermix");
-        std::fs::create_dir_all(&real_hermix).unwrap();
+        // Same race-protection rationale as
+        // `hermix_home_ignores_hermes_home`: this test mutates the
+        // process-global `$HERMIX_HOME`, so it must run under the
+        // shared env-test mutex or it races sister tests that also
+        // poke the same variable.
+        with_env_lock(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            let real_hermix = tmp.path().join("real-hermix");
+            std::fs::create_dir_all(&real_hermix).unwrap();
 
-        let saved = std::env::var("HERMIX_HOME").ok();
-        unsafe {
-            // Empty HERMIX_HOME → should fall through to default.
-            std::env::set_var("HERMIX_HOME", "");
-            std::env::set_var("HERMIX_MIGRATE_FROM_HERMES", "0");
-        }
-
-        // We can't assert against ~/.hermix (user-dependent) but we
-        // can assert it's NOT the real_hermix path we created.
-        let h = hermix_home();
-
-        // Restore.
-        unsafe {
-            std::env::remove_var("HERMIX_MIGRATE_FROM_HERMES");
-            match saved {
-                Some(v) => std::env::set_var("HERMIX_HOME", v),
-                None => std::env::remove_var("HERMIX_HOME"),
+            let saved = std::env::var("HERMIX_HOME").ok();
+            unsafe {
+                // Empty HERMIX_HOME → should fall through to default.
+                std::env::set_var("HERMIX_HOME", "");
+                std::env::set_var("HERMIX_MIGRATE_FROM_HERMES", "0");
             }
-        }
 
-        // Empty HERMIX_HOME → hermix_home() uses default (~/.hermix),
-        // which is definitely not the tempdir we created.
-        assert!(!h.to_string_lossy().contains("real-hermix"));
+            // We can't assert against ~/.hermix (user-dependent) but we
+            // can assert it's NOT the real_hermix path we created.
+            let h = hermix_home();
+
+            // Restore.
+            unsafe {
+                std::env::remove_var("HERMIX_MIGRATE_FROM_HERMES");
+                match saved {
+                    Some(v) => std::env::set_var("HERMIX_HOME", v),
+                    None => std::env::remove_var("HERMIX_HOME"),
+                }
+            }
+
+            // Empty HERMIX_HOME → hermix_home() uses default (~/.hermix),
+            // which is definitely not the tempdir we created.
+            assert!(!h.to_string_lossy().contains("real-hermix"));
+        })
     }
 
     // -----------------------------------------------------------------
