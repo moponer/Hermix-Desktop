@@ -4366,11 +4366,15 @@ pub(crate) fn extract_llm_probe_url(config: &GatewayConfig) -> Option<(String, O
             }
         }
     }
-    // 2) Fall back to the first provider with an api_key
+    // 2) Fall back to the first provider that is "configurable" (api_key OR env
+    //    var OR explicit base_url). Without an api_key/env, the runtime can't
+    //    actually authenticate, but returning the provider name + base_url lets
+    //    the caller at least surface a useful default (and probe it).
     for (name, p) in &config.llm_providers {
-        if p.api_key.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
-            || std::env::var(os_env_var(name)).ok().map(|s| !s.is_empty()).unwrap_or(false)
-        {
+        let has_key = p.api_key.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
+            || std::env::var(os_env_var(name)).ok().map(|s| !s.is_empty()).unwrap_or(false);
+        let has_url = p.base_url.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+        if has_key || has_url {
             return Some((name.clone(), p.base_url.clone()));
         }
     }
