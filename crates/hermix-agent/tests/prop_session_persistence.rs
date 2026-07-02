@@ -66,7 +66,15 @@ proptest! {
                 .expect("persist");
         }
 
-        let conn = rusqlite::Connection::open(home.join("sessions.db")).expect("open sqlite");
+        // `SessionPersistence` stores its DB at `<home>/data/sessions.db`
+        // (via `hermix_config::paths::sessions_db_path`). The previous
+        // test opened `home.join("sessions.db")` which was a fresh
+        // uninitialised SQLite file — every proptest case hit
+        // `SqliteFailure: no such table: sessions`. Use the same
+        // data_dir helper the production code uses so the path can't
+        // silently drift in the future.
+        let db_path = hermix_config::paths::data_dir_in(&home).join("sessions.db");
+        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
         let count: usize = conn
             .query_row("SELECT COUNT(DISTINCT id) FROM sessions", [], |row| row.get(0))
             .expect("count");
