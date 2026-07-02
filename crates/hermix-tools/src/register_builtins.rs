@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use hermix_core::{traits::RiskLevel, SkillProvider, TerminalBackend, ToolHandler};
+use hermix_core::{SkillProvider, TerminalBackend};
 
 use crate::tools::clarify::ClarifyBackend;
 use crate::ToolRegistry;
@@ -25,6 +25,15 @@ use crate::ToolRegistry;
 /// Backends that depend on environment variables (e.g. `OPENAI_API_KEY`,
 /// `FAL_KEY`, `HASS_URL`) are constructed eagerly; if the vars are absent
 /// the tools will return a clear error at *runtime*, not at registration.
+///
+/// P1.3 (2026-07-02): the per-tool migration is complete. Every
+/// built-in tool now owns a `pub fn register(...)` in
+/// `tools/<name>.rs`, and `register_builtin_tools` is mostly a
+/// post-pass + a single `tools::register_all(...)` call that wires
+/// the three DI backends (terminal / skill / browser). The
+/// `browser_*` tools are constructed here from `config.yaml` and
+/// pushed into `register_all` so each `tools/browser.rs::register`
+/// call is data-driven.
 pub fn register_builtin_tools(
     registry: &ToolRegistry,
     terminal_backend: Arc<dyn TerminalBackend>,
@@ -32,344 +41,53 @@ pub fn register_builtin_tools(
     clarify_backend: Option<Arc<dyn ClarifyBackend>>,
     enabled_toolsets: Option<HashSet<String>>,
 ) {
-    /// `enabled_toolsets: Some({...})` → only register tools whose
-    /// toolset tag is in the set. `None` → register everything
-    /// (back-compat). Special tags `"all"` and `"*"` mean "register
-    /// every tool regardless of group".
-    fn is_enabled(enabled: &Option<HashSet<String>>, toolset: &str) -> bool {
-        match enabled {
-            None => true,
-            Some(set) => set.contains("all") || set.contains("*") || set.contains(toolset),
-        }
-    }
-
-    /// Default-`Caution` registration. Use `reg_risk` for Safe / Dangerous
-    /// tools.
-    fn reg(
-        enabled_toolsets: &Option<HashSet<String>>,
-        registry: &ToolRegistry,
-        toolset: &str,
-        handler: Arc<dyn ToolHandler>,
-        emoji: &str,
-        env_deps: Vec<String>,
-    ) {
-        reg_risk(
-            enabled_toolsets,
-            registry,
-            toolset,
-            handler,
-            emoji,
-            env_deps,
-            RiskLevel::Caution,
-        );
-    }
-
-    /// Registration with an explicit [`RiskLevel`]. The pre-execution approval
-    /// hook uses this to decide whether to prompt the user in
-    /// `PermissionLevel::Default` mode.
-    fn reg_risk(
-        enabled_toolsets: &Option<HashSet<String>>,
-        registry: &ToolRegistry,
-        toolset: &str,
-        handler: Arc<dyn ToolHandler>,
-        emoji: &str,
-        env_deps: Vec<String>,
-        risk_level: RiskLevel,
-    ) {
-        // Toolset filter: we ALWAYS register the tool now (the
-        // handler closure is cheap to construct and we need the
-        // entry in the registry so the Settings UI can flip it
-        // back on later). The actual "hide from LLM" decision is
-        // applied as a post-pass at the bottom of
-        // `register_builtin_tools`, which walks
-        // `registry.list_toolsets()` and flips `is_enabled=false`
-        // for every entry whose toolset tag is not in the
-        // user's enabled set. This keeps the original
-        // `enabled_toolsets` parameter's *effective* behaviour
-        // (LLM only sees the whitelisted toolsets) while
-        // restoring the runtime-toggle capability that the
-        // Settings UI needs.
-        if !is_enabled(enabled_toolsets, toolset) {
-            let schema = handler.schema();
-            tracing::debug!(
-                tool = %schema.name,
-                toolset = %toolset,
-                "startup: toolset not in enabled set, will mark is_enabled=false post-pass"
-            );
-        }
-        let schema = handler.schema();
-        let name = schema.name.clone();
-        let desc = schema.description.clone();
-        registry.register_with_risk(
-            name,
-            toolset,
-            schema,
-            handler,
-            Arc::new(|| true),
-            env_deps,
-            true,
-            desc,
-            emoji,
-            None,
-            risk_level,
-            /* override_existing = */ false,
-        );
-    }
-
-    // -- Web tools -----------------------------------------------------------
-    // web_search + web_extract migrated to tools/web.rs::register (P1.3)
-
-    // -- Managed Tool Gateway -----------------------------------------------
-    // Routes tool calls through an HTTP gateway (e.g. Nous managed tools).
-    // Only functional when HERMIX_MANAGED_TOOL_GATEWAY_URL or vendor config
-    // is set; returns a helpful error otherwise.
-    // -- Terminal ------------------------------------------------------------
-    // Registered as `Caution`, not `Dangerous`. The tool itself can run
-    // anything from `ls` to `rm -rf`, so the tool-level *capability* is
-    // dangerous, but the per-call risk is decided by the inner
-    // `ApprovalManager` (see `hermix_tools::approval`) which already
-    // denies `rm -rf /` and similar outright and tags `sudo` / `apt
-    // install` as `RequiresConfirmation`. Marking the tool `Dangerous`
-    // makes `local_agent_service::on_pre_tool_dispatch` pre-prompt
-    // *every* terminal call — including `ls -la` and `echo hello`,
-    // which is a false-positive the user has explicitly called out.
-    // `Caution` keeps the policy intent ("can affect the system, the
-    // command shape decides whether to actually interrupt") aligned
-    // with the gate's own design note.
-    crate::tools::terminal::register(
-        registry,
-        terminal_backend.clone(),
-        registry.terminal_workspace_handle(),
-    );
-
-    // -- Computer-Use Automation (CUA) tools (P1.2 migrated to tools/cua.rs) --
-    crate::tools::cua::register(registry);
-
-    // -- File tools ----------------------------------------------------------
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "file",
-        Arc::new(crate::tools::file::ReadFileHandler::new(
-            terminal_backend.clone(),
-        )),
-        "📖",
-        vec![],
-        RiskLevel::Safe,
-    );
-    reg(
-        &enabled_toolsets,
-        registry,
-        "file",
-        Arc::new(crate::tools::file::WriteFileHandler::new(
-            terminal_backend.clone(),
-        )),
-        "✏️",
-        vec![],
-    );
-    reg(
-        &enabled_toolsets,
-        registry,
-        "file",
-        Arc::new(crate::tools::file::PatchHandler::new(Arc::new(
-            crate::backends::file::LocalPatchBackend::new(),
-        ))),
-        "🩹",
-        vec![],
-    );
-    reg(
-        &enabled_toolsets,
-        registry,
-        "file",
-        Arc::new(crate::tools::file::SearchFilesHandler::new(Arc::new(
-            crate::backends::file::LocalSearchBackend::new(),
-        ))),
-        "🔎",
-        vec![],
-    );
-    // -- Aliases for search_files / patch + Introspection ------------------
-    // list_files / edit_file / list_tools migrated to
-    // tools/aliases.rs::register (P1.3)
-    // read_pdf tool migrated to tools/pdf.rs::register (P1.2, 2026-06-30)
-
-    // -- Image generation (fal.ai) -------------------------------------------
-    // image_gen + gpt_image migrated to tools/image_gen.rs::register (P1.2, 2026-06-30)
-
-    // -- Video generation (SeedDance2) ---------------------------------------
-    // video_gen migrated to tools/video_gen.rs::register (P1.2, 2026-06-30)
-
-    // -- Audio generation (music, SFX, voice cloning) ------------------------
-
-    // -- Media workflow orchestrator -----------------------------------------
-    let media_backend: Arc<dyn crate::tools::media_workflow::MediaWorkflowBackend> =
-        Arc::new(crate::tools::media_workflow::PlanningWorkflowBackend::new());
-    crate::tools::media_workflow::register(registry, media_backend);
-
-    // -- Skills (3 tools) ----------------------------------------------------
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "skills",
-        Arc::new(crate::tools::skills::SkillsListHandler::new(
-            skill_provider.clone(),
-        )),
-        "📚",
-        vec![],
-        RiskLevel::Safe,
-    );
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "skills",
-        Arc::new(crate::tools::skills::SkillViewHandler::new(
-            skill_provider.clone(),
-        )),
-        "📖",
-        vec![],
-        RiskLevel::Safe,
-    );
-    reg(
-        &enabled_toolsets,
-        registry,
-        "skills",
-        Arc::new(crate::tools::skills::SkillManageHandler::new(
-            skill_provider,
-        )),
-        "⚙️",
-        vec![],
-    );
-
-    // -- compact_tool_chain (P0-2) ------------------------------------------
-    // LLM-facing tool that collapses N tool calls into one
-    // tool_result entry — the main lever for keeping long
-    // sessions under the context budget. Lives in its own
-    // `compact` toolset so it can be toggled off separately
-    // from the regular skill management tools if the user
-    // wants raw tool_use calls back.
+    // -- Migrated tools ------------------------------------------------------
+    // Every built-in tool is now `pub fn register(...)` in
+    // `tools/<name>.rs`. We construct the three backends that the
+    // DI-using tools need and hand them to `tools::register_all`,
+    // which is the single canonical wiring point.
     //
-    // We hand the chain its own cheap `Arc<ToolRegistry>` clone
-    // (the inner state is `Arc<Mutex<...>>` so this is just an
-    // atomic refcount bump, not a deep copy). The chain can
-    // then dispatch any tool already registered, including ones
-    // registered *after* this call — the registry's `Clone` is
-    // a view, not a snapshot.
-    crate::tools::tool_chain::register(registry, Arc::new(registry.clone()));
+    // Browser backend construction lives here (not inside the
+    // browser module) because the allowlist/port/headless settings
+    // come from `config.yaml` and we don't want `tools::browser` to
+    // reach across the crate for config helpers. The registry maps
+    // `session_id -> Arc<AutoBrowserBackend>` so group-chat agents
+    // in different sessions never share CDP state; the
+    // SessionedBrowserBackend wrapper is what the handlers hold so
+    // every tool call dispatches to the backend for the active
+    // session.
+    let browser_registry = std::sync::Arc::new(
+        crate::backends::browser::BrowserRegistry::new()
+            .with_allowed_domains(browser_allowed_domains_from_config())
+            .with_cdp_port(browser_cdp_port_from_config())
+            .with_headless(browser_headless_from_config()),
+    );
+    let sessioned = std::sync::Arc::new(
+        crate::backends::browser::SessionedBrowserBackend::new(browser_registry),
+    );
+    let browser_backend: Arc<dyn crate::tools::browser::BrowserBackend> = sessioned;
 
-    // -- Memory --------------------------------------------------------------
-    // Memory tool migrated to tools/memory.rs::register (P1.3).
-    // The companion `tracing::info!` that announces the
-    // frozen-snapshot mode now lives next to the registration site
-    // in tools/memory.rs::register so the operator sees it in the
-    // same boot trace.
-
-    // -- Disk cleanup --------------------------------------------------------
-    crate::tools::disk_cleanup::register(registry);
-
-    // -- Computer use (desktop automation) -----------------------------------
-    // Dangerous because every action operates on the live user
-    // desktop (clicks, keystrokes, clipboard). The pre-tool-
-    // dispatch layer in `LocalAgentService::decide_pre_tool_dispatch`
-    // requires explicit user approval in `PermissionLevel::Default`.
-
-    // -- CUA (self-hosted Computer-Use Automation) --------------------------
-    // Migrated to tools/cua.rs::register (P1.2 per-tool migration, 2026-07-01).
-    // 14 handlers total: Phase 1 primitives (screenshot, screen info,
-    // click, type, press key), Phase 2-A (window list, window at
-    // point, click window), Phase 2-B UIA (ui_tree, ui_find, ui_click,
-    // ui_focus, ui_invoke), Phase 2-D OCR (read-only, Safe).
-
-    // -- Hermes achievements -------------------------------------------------
-    // Migrated to tools/hermix_achievements.rs::register (P1.2 per-tool migration).
-
-    // -- Session search ------------------------------------------------------
-    // Migrated to tools/session_search.rs::register (P1.2 per-tool migration).
-
-    // -- Todo ----------------------------------------------------------------
-    // Migrated to tools/todo.rs::register (P1.2 per-tool migration).
-
-    // -- Kanban --------------------------------------------------------------
-    // Migrated to tools/kanban.rs::register (P1.2 per-tool migration).
-
-    // -- Model Providers -----------------------------------------------------
-    // Migrated to tools/model_providers.rs::register (P1.2 per-tool migration).
-
-    // -- Platforms -----------------------------------------------------------
-    // platforms migrated to tools/platforms.rs::register (P1.2, 2026-06-30)
-
-    // -- Security Guidance ---------------------------------------------------
-    // security_guidance migrated to tools/security_guidance.rs::register (P1.2, 2026-06-30)
-
-    // -- Clarify -------------------------------------------------------------
+    // Clarify backend: explicit caller-provided (desktop uses
+    // ChannelClarifyBackend for prompt-the-user) overrides the
+    // signal-based default.
     let clarify_backend: Arc<dyn ClarifyBackend> = match clarify_backend {
         Some(b) => b,
         None => Arc::new(crate::backends::clarify::SignalClarifyBackend::new()),
     };
+
+    crate::tools::register_all(
+        registry,
+        terminal_backend,
+        skill_provider,
+        browser_backend,
+    );
+    // The `clarify_backend` parameter is consumed here so we can
+    // re-register `clarify` with the caller-provided backend on top
+    // of the SignalClarifyBackend default that `register_all` wired.
+    // Doing it post-pass means the desktop's ChannelClarifyBackend
+    // takes precedence, and bare callers (tests) keep the signal
+    // default without manual unwrapping.
     crate::tools::clarify::register(registry, clarify_backend);
-
-    // -- Code execution ------------------------------------------------------
-    let code_backend: Arc<dyn crate::tools::code_execution::CodeExecutionBackend> =
-        Arc::new(crate::backends::code_execution::LocalCodeExecutionBackend::default());
-    crate::tools::code_execution::register(registry, code_backend);
-
-    // -- Delegation ----------------------------------------------------------
-    let delegation_backend: Arc<dyn crate::tools::delegation::DelegationBackend> =
-        Arc::new(crate::backends::delegation::SignalDelegationBackend::new());
-    crate::tools::delegation::register(registry, delegation_backend);
-
-    // -- Cronjob -------------------------------------------------------------
-    // Migrated to tools/cronjob.rs::register (P1.2 per-tool migration).
-
-    // -- Messaging -----------------------------------------------------------
-    // Migrated to tools/messaging.rs::register (P1.2 per-tool migration).
-
-    // -- Home Assistant (4 tools) --------------------------------------------
-    // homeassistant migrated to tools/homeassistant.rs::register (P1.2, 2026-06-30)
-
-    // -- TTS -----------------------------------------------------------------
-    // Migrated to tools/tts.rs::register (P1.2 per-tool migration).
-
-    // -- Browser (10 tools) --------------------------------------------------
-    {
-        // Phase 3: BrowserRegistry + SessionedBrowserBackend.
-        // The registry maps `session_id -> Arc<AutoBrowserBackend>` so
-        // group-chat agents in different sessions never share CDP state.
-        // The SessionedBrowserBackend wrapper is what the handlers hold:
-        // every tool call dispatches to the backend for the active
-        // session. Domain allowlist is loaded from `config.yaml` so
-        // operators can restrict where the LLM is allowed to navigate.
-        let browser_registry = std::sync::Arc::new(
-            crate::backends::browser::BrowserRegistry::new()
-                .with_allowed_domains(browser_allowed_domains_from_config())
-                .with_cdp_port(browser_cdp_port_from_config())
-                .with_headless(browser_headless_from_config()),
-        );
-        let sessioned = std::sync::Arc::new(
-            crate::backends::browser::SessionedBrowserBackend::new(browser_registry),
-        );
-        let browser_backend: Arc<dyn crate::tools::browser::BrowserBackend> = sessioned;
-        crate::tools::browser::register(registry, browser_backend);
-    }
-
-    // -- Mixture of Agents ---------------------------------------------------
-
-    // -- Process registry ----------------------------------------------------
-
-    // -- Transcription -------------------------------------------------------
-
-    // -- Voice mode ----------------------------------------------------------
-
-    // -- TTS Premium ---------------------------------------------------------
-
-    // -- OSV Check -----------------------------------------------------------
-
-    // -- URL Safety ----------------------------------------------------------
-    // url_safety tool migrated to tools/url_safety.rs::register (P1.2, 2026-06-30)
-
-    // -- Env passthrough -----------------------------------------------------
-
-    // -- Credential files ----------------------------------------------------
-
-    // -- Tool result storage -------------------------------------------------
 
     tracing::info!("Registered {} built-in tools", registry.list_tools().len());
 
@@ -377,11 +95,14 @@ pub fn register_builtin_tools(
     // `enabled_toolsets` whitelist, flip every registered
     // toolset whose tag is *not* in the whitelist to
     // `is_enabled=false`. Done as a single walk over the
-    // registered tags (not per-`reg` call) so we issue
-    // O(toolsets) `set_toolset_enabled` calls instead of
-    // O(tools). The previous per-`reg` filter (above) is kept
-    // as a debug log so operators can still see which tools
-    // were filtered in the log.
+    // registered tags so we issue O(toolsets)
+    // `set_toolset_enabled` calls instead of O(tools).
+    //
+    // P1.3 note: `tools::register_all` itself does not honour
+    // `enabled_toolsets` — every migrated tool is registered
+    // unconditionally. This post-pass flips the ones the user
+    // did not whitelist back off, matching the legacy behaviour
+    // while restoring runtime-toggle capability for the Settings UI.
     if let Some(set) = &enabled_toolsets {
         // Mirror the "all"/"*" wildcard semantics from
         // `is_enabled` so the post-pass does not
@@ -422,15 +143,6 @@ pub fn register_builtin_tools(
             "startup: re-enabled essential toolset floor (whitelist did not contain it)"
         );
     }
-
-    // -- P1.2 per-tool migrated tools ---------------------------------------
-    // Each tool in tools/*.rs now owns a self-registration function.
-    // They are invoked here so a single `register_builtin_tools` call
-    // wires up both the legacy in-file tools and the migrated ones.
-    // Note: the migrated tools do not yet honour `enabled_toolsets`
-    // (that is the planned P1.3 work). Until then they are always
-    // registered.
-    crate::tools::register_all(registry);
 }
 
 // `hermes_data_dir` / `dirs_home` were deleted: they bypassed
@@ -456,7 +168,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use hermix_core::{
-        AgentError, CommandOutput, Skill, SkillMeta, SkillProvider, TerminalBackend,
+        traits::RiskLevel, AgentError, CommandOutput, Skill, SkillMeta, SkillProvider,
+        TerminalBackend,
     };
 
     /// Minimal no-op terminal backend for `register_builtin_tools`. The

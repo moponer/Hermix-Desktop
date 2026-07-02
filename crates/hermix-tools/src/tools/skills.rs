@@ -4,9 +4,68 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, SkillProvider, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{
+    tool_schema, traits::RiskLevel, JsonSchema, SkillProvider, ToolError, ToolHandler, ToolSchema,
+};
 
 use std::sync::Arc;
+
+use crate::ToolRegistry;
+
+// ---------------------------------------------------------------------------
+// Registration (P1.3 migration: skills tools move out of register_builtins.rs)
+// ---------------------------------------------------------------------------
+
+/// Register the three skill tools: `skills_list`, `skill_view`,
+/// `skill_manage`. The `skills_list` + `skill_view` tools are read-only
+/// (Safe); `skill_manage` writes to disk and is Caution. All three
+/// share the same `skill_provider` so writes done through
+/// `skill_manage` are visible to subsequent `skills_list` /
+/// `skill_view` calls inside the same session.
+pub fn register(registry: &ToolRegistry, skill_provider: Arc<dyn SkillProvider>) {
+    registry.register_with_risk(
+        "skills_list",
+        "skills",
+        SkillsListHandler::new(skill_provider.clone()).schema(),
+        Arc::new(SkillsListHandler::new(skill_provider.clone())),
+        Arc::new(|| true),
+        vec![],
+        true,
+        "List all available skills with their metadata.",
+        "📚",
+        None,
+        RiskLevel::Safe,
+        /* override_existing = */ false,
+    );
+    registry.register_with_risk(
+        "skill_view",
+        "skills",
+        SkillViewHandler::new(skill_provider.clone()).schema(),
+        Arc::new(SkillViewHandler::new(skill_provider.clone())),
+        Arc::new(|| true),
+        vec![],
+        true,
+        "View the full content of a skill by name.",
+        "📖",
+        None,
+        RiskLevel::Safe,
+        /* override_existing = */ false,
+    );
+    registry.register_with_risk(
+        "skill_manage",
+        "skills",
+        SkillManageHandler::new(skill_provider.clone()).schema(),
+        Arc::new(SkillManageHandler::new(skill_provider)),
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Create, update, delete, auto-extract, or self-improve skills. See schema for the full action set (auto_create / auto_extract_from_conversation enforce quality gates).",
+        "⚙️",
+        None,
+        RiskLevel::Caution,
+        /* override_existing = */ false,
+    );
+}
 
 // ---------------------------------------------------------------------------
 // SkillsListHandler

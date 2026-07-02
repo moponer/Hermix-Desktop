@@ -4,12 +4,94 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{
+    tool_schema, traits::RiskLevel, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema,
+};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::credential_guard::CredentialGuard;
+use crate::ToolRegistry;
+
+// ---------------------------------------------------------------------------
+// Registration (P1.3 migration: file tools move out of register_builtins.rs)
+// ---------------------------------------------------------------------------
+
+/// Register the four file tools: `read_file`, `write_file`, `patch`,
+/// `search_files`. The same `terminal_backend` shared with the terminal
+/// tool is reused so that read/write go through the same path the
+/// shell uses; patch/search get their own local backends.
+///
+/// The handler registration mirrors the toolset tag + risk levels that
+/// `register_builtins.rs` had before the migration:
+/// - `read_file` → Safe (read-only, no env deps)
+/// - `write_file` → Caution (writes to disk)
+/// - `patch` → Caution (mutating edits)
+/// - `search_files` → Caution (no destructive power, but the file-
+///   toolset is uniformly Caution for consistency)
+pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBackend>) {
+    use crate::backends::file::{LocalPatchBackend, LocalSearchBackend};
+
+    registry.register_with_risk(
+        "read_file",
+        "file",
+        ReadFileHandler::new(terminal_backend.clone()).schema(),
+        Arc::new(ReadFileHandler::new(terminal_backend.clone())),
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Read file contents with optional offset and line limit. Returns the file content as a string with line numbers.",
+        "📖",
+        None,
+        RiskLevel::Safe,
+        /* override_existing = */ false,
+    );
+    registry.register_with_risk(
+        "write_file",
+        "file",
+        WriteFileHandler::new(terminal_backend.clone()).schema(),
+        Arc::new(WriteFileHandler::new(terminal_backend)),
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Write content to a file. Creates the file and parent directories if they don't exist. Overwrites existing content.",
+        "✏️",
+        None,
+        RiskLevel::Caution,
+        /* override_existing = */ false,
+    );
+    let patch_backend: Arc<dyn PatchBackend> = Arc::new(LocalPatchBackend::new());
+    registry.register_with_risk(
+        "patch",
+        "file",
+        PatchHandler::new(patch_backend.clone()).schema(),
+        Arc::new(PatchHandler::new(patch_backend)),
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Apply targeted find-and-replace edits to a file using fuzzy matching. Minor whitespace/indentation differences won't break matching.",
+        "🩹",
+        None,
+        RiskLevel::Caution,
+        /* override_existing = */ false,
+    );
+    let search_backend: Arc<dyn SearchBackend> = Arc::new(LocalSearchBackend::new());
+    registry.register_with_risk(
+        "search_files",
+        "file",
+        SearchFilesHandler::new(search_backend.clone()).schema(),
+        Arc::new(SearchFilesHandler::new(search_backend)),
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Search file contents (ripgrep-backed regex) or find files by glob pattern.",
+        "🔎",
+        None,
+        RiskLevel::Caution,
+        /* override_existing = */ false,
+    );
+}
 
 /// Resolve a path to an absolute string for display in LLM-visible tool
 /// output. The rule is **literal pass-through**: the path the user typed or

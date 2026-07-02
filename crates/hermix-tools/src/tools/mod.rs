@@ -53,12 +53,35 @@ pub mod web;
 
 use std::sync::Arc;
 
+use hermix_core::{SkillProvider, TerminalBackend};
+
+use crate::tools::browser::BrowserBackend;
 use crate::ToolRegistry;
 
 /// Register all migrated tools via their self-registration functions.
 /// During migration, unmigrated tools still go through `register_builtins.rs`.
 /// Once all tools are migrated, `register_builtins.rs` is deleted.
-pub fn register_all(registry: &ToolRegistry) {
+///
+/// P1.3 (2026-07-02) signature change: `register_all` now accepts the
+/// three backends that tools needed but didn't fit into a default
+/// constructor:
+/// - `terminal_backend`: shared by `terminal`, `read_file`,
+///   `write_file` (and reachable from `delegate_task` / shell exec).
+///   `register_builtin_tools` is the single owner of this handle; if
+///   you call `register_all` from elsewhere, pass a backend of the
+///   same kind you'd pass to `register_builtin_tools`.
+/// - `skill_provider`: backs the three `skills_*` tools.
+/// - `browser_backend`: backs the ten `browser_*` tools. The
+///   `register_builtin_tools` caller constructs a
+///   `SessionedBrowserBackend` wrapping a `BrowserRegistry` so
+///   group-chat sessions get isolated CDP state; tests can pass any
+///   `Arc<dyn BrowserBackend>`.
+pub fn register_all(
+    registry: &ToolRegistry,
+    terminal_backend: Arc<dyn TerminalBackend>,
+    skill_provider: Arc<dyn SkillProvider>,
+    browser_backend: Arc<dyn BrowserBackend>,
+) {
     // P1.2 per-tool migration (completed 2026-07-01):
     disk_cleanup::register(registry);
     vision::register(registry);
@@ -97,21 +120,30 @@ pub fn register_all(registry: &ToolRegistry) {
         Arc::new(crate::backends::code_execution::LocalCodeExecutionBackend::default())
             as Arc<dyn code_execution::CodeExecutionBackend>,
     );
-    // terminal needs a TerminalBackend; use a LocalTerminalBackend
-    // if the backends module exposes one, otherwise this is a no-op
-    // (the real registration in register_builtins.rs handles it).
     cua::register(registry);
-    // P1.3 migration: web_search + web_extract use keyless local
-    // backends (Baidu HTML scraper + reqwest HTML fetch). Pushed
-    // here out of register_builtins.rs.
+    // P1.3 (2026-07-02): file tools (read_file / write_file / patch /
+    // search_files) share `terminal_backend` with the terminal tool so
+    // every code path that opens files uses the same backend. Patch +
+    // search get local backends (LocalPatchBackend / LocalSearchBackend)
+    // because they need fuzzy-match + ripgrep semantics that the
+    // TerminalBackend trait doesn't expose.
+    file::register(registry, terminal_backend.clone());
+    // P1.3: terminal tool. The workspace handle is owned by the
+    // registry (set by `LocalAgentService` per-turn from
+    // `AgentOverrides::workspace`) so the terminal tool sees the
+    // same cwd the desktop UI picker picked.
+    terminal::register(registry, terminal_backend, registry.terminal_workspace_handle());
+    // P1.3: web tools (keyless local backends: Baidu HTML scraper +
+    // reqwest HTML fetch).
     web::register(registry);
-    // P1.3 migration: list_files / edit_file (aliases of search_files /
-    // patch) + list_tools (introspection) move out of
-    // register_builtins.rs into tools/aliases.rs::register.
+    // P1.3: list_files / edit_file (aliases of search_files / patch)
+    // + list_tools (introspection).
     aliases::register(registry);
-    // P1.3 migration: memory tool with FileMemoryBackend moves out of
-    // register_builtins.rs into tools/memory.rs::register.
+    // P1.3: memory tool with FileMemoryBackend.
     memory::register(registry);
-    // browser needs a BrowserBackend with allowlist/port/headless
-    // config from config.yaml — register_builtins.rs owns that wiring.
+    // P1.3: skills tools (skills_list / skill_view / skill_manage).
+    skills::register(registry, skill_provider);
+    // P1.3: browser tools (10 handlers backed by the sessioned
+    // backend so per-session CDP state stays isolated).
+    browser::register(registry, browser_backend);
 }
