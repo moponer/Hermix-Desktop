@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use hermix_core::{SkillProvider, TerminalBackend};
 
+use hermix_config::paths::hermix_home;
+
 use crate::tools::clarify::ClarifyBackend;
 use crate::ToolRegistry;
 
@@ -125,6 +127,13 @@ pub fn register_builtin_tools(
 // `hermix_config::paths::hermix_home()` and ignored `HERMIX_PORTABLE_DATA_DIR`,
 // which caused session_search to write to a different DB than the rest of
 // the app in portable-desktop mode. Use `paths::sessions_db_path()` instead.
+//
+// `BrowserConfig::read_home_yaml` had the same P0: it read `$HERMIX_HOME` /
+// `$HERMES_HOME` directly via `std::env::var` instead of going through
+// `hermix_home()`. Fixed in P1.5 — portable-desktop launchers that set
+// `HERMIX_PORTABLE_DATA_DIR` now resolve to the right config.yaml, and the
+// legacy `$HERMES_HOME` alias (used by the original NousResearch agent)
+// cannot silently clobber a developer's browser config.
 
 #[cfg(test)]
 mod tests {
@@ -700,14 +709,27 @@ impl BrowserConfig {
         cfg
     }
 
-    /// Read `$HERMIX_HOME/config.yaml` (or `$HERMES_HOME/config.yaml`
-    /// as a legacy alias). Returns `None` when neither env var is
-    /// set or the file is unreadable — startup should not panic.
+    /// Read the canonical `$HERMIX_HOME/config.yaml` (resolved via
+    /// [`hermix_home`], which honors `HERMIX_PORTABLE_DATA_DIR` for
+    /// the Tauri portable-desktop launcher).
+    ///
+    /// **Deliberate non-features** vs. the previous implementation:
+    ///
+    /// * **No `$HERMES_HOME` fallback.** The original NousResearch
+    ///   `hermes-agent` uses the same env var name; silently picking
+    ///   it up would let two unrelated projects fight over one data
+    ///   dir. Users running the old agent should set `HERMIX_HOME`
+    ///   explicitly or run with `HERMIX_MIGRATE_FROM_HERMES=1`.
+    /// * **No raw `std::env::var("HERMIX_HOME")` lookup.** Going
+    ///   through `hermix_home()` ensures the portable launcher and
+    ///   the standard install resolve to the same file (this is the
+    ///   same P0 fix that already cleaned up `session_search`).
+    ///
+    /// Returns `None` when the home is empty or `config.yaml` is
+    /// unreadable — startup should not panic on a missing config.
     fn read_home_yaml() -> Option<String> {
-        let home = std::env::var("HERMIX_HOME")
-            .or_else(|_| std::env::var("HERMES_HOME"))
-            .ok()?;
-        let path = std::path::Path::new(&home).join("config.yaml");
+        let home = hermix_home();
+        let path = home.join("config.yaml");
         std::fs::read_to_string(&path).ok()
     }
 }
@@ -815,22 +837,89 @@ mod browser_config_tests {
 
     /// Live IO test — guarded by `HERMIX_HOME_LOCK` so we don't race
     /// with other tests that touch the env var.
+    ///
+    /// Points `HERMIX_HOME` at an **empty** tempdir so we don't pick
+    /// up the developer's real `~/.hermix/config.yaml` (which would
+    /// silently override the assertion). This is also the new
+    /// semantic of `from_env()`: the canonical home, no env-only
+    /// bypass.
     #[test]
-    fn from_env_returns_default_when_home_missing() {
+    fn from_env_returns_default_when_config_missing() {
+        use std::sync::atomic::AtomicU64;
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let _guard = HERMIX_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "hermix-browser-config-empty-{}-{n}",
+            std::process::id(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Note: deliberately do NOT create config.yaml.
+
         let saved = std::env::var("HERMIX_HOME").ok();
-        let saved_hermes = std::env::var("HERMES_HOME").ok();
-        std::env::remove_var("HERMIX_HOME");
-        std::env::remove_var("HERMES_HOME");
+        std::env::set_var("HERMIX_HOME", &dir);
         let cfg = BrowserConfig::from_env();
-        assert_eq!(cfg, BrowserConfig::default());
-        // Restore so subsequent tests see the original env.
         if let Some(v) = saved {
             std::env::set_var("HERMIX_HOME", v);
+        } else {
+            std::env::remove_var("HERMIX_HOME");
+        }
+
+        assert_eq!(cfg, BrowserConfig::default());
+    }
+
+    /// **P0 regression**: `$HERMES_HOME` is the env var used by the
+    /// original NousResearch `hermes-agent` (a different project).
+    /// `BrowserConfig::from_env` must **not** silently pick it up
+    /// just because the developer happens to have it set — that
+    /// would cause two unrelated agents to share one config dir.
+    #[test]
+    fn from_env_ignores_legacy_hermes_home() {
+        use std::sync::atomic::AtomicU64;
+        use std::{fs, io::Write};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let _guard = HERMIX_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Put a recognisable config under $HERMES_HOME only.
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let hermes_dir = std::env::temp_dir().join(format!(
+            "hermix-browser-config-hermes-{}-{n}",
+            std::process::id(),
+        ));
+        fs::create_dir_all(&hermes_dir).unwrap();
+        {
+            let mut f = fs::File::create(hermes_dir.join("config.yaml")).unwrap();
+            f.write_all(b"browser:\n  cdp_port: 1111\n").unwrap();
+        }
+        // And a different (empty) HERMIX_HOME.
+        let hermix_dir = std::env::temp_dir().join(format!(
+            "hermix-browser-config-hermix-{}-{n}",
+            std::process::id(),
+        ));
+        fs::create_dir_all(&hermix_dir).unwrap();
+
+        let saved_hermix = std::env::var("HERMIX_HOME").ok();
+        let saved_hermes = std::env::var("HERMES_HOME").ok();
+        std::env::set_var("HERMIX_HOME", &hermix_dir);
+        std::env::set_var("HERMES_HOME", &hermes_dir);
+
+        let cfg = BrowserConfig::from_env();
+
+        if let Some(v) = saved_hermix {
+            std::env::set_var("HERMIX_HOME", v);
+        } else {
+            std::env::remove_var("HERMIX_HOME");
         }
         if let Some(v) = saved_hermes {
             std::env::set_var("HERMES_HOME", v);
+        } else {
+            std::env::remove_var("HERMES_HOME");
         }
+
+        // cdp_port from $HERMES_HOME must NOT leak through.
+        assert_eq!(cfg, BrowserConfig::default());
     }
 
     /// `HERMIX_HOME` is process-global env state; concurrent tests
