@@ -220,6 +220,7 @@ import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
 import { getSessionArchiveRefs, getAvailableTools, updateSessionMetadata, type ArchiveRef, type ToolDescriptor } from "../api";
 import { ArchiveRefsGraph } from "./ArchiveRefsGraph";
+import { TracePanel } from "./TracePanel";
 import type { Session } from "../types";
 import type { ChatOverrides } from "../hooks/useStreamChat";
 const mascotUrl = "/mascot-256.png";
@@ -1003,6 +1004,12 @@ export function ChatView({
   // cleans some rows up on disk.
   const [archiveRefs, setArchiveRefs] = useState<ArchiveRef[]>([]);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  // Stage 4.2 — Computer-use action timeline. Default collapsed so
+  // the main chat area stays uncluttered for users who never invoke
+  // CUA. The banner itself only appears once a session has actually
+  // produced at least one event (TracePanel collapses to null when
+  // the response is `missing: true` AND empty).
+  const [traceOpen, setTraceOpen] = useState(false);
   useEffect(() => {
     if (!sessionId) {
       setArchiveRefs([]);
@@ -1699,6 +1706,48 @@ const clearPendingImages = useCallback(() => {
           open={archiveOpen}
           onToggle={() => setArchiveOpen((v) => !v)}
         />
+      )}
+      {sessionId && (
+        // Stage 4.2 — Computer-use action timeline (opt-in panel).
+        // Default collapsed; the panel itself collapses to its
+        // empty-state copy when the JSONL has no rows for the
+        // session, so this banner doesn't burn screen real estate
+        // for users who never invoke CUA.
+        <div className="mx-3 sm:mx-4 mb-2">
+          <button
+            type="button"
+            onClick={() => setTraceOpen((v) => !v)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-left rounded-lg border"
+            style={{
+              borderColor: "var(--color-border)",
+              background: "var(--color-bg-secondary)",
+              color: "var(--color-text-primary)",
+              fontSize: 12,
+            }}
+            aria-expanded={traceOpen}
+          >
+            <span
+              aria-hidden
+              style={{
+                fontSize: 11,
+                transform: traceOpen ? "rotate(90deg)" : "rotate(0deg)",
+                transition: "transform 120ms ease",
+                color: "var(--color-text-secondary)",
+              }}
+            >
+              ▶
+            </span>
+            <span style={{ fontWeight: 600 }}>CUA 操作时间线</span>
+            <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+              · 计算机使用代理执行的截图 / 点击 / 输入 / 按键 记录
+            </span>
+          </button>
+          {traceOpen && (
+            <div className="mt-1.5">
+              <TracePanel sessionId={sessionId} />
+            </div>
+          )}
+        </div>
       )}
       <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
         <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-6">
