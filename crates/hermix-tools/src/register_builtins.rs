@@ -26,14 +26,12 @@ use crate::ToolRegistry;
 /// `FAL_KEY`, `HASS_URL`) are constructed eagerly; if the vars are absent
 /// the tools will return a clear error at *runtime*, not at registration.
 ///
-/// P1.3 (2026-07-02): the per-tool migration is complete. Every
-/// built-in tool now owns a `pub fn register(...)` in
-/// `tools/<name>.rs`, and `register_builtin_tools` is mostly a
-/// post-pass + a single `tools::register_all(...)` call that wires
-/// the three DI backends (terminal / skill / browser). The
-/// `browser_*` tools are constructed here from `config.yaml` and
-/// pushed into `register_all` so each `tools/browser.rs::register`
-/// call is data-driven.
+/// P1.4 (2026-07-02): the body is now an honest three-step pipeline
+/// (build browser backend → register_all → reconcile whitelist + floor).
+/// The three `browser_*_from_config` helpers were merged into
+/// [`BrowserConfig::from_env`] (single IO instead of three) and the
+/// per-step rationale moved into the function-level doc below so the
+/// body itself reads top-to-bottom without inline commentary.
 pub fn register_builtin_tools(
     registry: &ToolRegistry,
     terminal_backend: Arc<dyn TerminalBackend>,
@@ -41,77 +39,59 @@ pub fn register_builtin_tools(
     clarify_backend: Option<Arc<dyn ClarifyBackend>>,
     enabled_toolsets: Option<HashSet<String>>,
 ) {
-    // -- Migrated tools ------------------------------------------------------
-    // Every built-in tool is now `pub fn register(...)` in
-    // `tools/<name>.rs`. We construct the three backends that the
-    // DI-using tools need and hand them to `tools::register_all`,
-    // which is the single canonical wiring point.
-    //
-    // Browser backend construction lives here (not inside the
-    // browser module) because the allowlist/port/headless settings
-    // come from `config.yaml` and we don't want `tools::browser` to
-    // reach across the crate for config helpers. The registry maps
-    // `session_id -> Arc<AutoBrowserBackend>` so group-chat agents
-    // in different sessions never share CDP state; the
-    // SessionedBrowserBackend wrapper is what the handlers hold so
-    // every tool call dispatches to the backend for the active
-    // session.
+    // 1. Browser backend. We construct it here (not inside
+    //    `tools::browser::register`) because the allowlist / port /
+    //    headless settings come from `config.yaml` and we don't want
+    //    the browser module to reach across the crate for config
+    //    helpers. The `SessionedBrowserBackend` wrapper hands each
+    //    `tools::browser::register` handler an indirection that
+    //    dispatches by `session_id`, so group-chat agents in
+    //    different sessions never share CDP state.
+    let browser_cfg = BrowserConfig::from_env();
     let browser_registry = std::sync::Arc::new(
         crate::backends::browser::BrowserRegistry::new()
-            .with_allowed_domains(browser_allowed_domains_from_config())
-            .with_cdp_port(browser_cdp_port_from_config())
-            .with_headless(browser_headless_from_config()),
+            .with_allowed_domains(browser_cfg.allowed_domains)
+            .with_cdp_port(browser_cfg.cdp_port)
+            .with_headless(browser_cfg.headless),
     );
-    let sessioned = std::sync::Arc::new(
-        crate::backends::browser::SessionedBrowserBackend::new(browser_registry),
-    );
-    let browser_backend: Arc<dyn crate::tools::browser::BrowserBackend> = sessioned;
+    let browser_backend: Arc<dyn crate::tools::browser::BrowserBackend> =
+        std::sync::Arc::new(crate::backends::browser::SessionedBrowserBackend::new(
+            browser_registry,
+        ));
 
-    // Clarify backend: explicit caller-provided (desktop uses
-    // ChannelClarifyBackend for prompt-the-user) overrides the
-    // signal-based default.
+    // 2. Clarify backend. Caller-provided (desktop uses
+    //    `ChannelClarifyBackend` for prompt-the-user) wins over the
+    //    signal-based default. The default is used by tests and CLI
+    //    callers that don't need a UI prompt.
     let clarify_backend: Arc<dyn ClarifyBackend> = match clarify_backend {
         Some(b) => b,
         None => Arc::new(crate::backends::clarify::SignalClarifyBackend::new()),
     };
 
+    // 3. Wire everything into the registry via the per-tool
+    //    `register(...)` functions. Then re-register `clarify` on
+    //    top with the caller-provided backend so the desktop's
+    //    blocking prompt overrides the signal default that
+    //    `register_all` just installed.
     crate::tools::register_all(
         registry,
         terminal_backend,
         skill_provider,
         browser_backend,
     );
-    // The `clarify_backend` parameter is consumed here so we can
-    // re-register `clarify` with the caller-provided backend on top
-    // of the SignalClarifyBackend default that `register_all` wired.
-    // Doing it post-pass means the desktop's ChannelClarifyBackend
-    // takes precedence, and bare callers (tests) keep the signal
-    // default without manual unwrapping.
     crate::tools::clarify::register(registry, clarify_backend);
 
     tracing::info!("Registered {} built-in tools", registry.list_tools().len());
 
-    // Post-pass: if the caller passed an explicit
-    // `enabled_toolsets` whitelist, flip every registered
-    // toolset whose tag is *not* in the whitelist to
-    // `is_enabled=false`. Done as a single walk over the
-    // registered tags so we issue O(toolsets)
-    // `set_toolset_enabled` calls instead of O(tools).
-    //
-    // P1.3 note: `tools::register_all` itself does not honour
-    // `enabled_toolsets` — every migrated tool is registered
-    // unconditionally. This post-pass flips the ones the user
-    // did not whitelist back off, matching the legacy behaviour
-    // while restoring runtime-toggle capability for the Settings UI.
+    // 4. Whitelist post-pass. `tools::register_all` registers every
+    //    tool unconditionally; this flips the ones the user did not
+    //    whitelist back off, restoring the Settings UI's runtime
+    //    toggle without re-registering. Mirrored wildcard (`"all"` /
+    //    `"*"`) keeps "user wants everything on" working.
     if let Some(set) = &enabled_toolsets {
-        // Mirror the "all"/"*" wildcard semantics from
-        // `is_enabled` so the post-pass does not
-        // accidentally disable everything when the wildcard
-        // is present.
         let wildcard = set.contains("all") || set.contains("*");
         if !wildcard {
-            let registered = registry.list_toolsets();
-            for ts in registered {
+            for ts in registry.list_toolsets() {
                 if !set.contains(&ts) {
                     let n = registry.set_toolset_enabled(&ts, false);
                     tracing::info!(
@@ -124,17 +104,13 @@ pub fn register_builtin_tools(
         }
     }
 
-    // Essential toolset floor: re-assert the toolsets the
-    // LLM must always see (`terminal`, `file`,
-    // `code_execution`, `web`, `memory`, `pdf`, `core`,
-    // `security`) AFTER the whitelist post-pass above. If
-    // the user's persisted `enabled_toolsets.json` omitted
-    // `terminal` — e.g. a hand-edited list containing only
-    // `["file", "web"]` — the post-pass would have just
-    // turned `terminal` off, and the LLM would answer "I
-    // don't have terminal". The floor undoes that, logging
-    // each re-enable so operators can see when a saved
-    // preference is being overridden.
+    // 5. Essential toolset floor. Re-asserts `terminal` / `file` /
+    //    `code_execution` / `web` / `memory` / `pdf` / `core` /
+    //    `security` AFTER the whitelist above. A hand-edited
+    //    `enabled_toolsets.json` containing only `["file", "web"]`
+    //    would otherwise leave the LLM answering "I don't have
+    //    terminal". See `essential::ensure_essentials_enabled` for
+    //    the full rationale.
     let reasserted = crate::essential::ensure_essentials_enabled(registry);
     if reasserted > 0 {
         tracing::info!(
@@ -378,6 +354,61 @@ mod tests {
     }
 
     #[test]
+    fn every_registered_tool_has_a_unique_name() {
+        // Defensive: the registry keys every tool by `name`, and the
+        // LLM dispatch path looks up by `name`. A duplicate name
+        // means the second registration is silently dropped (the
+        // `register_with_risk(override_existing=false)` contract).
+        // The intent is that every tool's `pub fn register` registers
+        // exactly one entry under a unique name — this test pins
+        // that invariant. If a future refactor accidentally double-
+        // registers a tool, the test panics with the collision pair
+        // so the developer can grep for the offending `register` call.
+        let registry = registry_with_builtins();
+        let entries = registry.list_tools();
+        let total = entries.len();
+        let mut names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
+        names.sort();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len(), "duplicate tool names in registry (total entries = {total})");
+    }
+
+    #[test]
+    fn every_registered_tool_has_a_nonempty_toolset_tag() {
+        // Defensive: the Settings UI filters / groups by `toolset`.
+        // A tool registered with an empty `toolset` string would be
+        // un-toggleable from the UI and would silently escape the
+        // `essential::ensure_essentials_enabled` floor (which keys
+        // on the toolset tag). Pin every entry to a non-empty tag.
+        let registry = registry_with_builtins();
+        for entry in registry.list_tools() {
+            assert!(
+                !entry.toolset.is_empty(),
+                "tool `{}` registered without a toolset tag",
+                entry.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_registered_tool_has_a_nonempty_description() {
+        // The catalog one-liner (`registry.catalog()`) and the WS
+        // `tool_definition` event both surface the description. An
+        // empty description would render as a blank line in the
+        // Settings UI tool list, defeating the operator's ability
+        // to recognise what the tool does.
+        let registry = registry_with_builtins();
+        for entry in registry.list_tools() {
+            assert!(
+                !entry.description.trim().is_empty(),
+                "tool `{}` registered with empty description",
+                entry.name
+            );
+        }
+    }
+
+    #[test]
     fn all_registered_tools_have_a_known_risk_level() {
         // Catches tools registered without an explicit
         // `RiskLevel` argument — they default to `Caution`,
@@ -521,187 +552,285 @@ mod tests {
     }
 }
 
-/// Read `browser.allowed_domains` from `config.yaml`. Returns `None` when
-/// the key is missing (no restriction). The schema is the same as the
-/// `AgentLoopBehaviorConfig` style: a YAML list of host strings, with
-/// `*.example.com` wildcards allowed.
-fn browser_allowed_domains_from_config() -> Option<Vec<String>> {
-    let home = std::env::var("HERMIX_HOME")
-        .or_else(|_| std::env::var("HERMES_HOME"))
-        .ok()?;
-    let path = std::path::Path::new(&home).join("config.yaml");
-    let text = std::fs::read_to_string(&path).ok()?;
-    // Cheap hand-rolled YAML scan — we don't want a full YAML dep here
-    // for one list. The expected shape is:
-    //   browser:
-    //     allowed_domains:
-    //       - example.com
-    //       - "*.trusted.io"
-    let mut in_browser = false;
-    let mut in_domains = false;
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
+/// Read `browser.allowed_domains` / `browser.cdp_port` / `browser.headless`
+/// from `~/.hermix/config.yaml`.
+///
+/// Hand-rolled YAML scan — we don't want a full YAML dep here for
+/// three fields. The expected shape is:
+/// ```yaml
+/// browser:
+///   allowed_domains:
+///     - example.com
+///     - "*.trusted.io"
+///   cdp_port: 9223
+///   headless: true
+/// ```
+///
+/// P1.4 (2026-07-02): the previous design had three separate
+/// `browser_*_from_config()` helpers, each of which independently
+/// re-`read_to_string`'d the file and re-scanned for its own key.
+/// That was three filesystem reads per `register_builtin_tools`
+/// call, plus 150 lines of near-duplicate code. [`BrowserConfig`]
+/// now reads the file once and populates every field in a single
+/// pass; the call site collapses to a single `BrowserConfig::from_env()`
+/// expression.
+#[derive(Default, Debug, PartialEq, Eq)]
+struct BrowserConfig {
+    /// `Some(list)` restricts navigation. `None` = no allowlist (the
+    /// SSRF guard still rejects private addresses). An empty `Some(vec![])`
+    /// would mean "no navigation allowed" — we collapse to `None` here
+    /// to keep the runtime semantics intuitive.
+    allowed_domains: Option<Vec<String>>,
+    /// CDP port to use for browser bootstrap. `None` falls back to
+    /// `cdp_bootstrap::DEFAULT_CDP_PORT` (9222) or `HERMIX_BROWSER_CDP_PORT`.
+    cdp_port: Option<u16>,
+    /// Override the `HERMIX_BROWSER_HEADLESS` env-var fallback. `None`
+    /// = consult the env var next.
+    headless: Option<bool>,
+}
+
+impl BrowserConfig {
+    /// Read the user's `config.yaml` from `$HERMIX_HOME` (with the
+    /// legacy `$HERMES_HOME` alias) and extract every browser
+    /// sub-field. Returns [`Default::default`] (all `None`) when the
+    /// file is missing or unreadable — startup should not fail
+    /// because the operator has not configured browser details yet.
+    fn from_env() -> Self {
+        match Self::read_home_yaml() {
+            Some(text) => Self::from_yaml(&text),
+            None => Self::default(),
         }
-        let trimmed_l = trimmed.trim_start();
-        if !in_browser {
-            // Match a top-level `browser:` key (no leading whitespace).
-            if !line.starts_with(' ') && !line.starts_with('\t') && trimmed == "browser:" {
-                in_browser = true;
+    }
+
+    /// Parse the three browser sub-fields out of an already-read YAML
+    /// string. Pure function (no IO) — every test exercises this
+    /// path so we don't need to set `HERMIX_HOME` per case.
+    fn from_yaml(text: &str) -> Self {
+        let mut cfg = Self::default();
+        let mut in_browser = false;
+        let mut in_domains = false;
+        let lines: Vec<&str> = text.lines().collect();
+        let mut i = 0;
+        while i < lines.len() {
+            let raw = lines[i];
+            // Strip `#` comments before scanning. Don't touch `#`
+            // inside quoted strings — the YAML we accept is too
+            // simple to need that.
+            let line = raw.split('#').next().unwrap_or("");
+            if line.is_empty() {
+                i += 1;
+                continue;
             }
-            continue;
-        }
-        // We are inside the `browser:` block. Detect a new top-level key
-        // (i.e. a sibling that ends the block).
-        if !line.starts_with(' ') && !line.starts_with('\t') && trimmed.ends_with(':') {
-            in_browser = false;
-            in_domains = false;
-            continue;
-        }
-        if !in_domains {
-            // Look for the `allowed_domains:` sub-key. We compare against
-            // a left-trimmed copy so the leading indent of nested YAML
-            // is harmless.
-            if trimmed_l.starts_with("allowed_domains:") {
-                // Inline list: `allowed_domains: [a, b, c]`
+            let trimmed = line.trim_end();
+            let trimmed_l = trimmed.trim_start();
+
+            if !in_browser {
+                if trimmed_l.starts_with("browser:") || trimmed_l.starts_with("browser :") {
+                    in_browser = true;
+                }
+                i += 1;
+                continue;
+            }
+            // Inside the `browser:` block. A new top-level key ends it.
+            if !line.starts_with(' ') && !line.starts_with('\t') && trimmed.ends_with(':') {
+                in_browser = false;
+                in_domains = false;
+                i += 1;
+                continue;
+            }
+
+            if !in_domains {
+                // Not in a list — try each recognised sub-key.
+                let mut handled = true;
                 if let Some(rest) = trimmed_l.strip_prefix("allowed_domains:") {
                     let rest = rest.trim();
-                    if let Some(inner) = rest
-                        .strip_prefix('[')
-                        .and_then(|s| s.strip_suffix(']'))
+                    // Inline list form: `allowed_domains: [a, b, c]`.
+                    if let Some(inner) =
+                        rest.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
                     {
-                        for item in inner.split(',') {
-                            let s = item.trim().trim_matches('"').trim_matches('\'');
-                            if !s.is_empty() {
-                                out.push(s.to_string());
-                            }
+                        let domains = inner
+                            .split(',')
+                            .map(|s| s.trim().trim_matches(|c| c == '"' || c == '\''))
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .collect::<Vec<_>>();
+                        if !domains.is_empty() {
+                            cfg.allowed_domains = Some(domains);
                         }
                     }
                     in_domains = true;
+                } else if let Some(rest) = trimmed_l.strip_prefix("cdp_port:") {
+                    if let Ok(n) = rest.trim().parse::<u16>() {
+                        cfg.cdp_port = Some(n);
+                    }
+                } else if let Some(rest) = trimmed_l.strip_prefix("headless:") {
+                    cfg.headless = match rest.trim().to_ascii_lowercase().as_str() {
+                        "true" | "yes" | "1" | "on" => Some(true),
+                        "false" | "no" | "0" | "off" => Some(false),
+                        _ => None,
+                    };
+                } else {
+                    handled = false;
                 }
-                continue;
-            }
-        } else {
-            // Inside `allowed_domains:`: list items start with `- ` (after indent).
-            if let Some(rest) = trimmed_l.strip_prefix("- ") {
-                let s = rest.trim().trim_matches('"').trim_matches('\'');
-                if !s.is_empty() {
-                    out.push(s.to_string());
+                let _ = handled; // marker; kept for clarity of the if/else chain
+                i += 1;
+            } else {
+                // Inside an `allowed_domains:` block-list.
+                if let Some(rest) = trimmed_l.strip_prefix("- ") {
+                    let s = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+                    if !s.is_empty() {
+                        cfg.allowed_domains
+                            .get_or_insert_with(Vec::new)
+                            .push(s.to_string());
+                    }
+                    i += 1;
+                } else if trimmed_l.is_empty() {
+                    // Blank line inside the list — keep in_domains.
+                    i += 1;
+                } else {
+                    // Sibling sub-key — exit the list, re-process
+                    // this line under the !in_domains branch by
+                    // not advancing `i`. The next loop iteration
+                    // sees in_domains=false and picks up
+                    // cdp_port / headless / a fresh allowed_domains.
+                    in_domains = false;
                 }
-            } else if !trimmed_l.is_empty() {
-                // Out of the list (a sibling sub-key).
-                in_domains = false;
             }
         }
+        cfg
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
-}
 
-/// Read `browser.cdp_port` from `~/.hermix/config.yaml`. Hand-rolled
-/// YAML scan — we don't want a full YAML dep here for one int. The
-/// expected shape is:
-/// ```yaml
-/// browser:
-///   cdp_port: 9223
-/// ```
-/// `None` = fall back to `cdp_bootstrap::DEFAULT_CDP_PORT` (9222) or
-/// `HERMIX_BROWSER_CDP_PORT` env var.
-fn browser_cdp_port_from_config() -> Option<u16> {
-    let home = std::env::var("HERMIX_HOME")
-        .or_else(|_| std::env::var("HERMES_HOME"))
-        .ok()?;
-    let path = std::path::Path::new(&home).join("config.yaml");
-    let text = std::fs::read_to_string(&path).ok()?;
-    let mut in_browser = false;
-    for raw in text.lines() {
-        let line = raw.split('#').next().unwrap_or(""); // drop comments
-        let trimmed_l = line.trim_start();
-        // Detect entry into `browser:` block (top-level key).
-        if !in_browser {
-            if trimmed_l.starts_with("browser:") || trimmed_l.starts_with("browser :") {
-                in_browser = true;
-            }
-            continue;
-        }
-        // Inside `browser:` — only the first-level sub-keys matter.
-        // Indent is 0 or 2 spaces; trimmed_l has no leading whitespace.
-        if !line.starts_with(' ') && !line.starts_with('\t') && !trimmed_l.is_empty() {
-            // Left the browser block.
-            break;
-        }
-        if let Some(rest) = trimmed_l.strip_prefix("cdp_port:") {
-            let rest = rest.trim();
-            if let Ok(n) = rest.parse::<u16>() {
-                return Some(n);
-            }
-        }
+    /// Read `$HERMIX_HOME/config.yaml` (or `$HERMES_HOME/config.yaml`
+    /// as a legacy alias). Returns `None` when neither env var is
+    /// set or the file is unreadable — startup should not panic.
+    fn read_home_yaml() -> Option<String> {
+        let home = std::env::var("HERMIX_HOME")
+            .or_else(|_| std::env::var("HERMES_HOME"))
+            .ok()?;
+        let path = std::path::Path::new(&home).join("config.yaml");
+        std::fs::read_to_string(&path).ok()
     }
-    None
-}
-
-/// Read `browser.headless` from `~/.hermix/config.yaml`. `Some(bool)`
-/// when set, `None` when missing. Env var `HERMIX_BROWSER_HEADLESS`
-/// is read by `BrowserRegistry::headless()` as a secondary fallback
-/// (so this config path wins over the env var).
-fn browser_headless_from_config() -> Option<bool> {
-    let home = std::env::var("HERMIX_HOME")
-        .or_else(|_| std::env::var("HERMES_HOME"))
-        .ok()?;
-    let path = std::path::Path::new(&home).join("config.yaml");
-    let text = std::fs::read_to_string(&path).ok()?;
-    let mut in_browser = false;
-    for raw in text.lines() {
-        let line = raw.split('#').next().unwrap_or("");
-        let trimmed_l = line.trim_start();
-        if !in_browser {
-            if trimmed_l.starts_with("browser:") || trimmed_l.starts_with("browser :") {
-                in_browser = true;
-            }
-            continue;
-        }
-        if !line.starts_with(' ') && !line.starts_with('\t') && !trimmed_l.is_empty() {
-            break;
-        }
-        if let Some(rest) = trimmed_l.strip_prefix("headless:") {
-            let rest = rest.trim().to_ascii_lowercase();
-            return match rest.as_str() {
-                "true" | "yes" | "1" | "on" => Some(true),
-                "false" | "no" | "0" | "off" => Some(false),
-                _ => None,
-            };
-        }
-    }
-    None
 }
 
 #[cfg(test)]
-mod phase3_registry_tests {
+mod browser_config_tests {
     use super::*;
-    use std::io::Write;
 
-    static TEST_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    #[test]
+    fn parses_all_three_fields_in_one_pass() {
+        // The P1.4 win: a single YAML block, a single read, all
+        // three fields populated. The previous code did three reads.
+        let cfg = BrowserConfig::from_yaml(
+            "browser:\n  allowed_domains:\n    - example.com\n    - \"*.trusted.io\"\n  cdp_port: 9223\n  headless: true\n",
+        );
+        assert_eq!(
+            cfg.allowed_domains,
+            Some(vec!["example.com".to_string(), "*.trusted.io".to_string()])
+        );
+        assert_eq!(cfg.cdp_port, Some(9223));
+        assert_eq!(cfg.headless, Some(true));
+    }
 
-    /// Each test gets its own temp dir. We can't share one because
-    /// rust runs tests in parallel by default and they all read
-    /// `HERMIX_HOME` to find the config file.
-    fn write_config(content: &str) -> std::path::PathBuf {
-        let n = TEST_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "hermix-test-{}-{}",
-            std::process::id(),
-            n
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.yaml");
-        let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(content.as_bytes()).unwrap();
-        path
+    #[test]
+    fn returns_default_when_browser_block_absent() {
+        let cfg = BrowserConfig::from_yaml("other_key: 1\n");
+        assert_eq!(cfg, BrowserConfig::default());
+    }
+
+    #[test]
+    fn allowed_domains_inline_array_syntax() {
+        let cfg = BrowserConfig::from_yaml("browser:\n  allowed_domains: [a.com, b.com]\n");
+        assert_eq!(
+            cfg.allowed_domains,
+            Some(vec!["a.com".to_string(), "b.com".to_string()])
+        );
+    }
+
+    #[test]
+    fn cdp_port_missing_yields_none() {
+        let cfg = BrowserConfig::from_yaml("browser:\n  allowed_domains: [a.com]\n");
+        assert_eq!(cfg.cdp_port, None);
+    }
+
+    #[test]
+    fn cdp_port_invalid_value_yields_none_not_panic() {
+        let cfg = BrowserConfig::from_yaml("browser:\n  cdp_port: not_a_number\n");
+        assert_eq!(cfg.cdp_port, None);
+    }
+
+    #[test]
+    fn headless_accepts_truthy_and_falsy_aliases() {
+        for (v, expected) in [
+            ("true", Some(true)),
+            ("True", Some(true)),
+            ("yes", Some(true)),
+            ("1", Some(true)),
+            ("on", Some(true)),
+            ("false", Some(false)),
+            ("False", Some(false)),
+            ("no", Some(false)),
+            ("0", Some(false)),
+            ("off", Some(false)),
+        ] {
+            let yaml = format!("browser:\n  headless: {v}\n");
+            let cfg = BrowserConfig::from_yaml(&yaml);
+            assert_eq!(cfg.headless, expected, "headless={v}");
+        }
+    }
+
+    #[test]
+    fn headless_unrecognised_value_yields_none() {
+        let cfg = BrowserConfig::from_yaml("browser:\n  headless: maybe\n");
+        assert_eq!(cfg.headless, None);
+    }
+
+    #[test]
+    fn allowed_domains_quoted_strings_strip_quotes() {
+        let cfg =
+            BrowserConfig::from_yaml("browser:\n  allowed_domains:\n    - \"quoted.example\"\n");
+        assert_eq!(
+            cfg.allowed_domains,
+            Some(vec!["quoted.example".to_string()])
+        );
+    }
+
+    #[test]
+    fn comments_are_stripped_before_parsing() {
+        let cfg = BrowserConfig::from_yaml(
+            "# top-level comment\nbrowser:\n  # block comment\n  cdp_port: 9333\n  headless: false\n",
+        );
+        assert_eq!(cfg.cdp_port, Some(9333));
+        assert_eq!(cfg.headless, Some(false));
+    }
+
+    #[test]
+    fn sibling_top_level_key_ends_browser_block() {
+        // After `logging:` the scanner must not pick up
+        // `level:` as a browser sub-field.
+        let cfg = BrowserConfig::from_yaml(
+            "browser:\n  cdp_port: 9223\nlogging:\n  level: info\n",
+        );
+        assert_eq!(cfg.cdp_port, Some(9223));
+    }
+
+    /// Live IO test — guarded by `HERMIX_HOME_LOCK` so we don't race
+    /// with other tests that touch the env var.
+    #[test]
+    fn from_env_returns_default_when_home_missing() {
+        let _guard = HERMIX_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var("HERMIX_HOME").ok();
+        let saved_hermes = std::env::var("HERMES_HOME").ok();
+        std::env::remove_var("HERMIX_HOME");
+        std::env::remove_var("HERMES_HOME");
+        let cfg = BrowserConfig::from_env();
+        assert_eq!(cfg, BrowserConfig::default());
+        // Restore so subsequent tests see the original env.
+        if let Some(v) = saved {
+            std::env::set_var("HERMIX_HOME", v);
+        }
+        if let Some(v) = saved_hermes {
+            std::env::set_var("HERMES_HOME", v);
+        }
     }
 
     /// `HERMIX_HOME` is process-global env state; concurrent tests
@@ -709,80 +838,45 @@ mod phase3_registry_tests {
     /// duration of any test that touches `HERMIX_HOME`.
     static HERMIX_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Run a closure with `HERMIX_HOME` set to a unique temp dir,
-    /// and restore the env on exit. Serialised across the test
-    /// module via [`HERMIX_HOME_LOCK`] so we don't race with
-    /// parallel cargo test threads.
-    fn with_temp_config<F: FnOnce()>(content: &str, body: F) {
+    /// Round-trip: write a YAML, point `HERMIX_HOME` at it, call
+    /// `from_env()`, assert all three fields round-tripped. This
+    /// is the only test that exercises the env→disk path; every
+    /// other test goes through `from_yaml` so they don't have to
+    /// juggle env vars.
+    #[test]
+    fn from_env_round_trip_through_disk() {
+        use std::io::Write;
+        use std::sync::atomic::AtomicU64;
+
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let _guard = HERMIX_HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let path = write_config(content);
-        std::env::set_var("HERMIX_HOME", path.parent().unwrap());
-        body();
-        std::env::remove_var("HERMIX_HOME");
-    }
 
-    #[test]
-    fn config_parses_allowed_domains_list() {
-        with_temp_config(
-            "browser:\n  allowed_domains:\n    - example.com\n    - \"*.trusted.io\"\n",
-            || {
-                let domains = browser_allowed_domains_from_config();
-                assert_eq!(
-                    domains,
-                    Some(vec!["example.com".to_string(), "*.trusted.io".to_string()])
-                );
-            },
-        );
-    }
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "hermix-browser-config-{}-{n}",
+            std::process::id(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.yaml");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(
+                b"browser:\n  allowed_domains:\n    - a.com\n  cdp_port: 9333\n  headless: true\n",
+            )
+            .unwrap();
+        }
 
-    #[test]
-    fn config_returns_none_when_key_missing() {
-        with_temp_config("other_key: 1\n", || {
-            let domains = browser_allowed_domains_from_config();
-            assert_eq!(domains, None);
-        });
-    }
+        let saved = std::env::var("HERMIX_HOME").ok();
+        std::env::set_var("HERMIX_HOME", &dir);
+        let cfg = BrowserConfig::from_env();
+        if let Some(v) = saved {
+            std::env::set_var("HERMIX_HOME", v);
+        } else {
+            std::env::remove_var("HERMIX_HOME");
+        }
 
-    #[test]
-    fn config_handles_inline_array_syntax() {
-        with_temp_config("browser:\n  allowed_domains: [a.com, b.com]\n", || {
-            let domains = browser_allowed_domains_from_config();
-            assert_eq!(
-                domains,
-                Some(vec!["a.com".to_string(), "b.com".to_string()])
-            );
-        });
-    }
-
-    #[test]
-    fn config_parses_cdp_port() {
-        with_temp_config("browser:\n  cdp_port: 9223\n", || {
-            let port = browser_cdp_port_from_config();
-            assert_eq!(port, Some(9223));
-        });
-    }
-
-    #[test]
-    fn config_returns_none_for_missing_cdp_port() {
-        with_temp_config("browser:\n  allowed_domains: [a.com]\n", || {
-            let port = browser_cdp_port_from_config();
-            assert_eq!(port, None);
-        });
-    }
-
-    #[test]
-    fn config_parses_headless_true() {
-        with_temp_config("browser:\n  headless: true\n", || {
-            let h = browser_headless_from_config();
-            assert_eq!(h, Some(true));
-        });
-    }
-
-    #[test]
-    fn config_parses_headless_false() {
-        with_temp_config("browser:\n  headless: false\n", || {
-            let h = browser_headless_from_config();
-            assert_eq!(h, Some(false));
-        });
+        assert_eq!(cfg.allowed_domains, Some(vec!["a.com".to_string()]));
+        assert_eq!(cfg.cdp_port, Some(9333));
+        assert_eq!(cfg.headless, Some(true));
     }
 }
