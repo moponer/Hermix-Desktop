@@ -29,6 +29,7 @@ use indexmap::IndexMap;
 use serde_json::{json, Value};
 
 use hermix_core::tool_schema::JsonSchema;
+use hermix_core::traits::RiskLevel;
 use hermix_core::{ToolError, ToolHandler, ToolSchema};
 
 use crate::tools::file::{PatchBackend, SearchBackend};
@@ -260,6 +261,86 @@ impl ToolHandler for ListToolsHandler {
              back into your next turn.",
             JsonSchema::object(props, vec![]),
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register the three aliases with the registry.
+///
+/// All three use local, stateless backends:
+/// - `list_files` -> `LocalSearchBackend` (alias of `search_files`, target="files")
+/// - `edit_file`  -> `LocalPatchBackend`  (alias of `patch`)
+/// - `list_tools` -> the registry itself   (always-on introspection)
+///
+/// P1.3 migration: previously inline in
+/// `register_builtins.rs::register_builtin_tools`.
+pub fn register(registry: &ToolRegistry) {
+    // list_files — alias of search_files (target="files")
+    {
+        let h = Arc::new(ListFilesHandler::new(Arc::new(
+            crate::backends::file::LocalSearchBackend::new(),
+        )));
+        let schema = h.schema();
+        registry.register_with_risk(
+            "list_files",
+            "file",
+            schema,
+            h,
+            Arc::new(|| true),
+            vec![],
+            false,
+            "List files in a directory matching a glob pattern (alias of search_files with target='files'). \
+             Use this when you want to enumerate files in a folder; for non-file targets use search_files directly.",
+            "📂",
+            None,
+            RiskLevel::Caution,
+            false,
+        );
+    }
+    // edit_file — alias of patch
+    {
+        let h = Arc::new(EditFileHandler::new(Arc::new(
+            crate::backends::file::LocalPatchBackend::new(),
+        )));
+        let schema = h.schema();
+        registry.register_with_risk(
+            "edit_file",
+            "file",
+            schema,
+            h,
+            Arc::new(|| true),
+            vec![],
+            false,
+            "Apply targeted find-and-replace edits to a file (alias of `patch`). \
+             Use this for surgical edits; use write_file when rewriting a whole file.",
+            "✏️",
+            None,
+            RiskLevel::Caution,
+            false,
+        );
+    }
+    // list_tools — introspection
+    {
+        let h = Arc::new(ListToolsHandler::new(Arc::new(registry.clone())));
+        let schema = h.schema();
+        registry.register_with_risk(
+            "list_tools",
+            "core",
+            schema,
+            h,
+            Arc::new(|| true),
+            vec![],
+            false,
+            "List every tool currently registered with the agent, including aliases. \
+             Use when 'Unknown tool' is returned or to discover the full schema.",
+            "🧰",
+            None,
+            RiskLevel::Safe,
+            false,
+        );
     }
 }
 

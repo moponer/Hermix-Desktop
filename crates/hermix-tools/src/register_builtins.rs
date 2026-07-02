@@ -187,46 +187,9 @@ pub fn register_builtin_tools(
         "🔎",
         vec![],
     );
-    // -- Aliases for search_files / patch ----------------------------------
-    // The LLM is far more likely to call `list_files` / `edit_file`
-    // (the natural-language names) than the canonical
-    // `search_files` / `patch`. Register thin wrappers with the same
-    // backends so neither call returns "Unknown tool".
-    reg(
-        &enabled_toolsets,
-        registry,
-        "file",
-        Arc::new(crate::tools::aliases::ListFilesHandler::new(Arc::new(
-            crate::backends::file::LocalSearchBackend::new(),
-        ))),
-        "📂",
-        vec![],
-    );
-    reg(
-        &enabled_toolsets,
-        registry,
-        "file",
-        Arc::new(crate::tools::aliases::EditFileHandler::new(Arc::new(
-            crate::backends::file::LocalPatchBackend::new(),
-        ))),
-        "✏️",
-        vec![],
-    );
-    // -- Introspection -----------------------------------------------------
-    // Always-on meta-tool that dumps every registered schema so the
-    // LLM can recover from "Unknown tool" failures and discover
-    // alias names at runtime. Safe to call repeatedly.
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "core",
-        Arc::new(crate::tools::aliases::ListToolsHandler::new(
-            Arc::new(registry.clone()),
-        )),
-        "🧰",
-        vec![],
-        RiskLevel::Safe,
-    );
+    // -- Aliases for search_files / patch + Introspection ------------------
+    // list_files / edit_file / list_tools migrated to
+    // tools/aliases.rs::register (P1.3)
     // read_pdf tool migrated to tools/pdf.rs::register (P1.2, 2026-06-30)
 
     // -- Image generation (fal.ai) -------------------------------------------

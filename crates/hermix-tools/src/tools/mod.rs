@@ -105,6 +105,10 @@ pub fn register_all(registry: &ToolRegistry) {
     // backends (Baidu HTML scraper + reqwest HTML fetch). Pushed
     // here out of register_builtins.rs.
     web::register(registry);
+    // P1.3 migration: list_files / edit_file (aliases of search_files /
+    // patch) + list_tools (introspection) move out of
+    // register_builtins.rs into tools/aliases.rs::register.
+    aliases::register(registry);
     // browser needs a BrowserBackend with allowlist/port/headless
     // config from config.yaml — register_builtins.rs owns that wiring.
 }
