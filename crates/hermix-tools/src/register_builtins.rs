@@ -256,28 +256,11 @@ pub fn register_builtin_tools(
     crate::tools::tool_chain::register(registry, Arc::new(registry.clone()));
 
     // -- Memory --------------------------------------------------------------
-    reg(
-        &enabled_toolsets,
-        registry,
-        "memory",
-        Arc::new(crate::tools::memory::MemoryHandler::new(Arc::new(
-            crate::backends::memory::FileMemoryBackend::new(),
-        ))),
-        "🧠",
-        vec![],
-    );
-    // Memory frozen-snapshot mode: log that the snapshot
-    // machinery is engaged so the operator can grep for
-    // `Memory: snapshot=` and confirm prefix-cache protection
-    // is active. The actual snapshot read happens lazily on
-    // the first `MemoryBackend::current_snapshot()` call (the
-    // agent loop drives that, not us here).
-    tracing::info!(
-        "Memory: frozen-snapshot mode active (MEMORY.md/USER.md read once, \
-         pinned for the session; add/replace/remove write to disk but do not \
-         mutate the snapshot — this protects the LLM prefix cache). \
-         Call `MemoryBackend::refresh_snapshot()` to re-pin from disk."
-    );
+    // Memory tool migrated to tools/memory.rs::register (P1.3).
+    // The companion `tracing::info!` that announces the
+    // frozen-snapshot mode now lives next to the registration site
+    // in tools/memory.rs::register so the operator sees it in the
+    // same boot trace.
 
     // -- Disk cleanup --------------------------------------------------------
     crate::tools::disk_cleanup::register(registry);

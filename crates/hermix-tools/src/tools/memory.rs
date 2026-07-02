@@ -4,9 +4,12 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
+use hermix_core::traits::RiskLevel;
 use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
 
 use std::sync::Arc;
+
+use crate::ToolRegistry;
 
 // ---------------------------------------------------------------------------
 // MemoryBackend trait (extends MemoryProvider for memory-specific ops)
@@ -159,6 +162,57 @@ impl ToolHandler for MemoryHandler {
             JsonSchema::object(props, vec!["action".into(), "target".into()]),
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register the `memory` tool with the registry.
+///
+/// The default backend is `FileMemoryBackend` — it persists to
+/// `MEMORY.md` / `USER.md` under `hermix_home()`. Operators that need
+/// an alternate backend can construct their own `MemoryHandler` and
+/// re-register under the same `memory` key before this `register` is
+/// called.
+///
+/// P1.3 migration: previously inline in
+/// `register_builtins.rs::register_builtin_tools`.
+///
+/// The companion `tracing::info!` that announces the frozen-snapshot
+/// mode (`MemoryBackend::current_snapshot` memoizes MEMORY.md/USER.md
+/// at session start so the LLM prefix cache stays stable across
+/// write-after-read cycles) lives next to the registration site so the
+/// operator sees it in the same boot trace.
+pub fn register(registry: &ToolRegistry) {
+    let backend: Arc<dyn crate::tools::memory::MemoryBackend> = Arc::new(
+        crate::backends::memory::FileMemoryBackend::new(),
+    );
+    let h = Arc::new(MemoryHandler::new(backend));
+    let schema = h.schema();
+    registry.register_with_risk(
+        "memory",
+        "memory",
+        schema,
+        h,
+        Arc::new(|| true),
+        vec![],
+        false,
+        "Save durable information to persistent memory across sessions. \
+         target='user' for user preferences; target='memory' for environment/workflow notes. \
+         Do not store temporary task progress.",
+        "🧠",
+        None,
+        RiskLevel::Caution,
+        false,
+    );
+
+    tracing::info!(
+        "Memory: frozen-snapshot mode active (MEMORY.md/USER.md read once, \
+         pinned for the session; add/replace/remove write to disk but do not \
+         mutate the snapshot — this protects the LLM prefix cache). \
+         Call `MemoryBackend::refresh_snapshot()` to re-pin from disk."
+    );
 }
 
 #[cfg(test)]

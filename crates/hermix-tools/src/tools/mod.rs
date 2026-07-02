@@ -109,6 +109,9 @@ pub fn register_all(registry: &ToolRegistry) {
     // patch) + list_tools (introspection) move out of
     // register_builtins.rs into tools/aliases.rs::register.
     aliases::register(registry);
+    // P1.3 migration: memory tool with FileMemoryBackend moves out of
+    // register_builtins.rs into tools/memory.rs::register.
+    memory::register(registry);
     // browser needs a BrowserBackend with allowlist/port/headless
     // config from config.yaml — register_builtins.rs owns that wiring.
 }
