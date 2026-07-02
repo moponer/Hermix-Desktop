@@ -1831,9 +1831,9 @@ impl SessionPersistence {
         Ok(n)
     }
 
-    // TODO(token-persist): persist LLM usage (input_tokens / output_tokens /
-    // cost) into messages.extra JSON so `aggregate_usage` can sum real
-    // numbers instead of returning 0. See `docs/TODO.md` for the rollout plan.
+    // DONE (2026-07-02 P1.x): token/cost persisted via `persist_token_usage()`
+    // → `token_usage` table; aggregated by `aggregate_usage()` SQL.
+    // No need for messages.extra.json hack.
 
     /// Aggregate real session / message / model counts over the last `days` days.
     /// P1-3 (2026-06-27): also sums token usage from `token_usage` and
