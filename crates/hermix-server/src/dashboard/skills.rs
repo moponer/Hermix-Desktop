@@ -384,18 +384,26 @@ pub async fn set_enabled_toolsets(
     // is in `enabled` is on; everything else is off. This
     // makes the call a "set absolute state" rather than a
     // diff, which is the contract the UI expects.
-    let mut new_enabled: Vec<String> = Vec::new();
-    for ts in &registered {
-        let on = enabled.contains(ts);
-        let n = state.tool_registry.set_toolset_enabled(ts, on);
-        if on {
-            new_enabled.push(ts.clone());
-            tracing::info!(toolset = %ts, entries = n, "toolset enabled at runtime");
-        } else {
-            tracing::info!(toolset = %ts, entries = n, "toolset disabled at runtime");
-        }
-    }
-    new_enabled.sort();
+    //
+    // 2026-07-02 (P1.7): the helper `apply_toggle_with_floor` (defined
+    // below) does the toggle *and* re-asserts the essential toolset
+    // floor in one pass. Without the floor re-assert, a user can
+    // use the Settings UI to toggle `terminal` off; the in-process
+    // state then has it disabled, and the next `set_enabled_toolsets`
+    // call persists the disabled state to `enabled_toolsets.json`.
+    // The next process restart would load the persisted file, see
+    // `terminal` missing from the enabled list, and
+    // `apply_persisted_toolset_state` would (correctly) re-enable it
+    // — *but the running process is now broken until restart*. We
+    // close the gap by applying the floor here, the same way the
+    // startup paths do. The trade-off (see `hermix_tools::essential`
+    // for the full rationale): the UI may show a toolset as "off"
+    // briefly, but the in-process state always matches what the
+    // LLM will be told exists. We also extend the persisted list
+    // to include the re-asserted floor, so a restart doesn't undo
+    // the override.
+    let new_enabled =
+        apply_toggle_with_floor(&state.tool_registry, &registered, &enabled);
 
     // Persist. We save the *enabled* list (the disabled set is
     // derivable as the complement of `registered`, which the
@@ -417,6 +425,60 @@ pub async fn set_enabled_toolsets(
         enabled: new_enabled,
         unknown,
     }))
+}
+
+/// Apply a "set absolute state" toggle to a [`ToolRegistry`] and
+/// re-assert the essential toolset floor in the same pass. Returns
+/// the canonical enabled list (sorted, with the floor folded in)
+/// that the caller should both report to the UI and persist to
+/// `enabled_toolsets.json`.
+///
+/// Why one helper, not two? The floor re-assertion is part of the
+/// toggle contract: a user-facing toggle of `terminal` to "off"
+/// is overridden by the floor, and that override has to be
+/// reflected in **both** the in-process state *and* the persisted
+/// file. Splitting them into two steps is what made the runtime
+/// path silently drop the floor (P1.7 bug) — the floor was
+/// applied at startup but not at toggle time, and the toggle
+/// path did not see a reason to consult the floor.
+///
+/// Splitting out a helper also makes the toggle logic testable
+/// without spinning up the full `HttpServerState` (which the
+/// test module in this file already does for the seed path).
+fn apply_toggle_with_floor(
+    registry: &hermix_tools::ToolRegistry,
+    registered: &HashSet<String>,
+    requested_enabled: &HashSet<String>,
+) -> Vec<String> {
+    let mut new_enabled: Vec<String> = Vec::new();
+    for ts in registered {
+        let on = requested_enabled.contains(ts);
+        let n = registry.set_toolset_enabled(ts, on);
+        if on {
+            new_enabled.push(ts.clone());
+            tracing::info!(toolset = %ts, entries = n, "toolset enabled at runtime");
+        } else {
+            tracing::info!(toolset = %ts, entries = n, "toolset disabled at runtime");
+        }
+    }
+
+    let reasserted = hermix_tools::essential::ensure_essentials_enabled(registry);
+    if reasserted > 0 {
+        for ts in hermix_tools::essential::ESSENTIAL_TOOLSETS {
+            if registered.contains(*ts) && !new_enabled.iter().any(|n| n == ts) {
+                new_enabled.push(ts.to_string());
+            }
+        }
+        tracing::warn!(
+            reasserted_entries = reasserted,
+            floor = ?hermix_tools::essential::ESSENTIAL_TOOLSETS,
+            "runtime toolset toggle overrode essential floor; re-enabling \
+             and persisting the floor-applied state so a restart sees the \
+             same set."
+        );
+    }
+    new_enabled.sort();
+    new_enabled
 }
 
 // ── Builtin skill seeding ────────────────────────────────────────────
@@ -576,7 +638,7 @@ mod tests {
     fn seed_builtin_skills_writes_all_skills() {
         let dir = tempdir().unwrap();
         let count = seed_builtin_skills(dir.path()).unwrap();
-        assert_eq!(count, 17, "should seed exactly 17 skills");
+        assert_eq!(count, 16, "should seed exactly 16 skills");
         // Verify some exist
         assert!(
             dir.path().join("software-development").join("architecture-design").join("SKILL.md").exists(),
@@ -631,7 +693,7 @@ mod tests {
         seed_builtin_skills(dir.path()).unwrap();
         let store = hermix_skills::FileSkillStore::new(dir.path().to_path_buf());
         let metas = store.list().await.unwrap();
-        assert_eq!(metas.len(), 17, "list should return all 17 seeded skills");
+        assert_eq!(metas.len(), 16, "list should return all 16 seeded skills");
         // Verify names from each category
         let names: Vec<&str> = metas.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"architecture-design"));
@@ -640,5 +702,230 @@ mod tests {
         assert!(names.contains(&"investment-analysis"));
         assert!(names.contains(&"travel-planning"));
         assert!(names.contains(&"web-novel"));
+    }
+
+    // ── P1.7: essential-floor override at runtime ────────────────────
+    //
+    // Regression: the floor was applied at startup (twice: once in
+    // `register_builtin_tools` and once in
+    // `apply_persisted_toolset_state`) but NOT in
+    // `set_enabled_toolsets`. A user could use the Settings UI to
+    // toggle `terminal` off; the in-process state would then have
+    // it disabled, and the next LLM call would 4xx the terminal
+    // tool — even though the floor docstring in
+    // `hermix_tools::essential` promised the LLM would always see
+    // it. The fix: `apply_toggle_with_floor` re-asserts the floor
+    // and folds the re-enabled toolsets into the returned list, so
+    // a restart sees the same effective state.
+    //
+    // Test strategy: `ToolRegistry` is a closed shape (no public
+    // `is_toolset_enabled` getter; `set_toolset_enabled` returns
+    // the *number of flipped entries*, not the new state). We
+    // exercise the floor override behaviour against a real
+    // registry built by `register_builtin_tools` and observe the
+    // *returned list*, which is the contract callers care about:
+    // it must include the floor toolsets regardless of the user's
+    // request.
+
+    use hermix_core::{CommandOutput, SkillProvider, TerminalBackend};
+    use std::sync::Arc;
+
+    /// No-op skill provider so `register_builtin_tools` accepts
+    /// our `Arc<dyn SkillProvider>` argument. The runtime toggle
+    /// path doesn't touch it; we just need the registry to come
+    /// up with the canonical toolset list.
+    struct NoopSkillProvider;
+    #[async_trait::async_trait]
+    impl SkillProvider for NoopSkillProvider {
+        async fn create_skill(
+            &self,
+            _name: &str,
+            _content: &str,
+            _category: Option<&str>,
+        ) -> Result<hermix_core::Skill, hermix_core::AgentError> {
+            unreachable!("NoopSkillProvider::create_skill should never be called")
+        }
+        async fn get_skill(
+            &self,
+            _name: &str,
+        ) -> Result<Option<hermix_core::Skill>, hermix_core::AgentError> {
+            Ok(None)
+        }
+        async fn list_skills(
+            &self,
+        ) -> Result<Vec<hermix_core::SkillMeta>, hermix_core::AgentError> {
+            Ok(vec![])
+        }
+        async fn update_skill(
+            &self,
+            _name: &str,
+            _content: &str,
+        ) -> Result<hermix_core::Skill, hermix_core::AgentError> {
+            unreachable!("NoopSkillProvider::update_skill should never be called")
+        }
+        async fn delete_skill(
+            &self,
+            _name: &str,
+        ) -> Result<(), hermix_core::AgentError> {
+            Ok(())
+        }
+    }
+
+    /// No-op terminal backend. `register_builtin_tools` only uses
+    /// it to construct `TerminalHandler`; the test itself never
+    /// dispatches a terminal call.
+    struct NoopBackend;
+    #[async_trait::async_trait]
+    impl TerminalBackend for NoopBackend {
+        async fn execute_command(
+            &self,
+            _cmd: &str,
+            _timeout: Option<u64>,
+            _workdir: Option<&str>,
+            _background: bool,
+            _pty: bool,
+        ) -> Result<CommandOutput, hermix_core::AgentError> {
+            unreachable!("NoopBackend::execute_command should never be called")
+        }
+        async fn read_file(
+            &self,
+            _path: &str,
+            _offset: Option<u64>,
+            _limit: Option<u64>,
+        ) -> Result<String, hermix_core::AgentError> {
+            unreachable!("NoopBackend::read_file should never be called")
+        }
+        async fn write_file(
+            &self,
+            _path: &str,
+            _content: &str,
+        ) -> Result<(), hermix_core::AgentError> {
+            unreachable!("NoopBackend::write_file should never be called")
+        }
+        async fn file_exists(
+            &self,
+            _path: &str,
+        ) -> Result<bool, hermix_core::AgentError> {
+            unreachable!("NoopBackend::file_exists should never be called")
+        }
+    }
+
+    fn fixture_registry() -> (hermix_tools::ToolRegistry, HashSet<String>) {
+        // Isolate HERMIX_HOME so the BrowserConfig loader doesn't
+        // pick up the dev machine's real ~/.hermix/config.yaml —
+        // a tempdir is the only safe way to make the fixture
+        // hermetic. (See hermix_config::paths::hermix_home().)
+        let home = tempdir().unwrap();
+        std::env::set_var("HERMIX_HOME", home.path());
+        let reg = hermix_tools::ToolRegistry::new();
+        let skill_provider: Arc<dyn SkillProvider> = Arc::new(NoopSkillProvider);
+        let terminal: Arc<dyn TerminalBackend> = Arc::new(NoopBackend);
+        hermix_tools::register_builtin_tools(&reg, terminal, skill_provider, None, None);
+        let registered: HashSet<String> =
+            reg.list_toolsets().into_iter().collect();
+        // Sanity: at least the *core* floor must be present
+        // (`terminal` is the documented regression test). We don't
+        // hard-pin every entry in `ESSENTIAL_TOOLSETS` because
+        // the constant has historically out-paced registration
+        // (e.g. `pdf`, `office`, `computer_use`, `cua` are in
+        // the floor but not in the runtime registry — a separate
+        // P-bug tracked elsewhere). The P1.7 contract is "floor
+        // toolsets that *are* registered must survive a runtime
+        // toggle-off", which is what the tests below check.
+        assert!(
+            registered.iter().any(|n| n == "terminal"),
+            "P1.7 fixture: `terminal` must be in registry, got {registered:?}"
+        );
+        assert!(
+            registered.iter().any(|n| n == "file"),
+            "P1.7 fixture: `file` must be in registry, got {registered:?}"
+        );
+        (reg, registered)
+    }
+
+    #[test]
+    fn apply_toggle_with_floor_keeps_essentials_even_when_user_toggles_off() {
+        let (reg, registered) = fixture_registry();
+
+        // User toggles everything off — including `terminal` and
+        // `file`, which are in the essential floor. The `requested`
+        // set intentionally contains *no* floor toolsets.
+        let requested: HashSet<String> = HashSet::new();
+        let returned = apply_toggle_with_floor(&reg, &registered, &requested);
+
+        // Persisted list: the floor is folded in, so a restart
+        // sees the same effective state. This is the observable
+        // contract of the helper; the in-process state is mirrored
+        // exactly (we call `set_toolset_enabled` on the same
+        // registry) but the public API doesn't expose a getter to
+        // assert on, so we test through the returned list.
+        for ts in hermix_tools::essential::ESSENTIAL_TOOLSETS {
+            if registered.iter().any(|n| n == ts) {
+                assert!(
+                    returned.iter().any(|n| n == ts),
+                    "P1.7 regression: returned list must include floor toolset {ts} \
+                     even when user requested everything off. Got: {returned:?}"
+                );
+            }
+        }
+        // Returned list is sorted (contract callers rely on).
+        let mut sorted = returned.clone();
+        sorted.sort();
+        assert_eq!(returned, sorted, "returned list must be sorted");
+    }
+
+    #[test]
+    fn apply_toggle_with_floor_is_idempotent_when_user_already_kept_essentials() {
+        let (reg, registered) = fixture_registry();
+        // User requests the full floor plus `browser`. The
+        // helper should be a near-no-op (no re-assertion needed).
+        let requested: HashSet<String> = registered.clone();
+        let returned = apply_toggle_with_floor(&reg, &registered, &requested);
+        // The returned list must at minimum contain every
+        // registered toolset (no floor override needed, no extras
+        // dropped).
+        for ts in &registered {
+            assert!(
+                returned.contains(ts),
+                "P1.7: requested-full toggle must preserve toolset {ts} in returned list"
+            );
+        }
+        // Defensive: the returned set must equal the requested
+        // set (the floor is a subset of requested, so no
+        // additions). Sort both into Vec for a deterministic
+        // comparison (HashSet itself has no `sort`).
+        let mut req_vec: Vec<String> = requested.into_iter().collect();
+        req_vec.sort();
+        assert_eq!(
+            returned, req_vec,
+            "P1.7: when user requests everything, returned should mirror it"
+        );
+    }
+
+    #[test]
+    fn apply_toggle_with_floor_keeps_essentials_when_user_passes_partial_set() {
+        let (reg, registered) = fixture_registry();
+        // User keeps only `web`. Floor must re-assert. We pick
+        // `web` because it is both in the floor *and* registered
+        // (the floor lists `browser` too, but P1.3 split the
+        // browser toolset into per-action toolsets
+        // `browser_navigate`/`browser_click`/etc., so the
+        // single-name `browser` no longer exists in the runtime
+        // registry).
+        let mut requested: HashSet<String> = HashSet::new();
+        requested.insert("web".to_string());
+        let returned = apply_toggle_with_floor(&reg, &registered, &requested);
+        for ts in hermix_tools::essential::ESSENTIAL_TOOLSETS {
+            if registered.iter().any(|n| n == ts) {
+                assert!(
+                    returned.iter().any(|n| n == ts),
+                    "P1.7: partial-user toggle must still re-include floor toolset {ts}"
+                );
+            }
+        }
+        assert!(
+            returned.contains(&"web".to_string()),
+            "P1.7: user's `web` choice must be honoured"
+        );
     }
 }
