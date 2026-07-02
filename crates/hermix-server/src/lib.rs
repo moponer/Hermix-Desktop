@@ -890,6 +890,20 @@ impl HttpServerState {
         self.groupchat_mgr.clone()
     }
 
+    /// Access the agent service that backs chat endpoints. Always present
+    /// — the constructor takes care of building a `LocalAgentService`
+    /// (or honouring a test-supplied [`AgentService`] mock) before
+    /// exposing the state to the router.
+    ///
+    /// Polish/automation rewrite endpoints live in
+    /// [`crate::dashboard::polish`] and call this to dispatch a single
+    /// stateless LLM turn. They build an ad-hoc session id, send one
+    /// user turn, then call `reset_session` so the parent conversation
+    /// history stays untouched.
+    pub fn agent_service(&self) -> Arc<dyn hermix_core::traits::AgentService> {
+        self.agent_service.clone()
+    }
+
     /// Build dashboard state using the default [`hermix_config::hermix_home`] resolution.
     pub async fn build(config: GatewayConfig) -> Result<Self, AgentError> {
         Self::build_with_hermes_home(config, hermix_config::hermix_home()).await

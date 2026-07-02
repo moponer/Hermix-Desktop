@@ -14,6 +14,7 @@ pub mod mcp;
 pub mod migration;
 pub mod persona;
 pub mod plugins_inspect;
+pub mod polish;
 pub mod skills;
 pub mod status;
 pub mod stubs;
@@ -258,5 +259,18 @@ pub fn router() -> Router<HttpServerState> {
         .route(
             "/api/groupchat/rooms/{room_id}/overturn",
             post(groupchat_api::overturn_violation),
+        )
+        // §2 Polish — doc rewrite endpoints used by the desktop
+        // "润色" / "改写" affordances. `polish::post_polish_chat`
+        // rebuilds a natural-language message, `polish::post_polish_automation`
+        // rewrites a draft into a structured automation PROMPT.
+        // Each handler binds to a single template constant from
+        // `polish.rs`; the front-end sends `{draft, ctx}` and gets
+        // back `{ok, text, error?}` so it can keep its existing
+        // whitespace-only fallback if the backend is unreachable.
+        .route("/api/polish/chat", post(polish::post_polish_chat))
+        .route(
+            "/api/polish/automation",
+            post(polish::post_polish_automation),
         )
 }
