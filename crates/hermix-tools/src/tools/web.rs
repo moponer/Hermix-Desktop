@@ -1,12 +1,15 @@
 //! Web tools: web_search (Exa) and web_extract (Firecrawl)
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermix_core::{tool_schema, traits::RiskLevel, JsonSchema, ToolError, ToolHandler, ToolSchema};
 
 use crate::tools::url_safety::SsrfGuard;
+use crate::ToolRegistry;
 
 // ---------------------------------------------------------------------------
 // Backend traits (injectable by the caller)
@@ -184,6 +187,66 @@ impl ToolHandler for WebExtractHandler {
             "Extract clean content from a web page using Firecrawl. Returns the page text and optional links.",
             JsonSchema::object(props, vec!["url".into()]),
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Registration
+// ---------------------------------------------------------------------------
+
+/// Register both `web_search` and `web_extract` with the registry.
+///
+/// Backends are constructed locally with the keyless defaults
+/// (`BaiduHtmlSearchBackend` — no API key, Baidu HTML scraper; and
+/// `SimpleExtractBackend` — keyless reqwest HTML fetch with SSRF
+/// pre-check inside `WebExtractHandler`). Operators that need Exa or
+/// Firecrawl backends can call these constructors directly elsewhere
+/// and re-register under the same `web_search` / `web_extract` keys
+/// before this `register` is called.
+///
+/// P1.3 migration: previously inline in `register_builtins.rs::register_builtin_tools`.
+pub fn register(registry: &ToolRegistry) {
+    // web_search
+    {
+        let search = Arc::new(WebSearchHandler::new(Box::new(
+            crate::backends::web::BaiduHtmlSearchBackend::new(),
+        )));
+        let schema = search.schema();
+        registry.register_with_risk(
+            "web_search",
+            "web",
+            schema,
+            search,
+            Arc::new(|| true),
+            vec![],
+            false,
+            "Search the web using a keyless backend (Baidu HTML scraper). Returns results with titles, URLs and snippets.",
+            "🔍",
+            None,
+            RiskLevel::Safe,
+            false,
+        );
+    }
+    // web_extract (with SSRF pre-check enabled by default)
+    {
+        let extract = Arc::new(WebExtractHandler::new(Box::new(
+            crate::backends::web::SimpleExtractBackend::new(),
+        )));
+        let schema = extract.schema();
+        registry.register_with_risk(
+            "web_extract",
+            "web",
+            schema,
+            extract,
+            Arc::new(|| true),
+            vec![],
+            false,
+            "Extract clean content from a URL. Includes an SSRF pre-check that blocks loopback / link-local / RFC1918 / IPv6 ULA addresses.",
+            "📄",
+            None,
+            RiskLevel::Safe,
+            false,
+        );
     }
 }
 

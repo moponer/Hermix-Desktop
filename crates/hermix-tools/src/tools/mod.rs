@@ -101,6 +101,10 @@ pub fn register_all(registry: &ToolRegistry) {
     // if the backends module exposes one, otherwise this is a no-op
     // (the real registration in register_builtins.rs handles it).
     cua::register(registry);
+    // P1.3 migration: web_search + web_extract use keyless local
+    // backends (Baidu HTML scraper + reqwest HTML fetch). Pushed
+    // here out of register_builtins.rs.
+    web::register(registry);
     // browser needs a BrowserBackend with allowlist/port/headless
     // config from config.yaml — register_builtins.rs owns that wiring.
 }

@@ -117,30 +117,7 @@ pub fn register_builtin_tools(
     }
 
     // -- Web tools -----------------------------------------------------------
-    // Web search: keyless Baidu HTML scraper (no API key, works out of the box).
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "web",
-        Arc::new(crate::tools::web::WebSearchHandler::new(Box::new(
-            crate::backends::web::BaiduHtmlSearchBackend::new(),
-        ))),
-        "🔍",
-        vec![],
-        RiskLevel::Safe,
-    );
-    // Web extract: keyless reqwest HTML fetch (no Firecrawl, no API key).
-    reg_risk(
-        &enabled_toolsets,
-        registry,
-        "web",
-        Arc::new(crate::tools::web::WebExtractHandler::new(Box::new(
-            crate::backends::web::SimpleExtractBackend::new(),
-        ))),
-        "📄",
-        vec![],
-        RiskLevel::Safe,
-    );
+    // web_search + web_extract migrated to tools/web.rs::register (P1.3)
 
     // -- Managed Tool Gateway -----------------------------------------------
     // Routes tool calls through an HTTP gateway (e.g. Nous managed tools).
