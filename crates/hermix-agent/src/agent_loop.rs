@@ -5757,75 +5757,43 @@ impl AgentLoop {
                 break r;
             };
             let api_elapsed_ms = api_start.elapsed().as_millis() as u64;
-            let has_tool_calls = response
-                .message
-                .tool_calls
-                .as_ref()
-                .is_some_and(|tc| !tc.is_empty());
-            info!(
-                turn = total_turns,
-                api_elapsed_ms,
-                has_tool_calls,
-                finish_reason = response.finish_reason.as_deref().unwrap_or(""),
-                "llm_response_received"
-            );
 
-            // --- Post-LLM hook ---
-            let post_ctx = serde_json::json!({
-                "turn": total_turns,
-                "api_time_ms": api_elapsed_ms,
-                "has_tool_calls": has_tool_calls,
-            });
-            let post_results = self.invoke_hook(HookType::PostLlmCall, &post_ctx);
-            self.inject_hook_context(&post_results, &mut ctx);
-
-            if let Some(ref usage) = turn_usage_acc {
-                accumulated_usage = Some(merge_usage(accumulated_usage, usage));
-                if let Some(cost) =
-                    estimate_usage_cost_usd(usage, response.model.as_str(), &self.config)
-                {
-                    session_cost_usd += cost;
-                }
-            }
-
-            if let Some(limit) = self.config.max_cost_usd {
-                if !cost_warned
-                    && session_cost_usd >= limit * self.config.cost_guard_degrade_at_ratio
-                {
-                    cost_warned = true;
-                    if forced_runtime_route.is_none() {
-                        if let Some(model) = self.resolve_cost_degrade_model() {
-                            forced_runtime_route = Some(self.turn_route_cost_guard(model.clone()));
-                            ctx.add_message(Message::system(format!(
-                                "Cost guard: session spend is now ${:.4}/${:.4}. Switching to cheaper model `{}`.",
-                                session_cost_usd, limit, model
-                            )));
-                        } else {
-                            ctx.add_message(Message::system(format!(
-                                "Cost guard warning: session spend is now ${:.4}/${:.4}.",
-                                session_cost_usd, limit
-                            )));
-                        }
-                    }
-                }
-                if session_cost_usd >= limit {
-                    ctx.add_message(Message::system(format!(
-                        "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
-                        session_cost_usd, limit
-                    )));
-                    return Ok(self.finalize_agent_result(
-                        &ctx,
-                        total_turns,
-                        &tool_errors,
-                        accumulated_usage,
-                        session_cost_usd,
-                        session_started_hooks_fired,
-                        persist_user_idx,
-                        false,
-                        false,
+            // Phase 1.3c (2026-07-03): mirrors 1.3b on the run_stream()
+            // side. Post-LLM hook + usage accumulate + cost guard move
+            // into `process_post_response`. The stream-specific
+            // `llm_response_received` info! line is now emitted inside
+            // the helper when `stream_mode = true`. The
+            // `last_finish_reason` was already updated inside the
+            // stream retry loop (line ~5640) to the final response's
+            // finish_reason — no need to refresh it here.
+            if matches!(
+                self.process_post_response(
+                    &mut ctx,
+                    &response,
+                    turn_usage_acc.as_ref(),
+                    total_turns,
+                    api_elapsed_ms,
+                    &mut accumulated_usage,
+                    &mut session_cost_usd,
+                    &mut cost_warned,
+                    &mut forced_runtime_route,
+                    &mut last_content_with_tools,
+                    true, // stream_mode
+                )?,
+                PostResponseAction::CostGuardTripped
+            ) {
+                return Ok(self.finalize_agent_result(
+                    &ctx,
+                    total_turns,
+                    &tool_errors,
+                    accumulated_usage,
+                    session_cost_usd,
+                    session_started_hooks_fired,
+                    persist_user_idx,
+                    false,
+                    false,
                     last_finish_reason.clone(),
-                    ));
-                }
+                ));
             }
 
             let history_includes_tool = ctx
