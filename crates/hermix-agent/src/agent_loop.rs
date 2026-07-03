@@ -5026,14 +5026,8 @@ impl AgentLoop {
                         continue;
                     }
                     tracing::debug!("No tool calls in response, finishing naturally");
-                    // Final memory sync
-                    let (u, a) = extract_last_user_assistant(ctx.get_messages());
-                    self.memory_sync(&u, &a, session_id);
-                    // Phase 18 (架构-1): freeze a final snapshot at
-                    // session end so the next session can pick up
-                    // without replaying every frame.
-                    self.maybe_freeze_snapshot(session_id, total_turns);
-                    self.spawn_background_review(total_turns, &ctx, review_memory_at_end);
+                    // Phase 2.4: terminal-persistence shared with run_stream
+                    self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
                     return Ok(self.finalize_agent_result(
                         &ctx,
                         total_turns,
@@ -5961,13 +5955,8 @@ impl AgentLoop {
                 ) {
                     continue;
                 }
-                let (u, a) = extract_last_user_assistant(ctx.get_messages());
-                self.memory_sync(&u, &a, session_id);
-                // Phase 18 (架构-1): freeze a final snapshot at session end
-                // so the next session can pick up without replaying every
-                // frame. Parity with `run()` natural-finish path (line ~5035).
-                self.maybe_freeze_snapshot(session_id, total_turns);
-                self.spawn_background_review(total_turns, &ctx, review_memory_at_end);
+                // Phase 2.4: terminal-persistence shared with run()
+                self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
                 Self::emit_mute_transition(&on_chunk, &stream_mute, false);
                 return Ok(self.finalize_agent_result(
                     &ctx,
@@ -7266,6 +7255,25 @@ impl AgentLoop {
                 "Background review snapshot captured"
             );
         });
+    }
+
+    /// Phase 2.4: terminal-persistence shared by `run()` and `run_stream()`
+    /// natural-finish paths. Extracted to keep the two call sites in
+    /// lock-step (P3 added `maybe_freeze_snapshot` to run_stream and we
+    /// don't want that fix to drift again).
+    fn persist_session_terminal(
+        &self,
+        ctx: &ContextManager,
+        session_id: &str,
+        total_turns: u32,
+        review_memory_at_end: bool,
+    ) {
+        let (u, a) = extract_last_user_assistant(ctx.get_messages());
+        self.memory_sync(&u, &a, session_id);
+        // Phase 18: freeze a final snapshot at session end so the next
+        // session can pick up without replaying every frame.
+        self.maybe_freeze_snapshot(session_id, total_turns);
+        self.spawn_background_review(total_turns, ctx, review_memory_at_end);
     }
 
     /// Metrics (always) + optional Python-style memory/skill review LLM pass on session end.
