@@ -595,7 +595,7 @@ struct PreparedRun {
 #[derive(Default)]
 struct LoopState {
     /// Total turns completed so far in this run.
-    turn: u32,
+    total_turns: u32,
     /// Turn counter for the compressor (reset on each compaction).
     iter_since_compress: u32,
     /// Accumulated API time in ms.
@@ -618,7 +618,11 @@ struct LoopState {
     invalid_json_retries: u32,
     /// Last assistant message that included tool_use (for re-asking).
     last_content_with_tools: Option<String>,
-    /// Context pressure tracking (last warned percentage).
+    /// Context pressure: first percentage value at which we warned.
+    context_pressure_warned_at: f64,
+    /// Context pressure: wall-clock instant of last warning.
+    context_pressure_last_warn_at: Option<Instant>,
+    /// Context pressure: last warned percentage.
     context_pressure_last_warn_percent: f64,
 }
 
@@ -637,6 +641,49 @@ impl LoopState {
     #[allow(dead_code)]
     fn context_pressure_exceeds(&self, ctx: &ContextManager, threshold: usize) -> bool {
         self.total_tokens(ctx) > threshold
+    }
+
+    /// Bridge writeback: when `run()` (and later `run_stream()`) keep the
+    /// 14 loop-locals as local aliases for ergonomic code, the live values
+    /// sit in those bindings, not in `state`. Call this once per iteration
+    /// so `state` always reflects the current run progress — that's what
+    /// makes the future `run_shared_loop(state, llm_caller)` extraction
+    /// possible (the shared body only sees `&mut LoopState`).
+    ///
+    /// Phase 1.1 (2026-07-03): wired in `run()` only; `run_stream()` and
+    /// the shared extraction land in Phase 1.2 / 1.3.
+    #[allow(clippy::too_many_arguments)]
+    fn publish_from(
+        &mut self,
+        total_turns: u32,
+        total_api_time_ms: u64,
+        total_tool_time_ms: u64,
+        accumulated_usage: Option<&UsageStats>,
+        session_cost_usd: f64,
+        cost_warned: bool,
+        forced_runtime_route: Option<&TurnRuntimeRoute>,
+        last_checkpoint_messages: Option<&Vec<Message>>,
+        invalid_tool_retries: u32,
+        invalid_json_retries: u32,
+        last_content_with_tools: Option<&String>,
+        context_pressure_warned_at: f64,
+        context_pressure_last_warn_at: Option<Instant>,
+        context_pressure_last_warn_percent: f64,
+    ) {
+        self.total_turns = total_turns;
+        self.total_api_time_ms = total_api_time_ms;
+        self.total_tool_time_ms = total_tool_time_ms;
+        self.accumulated_usage = accumulated_usage.cloned();
+        self.session_cost_usd = session_cost_usd;
+        self.cost_warned = cost_warned;
+        self.forced_runtime_route = forced_runtime_route.cloned();
+        self.last_checkpoint_messages = last_checkpoint_messages.cloned();
+        self.invalid_tool_retries = invalid_tool_retries;
+        self.invalid_json_retries = invalid_json_retries;
+        self.last_content_with_tools = last_content_with_tools.cloned();
+        self.context_pressure_warned_at = context_pressure_warned_at;
+        self.context_pressure_last_warn_at = context_pressure_last_warn_at;
+        self.context_pressure_last_warn_percent = context_pressure_last_warn_percent;
     }
 }
 
@@ -4339,25 +4386,26 @@ impl AgentLoop {
         let session_id = self.config.session_id.as_deref().unwrap_or("");
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
 
-        let mut total_turns: u32 = 0;
-        let mut _total_api_time_ms: u64 = 0;
-        let mut _total_tool_time_ms: u64 = 0;
-        let mut accumulated_usage: Option<UsageStats> = None;
-        let mut session_cost_usd: f64 = 0.0;
-        let mut cost_warned = false;
-        let mut forced_runtime_route: Option<TurnRuntimeRoute> = None;
-        let mut last_checkpoint_messages: Option<Vec<Message>> = None;
-        let mut invalid_tool_retries: u32 = 0;
-        let mut invalid_json_retries: u32 = 0;
-        let mut last_content_with_tools: Option<String> = None;
-        let mut context_pressure_warned_at: f64 = 0.0;
-        let mut context_pressure_last_warn_at: Option<Instant> = None;
-        let mut context_pressure_last_warn_percent: f64 = 0.0;
-
-        // Phase 1 foundation (2026-07-03): `LoopState` is added at module
-        // scope. The actual migration of these 14 locals onto `state` is
-        // tracked as a follow-up commit to keep this change zero-impact.
-        let _state = LoopState::default();
+        // Phase 1.1 (2026-07-03): bridge — every loop-local mutable lives
+        // in `state`; the local bindings below are zero-cost aliases so
+        // the loop body keeps working unchanged. The 14 `state.x = x`
+        // writebacks at the end of each iteration are how we re-publish
+        // progress to the struct, so call sites in helpers can read
+        // `state.total_turns` etc. without manual passing.
+        let mut state = LoopState::default();
+        let (mut total_turns, mut _total_api_time_ms, mut _total_tool_time_ms) =
+            (state.total_turns, state.total_api_time_ms, state.total_tool_time_ms);
+        let mut accumulated_usage: Option<UsageStats> = state.accumulated_usage.clone();
+        let (mut session_cost_usd, mut cost_warned) = (state.session_cost_usd, state.cost_warned);
+        let mut forced_runtime_route: Option<TurnRuntimeRoute> = state.forced_runtime_route.clone();
+        let mut last_checkpoint_messages: Option<Vec<Message>> =
+            state.last_checkpoint_messages.clone();
+        let (mut invalid_tool_retries, mut invalid_json_retries) =
+            (state.invalid_tool_retries, state.invalid_json_retries);
+        let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
+        let (mut context_pressure_warned_at, mut context_pressure_last_warn_at) =
+            (state.context_pressure_warned_at, state.context_pressure_last_warn_at);
+        let mut context_pressure_last_warn_percent: f64 = state.context_pressure_last_warn_percent;
 
         loop {
             if self.interrupt.take_interrupt_graceful().is_some() {
@@ -5113,6 +5161,28 @@ impl AgentLoop {
             }
 
             self.auto_compress_if_over_threshold(&mut ctx).await;
+
+            // Phase 1.1 (2026-07-03): publish loop-locals back to `state`
+            // so the future `run_shared_loop(state, llm_caller)` extraction
+            // can read live values via `&mut LoopState`. Runs once per
+            // iteration, after `auto_compress` (which can mutate
+            // `iter_since_compress`).
+            state.publish_from(
+                total_turns,
+                _total_api_time_ms,
+                _total_tool_time_ms,
+                accumulated_usage.as_ref(),
+                session_cost_usd,
+                cost_warned,
+                forced_runtime_route.as_ref(),
+                last_checkpoint_messages.as_ref(),
+                invalid_tool_retries,
+                invalid_json_retries,
+                last_content_with_tools.as_ref(),
+                context_pressure_warned_at,
+                context_pressure_last_warn_at,
+                context_pressure_last_warn_percent,
+            );
         }
     }
 
@@ -7345,7 +7415,7 @@ mod tests {
         // zero-initialized struct that is `#[derive(Default)]` so the
         // refactor of `run()` / `run_stream()` can keep using `..Default::default()`.
         let s = LoopState::default();
-        assert_eq!(s.turn, 0);
+        assert_eq!(s.total_turns, 0);
         assert_eq!(s.iter_since_compress, 0);
         assert_eq!(s.total_api_time_ms, 0);
         assert_eq!(s.total_tool_time_ms, 0);
@@ -7357,6 +7427,8 @@ mod tests {
         assert_eq!(s.invalid_tool_retries, 0);
         assert_eq!(s.invalid_json_retries, 0);
         assert!(s.last_content_with_tools.is_none());
+        assert_eq!(s.context_pressure_warned_at, 0.0);
+        assert!(s.context_pressure_last_warn_at.is_none());
         assert_eq!(s.context_pressure_last_warn_percent, 0.0);
     }
 
@@ -7366,17 +7438,52 @@ mod tests {
         // unrelated state — required because `run()` and `run_stream()`
         // will both mutate these fields on every turn.
         let mut s = LoopState::default();
-        s.turn += 1;
+        s.total_turns += 1;
         s.invalid_tool_retries += 1;
         s.invalid_json_retries += 2;
         s.session_cost_usd += 0.001;
-        assert_eq!(s.turn, 1);
+        assert_eq!(s.total_turns, 1);
         assert_eq!(s.invalid_tool_retries, 1);
         assert_eq!(s.invalid_json_retries, 2);
         assert!(s.session_cost_usd > 0.0);
         // Unrelated fields stay zero.
         assert_eq!(s.total_api_time_ms, 0);
         assert!(s.accumulated_usage.is_none());
+    }
+
+    #[test]
+    fn p1_1_loop_state_publish_from_round_trip() {
+        // Phase 1.1 (2026-07-03): the bridge between `run()`'s 14
+        // loop-local aliases and the 14 `state` fields. Publishing the
+        // locals back into `state` is what makes the future
+        // `run_shared_loop(state, llm_caller)` extraction possible
+        // (the shared body only sees `&mut LoopState`).
+        let mut s = LoopState::default();
+        s.publish_from(
+            7,                        // total_turns
+            1234,                     // total_api_time_ms
+            567,                      // total_tool_time_ms
+            None,                     // accumulated_usage
+            0.0042,                   // session_cost_usd
+            true,                     // cost_warned
+            None,                     // forced_runtime_route
+            None,                     // last_checkpoint_messages
+            2,                        // invalid_tool_retries
+            3,                        // invalid_json_retries
+            None,                     // last_content_with_tools
+            0.65,                     // context_pressure_warned_at
+            None,                     // context_pressure_last_warn_at
+            0.71,                     // context_pressure_last_warn_percent
+        );
+        assert_eq!(s.total_turns, 7);
+        assert_eq!(s.total_api_time_ms, 1234);
+        assert_eq!(s.total_tool_time_ms, 567);
+        assert_eq!(s.session_cost_usd, 0.0042);
+        assert!(s.cost_warned);
+        assert_eq!(s.invalid_tool_retries, 2);
+        assert_eq!(s.invalid_json_retries, 3);
+        assert_eq!(s.context_pressure_warned_at, 0.65);
+        assert_eq!(s.context_pressure_last_warn_percent, 0.71);
     }
 
     #[test]
