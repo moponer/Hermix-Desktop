@@ -357,8 +357,15 @@ mod tests {
     #[tokio::test]
     async fn test_execute_command_timeout() {
         let backend = LocalBackend::new(1, 1_048_576);
+        // Use a platform-appropriate long-running command.
+        // Unix: `sleep 30`; Windows: `ping -n 31 127.0.0.1 >nul` (~30s).
+        let cmd = if cfg!(windows) {
+            "ping -n 31 127.0.0.1 >nul"
+        } else {
+            "sleep 30"
+        };
         let result = backend
-            .execute_command("sleep 30", None, None, false, false)
+            .execute_command(cmd, None, None, false, false)
             .await;
         assert!(result.is_err());
         match result {
