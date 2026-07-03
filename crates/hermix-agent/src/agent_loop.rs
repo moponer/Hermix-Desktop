@@ -7362,6 +7362,62 @@ impl AgentLoop {
             tracing::debug!(todo_markers, "Hydrated todo markers from prior context");
         }
     }
+
+    /// See [`PostLlmAction`]. Mutates `inner_thinking` / `inner_empty`
+    /// when bumping the per-attempt retry budget and emits a `lifecycle`
+    /// status line on each transition.
+    fn classify_post_llm_response(
+        &self,
+        r: hermix_core::LlmResponse,
+        inner_thinking: &mut u32,
+        inner_empty: &mut u32,
+        ctx: &mut ContextManager,
+    ) -> PostLlmAction {
+        let has_tools = r
+            .message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|tc| !tc.is_empty());
+        if has_tools {
+            return PostLlmAction::Break(r);
+        }
+        if Self::assistant_visible_text(&r.message) {
+            return PostLlmAction::Break(r);
+        }
+        if Self::assistant_has_reasoning(&r.message)
+            && *inner_thinking < self.config.thinking_prefill_max_retries
+        {
+            *inner_thinking += 1;
+            self.emit_status(
+                "lifecycle",
+                &format!(
+                    "Reasoning-only response — retrying ({}/{})",
+                    *inner_thinking, self.config.thinking_prefill_max_retries
+                ),
+            );
+            ctx.add_message(r.message.clone());
+            return PostLlmAction::RetryReasoning;
+        }
+        if !Self::assistant_has_reasoning(&r.message)
+            && *inner_empty < self.config.empty_content_max_retries
+        {
+            *inner_empty += 1;
+            tracing::warn!(
+                "empty assistant response — retrying ({}/{})",
+                *inner_empty,
+                self.config.empty_content_max_retries
+            );
+            self.emit_status(
+                "lifecycle",
+                &format!(
+                    "Empty assistant response — retrying ({}/{})",
+                    *inner_empty, self.config.empty_content_max_retries
+                ),
+            );
+            return PostLlmAction::RetryEmpty;
+        }
+        PostLlmAction::Break(r)
+    }
 }
 
 /// File-change summary emitted after a successful mutating tool call.
@@ -7372,6 +7428,37 @@ struct FileChangeInfo {
     path: String,
     change_type: &'static str, // "created" | "modified" | "deleted" | "renamed"
     summary: Option<String>,
+}
+
+/// Phase 4.1 (2026-07-03): the per-attempt classification that sits
+/// inside the `let response = loop { ... }` retry block in both
+/// `run()` and `run_stream()`. Identical ~40 lines in both call
+/// sites — has_tools / visible_text / reasoning-retry / empty-retry /
+/// exhausted. Extracted here so the two retry loops can keep their
+/// own transport (sync vs stream-first) and call sites can `match`
+/// on the resulting action.
+///
+/// The helper takes `r` by value because the caller is going to
+/// hand ownership of the response to either a downstream consumer
+/// (`Break(r)`) or the context (the reasoning-retry branch already
+/// pushed `r.message` onto `ctx` before returning `RetryReasoning`,
+/// so `r` itself is dropped on the caller side).
+///
+/// `pub(crate)` so the `mod tests` block below can `match` on the
+/// variants; an impl-block-local enum would be private to the
+/// `AgentLoop` impl and unreachable from tests.
+#[derive(Debug)]
+pub(crate) enum PostLlmAction {
+    /// LLM produced tool calls or visible text — leave the retry
+    /// loop with this response.
+    Break(hermix_core::LlmResponse),
+    /// Reasoning-only response; the message has been pushed onto
+    /// `ctx` and the caller should re-enter the retry loop.
+    RetryReasoning,
+    /// Empty response (no reasoning, no content, no tools); the
+    /// caller should re-enter the retry loop without touching
+    /// `ctx`.
+    RetryEmpty,
 }
 
 /// Look at a completed tool call and decide whether it produced a
@@ -10657,6 +10744,7 @@ mod tests {
 /// pulling a real provider into a test.
 #[cfg(test)]
 mod stub_provider {
+    use super::*;
     use async_trait::async_trait;
     use futures::stream::{BoxStream, StreamExt};
     use hermix_core::{AgentError, LlmProvider, LlmResponse, Message, StreamChunk, ToolSchema};
@@ -10693,5 +10781,139 @@ mod stub_provider {
         ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
             futures::stream::empty().boxed()
         }
+    }
+
+    fn make_reasoning_response(reasoning: &str) -> hermix_core::LlmResponse {
+        let mut msg = Message::assistant("");
+        msg.reasoning_content = Some(reasoning.to_string());
+        hermix_core::LlmResponse {
+            message: msg,
+            usage: None,
+            model: "gpt-4o".to_string(),
+            finish_reason: None,
+        }
+    }
+
+    fn make_empty_response() -> hermix_core::LlmResponse {
+        hermix_core::LlmResponse {
+            message: Message::assistant(""),
+            usage: None,
+            model: "gpt-4o".to_string(),
+            finish_reason: None,
+        }
+    }
+
+    fn make_loop_for_classify() -> (AgentLoop, ContextManager) {
+        let config = AgentConfig::default();
+        // `classify_post_llm_response` is a pure synchronous classifier
+        // — it never touches the LLM provider, tool registry, or any
+        // IO channel — so an empty stub provider and an empty registry
+        // are enough to satisfy the `AgentLoop::new` constructor.
+        let loop_ = AgentLoop::new(
+            config,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(EmptyProvider),
+        );
+        let ctx = ContextManager::new(100);
+        (loop_, ctx)
+    }
+
+    #[test]
+    fn p4_1_classify_breaks_on_tool_calls() {
+        // Tool calls present → Break(r) regardless of content /
+        // reasoning state. Caller unwraps the response and dispatches.
+        let (mut loop_, mut ctx) = make_loop_for_classify();
+        let mut inner_thinking = 0;
+        let mut inner_empty = 0;
+        let mut msg = Message::assistant("");
+        msg.tool_calls = Some(vec![hermix_core::ToolCall {
+            id: "tc1".into(),
+            function: hermix_core::FunctionCall {
+                name: "noop".into(),
+                arguments: "{}".into(),
+            },
+        }]);
+        let action = loop_.classify_post_llm_response(
+            hermix_core::LlmResponse {
+                message: msg,
+                usage: None,
+                model: "gpt-4o".to_string(),
+                finish_reason: None,
+            },
+            &mut inner_thinking,
+            &mut inner_empty,
+            &mut ctx,
+        );
+        assert!(matches!(action, PostLlmAction::Break(_)));
+        assert_eq!(inner_thinking, 0);
+        assert_eq!(inner_empty, 0);
+        assert_eq!(ctx.get_messages().len(), 0);
+    }
+
+    #[test]
+    fn p4_1_classify_breaks_on_visible_text() {
+        // No tools, but assistant content is non-empty → Break(r).
+        // Counter budgets must not be touched.
+        let (mut loop_, mut ctx) = make_loop_for_classify();
+        let mut inner_thinking = 0;
+        let mut inner_empty = 0;
+        let action = loop_.classify_post_llm_response(
+            hermix_core::LlmResponse {
+                message: Message::assistant("hello world"),
+                usage: None,
+                model: "gpt-4o".to_string(),
+                finish_reason: None,
+            },
+            &mut inner_thinking,
+            &mut inner_empty,
+            &mut ctx,
+        );
+        assert!(matches!(action, PostLlmAction::Break(_)));
+        assert_eq!(inner_thinking, 0);
+        assert_eq!(inner_empty, 0);
+        assert_eq!(ctx.get_messages().len(), 0);
+    }
+
+    #[test]
+    fn p4_1_classify_retries_reasoning_within_budget() {
+        // Reasoning-only response with the budget set to 2 → first
+        // call increments to 1/2 and returns RetryReasoning; the
+        // message is pushed onto ctx so the next LLM call sees it as
+        // prior context.
+        let (mut loop_, mut ctx) = make_loop_for_classify();
+        loop_.config.thinking_prefill_max_retries = 2;
+        let mut inner_thinking = 0;
+        let mut inner_empty = 0;
+        let action = loop_.classify_post_llm_response(
+            make_reasoning_response("thinking…"),
+            &mut inner_thinking,
+            &mut inner_empty,
+            &mut ctx,
+        );
+        assert!(matches!(action, PostLlmAction::RetryReasoning));
+        assert_eq!(inner_thinking, 1);
+        assert_eq!(inner_empty, 0);
+        assert_eq!(ctx.get_messages().len(), 1);
+    }
+
+    #[test]
+    fn p4_1_classify_retries_empty_within_budget() {
+        // No tools, no reasoning, no content → RetryEmpty (not
+        // RetryReasoning). The message must NOT be pushed — empty
+        // responses are noise that shouldn't pollute the conversation.
+        let (mut loop_, mut ctx) = make_loop_for_classify();
+        loop_.config.empty_content_max_retries = 1;
+        let mut inner_thinking = 0;
+        let mut inner_empty = 0;
+        let action = loop_.classify_post_llm_response(
+            make_empty_response(),
+            &mut inner_thinking,
+            &mut inner_empty,
+            &mut ctx,
+        );
+        assert!(matches!(action, PostLlmAction::RetryEmpty));
+        assert_eq!(inner_thinking, 0);
+        assert_eq!(inner_empty, 1);
+        assert_eq!(ctx.get_messages().len(), 0);
     }
 }
