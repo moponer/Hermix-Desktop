@@ -1122,16 +1122,68 @@ impl RetryCounters {
     }
 }
 
+/// Phase 5 (2026-07-04 follow-up): turn-level timing bookkeeping consolidated
+/// into one struct. The two sibling `u64` fields (`total_api_time_ms`,
+/// `total_tool_time_ms`) used to live directly on `LoopState` and were
+/// bridged back from `run()`'s loop-locals via 2 sibling arguments in
+/// `publish_from`. Folding them into one struct:
+/// - shrinks `LoopState` by 2 fields (10 → 8),
+/// - shrinks `publish_from` from 5 args to 3 args,
+/// - lets `run()` mutate the timings in place via `record_api` /
+///   `record_tool` instead of accumulating to a local `_total_*` and
+///   re-publishing each iteration (the local accumulation was the
+///   pre-extraction pattern that the Phase 1.1 bridge set up for
+///   `total_turns`; timings don't need that bridge because nothing
+///   reads `state.timings` from outside this file — they're just
+///   collected for future inspection / metrics).
+///
+/// The 2 fields stay co-located on `self.timings` and mutate in
+/// place. Reset / `Default` produce the same all-zeros state as
+/// before, so `LoopState::default()` semantics are unchanged.
+struct TurnTimings {
+    /// Accumulated LLM-call wall-clock time in milliseconds across
+    /// all turns of this run.
+    total_api_time_ms: u64,
+    /// Accumulated tool-execution wall-clock time in milliseconds
+    /// across all turns of this run.
+    total_tool_time_ms: u64,
+}
+
+impl Default for TurnTimings {
+    fn default() -> Self {
+        Self {
+            total_api_time_ms: 0,
+            total_tool_time_ms: 0,
+        }
+    }
+}
+
+impl TurnTimings {
+    /// Accumulate a per-LLM-call elapsed time into the running API
+    /// total. Saturating-add so a long-running session can't wrap
+    /// around.
+    fn record_api(&mut self, elapsed_ms: u64) {
+        self.total_api_time_ms = self.total_api_time_ms.saturating_add(elapsed_ms);
+    }
+
+    /// Accumulate a per-tool-execution elapsed time into the running
+    /// tool total. Saturating-add.
+    fn record_tool(&mut self, elapsed_ms: u64) {
+        self.total_tool_time_ms = self.total_tool_time_ms.saturating_add(elapsed_ms);
+    }
+}
+
 #[derive(Default)]
 struct LoopState {
     /// Total turns completed so far in this run.
     total_turns: u32,
     /// Turn counter for the compressor (reset on each compaction).
     iter_since_compress: u32,
-    /// Accumulated API time in ms.
-    total_api_time_ms: u64,
-    /// Accumulated tool execution time in ms.
-    total_tool_time_ms: u64,
+    /// Per-run API + tool wall-clock accumulators. Phase 5 (2026-07-04):
+    /// extracted from 2 inline `u64` fields to a [`TurnTimings`] struct
+    /// so `publish_from` shrinks by 2 args and the `record_api` /
+    /// `record_tool` methods are the single mutation path.
+    timings: TurnTimings,
     /// Cost-guard bookkeeping: cumulative usage, USD spend, warn flag,
     /// forced route. Phase 5 (2026-07-03): 4 inline fields that used to
     /// sit directly on `LoopState` moved into [`CostGuard`] which is
@@ -1200,18 +1252,19 @@ impl LoopState {
     /// `install_downgrade`. `publish_from` shrank from 11 args to 7
     /// args: only the scalars + the 2 rarely-touched message-cached
     /// `Option`s remain.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// Phase 5 (2026-07-04 follow-up): also dropped 2 timing args
+    /// (`total_api_time_ms` / `total_tool_time_ms`) — those moved into
+    /// [`TurnTimings`] which is mutated in place via `record_api` /
+    /// `record_tool`. `publish_from` shrank from 5 args to 3 args:
+    /// only `total_turns` + the 2 message-cached `Option`s remain.
     fn publish_from(
         &mut self,
         total_turns: u32,
-        total_api_time_ms: u64,
-        total_tool_time_ms: u64,
         last_checkpoint_messages: Option<&Vec<Message>>,
         last_content_with_tools: Option<&String>,
     ) {
         self.total_turns = total_turns;
-        self.total_api_time_ms = total_api_time_ms;
-        self.total_tool_time_ms = total_tool_time_ms;
         self.last_checkpoint_messages = last_checkpoint_messages.cloned();
         self.last_content_with_tools = last_content_with_tools.cloned();
     }
@@ -4981,8 +5034,12 @@ impl AgentLoop {
         // `state.cost_guard.session_cost_usd`. The 4 sibling locals
         // dropped from `publish_from` in the same commit.
         let mut state = LoopState::default();
-        let (mut total_turns, mut _total_api_time_ms, mut _total_tool_time_ms) =
-            (state.total_turns, state.total_api_time_ms, state.total_tool_time_ms);
+        // Phase 5 (2026-07-04): `total_api_time_ms` / `total_tool_time_ms`
+        // no longer get bridged to local aliases — they live on
+        // `state.timings` and are mutated in place via `record_api` /
+        // `record_tool`. Only `total_turns` keeps the local-alias pattern
+        // because the rest of the loop body still reads it as a scalar.
+        let mut total_turns: u32 = state.total_turns;
         let mut last_checkpoint_messages: Option<Vec<Message>> =
             state.last_checkpoint_messages.clone();
         let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
@@ -5222,7 +5279,10 @@ impl AgentLoop {
                 }
             };
             let api_elapsed = api_start.elapsed().as_millis() as u64;
-            _total_api_time_ms += api_elapsed;
+            // Phase 5 (2026-07-04): record timings on `state.timings`
+            // directly (saturating-add inside) instead of accumulating
+            // to a local + re-publishing via `publish_from`.
+            state.timings.record_api(api_elapsed);
 
             // Phase 1.3b (2026-07-03): post-LLM hook + usage accumulate +
             // cost guard extracted into `process_post_response`. ~60 lines
@@ -5497,7 +5557,8 @@ impl AgentLoop {
                 )
                 .await;
             let tool_elapsed = tool_start.elapsed().as_millis() as u64;
-            _total_tool_time_ms += tool_elapsed;
+            // Phase 5 (2026-07-04): see `record_api` above.
+            state.timings.record_tool(tool_elapsed);
 
             let turn_tool_error_count = results.iter().filter(|r| r.is_error).count() as u32;
             if self.config.rollback_on_tool_error_threshold > 0
@@ -5649,8 +5710,6 @@ impl AgentLoop {
             // `iter_since_compress`).
             state.publish_from(
                 total_turns,
-                _total_api_time_ms,
-                _total_tool_time_ms,
                 last_checkpoint_messages.as_ref(),
                 last_content_with_tools.as_ref(),
             );
@@ -6428,8 +6487,6 @@ impl AgentLoop {
             // both call sites.
             state.publish_from(
                 total_turns,
-                0, // total_api_time_ms — run_stream doesn't accumulate this
-                0, // total_tool_time_ms — run_stream doesn't accumulate this
                 last_checkpoint_messages.as_ref(),
                 last_content_with_tools.as_ref(),
             );
@@ -7781,11 +7838,14 @@ mod tests {
         // Phase 1 (2026-07-03): `LoopState::default` must produce a
         // zero-initialized struct that is `#[derive(Default)]` so the
         // refactor of `run()` / `run_stream()` can keep using `..Default::default()`.
+        //
+        // Phase 5 (2026-07-04): `total_api_time_ms` / `total_tool_time_ms`
+        // moved into `state.timings`; access path now `s.timings.*`.
         let s = LoopState::default();
         assert_eq!(s.total_turns, 0);
         assert_eq!(s.iter_since_compress, 0);
-        assert_eq!(s.total_api_time_ms, 0);
-        assert_eq!(s.total_tool_time_ms, 0);
+        assert_eq!(s.timings.total_api_time_ms, 0);
+        assert_eq!(s.timings.total_tool_time_ms, 0);
         assert!(s.cost_guard.accumulated_usage.is_none());
         assert_eq!(s.cost_guard.session_cost_usd, 0.0);
         assert!(!s.cost_guard.cost_warned);
@@ -7805,19 +7865,52 @@ mod tests {
         // Sanity: the per-turn counters can be updated without touching
         // unrelated state — required because `run()` and `run_stream()`
         // will both mutate these fields on every turn.
+        //
+        // Phase 5 (2026-07-04): timings now use `state.timings.record_*`
+        // (saturating-add) instead of a top-level `+= 1`. We exercise
+        // the new path here and assert it doesn't bleed into other
+        // counters.
         let mut s = LoopState::default();
         s.total_turns += 1;
         s.retry_counters.bump_invalid_tool();
         s.retry_counters.bump_invalid_json();
         s.retry_counters.bump_invalid_json();
         s.cost_guard.session_cost_usd += 0.001;
+        s.timings.record_api(42);
+        s.timings.record_tool(99);
         assert_eq!(s.total_turns, 1);
         assert_eq!(s.retry_counters.invalid_tool, 1);
         assert_eq!(s.retry_counters.invalid_json, 2);
         assert!(s.cost_guard.session_cost_usd > 0.0);
         // Unrelated fields stay zero.
-        assert_eq!(s.total_api_time_ms, 0);
+        assert_eq!(s.timings.total_api_time_ms, 42);
+        assert_eq!(s.timings.total_tool_time_ms, 99);
         assert!(s.cost_guard.accumulated_usage.is_none());
+    }
+
+    #[test]
+    fn p5_turn_timings_record_independently() {
+        // Phase 5 (2026-07-04): `record_api` and `record_tool` must
+        // accumulate independently (each on its own `u64`), saturating
+        // on overflow (a long session shouldn't wrap around). Default
+        // must be all zeros so `LoopState::default()` semantics stay
+        // unchanged from the pre-extraction two-`u64`-field version.
+        let mut t = TurnTimings::default();
+        assert_eq!(t.total_api_time_ms, 0);
+        assert_eq!(t.total_tool_time_ms, 0);
+
+        t.record_api(100);
+        t.record_api(50);
+        t.record_tool(200);
+        assert_eq!(t.total_api_time_ms, 150);
+        assert_eq!(t.total_tool_time_ms, 200);
+
+        // Saturating: u64::MAX + 1 stays at u64::MAX instead of wrapping
+        // to 0 (which would silently under-report a long session).
+        let mut t2 = TurnTimings::default();
+        t2.record_api(u64::MAX);
+        t2.record_api(1);
+        assert_eq!(t2.total_api_time_ms, u64::MAX);
     }
 
     #[test]
@@ -7834,17 +7927,24 @@ mod tests {
         // owned by `state.cost_guard` and are no longer bridged. The 3
         // retry-counter args and the 3 context-pressure args were
         // already removed in earlier Phase 5 sub-commits.
+        //
+        // Phase 5 (2026-07-04): shrank from 5 args to 3 args. The 2
+        // timing args (`total_api_time_ms` / `total_tool_time_ms`)
+        // are owned by `state.timings` and mutated in place by
+        // `record_api` / `record_tool`. We exercise both paths here.
         let mut s = LoopState::default();
         s.publish_from(
             7,                        // total_turns
-            1234,                     // total_api_time_ms
-            567,                      // total_tool_time_ms
             None,                     // last_checkpoint_messages
             None,                     // last_content_with_tools
         );
         assert_eq!(s.total_turns, 7);
-        assert_eq!(s.total_api_time_ms, 1234);
-        assert_eq!(s.total_tool_time_ms, 567);
+        // timings live on the inner struct — exercise the in-place
+        // record path that replaced the old `+= api_elapsed` locals.
+        s.timings.record_api(1234);
+        s.timings.record_tool(567);
+        assert_eq!(s.timings.total_api_time_ms, 1234);
+        assert_eq!(s.timings.total_tool_time_ms, 567);
         // cost_guard defaults are unchanged by publish_from — owned by
         // the inner struct and mutated in place by the runtime.
         assert!(s.cost_guard.accumulated_usage.is_none());
