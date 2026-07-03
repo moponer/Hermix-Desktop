@@ -10170,6 +10170,91 @@ mod tests {
         assert!(!r.can_attempt("qwen-oauth"));
     }
 
+    // ── should_emit_context_pressure_warning unit tests (2026-07-03) ──
+    //
+    // The helper is the gate that decides whether `run()` / `run_stream()`
+    // should fire a `lifecycle` warning when the context window fills up.
+    // It had no direct unit tests — coverage only came through the
+    // integration path. These tests exercise the three decision rules
+    // (tier upgrade, cooldown, percent step) using deterministic state
+    // and rely on the helper's own `Instant::now()` for time, so no
+    // wall-clock waiting is needed.
+
+    #[test]
+    fn cp_helper_returns_false_when_tier_zero() {
+        let mut warned_tier = 0.0;
+        let mut last_warn_at = None;
+        let mut last_warn_percent = 0.0;
+        let emit = AgentLoop::should_emit_context_pressure_warning(
+            0.42,
+            0.0,
+            &mut warned_tier,
+            &mut last_warn_at,
+            &mut last_warn_percent,
+        );
+        assert!(!emit);
+        // No state mutation when no emission.
+        assert_eq!(warned_tier, 0.0);
+        assert!(last_warn_at.is_none());
+        assert_eq!(last_warn_percent, 0.0);
+    }
+
+    #[test]
+    fn cp_helper_emits_on_first_call_above_zero() {
+        let mut warned_tier = 0.0;
+        let mut last_warn_at = None;
+        let mut last_warn_percent = 0.0;
+        let emit = AgentLoop::should_emit_context_pressure_warning(
+            0.65,
+            0.65,
+            &mut warned_tier,
+            &mut last_warn_at,
+            &mut last_warn_percent,
+        );
+        assert!(emit);
+        // Tier upgrade always emits and records tier + warn_at + percent.
+        assert_eq!(warned_tier, 0.65);
+        assert!(last_warn_at.is_some());
+        assert_eq!(last_warn_percent, 65.0);
+    }
+
+    #[test]
+    fn cp_helper_blocks_within_cooldown_without_tier_upgrade() {
+        let mut warned_tier = 0.65;
+        let mut last_warn_at = Some(Instant::now());
+        let mut last_warn_percent = 65.0;
+        // Same tier, <5% advance, immediately after prior emit → cooldown blocks.
+        let emit = AgentLoop::should_emit_context_pressure_warning(
+            0.66,
+            0.65,
+            &mut warned_tier,
+            &mut last_warn_at,
+            &mut last_warn_percent,
+        );
+        assert!(!emit);
+        // State unchanged.
+        assert_eq!(warned_tier, 0.65);
+        assert_eq!(last_warn_percent, 65.0);
+    }
+
+    #[test]
+    fn cp_helper_emits_on_tier_upgrade_even_within_cooldown() {
+        let mut warned_tier = 0.65;
+        let mut last_warn_at = Some(Instant::now());
+        let mut last_warn_percent = 65.0;
+        // Tier upgrade overrides the cooldown.
+        let emit = AgentLoop::should_emit_context_pressure_warning(
+            0.66,
+            0.85,
+            &mut warned_tier,
+            &mut last_warn_at,
+            &mut last_warn_percent,
+        );
+        assert!(emit);
+        assert_eq!(warned_tier, 0.85);
+        assert!(last_warn_at.is_some());
+    }
+
     // ── Phase 1.3a (2026-07-03): process_post_response unit tests ──
     //
     // The shared post-LLM helper extracted in 1.3a replaces ~200 lines
