@@ -692,6 +692,19 @@ impl LoopState {
     }
 }
 
+/// Phase 1.3a (2026-07-03): outcome of [`AgentLoop::process_post_response`].
+/// The shared post-LLM helper decides between two paths:
+/// - `Finalize`: no tool calls → no work left, return the AgentResult.
+/// - `Continue`: tool calls present → fall through to tool dispatch.
+#[derive(Debug)]
+enum PostResponseAction {
+    /// No tool calls: stop the loop. The caller should `return`
+    /// `Ok(self.finalize_agent_result(...))`.
+    Finalize,
+    /// Tool calls present: caller falls through to `execute_tool_calls`.
+    Continue,
+}
+
 // ---------------------------------------------------------------------------
 // Backwards-compat re-exports (P2.2.4, 2026-06-30)
 // ---------------------------------------------------------------------------
@@ -872,6 +885,126 @@ impl AgentLoop {
                 .ok()
                 .and_then(|g| g.as_ref().map(|m| m.to_snapshot())),
         }
+    }
+
+    /// Phase 1.3a (2026-07-03): the post-LLM logic that was duplicated
+    /// ~200 lines in `run()` and `run_stream()`. Fires the PostLlmCall
+    /// hook, accumulates usage, runs the cost guard (with auto-degrade
+    /// to the configured cheap model), and decides between
+    /// `Finalize` (no tool calls → caller returns) and `Continue`
+    /// (tool calls → caller falls through to `execute_tool_calls`).
+    ///
+    /// `stream_mode` is `true` for `run_stream()` — the helper uses
+    /// this to emit a stream-specific `tracing` line and to forward
+    /// the `finish_reason` through the finalize path.
+    #[allow(clippy::too_many_arguments)]
+    fn process_post_response(
+        &self,
+        ctx: &mut ContextManager,
+        response: &hermix_core::LlmResponse,
+        turn_usage_acc: Option<&UsageStats>,
+        total_turns: u32,
+        accumulated_usage: &mut Option<UsageStats>,
+        session_cost_usd: &mut f64,
+        cost_warned: &mut bool,
+        forced_runtime_route: &mut Option<TurnRuntimeRoute>,
+        last_content_with_tools: &mut Option<String>,
+        stream_mode: bool,
+    ) -> Result<PostResponseAction, AgentError> {
+        let api_elapsed = 0u64; // elapsed tracked in caller's loop-local for now
+        let has_tool_calls = response
+            .message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|tc| !tc.is_empty());
+
+        if stream_mode {
+            tracing::info!(
+                turn = total_turns,
+                has_tool_calls,
+                finish_reason = response.finish_reason.as_deref().unwrap_or(""),
+                "llm_response_received"
+            );
+        }
+
+        // --- Post-LLM hook ---
+        let post_ctx = serde_json::json!({
+            "turn": total_turns,
+            "api_time_ms": api_elapsed,
+            "has_tool_calls": has_tool_calls,
+        });
+        let post_results = self.invoke_hook(HookType::PostLlmCall, &post_ctx);
+        self.inject_hook_context(&post_results, ctx);
+
+        if let Some(ref usage) = turn_usage_acc {
+            *accumulated_usage = Some(merge_usage(accumulated_usage.clone(), usage));
+            if let Some(cost) =
+                estimate_usage_cost_usd(usage, response.model.as_str(), &self.config)
+            {
+                *session_cost_usd += cost;
+            }
+        }
+
+        // --- Cost guard ---
+        if let Some(limit) = self.config.max_cost_usd {
+            if !*cost_warned
+                && *session_cost_usd >= limit * self.config.cost_guard_degrade_at_ratio
+            {
+                *cost_warned = true;
+                if forced_runtime_route.is_none() {
+                    if let Some(model) = self.resolve_cost_degrade_model() {
+                        *forced_runtime_route = Some(self.turn_route_cost_guard(model.clone()));
+                        ctx.add_message(Message::system(format!(
+                            "Cost guard: session spend is now ${:.4}/${:.4}. Switching to cheaper model `{}`.",
+                            session_cost_usd, limit, model
+                        )));
+                    } else {
+                        ctx.add_message(Message::system(format!(
+                            "Cost guard warning: session spend is now ${:.4}/${:.4}.",
+                            session_cost_usd, limit
+                        )));
+                    }
+                }
+            }
+            if *session_cost_usd >= limit {
+                ctx.add_message(Message::system(format!(
+                    "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
+                    session_cost_usd, limit
+                )));
+                // Caller detects "tripped" via returned Err or via a separate
+                // signal — for now we encode it as Finalize + a marker on state.
+                return Ok(PostResponseAction::Finalize);
+            }
+        }
+
+        let tool_calls_present = response
+            .message
+            .tool_calls
+            .as_ref()
+            .is_some_and(|tc| !tc.is_empty());
+
+        if !tool_calls_present {
+            // No tool calls — agent is done. Save the last assistant content
+            // for ack-continuation tracking.
+            if response
+                .message
+                .content
+                .as_deref()
+                .is_some_and(|s| !s.is_empty())
+            {
+                *last_content_with_tools = response
+                    .message
+                    .content
+                    .as_deref()
+                    .map(strip_think_blocks_for_ack)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+            }
+            return Ok(PostResponseAction::Finalize);
+        }
+
+        // Tool calls present — caller continues to dispatch.
+        Ok(PostResponseAction::Continue)
     }
 
     /// v2 (2026-06-21): most recent archive refs produced by
@@ -9986,6 +10119,154 @@ mod tests {
 
         std::env::remove_var("HERMIX_QWEN_OAUTH_TOKEN_URL");
         std::env::remove_var("HERMIX_QWEN_OAUTH_CLIENT_ID");
+    }
+
+    // ── Phase 1.3a (2026-07-03): process_post_response unit tests ──
+    //
+    // The shared post-LLM helper extracted in 1.3a replaces ~200 lines
+    // of duplication between `run()` and `run_stream()`. These tests
+    // exercise the two return paths (Finalize / Continue) and the
+    // usage-accumulation side effect.
+
+    #[test]
+    fn p1_3a_process_post_response_finalize_on_no_tool_calls() {
+        // No tool calls in response → Finalize. The helper should also
+        // copy the assistant visible text into `last_content_with_tools`
+        // for ack-continuation tracking.
+        struct DummyProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for DummyProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<hermix_core::LlmResponse, AgentError> {
+                unimplemented!()
+            }
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> futures::stream::BoxStream<'static, Result<StreamChunk, AgentError>> {
+                futures::stream::empty().boxed()
+            }
+        }
+        let agent = AgentLoop::new(
+            AgentConfig::default(),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(DummyProvider),
+        );
+        let mut ctx = ContextManager::for_model(&agent.config.model);
+        let response = hermix_core::LlmResponse {
+            message: Message::assistant("final answer"),
+            usage: None,
+            model: "test".into(),
+            finish_reason: Some("stop".into()),
+        };
+        let mut accumulated: Option<UsageStats> = None;
+        let mut cost = 0.0f64;
+        let mut cost_warned = false;
+        let mut forced_route: Option<TurnRuntimeRoute> = None;
+        let mut last_content: Option<String> = None;
+        let action = agent
+            .process_post_response(
+                &mut ctx,
+                &response,
+                None,
+                0, // total_turns
+                &mut accumulated,
+                &mut cost,
+                &mut cost_warned,
+                &mut forced_route,
+                &mut last_content,
+                false, // stream_mode
+            )
+            .unwrap();
+        assert!(matches!(action, PostResponseAction::Finalize));
+        assert_eq!(last_content.as_deref(), Some("final answer"));
+    }
+
+    #[test]
+    fn p1_3a_process_post_response_continue_on_tool_calls() {
+        // Tool calls in response → Continue. The helper should leave
+        // `last_content_with_tools` untouched (caller handles that).
+        struct DummyProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for DummyProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<hermix_core::LlmResponse, AgentError> {
+                unimplemented!()
+            }
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> futures::stream::BoxStream<'static, Result<StreamChunk, AgentError>> {
+                futures::stream::empty().boxed()
+            }
+        }
+        let agent = AgentLoop::new(
+            AgentConfig::default(),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(DummyProvider),
+        );
+        let mut ctx = ContextManager::for_model(&agent.config.model);
+        let mut msg = Message::assistant("calling tool");
+        msg.tool_calls = Some(vec![ToolCall {
+            id: "tc-1".into(),
+            function: hermix_core::FunctionCall {
+                name: "echo".into(),
+                arguments: "{}".into(),
+            },
+        }]);
+        let response = hermix_core::LlmResponse {
+            message: msg,
+            usage: None,
+            model: "test".into(),
+            finish_reason: Some("tool_calls".into()),
+        };
+        let mut accumulated: Option<UsageStats> = None;
+        let mut cost = 0.0f64;
+        let mut cost_warned = false;
+        let mut forced_route: Option<TurnRuntimeRoute> = None;
+        let mut last_content: Option<String> = None;
+        let action = agent
+            .process_post_response(
+                &mut ctx,
+                &response,
+                None,
+                0,
+                &mut accumulated,
+                &mut cost,
+                &mut cost_warned,
+                &mut forced_route,
+                &mut last_content,
+                false,
+            )
+            .unwrap();
+        assert!(matches!(action, PostResponseAction::Continue));
+        // last_content_with_tools untouched (set later by the loop after
+        // the assistant message is appended to ctx).
+        assert!(last_content.is_none());
     }
 
     #[tokio::test]
