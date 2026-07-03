@@ -1,6 +1,13 @@
 //! Small text utilities shared across the workspace.
 //!
-//! Currently provides [`truncate_chars`], a UTF-8 safe slicing helper
+//! Currently provides [`truncate_chars`] (UTF-8 safe slicing) and
+//! [`is_error_json`] (cheap structural probe for the dispatch path).
+//! Earlier versions of `is_error_json` did a `starts_with(r#"{"error"#)`
+//! check, which mis-flagged any legitimate JSON object whose first key
+//! happened to be `"error"` (e.g. `{"error_count":3}`) and silently
+//! missed error responses that wrapped the key (` {"error": ...}`).
+//!
+//! [`truncate_chars`], a UTF-8 safe slicing helper
 //! that the tool registry and dispatcher use to clip oversized tool
 //! results. Earlier versions used byte-level slicing (`&s[..n]`) which
 //! panics on any non-ASCII boundary — every CJK / emoji output larger
@@ -116,6 +123,70 @@ pub fn format_token_count(n: usize) -> String {
     format!("{:.1}M", m)
 }
 
+/// Probe whether a tool-result string is a JSON error envelope.
+///
+/// Cheap, allocation-free check: looks for an optional UTF-8 BOM, any
+/// leading whitespace, then an opening `{` followed by `"error"` as a
+/// JSON string key (with the colon that must follow a key). Returns
+/// `true` only if the structure actually parses to an object whose
+/// first key is `"error"`.
+///
+/// **Why not `starts_with(r#"{"error"#)`?** That heuristic has three
+/// false-positive classes the dispatch hot path was hitting:
+///
+/// 1. `{"error_count": 3}` — first key is `error_count`, not `error`,
+///    but starts_with sees the prefix and reports an error.
+/// 2. `{"errors": [...]}` — same problem at scale.
+/// 3. Whitespace-prefixed envelopes (`\n  {"error": ...}`) used by some
+///    hand-rolled handlers — silently misses.
+///
+/// And one false-negative class:
+/// 4. `{"success": false, "error": "..."}` — error is not the first
+///    key, but starts_with reports success.
+///
+/// This function still recognises case (4) as success (error is *not*
+/// the first key), matching what callers actually want: "is the
+/// top-level shape an error envelope?"
+pub fn is_error_json(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    // Skip leading whitespace (space, tab, newline, carriage return).
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    // Skip UTF-8 BOM if present.
+    if i + 3 <= bytes.len() && bytes[i..i + 3] == [0xEF, 0xBB, 0xBF] {
+        i += 3;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+    }
+    // Must start with `{`.
+    if i >= bytes.len() || bytes[i] != b'{' {
+        return false;
+    }
+    i += 1;
+    // Skip whitespace inside the object.
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    // Must have `"error"` as the first key.
+    let needle = b"\"error\"";
+    if i + needle.len() > bytes.len() || &bytes[i..i + needle.len()] != needle {
+        return false;
+    }
+    i += needle.len();
+    // Allow whitespace between key and colon.
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    // Require the colon that separates a JSON key from its value.
+    if i >= bytes.len() || bytes[i] != b':' {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod format_token_count_tests {
     use super::format_token_count;
@@ -157,5 +228,54 @@ mod format_token_count_tests {
         assert_eq!(format_token_count(1_000_000), "1.0M");
         assert_eq!(format_token_count(2_500_000), "2.5M");
         assert_eq!(format_token_count(12_345_678), "12.3M");
+    }
+}
+
+#[cfg(test)]
+mod is_error_json_tests {
+    use super::is_error_json;
+
+    #[test]
+    fn detects_plain_error_envelope() {
+        assert!(is_error_json(r#"{"error": "boom"}"#));
+        assert!(is_error_json(r#"{"error":"x"}"#));
+    }
+
+    #[test]
+    fn allows_whitespace_and_bom_prefix() {
+        assert!(is_error_json(r#"  {"error": "x"}"#));
+        assert!(is_error_json("\n\t{\"error\":\"x\"}"));
+        assert!(is_error_json("\u{FEFF}{\"error\":\"x\"}"));
+    }
+
+    #[test]
+    fn rejects_when_error_is_not_first_key() {
+        // The previous starts_with heuristic classified this as success,
+        // which was the intent — and we keep that intent.
+        assert!(!is_error_json(r#"{"success": false, "error": "x"}"#));
+    }
+
+    #[test]
+    fn rejects_keys_that_start_with_error_but_are_not_error() {
+        // The previous starts_with heuristic classified these as errors
+        // (false positive). The new probe rejects them.
+        assert!(!is_error_json(r#"{"error_count": 3}"#));
+        assert!(!is_error_json(r#"{"errors": []}"#));
+        assert!(!is_error_json(r#"{"errorCode": 500}"#));
+    }
+
+    #[test]
+    fn rejects_non_json_strings() {
+        assert!(!is_error_json(""));
+        assert!(!is_error_json("plain text"));
+        assert!(!is_error_json("[1, 2, 3]"));
+        assert!(!is_error_json(r#"{"key": "value"}"#));
+        assert!(!is_error_json(r#"error: x"#)); // not even JSON
+    }
+
+    #[test]
+    fn requires_colon_after_error_key() {
+        // {"error" "x"} is not valid JSON, so we must not treat it as one.
+        assert!(!is_error_json(r#"{"error" "x"}"#));
     }
 }

@@ -60,4 +60,4 @@ pub use acui::{AcuiDirective, AcuiHide, AcuiPosition, AcuiShow, AcuiState, AcuiU
 pub use traits::ParseMode;
 
 // Re-export text utilities
-pub use text_utils::{format_token_count, truncate_chars};
+pub use text_utils::{format_token_count, is_error_json, truncate_chars};

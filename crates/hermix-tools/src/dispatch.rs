@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use hermix_core::{truncate_chars, BudgetConfig, ToolCall, ToolHandler, ToolResult};
+use hermix_core::{is_error_json, truncate_chars, BudgetConfig, ToolCall, ToolHandler, ToolResult};
 use serde_json::Value;
 use tokio::task::JoinSet;
 
@@ -137,8 +137,10 @@ pub async fn dispatch_tools(
             };
             let duration_ms = start.elapsed().as_millis() as u64;
 
-            // Check if result is an error
-            let is_error = result.starts_with(r#"{"error"#);
+            // Structural probe — see hermix_core::is_error_json for the
+            // false-positive classes ({"error_count":..}, {"errors":..})
+            // the previous starts_with heuristic mis-flagged.
+            let is_error = is_error_json(&result);
 
             DispatchedResult {
                 tool_call_id: call.id,
@@ -223,7 +225,7 @@ pub async fn dispatch_single(
         .await;
     let _duration_ms = start.elapsed().as_millis() as u64;
 
-    let is_error = result.starts_with(r#"{"error"#);
+    let is_error = is_error_json(&result);
 
     let content = if result.chars().count() > max_result_size_chars {
         let head = truncate_chars(&result, max_result_size_chars);
