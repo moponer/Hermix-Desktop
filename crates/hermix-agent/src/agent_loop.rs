@@ -834,6 +834,65 @@ struct PreparedRun {
 /// inside `run()` and `run_stream()`. Until then most fields are read by
 /// tests only, which is why the whole struct is `#[allow(dead_code)]`.
 #[allow(dead_code)]
+/// Encapsulates the 3 tracking fields the context-pressure warning
+/// logic uses. Lifted out of [`LoopState`] so the cooldown/throttle
+/// rules live in one place (and can be unit-tested without spinning
+/// up an `AgentLoop`).
+///
+/// Phase 5 (2026-07-03): replaces 3 fields (`context_pressure_warned_at`,
+/// `context_pressure_last_warn_at`, `context_pressure_last_warn_percent`)
+/// scattered across `LoopState`. The shared [`should_emit_warning`]
+/// method now owns the cooldown + tier-upgrade + percent-step rules.
+#[derive(Debug, Clone, Default)]
+struct ContextPressureMonitor {
+    /// Tier at which we last warned (0.0 = never). Different tiers
+    /// represent different pressure thresholds crossed (e.g. 0.5, 0.7, 0.85).
+    warned_tier: f64,
+    /// Wall-clock instant of the last warning (None = never).
+    last_warn_at: Option<Instant>,
+    /// Last progress percentage at which we emitted a warning.
+    last_warn_percent: f64,
+}
+
+impl ContextPressureMonitor {
+    /// Returns true if we should emit a context-pressure warning for the
+    /// current `progress_ratio` (0.0..=1.0) at the given `tier`.
+    ///
+    /// Rules (unchanged from the pre-extraction free function):
+    /// - `tier <= 0.0` is a no-op (caller suppressed this tier).
+    /// - Emit when the tier increased OR (cooldown elapsed AND
+    ///   progress advanced by ≥ `WARN_PERCENT_STEP` since last warn).
+    /// - On emit: store `tier` (only when it changed), `now`,
+    ///   and `progress_percent`.
+    fn should_emit_warning(&mut self, progress_ratio: f64, tier: f64) -> bool {
+        if tier <= 0.0 {
+            return false;
+        }
+        let progress_percent = progress_ratio * 100.0;
+        let now = Instant::now();
+        const WARN_COOLDOWN_SECS: u64 = 20;
+        const WARN_PERCENT_STEP: f64 = 5.0;
+
+        let tier_upgraded = tier > self.warned_tier;
+        let cooldown_elapsed = self
+            .last_warn_at
+            .map(|t| now.duration_since(t) >= Duration::from_secs(WARN_COOLDOWN_SECS))
+            .unwrap_or(true);
+        let percent_advanced =
+            (progress_percent - self.last_warn_percent) >= WARN_PERCENT_STEP;
+
+        if tier_upgraded || (cooldown_elapsed && percent_advanced) {
+            if tier_upgraded {
+                self.warned_tier = tier;
+            }
+            self.last_warn_at = Some(now);
+            self.last_warn_percent = progress_percent;
+            return true;
+        }
+        false
+    }
+}
+
 #[derive(Default)]
 struct LoopState {
     /// Total turns completed so far in this run.
@@ -863,12 +922,10 @@ struct LoopState {
     truncated_tool_call_retries: u32,
     /// Last assistant message that included tool_use (for re-asking).
     last_content_with_tools: Option<String>,
-    /// Context pressure: first percentage value at which we warned.
-    context_pressure_warned_at: f64,
-    /// Context pressure: wall-clock instant of last warning.
-    context_pressure_last_warn_at: Option<Instant>,
-    /// Context pressure: last warned percentage.
-    context_pressure_last_warn_percent: f64,
+    /// Context-pressure warning state (tier + cooldown timestamp + last %).
+    /// Phase 5 (2026-07-03): extracted from 3 inline fields to consolidate
+    /// the throttle/cooldown rules in [`ContextPressureMonitor::should_emit_warning`].
+    context_pressure: ContextPressureMonitor,
 }
 
 impl LoopState {
@@ -889,7 +946,7 @@ impl LoopState {
     }
 
     /// Bridge writeback: when `run()` (and later `run_stream()`) keep the
-    /// 14 loop-locals as local aliases for ergonomic code, the live values
+    /// 11 loop-locals as local aliases for ergonomic code, the live values
     /// sit in those bindings, not in `state`. Call this once per iteration
     /// so `state` always reflects the current run progress — that's what
     /// makes the future `run_shared_loop(state, llm_caller)` extraction
@@ -897,6 +954,11 @@ impl LoopState {
     ///
     /// Phase 1.1 (2026-07-03): wired in `run()` only; `run_stream()` and
     /// the shared extraction land in Phase 1.2 / 1.3.
+    ///
+    /// Phase 5 (2026-07-03): dropped 3 args (`context_pressure_*`) — those
+    /// moved into [`ContextPressureMonitor`] which lives directly on
+    /// `self.context_pressure` and is mutated in place via
+    /// [`ContextPressureMonitor::should_emit_warning`].
     #[allow(clippy::too_many_arguments)]
     fn publish_from(
         &mut self,
@@ -912,9 +974,6 @@ impl LoopState {
         invalid_json_retries: u32,
         truncated_tool_call_retries: u32,
         last_content_with_tools: Option<&String>,
-        context_pressure_warned_at: f64,
-        context_pressure_last_warn_at: Option<Instant>,
-        context_pressure_last_warn_percent: f64,
     ) {
         self.total_turns = total_turns;
         self.total_api_time_ms = total_api_time_ms;
@@ -928,9 +987,6 @@ impl LoopState {
         self.invalid_json_retries = invalid_json_retries;
         self.truncated_tool_call_retries = truncated_tool_call_retries;
         self.last_content_with_tools = last_content_with_tools.cloned();
-        self.context_pressure_warned_at = context_pressure_warned_at;
-        self.context_pressure_last_warn_at = context_pressure_last_warn_at;
-        self.context_pressure_last_warn_percent = context_pressure_last_warn_percent;
     }
 }
 
@@ -3812,38 +3868,6 @@ impl AgentLoop {
         }
     }
 
-    fn should_emit_context_pressure_warning(
-        progress_ratio: f64,
-        tier: f64,
-        warned_tier: &mut f64,
-        last_warn_at: &mut Option<Instant>,
-        last_warn_percent: &mut f64,
-    ) -> bool {
-        if tier <= 0.0 {
-            return false;
-        }
-        let progress_percent = progress_ratio * 100.0;
-        let now = Instant::now();
-        const WARN_COOLDOWN_SECS: u64 = 20;
-        const WARN_PERCENT_STEP: f64 = 5.0;
-
-        let tier_upgraded = tier > *warned_tier;
-        let cooldown_elapsed = last_warn_at
-            .map(|t| now.duration_since(t) >= Duration::from_secs(WARN_COOLDOWN_SECS))
-            .unwrap_or(true);
-        let percent_advanced = (progress_percent - *last_warn_percent) >= WARN_PERCENT_STEP;
-
-        if tier_upgraded || (cooldown_elapsed && percent_advanced) {
-            if tier_upgraded {
-                *warned_tier = tier;
-            }
-            *last_warn_at = Some(now);
-            *last_warn_percent = progress_percent;
-            return true;
-        }
-        false
-    }
-
     fn assistant_visible_text(m: &Message) -> bool {
         m.content
             .as_deref()
@@ -4723,9 +4747,6 @@ impl AgentLoop {
         let (mut invalid_tool_retries, mut invalid_json_retries) =
             (state.invalid_tool_retries, state.invalid_json_retries);
         let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
-        let (mut context_pressure_warned_at, mut context_pressure_last_warn_at) =
-            (state.context_pressure_warned_at, state.context_pressure_last_warn_at);
-        let mut context_pressure_last_warn_percent: f64 = state.context_pressure_last_warn_percent;
 
         loop {
             if self.interrupt.take_interrupt_graceful().is_some() {
@@ -5371,13 +5392,7 @@ impl AgentLoop {
                 } else {
                     0.0
                 };
-                if Self::should_emit_context_pressure_warning(
-                    progress,
-                    tier,
-                    &mut context_pressure_warned_at,
-                    &mut context_pressure_last_warn_at,
-                    &mut context_pressure_last_warn_percent,
-                ) {
+                if state.context_pressure.should_emit_warning(progress, tier) {
                     let message = format!(
                         "Context pressure {:.0}% of compaction threshold ({} / {})",
                         progress * 100.0,
@@ -5409,9 +5424,6 @@ impl AgentLoop {
                 invalid_json_retries,
                 0, // truncated_tool_call_retries — run() never sees a truncated stream
                 last_content_with_tools.as_ref(),
-                context_pressure_warned_at,
-                context_pressure_last_warn_at,
-                context_pressure_last_warn_percent,
             );
         }
     }
@@ -5539,9 +5551,6 @@ impl AgentLoop {
             (state.invalid_tool_retries, state.invalid_json_retries);
         let mut truncated_tool_call_retries: u32 = state.truncated_tool_call_retries;
         let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
-        let (mut context_pressure_warned_at, mut context_pressure_last_warn_at) =
-            (state.context_pressure_warned_at, state.context_pressure_last_warn_at);
-        let mut context_pressure_last_warn_percent: f64 = state.context_pressure_last_warn_percent;
 
         loop {
             if self.interrupt.take_interrupt_graceful().is_some() {
@@ -6182,13 +6191,7 @@ impl AgentLoop {
                 } else {
                     0.0
                 };
-                if Self::should_emit_context_pressure_warning(
-                    progress,
-                    tier,
-                    &mut context_pressure_warned_at,
-                    &mut context_pressure_last_warn_at,
-                    &mut context_pressure_last_warn_percent,
-                ) {
+                if state.context_pressure.should_emit_warning(progress, tier) {
                     let message = format!(
                         "Context pressure {:.0}% of compaction threshold ({} / {})",
                         progress * 100.0,
@@ -6220,9 +6223,6 @@ impl AgentLoop {
                 invalid_json_retries,
                 truncated_tool_call_retries,
                 last_content_with_tools.as_ref(),
-                context_pressure_warned_at,
-                context_pressure_last_warn_at,
-                context_pressure_last_warn_percent,
             );
         }
     }
@@ -7585,9 +7585,9 @@ mod tests {
         assert_eq!(s.invalid_tool_retries, 0);
         assert_eq!(s.invalid_json_retries, 0);
         assert!(s.last_content_with_tools.is_none());
-        assert_eq!(s.context_pressure_warned_at, 0.0);
-        assert!(s.context_pressure_last_warn_at.is_none());
-        assert_eq!(s.context_pressure_last_warn_percent, 0.0);
+        assert_eq!(s.context_pressure.warned_tier, 0.0);
+        assert!(s.context_pressure.last_warn_at.is_none());
+        assert_eq!(s.context_pressure.last_warn_percent, 0.0);
     }
 
     #[test]
@@ -7630,9 +7630,6 @@ mod tests {
             3,                        // invalid_json_retries
             1,                        // truncated_tool_call_retries (stream-only)
             None,                     // last_content_with_tools
-            0.65,                     // context_pressure_warned_at
-            None,                     // context_pressure_last_warn_at
-            0.71,                     // context_pressure_last_warn_percent
         );
         assert_eq!(s.total_turns, 7);
         assert_eq!(s.total_api_time_ms, 1234);
@@ -7642,8 +7639,14 @@ mod tests {
         assert_eq!(s.invalid_tool_retries, 2);
         assert_eq!(s.invalid_json_retries, 3);
         assert_eq!(s.truncated_tool_call_retries, 1);
-        assert_eq!(s.context_pressure_warned_at, 0.65);
-        assert_eq!(s.context_pressure_last_warn_percent, 0.71);
+        // context_pressure is on the inner struct — set directly here to
+        // mirror pre-extraction semantics (publish_from no longer owns
+        // those 3 fields; the inner struct is mutated in place by
+        // should_emit_warning).
+        s.context_pressure.warned_tier = 0.65;
+        s.context_pressure.last_warn_percent = 0.71;
+        assert_eq!(s.context_pressure.warned_tier, 0.65);
+        assert_eq!(s.context_pressure.last_warn_percent, 0.71);
     }
 
     #[test]
@@ -10170,7 +10173,7 @@ mod tests {
         assert!(!r.can_attempt("qwen-oauth"));
     }
 
-    // ── should_emit_context_pressure_warning unit tests (2026-07-03) ──
+    // ── ContextPressureMonitor unit tests (2026-07-03) ──
     //
     // The helper is the gate that decides whether `run()` / `run_stream()`
     // should fire a `lifecycle` warning when the context window fills up.
@@ -10181,78 +10184,66 @@ mod tests {
     // wall-clock waiting is needed.
 
     #[test]
-    fn cp_helper_returns_false_when_tier_zero() {
-        let mut warned_tier = 0.0;
-        let mut last_warn_at = None;
-        let mut last_warn_percent = 0.0;
-        let emit = AgentLoop::should_emit_context_pressure_warning(
-            0.42,
-            0.0,
-            &mut warned_tier,
-            &mut last_warn_at,
-            &mut last_warn_percent,
-        );
+    fn cp_monitor_default_is_all_zero_and_none() {
+        // Phase 5: the freshly-extracted ContextPressureMonitor must
+        // behave like the old 3 inline fields when not yet primed —
+        // otherwise the first call inside run() / run_stream() would
+        // see stale defaults.
+        let m = ContextPressureMonitor::default();
+        assert_eq!(m.warned_tier, 0.0);
+        assert!(m.last_warn_at.is_none());
+        assert_eq!(m.last_warn_percent, 0.0);
+    }
+
+    #[test]
+    fn cp_monitor_returns_false_when_tier_zero() {
+        let mut m = ContextPressureMonitor::default();
+        let emit = m.should_emit_warning(0.42, 0.0);
         assert!(!emit);
         // No state mutation when no emission.
-        assert_eq!(warned_tier, 0.0);
-        assert!(last_warn_at.is_none());
-        assert_eq!(last_warn_percent, 0.0);
+        assert_eq!(m.warned_tier, 0.0);
+        assert!(m.last_warn_at.is_none());
+        assert_eq!(m.last_warn_percent, 0.0);
     }
 
     #[test]
-    fn cp_helper_emits_on_first_call_above_zero() {
-        let mut warned_tier = 0.0;
-        let mut last_warn_at = None;
-        let mut last_warn_percent = 0.0;
-        let emit = AgentLoop::should_emit_context_pressure_warning(
-            0.65,
-            0.65,
-            &mut warned_tier,
-            &mut last_warn_at,
-            &mut last_warn_percent,
-        );
+    fn cp_monitor_emits_on_first_call_above_zero() {
+        let mut m = ContextPressureMonitor::default();
+        let emit = m.should_emit_warning(0.65, 0.65);
         assert!(emit);
         // Tier upgrade always emits and records tier + warn_at + percent.
-        assert_eq!(warned_tier, 0.65);
-        assert!(last_warn_at.is_some());
-        assert_eq!(last_warn_percent, 65.0);
+        assert_eq!(m.warned_tier, 0.65);
+        assert!(m.last_warn_at.is_some());
+        assert_eq!(m.last_warn_percent, 65.0);
     }
 
     #[test]
-    fn cp_helper_blocks_within_cooldown_without_tier_upgrade() {
-        let mut warned_tier = 0.65;
-        let mut last_warn_at = Some(Instant::now());
-        let mut last_warn_percent = 65.0;
+    fn cp_monitor_blocks_within_cooldown_without_tier_upgrade() {
+        let mut m = ContextPressureMonitor::default();
+        // Seed: same tier, recent emit at 65%.
+        m.warned_tier = 0.65;
+        m.last_warn_at = Some(Instant::now());
+        m.last_warn_percent = 65.0;
         // Same tier, <5% advance, immediately after prior emit → cooldown blocks.
-        let emit = AgentLoop::should_emit_context_pressure_warning(
-            0.66,
-            0.65,
-            &mut warned_tier,
-            &mut last_warn_at,
-            &mut last_warn_percent,
-        );
+        let emit = m.should_emit_warning(0.66, 0.65);
         assert!(!emit);
         // State unchanged.
-        assert_eq!(warned_tier, 0.65);
-        assert_eq!(last_warn_percent, 65.0);
+        assert_eq!(m.warned_tier, 0.65);
+        assert_eq!(m.last_warn_percent, 65.0);
     }
 
     #[test]
-    fn cp_helper_emits_on_tier_upgrade_even_within_cooldown() {
-        let mut warned_tier = 0.65;
-        let mut last_warn_at = Some(Instant::now());
-        let mut last_warn_percent = 65.0;
+    fn cp_monitor_emits_on_tier_upgrade_even_within_cooldown() {
+        let mut m = ContextPressureMonitor::default();
+        // Seed: tier=0.65, just warned at 65%.
+        m.warned_tier = 0.65;
+        m.last_warn_at = Some(Instant::now());
+        m.last_warn_percent = 65.0;
         // Tier upgrade overrides the cooldown.
-        let emit = AgentLoop::should_emit_context_pressure_warning(
-            0.66,
-            0.85,
-            &mut warned_tier,
-            &mut last_warn_at,
-            &mut last_warn_percent,
-        );
+        let emit = m.should_emit_warning(0.66, 0.85);
         assert!(emit);
-        assert_eq!(warned_tier, 0.85);
-        assert!(last_warn_at.is_some());
+        assert_eq!(m.warned_tier, 0.85);
+        assert!(m.last_warn_at.is_some());
     }
 
     // ── Phase 1.3a (2026-07-03): process_post_response unit tests ──
