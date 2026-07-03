@@ -180,10 +180,10 @@ impl EmbeddedMemoryBackend {
         // 已存在的 CREATE TABLE / ALTER TABLE 仍然全部跑（向后兼容），
         // 但新增的 schema 块（janitor、recall_audit、session_snapshots）
         // 用 version 守卫，避免每次 open() 跑 14 个 SQL。
-        // - 新装 DB：user_version=0 → 全部 migration 顺序执行 → 4
-        // - 已有 DB（user_version=3）：只跑 v4
-        // - 最新 DB（user_version=4）：啥都不跑（极快）
-        const CURRENT_SCHEMA_VERSION: i64 = 4;
+        // - 新装 DB：user_version=0 → 全部 migration 顺序执行 → 5
+        // - 已有 DB（user_version=4）：只跑 v5（WAL + synchronous=NORMAL）
+        // - 最新 DB（user_version=5）：啥都不跑（极快）
+        const CURRENT_SCHEMA_VERSION: i64 = 5;
         let current_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap_or(0);
@@ -435,6 +435,48 @@ impl EmbeddedMemoryBackend {
                 "#,
             )?;
             let _ = conn.execute_batch("PRAGMA user_version = 4");
+        }
+        // v5 (2026-07-03): WAL mode + NORMAL synchronous — addresses
+        // the "SQLite 锁竞争" symptom (high write frequency from
+        // every-turn `sync_turn`). WAL lets readers proceed without
+        // blocking on the writer; NORMAL drops the per-commit
+        // fsync while still keeping crash-safe (full sync at
+        // checkpoint). Together they cut disk-side lock dwell time
+        // by ~10x on hot paths (no measurement here; rationale per
+        // https://www.sqlite.org/wal.html + synchronous.html).
+        //
+        // Both PRAGMAs are durable: WAL mode persists in the DB
+        // header (sqlite3 sees it next time even without these
+        // lines). `synchronous` is per-connection so we set it on
+        // every open() to defend against somebody else lowering it.
+        //
+        // Note: rusqlite's bundled SQLite ships with
+        // `SQLITE_ENABLE_LOCKING_STYLE` — the WAL file (`-wal`)
+        // lives next to memory.db. We do **not** manually truncate
+        // it: passive checkpoint is enabled by default (threshold
+        // ~1000 pages), and an explicit checkpoint forces a brief
+        // writer stall, so we defer to SQLite's defaults.
+        if current_version < 5 {
+            let mode: String = conn
+                .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))
+                .unwrap_or_else(|_| "unknown".to_string());
+            // `query_row` with a PRAGMA that takes a value returns
+            // the *new* mode. SQLite answers "wal" on success.
+            if mode != "wal" {
+                tracing::warn!(
+                    target: "hermix.focus",
+                    actual = %mode,
+                    "PRAGMA journal_mode = WAL did not stick; \
+                     file may be on a read-only filesystem"
+                );
+            }
+            conn.execute_batch("PRAGMA synchronous = NORMAL")?;
+            let _ = conn.execute_batch("PRAGMA user_version = 5");
+        } else {
+            // Already at v5: defensive re-set of `synchronous` (it
+            // is per-connection, not persisted in the DB header) so
+            // we don't depend on whoever opened it last.
+            conn.execute_batch("PRAGMA synchronous = NORMAL")?;
         }
         Ok(())
     }
@@ -2160,6 +2202,108 @@ mod tests {
         // Multi-token mixed query: should match
         let hits = b.fts_search_visible("Rust 编程", 10, None).unwrap();
         assert!(!hits.is_empty(), "mixed query 'Rust 编程' must hit, got {} hits", hits.len());
+    }
+
+    // ------------------------------------------------------------------
+    // M6 (2026-07-03): SQLite WAL + synchronous=NORMAL — disk lock
+    // contention relief for the every-turn `sync_turn` write path.
+    // ------------------------------------------------------------------
+
+    /// v5 migration flips `journal_mode` to WAL and bumps
+    /// `user_version` to 5. We must use a file-backed DB because
+    /// `:memory:` databases ignore WAL (they answer `memory` even
+    /// after `journal_mode = WAL`).
+    #[test]
+    fn m6_wal_mode_active_after_open() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("memory.db");
+        let b = EmbeddedMemoryBackend::open(&db_path).expect("open");
+
+        let conn = b.conn.lock();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .expect("journal_mode");
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("user_version");
+        // synchronous=NORMAL → SQLite answers `1`. FULL is `2`,
+        // OFF is `0`. We accept `1` here; if a later migration
+        // changes the policy, update this assertion in the same
+        // commit.
+        let sync_mode: i64 = conn
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .expect("synchronous");
+        drop(conn);
+
+        assert_eq!(mode, "wal", "journal_mode must be WAL after migrate()");
+        assert_eq!(version, 5, "user_version must be 5 after migrate()");
+        assert_eq!(sync_mode, 1, "synchronous must be NORMAL (1), not FULL (2) or OFF (0)");
+    }
+
+    /// Idempotency: opening an already-v5 DB does **not** drop WAL or
+    /// change user_version. `synchronous` is per-connection so it
+    /// re-applies on every open() (defensive, see comment in
+    /// migrate()).
+    #[test]
+    fn m6_v5_reopen_keeps_wal_and_bumps_synchronous_defensively() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("memory.db");
+        {
+            let _b = EmbeddedMemoryBackend::open(&db_path).expect("first open");
+        }
+        let b2 = EmbeddedMemoryBackend::open(&db_path).expect("second open");
+
+        let conn = b2.conn.lock();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .expect("journal_mode");
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .expect("user_version");
+        let sync_mode: i64 = conn
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .expect("synchronous");
+        drop(conn);
+
+        assert_eq!(mode, "wal", "second open must keep WAL");
+        assert_eq!(version, 5, "second open must keep user_version=5");
+        assert_eq!(
+            sync_mode, 1,
+            "synchronous must be re-asserted to NORMAL even when already v5"
+        );
+    }
+
+    /// After WAL is active, every-turn `sync_turn` still produces a
+    /// queryable frame. This guards against an accidental regression
+    /// where the WAL flip breaks a write path. We exercise 5 turns
+    /// (mirroring the "5 turns per flush" task description) to make
+    /// sure the recent_turns ring + frames table both stay coherent.
+    #[tokio::test]
+    async fn m6_wal_does_not_break_sync_turn_pipeline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("memory.db");
+        let b = EmbeddedMemoryBackend::open(&db_path).expect("open");
+
+        for i in 0..5 {
+            b.sync_turn(
+                &format!("user message {i}"),
+                &format!("assistant reply {i}"),
+                "s1",
+            );
+        }
+        // Five turns → five frames tagged `turn`.
+        let hits = b
+            .recognize(
+                &MemoryQuery::recall("assistant reply")
+                    .with_limit(20),
+            )
+            .await
+            .unwrap();
+        assert!(
+            hits.len() >= 5,
+            "5 sync_turn calls must produce >=5 queryable frames; got {}",
+            hits.len()
+        );
     }
 
     #[tokio::test]
