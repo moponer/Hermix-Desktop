@@ -174,6 +174,37 @@ pub struct AgentConfig {
     #[serde(default)]
     pub skip_memory: bool,
 
+    /// M2: hard char cap on the `## Memory` block injected into the
+    /// system prompt per turn. Hits below `memory_min_salience` are
+    /// dropped first; the remaining list is appended top-down until
+    /// the budget is exhausted. Default `4000` chars ≈ 1.5-2K tokens
+    /// for mixed CJK/ASCII content — was 12000 (~6K tokens), which
+    /// dominated context windows without improving recall quality.
+    /// Set to `0` to disable the cap entirely (legacy behaviour).
+    #[serde(default = "default_memory_char_budget")]
+    pub memory_char_budget: usize,
+
+    /// M2: noise floor for memory recall. Hits with `salience < this`
+    /// are dropped before the char budget is applied. Default `0.30`
+    /// filters out low-signal fragments (e.g. session boilerplate,
+    /// generated text), letting the budget spend tokens on facts the
+    /// user actually cares about. Set to `0.0` to disable.
+    #[serde(default = "default_memory_min_salience")]
+    pub memory_min_salience: f32,
+
+    /// M2: cap on subsequent-turn recall size (after the first full
+    /// recall has seeded the context). Default `5` — keeps the
+    /// `## Memory` block small for ongoing turns since the LLM
+    /// already has prior memory in the active context window.
+    #[serde(default = "default_memory_recall_limit_subsequent")]
+    pub memory_recall_limit_subsequent: usize,
+
+    /// M2: cap on first-turn recall size (before any context seeding).
+    /// Default `50` — wide net to surface everything relevant at
+    /// session start.
+    #[serde(default = "default_memory_recall_limit_first")]
+    pub memory_recall_limit_first: usize,
+
     /// Optional cheap-vs-strong per-turn routing.
     #[serde(default)]
     pub smart_model_routing: SmartModelRoutingConfig,
@@ -405,6 +436,30 @@ fn default_memory_nudge_interval() -> u32 {
     10
 }
 
+/// M2: hard char cap on `## Memory` block per turn. Was 12000 (~6K tokens)
+/// which dominated context windows. 4000 chars ≈ 1.5-2K tokens is enough
+/// for the 5-8 highest-salience hits the LLM actually uses.
+fn default_memory_char_budget() -> usize {
+    4000
+}
+
+/// M2: noise floor — drops hits with salience below this before budgeting.
+/// 0.30 keeps only meaningful facts; legacy behaviour was to inject everything.
+fn default_memory_min_salience() -> f32 {
+    0.30
+}
+
+/// M2: cap on subsequent-turn recall. Down from 10 — the LLM already has
+/// the prior turn's memory in active context.
+fn default_memory_recall_limit_subsequent() -> usize {
+    5
+}
+
+/// M2: first-turn recall size. Stays at 50 — wide net to surface everything.
+fn default_memory_recall_limit_first() -> usize {
+    50
+}
+
 fn default_skill_creation_nudge_interval() -> u32 {
     10
 }
@@ -485,6 +540,10 @@ impl Default for AgentConfig {
             session_id: None,
             hermix_home: None,
             skip_memory: false,
+            memory_char_budget: default_memory_char_budget(),
+            memory_min_salience: default_memory_min_salience(),
+            memory_recall_limit_subsequent: default_memory_recall_limit_subsequent(),
+            memory_recall_limit_first: default_memory_recall_limit_first(),
             smart_model_routing: SmartModelRoutingConfig::default(),
             provider: None,
             platform: None,
@@ -526,5 +585,89 @@ impl Default for AgentConfig {
             active_toolsets: Vec::new(),
             autonomous_mode: default_autonomous_mode(),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M2 (memory injection budget): the four new AgentConfig fields
+    /// must default to conservative values so production sessions
+    /// don't accidentally re-introduce the 6K-token memory block.
+    #[test]
+    fn m2_memory_defaults_are_conservative() {
+        let c = AgentConfig::default();
+        assert_eq!(
+            c.memory_char_budget, 4000,
+            "char budget must default to 4000 (was hardcoded 12000)"
+        );
+        assert!(
+            (c.memory_min_salience - 0.30).abs() < 1e-5,
+            "salience floor must default to 0.30, got {}",
+            c.memory_min_salience
+        );
+        assert_eq!(
+            c.memory_recall_limit_subsequent, 5,
+            "subsequent recall must cap at 5 (was 10)"
+        );
+        assert_eq!(
+            c.memory_recall_limit_first, 50,
+            "first-turn recall must stay at 50 for cold-start coverage"
+        );
+    }
+
+    /// M2: the new fields must round-trip through serde without
+    /// losing precision or being silently dropped.
+    #[test]
+    fn m2_memory_fields_serde_roundtrip() {
+        let mut c = AgentConfig::default();
+        c.memory_char_budget = 8000;
+        c.memory_min_salience = 0.45;
+        c.memory_recall_limit_first = 80;
+        c.memory_recall_limit_subsequent = 12;
+
+        let json = serde_json::to_string(&c).expect("serialize");
+        let back: AgentConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.memory_char_budget, 8000);
+        assert!((back.memory_min_salience - 0.45).abs() < 1e-5);
+        assert_eq!(back.memory_recall_limit_first, 80);
+        assert_eq!(back.memory_recall_limit_subsequent, 12);
+    }
+
+    /// M2: 0 means "disable the cap" — used by tests and by power
+    /// users who want the legacy behaviour. Must round-trip as 0.
+    #[test]
+    fn m2_zero_budget_roundtrips_as_zero() {
+        let mut c = AgentConfig::default();
+        c.memory_char_budget = 0;
+        c.memory_min_salience = 0.0;
+        let json = serde_json::to_string(&c).unwrap();
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.memory_char_budget, 0);
+        assert_eq!(back.memory_min_salience, 0.0);
+    }
+
+    /// M2: backwards-compat — existing configs without the new fields
+    /// (or with them missing) must deserialise with the new defaults.
+    #[test]
+    fn m2_old_config_without_new_fields_uses_defaults() {
+        // Strip the new fields from a serialised config.
+        let c = AgentConfig::default();
+        let mut v: serde_json::Value = serde_json::to_value(&c).unwrap();
+        v.as_object_mut().unwrap().remove("memory_char_budget");
+        v.as_object_mut().unwrap().remove("memory_min_salience");
+        v.as_object_mut().unwrap().remove("memory_recall_limit_subsequent");
+        v.as_object_mut().unwrap().remove("memory_recall_limit_first");
+        let back: AgentConfig = serde_json::from_value(v).unwrap();
+        // All four must come back as defaults, not zero/None.
+        assert_eq!(back.memory_char_budget, 4000);
+        assert!((back.memory_min_salience - 0.30).abs() < 1e-5);
+        assert_eq!(back.memory_recall_limit_subsequent, 5);
+        assert_eq!(back.memory_recall_limit_first, 50);
     }
 }

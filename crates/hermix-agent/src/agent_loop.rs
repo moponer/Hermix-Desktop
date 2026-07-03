@@ -1395,11 +1395,17 @@ impl AgentLoop {
             return String::new();
         }
 
-        // Phase 18: recall gating — full 50-hit recall only on the first
-        // turn; subsequent turns use a smaller limit (the LLM already has
-        // the prior turn's memory in the active context window).
+        // M2 (2026-07-03): recall gating + budget pulled from config.
+        // Defaults are 50 first / 5 subsequent recall, 4000 char block
+        // cap, 0.30 salience floor. Tunables were previously hardcoded.
         let is_seeded = self.memory_recall_seeded.load(std::sync::atomic::Ordering::Relaxed);
-        let limit = if is_seeded { 10 } else { 50 };
+        let limit = if is_seeded {
+            self.config.memory_recall_limit_subsequent
+        } else {
+            self.config.memory_recall_limit_first
+        };
+        let char_budget = self.config.memory_char_budget;
+        let min_salience = self.config.memory_min_salience;
 
         // --- Phase 15: Time-aware recall via MemoryLayer path ----------
         let time_window = extract_time_window(query);
@@ -1498,9 +1504,10 @@ impl AgentLoop {
         });
 
         // Inject structured hits as a markdown block with token budget.
+        // M2: char budget + salience floor come from config (defaults
+        // 4000 chars / 0.30 salience — see AgentConfig).
         let mut block = String::from("## Memory\n\n");
         let mut total_chars = 0;
-        let char_budget = 12000; // ~6000 tokens
 
         // Include MEMORY.md content as high-priority hits (file-based memory)
         if let Some(ref hh) = self.config.hermix_home {
@@ -1518,6 +1525,11 @@ impl AgentLoop {
         }
 
         for h in &deduped {
+            // M2: salience noise floor — drop low-signal fragments
+            // before they consume char_budget.
+            if h.salience < min_salience {
+                continue;
+            }
             // Source-aware label: facts get `[fact]`, memory_write
             // gets `[memo]`, turns get `[turn]`, otherwise generic.
             let source_tag = match h.source.as_str() {
