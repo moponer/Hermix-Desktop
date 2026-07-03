@@ -696,11 +696,14 @@ impl LoopState {
 /// The shared post-LLM helper decides between two paths:
 /// - `Finalize`: no tool calls → no work left, return the AgentResult.
 /// - `Continue`: tool calls present → fall through to tool dispatch.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum PostResponseAction {
     /// No tool calls: stop the loop. The caller should `return`
     /// `Ok(self.finalize_agent_result(...))`.
     Finalize,
+    /// Cost guard tripped (session spend exceeded `max_cost_usd`).
+    /// Caller should `return` with `finalize_agent_result(.., false, false, None)`.
+    CostGuardTripped,
     /// Tool calls present: caller falls through to `execute_tool_calls`.
     Continue,
 }
@@ -904,6 +907,7 @@ impl AgentLoop {
         response: &hermix_core::LlmResponse,
         turn_usage_acc: Option<&UsageStats>,
         total_turns: u32,
+        api_elapsed: u64,
         accumulated_usage: &mut Option<UsageStats>,
         session_cost_usd: &mut f64,
         cost_warned: &mut bool,
@@ -911,7 +915,6 @@ impl AgentLoop {
         last_content_with_tools: &mut Option<String>,
         stream_mode: bool,
     ) -> Result<PostResponseAction, AgentError> {
-        let api_elapsed = 0u64; // elapsed tracked in caller's loop-local for now
         let has_tool_calls = response
             .message
             .tool_calls
@@ -971,9 +974,7 @@ impl AgentLoop {
                     "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
                     session_cost_usd, limit
                 )));
-                // Caller detects "tripped" via returned Err or via a separate
-                // signal — for now we encode it as Finalize + a marker on state.
-                return Ok(PostResponseAction::Finalize);
+                return Ok(PostResponseAction::CostGuardTripped);
             }
         }
 
@@ -4809,63 +4810,40 @@ impl AgentLoop {
             let api_elapsed = api_start.elapsed().as_millis() as u64;
             _total_api_time_ms += api_elapsed;
 
-            // --- Post-LLM hook ---
-            let post_ctx = serde_json::json!({
-                "turn": total_turns,
-                "api_time_ms": api_elapsed,
-                "has_tool_calls": response.message.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()),
-            });
-            let post_results = self.invoke_hook(HookType::PostLlmCall, &post_ctx);
-            self.inject_hook_context(&post_results, &mut ctx);
-
-            // Accumulate usage (merged across semantic-retried sub-calls)
-            if let Some(ref usage) = turn_usage_acc {
-                accumulated_usage = Some(merge_usage(accumulated_usage, usage));
-                if let Some(cost) =
-                    estimate_usage_cost_usd(usage, response.model.as_str(), &self.config)
-                {
-                    session_cost_usd += cost;
-                }
-            }
-
-            if let Some(limit) = self.config.max_cost_usd {
-                if !cost_warned
-                    && session_cost_usd >= limit * self.config.cost_guard_degrade_at_ratio
-                {
-                    cost_warned = true;
-                    if forced_runtime_route.is_none() {
-                        if let Some(model) = self.resolve_cost_degrade_model() {
-                            forced_runtime_route = Some(self.turn_route_cost_guard(model.clone()));
-                            ctx.add_message(Message::system(format!(
-                                "Cost guard: session spend is now ${:.4}/${:.4}. Switching to cheaper model `{}`.",
-                                session_cost_usd, limit, model
-                            )));
-                        } else {
-                            ctx.add_message(Message::system(format!(
-                                "Cost guard warning: session spend is now ${:.4}/${:.4}.",
-                                session_cost_usd, limit
-                            )));
-                        }
-                    }
-                }
-                if session_cost_usd >= limit {
-                    ctx.add_message(Message::system(format!(
-                        "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
-                        session_cost_usd, limit
-                    )));
-                    return Ok(self.finalize_agent_result(
-                        &ctx,
-                        total_turns,
-                        &tool_errors,
-                        accumulated_usage,
-                        session_cost_usd,
-                        session_started_hooks_fired,
-                        persist_user_idx,
-                        false,
-                        false,
+            // Phase 1.3b (2026-07-03): post-LLM hook + usage accumulate +
+            // cost guard extracted into `process_post_response`. ~60 lines
+            // of duplication with `run_stream()` collapsed into one helper
+            // call. Only the `CostGuardTripped` variant short-circuits the
+            // loop here; `Finalize` (no tool calls) falls through to the
+            // existing `decide_post_response_fallback` block below.
+            if matches!(
+                self.process_post_response(
+                    &mut ctx,
+                    &response,
+                    turn_usage_acc.as_ref(),
+                    total_turns,
+                    api_elapsed,
+                    &mut accumulated_usage,
+                    &mut session_cost_usd,
+                    &mut cost_warned,
+                    &mut forced_runtime_route,
+                    &mut last_content_with_tools,
+                    false, // stream_mode
+                )?,
+                PostResponseAction::CostGuardTripped
+            ) {
+                return Ok(self.finalize_agent_result(
+                    &ctx,
+                    total_turns,
+                    &tool_errors,
+                    accumulated_usage,
+                    session_cost_usd,
+                    session_started_hooks_fired,
+                    persist_user_idx,
+                    false,
+                    false,
                     None,
-                    ));
-                }
+                ));
             }
 
             let history_includes_tool = ctx
@@ -10182,6 +10160,7 @@ mod tests {
                 &response,
                 None,
                 0, // total_turns
+                0, // api_elapsed
                 &mut accumulated,
                 &mut cost,
                 &mut cost_warned,
@@ -10192,6 +10171,73 @@ mod tests {
             .unwrap();
         assert!(matches!(action, PostResponseAction::Finalize));
         assert_eq!(last_content.as_deref(), Some("final answer"));
+    }
+
+    #[test]
+    fn p1_3a_process_post_response_cost_guard_trips_when_limit_exceeded() {
+        // `session_cost_usd` already over `max_cost_usd` → CostGuardTripped
+        // (caller should return finalize with finished_naturally=false).
+        struct DummyProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for DummyProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<hermix_core::LlmResponse, AgentError> {
+                unimplemented!()
+            }
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> futures::stream::BoxStream<'static, Result<StreamChunk, AgentError>> {
+                futures::stream::empty().boxed()
+            }
+        }
+        let mut cfg = AgentConfig::default();
+        cfg.max_cost_usd = Some(0.01);
+        let agent = AgentLoop::new(
+            cfg,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(DummyProvider),
+        );
+        let mut ctx = ContextManager::for_model(&agent.config.model);
+        let response = hermix_core::LlmResponse {
+            message: Message::assistant("anything"),
+            usage: None,
+            model: "test".into(),
+            finish_reason: Some("stop".into()),
+        };
+        let mut accumulated: Option<UsageStats> = None;
+        let mut cost = 0.5f64; // already 50x over the 0.01 limit
+        let mut cost_warned = false;
+        let mut forced_route: Option<TurnRuntimeRoute> = None;
+        let mut last_content: Option<String> = None;
+        let action = agent
+            .process_post_response(
+                &mut ctx,
+                &response,
+                None,
+                0,
+                0,
+                &mut accumulated,
+                &mut cost,
+                &mut cost_warned,
+                &mut forced_route,
+                &mut last_content,
+                false,
+            )
+            .unwrap();
+        assert_eq!(action, PostResponseAction::CostGuardTripped);
     }
 
     #[test]
@@ -10255,6 +10301,7 @@ mod tests {
                 &response,
                 None,
                 0,
+                0, // api_elapsed
                 &mut accumulated,
                 &mut cost,
                 &mut cost_warned,
