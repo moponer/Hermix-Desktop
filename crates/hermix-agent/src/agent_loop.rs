@@ -4532,6 +4532,22 @@ impl AgentLoop {
                 self.route_tools(all, &messages)
             }
         };
+        // Log the *resolved* tool count (after routing), not the raw
+        // parameter. The `tool_count` on the span is the caller's
+        // argument and is zero when the caller passes `None`. Was
+        // previously open-coded in `run_stream` only; centralizing
+        // here so both `run` and `run_stream` emit the same diagnostic.
+        if tool_schemas.is_empty() {
+            tracing::warn!(
+                registry_size = self.tool_registry.schemas().len(),
+                "No tool schemas after routing — LLM will not see any tools"
+            );
+        } else {
+            tracing::info!(
+                resolved = tool_schemas.len(),
+                "Tool schemas resolved for this turn"
+            );
+        }
 
         // Build and inject system prompt (or reuse SQLite-cached prompt for session continuity)
         let (system_content, restored_system) =
@@ -5477,114 +5493,32 @@ impl AgentLoop {
                 });
             });
 
-        let mut ctx = ContextManager::for_model_with_providers(
-            &self.config.model,
-            Some(&self.config.llm_providers),
-        );
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
+        // Phase 3.1 (2026-07-03): `run_stream` setup was an open-coded
+        // re-implementation of `prepare_run_context`. The two functions
+        // diverge only in their *non-prepare* concerns — `run()` is
+        // non-stream, `run_stream()` wraps the chunk callback and
+        // tracks `last_finish_reason`. The "before any model call"
+        // work (sanitize / strip / task_hint / route_tools /
+        // system_prompt / session_start hook / hydrate_todo /
+        // persist_user_idx / codex+autonomous counters /
+        // review_memory_at_end / memory_prefetch /
+        // auto_compress_if_over_threshold) is identical and now
+        // lives in one place. The tool-schemas tracing that used to
+        // live only in `run_stream` was promoted to
+        // `prepare_run_context` so both call sites emit the same
+        // diagnostic.
+        let PreparedRun {
+            mut ctx,
+            tool_schemas,
+            session_started_hooks_fired,
+            persist_user_idx,
+            mut codex_ack_continuations,
+            mut autonomous_nudge_count,
+            review_memory_at_end,
+            task_hint,
+        } = self.prepare_run_context(messages, tools.as_ref()).await;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
-        let mut messages = messages;
-        for msg in messages.iter_mut() {
-            if let Some(ref mut c) = msg.content {
-                *c = sanitize_surrogates(c).into_owned();
-            }
-        }
-        strip_budget_warnings_from_messages(&mut messages);
-
-        let task_hint = messages
-            .iter()
-            .rev()
-            .find(|m| matches!(m.role, hermix_core::MessageRole::User))
-            .and_then(|m| m.content.clone())
-            .unwrap_or_default();
-
-        let tool_schemas: Vec<ToolSchema> = match tools {
-            Some(t) => self.route_tools(t, &messages),
-            None => {
-                let all = self.tool_registry.schemas();
-                self.route_tools(all, &messages)
-            }
-        };
-        // Log the *resolved* tool count (after routing), not the raw
-        // parameter. The `tool_count` on the span is the caller's
-        // argument and is zero when the caller passes `None`.
-        if tool_schemas.is_empty() {
-            tracing::warn!(
-                registry_size = self.tool_registry.schemas().len(),
-                "No tool schemas after routing — LLM will not see any tools"
-            );
-        } else {
-            tracing::info!(
-                resolved = tool_schemas.len(),
-                "Tool schemas resolved for this turn"
-            );
-        }
-        let (system_content, restored_system) =
-            self.resolve_initial_system_prompt(&task_hint, &tool_schemas);
-        ctx.add_message(Message::system(&system_content));
-
-        let mut session_started_hooks_fired = false;
-        if !restored_system {
-            let hook_ctx = serde_json::json!({
-                "session_id": self.config.session_id,
-                "model": self.config.model,
-            });
-            let _results = self.invoke_hook(HookType::OnSessionStart, &hook_ctx);
-            self.inject_hook_context(&_results, &mut ctx);
-            session_started_hooks_fired = true;
-        }
-
-        for msg in messages {
-            ctx.add_message(msg);
-        }
-        self.hydrate_todo_store(&ctx);
-
-        let persist_user_idx = if self.config.persist_user_message.is_some() {
-            ctx.get_messages()
-                .iter()
-                .enumerate()
-                .rfind(|(_, m)| m.role == MessageRole::User)
-                .map(|(i, _)| i)
-        } else {
-            None
-        };
-        #[allow(unused_mut)] // bound mut so the caller can `+=` after destructuring
-        let mut codex_ack_continuations: u32 = 0;
-        // Counts how many times the autonomous loop has re-driven the LLM after
-        // it produced plain text without tool calls. Capped at
-        // `default_max_autonomous_nudges()` to prevent infinite loops when the
-        // model genuinely cannot make further progress.
-        #[allow(unused_mut)] // bound mut so the caller can `+=` after destructuring
-        let mut autonomous_nudge_count: u32 = 0;
-
-        let mut review_memory_at_end = false;
-        if self.config.memory_nudge_interval > 0
-            && self.tool_registry.names().iter().any(|n| n == "memory")
-        {
-            if let Ok(mut c) = self.evolution_counters.lock() {
-                c.turns_since_memory = c.turns_since_memory.saturating_add(1);
-                if c.turns_since_memory >= self.config.memory_nudge_interval {
-                    review_memory_at_end = true;
-                    c.turns_since_memory = 0;
-                }
-            }
-        }
-
-        // Memory prefetch
-        let first_user = ctx
-            .get_messages()
-            .iter()
-            .rfind(|m| matches!(m.role, hermix_core::MessageRole::User))
-            .and_then(|m| m.content.clone())
-            .unwrap_or_default();
-        let mem_ctx_raw = self.memory_prefetch(&first_user, session_id).await;
-        if !mem_ctx_raw.is_empty() {
-            ctx.add_message(Message::system(&mem_ctx_raw));
-        }
-
-        if self.config.preflight_context_compress {
-            self.auto_compress_if_over_threshold(&mut ctx).await;
-        }
 
         let mut state = LoopState::default();
         let mut total_turns: u32 = state.total_turns;
