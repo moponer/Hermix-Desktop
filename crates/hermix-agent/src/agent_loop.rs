@@ -11510,7 +11510,7 @@ mod stub_provider {
     fn p4_1_classify_breaks_on_tool_calls() {
         // Tool calls present → Break(r) regardless of content /
         // reasoning state. Caller unwraps the response and dispatches.
-        let (mut loop_, mut ctx) = make_loop_for_classify();
+        let (loop_, mut ctx) = make_loop_for_classify();
         let mut inner_thinking = 0;
         let mut inner_empty = 0;
         let mut msg = Message::assistant("");
@@ -11542,7 +11542,7 @@ mod stub_provider {
     fn p4_1_classify_breaks_on_visible_text() {
         // No tools, but assistant content is non-empty → Break(r).
         // Counter budgets must not be touched.
-        let (mut loop_, mut ctx) = make_loop_for_classify();
+        let (loop_, mut ctx) = make_loop_for_classify();
         let mut inner_thinking = 0;
         let mut inner_empty = 0;
         let action = loop_.classify_post_llm_response(
