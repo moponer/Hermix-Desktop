@@ -1294,47 +1294,15 @@ impl LoopState {
         self.total_tokens(ctx) > threshold
     }
 
-    /// Bridge writeback: when `run()` (and later `run_stream()`) keep the
-    /// 11 loop-locals as local aliases for ergonomic code, the live values
-    /// sit in those bindings, not in `state`. Call this once per iteration
-    /// so `state` always reflects the current run progress — that's what
-    /// makes the future `run_shared_loop(state, llm_caller)` extraction
-    /// possible (the shared body only sees `&mut LoopState`).
-    ///
-    /// Phase 1.1 (2026-07-03): wired in `run()` only; `run_stream()` and
-    /// the shared extraction land in Phase 1.2 / 1.3.
-    ///
-    /// Phase 5 (2026-07-03): dropped 3 args (`context_pressure_*`) — those
-    /// moved into [`ContextPressureMonitor`] which lives directly on
-    /// `self.context_pressure` and is mutated in place via
-    /// [`ContextPressureMonitor::should_emit_warning`].
-    ///
-    /// Phase 5 (2026-07-03, later): also dropped 3 retry-counter args
-    /// (`invalid_tool_retries` / `invalid_json_retries` /
-    /// `truncated_tool_call_retries`) — those moved into
-    /// [`RetryCounters`] which is mutated in place via `bump_*` /
-    /// `reset_*` methods.
-    ///
-    /// Phase 5 (2026-07-03, even later): also dropped 4 cost-guard args
-    /// (`accumulated_usage` / `session_cost_usd` / `cost_warned` /
-    /// `forced_runtime_route`) — those moved into [`CostGuard`] which is
-    /// mutated in place via `record_usage` / `evaluate_thresholds` /
-    /// `install_downgrade`. `publish_from` shrank from 11 args to 7
-    /// args: only the scalars + the 2 rarely-touched message-cached
-    /// `Option`s remain.
-    ///
-    /// Phase 5 (2026-07-04 follow-up): also dropped 2 message-cache
-    /// args (`last_checkpoint_messages` / `last_content_with_tools`)
-    /// — those moved into [`MessageCache`] which is mutated in place
-    /// via `store_checkpoint` / `store_content_with_tools`. The
-    /// previous follow-up had dropped the 2 timing args. `publish_from`
-    /// now takes just 1 arg (`total_turns`); the caches are owned by
-    /// `state.message_cache` directly and the loop body writes to it
-    /// via `&mut state.message_cache` instead of bridging through
-    /// locals.
-    fn publish_from(&mut self, total_turns: u32) {
-        self.total_turns = total_turns;
-    }
+    // Phase 5 (2026-07-04): the `publish_from` bridge that was introduced
+    // in Phase 1.1 (2026-07-03) is removed. It used to take 14 args and
+    // shrank progressively to 1 arg (`total_turns`) as each manager struct
+    // took over its fields. With only `total_turns` left to bridge, the
+    // helper became a one-liner — `run()` and `run_stream()` now write
+    // `state.total_turns = total_turns;` directly. The other 13 fields
+    // were never bridged this way; they live on inner structs that the
+    // loop body mutates in place via their own `record_*` / `bump_*` /
+    // `store_*` methods.
 }
 
 /// Phase 1.3a (2026-07-03): outcome of [`AgentLoop::process_post_response`].
@@ -5787,11 +5755,14 @@ impl AgentLoop {
             // can read live values via `&mut LoopState`. Runs once per
             // iteration, after `auto_compress`.
             //
-            // Phase 5 (2026-07-04): only `total_turns` is bridged now —
-            // the 2 message caches live on `state.message_cache` and the
+            // Phase 5 (2026-07-04): with the `publish_from` bridge helper
+            // deleted, only `total_turns` needs a writeback here — the
+            // 2 message caches live on `state.message_cache` and the
             // 2 timings live on `state.timings`, both mutated in place
-            // by the loop body. `publish_from` shrank from 3 args to 1.
-            state.publish_from(total_turns);
+            // by the loop body. The other 13 fields that once went
+            // through `publish_from` now live on inner structs and are
+            // mutated via their own methods.
+            state.total_turns = total_turns;
         }
     }
 
@@ -6568,9 +6539,10 @@ impl AgentLoop {
             // and the Phase 1.3 `run_shared_loop` extraction can accept
             // both call sites.
             //
-            // Phase 5 (2026-07-04): only `total_turns` is bridged now —
-            // see the matching comment in `run()`.
-            state.publish_from(total_turns);
+            // Phase 5 (2026-07-04): with the `publish_from` bridge helper
+            // deleted, only `total_turns` needs a writeback here — see
+            // the matching comment in `run()` for the full history.
+            state.total_turns = total_turns;
         }
     }
 
@@ -8035,15 +8007,15 @@ mod tests {
     }
 
     #[test]
-    fn p1_1_loop_state_publish_from_round_trip() {
+    fn p1_1_loop_state_round_trip() {
         // Phase 1.1 (2026-07-03): the bridge between `run()`'s 14
         // loop-local aliases and the 14 `state` fields. Publishing the
         // locals back into `state` is what makes the future
         // `run_shared_loop(state, llm_caller)` extraction possible
         // (the shared body only sees `&mut LoopState`).
         //
-        // Phase 5 (2026-07-03): `publish_from` shrank from 9 args to
-        // 5 args. The 4 cost-guard args (accumulated_usage /
+        // Phase 5 (2026-07-03): the `publish_from` bridge shrank from
+        // 9 args to 5 args. The 4 cost-guard args (accumulated_usage /
         // session_cost_usd / cost_warned / forced_runtime_route) are
         // owned by `state.cost_guard` and are no longer bridged. The 3
         // retry-counter args and the 3 context-pressure args were
@@ -8060,8 +8032,15 @@ mod tests {
         // owned by `state.message_cache` and mutated in place by
         // `store_checkpoint` / `store_content_with_tools`. We
         // exercise all 4 in-place paths in this test.
+        //
+        // Phase 5 (2026-07-04, 3rd follow-up): the `publish_from`
+        // helper is removed entirely. The single remaining arg
+        // (`total_turns`) is written directly to `state.total_turns`
+        // in both `run()` and `run_stream()`. The bridge is dead.
         let mut s = LoopState::default();
-        s.publish_from(7); // total_turns
+        // total_turns — the only field still bridged, now assigned
+        // directly without going through `publish_from`.
+        s.total_turns = 7;
         assert_eq!(s.total_turns, 7);
         // timings live on the inner struct — exercise the in-place
         // record path that replaced the old `+= api_elapsed` locals.
@@ -8083,16 +8062,15 @@ mod tests {
         let taken = s.message_cache.take_content_with_tools();
         assert_eq!(taken, Some("visible text".to_string()));
         assert!(s.message_cache.content_with_tools().is_none());
-        // cost_guard defaults are unchanged by publish_from — owned by
+        // cost_guard defaults are unchanged by the bridge — owned by
         // the inner struct and mutated in place by the runtime.
         assert!(s.cost_guard.accumulated_usage.is_none());
         assert_eq!(s.cost_guard.session_cost_usd, 0.0);
         assert!(!s.cost_guard.cost_warned);
         assert!(s.cost_guard.forced_runtime_route.is_none());
         // retry_counters live on the inner struct — set directly here
-        // to mirror pre-extraction semantics (publish_from no longer
-        // owns those 3 fields; the inner struct is mutated in place by
-        // bump_* / reset_* methods).
+        // to mirror pre-extraction semantics (the inner struct is
+        // mutated in place by bump_* / reset_* methods).
         s.retry_counters.invalid_tool = 2;
         s.retry_counters.invalid_json = 3;
         s.retry_counters.truncated_tool = 1;
@@ -8100,9 +8078,8 @@ mod tests {
         assert_eq!(s.retry_counters.invalid_json, 3);
         assert_eq!(s.retry_counters.truncated_tool, 1);
         // context_pressure is on the inner struct — set directly here to
-        // mirror pre-extraction semantics (publish_from no longer owns
-        // those 3 fields; the inner struct is mutated in place by
-        // should_emit_warning).
+        // mirror pre-extraction semantics (the inner struct is mutated
+        // in place by should_emit_warning).
         s.context_pressure.warned_tier = 0.65;
         s.context_pressure.last_warn_percent = 0.71;
         assert_eq!(s.context_pressure.warned_tier, 0.65);
