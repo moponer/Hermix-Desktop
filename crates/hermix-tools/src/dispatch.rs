@@ -12,6 +12,41 @@ use tokio::task::JoinSet;
 
 use crate::registry::ToolRegistry;
 
+/// Dispatch one of the three bridge tools (`tool_search` /
+/// `tool_describe` / `tool_call`).
+///
+/// These are the only tools NOT registered in the registry — they are
+/// the meta-tool for discovering the deferred-tool list that the LLM
+/// would otherwise never see. The match is exhaustive on the three
+/// bridge names; any other name falls through to the `_` arm and
+/// returns an error JSON, so a typo in `is_bridge` never silently
+/// misroutes a call.
+async fn dispatch_bridge_tool(call: &ToolCall, registry: &Arc<ToolRegistry>) -> String {
+    use crate::tools::tool_search::{ToolCallHandler, ToolDescribeHandler, ToolSearchHandler};
+    let args: Value = call
+        .function
+        .arguments
+        .parse()
+        .unwrap_or(Value::Null);
+    match call.function.name.as_str() {
+        "tool_search" => ToolSearchHandler::new(registry.clone())
+            .execute(args)
+            .await
+            .unwrap_or_else(|e| format!(r#"{{"error": "{e}"}}"#)),
+        "tool_describe" => ToolDescribeHandler::new(registry.clone())
+            .execute(args)
+            .await
+            .unwrap_or_else(|e| format!(r#"{{"error": "{e}"}}"#)),
+        "tool_call" => ToolCallHandler::new(registry.clone())
+            .execute(args)
+            .await
+            .unwrap_or_else(|e| format!(r#"{{"error": "{e}"}}"#)),
+        other => format!(
+            r#"{{"error": "is_bridge returned true for non-bridge name '{other}'"}}"#
+        ),
+    }
+}
+
 /// Result of dispatching a single tool call, including timing information.
 #[derive(Debug, Clone)]
 pub struct DispatchedResult {
@@ -56,7 +91,6 @@ pub async fn dispatch_tools(
     budget: BudgetConfig,
     pool_size: usize,
 ) -> Vec<ToolResult> {
-    use crate::tools::tool_search::{is_bridge, ToolCallHandler, ToolDescribeHandler, ToolSearchHandler};
     use tokio::sync::Semaphore;
 
     // Real concurrency limit (was: `let _concurrency = pool_size.max(1);`
@@ -80,23 +114,16 @@ pub async fn dispatch_tools(
                 .await
                 .expect("semaphore closed unexpectedly");
             let start = Instant::now();
-            let result = if is_bridge(&call.function.name) {
-                let args: Value = call.function.arguments.parse().unwrap_or(Value::Null);
-                match call.function.name.as_str() {
-                    "tool_search" => {
-                        let h = ToolSearchHandler::new(registry);
-                        h.execute(args).await.unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
-                    }
-                    "tool_describe" => {
-                        let h = ToolDescribeHandler::new(registry);
-                        h.execute(args).await.unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
-                    }
-                    "tool_call" => {
-                        let h = ToolCallHandler::new(registry);
-                        h.execute(args).await.unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
-                    }
-                    _ => unreachable!(),
-                }
+            // Bridge tools (`tool_search` / `tool_describe` / `tool_call`)
+            // are intentionally NOT registered in the registry — they are
+            // the LLM-facing meta-tool for discovering deferred tools.
+            // They go through a dedicated handler, not registry.dispatch_async,
+            // because (a) they need access to the full schema list (which
+            // is hidden from the LLM otherwise) and (b) `tool_call` calls
+            // back into registry.dispatch_async recursively, which would
+            // need a different bridge path. See `dispatch_bridge_tool`.
+            let result = if crate::tools::tool_search::is_bridge(&call.function.name) {
+                dispatch_bridge_tool(&call, &registry).await
             } else {
                 registry
                     .dispatch_async(
@@ -267,5 +294,76 @@ mod tests {
         let content = &results[0].content;
         assert!(content.contains("[... truncated"));
         assert!(std::str::from_utf8(content.as_bytes()).is_ok());
+    }
+
+    // ── dispatch_bridge_tool regression tests (A2) ────────────────────
+    //
+    // The bridge path used to inline a 14-line match on
+    // `call.function.name.as_str()`. Extracted into
+    // `dispatch_bridge_tool` so:
+    //  - all three handlers share one parse-args / format-error path;
+    //  - a future bridge tool only adds one match arm, not three call
+    //    sites;
+    //  - the `_` arm catches `is_bridge` drift (returns an error JSON
+    //    instead of silently routing a non-bridge name to a handler).
+
+    fn bridge_call(name: &str, args: &str) -> ToolCall {
+        ToolCall {
+            id: format!("call_{name}"),
+            function: hermix_core::FunctionCall {
+                name: name.to_string(),
+                arguments: args.to_string(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_bridge_tool_search_returns_schema_list() {
+        let registry = Arc::new(ToolRegistry::new());
+        // Empty registry → tool_search handler should still return a
+        // valid (possibly empty) JSON list — never panic, never route
+        // to the registry path.
+        let call = bridge_call("tool_search", r#"{"query":"nope"}"#);
+        let out = dispatch_bridge_tool(&call, &registry).await;
+        // Must NOT be the "is_bridge drift" sentinel.
+        assert!(
+            !out.contains("is_bridge returned true"),
+            "tool_search should not hit the drift arm: {out}"
+        );
+        // ToolSearchHandler returns `{"query":...,"matches":[...],"total_deferred":N}`.
+        // Empty registry → total_deferred == 0 → matches empty. Verify
+        // it's structured JSON.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&out).expect("tool_search output must be JSON");
+        assert!(parsed.get("matches").is_some());
+        assert!(parsed.get("total_deferred").is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_bridge_tool_describe_returns_schema() {
+        let registry = Arc::new(ToolRegistry::new());
+        let call = bridge_call("tool_describe", r#"{"name":"read_file"}"#);
+        let out = dispatch_bridge_tool(&call, &registry).await;
+        assert!(!out.contains("is_bridge returned true"));
+        // Empty registry → handler returns the standard "tool not
+        // registered" error JSON shape.
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("JSON");
+        assert!(parsed.get("error").is_some() || parsed.get("schema").is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_bridge_tool_drift_arm_returns_error_json() {
+        // If `is_bridge` ever drifts and admits a non-bridge name,
+        // dispatch_bridge_tool must still produce an error JSON —
+        // never silently route to a handler that doesn't fit.
+        let registry = Arc::new(ToolRegistry::new());
+        let call = bridge_call("not_a_real_bridge_tool", "{}");
+        let out = dispatch_bridge_tool(&call, &registry).await;
+        assert!(
+            out.contains("is_bridge returned true"),
+            "expected drift-sentinel error, got: {out}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("JSON");
+        assert!(parsed.get("error").is_some());
     }
 }
