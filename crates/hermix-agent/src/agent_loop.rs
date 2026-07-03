@@ -1122,6 +1122,75 @@ impl RetryCounters {
     }
 }
 
+/// Phase 5 (2026-07-04 follow-up): per-run LLM-result caches consolidated
+/// into one struct. The two sibling `Option` fields
+/// (`last_checkpoint_messages`, `last_content_with_tools`) used to live
+/// directly on `LoopState` and were bridged back from `run()`'s
+/// loop-locals via 2 sibling arguments in `publish_from`. Folding them
+/// into one struct:
+/// - shrinks `LoopState` by 2 fields (8 → 6),
+/// - shrinks `publish_from` from 3 args to 1 arg (only `total_turns`
+///   remains bridged),
+/// - lets `run()` mutate the caches in place via
+///   `store_checkpoint` / `store_content_with_tools` /
+///   `take_content_with_tools` instead of accumulating to a local
+///   alias and re-publishing each iteration,
+/// - collapses 2 helper-arg slots (`&mut Option<String>` for
+///   `last_content_with_tools`) to 1 (`&mut MessageCache`).
+///
+/// The 2 fields stay co-located on `self.message_cache` and mutate
+/// in place. Reset / `Default` produce the same all-`None` state as
+/// before, so `LoopState::default()` semantics are unchanged.
+struct MessageCache {
+    /// Last checkpoint messages for crash recovery / auto-rollback.
+    last_checkpoint_messages: Option<Vec<Message>>,
+    /// Last assistant message that included `tool_use` (for the
+    /// codex-ack continuation logic on the next turn).
+    last_content_with_tools: Option<String>,
+}
+
+impl Default for MessageCache {
+    fn default() -> Self {
+        Self {
+            last_checkpoint_messages: None,
+            last_content_with_tools: None,
+        }
+    }
+}
+
+impl MessageCache {
+    /// Store a fresh checkpoint snapshot (taken from the context after
+    /// a successful turn). Overwrites any prior checkpoint.
+    fn store_checkpoint(&mut self, snapshot: Vec<Message>) {
+        self.last_checkpoint_messages = Some(snapshot);
+    }
+
+    /// Overwrite the cached assistant content (used by
+    /// `process_post_response` and `prepare_assistant_turn` when the
+    /// assistant's last visible text came bundled with tool calls).
+    fn store_content_with_tools(&mut self, content: Option<String>) {
+        self.last_content_with_tools = content;
+    }
+
+    /// Take the cached assistant content out (used by the finalize
+    /// path when handing off to the next session / persisting the
+    /// agent result). Leaves `None` behind.
+    fn take_content_with_tools(&mut self) -> Option<String> {
+        self.last_content_with_tools.take()
+    }
+
+    /// Borrow the checkpoint for rollback / publish — caller clones
+    /// if it needs ownership.
+    fn checkpoint(&self) -> Option<&Vec<Message>> {
+        self.last_checkpoint_messages.as_ref()
+    }
+
+    /// Borrow the cached assistant content for publish.
+    fn content_with_tools(&self) -> Option<&String> {
+        self.last_content_with_tools.as_ref()
+    }
+}
+
 /// Phase 5 (2026-07-04 follow-up): turn-level timing bookkeeping consolidated
 /// into one struct. The two sibling `u64` fields (`total_api_time_ms`,
 /// `total_tool_time_ms`) used to live directly on `LoopState` and were
@@ -1191,16 +1260,19 @@ struct LoopState {
     /// `install_downgrade`. `publish_from` no longer takes 4 sibling
     /// arguments for these.
     cost_guard: CostGuard,
-    /// Last checkpoint messages for crash recovery.
-    last_checkpoint_messages: Option<Vec<Message>>,
+    /// Per-run message caches (last checkpoint snapshot + last
+    /// assistant content with tool calls). Phase 5 (2026-07-04): the 2
+    /// sibling `Option` fields that used to live here moved into
+    /// [`MessageCache`] which is mutated in place via `store_*` /
+    /// `take_*` / `*()` accessors. `publish_from` no longer takes 2
+    /// sibling arguments for these.
+    message_cache: MessageCache,
     /// Retries against invalid tool names / invalid tool JSON / truncated
     /// tool calls. Phase 5 (2026-07-03): the 3 sibling `u32` fields that
     /// used to live here moved into [`RetryCounters`] and are mutated
     /// in place via `bump_*` / `reset_*` methods. `publish_from` no
     /// longer takes 3 sibling arguments for these.
     retry_counters: RetryCounters,
-    /// Last assistant message that included tool_use (for re-asking).
-    last_content_with_tools: Option<String>,
     /// Context-pressure warning state (tier + cooldown timestamp + last %).
     /// Phase 5 (2026-07-03): extracted from 3 inline fields to consolidate
     /// the throttle/cooldown rules in [`ContextPressureMonitor::should_emit_warning`].
@@ -1253,20 +1325,17 @@ impl LoopState {
     /// args: only the scalars + the 2 rarely-touched message-cached
     /// `Option`s remain.
     ///
-    /// Phase 5 (2026-07-04 follow-up): also dropped 2 timing args
-    /// (`total_api_time_ms` / `total_tool_time_ms`) — those moved into
-    /// [`TurnTimings`] which is mutated in place via `record_api` /
-    /// `record_tool`. `publish_from` shrank from 5 args to 3 args:
-    /// only `total_turns` + the 2 message-cached `Option`s remain.
-    fn publish_from(
-        &mut self,
-        total_turns: u32,
-        last_checkpoint_messages: Option<&Vec<Message>>,
-        last_content_with_tools: Option<&String>,
-    ) {
+    /// Phase 5 (2026-07-04 follow-up): also dropped 2 message-cache
+    /// args (`last_checkpoint_messages` / `last_content_with_tools`)
+    /// — those moved into [`MessageCache`] which is mutated in place
+    /// via `store_checkpoint` / `store_content_with_tools`. The
+    /// previous follow-up had dropped the 2 timing args. `publish_from`
+    /// now takes just 1 arg (`total_turns`); the caches are owned by
+    /// `state.message_cache` directly and the loop body writes to it
+    /// via `&mut state.message_cache` instead of bridging through
+    /// locals.
+    fn publish_from(&mut self, total_turns: u32) {
         self.total_turns = total_turns;
-        self.last_checkpoint_messages = last_checkpoint_messages.cloned();
-        self.last_content_with_tools = last_content_with_tools.cloned();
     }
 }
 
@@ -1488,6 +1557,13 @@ impl AgentLoop {
     /// helper signature because they're stored on `LoopState` (used by
     /// the codex-ack continuation logic on the next turn) and not on
     /// `CostGuard`.
+    ///
+    /// Phase 5 (2026-07-04 follow-up): `&mut Option<String>` for
+    /// `last_content_with_tools` collapsed to `&mut MessageCache`,
+    /// dropping the helper to 6 mutable args (the `Option<String>` is
+    /// now reached via `cache.store_content_with_tools(...)` inside
+    /// the helper). The companion helper `prepare_assistant_turn`
+    /// also takes `&mut MessageCache` for the same reason.
     #[allow(clippy::too_many_arguments)]
     fn process_post_response(
         &self,
@@ -1497,7 +1573,7 @@ impl AgentLoop {
         total_turns: u32,
         api_elapsed: u64,
         cost_guard: &mut CostGuard,
-        last_content_with_tools: &mut Option<String>,
+        message_cache: &mut MessageCache,
         stream_mode: bool,
     ) -> Result<PostResponseAction, AgentError> {
         let has_tool_calls = response
@@ -1579,13 +1655,15 @@ impl AgentLoop {
                 .as_deref()
                 .is_some_and(|s| !s.is_empty())
             {
-                *last_content_with_tools = response
-                    .message
-                    .content
-                    .as_deref()
-                    .map(strip_think_blocks_for_ack)
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
+                message_cache.store_content_with_tools(
+                    response
+                        .message
+                        .content
+                        .as_deref()
+                        .map(strip_think_blocks_for_ack)
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                );
             }
             return Ok(PostResponseAction::Finalize);
         }
@@ -1616,7 +1694,7 @@ impl AgentLoop {
         &self,
         ctx: &mut ContextManager,
         response: &hermix_core::LlmResponse,
-        last_content_with_tools: &mut Option<String>,
+        message_cache: &mut MessageCache,
     ) -> (bool, Message, Option<Vec<ToolCall>>) {
         let history_includes_tool = ctx
             .get_messages()
@@ -1631,12 +1709,14 @@ impl AgentLoop {
             .is_some_and(|v| !v.is_empty())
             && Self::assistant_visible_text_after_think_blocks(&assistant_msg)
         {
-            *last_content_with_tools = assistant_msg
-                .content
-                .as_deref()
-                .map(strip_think_blocks_for_ack)
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty());
+            message_cache.store_content_with_tools(
+                assistant_msg
+                    .content
+                    .as_deref()
+                    .map(strip_think_blocks_for_ack)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            );
         }
         (history_includes_tool, assistant_msg, tool_calls)
     }
@@ -5034,15 +5114,14 @@ impl AgentLoop {
         // `state.cost_guard.session_cost_usd`. The 4 sibling locals
         // dropped from `publish_from` in the same commit.
         let mut state = LoopState::default();
-        // Phase 5 (2026-07-04): `total_api_time_ms` / `total_tool_time_ms`
-        // no longer get bridged to local aliases — they live on
-        // `state.timings` and are mutated in place via `record_api` /
-        // `record_tool`. Only `total_turns` keeps the local-alias pattern
-        // because the rest of the loop body still reads it as a scalar.
+        // Phase 5 (2026-07-04): only `total_turns` keeps the
+        // local-alias pattern because the rest of the loop body still
+        // reads it as a scalar. The two message caches live on
+        // `state.message_cache` and are mutated in place via
+        // `store_*` / `take_*` / `*()` accessors. The two timings
+        // live on `state.timings` and are mutated in place via
+        // `record_api` / `record_tool`.
         let mut total_turns: u32 = state.total_turns;
-        let mut last_checkpoint_messages: Option<Vec<Message>> =
-            state.last_checkpoint_messages.clone();
-        let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
 
         loop {
             if self.interrupt.take_interrupt_graceful().is_some() {
@@ -5107,7 +5186,9 @@ impl AgentLoop {
             if self.config.checkpoint_interval_turns > 0
                 && (total_turns - 1).is_multiple_of(self.config.checkpoint_interval_turns)
             {
-                last_checkpoint_messages = Some(ctx.get_messages().to_vec());
+                // Phase 5 (2026-07-04): store checkpoint directly on
+                // the `state.message_cache` (no more local alias).
+                state.message_cache.store_checkpoint(ctx.get_messages().to_vec());
             }
 
             // Notify memory + plugins of new turn
@@ -5298,7 +5379,7 @@ impl AgentLoop {
                     total_turns,
                     api_elapsed,
                     &mut state.cost_guard,
-                    &mut last_content_with_tools,
+                    &mut state.message_cache,
                     false, // stream_mode
                 )?,
                 PostResponseAction::CostGuardTripped
@@ -5320,7 +5401,7 @@ impl AgentLoop {
             let (history_includes_tool, assistant_msg, tool_calls) = self.prepare_assistant_turn(
                 &mut ctx,
                 &response,
-                &mut last_content_with_tools,
+                &mut state.message_cache,
             );
 
             // Step complete callback
@@ -5350,7 +5431,7 @@ impl AgentLoop {
                             total_turns,
                             max_turns: self.config.max_turns,
                             max_autonomous_nudges: default_max_autonomous_nudges(),
-                            last_content_with_tools: last_content_with_tools.take(),
+                            last_content_with_tools: state.message_cache.take_content_with_tools(),
                             assistant_has_visible_text:
                                 Self::assistant_visible_text_after_think_blocks,
                         },
@@ -5564,7 +5645,7 @@ impl AgentLoop {
             if self.config.rollback_on_tool_error_threshold > 0
                 && turn_tool_error_count >= self.config.rollback_on_tool_error_threshold
             {
-                if let Some(snapshot) = last_checkpoint_messages.clone() {
+                if let Some(snapshot) = state.message_cache.checkpoint().cloned() {
                     *ctx.get_messages_mut() = snapshot;
                     ctx.add_message(Message::system(format!(
                         "Auto-rollback: {} tool call(s) failed in one turn. Restored latest checkpoint and continuing.",
@@ -5708,11 +5789,12 @@ impl AgentLoop {
             // can read live values via `&mut LoopState`. Runs once per
             // iteration, after `auto_compress` (which can mutate
             // `iter_since_compress`).
-            state.publish_from(
-                total_turns,
-                last_checkpoint_messages.as_ref(),
-                last_content_with_tools.as_ref(),
-            );
+            //
+            // Phase 5 (2026-07-04): only `total_turns` is bridged now —
+            // the 2 message caches live on `state.message_cache` and the
+            // 2 timings live on `state.timings`, both mutated in place
+            // by the loop body. `publish_from` shrank from 3 args to 1.
+            state.publish_from(total_turns);
         }
     }
 
@@ -5829,10 +5911,11 @@ impl AgentLoop {
         let session_id = self.config.session_id.as_deref().unwrap_or("");
 
         let mut state = LoopState::default();
+        // Phase 5 (2026-07-04): same as in `run()`. Only `total_turns`
+        // keeps the local-alias pattern. The two message caches live
+        // on `state.message_cache` (mutated in place) and the two
+        // timings live on `state.timings` (mutated in place).
         let mut total_turns: u32 = state.total_turns;
-        let mut last_checkpoint_messages: Option<Vec<Message>> =
-            state.last_checkpoint_messages.clone();
-        let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
 
         loop {
             if self.interrupt.take_interrupt_graceful().is_some() {
@@ -5897,7 +5980,9 @@ impl AgentLoop {
             if self.config.checkpoint_interval_turns > 0
                 && (total_turns - 1).is_multiple_of(self.config.checkpoint_interval_turns)
             {
-                last_checkpoint_messages = Some(ctx.get_messages().to_vec());
+                // Phase 5 (2026-07-04): store checkpoint directly on
+                // the `state.message_cache` (no more local alias).
+                state.message_cache.store_checkpoint(ctx.get_messages().to_vec());
             }
 
             if total_turns.is_multiple_of(self.config.memory_flush_interval) && total_turns > 0 {
@@ -6066,7 +6151,7 @@ impl AgentLoop {
                     total_turns,
                     api_elapsed_ms,
                     &mut state.cost_guard,
-                    &mut last_content_with_tools,
+                    &mut state.message_cache,
                     true, // stream_mode
                 )?,
                 PostResponseAction::CostGuardTripped
@@ -6088,7 +6173,7 @@ impl AgentLoop {
             let (history_includes_tool, assistant_msg, tool_calls) = self.prepare_assistant_turn(
                 &mut ctx,
                 &response,
-                &mut last_content_with_tools,
+                &mut state.message_cache,
             );
             if response.finish_reason.as_deref() == Some("length")
                 && assistant_msg
@@ -6140,7 +6225,7 @@ impl AgentLoop {
                         total_turns,
                         max_turns: self.config.max_turns,
                         max_autonomous_nudges: default_max_autonomous_nudges(),
-                        last_content_with_tools: last_content_with_tools.take(),
+                        last_content_with_tools: state.message_cache.take_content_with_tools(),
                         assistant_has_visible_text:
                             Self::assistant_visible_text_after_think_blocks,
                     },
@@ -6347,7 +6432,7 @@ impl AgentLoop {
             if self.config.rollback_on_tool_error_threshold > 0
                 && turn_tool_error_count >= self.config.rollback_on_tool_error_threshold
             {
-                if let Some(snapshot) = last_checkpoint_messages.clone() {
+                if let Some(snapshot) = state.message_cache.checkpoint().cloned() {
                     *ctx.get_messages_mut() = snapshot;
                     ctx.add_message(Message::system(format!(
                         "Auto-rollback: {} tool call(s) failed in one turn. Restored latest checkpoint and continuing.",
@@ -6485,11 +6570,10 @@ impl AgentLoop {
             // After this commit, `state` reflects live run_stream values too,
             // and the Phase 1.3 `run_shared_loop` extraction can accept
             // both call sites.
-            state.publish_from(
-                total_turns,
-                last_checkpoint_messages.as_ref(),
-                last_content_with_tools.as_ref(),
-            );
+            //
+            // Phase 5 (2026-07-04): only `total_turns` is bridged now —
+            // see the matching comment in `run()`.
+            state.publish_from(total_turns);
         }
     }
 
@@ -7841,6 +7925,10 @@ mod tests {
         //
         // Phase 5 (2026-07-04): `total_api_time_ms` / `total_tool_time_ms`
         // moved into `state.timings`; access path now `s.timings.*`.
+        // `last_checkpoint_messages` / `last_content_with_tools` moved
+        // into `state.message_cache`; access path now
+        // `s.message_cache.checkpoint().is_none()` /
+        // `s.message_cache.content_with_tools().is_none()`.
         let s = LoopState::default();
         assert_eq!(s.total_turns, 0);
         assert_eq!(s.iter_since_compress, 0);
@@ -7850,11 +7938,11 @@ mod tests {
         assert_eq!(s.cost_guard.session_cost_usd, 0.0);
         assert!(!s.cost_guard.cost_warned);
         assert!(s.cost_guard.forced_runtime_route.is_none());
-        assert!(s.last_checkpoint_messages.is_none());
+        assert!(s.message_cache.checkpoint().is_none());
         assert_eq!(s.retry_counters.invalid_tool, 0);
         assert_eq!(s.retry_counters.invalid_json, 0);
         assert_eq!(s.retry_counters.truncated_tool, 0);
-        assert!(s.last_content_with_tools.is_none());
+        assert!(s.message_cache.content_with_tools().is_none());
         assert_eq!(s.context_pressure.warned_tier, 0.0);
         assert!(s.context_pressure.last_warn_at.is_none());
         assert_eq!(s.context_pressure.last_warn_percent, 0.0);
@@ -7914,6 +8002,43 @@ mod tests {
     }
 
     #[test]
+    fn p5_message_cache_store_and_take_independently() {
+        // Phase 5 (2026-07-04): `store_checkpoint` /
+        // `store_content_with_tools` / `take_content_with_tools` /
+        // `checkpoint` / `content_with_tools` must all behave
+        // independently (the two caches are unrelated fields, not
+        // aliases of each other) and `take_content_with_tools` must
+        // clear the slot behind it (so a second `take` returns
+        // `None`). Default must be all-`None` so
+        // `LoopState::default()` semantics stay unchanged.
+        let mut c = MessageCache::default();
+        assert!(c.checkpoint().is_none());
+        assert!(c.content_with_tools().is_none());
+
+        let snapshot = vec![Message::user("checkpoint text")];
+        c.store_checkpoint(snapshot.clone());
+        c.store_content_with_tools(Some("visible text".to_string()));
+        assert_eq!(c.checkpoint().unwrap(), &snapshot);
+        assert_eq!(
+            c.content_with_tools().unwrap(),
+            "visible text"
+        );
+
+        // take_content_with_tools moves the value out and clears the
+        // slot; checkpoint is untouched (take is per-slot).
+        let taken = c.take_content_with_tools();
+        assert_eq!(taken, Some("visible text".to_string()));
+        assert!(c.content_with_tools().is_none());
+        assert!(c.checkpoint().is_some());
+
+        // store_content_with_tools(None) is a no-op for callers that
+        // want to clear without consuming (in case `None` means
+        // "explicitly nothing" vs. the implicit `None` after a take).
+        c.store_content_with_tools(None);
+        assert!(c.content_with_tools().is_none());
+    }
+
+    #[test]
     fn p1_1_loop_state_publish_from_round_trip() {
         // Phase 1.1 (2026-07-03): the bridge between `run()`'s 14
         // loop-local aliases and the 14 `state` fields. Publishing the
@@ -7928,16 +8053,19 @@ mod tests {
         // retry-counter args and the 3 context-pressure args were
         // already removed in earlier Phase 5 sub-commits.
         //
-        // Phase 5 (2026-07-04): shrank from 5 args to 3 args. The 2
-        // timing args (`total_api_time_ms` / `total_tool_time_ms`)
-        // are owned by `state.timings` and mutated in place by
-        // `record_api` / `record_tool`. We exercise both paths here.
+        // Phase 5 (2026-07-04, 1st follow-up): shrank from 5 args to
+        // 3 args. The 2 timing args (`total_api_time_ms` /
+        // `total_tool_time_ms`) are owned by `state.timings` and
+        // mutated in place by `record_api` / `record_tool`.
+        //
+        // Phase 5 (2026-07-04, 2nd follow-up): shrank from 3 args to
+        // 1 arg. The 2 message-cache args
+        // (`last_checkpoint_messages` / `last_content_with_tools`) are
+        // owned by `state.message_cache` and mutated in place by
+        // `store_checkpoint` / `store_content_with_tools`. We
+        // exercise all 4 in-place paths in this test.
         let mut s = LoopState::default();
-        s.publish_from(
-            7,                        // total_turns
-            None,                     // last_checkpoint_messages
-            None,                     // last_content_with_tools
-        );
+        s.publish_from(7); // total_turns
         assert_eq!(s.total_turns, 7);
         // timings live on the inner struct — exercise the in-place
         // record path that replaced the old `+= api_elapsed` locals.
@@ -7945,6 +8073,20 @@ mod tests {
         s.timings.record_tool(567);
         assert_eq!(s.timings.total_api_time_ms, 1234);
         assert_eq!(s.timings.total_tool_time_ms, 567);
+        // message_cache lives on the inner struct — exercise the
+        // store / take / checkpoint / content_with_tools paths that
+        // replaced the old `last_*` local aliases.
+        let snapshot = vec![Message::user("checkpoint text")];
+        s.message_cache.store_checkpoint(snapshot.clone());
+        s.message_cache.store_content_with_tools(Some("visible text".to_string()));
+        assert_eq!(s.message_cache.checkpoint().unwrap(), &snapshot);
+        assert_eq!(
+            s.message_cache.content_with_tools().unwrap(),
+            "visible text"
+        );
+        let taken = s.message_cache.take_content_with_tools();
+        assert_eq!(taken, Some("visible text".to_string()));
+        assert!(s.message_cache.content_with_tools().is_none());
         // cost_guard defaults are unchanged by publish_from — owned by
         // the inner struct and mutated in place by the runtime.
         assert!(s.cost_guard.accumulated_usage.is_none());
@@ -10846,7 +10988,11 @@ mod tests {
             finish_reason: Some("stop".into()),
         };
         let mut cost_guard = CostGuard::default();
-        let mut last_content: Option<String> = None;
+        // Phase 5 (2026-07-04): `&mut Option<String>` arg became
+        // `&mut MessageCache`; the old `last_content` local is gone,
+        // we exercise the same final-answer path through
+        // `message_cache.content_with_tools()`.
+        let mut message_cache = MessageCache::default();
         let action = agent
             .process_post_response(
                 &mut ctx,
@@ -10855,12 +11001,12 @@ mod tests {
                 0, // total_turns
                 0, // api_elapsed
                 &mut cost_guard,
-                &mut last_content,
+                &mut message_cache,
                 false, // stream_mode
             )
             .unwrap();
         assert!(matches!(action, PostResponseAction::Finalize));
-        assert_eq!(last_content.as_deref(), Some("final answer"));
+        assert_eq!(message_cache.content_with_tools().map(String::as_str), Some("final answer"));
     }
 
     #[test]
@@ -10909,7 +11055,7 @@ mod tests {
         };
         let mut cost_guard = CostGuard::default();
         cost_guard.session_cost_usd = 0.5; // already 50x over the 0.01 limit
-        let mut last_content: Option<String> = None;
+        let mut message_cache = MessageCache::default();
         let action = agent
             .process_post_response(
                 &mut ctx,
@@ -10918,7 +11064,7 @@ mod tests {
                 0,
                 0,
                 &mut cost_guard,
-                &mut last_content,
+                &mut message_cache,
                 false,
             )
             .unwrap();
@@ -10976,7 +11122,7 @@ mod tests {
             finish_reason: Some("tool_calls".into()),
         };
         let mut cost_guard = CostGuard::default();
-        let mut last_content: Option<String> = None;
+        let mut message_cache = MessageCache::default();
         let action = agent
             .process_post_response(
                 &mut ctx,
@@ -10985,14 +11131,14 @@ mod tests {
                 0,
                 0, // api_elapsed
                 &mut cost_guard,
-                &mut last_content,
+                &mut message_cache,
                 false,
             )
             .unwrap();
         assert!(matches!(action, PostResponseAction::Continue));
         // last_content_with_tools untouched (set later by the loop after
         // the assistant message is appended to ctx).
-        assert!(last_content.is_none());
+        assert!(message_cache.content_with_tools().is_none());
     }
 
     #[tokio::test]
