@@ -1235,8 +1235,11 @@ impl TurnTimings {
 /// 14 run() + 17 run_stream() locals through it via `publish_from`.
 /// Phase 5 (2026-07-03 + 2026-07-04) folds 9 inline fields into 4
 /// manager structs ([`TurnTimings`], [`CostGuard`], [`MessageCache`],
-/// [`RetryCounters`], [`ContextPressureMonitor`]) so `publish_from`
-/// is now a 1-arg bridge (`total_turns` only).
+/// [`RetryCounters`], [`ContextPressureMonitor`]). After Phase 5
+/// (commits a37bba3, d31f7e8) the `publish_from` bridge is gone —
+/// `run()` / `run_stream()` write `state.total_turns = total_turns;`
+/// directly; the inner manager structs are mutated in place via their
+/// own `record_*` / `bump_*` / `store_*` methods.
 #[derive(Default)]
 struct LoopState {
     /// Total turns completed so far in this run.
@@ -1270,24 +1273,6 @@ struct LoopState {
     /// Phase 5 (2026-07-03): extracted from 3 inline fields to consolidate
     /// the throttle/cooldown rules in [`ContextPressureMonitor::should_emit_warning`].
     context_pressure: ContextPressureMonitor,
-}
-
-impl LoopState {
-    // Phase 5 (2026-07-04): the `publish_from` bridge that was introduced
-    // in Phase 1.1 (2026-07-03) is removed. It used to take 14 args and
-    // shrank progressively to 1 arg (`total_turns`) as each manager struct
-    // took over its fields. With only `total_turns` left to bridge, the
-    // helper became a one-liner — `run()` and `run_stream()` now write
-    // `state.total_turns = total_turns;` directly. The other 13 fields
-    // were never bridged this way; they live on inner structs that the
-    // loop body mutates in place via their own `record_*` / `bump_*` /
-    // `store_*` methods.
-
-    // Phase 5 (2026-07-04): the two `#[allow(dead_code)]` helpers
-    // (`total_tokens` / `context_pressure_exceeds`) that were kept
-    // around as future wiring points are removed — 铁律 M (no
-    // half-implementations). Call sites read `ctx.total_tokens()`
-    // directly, so these wrappers are pure dead weight.
 }
 
 /// Phase 1.3a (2026-07-03): outcome of [`AgentLoop::process_post_response`].
