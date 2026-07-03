@@ -1246,8 +1246,6 @@ impl TurnTimings {
 struct LoopState {
     /// Total turns completed so far in this run.
     total_turns: u32,
-    /// Turn counter for the compressor (reset on each compaction).
-    iter_since_compress: u32,
     /// Per-run API + tool wall-clock accumulators. Phase 5 (2026-07-04):
     /// extracted from 2 inline `u64` fields to a [`TurnTimings`] struct
     /// so `publish_from` shrinks by 2 args and the `record_api` /
@@ -5787,8 +5785,7 @@ impl AgentLoop {
             // Phase 1.1 (2026-07-03): publish loop-locals back to `state`
             // so the future `run_shared_loop(state, llm_caller)` extraction
             // can read live values via `&mut LoopState`. Runs once per
-            // iteration, after `auto_compress` (which can mutate
-            // `iter_since_compress`).
+            // iteration, after `auto_compress`.
             //
             // Phase 5 (2026-07-04): only `total_turns` is bridged now —
             // the 2 message caches live on `state.message_cache` and the
@@ -7931,7 +7928,6 @@ mod tests {
         // `s.message_cache.content_with_tools().is_none()`.
         let s = LoopState::default();
         assert_eq!(s.total_turns, 0);
-        assert_eq!(s.iter_since_compress, 0);
         assert_eq!(s.timings.total_api_time_ms, 0);
         assert_eq!(s.timings.total_tool_time_ms, 0);
         assert!(s.cost_guard.accumulated_usage.is_none());
