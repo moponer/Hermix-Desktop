@@ -5963,6 +5963,10 @@ impl AgentLoop {
                 }
                 let (u, a) = extract_last_user_assistant(ctx.get_messages());
                 self.memory_sync(&u, &a, session_id);
+                // Phase 18 (架构-1): freeze a final snapshot at session end
+                // so the next session can pick up without replaying every
+                // frame. Parity with `run()` natural-finish path (line ~5035).
+                self.maybe_freeze_snapshot(session_id, total_turns);
                 self.spawn_background_review(total_turns, &ctx, review_memory_at_end);
                 Self::emit_mute_transition(&on_chunk, &stream_mute, false);
                 return Ok(self.finalize_agent_result(
