@@ -1278,22 +1278,6 @@ struct LoopState {
 }
 
 impl LoopState {
-    /// Return the total token count for context-pressure estimation.
-    /// Wired in Phase 1.1 (2026-07-03 follow-up) — kept `#[allow(dead_code)]`
-    /// because the actual call-site migration of the 14 loop locals onto
-    /// `state` is a separate, non-trivial commit.
-    #[allow(dead_code)]
-    fn total_tokens(&self, ctx: &ContextManager) -> usize {
-        ctx.total_tokens()
-    }
-
-    /// Return true: context pressure exceeds the configured threshold.
-    /// Wired in Phase 1.1 (2026-07-03 follow-up).
-    #[allow(dead_code)]
-    fn context_pressure_exceeds(&self, ctx: &ContextManager, threshold: usize) -> bool {
-        self.total_tokens(ctx) > threshold
-    }
-
     // Phase 5 (2026-07-04): the `publish_from` bridge that was introduced
     // in Phase 1.1 (2026-07-03) is removed. It used to take 14 args and
     // shrank progressively to 1 arg (`total_turns`) as each manager struct
@@ -1303,6 +1287,12 @@ impl LoopState {
     // were never bridged this way; they live on inner structs that the
     // loop body mutates in place via their own `record_*` / `bump_*` /
     // `store_*` methods.
+
+    // Phase 5 (2026-07-04): the two `#[allow(dead_code)]` helpers
+    // (`total_tokens` / `context_pressure_exceeds`) that were kept
+    // around as future wiring points are removed — 铁律 M (no
+    // half-implementations). Call sites read `ctx.total_tokens()`
+    // directly, so these wrappers are pure dead weight.
 }
 
 /// Phase 1.3a (2026-07-03): outcome of [`AgentLoop::process_post_response`].
