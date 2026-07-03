@@ -1184,11 +1184,6 @@ impl MessageCache {
     fn checkpoint(&self) -> Option<&Vec<Message>> {
         self.last_checkpoint_messages.as_ref()
     }
-
-    /// Borrow the cached assistant content for publish.
-    fn content_with_tools(&self) -> Option<&String> {
-        self.last_content_with_tools.as_ref()
-    }
 }
 
 /// Phase 5 (2026-07-04 follow-up): turn-level timing bookkeeping consolidated
@@ -7871,7 +7866,7 @@ mod tests {
         // `last_checkpoint_messages` / `last_content_with_tools` moved
         // into `state.message_cache`; access path now
         // `s.message_cache.checkpoint().is_none()` /
-        // `s.message_cache.content_with_tools().is_none()`.
+        // `s.message_cache.last_content_with_tools.is_none()`.
         let s = LoopState::default();
         assert_eq!(s.total_turns, 0);
         assert_eq!(s.timings.total_api_time_ms, 0);
@@ -7884,7 +7879,7 @@ mod tests {
         assert_eq!(s.retry_counters.invalid_tool, 0);
         assert_eq!(s.retry_counters.invalid_json, 0);
         assert_eq!(s.retry_counters.truncated_tool, 0);
-        assert!(s.message_cache.content_with_tools().is_none());
+        assert!(s.message_cache.last_content_with_tools.is_none());
         assert_eq!(s.context_pressure.warned_tier, 0.0);
         assert!(s.context_pressure.last_warn_at.is_none());
         assert_eq!(s.context_pressure.last_warn_percent, 0.0);
@@ -7955,14 +7950,14 @@ mod tests {
         // `LoopState::default()` semantics stay unchanged.
         let mut c = MessageCache::default();
         assert!(c.checkpoint().is_none());
-        assert!(c.content_with_tools().is_none());
+        assert!(c.last_content_with_tools.is_none());
 
         let snapshot = vec![Message::user("checkpoint text")];
         c.store_checkpoint(snapshot.clone());
         c.store_content_with_tools(Some("visible text".to_string()));
         assert_eq!(c.checkpoint().unwrap(), &snapshot);
         assert_eq!(
-            c.content_with_tools().unwrap(),
+            c.last_content_with_tools.as_deref().unwrap(),
             "visible text"
         );
 
@@ -7970,14 +7965,14 @@ mod tests {
         // slot; checkpoint is untouched (take is per-slot).
         let taken = c.take_content_with_tools();
         assert_eq!(taken, Some("visible text".to_string()));
-        assert!(c.content_with_tools().is_none());
+        assert!(c.last_content_with_tools.is_none());
         assert!(c.checkpoint().is_some());
 
         // store_content_with_tools(None) is a no-op for callers that
         // want to clear without consuming (in case `None` means
         // "explicitly nothing" vs. the implicit `None` after a take).
         c.store_content_with_tools(None);
-        assert!(c.content_with_tools().is_none());
+        assert!(c.last_content_with_tools.is_none());
     }
 
     #[test]
@@ -8030,12 +8025,12 @@ mod tests {
         s.message_cache.store_content_with_tools(Some("visible text".to_string()));
         assert_eq!(s.message_cache.checkpoint().unwrap(), &snapshot);
         assert_eq!(
-            s.message_cache.content_with_tools().unwrap(),
+            s.message_cache.last_content_with_tools.as_deref().unwrap(),
             "visible text"
         );
         let taken = s.message_cache.take_content_with_tools();
         assert_eq!(taken, Some("visible text".to_string()));
-        assert!(s.message_cache.content_with_tools().is_none());
+        assert!(s.message_cache.last_content_with_tools.is_none());
         // cost_guard defaults are unchanged by the bridge — owned by
         // the inner struct and mutated in place by the runtime.
         assert!(s.cost_guard.accumulated_usage.is_none());
@@ -10938,7 +10933,7 @@ mod tests {
         // Phase 5 (2026-07-04): `&mut Option<String>` arg became
         // `&mut MessageCache`; the old `last_content` local is gone,
         // we exercise the same final-answer path through
-        // `message_cache.content_with_tools()`.
+        // `message_cache.last_content_with_tools`.
         let mut message_cache = MessageCache::default();
         let action = agent
             .process_post_response(
@@ -10953,7 +10948,7 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(action, PostResponseAction::Finalize));
-        assert_eq!(message_cache.content_with_tools().map(String::as_str), Some("final answer"));
+        assert_eq!(message_cache.last_content_with_tools.as_deref(), Some("final answer"));
     }
 
     #[test]
@@ -11085,7 +11080,7 @@ mod tests {
         assert!(matches!(action, PostResponseAction::Continue));
         // last_content_with_tools untouched (set later by the loop after
         // the assistant message is appended to ctx).
-        assert!(message_cache.content_with_tools().is_none());
+        assert!(message_cache.last_content_with_tools.is_none());
     }
 
     #[tokio::test]
