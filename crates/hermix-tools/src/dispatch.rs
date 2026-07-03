@@ -6,6 +6,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use std::collections::HashMap;
+use std::time::Duration;
+
 use hermix_core::{is_error_json, truncate_chars, BudgetConfig, ToolCall, ToolHandler, ToolResult};
 use serde_json::Value;
 use tokio::task::JoinSet;
@@ -60,6 +63,11 @@ pub struct DispatchedResult {
     pub is_error: bool,
     /// Time taken in milliseconds.
     pub duration_ms: u64,
+    /// The JoinSet task id — used by `dispatch_tools` to recover the
+    /// input index so results can be returned in input order. `None`
+    /// when constructed outside a real `JoinSet` (tests, callers that
+    /// build `DispatchedResult` by hand).
+    pub task_id: Option<tokio::task::Id>,
 }
 
 impl From<DispatchedResult> for ToolResult {
@@ -72,24 +80,70 @@ impl From<DispatchedResult> for ToolResult {
     }
 }
 
+/// Timeouts for `dispatch_tools`.
+///
+/// Default: 60 s per call, 5 min total batch. These match the LLM
+/// timeout in `agent_loop::call_llm_with_retry` (60 s first attempt,
+/// 120 s retry) so a hanging tool never outlives its caller.
+#[derive(Debug, Clone, Copy)]
+pub struct DispatchTimeouts {
+    /// Maximum time any single tool call may take. A timeout produces
+    /// a `ToolResult::err` whose `content` is a JSON error envelope
+    /// (`{"error": "per-call timeout after Ns: ..."}`).
+    pub per_call: Duration,
+    /// Maximum time the whole batch may take. Even if individual
+    /// timeouts don't fire, the dispatcher gives up after `total`
+    /// and substitutes error envelopes for any still-pending calls.
+    pub total: Duration,
+}
+
+impl Default for DispatchTimeouts {
+    fn default() -> Self {
+        Self {
+            per_call: Duration::from_secs(60),
+            total: Duration::from_secs(300),
+        }
+    }
+}
+
 /// Dispatch multiple tool calls in parallel through the registry.
 ///
-/// Uses `tokio::JoinSet` with a configurable pool size for concurrency control.
-/// Results are truncated according to the budget config.
+/// Uses `tokio::JoinSet` with a configurable concurrency cap and budget
+/// enforcement. Results are truncated according to the budget config
+/// (UTF-8 safe — see A1). Two new guarantees on top of A1:
+///
+/// 1. **Per-call timeout.** Each spawned task is wrapped in
+///    `tokio::time::timeout(per_call_timeout, …)`. If a tool hangs
+///    (e.g. `terminal` reading from a fifo nobody will write to,
+///    `cua.click` waiting for an element that never appears), the
+///    timer fires and we substitute a `ToolResult::err` describing
+///    the timeout — the dispatch never blocks past `per_call_timeout`.
+///
+/// 2. **Input order preserved.** Results are returned in the same
+///    order as `calls`, even though `JoinSet` reports completions
+///    out of order. We track each task's input index and place
+///    results into a fixed-size `Vec<Option<ToolResult>>` before
+///    unwrapping into the final `Vec<ToolResult>`.
 ///
 /// # Arguments
-/// * `calls` - List of tool calls to dispatch
-/// * `registry` - The tool registry to dispatch through
-/// * `budget` - Budget configuration for result size limits
-/// * `pool_size` - Maximum number of concurrent tool executions (default: 8)
+/// * `calls`            - List of tool calls to dispatch
+/// * `registry`         - The tool registry to dispatch through
+/// * `budget`           - Budget configuration for result size limits
+/// * `pool_size`        - Maximum number of concurrent tool executions
+///                        (default: 8)
+/// * `timeouts`         - Per-call timeout and total batch timeout.
+///                        `DispatchTimeouts::default()` = 60 s per
+///                        call, 5 min total.
 ///
 /// # Returns
-/// Vec of ToolResult, one per input call, in no particular order.
+/// Vec of `ToolResult`, one per input call, **in the same order as
+/// `calls`**.
 pub async fn dispatch_tools(
     calls: Vec<ToolCall>,
     registry: Arc<ToolRegistry>,
     budget: BudgetConfig,
     pool_size: usize,
+    timeouts: DispatchTimeouts,
 ) -> Vec<ToolResult> {
     use tokio::sync::Semaphore;
 
@@ -101,11 +155,19 @@ pub async fn dispatch_tools(
     let semaphore = Arc::new(Semaphore::new(pool_size.max(1)));
     let mut join_set = JoinSet::new();
 
-    for call in calls {
+    // Track each task's input index so we can return results in
+    // input order. join_next() reports completions out of order, so
+    // we cannot just push into a Vec<ToolResult>.
+    let total = calls.len();
+    let mut ordered: Vec<Option<ToolResult>> = (0..total).map(|_| None).collect();
+    let mut task_to_index: HashMap<tokio::task::Id, usize> = HashMap::new();
+
+    for (index, call) in calls.into_iter().enumerate() {
         let registry = registry.clone();
         let semaphore = semaphore.clone();
         let _max_chars = budget.max_result_size_chars;
-        join_set.spawn(async move {
+        let per_call_timeout = timeouts.per_call;
+        let abort_handle = join_set.spawn(async move {
             // Wait for a permit before doing real work. The permit
             // is held for the duration of the task and released on
             // drop (i.e. on completion, including panic).
@@ -122,18 +184,33 @@ pub async fn dispatch_tools(
             // is hidden from the LLM otherwise) and (b) `tool_call` calls
             // back into registry.dispatch_async recursively, which would
             // need a different bridge path. See `dispatch_bridge_tool`.
-            let result = if crate::tools::tool_search::is_bridge(&call.function.name) {
-                dispatch_bridge_tool(&call, &registry).await
-            } else {
-                registry
-                    .dispatch_async(
-                        &call.function.name,
-                        call.function
-                            .arguments
-                            .parse()
-                            .unwrap_or(serde_json::Value::Null),
-                    )
-                    .await
+            //
+            // The whole bridge-or-registry dispatch is wrapped in
+            // tokio::time::timeout so a hanging handler (e.g. one that
+            // is blocked on a channel the user will never write to) can
+            // never wedge the batch.
+            let dispatch_fut = async {
+                if crate::tools::tool_search::is_bridge(&call.function.name) {
+                    dispatch_bridge_tool(&call, &registry).await
+                } else {
+                    registry
+                        .dispatch_async(
+                            &call.function.name,
+                            call.function
+                                .arguments
+                                .parse()
+                                .unwrap_or(serde_json::Value::Null),
+                        )
+                        .await
+                }
+            };
+            let result = match tokio::time::timeout(per_call_timeout, dispatch_fut).await {
+                Ok(s) => s,
+                Err(_elapsed) => format!(
+                    r#"{{"error": "per-call timeout after {}s: tool '{}' did not return in time"}}"#,
+                    per_call_timeout.as_secs(),
+                    call.function.name,
+                ),
             };
             let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -148,20 +225,49 @@ pub async fn dispatch_tools(
                 content: result,
                 is_error,
                 duration_ms,
+                task_id: Some(tokio::task::id()),
             }
         });
+        task_to_index.insert(abort_handle.id(), index);
     }
 
-    let mut results: Vec<ToolResult> = Vec::new();
-    while let Some(res) = join_set.join_next().await {
-        match res {
-            Ok(dr) => {
+    // Outer deadline: even if individual timeouts don't fire (every
+    // tool claims to be near completion but never returns), we cap the
+    // whole batch at `timeouts.total`.
+    let deadline = tokio::time::Instant::now() + timeouts.total;
+    while !ordered.iter().all(Option::is_some) {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            // Batch-wide timeout: fill in every still-pending slot with
+            // an error envelope. JoinSet tasks we drop here will be
+            // aborted when their handles go out of scope.
+            for (idx, slot) in ordered.iter_mut().enumerate() {
+                if slot.is_none() {
+                    *slot = Some(ToolResult::err(
+                        format!("batch_timeout_index_{idx}"),
+                        format!(
+                            "batch-wide timeout after {}s: this tool did not return in time",
+                            timeouts.total.as_secs()
+                        ),
+                    ));
+                }
+            }
+            break;
+        }
+        match tokio::time::timeout(remaining, join_set.join_next()).await {
+            Ok(Some(Ok(dr))) => {
+                let index = match dr.task_id.and_then(|id| task_to_index.get(&id).copied()) {
+                    Some(i) => i,
+                    None => {
+                        // We never assigned this task an index — that
+                        // would be a programming error. Surface it.
+                        tracing::error!(
+                            "dispatch_tools: completed task has no recorded input index"
+                        );
+                        continue;
+                    }
+                };
                 let mut content = dr.content;
-                // Per-result truncation. UTF-8 safe: we slice on
-                // char boundaries, not byte indices. Earlier
-                // versions used `&content[..N]` which panicked on
-                // any CJK / emoji output that hit the limit on a
-                // multi-byte boundary.
                 if content.chars().count() > budget.max_result_size_chars {
                     let head = truncate_chars(&content, budget.max_result_size_chars);
                     let removed = content.chars().count() - budget.max_result_size_chars;
@@ -170,41 +276,42 @@ pub async fn dispatch_tools(
                         head, removed
                     );
                 }
-                results.push(ToolResult {
+                ordered[index] = Some(ToolResult {
                     tool_call_id: dr.tool_call_id,
                     content,
                     is_error: dr.is_error,
                 });
             }
-            Err(e) => {
-                // Join error — treat as a tool error
-                results.push(ToolResult::err(
-                    "unknown",
-                    format!("Task join error: {}", e),
+            Ok(Some(Err(join_err))) => {
+                let dead_id = join_err.id();
+                let index = task_to_index.get(&dead_id).copied().unwrap_or(0);
+                ordered[index] = Some(ToolResult::err(
+                    format!("join_error_index_{index}"),
+                    format!("Task join error: {join_err}"),
                 ));
             }
+            Ok(None) => break, // join_set empty before we filled every slot
+            Err(_elapsed) => continue, // outer loop will catch zero remaining
         }
     }
 
-    // Aggregate budget enforcement. Same UTF-8 safe slice as above.
-    let total_chars: usize = results.iter().map(|r| r.content.chars().count()).sum();
-    if total_chars > budget.max_aggregate_chars {
-        let ratio = budget.max_aggregate_chars as f64 / total_chars as f64;
-        for result in results.iter_mut() {
-            let target_len = ((result.content.chars().count() as f64) * ratio) as usize;
-            let min_len = target_len.max(200);
-            if result.content.chars().count() > min_len {
-                let removed = result.content.chars().count() - min_len;
-                let head = truncate_chars(&result.content, min_len);
-                result.content = format!(
-                    "{}\n\n[... truncated {} characters ...]",
-                    head, removed
-                );
-            }
-        }
-    }
-
-    results
+    // Unwrap the fixed-size Vec<Option<ToolResult>> into a Vec<ToolResult>.
+    // A None slot here means the JoinSet drained without ever writing
+    // it (only possible if the total timeout raced a join_next — the
+    // outer loop should have caught that). Treat it as a synthetic err
+    // rather than panic, since the contract is "one result per call".
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            slot.unwrap_or_else(|| {
+                ToolResult::err(
+                    format!("missing_index_{i}"),
+                    "dispatch_tools returned no result for this call (internal error)".to_string(),
+                )
+            })
+        })
+        .collect()
 }
 
 /// Dispatch a single tool call through the registry (convenience wrapper).
@@ -257,6 +364,7 @@ mod tests {
             content: "result".to_string(),
             is_error: false,
             duration_ms: 100,
+            task_id: None,
         };
         let tr: ToolResult = dr.into();
         assert_eq!(tr.tool_call_id, "call_1");
@@ -288,7 +396,14 @@ mod tests {
                 arguments: "{}".to_string(),
             },
         };
-        let results = dispatch_tools(vec![call], registry, budget, 4).await;
+        let results = dispatch_tools(
+            vec![call],
+            registry,
+            budget,
+            4,
+            DispatchTimeouts::default(),
+        )
+        .await;
         assert_eq!(results.len(), 1);
         // The truncation marker must be present, and the head must
         // be a valid UTF-8 string (which is the whole point — the
@@ -367,5 +482,230 @@ mod tests {
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).expect("JSON");
         assert!(parsed.get("error").is_some());
+    }
+
+    // ── dispatch_tools timeout + order (A4) ──────────────────────────
+    //
+    // The `FakeHandler` below is registered into a fresh ToolRegistry
+    // and lets a test pick exactly how long the handler sleeps before
+    // returning. The "hang forever" arm uses `tokio::time::sleep`
+    // with a long duration — it always gets killed by the test's
+    // timeout, never runs to completion.
+
+    use async_trait::async_trait;
+    use hermix_core::traits::RiskLevel;
+    use hermix_core::{JsonSchema, ToolError, ToolHandler, ToolSchema};
+    use std::time::Duration;
+
+    fn make_handler(sleep: Duration, label: &'static str) -> FakeHandler {
+        FakeHandler { sleep, label }
+    }
+
+    fn register_fake(registry: &ToolRegistry, handler: FakeHandler) {
+        registry.register_with_risk(
+            handler.label,
+            "test",
+            handler.schema(),
+            Arc::new(make_handler(handler.sleep, handler.label)),
+            Arc::new(|| true),
+            Vec::new(),
+            true,
+            "fake",
+            "🔧",
+            None,
+            RiskLevel::Safe,
+            false,
+        );
+    }
+
+    struct FakeHandler {
+        sleep: Duration,
+        label: &'static str,
+    }
+
+    #[async_trait]
+    impl ToolHandler for FakeHandler {
+        fn schema(&self) -> ToolSchema {
+            ToolSchema::new(
+                self.label,
+                format!("fake handler that sleeps {:?}", self.sleep),
+                JsonSchema::object(indexmap::IndexMap::new(), Vec::new()),
+            )
+        }
+        async fn execute(&self, _params: Value) -> Result<String, ToolError> {
+            tokio::time::sleep(self.sleep).await;
+            Ok(format!("ok:{}", self.label))
+        }
+    }
+
+    fn make_call(id: &str, name: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            function: hermix_core::FunctionCall {
+                name: name.to_string(),
+                arguments: "{}".to_string(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_returns_results_in_input_order() {
+        let registry = ToolRegistry::new();
+        register_fake(
+            &registry,
+            make_handler(Duration::from_millis(120), "slow_a"),
+        );
+        register_fake(&registry, make_handler(Duration::from_millis(60), "mid"));
+        register_fake(&registry, make_handler(Duration::from_millis(0), "fast"));
+        let registry = Arc::new(registry);
+
+        let calls = vec![
+            make_call("call_0", "slow_a"),
+            make_call("call_1", "mid"),
+            make_call("call_2", "fast"),
+        ];
+        let results = dispatch_tools(
+            calls,
+            registry,
+            BudgetConfig {
+                max_result_size_chars: 1_000_000,
+                max_aggregate_chars: 10_000_000,
+            },
+            4,
+            DispatchTimeouts {
+                per_call: Duration::from_secs(5),
+                total: Duration::from_secs(30),
+            },
+        )
+        .await;
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].tool_call_id, "call_0");
+        assert!(results[0].content.contains("ok:slow_a"));
+        assert_eq!(results[1].tool_call_id, "call_1");
+        assert!(results[1].content.contains("ok:mid"));
+        assert_eq!(results[2].tool_call_id, "call_2");
+        assert!(results[2].content.contains("ok:fast"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_per_call_timeout_returns_error_envelope() {
+        let registry = ToolRegistry::new();
+        register_fake(
+            &registry,
+            make_handler(Duration::from_secs(10), "hanger"),
+        );
+        let registry = Arc::new(registry);
+
+        let start = std::time::Instant::now();
+        let results = dispatch_tools(
+            vec![make_call("c1", "hanger")],
+            registry,
+            BudgetConfig {
+                max_result_size_chars: 1_000_000,
+                max_aggregate_chars: 10_000_000,
+            },
+            2,
+            DispatchTimeouts {
+                per_call: Duration::from_millis(100),
+                total: Duration::from_secs(30),
+            },
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_error, "timeout result must be is_error");
+        assert!(
+            results[0].content.contains("per-call timeout"),
+            "content should mention per-call timeout, got: {}",
+            results[0].content
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "dispatch must return well before the 10 s hang, took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_total_timeout_fills_pending_with_errors() {
+        let registry = ToolRegistry::new();
+        for label in ["h1", "h2", "h3"] {
+            register_fake(
+                &registry,
+                make_handler(Duration::from_secs(10), label),
+            );
+        }
+        let registry = Arc::new(registry);
+
+        let start = std::time::Instant::now();
+        let results = dispatch_tools(
+            vec![
+                make_call("c1", "h1"),
+                make_call("c2", "h2"),
+                make_call("c3", "h3"),
+            ],
+            registry,
+            BudgetConfig {
+                max_result_size_chars: 1_000_000,
+                max_aggregate_chars: 10_000_000,
+            },
+            4,
+            DispatchTimeouts {
+                per_call: Duration::from_secs(60),
+                total: Duration::from_millis(200),
+            },
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(results.len(), 3);
+        for (i, r) in results.iter().enumerate() {
+            assert!(r.is_error, "call {i} should be error after total timeout");
+            assert!(r.content.contains("batch-wide timeout"));
+        }
+        assert!(
+            elapsed < Duration::from_millis(800),
+            "dispatch must return well before the 10 s hang, took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_per_call_timeout_does_not_block_fast_tools() {
+        let registry = ToolRegistry::new();
+        register_fake(
+            &registry,
+            make_handler(Duration::from_secs(10), "hanger"),
+        );
+        register_fake(&registry, make_handler(Duration::from_millis(0), "fast"));
+        let registry = Arc::new(registry);
+
+        let start = std::time::Instant::now();
+        let results = dispatch_tools(
+            vec![make_call("c_h", "hanger"), make_call("c_f", "fast")],
+            registry,
+            BudgetConfig {
+                max_result_size_chars: 1_000_000,
+                max_aggregate_chars: 10_000_000,
+            },
+            4,
+            DispatchTimeouts {
+                per_call: Duration::from_millis(100),
+                total: Duration::from_secs(30),
+            },
+        )
+        .await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].tool_call_id, "c_h");
+        assert!(results[0].is_error, "hanger must time out");
+        assert_eq!(results[1].tool_call_id, "c_f");
+        assert!(!results[1].is_error, "fast must succeed");
+        assert!(results[1].content.contains("ok:fast"));
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "dispatch took {elapsed:?}, fast tool should not have been blocked"
+        );
     }
 }
