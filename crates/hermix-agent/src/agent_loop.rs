@@ -5054,29 +5054,25 @@ impl AgentLoop {
         let session_id = self.config.session_id.as_deref().unwrap_or("");
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
 
-        // Phase 1.1 (2026-07-03): bridge — every loop-local mutable lives
-        // in `state`; the local bindings below are zero-cost aliases so
-        // the loop body keeps working unchanged. The 14 `state.x = x`
-        // writebacks at the end of each iteration are how we re-publish
-        // progress to the struct, so call sites in helpers can read
-        // `state.total_turns` etc. without manual passing.
+        // Phase 1.1 (2026-07-03) introduced `state` as a bridge — every
+        // loop-local mutable would eventually live in `state` so a future
+        // `run_shared_loop(state, llm_caller)` helper could take only
+        // `&mut LoopState` instead of the original 11+ locals.
         //
-        // Phase 5 (2026-07-03): 4 of those locals — `state.cost_guard.accumulated_usage`
-        // / `state.cost_guard.session_cost_usd` / `state.cost_guard.cost_warned` / `state.cost_guard.forced_runtime_route`
-        // — disappeared entirely. They now live as the 4 fields of
-        // `state.cost_guard` (the [`CostGuard`] struct) and are
-        // mutated in place via `&mut state.cost_guard`. Call sites
-        // that previously read `state.cost_guard.session_cost_usd` now read
-        // `state.cost_guard.session_cost_usd`. The 4 sibling locals
-        // dropped from `publish_from` in the same commit.
+        // Phase 5 (2026-07-03..2026-07-04) collapsed the bridge to its
+        // minimum: 4 manager structs (`cost_guard` / `retry_counters` /
+        // `context_pressure` / `timings` / `message_cache`) own the
+        // in-place-mutated fields, and `total_turns` is the only scalar
+        // still aliased to a local. The other 13 locals were either
+        // dropped or replaced with `record_*` / `bump_*` / `store_*`
+        // methods on the inner structs.
         let mut state = LoopState::default();
-        // Phase 5 (2026-07-04): only `total_turns` keeps the
-        // local-alias pattern because the rest of the loop body still
-        // reads it as a scalar. The two message caches live on
-        // `state.message_cache` and are mutated in place via
-        // `store_*` / `take_*` / `*()` accessors. The two timings
-        // live on `state.timings` and are mutated in place via
-        // `record_api` / `record_tool`.
+        // `total_turns` keeps the local-alias pattern because the rest
+        // of the loop body reads it as a scalar (the hot path is
+        // `if total_turns >= self.config.max_turns` etc.). The struct
+        // field `state.total_turns` is still written at the end of
+        // each iteration so the future shared loop body can read it
+        // without taking 11 more arguments.
         let mut total_turns: u32 = state.total_turns;
 
         loop {
