@@ -83,9 +83,9 @@ use tracing::{info, instrument};
 pub use crate::agent_config::{AgentConfig, RetryConfig, RuntimeProviderConfig};
 pub use crate::agent_helpers::{
     classify_error, classify_tool_error, compute_prompt_cache_key, default_max_autonomous_nudges,
-    is_interactive_tool, jittered_backoff, rand_u64_range, truncate_tool_result, AgentCallbacks,
+    is_interactive_tool, jittered_backoff, rand_u64_range, AgentCallbacks,
     ErrorClass, EvolutionCounters, ToolDispatchDecision, ToolEntry, ToolErrorClass, ToolRecovery,
-    ToolRegistry, TurnMetrics, TOOL_RESULT_CHAR_LIMIT,
+    ToolRegistry, TurnMetrics,
 };
 
 // ---------------------------------------------------------------------------
@@ -4986,10 +4986,11 @@ impl AgentLoop {
                     .iter()
                     .find(|tc| tc.id == result.tool_call_id)
                     .map(|tc| tc.function.name.as_str());
-                let truncated = truncate_tool_result(&result.content, tool_name);
+                // Truncation is owned by budget::enforce_budget (above),
+                // which is now the single char-safe path. See A1 commit.
                 ctx.add_message(Message::tool_result(
                     &result.tool_call_id,
-                    &truncated,
+                    &result.content,
                     tool_name,
                 ));
             }
@@ -5964,10 +5965,11 @@ impl AgentLoop {
                     .iter()
                     .find(|tc| tc.id == result.tool_call_id)
                     .map(|tc| tc.function.name.as_str());
-                let truncated = truncate_tool_result(&result.content, tool_name);
+                // Truncation is owned by budget::enforce_budget (above),
+                // which is now the single char-safe path. See A1 commit.
                 ctx.add_message(Message::tool_result(
                     &result.tool_call_id,
-                    &truncated,
+                    &result.content,
                     tool_name,
                 ));
             }

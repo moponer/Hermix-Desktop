@@ -9,8 +9,7 @@
 //! - `TurnMetrics`, `EvolutionCounters` (was agent_loop.rs:557-578)
 //! - `ToolDispatchDecision`, `AgentCallbacks` (was agent_loop.rs:584-693)
 //! - `ErrorClass`, `classify_error`, `jittered_backoff`, `rand_u64_range` (was agent_loop.rs:695-755)
-//! - `truncate_tool_result`, `compute_prompt_cache_key`, `default_max_autonomous_nudges` (was agent_loop.rs:493-550)
-//! - `TOOL_RESULT_CHAR_LIMIT` constant (was agent_loop.rs:493-494)
+//! - `compute_prompt_cache_key`, `default_max_autonomous_nudges` (was agent_loop.rs:493-550)
 //! - `is_interactive_tool` (P2.4, 2026-06-30) — names of tools that must run
 //!   sequentially in the caller's task rather than the parallel `JoinSet`.
 //! - `ToolErrorClass`, `classify_tool_error`, `ToolRecovery` (P2.5,
@@ -130,37 +129,21 @@ impl Default for ToolRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// Tool-result truncation
+// Tool-result truncation (REMOVED — see budget::truncate_result)
 // ---------------------------------------------------------------------------
-
-/// Maximum characters before we truncate a large tool result. ~1K tokens.
-pub const TOOL_RESULT_CHAR_LIMIT: usize = 4000;
-
-/// Truncate oversized tool results to avoid bloating the context window.
-/// `read_file`/`terminal`/`web_fetch` are common offenders (large file contents, API responses).
-/// Keeps the first `TOOL_RESULT_CHAR_LIMIT` chars and appends a notice with original size.
-pub fn truncate_tool_result(content: &str, tool_name: Option<&str>) -> String {
-    let total_len = content.len();
-    if total_len <= TOOL_RESULT_CHAR_LIMIT {
-        return content.to_string();
-    }
-    let is_large_tool = tool_name.is_some_and(|n| matches!(
-        n,
-        "read_file" | "read_pdf" | "terminal" | "exec_command"
-            | "web_fetch" | "browser_snapshot" | "list_files" | "search_files"
-    ));
-    if !is_large_tool {
-        return content.to_string();
-    }
-    let footer = format!(
-        "\n\n[... 截断: {}/{} chars，可用 read_file 读取完整内容]",
-        TOOL_RESULT_CHAR_LIMIT, total_len
-    );
-    let mut s = String::with_capacity(TOOL_RESULT_CHAR_LIMIT + footer.len());
-    s.push_str(&content[..TOOL_RESULT_CHAR_LIMIT]);
-    s.push_str(&footer);
-    s
-}
+//
+// Previously this module owned `truncate_tool_result` + `TOOL_RESULT_CHAR_LIMIT`,
+// which byte-sliced `content[..4000]` (panic on CJK mid-character) and applied
+// a hard 4 000-char cap on a hardcoded list of "large tools". Call sites in
+// `agent_loop.rs` then double-truncated: `budget::enforce_budget` (char-safe
+// after A1) ran first, then `truncate_tool_result` re-cut to 4 000 chars.
+//
+// Now there is one truncation path: `budget::truncate_result` (char-safe)
+// invoked from `budget::enforce_budget`. The per-tool allowlist and the
+// "可用 read_file 读取完整内容" footer were a UX nicety — the budget's
+// "[... truncated N characters ...]" footer carries the same information.
+// Configure `BudgetConfig::max_result_size_chars` per-call-site if a
+// particular tool needs a tighter cap than the global default.
 
 // ---------------------------------------------------------------------------
 // Prompt-cache key + autonomous-nudge default
