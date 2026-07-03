@@ -893,6 +893,73 @@ impl ContextPressureMonitor {
     }
 }
 
+/// Phase 5 (2026-07-03): per-loop retry counters consolidated into one
+/// struct so `LoopState` doesn't have to carry 3 sibling `u32` fields and
+/// `publish_from` doesn't have to take 3 sibling `u32` arguments.
+///
+/// All three counters follow the same shape:
+/// - `bump_*` saturating-increments and returns the new value.
+/// - `reset_*` clears the counter (called on the success path).
+/// - The `< max` / `>= max` comparison stays at the call site because
+///   the action on max differs between the three (finalize vs.
+///   continue-with-error vs. fall-through) — folding that decision
+///   into the helper would force one path on all three.
+struct RetryCounters {
+    /// Retries against invalid tool names.
+    invalid_tool: u32,
+    /// Retries against invalid JSON in tool arguments.
+    invalid_json: u32,
+    /// Retries when the streaming provider truncated a tool call's JSON.
+    /// `run_stream()`-only — non-stream `run()` cannot observe truncation.
+    truncated_tool: u32,
+}
+
+impl Default for RetryCounters {
+    fn default() -> Self {
+        Self {
+            invalid_tool: 0,
+            invalid_json: 0,
+            truncated_tool: 0,
+        }
+    }
+}
+
+impl RetryCounters {
+    /// Saturating-increment the invalid tool name counter and return the
+    /// new value. Caller compares to `config.invalid_tool_call_max_retries`.
+    fn bump_invalid_tool(&mut self) -> u32 {
+        self.invalid_tool = self.invalid_tool.saturating_add(1);
+        self.invalid_tool
+    }
+
+    /// Saturating-increment the invalid JSON counter and return the new
+    /// value. Caller compares to `config.invalid_tool_json_max_retries`.
+    fn bump_invalid_json(&mut self) -> u32 {
+        self.invalid_json = self.invalid_json.saturating_add(1);
+        self.invalid_json
+    }
+
+    /// Saturating-increment the truncated tool call counter and return the
+    /// new value. Caller compares to
+    /// `config.truncated_tool_call_max_retries`.
+    fn bump_truncated_tool(&mut self) -> u32 {
+        self.truncated_tool = self.truncated_tool.saturating_add(1);
+        self.truncated_tool
+    }
+
+    fn reset_invalid_tool(&mut self) {
+        self.invalid_tool = 0;
+    }
+
+    fn reset_invalid_json(&mut self) {
+        self.invalid_json = 0;
+    }
+
+    fn reset_truncated_tool(&mut self) {
+        self.truncated_tool = 0;
+    }
+}
+
 #[derive(Default)]
 struct LoopState {
     /// Total turns completed so far in this run.
@@ -913,13 +980,12 @@ struct LoopState {
     forced_runtime_route: Option<TurnRuntimeRoute>,
     /// Last checkpoint messages for crash recovery.
     last_checkpoint_messages: Option<Vec<Message>>,
-    /// Retries against invalid tool names (back-off on repeated).
-    invalid_tool_retries: u32,
-    /// Retries against invalid JSON in tool arguments.
-    invalid_json_retries: u32,
-    /// Retries when the streaming provider truncated a tool call's JSON.
-    /// `run_stream()`-only — non-stream `run()` cannot observe truncation.
-    truncated_tool_call_retries: u32,
+    /// Retries against invalid tool names / invalid tool JSON / truncated
+    /// tool calls. Phase 5 (2026-07-03): the 3 sibling `u32` fields that
+    /// used to live here moved into [`RetryCounters`] and are mutated
+    /// in place via `bump_*` / `reset_*` methods. `publish_from` no
+    /// longer takes 3 sibling arguments for these.
+    retry_counters: RetryCounters,
     /// Last assistant message that included tool_use (for re-asking).
     last_content_with_tools: Option<String>,
     /// Context-pressure warning state (tier + cooldown timestamp + last %).
@@ -959,6 +1025,12 @@ impl LoopState {
     /// moved into [`ContextPressureMonitor`] which lives directly on
     /// `self.context_pressure` and is mutated in place via
     /// [`ContextPressureMonitor::should_emit_warning`].
+    ///
+    /// Phase 5 (2026-07-03, later): also dropped 3 retry-counter args
+    /// (`invalid_tool_retries` / `invalid_json_retries` /
+    /// `truncated_tool_call_retries`) — those moved into
+    /// [`RetryCounters`] which is mutated in place via `bump_*` /
+    /// `reset_*` methods.
     #[allow(clippy::too_many_arguments)]
     fn publish_from(
         &mut self,
@@ -970,9 +1042,6 @@ impl LoopState {
         cost_warned: bool,
         forced_runtime_route: Option<&TurnRuntimeRoute>,
         last_checkpoint_messages: Option<&Vec<Message>>,
-        invalid_tool_retries: u32,
-        invalid_json_retries: u32,
-        truncated_tool_call_retries: u32,
         last_content_with_tools: Option<&String>,
     ) {
         self.total_turns = total_turns;
@@ -983,9 +1052,6 @@ impl LoopState {
         self.cost_warned = cost_warned;
         self.forced_runtime_route = forced_runtime_route.cloned();
         self.last_checkpoint_messages = last_checkpoint_messages.cloned();
-        self.invalid_tool_retries = invalid_tool_retries;
-        self.invalid_json_retries = invalid_json_retries;
-        self.truncated_tool_call_retries = truncated_tool_call_retries;
         self.last_content_with_tools = last_content_with_tools.cloned();
     }
 }
@@ -4744,8 +4810,6 @@ impl AgentLoop {
         let mut forced_runtime_route: Option<TurnRuntimeRoute> = state.forced_runtime_route.clone();
         let mut last_checkpoint_messages: Option<Vec<Message>> =
             state.last_checkpoint_messages.clone();
-        let (mut invalid_tool_retries, mut invalid_json_retries) =
-            (state.invalid_tool_retries, state.invalid_json_retries);
         let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
 
         loop {
@@ -5102,16 +5166,16 @@ impl AgentLoop {
                 .map(|tc| tc.function.name.clone())
                 .collect();
             if !invalid_tool_calls.is_empty() {
-                invalid_tool_retries = invalid_tool_retries.saturating_add(1);
+                let count = state.retry_counters.bump_invalid_tool();
                 self.emit_status(
                     "lifecycle",
                     &format!(
                         "Invalid tool call detected — retrying ({}/{})",
-                        invalid_tool_retries, self.config.invalid_tool_call_max_retries
+                        count, self.config.invalid_tool_call_max_retries
                     ),
                 );
                 let available = self.tool_registry.names().join(", ");
-                if invalid_tool_retries >= self.config.invalid_tool_call_max_retries {
+                if count >= self.config.invalid_tool_call_max_retries {
                     self.emit_status(
                         "lifecycle",
                         &format!(
@@ -5149,7 +5213,7 @@ impl AgentLoop {
                 }
                 continue;
             }
-            invalid_tool_retries = 0;
+            state.retry_counters.reset_invalid_tool();
 
             let mut invalid_json_args: Vec<(String, String)> = Vec::new();
             for tc in &mut tool_calls {
@@ -5158,13 +5222,13 @@ impl AgentLoop {
                 }
             }
             if !invalid_json_args.is_empty() {
-                invalid_json_retries = invalid_json_retries.saturating_add(1);
-                if invalid_json_retries < self.config.invalid_tool_json_max_retries {
+                let count = state.retry_counters.bump_invalid_json();
+                if count < self.config.invalid_tool_json_max_retries {
                     self.emit_status(
                         "lifecycle",
                         &format!(
                             "Invalid tool JSON arguments — retrying ({}/{})",
-                            invalid_json_retries, self.config.invalid_tool_json_max_retries
+                            count, self.config.invalid_tool_json_max_retries
                         ),
                     );
                     let _ = ctx.get_messages_mut().pop();
@@ -5177,7 +5241,7 @@ impl AgentLoop {
                         self.config.invalid_tool_json_max_retries
                     ),
                 );
-                invalid_json_retries = 0;
+                state.retry_counters.reset_invalid_json();
                 for tc in &tool_calls {
                     let content = if let Some((_, err)) = invalid_json_args
                         .iter()
@@ -5194,7 +5258,7 @@ impl AgentLoop {
                 }
                 continue;
             }
-            invalid_json_retries = 0;
+            state.retry_counters.reset_invalid_json();
 
             for tc in &tool_calls {
                 if let Ok(mut c) = self.evolution_counters.lock() {
@@ -5420,9 +5484,6 @@ impl AgentLoop {
                 cost_warned,
                 forced_runtime_route.as_ref(),
                 last_checkpoint_messages.as_ref(),
-                invalid_tool_retries,
-                invalid_json_retries,
-                0, // truncated_tool_call_retries — run() never sees a truncated stream
                 last_content_with_tools.as_ref(),
             );
         }
@@ -5547,9 +5608,6 @@ impl AgentLoop {
         let mut forced_runtime_route: Option<TurnRuntimeRoute> = state.forced_runtime_route.clone();
         let mut last_checkpoint_messages: Option<Vec<Message>> =
             state.last_checkpoint_messages.clone();
-        let (mut invalid_tool_retries, mut invalid_json_retries) =
-            (state.invalid_tool_retries, state.invalid_json_retries);
-        let mut truncated_tool_call_retries: u32 = state.truncated_tool_call_retries;
         let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
 
         loop {
@@ -5821,20 +5879,21 @@ impl AgentLoop {
                     .tool_calls
                     .as_ref()
                     .is_some_and(|calls| !calls.is_empty())
-                && truncated_tool_call_retries < self.config.truncated_tool_call_max_retries
             {
-                truncated_tool_call_retries = truncated_tool_call_retries.saturating_add(1);
-                self.emit_status(
-                    "lifecycle",
-                    &format!(
-                        "Truncated tool arguments — retrying ({}/{})",
-                        truncated_tool_call_retries, self.config.truncated_tool_call_max_retries
-                    ),
-                );
-                let _ = ctx.get_messages_mut().pop();
-                continue;
+                let count = state.retry_counters.bump_truncated_tool();
+                if count <= self.config.truncated_tool_call_max_retries {
+                    self.emit_status(
+                        "lifecycle",
+                        &format!(
+                            "Truncated tool arguments — retrying ({}/{})",
+                            count, self.config.truncated_tool_call_max_retries
+                        ),
+                    );
+                    let _ = ctx.get_messages_mut().pop();
+                    continue;
+                }
             }
-            truncated_tool_call_retries = 0;
+            state.retry_counters.reset_truncated_tool();
 
             if let Some(ref cb) = self.callbacks.on_step_complete {
                 cb(total_turns);
@@ -5921,16 +5980,16 @@ impl AgentLoop {
                 .map(|tc| tc.function.name.clone())
                 .collect();
             if !invalid_tool_calls.is_empty() {
-                invalid_tool_retries = invalid_tool_retries.saturating_add(1);
+                let count = state.retry_counters.bump_invalid_tool();
                 self.emit_status(
                     "lifecycle",
                     &format!(
                         "Invalid tool call detected — retrying ({}/{})",
-                        invalid_tool_retries, self.config.invalid_tool_call_max_retries
+                        count, self.config.invalid_tool_call_max_retries
                     ),
                 );
                 let available = self.tool_registry.names().join(", ");
-                if invalid_tool_retries >= self.config.invalid_tool_call_max_retries {
+                if count >= self.config.invalid_tool_call_max_retries {
                     self.emit_status(
                         "lifecycle",
                         &format!(
@@ -5968,7 +6027,7 @@ impl AgentLoop {
                 }
                 continue;
             }
-            invalid_tool_retries = 0;
+            state.retry_counters.reset_invalid_tool();
 
             let mut invalid_json_args: Vec<(String, String)> = Vec::new();
             for tc in &mut tool_calls {
@@ -5977,13 +6036,13 @@ impl AgentLoop {
                 }
             }
             if !invalid_json_args.is_empty() {
-                invalid_json_retries = invalid_json_retries.saturating_add(1);
-                if invalid_json_retries < self.config.invalid_tool_json_max_retries {
+                let count = state.retry_counters.bump_invalid_json();
+                if count < self.config.invalid_tool_json_max_retries {
                     self.emit_status(
                         "lifecycle",
                         &format!(
                             "Invalid tool JSON arguments — retrying ({}/{})",
-                            invalid_json_retries, self.config.invalid_tool_json_max_retries
+                            count, self.config.invalid_tool_json_max_retries
                         ),
                     );
                     let _ = ctx.get_messages_mut().pop();
@@ -5996,7 +6055,7 @@ impl AgentLoop {
                         self.config.invalid_tool_json_max_retries
                     ),
                 );
-                invalid_json_retries = 0;
+                state.retry_counters.reset_invalid_json();
                 for tc in &tool_calls {
                     let content = if let Some((_, err)) = invalid_json_args
                         .iter()
@@ -6013,7 +6072,7 @@ impl AgentLoop {
                 }
                 continue;
             }
-            invalid_json_retries = 0;
+            state.retry_counters.reset_invalid_json();
             for tc in &tool_calls {
                 if let Ok(mut c) = self.evolution_counters.lock() {
                     match tc.function.name.as_str() {
@@ -6219,9 +6278,6 @@ impl AgentLoop {
                 cost_warned,
                 forced_runtime_route.as_ref(),
                 last_checkpoint_messages.as_ref(),
-                invalid_tool_retries,
-                invalid_json_retries,
-                truncated_tool_call_retries,
                 last_content_with_tools.as_ref(),
             );
         }
@@ -7582,8 +7638,9 @@ mod tests {
         assert!(!s.cost_warned);
         assert!(s.forced_runtime_route.is_none());
         assert!(s.last_checkpoint_messages.is_none());
-        assert_eq!(s.invalid_tool_retries, 0);
-        assert_eq!(s.invalid_json_retries, 0);
+        assert_eq!(s.retry_counters.invalid_tool, 0);
+        assert_eq!(s.retry_counters.invalid_json, 0);
+        assert_eq!(s.retry_counters.truncated_tool, 0);
         assert!(s.last_content_with_tools.is_none());
         assert_eq!(s.context_pressure.warned_tier, 0.0);
         assert!(s.context_pressure.last_warn_at.is_none());
@@ -7597,12 +7654,13 @@ mod tests {
         // will both mutate these fields on every turn.
         let mut s = LoopState::default();
         s.total_turns += 1;
-        s.invalid_tool_retries += 1;
-        s.invalid_json_retries += 2;
+        s.retry_counters.bump_invalid_tool();
+        s.retry_counters.bump_invalid_json();
+        s.retry_counters.bump_invalid_json();
         s.session_cost_usd += 0.001;
         assert_eq!(s.total_turns, 1);
-        assert_eq!(s.invalid_tool_retries, 1);
-        assert_eq!(s.invalid_json_retries, 2);
+        assert_eq!(s.retry_counters.invalid_tool, 1);
+        assert_eq!(s.retry_counters.invalid_json, 2);
         assert!(s.session_cost_usd > 0.0);
         // Unrelated fields stay zero.
         assert_eq!(s.total_api_time_ms, 0);
@@ -7626,9 +7684,6 @@ mod tests {
             true,                     // cost_warned
             None,                     // forced_runtime_route
             None,                     // last_checkpoint_messages
-            2,                        // invalid_tool_retries
-            3,                        // invalid_json_retries
-            1,                        // truncated_tool_call_retries (stream-only)
             None,                     // last_content_with_tools
         );
         assert_eq!(s.total_turns, 7);
@@ -7636,9 +7691,16 @@ mod tests {
         assert_eq!(s.total_tool_time_ms, 567);
         assert_eq!(s.session_cost_usd, 0.0042);
         assert!(s.cost_warned);
-        assert_eq!(s.invalid_tool_retries, 2);
-        assert_eq!(s.invalid_json_retries, 3);
-        assert_eq!(s.truncated_tool_call_retries, 1);
+        // retry_counters live on the inner struct — set directly here
+        // to mirror pre-extraction semantics (publish_from no longer
+        // owns those 3 fields; the inner struct is mutated in place by
+        // bump_* / reset_* methods).
+        s.retry_counters.invalid_tool = 2;
+        s.retry_counters.invalid_json = 3;
+        s.retry_counters.truncated_tool = 1;
+        assert_eq!(s.retry_counters.invalid_tool, 2);
+        assert_eq!(s.retry_counters.invalid_json, 3);
+        assert_eq!(s.retry_counters.truncated_tool, 1);
         // context_pressure is on the inner struct — set directly here to
         // mirror pre-extraction semantics (publish_from no longer owns
         // those 3 fields; the inner struct is mutated in place by
@@ -10244,6 +10306,86 @@ mod tests {
         assert!(emit);
         assert_eq!(m.warned_tier, 0.85);
         assert!(m.last_warn_at.is_some());
+    }
+
+    // ── Phase 5 (2026-07-03): RetryCounters unit tests ──
+    //
+    // The 3 sibling retry counters on LoopState (invalid_tool_retries,
+    // invalid_json_retries, truncated_tool_call_retries) collapsed into
+    // a single RetryCounters struct. These tests pin the bump + reset
+    // contract; the `< max` / `>= max` decision stays at the call site
+    // because the action on max differs between the three.
+
+    #[test]
+    fn retry_counters_default_is_all_zero() {
+        // Phase 5: the freshly-constructed RetryCounters must start at
+        // zero for all three slots — otherwise a stale value would leak
+        // into the first call inside run() / run_stream().
+        let c = RetryCounters::default();
+        assert_eq!(c.invalid_tool, 0);
+        assert_eq!(c.invalid_json, 0);
+        assert_eq!(c.truncated_tool, 0);
+    }
+
+    #[test]
+    fn retry_counters_bump_returns_saturating_incremented_value() {
+        // All three bump methods return the new value and saturate
+        // instead of overflowing — required because a buggy provider
+        // could otherwise pin a counter at u32::MAX forever.
+        let mut c = RetryCounters::default();
+        assert_eq!(c.bump_invalid_tool(), 1);
+        assert_eq!(c.bump_invalid_tool(), 2);
+        assert_eq!(c.bump_invalid_json(), 1);
+        assert_eq!(c.bump_invalid_json(), 2);
+        assert_eq!(c.bump_truncated_tool(), 1);
+        // Saturating behavior: simulate pathological case.
+        c.invalid_tool = u32::MAX;
+        assert_eq!(c.bump_invalid_tool(), u32::MAX);
+        // Other counters untouched by the saturating bump.
+        assert_eq!(c.invalid_json, 2);
+        assert_eq!(c.truncated_tool, 1);
+    }
+
+    #[test]
+    fn retry_counters_reset_clears_only_the_targeted_slot() {
+        // The three reset methods are independent — resetting one
+        // counter must not touch the other two, otherwise a successful
+        // turn (which resets invalid_tool + invalid_json) could
+        // accidentally wipe the streaming-only truncated_tool counter.
+        let mut c = RetryCounters::default();
+        c.bump_invalid_tool();
+        c.bump_invalid_tool();
+        c.bump_invalid_json();
+        c.bump_truncated_tool();
+        c.reset_invalid_tool();
+        assert_eq!(c.invalid_tool, 0);
+        assert_eq!(c.invalid_json, 1);
+        assert_eq!(c.truncated_tool, 1);
+        c.reset_invalid_json();
+        assert_eq!(c.invalid_tool, 0);
+        assert_eq!(c.invalid_json, 0);
+        assert_eq!(c.truncated_tool, 1);
+        c.reset_truncated_tool();
+        assert_eq!(c.truncated_tool, 0);
+    }
+
+    #[test]
+    fn retry_counters_truncated_tool_bump_at_max_still_increments() {
+        // The truncated_tool call site checks `< max` BEFORE bumping
+        // (run_stream's "Truncated tool arguments — retrying" branch
+        // only fires when under the cap). After the bump-method
+        // refactor, the bump happens unconditionally and the call
+        // site does the `<= max` check after. The end-state observable
+        // behavior is the same: at the cap, the bump-then-check path
+        // is a no-op for the emit, and the next reset() wipes the
+        // counter. This test pins the bumped value so a future
+        // refactor that introduces an early-return would be caught.
+        let mut c = RetryCounters::default();
+        c.truncated_tool = 2; // simulate "just under the cap of 3"
+        assert_eq!(c.bump_truncated_tool(), 3); // bumps to 3
+        assert_eq!(c.bump_truncated_tool(), 4); // would be 4 (over the cap)
+        c.reset_truncated_tool();
+        assert_eq!(c.truncated_tool, 0);
     }
 
     // ── Phase 1.3a (2026-07-03): process_post_response unit tests ──
