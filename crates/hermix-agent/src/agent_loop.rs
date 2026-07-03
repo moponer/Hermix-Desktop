@@ -893,6 +893,168 @@ impl ContextPressureMonitor {
     }
 }
 
+/// Phase 5 (2026-07-03): cost-guard bookkeeping consolidated into one
+/// struct. The four sibling fields (`accumulated_usage`,
+/// `session_cost_usd`, `cost_warned`, `forced_runtime_route`) used to
+/// live directly on `LoopState` and were passed one-by-one as 4 sibling
+/// `&mut` arguments into [`AgentLoop::process_post_response`]. Folding
+/// them into one struct:
+/// - shrinks `LoopState` from 14 to 10 fields,
+/// - shrinks `process_post_response` from 7 to 3 mutable args (3 scalars
+///   stay as primitives; the bookkeeping is now `&mut CostGuard`),
+/// - keeps the 4-field atomic-mutation at the cost-guard code path
+///   where it belongs (a single helper can read + write the state),
+/// - lets `publish_from` drop another 4 args.
+///
+/// The 4 fields stay co-located on `self.cost_guard` and mutate in
+/// place via the `record_usage` / `apply_route_downgrade` methods.
+/// Reset / `Default` produce the same all-zeros state as before, so
+/// `LoopState::default()` semantics are unchanged.
+struct CostGuard {
+    /// Cumulative usage stats across turns.
+    accumulated_usage: Option<UsageStats>,
+    /// Running session cost estimate in USD.
+    session_cost_usd: f64,
+    /// Whether we've already warned about exceeding the cost threshold.
+    cost_warned: bool,
+    /// Forced cheap model route for remaining turns (set by smart router).
+    forced_runtime_route: Option<TurnRuntimeRoute>,
+}
+
+impl Default for CostGuard {
+    fn default() -> Self {
+        Self {
+            accumulated_usage: None,
+            session_cost_usd: 0.0,
+            cost_warned: false,
+            forced_runtime_route: None,
+        }
+    }
+}
+
+impl CostGuard {
+    /// Merge a per-turn `UsageStats` into the running total and
+    /// accumulate the per-turn USD cost into `session_cost_usd` using
+    /// the model's pricing config. No-op when the provider did not
+    /// return usage for the turn.
+    ///
+    /// Pre-extraction this block was open-coded inside
+    /// `process_post_response` immediately after the post-LLM hook;
+    /// it stays identical otherwise.
+    fn record_usage(&mut self, turn_usage: Option<&UsageStats>, model: &str, config: &AgentConfig) {
+        if let Some(usage) = turn_usage {
+            self.accumulated_usage = Some(merge_usage(self.accumulated_usage.clone(), usage));
+            if let Some(cost) = estimate_usage_cost_usd(usage, model, config) {
+                self.session_cost_usd += cost;
+            }
+        }
+    }
+
+    /// Check whether the warn or trip threshold has been crossed, and
+    /// fire the user-visible side effects (downgrade + system message)
+    /// the first time the warn threshold is hit. The caller is
+    /// responsible for actually building the `TurnRuntimeRoute` from
+    /// the returned `model` (the struct doesn't have access to
+    /// `AgentLoop::turn_route_cost_guard` which depends on
+    /// `self.primary_runtime_snapshot()`).
+    fn evaluate_thresholds(
+        &mut self,
+        max_cost_usd: Option<f64>,
+        degrade_at_ratio: f64,
+        resolve_degrade_model: impl FnOnce() -> Option<String>,
+    ) -> CostGuardAction {
+        let Some(limit) = max_cost_usd else {
+            return CostGuardAction { warn: None, trip: None };
+        };
+        // Mirror pre-extraction control flow: the warn branch runs
+        // first (flipping `cost_warned` and producing a side effect),
+        // then the trip branch is checked independently. Both can
+        // fire on the same call (spend jumped past both thresholds
+        // in one turn) — caller fires both side effects in order.
+        let mut warn = None;
+        if !self.cost_warned && self.session_cost_usd >= limit * degrade_at_ratio {
+            self.cost_warned = true;
+            if self.forced_runtime_route.is_none() {
+                if let Some(model) = resolve_degrade_model() {
+                    warn = Some(WarnEffect {
+                        kind: WarnKind::Downgrade { model },
+                        session_cost_usd: self.session_cost_usd,
+                        limit,
+                    });
+                } else {
+                    warn = Some(WarnEffect {
+                        kind: WarnKind::Warn,
+                        session_cost_usd: self.session_cost_usd,
+                        limit,
+                    });
+                }
+            }
+        }
+        let trip = if self.session_cost_usd >= limit {
+            Some(TripEffect {
+                session_cost_usd: self.session_cost_usd,
+                limit,
+            })
+        } else {
+            None
+        };
+        CostGuardAction { warn, trip }
+    }
+
+    /// Mark the route as downgraded. Called by the caller after
+    /// building the `TurnRuntimeRoute` from the model name returned by
+    /// [`Self::evaluate_thresholds`].
+    fn install_downgrade(&mut self, route: TurnRuntimeRoute) {
+        self.forced_runtime_route = Some(route);
+    }
+}
+
+/// Result of [`CostGuard::evaluate_thresholds`]. The caller drives
+/// the side effects (route build + system message) from the variant.
+///
+/// `warn` and `trip` can co-exist on the same call when spend jumped
+/// past both thresholds in one turn (e.g. the per-turn usage report
+/// pushed total spend above `max_cost_usd` while also clearing the
+/// warn ratio). The caller fires the warn side effect (system
+/// message, route downgrade) and then the trip side effect
+/// (terminating system message + return `CostGuardTripped`), in that
+/// order — mirroring the pre-extraction control flow where both
+/// branches ran independently.
+#[derive(Debug, PartialEq)]
+struct CostGuardAction {
+    /// Did this call cross the warn ratio for the first time?
+    /// `None` = no warn side effect. `Some(Downgrade { model, .. })` =
+    /// caller should build a `TurnRuntimeRoute` from the model and
+    /// install it via [`CostGuard::install_downgrade`], then emit the
+    /// "switching to cheaper model" system message. `Some(Warn { .. })`
+    /// = caller should emit a "cost guard warning" system message
+    /// (no cheap model was configured).
+    warn: Option<WarnEffect>,
+    /// Did this call exceed the absolute spend limit? If so, the
+    /// caller emits a "cost guard tripped" system message and returns
+    /// `PostResponseAction::CostGuardTripped`.
+    trip: Option<TripEffect>,
+}
+
+#[derive(Debug, PartialEq)]
+struct WarnEffect {
+    kind: WarnKind,
+    session_cost_usd: f64,
+    limit: f64,
+}
+
+#[derive(Debug, PartialEq)]
+enum WarnKind {
+    Downgrade { model: String },
+    Warn,
+}
+
+#[derive(Debug, PartialEq)]
+struct TripEffect {
+    session_cost_usd: f64,
+    limit: f64,
+}
+
 /// Phase 5 (2026-07-03): per-loop retry counters consolidated into one
 /// struct so `LoopState` doesn't have to carry 3 sibling `u32` fields and
 /// `publish_from` doesn't have to take 3 sibling `u32` arguments.
@@ -970,14 +1132,13 @@ struct LoopState {
     total_api_time_ms: u64,
     /// Accumulated tool execution time in ms.
     total_tool_time_ms: u64,
-    /// Cumulative usage stats across turns.
-    accumulated_usage: Option<UsageStats>,
-    /// Running session cost estimate in USD.
-    session_cost_usd: f64,
-    /// Whether we've already warned about exceeding the cost threshold.
-    cost_warned: bool,
-    /// Forced cheap model route for remaining turns (set by smart router).
-    forced_runtime_route: Option<TurnRuntimeRoute>,
+    /// Cost-guard bookkeeping: cumulative usage, USD spend, warn flag,
+    /// forced route. Phase 5 (2026-07-03): 4 inline fields that used to
+    /// sit directly on `LoopState` moved into [`CostGuard`] which is
+    /// mutated in place via `record_usage` / `evaluate_thresholds` /
+    /// `install_downgrade`. `publish_from` no longer takes 4 sibling
+    /// arguments for these.
+    cost_guard: CostGuard,
     /// Last checkpoint messages for crash recovery.
     last_checkpoint_messages: Option<Vec<Message>>,
     /// Retries against invalid tool names / invalid tool JSON / truncated
@@ -1031,26 +1192,26 @@ impl LoopState {
     /// `truncated_tool_call_retries`) — those moved into
     /// [`RetryCounters`] which is mutated in place via `bump_*` /
     /// `reset_*` methods.
+    ///
+    /// Phase 5 (2026-07-03, even later): also dropped 4 cost-guard args
+    /// (`accumulated_usage` / `session_cost_usd` / `cost_warned` /
+    /// `forced_runtime_route`) — those moved into [`CostGuard`] which is
+    /// mutated in place via `record_usage` / `evaluate_thresholds` /
+    /// `install_downgrade`. `publish_from` shrank from 11 args to 7
+    /// args: only the scalars + the 2 rarely-touched message-cached
+    /// `Option`s remain.
     #[allow(clippy::too_many_arguments)]
     fn publish_from(
         &mut self,
         total_turns: u32,
         total_api_time_ms: u64,
         total_tool_time_ms: u64,
-        accumulated_usage: Option<&UsageStats>,
-        session_cost_usd: f64,
-        cost_warned: bool,
-        forced_runtime_route: Option<&TurnRuntimeRoute>,
         last_checkpoint_messages: Option<&Vec<Message>>,
         last_content_with_tools: Option<&String>,
     ) {
         self.total_turns = total_turns;
         self.total_api_time_ms = total_api_time_ms;
         self.total_tool_time_ms = total_tool_time_ms;
-        self.accumulated_usage = accumulated_usage.cloned();
-        self.session_cost_usd = session_cost_usd;
-        self.cost_warned = cost_warned;
-        self.forced_runtime_route = forced_runtime_route.cloned();
         self.last_checkpoint_messages = last_checkpoint_messages.cloned();
         self.last_content_with_tools = last_content_with_tools.cloned();
     }
@@ -1264,6 +1425,16 @@ impl AgentLoop {
     /// `stream_mode` is `true` for `run_stream()` — the helper uses
     /// this to emit a stream-specific `tracing` line and to forward
     /// the `finish_reason` through the finalize path.
+    ///
+    /// Phase 5 (2026-07-03): 7 mutable scalar args collapsed to
+    /// `&mut CostGuard` + `&mut Option<String>` (4 args shrunk to 1
+    /// struct). `record_usage` / `evaluate_thresholds` / `install_downgrade`
+    /// on [`CostGuard`] absorb the 4-field atomic-mutation, so the
+    /// helper signature dropped from 11 args to 7. The two remaining
+    /// mutable scalars — `last_content_with_tools` — stay on the
+    /// helper signature because they're stored on `LoopState` (used by
+    /// the codex-ack continuation logic on the next turn) and not on
+    /// `CostGuard`.
     #[allow(clippy::too_many_arguments)]
     fn process_post_response(
         &self,
@@ -1272,10 +1443,7 @@ impl AgentLoop {
         turn_usage_acc: Option<&UsageStats>,
         total_turns: u32,
         api_elapsed: u64,
-        accumulated_usage: &mut Option<UsageStats>,
-        session_cost_usd: &mut f64,
-        cost_warned: &mut bool,
-        forced_runtime_route: &mut Option<TurnRuntimeRoute>,
+        cost_guard: &mut CostGuard,
         last_content_with_tools: &mut Option<String>,
         stream_mode: bool,
     ) -> Result<PostResponseAction, AgentError> {
@@ -1303,43 +1471,44 @@ impl AgentLoop {
         let post_results = self.invoke_hook(HookType::PostLlmCall, &post_ctx);
         self.inject_hook_context(&post_results, ctx);
 
-        if let Some(ref usage) = turn_usage_acc {
-            *accumulated_usage = Some(merge_usage(accumulated_usage.clone(), usage));
-            if let Some(cost) =
-                estimate_usage_cost_usd(usage, response.model.as_str(), &self.config)
-            {
-                *session_cost_usd += cost;
-            }
-        }
+        cost_guard.record_usage(turn_usage_acc, response.model.as_str(), &self.config);
 
         // --- Cost guard ---
-        if let Some(limit) = self.config.max_cost_usd {
-            if !*cost_warned
-                && *session_cost_usd >= limit * self.config.cost_guard_degrade_at_ratio
-            {
-                *cost_warned = true;
-                if forced_runtime_route.is_none() {
-                    if let Some(model) = self.resolve_cost_degrade_model() {
-                        *forced_runtime_route = Some(self.turn_route_cost_guard(model.clone()));
-                        ctx.add_message(Message::system(format!(
-                            "Cost guard: session spend is now ${:.4}/${:.4}. Switching to cheaper model `{}`.",
-                            session_cost_usd, limit, model
-                        )));
-                    } else {
-                        ctx.add_message(Message::system(format!(
-                            "Cost guard warning: session spend is now ${:.4}/${:.4}.",
-                            session_cost_usd, limit
-                        )));
-                    }
+        let action = cost_guard.evaluate_thresholds(
+            self.config.max_cost_usd,
+            self.config.cost_guard_degrade_at_ratio,
+            || self.resolve_cost_degrade_model(),
+        );
+        // Two independent side effects: warn (system message, route
+        // downgrade) and trip (system message, terminate loop). Both
+        // can fire on the same call when spend jumped past both
+        // thresholds in one turn — fire warn first, then trip, so the
+        // user sees "switching to cheaper model" before the
+        // terminating "stopping loop" message.
+        if let Some(warn) = action.warn {
+            match warn.kind {
+                WarnKind::Downgrade { model } => {
+                    let route = self.turn_route_cost_guard(model.clone());
+                    cost_guard.install_downgrade(route);
+                    ctx.add_message(Message::system(format!(
+                        "Cost guard: session spend is now ${:.4}/${:.4}. Switching to cheaper model `{}`.",
+                        warn.session_cost_usd, warn.limit, model
+                    )));
+                }
+                WarnKind::Warn => {
+                    ctx.add_message(Message::system(format!(
+                        "Cost guard warning: session spend is now ${:.4}/${:.4}.",
+                        warn.session_cost_usd, warn.limit
+                    )));
                 }
             }
-            if *session_cost_usd >= limit {
-                ctx.add_message(Message::system(format!(
-                    "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
-                    session_cost_usd, limit
-                )));
-                return Ok(PostResponseAction::CostGuardTripped);
-            }
+        }
+        if let Some(trip) = action.trip {
+            ctx.add_message(Message::system(format!(
+                "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
+                trip.session_cost_usd, trip.limit
+            )));
+            return Ok(PostResponseAction::CostGuardTripped);
         }
 
         let tool_calls_present = response
@@ -4802,12 +4971,18 @@ impl AgentLoop {
         // writebacks at the end of each iteration are how we re-publish
         // progress to the struct, so call sites in helpers can read
         // `state.total_turns` etc. without manual passing.
+        //
+        // Phase 5 (2026-07-03): 4 of those locals — `state.cost_guard.accumulated_usage`
+        // / `state.cost_guard.session_cost_usd` / `state.cost_guard.cost_warned` / `state.cost_guard.forced_runtime_route`
+        // — disappeared entirely. They now live as the 4 fields of
+        // `state.cost_guard` (the [`CostGuard`] struct) and are
+        // mutated in place via `&mut state.cost_guard`. Call sites
+        // that previously read `state.cost_guard.session_cost_usd` now read
+        // `state.cost_guard.session_cost_usd`. The 4 sibling locals
+        // dropped from `publish_from` in the same commit.
         let mut state = LoopState::default();
         let (mut total_turns, mut _total_api_time_ms, mut _total_tool_time_ms) =
             (state.total_turns, state.total_api_time_ms, state.total_tool_time_ms);
-        let mut accumulated_usage: Option<UsageStats> = state.accumulated_usage.clone();
-        let (mut session_cost_usd, mut cost_warned) = (state.session_cost_usd, state.cost_warned);
-        let mut forced_runtime_route: Option<TurnRuntimeRoute> = state.forced_runtime_route.clone();
         let mut last_checkpoint_messages: Option<Vec<Message>> =
             state.last_checkpoint_messages.clone();
         let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
@@ -4818,8 +4993,8 @@ impl AgentLoop {
                     &ctx,
                     total_turns,
                     &tool_errors,
-                    accumulated_usage.clone(),
-                    session_cost_usd,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
                     session_started_hooks_fired,
                     persist_user_idx,
                 ));
@@ -4841,8 +5016,8 @@ impl AgentLoop {
                     &ctx,
                     total_turns,
                     &tool_errors,
-                    accumulated_usage,
-                    session_cost_usd,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
                     session_started_hooks_fired,
                     persist_user_idx,
                     false,
@@ -4899,7 +5074,7 @@ impl AgentLoop {
             self.maybe_enforce_frame_cap(total_turns);
 
             // --- Pre-LLM hook ---
-            let turn_runtime_route = forced_runtime_route
+            let turn_runtime_route = state.cost_guard.forced_runtime_route
                 .clone()
                 .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
             let active_model = turn_runtime_route
@@ -5002,8 +5177,8 @@ impl AgentLoop {
                         &ctx,
                         total_turns,
                         &tool_errors,
-                        accumulated_usage.clone(),
-                        session_cost_usd,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
                         session_started_hooks_fired,
                         persist_user_idx,
                     ));
@@ -5018,8 +5193,8 @@ impl AgentLoop {
                             &ctx,
                             total_turns,
                             &tool_errors,
-                            accumulated_usage.clone(),
-                            session_cost_usd,
+                            state.cost_guard.accumulated_usage.clone(),
+                            state.cost_guard.session_cost_usd,
                             session_started_hooks_fired,
                             persist_user_idx,
                         ));
@@ -5062,10 +5237,7 @@ impl AgentLoop {
                     turn_usage_acc.as_ref(),
                     total_turns,
                     api_elapsed,
-                    &mut accumulated_usage,
-                    &mut session_cost_usd,
-                    &mut cost_warned,
-                    &mut forced_runtime_route,
+                    &mut state.cost_guard,
                     &mut last_content_with_tools,
                     false, // stream_mode
                 )?,
@@ -5075,8 +5247,8 @@ impl AgentLoop {
                     &ctx,
                     total_turns,
                     &tool_errors,
-                    accumulated_usage,
-                    session_cost_usd,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
                     session_started_hooks_fired,
                     persist_user_idx,
                     false,
@@ -5141,8 +5313,8 @@ impl AgentLoop {
                         &ctx,
                         total_turns,
                         &tool_errors,
-                        accumulated_usage,
-                        session_cost_usd,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
                         session_started_hooks_fired,
                         persist_user_idx,
                         true,
@@ -5191,8 +5363,8 @@ impl AgentLoop {
                         &ctx,
                         total_turns,
                         &tool_errors,
-                        accumulated_usage,
-                        session_cost_usd,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
                         session_started_hooks_fired,
                         persist_user_idx,
                         false,
@@ -5307,8 +5479,8 @@ impl AgentLoop {
                     &ctx,
                     total_turns,
                     &tool_errors,
-                    accumulated_usage.clone(),
-                    session_cost_usd,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
                     session_started_hooks_fired,
                     persist_user_idx,
                 ));
@@ -5320,7 +5492,7 @@ impl AgentLoop {
                     total_turns,
                     self.config
                         .max_cost_usd
-                        .map(|limit| (limit - session_cost_usd).max(0.0)),
+                        .map(|limit| (limit - state.cost_guard.session_cost_usd).max(0.0)),
                     &mut tool_errors,
                 )
                 .await;
@@ -5479,10 +5651,6 @@ impl AgentLoop {
                 total_turns,
                 _total_api_time_ms,
                 _total_tool_time_ms,
-                accumulated_usage.as_ref(),
-                session_cost_usd,
-                cost_warned,
-                forced_runtime_route.as_ref(),
                 last_checkpoint_messages.as_ref(),
                 last_content_with_tools.as_ref(),
             );
@@ -5603,9 +5771,6 @@ impl AgentLoop {
 
         let mut state = LoopState::default();
         let mut total_turns: u32 = state.total_turns;
-        let mut accumulated_usage: Option<UsageStats> = state.accumulated_usage.clone();
-        let (mut session_cost_usd, mut cost_warned) = (state.session_cost_usd, state.cost_warned);
-        let mut forced_runtime_route: Option<TurnRuntimeRoute> = state.forced_runtime_route.clone();
         let mut last_checkpoint_messages: Option<Vec<Message>> =
             state.last_checkpoint_messages.clone();
         let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
@@ -5616,8 +5781,8 @@ impl AgentLoop {
                     &ctx,
                     total_turns,
                     &tool_errors,
-                    accumulated_usage.clone(),
-                    session_cost_usd,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
                     session_started_hooks_fired,
                     persist_user_idx,
                 ));
@@ -5639,8 +5804,8 @@ impl AgentLoop {
                     &ctx,
                     total_turns,
                     &tool_errors,
-                    accumulated_usage,
-                    session_cost_usd,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
                     session_started_hooks_fired,
                     persist_user_idx,
                     false,
@@ -5685,7 +5850,7 @@ impl AgentLoop {
             self.maybe_enforce_frame_cap(total_turns);
 
             // Pre-LLM hook
-            let turn_runtime_route = forced_runtime_route
+            let turn_runtime_route = state.cost_guard.forced_runtime_route
                 .clone()
                 .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
             let active_model = turn_runtime_route
@@ -5708,8 +5873,8 @@ impl AgentLoop {
                         &ctx,
                         total_turns,
                         &tool_errors,
-                        accumulated_usage.clone(),
-                        session_cost_usd,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
                         session_started_hooks_fired,
                         persist_user_idx,
                     ));
@@ -5765,21 +5930,16 @@ impl AgentLoop {
                     match stream_collect? {
                         StreamCollectOutcome::Complete(resp) => resp,
                         StreamCollectOutcome::Interrupted(partial) => {
-                            if let Some(ref u) = partial.usage {
-                                accumulated_usage = Some(merge_usage(accumulated_usage.clone(), u));
-                                if let Some(cost) =
-                                    estimate_usage_cost_usd(u, partial.model.as_str(), &self.config)
-                                {
-                                    session_cost_usd += cost;
-                                }
-                            }
+                            state
+                                .cost_guard
+                                .record_usage(partial.usage.as_ref(), partial.model.as_str(), &self.config);
                             ctx.add_message(partial.message);
                             return Ok(self.graceful_interrupt_result(
                                 &ctx,
                                 total_turns,
                                 &tool_errors,
-                                accumulated_usage.clone(),
-                                session_cost_usd,
+                                state.cost_guard.accumulated_usage.clone(),
+                                state.cost_guard.session_cost_usd,
                                 session_started_hooks_fired,
                                 persist_user_idx,
                             ));
@@ -5796,8 +5956,8 @@ impl AgentLoop {
                                 &ctx,
                                 total_turns,
                                 &tool_errors,
-                                accumulated_usage.clone(),
-                                session_cost_usd,
+                                state.cost_guard.accumulated_usage.clone(),
+                                state.cost_guard.session_cost_usd,
                                 session_started_hooks_fired,
                                 persist_user_idx,
                             ));
@@ -5846,10 +6006,7 @@ impl AgentLoop {
                     turn_usage_acc.as_ref(),
                     total_turns,
                     api_elapsed_ms,
-                    &mut accumulated_usage,
-                    &mut session_cost_usd,
-                    &mut cost_warned,
-                    &mut forced_runtime_route,
+                    &mut state.cost_guard,
                     &mut last_content_with_tools,
                     true, // stream_mode
                 )?,
@@ -5859,8 +6016,8 @@ impl AgentLoop {
                     &ctx,
                     total_turns,
                     &tool_errors,
-                    accumulated_usage,
-                    session_cost_usd,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
                     session_started_hooks_fired,
                     persist_user_idx,
                     false,
@@ -5947,8 +6104,8 @@ impl AgentLoop {
                     &ctx,
                     total_turns,
                     &tool_errors,
-                    accumulated_usage,
-                    session_cost_usd,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
                     session_started_hooks_fired,
                     persist_user_idx,
                     true,
@@ -6005,8 +6162,8 @@ impl AgentLoop {
                         &ctx,
                         total_turns,
                         &tool_errors,
-                        accumulated_usage,
-                        session_cost_usd,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
                         session_started_hooks_fired,
                         persist_user_idx,
                         false,
@@ -6109,8 +6266,8 @@ impl AgentLoop {
                     &ctx,
                     total_turns,
                     &tool_errors,
-                    accumulated_usage.clone(),
-                    session_cost_usd,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
                     session_started_hooks_fired,
                     persist_user_idx,
                 ));
@@ -6122,7 +6279,7 @@ impl AgentLoop {
                     total_turns,
                     self.config
                         .max_cost_usd
-                        .map(|limit| (limit - session_cost_usd).max(0.0)),
+                        .map(|limit| (limit - state.cost_guard.session_cost_usd).max(0.0)),
                     &mut tool_errors,
                 )
                 .await;
@@ -6273,10 +6430,6 @@ impl AgentLoop {
                 total_turns,
                 0, // total_api_time_ms — run_stream doesn't accumulate this
                 0, // total_tool_time_ms — run_stream doesn't accumulate this
-                accumulated_usage.as_ref(),
-                session_cost_usd,
-                cost_warned,
-                forced_runtime_route.as_ref(),
                 last_checkpoint_messages.as_ref(),
                 last_content_with_tools.as_ref(),
             );
@@ -7633,10 +7786,10 @@ mod tests {
         assert_eq!(s.iter_since_compress, 0);
         assert_eq!(s.total_api_time_ms, 0);
         assert_eq!(s.total_tool_time_ms, 0);
-        assert!(s.accumulated_usage.is_none());
-        assert_eq!(s.session_cost_usd, 0.0);
-        assert!(!s.cost_warned);
-        assert!(s.forced_runtime_route.is_none());
+        assert!(s.cost_guard.accumulated_usage.is_none());
+        assert_eq!(s.cost_guard.session_cost_usd, 0.0);
+        assert!(!s.cost_guard.cost_warned);
+        assert!(s.cost_guard.forced_runtime_route.is_none());
         assert!(s.last_checkpoint_messages.is_none());
         assert_eq!(s.retry_counters.invalid_tool, 0);
         assert_eq!(s.retry_counters.invalid_json, 0);
@@ -7657,14 +7810,14 @@ mod tests {
         s.retry_counters.bump_invalid_tool();
         s.retry_counters.bump_invalid_json();
         s.retry_counters.bump_invalid_json();
-        s.session_cost_usd += 0.001;
+        s.cost_guard.session_cost_usd += 0.001;
         assert_eq!(s.total_turns, 1);
         assert_eq!(s.retry_counters.invalid_tool, 1);
         assert_eq!(s.retry_counters.invalid_json, 2);
-        assert!(s.session_cost_usd > 0.0);
+        assert!(s.cost_guard.session_cost_usd > 0.0);
         // Unrelated fields stay zero.
         assert_eq!(s.total_api_time_ms, 0);
-        assert!(s.accumulated_usage.is_none());
+        assert!(s.cost_guard.accumulated_usage.is_none());
     }
 
     #[test]
@@ -7674,23 +7827,30 @@ mod tests {
         // locals back into `state` is what makes the future
         // `run_shared_loop(state, llm_caller)` extraction possible
         // (the shared body only sees `&mut LoopState`).
+        //
+        // Phase 5 (2026-07-03): `publish_from` shrank from 9 args to
+        // 5 args. The 4 cost-guard args (accumulated_usage /
+        // session_cost_usd / cost_warned / forced_runtime_route) are
+        // owned by `state.cost_guard` and are no longer bridged. The 3
+        // retry-counter args and the 3 context-pressure args were
+        // already removed in earlier Phase 5 sub-commits.
         let mut s = LoopState::default();
         s.publish_from(
             7,                        // total_turns
             1234,                     // total_api_time_ms
             567,                      // total_tool_time_ms
-            None,                     // accumulated_usage
-            0.0042,                   // session_cost_usd
-            true,                     // cost_warned
-            None,                     // forced_runtime_route
             None,                     // last_checkpoint_messages
             None,                     // last_content_with_tools
         );
         assert_eq!(s.total_turns, 7);
         assert_eq!(s.total_api_time_ms, 1234);
         assert_eq!(s.total_tool_time_ms, 567);
-        assert_eq!(s.session_cost_usd, 0.0042);
-        assert!(s.cost_warned);
+        // cost_guard defaults are unchanged by publish_from — owned by
+        // the inner struct and mutated in place by the runtime.
+        assert!(s.cost_guard.accumulated_usage.is_none());
+        assert_eq!(s.cost_guard.session_cost_usd, 0.0);
+        assert!(!s.cost_guard.cost_warned);
+        assert!(s.cost_guard.forced_runtime_route.is_none());
         // retry_counters live on the inner struct — set directly here
         // to mirror pre-extraction semantics (publish_from no longer
         // owns those 3 fields; the inner struct is mutated in place by
@@ -10388,6 +10548,153 @@ mod tests {
         assert_eq!(c.truncated_tool, 0);
     }
 
+    // ── Phase 5 (2026-07-03): CostGuard struct + evaluate_thresholds ──
+    //
+    // The 4 cost-guard fields that used to be 4 sibling `&mut` args on
+    // `process_post_response` now live on a single `CostGuard` struct.
+    // `evaluate_thresholds` returns an enum (NoAction / Downgrade /
+    // Warn / Trip) so the caller — not the helper — owns the side
+    // effects (route build + system message).
+
+    #[test]
+    fn cost_guard_default_is_all_zeros_and_none() {
+        let cg = CostGuard::default();
+        assert!(cg.accumulated_usage.is_none());
+        assert_eq!(cg.session_cost_usd, 0.0);
+        assert!(!cg.cost_warned);
+        assert!(cg.forced_runtime_route.is_none());
+    }
+
+    #[test]
+    fn cost_guard_record_usage_merges_into_accumulated_and_adds_cost() {
+        let mut cg = CostGuard::default();
+        // First usage: 10 prompt + 20 completion → starts a new total.
+        cg.record_usage(
+            Some(&UsageStats {
+                prompt_tokens: 10,
+                completion_tokens: 20,
+                total_tokens: 30,
+                estimated_cost: Some(0.001),
+            }),
+            "test-model",
+            &AgentConfig::default(),
+        );
+        assert!(cg.accumulated_usage.is_some());
+        assert!(cg.session_cost_usd >= 0.0);
+    }
+
+    #[test]
+    fn cost_guard_record_usage_no_op_when_turn_usage_is_none() {
+        let mut cg = CostGuard::default();
+        cg.record_usage(None, "test-model", &AgentConfig::default());
+        assert!(cg.accumulated_usage.is_none());
+        assert_eq!(cg.session_cost_usd, 0.0);
+    }
+
+    #[test]
+    fn cost_guard_evaluate_returns_no_action_when_no_limit() {
+        let mut cg = CostGuard::default();
+        cg.session_cost_usd = 999.0;
+        let action = cg.evaluate_thresholds(None, 0.5, || None);
+        assert_eq!(action, CostGuardAction { warn: None, trip: None });
+        assert!(!cg.cost_warned);
+    }
+
+    #[test]
+    fn cost_guard_evaluate_returns_downgrade_when_warn_threshold_first_crossed() {
+        let mut cg = CostGuard::default();
+        cg.session_cost_usd = 0.06; // above 0.1 * 0.5
+        let action = cg.evaluate_thresholds(Some(0.1), 0.5, || Some("openai:gpt-4o-mini".into()));
+        match action.warn {
+            Some(WarnEffect { kind: WarnKind::Downgrade { model }, .. }) => {
+                assert_eq!(model, "openai:gpt-4o-mini");
+            }
+            other => panic!("expected Downgrade warn effect, got {:?}", other),
+        }
+        assert!(action.trip.is_none());
+        assert!(cg.cost_warned);
+        // forced_runtime_route is NOT set by evaluate_thresholds —
+        // the caller must call `install_downgrade` with the built
+        // `TurnRuntimeRoute`. This is the whole reason the helper
+        // doesn't construct the route itself.
+        assert!(cg.forced_runtime_route.is_none());
+    }
+
+    #[test]
+    fn cost_guard_evaluate_returns_warn_when_degrade_model_unresolvable() {
+        let mut cg = CostGuard::default();
+        cg.session_cost_usd = 0.06;
+        let action = cg.evaluate_thresholds(Some(0.1), 0.5, || None);
+        assert!(matches!(
+            action.warn,
+            Some(WarnEffect { kind: WarnKind::Warn, .. })
+        ));
+        assert!(action.trip.is_none());
+        assert!(cg.cost_warned);
+    }
+
+    #[test]
+    fn cost_guard_evaluate_is_idempotent_after_first_warn() {
+        let mut cg = CostGuard::default();
+        cg.session_cost_usd = 0.06;
+        // First crossing fires the downgrade side effect.
+        let first = cg.evaluate_thresholds(Some(0.1), 0.5, || Some("cheap".into()));
+        assert!(matches!(
+            first.warn,
+            Some(WarnEffect { kind: WarnKind::Downgrade { .. }, .. })
+        ));
+        // Caller installs the route (mirrors what process_post_response
+        // does in production). We only need *some* route to verify the
+        // forced_runtime_route field gets populated; a partial struct
+        // literal is fine.
+        cg.install_downgrade(TurnRuntimeRoute {
+            model: "cheap".into(),
+            provider: None,
+            base_url: None,
+            api_key_env: None,
+            api_mode: None,
+            command: None,
+            args: Vec::new(),
+            credential_pool: None,
+            credential_pool_fallback: true,
+            route_label: None,
+            routing_reason: Some("cost_guard".into()),
+            signature: TurnRouteSignature {
+                model: "cheap".into(),
+                provider: None,
+                base_url: None,
+                api_mode: ApiMode::ChatCompletions,
+                command: None,
+                args: Vec::new(),
+            },
+        });
+        assert!(cg.forced_runtime_route.is_some());
+        // Second evaluation: already past warn, no degrade, not yet
+        // over the absolute limit → no warn + no trip.
+        let second = cg.evaluate_thresholds(Some(0.1), 0.5, || Some("another".into()));
+        assert_eq!(second, CostGuardAction { warn: None, trip: None });
+    }
+
+    #[test]
+    fn cost_guard_evaluate_returns_trip_when_spend_exceeds_limit() {
+        let mut cg = CostGuard::default();
+        cg.session_cost_usd = 0.5;
+        let action = cg.evaluate_thresholds(Some(0.1), 0.5, || Some("cheap".into()));
+        let trip = action
+            .trip
+            .expect("expected trip effect, got None");
+        assert!((trip.session_cost_usd - 0.5).abs() < 1e-9);
+        assert!((trip.limit - 0.1).abs() < 1e-9);
+        // The trip path also flipped cost_warned on the way through
+        // (since 0.5 > 0.1 * 0.5 = 0.05). Both warn AND trip fired —
+        // caller fires both side effects in order.
+        assert!(cg.cost_warned);
+        assert!(matches!(
+            action.warn,
+            Some(WarnEffect { kind: WarnKind::Downgrade { .. }, .. })
+        ));
+    }
+
     // ── Phase 1.3a (2026-07-03): process_post_response unit tests ──
     //
     // The shared post-LLM helper extracted in 1.3a replaces ~200 lines
@@ -10438,10 +10745,7 @@ mod tests {
             model: "test".into(),
             finish_reason: Some("stop".into()),
         };
-        let mut accumulated: Option<UsageStats> = None;
-        let mut cost = 0.0f64;
-        let mut cost_warned = false;
-        let mut forced_route: Option<TurnRuntimeRoute> = None;
+        let mut cost_guard = CostGuard::default();
         let mut last_content: Option<String> = None;
         let action = agent
             .process_post_response(
@@ -10450,10 +10754,7 @@ mod tests {
                 None,
                 0, // total_turns
                 0, // api_elapsed
-                &mut accumulated,
-                &mut cost,
-                &mut cost_warned,
-                &mut forced_route,
+                &mut cost_guard,
                 &mut last_content,
                 false, // stream_mode
             )
@@ -10506,10 +10807,8 @@ mod tests {
             model: "test".into(),
             finish_reason: Some("stop".into()),
         };
-        let mut accumulated: Option<UsageStats> = None;
-        let mut cost = 0.5f64; // already 50x over the 0.01 limit
-        let mut cost_warned = false;
-        let mut forced_route: Option<TurnRuntimeRoute> = None;
+        let mut cost_guard = CostGuard::default();
+        cost_guard.session_cost_usd = 0.5; // already 50x over the 0.01 limit
         let mut last_content: Option<String> = None;
         let action = agent
             .process_post_response(
@@ -10518,10 +10817,7 @@ mod tests {
                 None,
                 0,
                 0,
-                &mut accumulated,
-                &mut cost,
-                &mut cost_warned,
-                &mut forced_route,
+                &mut cost_guard,
                 &mut last_content,
                 false,
             )
@@ -10579,10 +10875,7 @@ mod tests {
             model: "test".into(),
             finish_reason: Some("tool_calls".into()),
         };
-        let mut accumulated: Option<UsageStats> = None;
-        let mut cost = 0.0f64;
-        let mut cost_warned = false;
-        let mut forced_route: Option<TurnRuntimeRoute> = None;
+        let mut cost_guard = CostGuard::default();
         let mut last_content: Option<String> = None;
         let action = agent
             .process_post_response(
@@ -10591,10 +10884,7 @@ mod tests {
                 None,
                 0,
                 0, // api_elapsed
-                &mut accumulated,
-                &mut cost,
-                &mut cost_warned,
-                &mut forced_route,
+                &mut cost_guard,
                 &mut last_content,
                 false,
             )
