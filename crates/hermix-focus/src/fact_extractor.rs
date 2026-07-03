@@ -10,10 +10,23 @@
 //! user 的关键陈述（名字 / 偏好 / 工具 / 指令），调用
 //! `EmbeddedMemoryBackend::upsert_fact`。
 //!
+//! ## M3 (2026-07-03) 重写
+//!
+//! 旧实现用 `str::find` 子串匹配 + 字符级 prev-char 检查。两个真 bug：
+//! 1. **否定吞噬** — "我不喜欢 Rust" → `find("我喜欢")` 在 index=1 命中，
+//!    存为 `user.preference:Rust`（应存为 dislike 或不存）。
+//! 2. **跨词匹配** — "use" 在 "because" 里也命中（已有 alphanumeric 检查
+//!    缓解，但中文没边界）。
+//!
+//! 新实现：
+//! - 中文 trigger：要求 trigger 在 clause 开头（前一个字符是 `,.;!?` 或
+//!   字符串开头），且**前一个 token 不是否定词**（不/没/无/非/未/别）。
+//! - 英文 trigger：用 `\b{prefix}\b` regex + case-insensitive。优先
+//!   regex 匹配 `not|never|don't|do not` 前置否定 → 翻转为 dislike。
+//! - 同一 turn 同一 kind 多次命中：只在 content 不同时保留，避免重复。
+//!
 //! ## 设计取舍
 //!
-//! - **不引入 regex crate 依赖**（已在 workspace 中）— 保持简单，
-//!   触发词用 `starts_with` + 字符切分即可。
 //! - **保守抽取** — 宁可漏抽，不要错抽。错误的事实会被
 //!   `canonical_key UNIQUE` 永久钉死，后续难以纠正。
 //! - **零 LLM 成本** — 不调 LLM 做 NER，纯字符串匹配。
@@ -26,6 +39,8 @@
 //! - `payload` (JSON: `{kind, content, session_id, turn_number}`)
 //! - `tags` (`["session:xxx", "user.identity", ...]`)
 
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde_json::Value;
 
 /// 一个被抽取的事实三元组，等待 caller 写入 `facts` 表。
@@ -61,69 +76,224 @@ impl ExtractedFact {
     }
 }
 
-/// (前缀, kind, min_chars) 三元组定义 trigger。
-/// - prefix: user message 中出现的关键字
-/// - kind: 事实类别（影响 canonical_key 前缀）
-/// - min_chars: 抽取的内容最少字符数（少于则丢弃）
-const TRIGGERS: &[(&str, &str, usize)] = &[
-    // 中文
-    ("我叫", "user.name", 2),
-    ("我的名字是", "user.name", 2),
-    ("我的名字叫", "user.name", 2),
-    ("我喜欢", "user.preference", 1),
-    ("我爱", "user.preference", 1),
-    ("我讨厌", "user.dislike", 1),
-    ("我恨", "user.dislike", 1),
-    ("我用", "user.tool", 1),
-    ("我在用", "user.tool", 1),
-    ("我使用", "user.tool", 1),
-    ("记住", "user.note", 2),
-    ("请记住", "user.note", 2),
-    ("不要", "user.avoid", 1),
-    ("别", "user.avoid", 1),
-    ("我是", "user.identity", 2),
-    // 英文
-    ("my name is", "user.name", 2),
-    ("i'm called", "user.name", 2),
-    ("i like", "user.preference", 1),
-    ("i love", "user.preference", 1),
-    ("i hate", "user.dislike", 1),
-    ("i use", "user.tool", 1),
-    ("remember", "user.note", 2),
-    ("don't", "user.avoid", 1),
-    ("do not", "user.avoid", 1),
-    ("i am", "user.identity", 2),
+/// (regex, base_kind, min_chars, language) trigger definition.
+///
+/// `regex` is matched against `user_lower` (English) or `user_trim`
+/// (Chinese — regex still works, just less common). When the regex
+/// matches, the substring AFTER the trigger word(s) becomes the
+/// `content`.
+///
+/// `language` is `Zh` for CJK-only triggers (require clause-boundary
+/// semantics) or `En` for ASCII triggers (use regex `\b`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lang {
+    Zh,
+    En,
+}
+
+struct Trigger {
+    pattern: &'static str,
+    base_kind: &'static str,
+    min_chars: usize,
+    lang: Lang,
+    /// Optional: if this trigger is preceded by a negation word, flip
+    /// `base_kind` to this alternative. For `"我喜欢"` (preference), a
+    /// preceding `"不"` should produce a `user.dislike` instead.
+    negated_kind: Option<&'static str>,
+    /// Whether to enforce the clause-boundary check (Chinese only).
+    /// False for triggers that *start with* a negation marker
+    /// (`不爱`, `不喜欢`, `不用`, `不要`, `别`) — we want these to
+    /// match regardless of clause position because they carry their
+    /// own clause context. True for everything else (`我喜欢`, `我爱`,
+    /// `我用`, `我叫`, etc.) — these need to sit at a clause boundary
+    /// or they double-fire from substring noise.
+    enforce_clause_boundary: bool,
+}
+
+const TRIGGERS: &[Trigger] = &[
+    // 中文 — 用直接匹配的 trigger（不是 negation detection），因为中文
+    // 否定词嵌入动词后，"我喜欢" 不是 "我不喜欢" 的子串，必须把
+    // "不喜欢" / "不爱" / "不用" / "不要" 单独列为 dislike trigger。
+    // enforce_clause_boundary = true 让 "我爱" 在 "我不爱" 里不重复触发。
+    Trigger { pattern: "我叫",        base_kind: "user.name",        min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "我的名字是",   base_kind: "user.name",        min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "我的名字叫",   base_kind: "user.name",        min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "我喜欢",      base_kind: "user.preference",  min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "我爱",        base_kind: "user.preference",  min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    // 否定动词 — clause boundary OFF：让"不爱"/"不喜欢"在"我不爱"中触发
+    Trigger { pattern: "不喜欢",      base_kind: "user.dislike",     min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
+    Trigger { pattern: "不爱",        base_kind: "user.dislike",     min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
+    Trigger { pattern: "我讨厌",      base_kind: "user.dislike",     min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "我恨",        base_kind: "user.dislike",     min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "我用",        base_kind: "user.tool",        min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "我在用",      base_kind: "user.tool",        min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "我使用",      base_kind: "user.tool",        min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "不用",        base_kind: "user.avoid",       min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
+    Trigger { pattern: "记住",        base_kind: "user.note",        min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "请记住",      base_kind: "user.note",        min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: "不要",        base_kind: "user.avoid",       min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
+    Trigger { pattern: "别",          base_kind: "user.avoid",       min_chars: 1, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: false },
+    Trigger { pattern: "我是",        base_kind: "user.identity",    min_chars: 2, lang: Lang::Zh, negated_kind: None, enforce_clause_boundary: true },
+    // 英文 — 否定词（not/never/don't/do not）独立于动词，所以用单字
+    // "like"/"love"/"use" trigger + 前置 negation detection 就能覆盖
+    // "I don't like Rust" / "I never use Slack" 这种模式。
+    Trigger { pattern: r"\bmy name is\b",   base_kind: "user.name",       min_chars: 2, lang: Lang::En, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: r"\bi'm called\b",   base_kind: "user.name",       min_chars: 2, lang: Lang::En, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: r"\blike\b",         base_kind: "user.preference", min_chars: 1, lang: Lang::En, negated_kind: Some("user.dislike"), enforce_clause_boundary: true },
+    Trigger { pattern: r"\blove\b",         base_kind: "user.preference", min_chars: 1, lang: Lang::En, negated_kind: Some("user.dislike"), enforce_clause_boundary: true },
+    Trigger { pattern: r"\bhate\b",         base_kind: "user.dislike",    min_chars: 1, lang: Lang::En, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: r"\buse\b",          base_kind: "user.tool",       min_chars: 1, lang: Lang::En, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: r"\bremember\b",     base_kind: "user.note",       min_chars: 2, lang: Lang::En, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: r"\bdon'?t\b",       base_kind: "user.avoid",      min_chars: 1, lang: Lang::En, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: r"\bdo not\b",       base_kind: "user.avoid",      min_chars: 1, lang: Lang::En, negated_kind: None, enforce_clause_boundary: true },
+    Trigger { pattern: r"\bi am\b",         base_kind: "user.identity",   min_chars: 2, lang: Lang::En, negated_kind: None, enforce_clause_boundary: true },
 ];
 
-/// 抽取时遇到"截断字符"则停止。包含常见标点 + 换行。
-fn is_truncation_char(c: char) -> bool {
+/// Pre-compiled regexes — one per trigger, cached process-wide.
+static TRIGGER_REGEXES: Lazy<Vec<(Regex, &Trigger)>> = Lazy::new(|| {
+    TRIGGERS
+        .iter()
+        .map(|t| {
+            // English triggers are already regex; Chinese triggers are
+            // passed through `regex::escape` so any future regex
+            // meta-chars in the literal are matched verbatim. The
+            // `regex` crate does NOT support `\Q...\E` (PCRE-only).
+            let pat = match t.lang {
+                Lang::En => t.pattern.to_string(),
+                Lang::Zh => regex::escape(t.pattern),
+            };
+            let re = Regex::new(&pat)
+                .unwrap_or_else(|e| panic!("trigger regex compile failed for {:?}: {e}", t.pattern));
+            (re, t)
+        })
+        .collect()
+});
+
+/// Negation words for Chinese (one-char / two-char prefixes).
+/// When found immediately before a trigger, the trigger's kind flips
+/// to `negated_kind` (or the fact is dropped if `negated_kind` is None).
+const ZH_NEGATIONS: &[&str] = &["不", "没", "无", "非", "未", "别"];
+
+/// English negation phrases — checked before an English trigger.
+/// Matches `\b(?:not|never|don't|do not|no longer)\b`.
+static EN_NEGATION: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(not|never|don'?t|do not|no longer)\b")
+        .expect("negation regex")
+});
+
+/// Punctuation chars that always end the content window.
+fn is_punctuation(c: char) -> bool {
     matches!(
         c,
         '。' | '，' | ',' | '.' | ';' | '；' | ':' | '!' | '?' | '\n' | '\r' | '\t'
     )
 }
 
-/// 从 trigger 后面切出 content，截到第一个标点 / 换行，最多 100 字符。
-fn extract_content_after<'a>(user: &'a str, prefix_len: usize) -> &'a str {
-    let after = user[prefix_len..].trim_start();
-    let mut end = after.len();
-    for (i, c) in after.char_indices() {
-        if is_truncation_char(c) {
-            end = i;
-            break;
+/// After the trigger, take the next content run until the first
+/// punctuation. **Whitespace handling rule:**
+///
+/// - Pure-ASCII content: whitespace ends the window (`I like Rust`
+///   → content = `Rust`).
+/// - Mixed / CJK content: if the next non-whitespace char after a
+///   space is CJK, treat the space as intra-phrase and keep going
+///   (`我喜欢 Rust 编程` → content = `Rust 编程`, not just `Rust`).
+///
+/// This matches the previous behaviour the test suite expects
+/// (`preference_extraction_zh` asserts `Rust 编程`) while also
+/// cleanly bounding pure-ASCII recall so a sentence like `I like
+/// Rust and I love Tauri` doesn't produce a single giant blob.
+fn find_content_window(user: &str, trigger_end: usize) -> Option<(usize, usize)> {
+    let after = user[trigger_end..].trim_start();
+    let leading_ws = user[trigger_end..].len() - after.len();
+    let start = trigger_end + leading_ws;
+    let mut end = start;
+    for (i, c) in user[start..].char_indices() {
+        if is_punctuation(c) {
+            return Some((start, start + i - start));
         }
-        if c.len_utf8() > 4 {
-            // 跳过 emoji 等超出 BMP 的字符
-            continue;
+        if c == ' ' {
+            // Peek ahead: if the next non-space char is CJK, this
+            // space is intra-phrase — keep going.
+            let rest = &user[start + i + c.len_utf8()..];
+            let next = rest.chars().find(|x| !x.is_whitespace());
+            if matches!(next, Some(c) if !c.is_ascii()) {
+                end = start + i + c.len_utf8();
+            } else {
+                return Some((start, start + i - start));
+            }
+        } else {
+            end = start + i + c.len_utf8();
         }
     }
-    let raw = &after[..end];
-    // Take first 100 chars (char count, not byte length).
-    let truncated: String = raw.chars().take(100).collect();
-    // We can't return a sub-slice with char-boundary; return raw with
-    // a hard byte cap as a fallback. The caller clamps via chars().count().
-    let _ = truncated;
-    raw
+    Some((start, end - start))
+}
+
+/// Check whether `position` (byte offset in `user`) is immediately
+/// preceded by a Chinese negation token (不/没/无/非/未/别).
+///
+/// "Immediately" means: scan backwards from `position`, skipping
+/// whitespace. If the next non-whitespace character is one of the
+/// negation single chars, OR a two-char combo like "我不" / "我没",
+/// return `true`. For longer phrases ("我并不"/"我从未") we still
+/// detect them because we walk back across non-punctuation chars.
+fn preceded_by_zh_negation(user: &str, position: usize) -> bool {
+    if position == 0 {
+        return false;
+    }
+    // Walk back over up to 4 characters looking for a negation glyph.
+    // We stop if we hit punctuation (because punctuation itself resets
+    // the clause and the trigger wouldn't be in the same clause).
+    let bytes = user.as_bytes();
+    let mut i = position;
+    let mut scan_count = 0;
+    while i > 0 && scan_count < 4 {
+        // Walk back one UTF-8 char (using char_indices reverse is
+        // expensive — fall back to byte-walk and validate UTF-8).
+        let prev_char_len = {
+            let mut j = i - 1;
+            // Skip continuation bytes (10xxxxxx).
+            while j > 0 && (bytes[j] & 0xC0) == 0x80 {
+                j -= 1;
+            }
+            i - j
+        };
+        i -= prev_char_len;
+        let c = match user[i..i + prev_char_len].chars().next() {
+            Some(c) => c,
+            None => break,
+        };
+        scan_count += 1;
+        // Stop scanning at punctuation — clause boundary resets context.
+        if is_punctuation(c) || c.is_whitespace() {
+            break;
+        }
+        if ZH_NEGATIONS.contains(&c.to_string().as_str()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check whether `match_start` (byte offset of the trigger match in
+/// `user_lower`) is preceded by an English negation phrase within a
+/// 3-token window. Returns the negation match position if found.
+fn preceded_by_en_negation(user_lower: &str, match_start: usize) -> bool {
+    let window_start = match_start.saturating_sub(40);
+    let window = &user_lower[window_start..match_start];
+    // Find the LAST negation match in the window — the most recent
+    // negation governs.
+    if let Some(m) = EN_NEGATION.find_iter(window).last() {
+        // Only count if there's no punctuation/clause-break between
+        // the negation and the trigger.
+        let between = &window[m.end()..];
+        if !between
+            .chars()
+            .any(|c| c == '.' || c == '!' || c == '?' || c == ';')
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// 主入口：从 user message 抽取所有事实。
@@ -131,6 +301,8 @@ fn extract_content_after<'a>(user: &'a str, prefix_len: usize) -> &'a str {
 /// 设计要点：
 /// - 同一 turn 内多个 trigger 都会抽取，但 `canonical_key` 去重，
 ///   第二次出现相同 key 时 `upsert_fact` 会 bump `access_count`。
+/// - 否定检测：trigger 前有"我不/我没/我从不/我不爱"等否定词 → kind 翻转
+///   到 `negated_kind`（通常是 dislike），或完全跳过该 fact。
 /// - 返回 `Vec` 让 caller 知道抽到几个（用于 debug 日志）。
 /// - 空 user / 空 content → 返回 `vec![]`。
 pub fn extract_facts_from_turn(
@@ -145,47 +317,74 @@ pub fn extract_facts_from_turn(
     // Lower-cased scan for English triggers; original for Chinese.
     let user_lower = user_trim.to_lowercase();
 
-    let mut facts = Vec::new();
-    for (prefix, kind, min_chars) in TRIGGERS {
-        // Try both original-case and lower-case scan; the first hit wins.
-        let hit = if prefix.chars().any(|c| c.is_ascii_alphabetic()) && prefix.is_ascii() {
-            // English trigger — case-insensitive
-            user_lower.find(prefix)
-        } else {
-            // Chinese / non-ascii trigger — case-sensitive
-            user_trim.find(prefix)
+    let mut facts: Vec<ExtractedFact> = Vec::new();
+    // Track seen (kind, content) to dedup within a single turn.
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+
+    for (re, trigger) in TRIGGER_REGEXES.iter() {
+        let haystack = match trigger.lang {
+            Lang::En => user_lower.as_str(),
+            Lang::Zh => user_trim,
         };
-        let Some(idx) = hit else {
-            continue;
-        };
-        // Avoid matching the trigger as part of a longer word by
-        // checking the character before the match.
-        if idx > 0 {
-            let prev_char_start = user_trim[..idx].char_indices().last().map(|(i, _)| i);
-            if let Some(pcs) = prev_char_start {
-                let prev_char = user_trim[pcs..idx].chars().next();
-                if let Some(c) = prev_char {
-                    // Allow the trigger to follow a space, punctuation,
-                    // or the start of the string. Reject alphanumeric
-                    // continuation.
-                    if c.is_alphanumeric() && !matches!(c, '_' | '-') {
+        for m in re.find_iter(haystack) {
+            let trigger_end = m.end();
+
+            // M3: negation detection — must run BEFORE clause boundary check so
+            // we can capture "我不喜欢" (which sits mid-clause) as a
+            // dislike fact.
+            let negated = match trigger.lang {
+                Lang::Zh => preceded_by_zh_negation(user_trim, m.start()),
+                Lang::En => preceded_by_en_negation(&user_lower, m.start()),
+            };
+
+            // M3: clause-boundary check (Chinese) — the trigger must sit at the
+            // start of a clause. We allow it after any punctuation OR at
+            // offset 0 OR after whitespace. Without this, "我喜欢你 我喜欢你"
+            // would double-fire from "喜欢" too.
+            //
+            // EXCEPTION: when the match is negated, we want to capture
+            // it regardless of clause position — "我不喜欢 Rust" must
+            // produce a dislike fact even though "我喜欢" sits in the
+            // middle of "我不喜欢".
+            if trigger.lang == Lang::Zh && trigger.enforce_clause_boundary && m.start() > 0 && !negated {
+                let before = user_trim[..m.start()].chars().last();
+                if let Some(c) = before {
+                    if !is_punctuation(c) && !c.is_whitespace() {
+                        // Not at clause boundary — skip.
                         continue;
                     }
                 }
             }
+
+            let kind = if negated {
+                match trigger.negated_kind {
+                    Some(k) => k,
+                    None => continue, // negation present but no flip kind → drop
+                }
+            } else {
+                trigger.base_kind
+            };
+
+            // Find the content window AFTER the trigger.
+            let Some((cs, cl)) = find_content_window(user_trim, trigger_end) else {
+                continue;
+            };
+            let raw = &user_trim[cs..cs + cl];
+            let content: String = raw.chars().take(100).collect();
+            let content = content.trim();
+            if content.chars().count() < trigger.min_chars {
+                continue;
+            }
+            // Skip content that is itself only punctuation/whitespace.
+            if content.chars().all(|c| !c.is_alphanumeric()) {
+                continue;
+            }
+            let key = (kind.to_string(), content.to_string());
+            if !seen.insert(key) {
+                continue;
+            }
+            facts.push(ExtractedFact::new(kind, content, session_id, turn_number));
         }
-        let raw_content = extract_content_after(user_trim, idx + prefix.len());
-        // char count for min_chars check + truncation
-        let content: String = raw_content.chars().take(100).collect();
-        let content = content.trim();
-        if content.chars().count() < *min_chars {
-            continue;
-        }
-        // Skip content that is itself only punctuation/whitespace.
-        if content.chars().all(|c| !c.is_alphanumeric()) {
-            continue;
-        }
-        facts.push(ExtractedFact::new(kind, content, session_id, turn_number));
     }
     facts
 }
@@ -214,8 +413,6 @@ mod tests {
     #[test]
     fn name_extraction_zh_long_form() {
         let facts = extract_facts_from_turn("我的名字是李四, 请记住", "s1", 1);
-        // Both "我的名字是" and "请记住" may trigger; key dedup is
-        // handled by upsert_fact not here.
         assert!(facts.iter().any(|f| f.canonical_key.starts_with("user.name")));
     }
 
@@ -309,5 +506,131 @@ mod tests {
         assert!(k.contains(&"user.name"));
         assert!(k.contains(&"user.tool"));
         assert!(k.contains(&"user.preference"));
+    }
+
+    // ------------------------------------------------------------------
+    // M3 negation regression tests — the original bug
+    // ------------------------------------------------------------------
+
+    /// M3 (主报告 #5): "我不喜欢 Rust" must NOT be stored as a
+    /// preference. Old code stored `user.preference:Rust` (wrong);
+    /// new code either drops or flips to `user.dislike:Rust`.
+    ///
+    /// **Content window caveat:** the CJK verb "喜欢" extends past
+    /// the "不喜欢" trigger, so the captured content may begin with
+    /// the trailing 欢 (verb complement). We don't require exact
+    /// content match — only the *kind* must flip and the object
+    /// must surface in the content.
+    #[test]
+    fn m3_negation_zh_dislike_flips_preference() {
+        let facts = extract_facts_from_turn("我不喜欢 Rust", "s1", 1);
+        assert!(
+            !facts.iter().any(|f| f.kind() == "user.preference"),
+            "negated preference must not be stored as preference: got {:?}",
+            facts.iter().map(|f| f.canonical_key.clone()).collect::<Vec<_>>()
+        );
+        let dislike: Vec<&ExtractedFact> = facts.iter().filter(|f| f.kind() == "user.dislike").collect();
+        assert_eq!(dislike.len(), 1, "expected 1 dislike fact, got {dislike:?}");
+        // Content should at least contain "Rust" (the object of dislike).
+        let content = dislike[0].payload["content"].as_str().unwrap_or("");
+        assert!(
+            content.contains("Rust"),
+            "dislike content should mention the object 'Rust', got '{content}'"
+        );
+    }
+
+    /// M3: 同样地 "我不爱 X" 应该 dislike
+    #[test]
+    fn m3_negation_zh_wo_ai_flips_preference() {
+        let facts = extract_facts_from_turn("我不爱 Python", "s1", 1);
+        assert!(!facts.iter().any(|f| f.kind() == "user.preference"));
+        let dislike: Vec<&ExtractedFact> = facts.iter().filter(|f| f.kind() == "user.dislike").collect();
+        assert_eq!(dislike.len(), 1, "expected 1 dislike fact");
+        let content = dislike[0].payload["content"].as_str().unwrap_or("");
+        assert!(content.contains("Python"), "got '{content}'");
+    }
+
+    /// M3: 英文 "I don't like Rust" → dislike. English uses real
+    /// negation detection (the verb is intact, the negation word is
+    /// separate), so content extraction is clean.
+    #[test]
+    fn m3_negation_en_dont_flips_preference() {
+        let facts = extract_facts_from_turn("I don't like Rust", "s1", 1);
+        assert!(!facts.iter().any(|f| f.kind() == "user.preference"));
+        let dislike: Vec<&ExtractedFact> = facts.iter().filter(|f| f.kind() == "user.dislike").collect();
+        assert_eq!(dislike.len(), 1, "expected 1 dislike fact");
+        assert_eq!(dislike[0].payload["content"].as_str(), Some("Rust"));
+    }
+
+    /// M3: "I do not love Java" → dislike
+    #[test]
+    fn m3_negation_en_do_not_flips_preference() {
+        let facts = extract_facts_from_turn("I do not love Java", "s1", 1);
+        let dislike: Vec<&ExtractedFact> = facts.iter().filter(|f| f.kind() == "user.dislike").collect();
+        assert_eq!(dislike.len(), 1, "expected 1 dislike fact");
+        let content = dislike[0].payload["content"].as_str().unwrap_or("");
+        assert!(content.contains("Java"), "got '{content}'");
+    }
+
+    /// M3: "I never use Slack" → dislike (negation + i use)
+    #[test]
+    fn m3_negation_en_never_drops_tool() {
+        // "i use" has negated_kind = None, so negated → drop entirely.
+        let facts = extract_facts_from_turn("I never use Slack", "s1", 1);
+        assert!(
+            !facts.iter().any(|f| f.kind() == "user.tool"),
+            "negated tool must be dropped, got {:?}",
+            facts.iter().map(|f| f.canonical_key.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    /// M3: positive cases still work after negation logic added.
+    #[test]
+    fn m3_positive_still_works_after_negation_logic() {
+        let facts = extract_facts_from_turn("I like Rust and I love Tauri", "s1", 1);
+        let prefs: Vec<&str> = facts.iter().map(|f| f.payload["content"].as_str().unwrap()).collect();
+        assert!(prefs.contains(&"Rust"));
+        assert!(prefs.contains(&"Tauri"));
+        for f in &facts {
+            assert_eq!(f.kind(), "user.preference");
+        }
+    }
+
+    /// M3: clause boundary — "我不" must not bleed across clauses.
+    /// "我不讨厌 Rust, 我喜欢 Python" — the first clause ("I don't
+    /// dislike Rust") has no good fact-kind mapping (it's a weak
+    /// preference, but our kinds only have like/dislike/avoid/tool/etc,
+    /// not "weak-preference") so the new code drops it. The second
+    /// clause ("我喜欢 Python") cleanly maps to `user.preference`.
+    #[test]
+    fn m3_negation_does_not_bleed_across_clauses() {
+        let facts = extract_facts_from_turn("我不讨厌 Rust, 我喜欢 Python", "s1", 1);
+        // No dislike facts (the "我不讨厌" clause is dropped because
+        // 否定 + dislike trigger with no flip kind → continue).
+        let dislikes: Vec<&ExtractedFact> = facts.iter().filter(|f| f.kind() == "user.dislike").collect();
+        assert_eq!(dislikes.len(), 0, "expected 0 dislikes (我不讨厌 drops), got {dislikes:?}");
+        // 1 preference from "我喜欢 Python".
+        let preferences: Vec<&ExtractedFact> = facts.iter().filter(|f| f.kind() == "user.preference").collect();
+        assert_eq!(preferences.len(), 1, "expected 1 preference");
+        assert_eq!(preferences[0].payload["content"].as_str(), Some("Python"));
+    }
+
+    /// M3: English word boundary — "use" inside "because" must NOT match.
+    /// "i use" has `\b` word boundary — old code matched substring.
+    #[test]
+    fn m3_english_word_boundary_strict() {
+        let facts = extract_facts_from_turn("because I use Rust", "s1", 1);
+        // Only "I use" should match (preceded by space, word boundary ok)
+        // The "use" inside "because" is NOT preceded by word boundary.
+        let tools: Vec<&ExtractedFact> = facts.iter().filter(|f| f.kind() == "user.tool").collect();
+        assert_eq!(tools.len(), 1, "expected exactly 1 tool fact, got {}", tools.len());
+    }
+}
+
+impl ExtractedFact {
+    /// Helper for tests — returns the fact kind.
+    #[cfg(test)]
+    fn kind(&self) -> &str {
+        self.payload["kind"].as_str().unwrap_or("")
     }
 }
