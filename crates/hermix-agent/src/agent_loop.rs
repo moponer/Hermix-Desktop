@@ -1008,6 +1008,53 @@ impl AgentLoop {
         Ok(PostResponseAction::Continue)
     }
 
+    /// Phase 2.2 (2026-07-03): shared per-turn post-LLM setup that
+    /// `run()` and `run_stream()` previously open-coded after the
+    /// `process_post_response` call. Builds the local `assistant_msg`,
+    /// appends it to the context, updates `last_content_with_tools` if
+    /// the assistant content came bundled with tool calls (used by the
+    /// codex-ack continuation logic on the next turn), and reports
+    /// whether any prior tool result exists in the history.
+    ///
+    /// Returns the three locals the caller needs:
+    /// - `history_includes_tool`: did any earlier turn leave a `Tool`
+    ///   message in the context? Used by
+    ///   `decide_post_response_fallback` to know whether tool
+    ///   execution is part of the protocol context.
+    /// - `assistant_msg`: the LLM's response, freshly appended to
+    ///   the context.
+    /// - `tool_calls`: the LLM's claimed tool calls, cloned for the
+    ///   caller to dispatch / dedup.
+    #[allow(clippy::type_complexity)]
+    fn prepare_assistant_turn(
+        &self,
+        ctx: &mut ContextManager,
+        response: &hermix_core::LlmResponse,
+        last_content_with_tools: &mut Option<String>,
+    ) -> (bool, Message, Option<Vec<ToolCall>>) {
+        let history_includes_tool = ctx
+            .get_messages()
+            .iter()
+            .any(|m| m.role == MessageRole::Tool);
+        let assistant_msg = response.message.clone();
+        let tool_calls = assistant_msg.tool_calls.clone();
+        ctx.add_message(assistant_msg.clone());
+        if assistant_msg
+            .tool_calls
+            .as_ref()
+            .is_some_and(|v| !v.is_empty())
+            && Self::assistant_visible_text_after_think_blocks(&assistant_msg)
+        {
+            *last_content_with_tools = assistant_msg
+                .content
+                .as_deref()
+                .map(strip_think_blocks_for_ack)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
+        (history_includes_tool, assistant_msg, tool_calls)
+    }
+
     /// Phase 2.1 (2026-07-03): apply the four-variant
     /// `PostResponseFallback` outcome produced by
     /// `crate::post_response_fallback::decide_post_response_fallback`.
@@ -4897,26 +4944,11 @@ impl AgentLoop {
                 ));
             }
 
-            let history_includes_tool = ctx
-                .get_messages()
-                .iter()
-                .any(|m| m.role == MessageRole::Tool);
-            let assistant_msg = response.message.clone();
-            let tool_calls = assistant_msg.tool_calls.clone();
-            ctx.add_message(assistant_msg.clone());
-            if assistant_msg
-                .tool_calls
-                .as_ref()
-                .is_some_and(|v| !v.is_empty())
-                && Self::assistant_visible_text_after_think_blocks(&assistant_msg)
-            {
-                last_content_with_tools = assistant_msg
-                    .content
-                    .as_deref()
-                    .map(strip_think_blocks_for_ack)
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-            }
+            let (history_includes_tool, assistant_msg, tool_calls) = self.prepare_assistant_turn(
+                &mut ctx,
+                &response,
+                &mut last_content_with_tools,
+            );
 
             // Step complete callback
             if let Some(ref cb) = self.callbacks.on_step_complete {
@@ -5827,26 +5859,11 @@ impl AgentLoop {
                 ));
             }
 
-            let history_includes_tool = ctx
-                .get_messages()
-                .iter()
-                .any(|m| m.role == MessageRole::Tool);
-            let assistant_msg = response.message.clone();
-            let tool_calls = assistant_msg.tool_calls.clone();
-            ctx.add_message(assistant_msg.clone());
-            if assistant_msg
-                .tool_calls
-                .as_ref()
-                .is_some_and(|v| !v.is_empty())
-                && Self::assistant_visible_text_after_think_blocks(&assistant_msg)
-            {
-                last_content_with_tools = assistant_msg
-                    .content
-                    .as_deref()
-                    .map(strip_think_blocks_for_ack)
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-            }
+            let (history_includes_tool, assistant_msg, tool_calls) = self.prepare_assistant_turn(
+                &mut ctx,
+                &response,
+                &mut last_content_with_tools,
+            );
             if response.finish_reason.as_deref() == Some("length")
                 && assistant_msg
                     .tool_calls
