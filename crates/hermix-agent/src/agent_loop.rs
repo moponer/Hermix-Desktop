@@ -616,6 +616,9 @@ struct LoopState {
     invalid_tool_retries: u32,
     /// Retries against invalid JSON in tool arguments.
     invalid_json_retries: u32,
+    /// Retries when the streaming provider truncated a tool call's JSON.
+    /// `run_stream()`-only — non-stream `run()` cannot observe truncation.
+    truncated_tool_call_retries: u32,
     /// Last assistant message that included tool_use (for re-asking).
     last_content_with_tools: Option<String>,
     /// Context pressure: first percentage value at which we warned.
@@ -665,6 +668,7 @@ impl LoopState {
         last_checkpoint_messages: Option<&Vec<Message>>,
         invalid_tool_retries: u32,
         invalid_json_retries: u32,
+        truncated_tool_call_retries: u32,
         last_content_with_tools: Option<&String>,
         context_pressure_warned_at: f64,
         context_pressure_last_warn_at: Option<Instant>,
@@ -680,6 +684,7 @@ impl LoopState {
         self.last_checkpoint_messages = last_checkpoint_messages.cloned();
         self.invalid_tool_retries = invalid_tool_retries;
         self.invalid_json_retries = invalid_json_retries;
+        self.truncated_tool_call_retries = truncated_tool_call_retries;
         self.last_content_with_tools = last_content_with_tools.cloned();
         self.context_pressure_warned_at = context_pressure_warned_at;
         self.context_pressure_last_warn_at = context_pressure_last_warn_at;
@@ -5178,6 +5183,7 @@ impl AgentLoop {
                 last_checkpoint_messages.as_ref(),
                 invalid_tool_retries,
                 invalid_json_retries,
+                0, // truncated_tool_call_retries — run() never sees a truncated stream
                 last_content_with_tools.as_ref(),
                 context_pressure_warned_at,
                 context_pressure_last_warn_at,
@@ -5380,19 +5386,20 @@ impl AgentLoop {
             self.auto_compress_if_over_threshold(&mut ctx).await;
         }
 
-        let mut total_turns: u32 = 0;
-        let mut accumulated_usage: Option<UsageStats> = None;
-        let mut session_cost_usd: f64 = 0.0;
-        let mut cost_warned = false;
-        let mut forced_runtime_route: Option<TurnRuntimeRoute> = None;
-        let mut last_checkpoint_messages: Option<Vec<Message>> = None;
-        let mut invalid_tool_retries: u32 = 0;
-        let mut invalid_json_retries: u32 = 0;
-        let mut truncated_tool_call_retries: u32 = 0;
-        let mut last_content_with_tools: Option<String> = None;
-        let mut context_pressure_warned_at: f64 = 0.0;
-        let mut context_pressure_last_warn_at: Option<Instant> = None;
-        let mut context_pressure_last_warn_percent: f64 = 0.0;
+        let mut state = LoopState::default();
+        let mut total_turns: u32 = state.total_turns;
+        let mut accumulated_usage: Option<UsageStats> = state.accumulated_usage.clone();
+        let (mut session_cost_usd, mut cost_warned) = (state.session_cost_usd, state.cost_warned);
+        let mut forced_runtime_route: Option<TurnRuntimeRoute> = state.forced_runtime_route.clone();
+        let mut last_checkpoint_messages: Option<Vec<Message>> =
+            state.last_checkpoint_messages.clone();
+        let (mut invalid_tool_retries, mut invalid_json_retries) =
+            (state.invalid_tool_retries, state.invalid_json_retries);
+        let mut truncated_tool_call_retries: u32 = state.truncated_tool_call_retries;
+        let mut last_content_with_tools: Option<String> = state.last_content_with_tools.clone();
+        let (mut context_pressure_warned_at, mut context_pressure_last_warn_at) =
+            (state.context_pressure_warned_at, state.context_pressure_last_warn_at);
+        let mut context_pressure_last_warn_percent: f64 = state.context_pressure_last_warn_percent;
 
         loop {
             if self.interrupt.take_interrupt_graceful().is_some() {
@@ -6172,6 +6179,29 @@ impl AgentLoop {
             }
 
             self.auto_compress_if_over_threshold(&mut ctx).await;
+
+            // Phase 1.2 (2026-07-03): publish loop-locals back to `state`
+            // (mirror of the bridge installed in `run()` for Phase 1.1).
+            // After this commit, `state` reflects live run_stream values too,
+            // and the Phase 1.3 `run_shared_loop` extraction can accept
+            // both call sites.
+            state.publish_from(
+                total_turns,
+                0, // total_api_time_ms — run_stream doesn't accumulate this
+                0, // total_tool_time_ms — run_stream doesn't accumulate this
+                accumulated_usage.as_ref(),
+                session_cost_usd,
+                cost_warned,
+                forced_runtime_route.as_ref(),
+                last_checkpoint_messages.as_ref(),
+                invalid_tool_retries,
+                invalid_json_retries,
+                truncated_tool_call_retries,
+                last_content_with_tools.as_ref(),
+                context_pressure_warned_at,
+                context_pressure_last_warn_at,
+                context_pressure_last_warn_percent,
+            );
         }
     }
 
@@ -7470,6 +7500,7 @@ mod tests {
             None,                     // last_checkpoint_messages
             2,                        // invalid_tool_retries
             3,                        // invalid_json_retries
+            1,                        // truncated_tool_call_retries (stream-only)
             None,                     // last_content_with_tools
             0.65,                     // context_pressure_warned_at
             None,                     // context_pressure_last_warn_at
@@ -7482,6 +7513,7 @@ mod tests {
         assert!(s.cost_warned);
         assert_eq!(s.invalid_tool_retries, 2);
         assert_eq!(s.invalid_json_retries, 3);
+        assert_eq!(s.truncated_tool_call_retries, 1);
         assert_eq!(s.context_pressure_warned_at, 0.65);
         assert_eq!(s.context_pressure_last_warn_percent, 0.71);
     }
