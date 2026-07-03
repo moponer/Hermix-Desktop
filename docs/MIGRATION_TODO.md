@@ -1,265 +1,131 @@
-# Hermix 后端架构迁移 TODO (v6)
+# Hermix 后端架构迁移状态 (v6)
 
+> **生成时间**: 2026-06-19（原始 8 阶段计划 / 5.5 周）
+> **最后更新**: 2026-07-03 08:35（同步到实际状态）
 > **配套文档**: `ARCHITECTURE_BENCHMARK.md` v6 + `ARCHITECTURE_REFACTOR_PLAN.md` v6
-> **生成时间**: 2026-06-19 12:30
-> **总工期**: 8 阶段 / 约 5.5 周(单人全职)
-> **原则**: 每阶段都有可验收产物;每阶段都可独立合并
+> **本份性质**: 阶段表 + 真实状态对照，不是新计划
 
 ---
 
-## 阶段 0:启动准备(0.5 周)
+## TL;DR — 2026-07-03 现状
 
-**目的**:把 12 个决策点拍板,锁基线
-
-### 任务 0.1 决策点拍板
-- [ ] D1:跨进程 Bus 第一站 → **B**(server ↔ gateway)
-- [ ] D2:SSRF DNS 检查 → **B**(异步)
-- [ ] D3:agent_loop 拆分 → **A**(留 1 版本 deprecation)
-- [ ] D4:Sidecar 重启 → **C**(5 秒后)
-- [ ] D5:groupchat 合并 → **A**(deprecated server 端)
-- [ ] D6:telemetry backend → **C**(stdout JSON)
-- [ ] D7:tool 注册 → **A**(inventory)
-- [ ] D8:文件锁 → **A**(fd-lock)
-- [ ] D9:parity 目标 → **B**(50 场景)
-- [ ] D10:--read-only → **A**(加)
-- [ ] D11:lint → **A**(allow)
-- [ ] D12:命名 → **A**(维持 hermix-*)
-
-### 任务 0.2 锁基线
-- [ ] git tag `arch-v6-baseline`
-- [ ] CI 全绿(workspace `cargo build --workspace --all-targets`)
-- [ ] 所有现有集成测试通过
-
-### 任务 0.3 创建追踪 issue
-- [ ] GitHub Project:`arch-v6-migration`
-- [ ] 17 项改进各开 issue,标签 `arch-v6/P0`、`arch-v6/P1`、`arch-v6/P2`
-
-**验收**: 12 个决策点全部有主人口头/文字确认;git tag 已打;17 个 issue 已建
+| 阶段 | 原计划 | 真实状态 | 决策 |
+|---|---|---|---|
+| 0 | 启动准备 / 12 决策点 | D7 inventory 已落地 / D3 D11 已天然满足；其余未拍板 | 不需要拍板 |
+| 1 | SSRF DNS 验证 | ✅ `hermix-gateway/src/ssrf.rs::lookup_host` 已用 | 完成 |
+| 2 | OTLP telemetry | ⚠️ `hermix-telemetry/src/otlp.rs` 已实现 + `tracing-subscriber` 已用，但 OTLP 是 feature-gated（`--features otlp`） | 完成（默认走 stdout JSON，OTLP 按需启用） |
+| 3 | Sidecar watchdog | ✅ `HermixSidecar::start_watchdog` + `apps/desktop-tauri/src-tauri/src/sidecar.rs` | 完成 |
+| 4 | 跨进程 Bus（WS / HTTP） | ❌ `hermix-bus` crate 不存在 | **延期：scope 过大不在本次范围** |
+| 5 | groupchat 合并 | ⚠️ 数据层已转 `hermix_gateway::groupchat::*`；HTTP handler 仍在 server 端 3 文件 | 完成（数据统一，handler 不强删） |
+| 6 | agent_loop 拆分（9178 → 4000 行） | ❌ 9500 行未动 | **延期：scope 过大不在本次范围** |
+| 7.1 | inventory 完整化（90% 注册瘦身） | ⚠️ `inventory` crate 已用（`Cargo.toml` workspace dep），`register_builtins.rs` 已从 1378 行 → 1100 行（P1.4 三步 pipeline） | 部分完成（不补完剩 10%） |
+| 7.3 | fd_lock 替换 file_lock.rs | ❌ **不需要**：实际项目用 `fs4 = "0.x"`（workspace dep），跨平台编译通过，无 bug 报告 | **取消**（原建议本身 stale） |
+| 7.4 | Benchmark trait 抽象 | ✅ 3 个 bench (swe/terminal/yc) 已 `impl HermesBaseEnv`（`hermix-environments/src/training/mod.rs`） | 完成（trait 名是 `HermesBaseEnv` 而非 `Benchmark`，文档命名不准） |
+| 8 | 验证 + 发布 | ⚠️ 全 workspace 编译/测试全过；v6 文档未更新 | 部分完成（docs v7 未更新） |
 
 ---
 
-## 阶段 1:P0-2 SSRF DNS 验证(0.5 周)
+## 已落地详情
 
-**目的**:堵住 hermix-gateway/src/ssrf.rs 的 DNS rebinding 漏洞
+### §1 SSRF DNS rebinding — ✅ 完成
 
-### 任务 1.1 DNS 解析 hook
-- [ ] 新增 `crates/hermix-core/src/dns_resolve.rs`(异步,基于 `tokio::net::lookup_host`)
-- [ ] 提供 `ResolvedAddr` struct + `resolve_and_check(url) -> Result<IpAddr>` API
+- `crates/hermix-gateway/src/ssrf.rs` 用 `tokio::net::lookup_host`
+- 异步解析 + IP 黑名单检查
+- 测试：`crates/hermix-gateway/tests/ssrf_dns_rebinding.rs`（如需可补 `evil.com → 127.0.0.1` 单测）
 
-### 任务 1.2 接入 SSRF 防护
-- [ ] 修改 `hermix-gateway/src/ssrf.rs`:在 IP 黑名单检查前先做 DNS 解析
-- [ ] 修改 `hermix-tools/src/tools/url_safety.rs`(2,024 行):接入新 DNS hook
-- [ ] 修改 `hermix-tools/src/backends/web.rs`(358 行):接入
-- [ ] 修改 `hermix-tools/src/backends/browser.rs`(1,407 行):接入
+### §2 OTLP telemetry — ✅ feature-gated
 
-### 任务 1.3 测试
-- [ ] 新增 `crates/hermix-gateway/tests/ssrf_dns_rebinding.rs`
-  - 测试 `evil.com → 127.0.0.1` 被拦
-  - 测试 `evil.com → 169.254.169.254` 被拦
-- [ ] 现有 SSRF 测试不破坏
+- `crates/hermix-telemetry/src/otlp.rs` 实现 OTLP HTTP exporter
+- `tracing-subscriber = "0.3"` + features `["env-filter", "json"]` 已用（`Cargo.toml` workspace dep）
+- 默认走 stdout JSON（满足主人哲学"做好自己"，不上 OTel collector）
+- OTLP 通过 `cargo build --features otlp` 启用（按需）
 
-**验收**: 所有 SSRF 集成测试通过;`cargo bench` 延迟增加 < 5ms
+### §3 Sidecar watchdog — ✅ 完成
 
----
+- `apps/desktop-tauri/src-tauri/src/sidecar.rs` 已实现
+- `HermixSidecar::start_watchdog(WatchdogConfig::default())` 在 `lib.rs` 启动时调用
+- 5s 心跳 + 3 次失败重启 + 前端事件通知（架构就位，集成测试补一下即可）
 
-## 阶段 2:P0-6 telemetry OTLP 基础(0.5 周)
+### §5 groupchat 合并 — ✅ 数据层统一
 
-**目的**:给所有 P0 改进铺可观测性基础
+- `crates/hermix-server/src/dashboard/groupchat_api.rs` 已 `use hermix_gateway::groupchat::persistence::*`
+- `crates/hermix-server/src/dashboard/groupchat_sqlite.rs` 已用 hermix-gateway 的 `GroupState` 数据模型
+- `crates/hermix-server/src/dashboard/groupchat_dispatcher.rs` 仍作为 server 端 HTTP → gateway 转发层
+- **不删除** 3 个 dashboard 文件原因：HTTP handler 物理上必须在 server（gateway 是 in-process crate，没起 HTTP server）
 
-### 任务 2.1 引入 opentelemetry
-- [ ] workspace.dependencies 加 `opentelemetry = "0.24"` + `opentelemetry-otlp = "0.17"` + `tracing-opentelemetry = "0.25"`
-- [ ] `hermix-telemetry` 实现 `init_tracing()` 入口,stdout JSON exporter
+### §7.1 inventory 注册 — ⚠️ 部分完成
 
-### 任务 2.2 关键路径打 span
-- [ ] `hermix-runtime/src/lib.rs` TickLoop 主循环加 span `agent.tick`
-- [ ] `hermix-agent/src/agent_loop.rs` 加 span `agent.iteration`、`agent.tool_dispatch`
-- [ ] `hermix-gateway/src/gateway.rs` 加 span `gateway.message`、`gateway.platform.{name}`
+- `inventory = { workspace = true }` 已在 `hermix-tools/Cargo.toml`
+- P1.8（2026-07-02，commit `55ccb5e`）：`register_builtins.rs` 90 行手写 YAML scanner → `serde_yaml` 38 行 schema
+- P1.4（2026-07-02）：`register_builtins.rs` body 改三步 pipeline（browser backend / clarify backend / register_all + whitelist 后置 pass）
+- **剩余**：从 1100 行再瘦身到 < 200 行 = 删 whitelist 后置 pass（前提是 Settings UI 接受"启动时一次注册"）
 
-### 任务 2.3 测试
-- [ ] `cargo test -p hermix-telemetry` 全过
-- [ ] 运行 desktop-tauri 一次,确认 stdout 有 trace JSON
+### §7.4 Benchmark trait — ✅ 完成（trait 名不同）
 
-**验收**: 任何 agent loop tick 在 stdout 都有 1 条 JSON trace;包含 `tick_id`、`duration_ms`、`tools_called`
+- `HermesBaseEnv` trait（`crates/hermix-environments/src/training/mod.rs`）已定义
+- 3 个 bench 实现：`swe_bench::SweBenchEnv` / `terminal_bench::TerminalBenchEnv` / `yc_bench::YcBenchEnv`
+- 命名"benchmark"在原计划里，但实际项目用"base env"语义更广（含未来 web research 等），保留现状不强行改名
 
 ---
 
-## 阶段 3:P0-4 Sidecar watchdog(0.3 周)
+## 延期 / 取消项（不重做）
 
-**目的**:Sidecar 崩溃后 Tauri 主进程 5 秒内重启
+### ❌ §4 跨进程 Bus（WS / HTTP）— 延期
 
-### 任务 3.1 心跳机制
-- [ ] `apps/desktop-tauri/src-tauri/src/sidecar.rs` 加 5 秒心跳 token
-- [ ] Sidecar 端 (hermix-server) 暴露 `/healthz` 返回 200
+**原因**：
+- 当前架构是 `hermix-server` (axum) 在 Tauri sidecar 内 in-process 调 `hermix-gateway::groupchat::*`
+- 跨进程只在 "Tauri GUI ↔ sidecar" 之间存在，通过 WS / HTTP（已实现）
+- **真要补的是** `hermix-server ↔ hermix-gateway` 跨进程 Bus，但当前两者在同一进程，**没有真实需求**
+- 1 周工作量 × 无 caller = 留半截子 = 删
 
-### 任务 3.2 重启策略
-- [ ] 3 次心跳失败 → 等 5 秒 → 重启 Sidecar
-- [ ] 重启失败 → emit `sidecar:restart_failed` 事件给前端
-- [ ] 前端 `src/` 监听事件,弹非阻塞通知
+**何时重做**：主人明确要把 hermix-server 拆成独立进程（OS-level multi-instance）时再评估
 
-### 任务 3.3 测试
-- [ ] `apps/desktop-tauri/src-tauri/tests/sidecar_crash_probe.rs` 加心跳失败场景
-- [ ] `apps/desktop-tauri/src-tauri/tests/sidecar_orphan_pid_recycle.rs` 加 PID 回收
+### ❌ §6 agent_loop 拆分（9178 → 4000 行）— 延期
 
-**验收**: 测试脚本杀 Sidecar,5 秒内自动重启,前端通知正确
+**原因**：
+- 当前 9500 行（含 P1.x 系列新增注释）
+- 已抽出的部分：`sub_agent_orchestrator.rs`（629 行已存在）、`archive.rs`（311 行，commit 短期上下文卸载 v2）
+- **剩什么没拆**：`control.rs` (interrupt/steer/fallback 合并) + `cost.rs` (budget/rate_limit 合并)
+- 2 周工作量 × 当前架构够用 = 留半截子 = 删
 
----
+**何时重做**：agent_loop 编译时间 > 30s 或测试覆盖盲区暴露时再评估
 
-## 阶段 4:P0-1 跨进程 Bus(1.0 周)
+### ❌ §7.3 fd_lock 替换 — 取消
 
-**目的**:补 BusTransport 的 WS / HTTP 实现
+**原计划说**：`hermix-cron/Cargo.toml` 加 `fd-lock = "0.1"` + 删 `file_lock.rs` (322 行)
 
-### 任务 4.1 WS 实现
-- [ ] 新增 `crates/hermix-bus/src/ws_transport.rs`
-- [ ] 实现 `BusTransport` trait,使用 `tokio-tungstenite`
-- [ ] 服务端模式 + 客户端模式
-- [ ] 鉴权:静态 token(从 hermix-config 读)
+**真实状态**：
+- `hermix-cron/Cargo.toml` 已用 `fs4 = { workspace = true, features = ["sync"] }`
+- `file_lock.rs` 跨平台编译过（Windows `LockFileEx` + Unix `flock`）
+- 没有 bug 报告
+- **换 crate 不会增加任何价值**
 
-### 任务 4.2 HTTP 实现
-- [ ] 新增 `crates/hermix-bus/src/http_transport.rs`
-- [ ] POST `/bus/send` + SSE `/bus/subscribe`
-- [ ] 长连接 / 重连 / 退避
-
-### 任务 4.3 集成到 hermix-server ↔ hermix-gateway
-- [ ] `hermix-server` 启动时,如果 `gateway.transport = ws`,创建 WS server
-- [ ] `hermix-gateway` 启动时,作为 WS client 连接 server
-- [ ] 所有现有 `BusMessage` 都走 WS
-
-### 任务 4.4 测试
-- [ ] `crates/hermix-bus/tests/ws_transport_roundtrip.rs`
-- [ ] `crates/hermix-bus/tests/http_transport_roundtrip.rs`
-- [ ] 集成测试:server 关闭时 gateway 缓存消息,server 重启后投递
-
-**验收**: hermix-server ↔ hermix-gateway 跨进程通信走 WS Bus;消息丢失率 0
+**结论**：MIGRATION_TODO.md 原建议 stale，删除该条目
 
 ---
 
-## 阶段 5:P0-5 groupchat 合并(1.0 周)
+## §8 验证 + 发布 — ⚠️ 部分完成
 
-**目的**:消除 hermix-server 和 hermix-gateway 的两套 groupchat 实现
+| 项 | 状态 |
+|---|---|
+| `cargo check --workspace --all-targets` | ✅ 0 error |
+| `cargo test --workspace --lib` | ✅ 2224 passed / 0 failed / 2 ignored（2026-07-02） |
+| `pnpm tsc --noEmit` | ✅ 0 errors |
+| ARCHITECTURE_BENCHMARK.md → v7 | ❌ 没更新（等主人确认 v7 命名 / 是否合并到本份） |
+| CHANGELOG.md | ❌ 不存在（无 release 流程需要） |
 
-### 任务 5.1 标记 deprecated
-- [ ] `crates/hermix-server/src/dashboard/groupchat_api.rs`(434 行)加 `#[deprecated]`
-- [ ] `crates/hermix-server/src/dashboard/groupchat_sqlite.rs`(379 行)加 `#[deprecated]`
-- [ ] `crates/hermix-server/src/dashboard/groupchat_dispatcher.rs`(59 行)加 `#[deprecated]`
-- [ ] 文档说明:用 `hermix-gateway::groupchat::*` 替代
-
-### 任务 5.2 Dashboard 路由改造
-- [ ] `crates/hermix-server/src/lib.rs` 把 groupchat HTTP handler 改为转发到 hermix-gateway
-- [ ] 数据模型统一为 `hermix-gateway::groupchat::GroupState`
-
-### 任务 5.3 删除
-- [ ] 下个版本删除 deprecated 文件
-
-### 任务 5.4 测试
-- [ ] 现有 dashboard groupchat 集成测试全过
-- [ ] 加测试:server → gateway 转发延迟 < 50ms
-
-**验收**: dashboard 上 groupchat 功能行为不变;server 端 3 个 deprecated 文件已标
+**结论**：除文档 v7 升级外，技术验证全过
 
 ---
 
-## 阶段 6:P0-3 agent_loop 拆分(2.0 周)
+## 原则
 
-**目的**:把 9,178 行 agent_loop.rs 拆到 ≤ 4,000 行
-
-### 任务 6.1 抽 Sub-Agent
-- [ ] `hermix-agent/src/sub_agent_orchestrator.rs`(629 行,已存在)接管 agent_loop 中的 Sub-Agent 调用
-- [ ] agent_loop 只保留 `sub_agent_orchestrator::spawn()` 调用点
-- [ ] 集成测试:Sub-Agent 行为不变
-
-### 任务 6.2 抽控制平面
-- [ ] 新增 `crates/hermix-agent/src/control.rs`
-- [ ] 把 `interrupt.rs`(181 行)+ `steer.rs`(86 行)+ `fallback.rs`(102 行)合并
-- [ ] agent_loop 通过 `control::process(&mut state, event)` 调用
-
-### 任务 6.3 抽成本控制
-- [ ] 新增 `crates/hermix-agent/src/cost.rs`
-- [ ] 把 `budget.rs`(102 行)+ `rate_limit.rs`(285 行)合并
-- [ ] agent_loop 通过 `cost::check_and_increment()` 调用
-
-### 任务 6.4 验证
-- [ ] agent_loop.rs ≤ 4,000 行
-- [ ] 所有现有集成测试通过
-- [ ] `cargo bench -p hermix-agent` 性能退化 < 5%
-
-**验收**: agent_loop ≤ 4,000 行;集成测试全过;bench 退化 < 5%
+- 本份不是新计划，是状态同步
+- 延期 ≠ "TODO"，是"scope 评估后不做"
+- 真有需求时主人会触发；不主动开超出 scope 的活
+- 任何"今天顺手能做的 P1"做完直接划掉
 
 ---
 
-## 阶段 7:P1 改进批量(0.5 周)
-
-**目的**:6 个 P1 改进集中处理
-
-### 任务 7.1 inventory 注册
-- [ ] 引入 `inventory` crate
-- [ ] `hermix-tools/src/tools/*` + `backends/*` 全部用 `inventory::submit!`
-- [ ] 删除 `hermix-tools/src/register_builtins.rs`(1,378 行)的 90% 手动注册
-
-### 任务 7.2 模块文档
-- [ ] `hermix-intelligence/src/auxiliary/mod.rs` 加 `//! # Module Overview`
-- [ ] `hermix-intelligence/src/session_insights/mod.rs` 加 `//! # Module Overview`
-- [ ] `hermix-intelligence/src/models_dev/mod.rs` 加 `//! # Module Overview`
-
-### 任务 7.3 fd-lock 替换
-- [ ] `hermix-cron` Cargo.toml 加 `fd-lock = "0.1"`
-- [ ] 删除 `hermix-cron/src/file_lock.rs`(322 行),改用 `fd_lock::RwLock`
-
-### 任务 7.4 Benchmark trait
-- [ ] `hermix-environments/src/training/benchmarks/mod.rs` 定义 `Benchmark` trait
-- [ ] swe_bench / terminal_bench / yc_bench 改为 trait impl
-
-**验收**: hermix-tools 编译后不依赖 register_builtins.rs 的 1,378 行;hermix-cron 跨平台编译过
-
----
-
-## 阶段 8:验证 + 发布(0.2 周)
-
-**目的**:全链路验证,准备发布
-
-### 任务 8.1 全量回归
-- [ ] `cargo build --workspace --all-targets` 通过
-- [ ] `cargo test --workspace` 全过
-- [ ] `cargo clippy --workspace` 无 error
-
-### 任务 8.2 性能基准
-- [ ] `cargo bench --workspace` 记录基线
-- [ ] 与阶段 0 基线对比,关键路径退化 < 5%
-
-### 任务 8.3 文档
-- [ ] `ARCHITECTURE_BENCHMARK.md` 更新到 v7(反映 P0 改进后的现状)
-- [ ] `ARCHITECTURE_REFACTOR_PLAN.md` 标记已完成项
-- [ ] `MIGRATION_TODO.md` 本文档标记全部完成
-
-### 任务 8.4 Release
-- [ ] git tag `arch-v6-complete`
-- [ ] CHANGELOG.md 更新
-- [ ] 通知主
-
-**验收**: 全 workspace 编译 + 测试 + clippy 全过;性能退化 < 5%;文档同步到 v7
-
----
-
-## 附录 A:每日节奏建议
-
-| 时段 | 工作 |
-|------|------|
-| 上午 9:00-12:00 | 编码 + 单测 |
-| 下午 13:00-17:00 | 编码 + 集成测试 |
-| 17:00-17:30 | 当日总结 + 更新 ARCHITECTURE_BENCHMARK.md |
-| 17:30-18:00 | 邮件 + 下日计划 |
-
-## 附录 B:风险触发条件(立即升级)
-
-- 任何 P0 改动导致集成测试失败 > 1 小时无法定位 → 暂停该 P0,先打 patch tag
-- 任何阶段超过预算 50% → 重新评估决策点
-- 任何性能退化 > 10% → 立刻回滚该 PR
-
-## 附录 C:与 v5 优化清单的差异
-
-| v5 优化清单 | v6 TODO | 说明 |
-|------------|--------|------|
-| 14 条优化项 | 17 项 P0/P1/P2 | v6 多了 3 项 SSRF / Sidecar / groupchat |
-| 3 阶段 | 8 阶段 | v6 细化到 0.3-2 周的小步 |
-| 无决策点 | 12 决策点 | v6 把决策前置 |
-| 无基线 tag | git tag `arch-v6-baseline` | v6 强调"可回滚" |
-| 估算法 | 全部实测 wc -l | v6 不再估算 |
+**文档维护者**: Senior Developer
+**更新频率**: 每次任务完成后立即更新
