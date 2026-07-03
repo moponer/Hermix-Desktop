@@ -1008,6 +1008,57 @@ impl AgentLoop {
         Ok(PostResponseAction::Continue)
     }
 
+    /// Phase 2.1 (2026-07-03): apply the four-variant
+    /// `PostResponseFallback` outcome produced by
+    /// `crate::post_response_fallback::decide_post_response_fallback`.
+    /// Both `run()` and `run_stream()` previously open-coded this
+    /// match arm — the only difference between the two call sites
+    /// was the tracing message text. This helper centralises the
+    /// match and parameterises the stream-mode log suffix.
+    ///
+    /// Returns `true` when a `ContinueWithUserMsg` or
+    /// `ContinueWithSystemNudge` variant injected a message into the
+    /// context — the caller should `continue;` to restart the loop
+    /// with the injected message. Returns `false` when the variant
+    /// was `PatchLastAssistant` (which mutated the last assistant
+    /// message in place) or `Finalize` (a no-op) — the caller should
+    /// fall through to its terminal finalize path.
+    fn apply_fallback_outcome(
+        &self,
+        ctx: &mut ContextManager,
+        action: crate::post_response_fallback::PostResponseFallback,
+        stream_mode: bool,
+        total_turns: u32,
+        autonomous_nudge_count: u32,
+    ) -> bool {
+        use crate::post_response_fallback::PostResponseFallback;
+        match action {
+            PostResponseFallback::ContinueWithUserMsg(msg) => {
+                ctx.add_message(Message::user(&msg));
+                true
+            }
+            PostResponseFallback::ContinueWithSystemNudge(msg) => {
+                tracing::debug!(
+                    nudge_count = autonomous_nudge_count,
+                    total_turns,
+                    "autonomous_mode{}: nudging LLM back into action",
+                    if stream_mode { "" } else { " [non-stream]" }
+                );
+                ctx.add_message(Message::system(&msg));
+                true
+            }
+            PostResponseFallback::PatchLastAssistant { content } => {
+                if let Some(last) = ctx.get_messages_mut().last_mut() {
+                    if last.role == MessageRole::Assistant {
+                        last.content = Some(content);
+                    }
+                }
+                false
+            }
+            PostResponseFallback::Finalize => false,
+        }
+    }
+
     /// v2 (2026-06-21): most recent archive refs produced by
     /// `auto_compress_if_over_threshold`. Empty when the context has
     /// never crossed the 80% pressure threshold. Frontend uses this
@@ -4901,34 +4952,14 @@ impl AgentLoop {
                     );
                     codex_ack_continuations = outcome.new_codex_ack_continuations;
                     autonomous_nudge_count = outcome.new_autonomous_nudge_count;
-                    match outcome.action {
-                        crate::post_response_fallback::PostResponseFallback::ContinueWithUserMsg(
-                            msg,
-                        ) => {
-                            ctx.add_message(Message::user(&msg));
-                            continue;
-                        }
-                        crate::post_response_fallback::PostResponseFallback::ContinueWithSystemNudge(
-                            msg,
-                        ) => {
-                            tracing::debug!(
-                                nudge_count = autonomous_nudge_count,
-                                total_turns,
-                                "autonomous_mode [non-stream]: nudging LLM back into action"
-                            );
-                            ctx.add_message(Message::system(&msg));
-                            continue;
-                        }
-                        crate::post_response_fallback::PostResponseFallback::PatchLastAssistant {
-                            content,
-                        } => {
-                            if let Some(last) = ctx.get_messages_mut().last_mut() {
-                                if last.role == MessageRole::Assistant {
-                                    last.content = Some(content);
-                                }
-                            }
-                        }
-                        crate::post_response_fallback::PostResponseFallback::Finalize => {}
+                    if self.apply_fallback_outcome(
+                        &mut ctx,
+                        outcome.action,
+                        false, // stream_mode
+                        total_turns,
+                        autonomous_nudge_count,
+                    ) {
+                        continue;
                     }
                     tracing::debug!("No tool calls in response, finishing naturally");
                     // Final memory sync
@@ -5872,34 +5903,14 @@ impl AgentLoop {
                 );
                 codex_ack_continuations = outcome.new_codex_ack_continuations;
                 autonomous_nudge_count = outcome.new_autonomous_nudge_count;
-                match outcome.action {
-                    crate::post_response_fallback::PostResponseFallback::ContinueWithUserMsg(
-                        msg,
-                    ) => {
-                        ctx.add_message(Message::user(&msg));
-                        continue;
-                    }
-                    crate::post_response_fallback::PostResponseFallback::ContinueWithSystemNudge(
-                        msg,
-                    ) => {
-                        tracing::debug!(
-                            nudge_count = autonomous_nudge_count,
-                            total_turns,
-                            "autonomous_mode: nudging LLM back into action"
-                        );
-                        ctx.add_message(Message::system(&msg));
-                        continue;
-                    }
-                    crate::post_response_fallback::PostResponseFallback::PatchLastAssistant {
-                        content,
-                    } => {
-                        if let Some(last) = ctx.get_messages_mut().last_mut() {
-                            if last.role == MessageRole::Assistant {
-                                last.content = Some(content);
-                            }
-                        }
-                    }
-                    crate::post_response_fallback::PostResponseFallback::Finalize => {}
+                if self.apply_fallback_outcome(
+                    &mut ctx,
+                    outcome.action,
+                    true, // stream_mode
+                    total_turns,
+                    autonomous_nudge_count,
+                ) {
+                    continue;
                 }
                 let (u, a) = extract_last_user_assistant(ctx.get_messages());
                 self.memory_sync(&u, &a, session_id);
