@@ -582,6 +582,68 @@ struct PreparedRun {
     task_hint: String,
 }
 
+/// All mutable loop-local state shared between `run()` and `run_stream()`.
+/// Centralized to avoid declaring 17+ individual locals in both methods
+/// (reduces duplication and eliminates the "forget to sync" bug).
+///
+/// Phase 1 (2026-07-03) introduces the struct. The actual migration of
+/// the 14 individual locals in `run()` and 17 in `run_stream()` onto
+/// `state` is a Phase 1.1 follow-up — see `// Phase 1 foundation` comment
+/// inside `run()` and `run_stream()`. Until then most fields are read by
+/// tests only, which is why the whole struct is `#[allow(dead_code)]`.
+#[allow(dead_code)]
+#[derive(Default)]
+struct LoopState {
+    /// Total turns completed so far in this run.
+    turn: u32,
+    /// Turn counter for the compressor (reset on each compaction).
+    iter_since_compress: u32,
+    /// Accumulated API time in ms.
+    total_api_time_ms: u64,
+    /// Accumulated tool execution time in ms.
+    total_tool_time_ms: u64,
+    /// Cumulative usage stats across turns.
+    accumulated_usage: Option<UsageStats>,
+    /// Running session cost estimate in USD.
+    session_cost_usd: f64,
+    /// Whether we've already warned about exceeding the cost threshold.
+    cost_warned: bool,
+    /// Forced cheap model route for remaining turns (set by smart router).
+    forced_runtime_route: Option<TurnRuntimeRoute>,
+    /// Last checkpoint messages for crash recovery.
+    last_checkpoint_messages: Option<Vec<Message>>,
+    /// Retries against invalid tool names (back-off on repeated).
+    invalid_tool_retries: u32,
+    /// Retries against invalid JSON in tool arguments.
+    invalid_json_retries: u32,
+    /// Last assistant message that included tool_use (for re-asking).
+    last_content_with_tools: Option<String>,
+    /// Context pressure tracking (last warned percentage).
+    context_pressure_last_warn_percent: f64,
+}
+
+impl LoopState {
+    /// Return the total token count for context-pressure estimation.
+    /// Wired in Phase 1.1 (2026-07-03 follow-up) — kept `#[allow(dead_code)]`
+    /// because the actual call-site migration of the 14 loop locals onto
+    /// `state` is a separate, non-trivial commit.
+    #[allow(dead_code)]
+    fn total_tokens(&self, ctx: &ContextManager) -> usize {
+        ctx.total_tokens()
+    }
+
+    /// Return true: context pressure exceeds the configured threshold.
+    /// Wired in Phase 1.1 (2026-07-03 follow-up).
+    #[allow(dead_code)]
+    fn context_pressure_exceeds(&self, ctx: &ContextManager, threshold: usize) -> bool {
+        self.total_tokens(ctx) > threshold
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Backwards-compat re-exports (P2.2.4, 2026-06-30)
+// ---------------------------------------------------------------------------
+
 impl AgentLoop {
     /// Populate [`AgentConfig::stored_system_prompt`] from SQLite (`sessions.system_prompt`) for session continuation.
     ///
@@ -4292,6 +4354,11 @@ impl AgentLoop {
         let mut context_pressure_last_warn_at: Option<Instant> = None;
         let mut context_pressure_last_warn_percent: f64 = 0.0;
 
+        // Phase 1 foundation (2026-07-03): `LoopState` is added at module
+        // scope. The actual migration of these 14 locals onto `state` is
+        // tracked as a follow-up commit to keep this change zero-impact.
+        let _state = LoopState::default();
+
         loop {
             if self.interrupt.take_interrupt_graceful().is_some() {
                 return Ok(self.graceful_interrupt_result(
@@ -7271,6 +7338,46 @@ fn merge_usage(existing: Option<UsageStats>, new: &UsageStats) -> UsageStats {
 mod tests {
     use super::*;
     use hermix_core::JsonSchema;
+
+    #[test]
+    fn p1_loop_state_defaults_to_zero() {
+        // Phase 1 (2026-07-03): `LoopState::default` must produce a
+        // zero-initialized struct that is `#[derive(Default)]` so the
+        // refactor of `run()` / `run_stream()` can keep using `..Default::default()`.
+        let s = LoopState::default();
+        assert_eq!(s.turn, 0);
+        assert_eq!(s.iter_since_compress, 0);
+        assert_eq!(s.total_api_time_ms, 0);
+        assert_eq!(s.total_tool_time_ms, 0);
+        assert!(s.accumulated_usage.is_none());
+        assert_eq!(s.session_cost_usd, 0.0);
+        assert!(!s.cost_warned);
+        assert!(s.forced_runtime_route.is_none());
+        assert!(s.last_checkpoint_messages.is_none());
+        assert_eq!(s.invalid_tool_retries, 0);
+        assert_eq!(s.invalid_json_retries, 0);
+        assert!(s.last_content_with_tools.is_none());
+        assert_eq!(s.context_pressure_last_warn_percent, 0.0);
+    }
+
+    #[test]
+    fn p1_loop_state_counters_increment_independently() {
+        // Sanity: the per-turn counters can be updated without touching
+        // unrelated state — required because `run()` and `run_stream()`
+        // will both mutate these fields on every turn.
+        let mut s = LoopState::default();
+        s.turn += 1;
+        s.invalid_tool_retries += 1;
+        s.invalid_json_retries += 2;
+        s.session_cost_usd += 0.001;
+        assert_eq!(s.turn, 1);
+        assert_eq!(s.invalid_tool_retries, 1);
+        assert_eq!(s.invalid_json_retries, 2);
+        assert!(s.session_cost_usd > 0.0);
+        // Unrelated fields stay zero.
+        assert_eq!(s.total_api_time_ms, 0);
+        assert!(s.accumulated_usage.is_none());
+    }
 
     #[test]
     fn test_agent_config_default() {
