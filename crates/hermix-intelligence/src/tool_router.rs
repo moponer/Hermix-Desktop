@@ -997,7 +997,7 @@ mod tests {
     // L1.4: VectorRouter::from_provider
     // -----------------------------------------------------------------
 
-    use crate::embedding::{EmbeddingProvider, StubEmbeddingProvider};
+    use crate::embedding::{EmbeddingProvider, HashingEmbeddingProvider};
 
     /// Run a closure inside a single-threaded Tokio runtime so
     /// `from_provider`'s `Handle::try_current()` succeeds. We avoid
@@ -1014,13 +1014,13 @@ mod tests {
 
     #[test]
     fn l14_from_provider_indexes_and_routes() {
-        // A BGE-style stub: embed turns text into a normalized vector
-        // by hashing the words. Same text → same vector. Identical
-        // queries embed to identical vectors, so identical tool
-        // descriptions should rank first.
-        let stub = Arc::new(StubEmbeddingProvider::new(8));
+        // HashingEmbeddingProvider: embed turns text into a normalized
+        // vector via character trigrams + FNV-1a bucket. Same text → same
+        // vector. Identical queries embed to identical vectors, so
+        // identical tool descriptions should rank first.
+        let provider = Arc::new(HashingEmbeddingProvider::new(8));
         in_runtime(|| {
-            let mut r = VectorRouter::from_provider(stub.clone());
+            let mut r = VectorRouter::from_provider(provider.clone());
             let tools = vec![
                 make_tool("file_read", "Read a file from disk"),
                 make_tool("file_write", "Write content to a file"),
