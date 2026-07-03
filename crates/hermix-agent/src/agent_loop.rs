@@ -5736,18 +5736,11 @@ impl AgentLoop {
 
             self.auto_compress_if_over_threshold(&mut ctx).await;
 
-            // Phase 1.1 (2026-07-03): publish loop-locals back to `state`
-            // so the future `run_shared_loop(state, llm_caller)` extraction
-            // can read live values via `&mut LoopState`. Runs once per
-            // iteration, after `auto_compress`.
-            //
-            // Phase 5 (2026-07-04): with the `publish_from` bridge helper
-            // deleted, only `total_turns` needs a writeback here — the
-            // 2 message caches live on `state.message_cache` and the
-            // 2 timings live on `state.timings`, both mutated in place
-            // by the loop body. The other 13 fields that once went
-            // through `publish_from` now live on inner structs and are
-            // mutated via their own methods.
+            // Write the only remaining loop-local back to `state` so the
+            // future `run_shared_loop(state, llm_caller)` helper can read
+            // it without taking 11+ locals. See the bridge comment at the
+            // top of `run()` for the full history of the 14 -> 1
+            // writeback shrink.
             state.total_turns = total_turns;
         }
     }
@@ -6519,15 +6512,9 @@ impl AgentLoop {
 
             self.auto_compress_if_over_threshold(&mut ctx).await;
 
-            // Phase 1.2 (2026-07-03): publish loop-locals back to `state`
-            // (mirror of the bridge installed in `run()` for Phase 1.1).
-            // After this commit, `state` reflects live run_stream values too,
-            // and the Phase 1.3 `run_shared_loop` extraction can accept
-            // both call sites.
-            //
-            // Phase 5 (2026-07-04): with the `publish_from` bridge helper
-            // deleted, only `total_turns` needs a writeback here — see
-            // the matching comment in `run()` for the full history.
+            // Mirror of the writeback at the end of `run()`: the only
+            // loop-local still bridged into `state` is `total_turns`.
+            // See the bridge comment at the top of `run()` for history.
             state.total_turns = total_turns;
         }
     }
