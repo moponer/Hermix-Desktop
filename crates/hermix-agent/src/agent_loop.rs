@@ -1055,6 +1055,38 @@ impl AgentLoop {
         (history_includes_tool, assistant_msg, tool_calls)
     }
 
+    /// Phase 2.3 (2026-07-03): centralised `mute_post_response`
+    /// control chunk emit. The same AtomicBool-swap-then-conditional-
+    /// emit pattern was open-coded in two places inside `run_stream()`:
+    /// the housekeeping block after tool dispatch (line ~5980) and the
+    /// terminal finalize path (line ~5936). This helper takes the
+    /// stream callback, the mute flag, and the desired next state, and
+    /// only fires the control chunk when the state actually changes
+    /// (the frontend only needs to know about transitions, not every
+    /// dispatch). Both call sites become a single 1-line call.
+    fn emit_mute_transition(
+        on_chunk: &Box<dyn Fn(StreamChunk) + Send + Sync>,
+        stream_mute: &std::sync::atomic::AtomicBool,
+        next_muted: bool,
+    ) {
+        use std::sync::atomic::Ordering;
+        let was_muted = stream_mute.swap(next_muted, Ordering::AcqRel);
+        if was_muted != next_muted {
+            on_chunk(StreamChunk {
+                delta: Some(hermix_core::StreamDelta {
+                    content: None,
+                    tool_calls: None,
+                    extra: Some(serde_json::json!({
+                        "control": "mute_post_response",
+                        "enabled": next_muted
+                    })),
+                }),
+                finish_reason: None,
+                usage: None,
+            });
+        }
+    }
+
     /// Phase 2.1 (2026-07-03): apply the four-variant
     /// `PostResponseFallback` outcome produced by
     /// `crate::post_response_fallback::decide_post_response_fallback`.
@@ -5932,20 +5964,7 @@ impl AgentLoop {
                 let (u, a) = extract_last_user_assistant(ctx.get_messages());
                 self.memory_sync(&u, &a, session_id);
                 self.spawn_background_review(total_turns, &ctx, review_memory_at_end);
-                if stream_mute.swap(false, Ordering::AcqRel) {
-                    on_chunk(StreamChunk {
-                        delta: Some(hermix_core::StreamDelta {
-                            content: None,
-                            tool_calls: None,
-                            extra: Some(serde_json::json!({
-                                "control": "mute_post_response",
-                                "enabled": false
-                            })),
-                        }),
-                        finish_reason: None,
-                        usage: None,
-                    });
-                }
+                Self::emit_mute_transition(&on_chunk, &stream_mute, false);
                 return Ok(self.finalize_agent_result(
                     &ctx,
                     total_turns,
@@ -5975,21 +5994,7 @@ impl AgentLoop {
             });
             let should_mute_post =
                 all_housekeeping && Self::assistant_visible_text_after_think_blocks(&assistant_msg);
-            let was_muted = stream_mute.swap(should_mute_post, Ordering::AcqRel);
-            if was_muted != should_mute_post {
-                on_chunk(StreamChunk {
-                    delta: Some(hermix_core::StreamDelta {
-                        content: None,
-                        tool_calls: None,
-                        extra: Some(serde_json::json!({
-                            "control": "mute_post_response",
-                            "enabled": should_mute_post
-                        })),
-                    }),
-                    finish_reason: None,
-                    usage: None,
-                });
-            }
+            Self::emit_mute_transition(&on_chunk, &stream_mute, should_mute_post);
 
             let invalid_tool_calls: Vec<String> = tool_calls
                 .iter()
