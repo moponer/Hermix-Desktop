@@ -175,8 +175,6 @@ pub struct ReferenceExtractor {
     file_path_re: Regex,
     url_re: Regex,
     env_var_re: Regex,
-    #[allow(dead_code)]
-    git_ref_re: Regex,
     ip_re: Regex,
 }
 
@@ -187,7 +185,6 @@ impl ReferenceExtractor {
                 .unwrap(),
             url_re: Regex::new(r#"https?://[^\s<>"')\]]+[^\s<>"')\].,;:!?]"#).unwrap(),
             env_var_re: Regex::new(r"\$\{?([A-Z][A-Z0-9_]{2,})\}?").unwrap(),
-            git_ref_re: Regex::new(r"\b([0-9a-f]{7,40})\b").unwrap(),
             ip_re: Regex::new(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b").unwrap(),
         }
     }
