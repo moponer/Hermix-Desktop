@@ -4908,50 +4908,21 @@ impl AgentLoop {
                     turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
                 }
 
-                let has_tools = r
-                    .message
-                    .tool_calls
-                    .as_ref()
-                    .is_some_and(|tc| !tc.is_empty());
-                if has_tools {
-                    break r;
+                // Phase 4.2 (2026-07-03): ~40 lines of has_tools /
+                // visible_text / reasoning-retry / empty-retry /
+                // exhausted classification now lives in
+                // `classify_post_llm_response` (Phase 4.1). The
+                // per-attempt state (`inner_thinking` / `inner_empty`)
+                // is owned by the loop and threaded through.
+                match self.classify_post_llm_response(
+                    r,
+                    &mut inner_thinking,
+                    &mut inner_empty,
+                    &mut ctx,
+                ) {
+                    PostLlmAction::Break(resp) => break resp,
+                    PostLlmAction::RetryReasoning | PostLlmAction::RetryEmpty => continue,
                 }
-                if Self::assistant_visible_text(&r.message) {
-                    break r;
-                }
-                if Self::assistant_has_reasoning(&r.message)
-                    && inner_thinking < self.config.thinking_prefill_max_retries
-                {
-                    inner_thinking += 1;
-                    self.emit_status(
-                        "lifecycle",
-                        &format!(
-                            "Reasoning-only response — retrying ({}/{})",
-                            inner_thinking, self.config.thinking_prefill_max_retries
-                        ),
-                    );
-                    ctx.add_message(r.message.clone());
-                    continue;
-                }
-                if !Self::assistant_has_reasoning(&r.message)
-                    && inner_empty < self.config.empty_content_max_retries
-                {
-                    inner_empty += 1;
-                    tracing::warn!(
-                        "empty assistant response — retrying ({}/{})",
-                        inner_empty,
-                        self.config.empty_content_max_retries
-                    );
-                    self.emit_status(
-                        "lifecycle",
-                        &format!(
-                            "Empty assistant response — retrying ({}/{})",
-                            inner_empty, self.config.empty_content_max_retries
-                        ),
-                    );
-                    continue;
-                }
-                break r;
             };
             let api_elapsed = api_start.elapsed().as_millis() as u64;
             _total_api_time_ms += api_elapsed;
@@ -5734,50 +5705,23 @@ impl AgentLoop {
                     turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
                 }
 
-                let has_tools = r
-                    .message
-                    .tool_calls
-                    .as_ref()
-                    .is_some_and(|tc| !tc.is_empty());
-                if has_tools {
-                    break r;
+                // Phase 4.2 (2026-07-03): mirrors the run() side —
+                // ~40 lines of has_tools / visible_text /
+                // reasoning-retry / empty-retry / exhausted
+                // classification collapse into a single `match` on
+                // `classify_post_llm_response` (Phase 4.1). The
+                // `inner_attempt` counter (stream-only) is bumped
+                // outside this match; per-attempt state is owned by
+                // the loop.
+                match self.classify_post_llm_response(
+                    r,
+                    &mut inner_thinking,
+                    &mut inner_empty,
+                    &mut ctx,
+                ) {
+                    PostLlmAction::Break(resp) => break resp,
+                    PostLlmAction::RetryReasoning | PostLlmAction::RetryEmpty => continue,
                 }
-                if Self::assistant_visible_text(&r.message) {
-                    break r;
-                }
-                if Self::assistant_has_reasoning(&r.message)
-                    && inner_thinking < self.config.thinking_prefill_max_retries
-                {
-                    inner_thinking += 1;
-                    self.emit_status(
-                        "lifecycle",
-                        &format!(
-                            "Reasoning-only response — retrying ({}/{})",
-                            inner_thinking, self.config.thinking_prefill_max_retries
-                        ),
-                    );
-                    ctx.add_message(r.message.clone());
-                    continue;
-                }
-                if !Self::assistant_has_reasoning(&r.message)
-                    && inner_empty < self.config.empty_content_max_retries
-                {
-                    inner_empty += 1;
-                    tracing::warn!(
-                        "empty assistant response (stream path) — retrying ({}/{})",
-                        inner_empty,
-                        self.config.empty_content_max_retries
-                    );
-                    self.emit_status(
-                        "lifecycle",
-                        &format!(
-                            "Empty assistant response — retrying ({}/{})",
-                            inner_empty, self.config.empty_content_max_retries
-                        ),
-                    );
-                    continue;
-                }
-                break r;
             };
             let api_elapsed_ms = api_start.elapsed().as_millis() as u64;
 
