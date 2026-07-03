@@ -824,16 +824,6 @@ struct PreparedRun {
     task_hint: String,
 }
 
-/// All mutable loop-local state shared between `run()` and `run_stream()`.
-/// Centralized to avoid declaring 17+ individual locals in both methods
-/// (reduces duplication and eliminates the "forget to sync" bug).
-///
-/// Phase 1 (2026-07-03) introduces the struct. The actual migration of
-/// the 14 individual locals in `run()` and 17 in `run_stream()` onto
-/// `state` is a Phase 1.1 follow-up — see `// Phase 1 foundation` comment
-/// inside `run()` and `run_stream()`. Until then most fields are read by
-/// tests only, which is why the whole struct is `#[allow(dead_code)]`.
-#[allow(dead_code)]
 /// Encapsulates the 3 tracking fields the context-pressure warning
 /// logic uses. Lifted out of [`LoopState`] so the cooldown/throttle
 /// rules live in one place (and can be unit-tested without spinning
@@ -1237,6 +1227,16 @@ impl TurnTimings {
     }
 }
 
+/// All mutable loop-local state shared between `run()` and `run_stream()`.
+/// Centralized to avoid declaring 17+ individual locals in both methods
+/// (reduces duplication and eliminates the "forget to sync" bug).
+///
+/// Phase 1 (2026-07-03) introduces the struct. Phase 1.1 wires the
+/// 14 run() + 17 run_stream() locals through it via `publish_from`.
+/// Phase 5 (2026-07-03 + 2026-07-04) folds 9 inline fields into 4
+/// manager structs ([`TurnTimings`], [`CostGuard`], [`MessageCache`],
+/// [`RetryCounters`], [`ContextPressureMonitor`]) so `publish_from`
+/// is now a 1-arg bridge (`total_turns` only).
 #[derive(Default)]
 struct LoopState {
     /// Total turns completed so far in this run.
