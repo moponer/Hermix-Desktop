@@ -38,7 +38,7 @@
 //!
 //! CREATE VIRTUAL TABLE IF NOT EXISTS frames_fts USING fts5(
 //!     id UNINDEXED,
-//!     payload_text,        -- extracted string from payload
+//!     payload_text,        -- extracted string from payload (M4: bigram-preprocessed for CJK)
 //!     tags_text,
 //!     tokenize = 'unicode61 remove_diacritics 2'
 //! );
@@ -487,8 +487,8 @@ impl EmbeddedMemoryBackend {
         // Also index in FTS5 (best-effort). Re-serialize for indexing so
         // we don't move out of the borrowed frame.
         let payload_for_index = serde_json::to_value(&frame.payload)?;
-        let payload_text = extract_text(&payload_for_index);
-        let tags_text = frame.tags.join(" ");
+        let payload_text = cjk_bigram_segment(&extract_text(&payload_for_index));
+        let tags_text = cjk_bigram_segment(&frame.tags.join(" "));
         let _ = conn.execute(
             "INSERT OR REPLACE INTO frames_fts (id, payload_text, tags_text) VALUES (?1, ?2, ?3)",
             params![frame.id.to_string(), payload_text, tags_text],
@@ -686,7 +686,7 @@ impl EmbeddedMemoryBackend {
         if key_trim.is_empty() {
             return Ok(None);
         }
-        let payload_text = extract_text(&payload);
+        let payload_text = cjk_bigram_segment(&extract_text(&payload));
         if payload_text.trim().is_empty() {
             return Ok(None);
         }
@@ -1020,8 +1020,8 @@ impl EmbeddedMemoryBackend {
             ],
         )?;
         let payload_for_index = serde_json::to_value(&frame.payload)?;
-        let payload_text = extract_text(&payload_for_index);
-        let tags_text = frame.tags.join(" ");
+        let payload_text = cjk_bigram_segment(&extract_text(&payload_for_index));
+        let tags_text = cjk_bigram_segment(&frame.tags.join(" "));
         let _ = tx.execute(
             "INSERT OR REPLACE INTO frames_fts (id, payload_text, tags_text) VALUES (?1, ?2, ?3)",
             params![frame.id.to_string(), payload_text, tags_text],
@@ -1227,14 +1227,21 @@ impl EmbeddedMemoryBackend {
         // Build an FTS5 MATCH expression from the text. We split on
         // whitespace and quote each token; tokens that look like FTS5
         // operators are skipped.
-        let tokens: Vec<String> = text
+        //
+        // M4: CJK query expansion — pre-segment the query with the same
+        // bigram splitter used at write time so single-word queries
+        // like "喜欢" still hit "我喜欢 Rust" (which is stored as
+        // "我 喜欢 Rust" after bigram preprocessing).
+        let bigrammed = cjk_bigram_segment(text);
+        let tokens: Vec<String> = bigrammed
             .split_whitespace()
-            .filter(|t| t.len() >= 2)
+            .filter(|t| t.chars().count() >= 1)
             .filter(|t| !["AND", "OR", "NOT", "NEAR"].contains(t))
             .map(|t| {
-                // strip non-word chars
+                // strip non-word chars (keep CJK — alphanumeric filter
+                // would strip them)
                 t.chars()
-                    .filter(|c| c.is_alphanumeric() || *c == '_')
+                    .filter(|c| c.is_alphanumeric() || *c == '_' || is_cjk(*c))
                     .collect::<String>()
             })
             .filter(|t| !t.is_empty())
@@ -1324,13 +1331,14 @@ impl EmbeddedMemoryBackend {
             Ok(s) => s,
             Err(_) => return Ok(Vec::new()),
         };
-        let tokens: Vec<String> = text
+        let bigrammed = cjk_bigram_segment(text);
+        let tokens: Vec<String> = bigrammed
             .split_whitespace()
-            .filter(|t| t.len() >= 2)
+            .filter(|t| t.chars().count() >= 1)
             .filter(|t| !["AND", "OR", "NOT", "NEAR"].contains(t))
             .map(|t| {
                 t.chars()
-                    .filter(|c| c.is_alphanumeric() || *c == '_')
+                    .filter(|c| c.is_alphanumeric() || *c == '_' || is_cjk(*c))
                     .collect::<String>()
             })
             .filter(|t| !t.is_empty())
@@ -1597,6 +1605,62 @@ fn extract_text(v: &Value) -> String {
             .join(" "),
         _ => v.to_string(),
     }
+}
+
+/// M4 (2026-07-03): CJK bigram preprocessor for FTS5 indexing.
+///
+/// SQLite's bundled FTS5 (without `SQLITE_ENABLE_FTS5_TOKENIZER_TRIGRAM`)
+/// uses the `unicode61` tokenizer which splits on whitespace — a CJK
+/// string like `"我喜欢 Rust"` tokenizes as `["我喜欢", "Rust"]`. Querying
+/// for just `"喜欢"` returns 0 hits because there's no `喜欢` token.
+///
+/// Application-layer fix: insert overlapping bigrams separated by spaces
+/// before passing to FTS5. `"我喜欢"` becomes `"我 喜欢"` (one bigram). The
+/// query side needs the same bigram expansion to match.
+///
+/// Idempotency: re-running on already-bigrammed text produces single-char
+/// "words" but no new bigrams — safe to call repeatedly.
+fn cjk_bigram_segment(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    let mut out = String::with_capacity(text.len() + chars.len());
+    let mut prev: Option<char> = None;
+    for &c in &chars {
+        if is_cjk(c) {
+            // Emit bigram (prev+c) if we have a previous CJK char.
+            if let Some(p) = prev {
+                if is_cjk(p) {
+                    out.push(p);
+                    out.push(c);
+                    out.push(' ');
+                }
+            }
+            // Emit single-char CJK token too (queries like "我" should match).
+            out.push(c);
+            out.push(' ');
+            prev = Some(c);
+        } else {
+            // Non-CJK: emit as-is (FTS5 unicode61 will tokenize on whitespace).
+            out.push(c);
+            prev = None;
+        }
+    }
+    out
+}
+
+/// True if `c` is CJK Unified Ideograph, Hiragana, Katakana, or Hangul.
+/// FTS5 unicode61 without bigram preprocessor can't index these well.
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{4E00}'..='\u{9FFF}' |    // CJK Unified Ideographs
+        '\u{3400}'..='\u{4DBF}' |    // CJK Extension A
+        '\u{F900}'..='\u{FAFF}' |    // CJK Compatibility Ideographs
+        '\u{3040}'..='\u{309F}' |    // Hiragana
+        '\u{30A0}'..='\u{30FF}' |    // Katakana
+        '\u{AC00}'..='\u{D7AF}'      // Hangul Syllables
+    )
 }
 
 /// A frame row loaded from the DB. The payload is kept as raw JSON so
@@ -2033,6 +2097,70 @@ impl MemoryLayer for EmbeddedMemoryBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------
+    // M4 (2026-07-03): CJK bigram preprocessor unit tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn m4_bigram_segments_pure_cjk() {
+        // 我喜欢 → 我 喜欢 (one bigram + 2 singles)
+        let out = cjk_bigram_segment("我喜欢");
+        assert!(out.contains("我 "), "got '{out}'");
+        assert!(out.contains("喜欢"), "got '{out}'");
+    }
+
+    #[test]
+    fn m4_bigram_preserves_ascii_tokens() {
+        let out = cjk_bigram_segment("我喜欢 Rust");
+        // ASCII "Rust" emitted as-is, surrounded by single CJK chars.
+        assert!(out.contains("Rust"), "got '{out}'");
+        // CJK chars also emitted as single-char tokens for short queries.
+        assert!(out.contains("我"), "got '{out}'");
+    }
+
+    #[test]
+    fn m4_bigram_handles_empty() {
+        assert_eq!(cjk_bigram_segment(""), "");
+    }
+
+    #[test]
+    fn m4_bigram_handles_pure_ascii() {
+        assert_eq!(cjk_bigram_segment("hello world"), "hello world");
+    }
+
+    #[test]
+    fn m4_bigram_chinese_query_matches_indexed_text() {
+        // Simulates a real FTS5 round-trip:
+        // 1. Insert frame with Chinese payload
+        // 2. Single-word Chinese query "喜欢" should hit it
+        //
+        // Without bigram preprocessor, the query "喜欢" would tokenize
+        // to one term that doesn't appear in the index (which has
+        // "我喜欢Rust" as a single unicode61 token).
+        let b = EmbeddedMemoryBackend::open_in_memory().unwrap();
+        let f = FocusFrame::new("我喜欢 Rust".to_string());
+        b.upsert_frame(&f).unwrap();
+
+        // Direct single-word query
+        let hits = b.fts_search_visible("喜欢", 10, None).unwrap();
+        assert!(
+            !hits.is_empty(),
+            "single-char query '喜欢' must hit indexed '我喜欢 Rust', got {} hits",
+            hits.len()
+        );
+    }
+
+    #[test]
+    fn m4_bigram_mixed_chinese_ascii_query() {
+        let b = EmbeddedMemoryBackend::open_in_memory().unwrap();
+        let f = FocusFrame::new("我喜欢 Rust 编程".to_string());
+        b.upsert_frame(&f).unwrap();
+
+        // Multi-token mixed query: should match
+        let hits = b.fts_search_visible("Rust 编程", 10, None).unwrap();
+        assert!(!hits.is_empty(), "mixed query 'Rust 编程' must hit, got {} hits", hits.len());
+    }
 
     #[tokio::test]
     async fn open_in_memory_works() {
