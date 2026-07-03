@@ -5314,7 +5314,8 @@ impl AgentLoop {
             let api_elapsed = api_start.elapsed().as_millis() as u64;
             // Phase 5 (2026-07-04): record timings on `state.timings`
             // directly (saturating-add inside) instead of accumulating
-            // to a local + re-publishing via `publish_from`.
+            // to a local and bridging back via the now-removed
+            // `publish_from` helper.
             state.timings.record_api(api_elapsed);
 
             // Phase 1.3b (2026-07-03): post-LLM hook + usage accumulate +
