@@ -104,6 +104,27 @@ pub fn post_tool_apply_pending_steer(
     restash_pending_steer(pending_steer, text);
 }
 
+/// Queue mid-run user guidance (Python `AIAgent.steer`).
+///
+/// Returns `false` when the text is empty/whitespace-only.
+pub fn steer(pending_steer: &Mutex<Option<String>>, text: &str) -> bool {
+    let Some(next) = normalize_accepted_steer_text(text) else {
+        return false;
+    };
+    if let Ok(mut guard) = pending_steer.lock() {
+        *guard = Some(concat_pending(guard.take(), next));
+        return true;
+    }
+    false
+}
+
+/// Clear any queued `/steer` guidance without applying it.
+pub fn clear_pending_steer(pending_steer: &Mutex<Option<String>>) {
+    if let Ok(mut guard) = pending_steer.lock() {
+        *guard = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

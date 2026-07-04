@@ -48,9 +48,6 @@ use crate::python_alignment::{
 };
 use crate::smart_model_routing::TurnRouteSignature;
 pub use crate::smart_model_routing::{ApiMode, CheapModelRouteConfig, SmartModelRoutingConfig};
-use crate::steer::{
-    apply_pending_steer_to_last_tool_message, concat_pending, normalize_accepted_steer_text,
-};
 use tracing::{info, instrument};
 
 // ---------------------------------------------------------------------------
@@ -1004,24 +1001,16 @@ impl AgentLoop {
     }
 
     /// Queue mid-run user guidance (Python `AIAgent.steer`).
+    /// Queue mid-run user guidance (Python `AIAgent.steer`).
     ///
     /// Returns `false` when the text is empty/whitespace-only.
     pub fn steer(&self, text: &str) -> bool {
-        let Some(next) = normalize_accepted_steer_text(text) else {
-            return false;
-        };
-        if let Ok(mut guard) = self.pending_steer.lock() {
-            *guard = Some(concat_pending(guard.take(), next));
-            return true;
-        }
-        false
+        crate::steer::steer(&self.pending_steer, text)
     }
 
     /// Clear any queued `/steer` guidance without applying it.
     pub fn clear_pending_steer(&self) {
-        if let Ok(mut guard) = self.pending_steer.lock() {
-            *guard = None;
-        }
+        crate::steer::clear_pending_steer(&self.pending_steer)
     }
 
     // ── M1: FocusStack plumbing ────────────────────────────────────
