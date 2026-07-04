@@ -678,38 +678,10 @@ pub use crate::message_cache::MessageCache;
 /// The 2 fields stay co-located on `self.timings` and mutate in
 /// place. Reset / `Default` produce the same all-zeros state as
 /// before, so `LoopState::default()` semantics are unchanged.
-struct TurnTimings {
-    /// Accumulated LLM-call wall-clock time in milliseconds across
-    /// all turns of this run.
-    total_api_time_ms: u64,
-    /// Accumulated tool-execution wall-clock time in milliseconds
-    /// across all turns of this run.
-    total_tool_time_ms: u64,
-}
-
-impl Default for TurnTimings {
-    fn default() -> Self {
-        Self {
-            total_api_time_ms: 0,
-            total_tool_time_ms: 0,
-        }
-    }
-}
-
-impl TurnTimings {
-    /// Accumulate a per-LLM-call elapsed time into the running API
-    /// total. Saturating-add so a long-running session can't wrap
-    /// around.
-    fn record_api(&mut self, elapsed_ms: u64) {
-        self.total_api_time_ms = self.total_api_time_ms.saturating_add(elapsed_ms);
-    }
-
-    /// Accumulate a per-tool-execution elapsed time into the running
-    /// tool total. Saturating-add.
-    fn record_tool(&mut self, elapsed_ms: u64) {
-        self.total_tool_time_ms = self.total_tool_time_ms.saturating_add(elapsed_ms);
-    }
-}
+///
+/// Physically split to `turn_timings.rs` (2026-07-04); re-exported
+/// here so existing `state.timings.*` call paths compile unchanged.
+pub use crate::turn_timings::TurnTimings;
 
 /// All mutable loop-local state shared between `run()` and `run_stream()`.
 /// Centralized to avoid declaring 17+ individual locals in both methods
