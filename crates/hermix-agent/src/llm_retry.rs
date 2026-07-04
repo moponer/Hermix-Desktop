@@ -30,10 +30,73 @@ use crate::plugins::{HookType, PluginManager};
 use crate::prompt_assembly::{extract_provider_and_model, messages_for_api_call};
 use crate::runtime_provider::{build_runtime_provider, credential_pool_for_route};
 
+/// Build the routed or primary provider, retrying OAuth refresh once on
+/// auth failures so an expired token doesn't burn retry slots.
+async fn build_provider_for_call(
+    config: &AgentConfig,
+    oauth: &OAuthRefresh,
+    primary_credential_pool: Option<&Arc<CredentialPool>>,
+    llm_provider: &Arc<dyn LlmProvider>,
+    route: Option<&TurnRuntimeRoute>,
+    model: &str,
+) -> (Arc<dyn LlmProvider>, String) {
+    let (provider_name, model_name) = extract_provider_and_model(config, model);
+    if let Some(rt) = route {
+        let mode = rt.api_mode.as_ref().unwrap_or(&config.api_mode);
+        let pool = credential_pool_for_route(primary_credential_pool, rt);
+        let provider_str = rt.provider.as_deref().unwrap_or(provider_name.as_str());
+        match build_runtime_provider(
+            config, oauth,
+            provider_str, model_name,
+            rt.base_url.as_deref(), rt.api_key_env.as_deref(),
+            None, Some(mode), pool,
+        ) {
+            Ok(p) => return (p, model_name.to_string()),
+            Err(e) => {
+                tracing::warn!(
+                    reason = ?rt.routing_reason,
+                    error = %e,
+                    "Runtime route unavailable, falling back to primary"
+                );
+            }
+        }
+    }
+    // Fallback to primary
+    let (_, primary_model) = extract_provider_and_model(config, config.model.as_str());
+    (llm_provider.clone(), primary_model.to_string())
+}
+
+/// Execute one LLM API call against the given provider/model.
+async fn execute_llm_call(
+    provider: &Arc<dyn LlmProvider>,
+    api_messages: &[hermix_core::Message],
+    tool_schemas: &[ToolSchema],
+    config: &AgentConfig,
+    model: &str,
+    extra_body: Option<&serde_json::Value>,
+) -> Result<LlmResponse, AgentError> {
+    provider
+        .chat_completion(
+            api_messages,
+            tool_schemas,
+            config.max_tokens,
+            config.temperature,
+            Some(model),
+            extra_body,
+        )
+        .await
+}
+
 /// Single retry-instrumented LLM call (non-streaming).
 ///
+/// Retry discipline:
+/// - Route build failures → fall back to primary runtime, do NOT consume retry slot
+/// - Auth (401) failures → refresh OAuth token once, retry; still fatal if refresh fails
+/// - RateLimit / Retryable → retry with backoff, up to max_retries
+/// - After all retries exhausted → try fallback_model once if configured
+///
 /// Returns the successful [`LlmResponse`] or an [`AgentError::LlmApi`]
-/// when all attempts (including optional fallback) are exhausted.
+/// when all attempts (including fallback) are exhausted.
 #[allow(clippy::too_many_arguments)]
 pub async fn call_llm_with_retry(
     config: &AgentConfig,
@@ -51,8 +114,7 @@ pub async fn call_llm_with_retry(
         .map(|r| r.model.as_str())
         .unwrap_or(config.model.as_str());
     let (_, request_model) = extract_provider_and_model(config, model);
-    let (_, primary_request_model) =
-        extract_provider_and_model(config, config.model.as_str());
+
     if let Some(rt) = route {
         if let Some(ref label) = rt.route_label {
             tracing::debug!(%label, model = %rt.model, ?rt.signature, "smart model route");
@@ -61,11 +123,26 @@ pub async fn call_llm_with_retry(
             tracing::debug!(command = ?rt.command, args = ?rt.args, "smart route process metadata");
         }
     }
+
     let api_messages = messages_for_api_call(config, ctx);
     let retry = &config.retry;
     let (effective_max_retries, effective_base_delay_ms) =
         (retry.max_retries, retry.base_delay_ms);
-    let default_extra_body = extra_body_for_api_mode(config, &config.api_mode);
+
+    // Build the provider once outside the retry loop. Route build
+    // failures don't consume retry slots — they immediately fall
+    // back to the primary runtime.
+    let mode = route
+        .and_then(|r| r.api_mode.as_ref())
+        .unwrap_or(&config.api_mode);
+    let extra_body = extra_body_for_api_mode(config, mode);
+    let (mut provider, mut resolved_model) = build_provider_for_call(
+        config, oauth, primary_credential_pool, llm_provider, route, model,
+    )
+    .await;
+
+    // Track whether we've already tried an OAuth refresh during this call.
+    let mut oauth_refreshed = false;
 
     for attempt in 0..=effective_max_retries {
         interrupt.check_interrupt()?;
@@ -76,65 +153,10 @@ pub async fn call_llm_with_retry(
             "route_label": route.and_then(|r| r.route_label.as_deref()),
         });
         let _ = invoke_hook(plugin_manager, HookType::PreApiRequest, &pre_api_ctx);
-        let result = if let Some(rt) = route {
-            let (provider_name, model_name) = extract_provider_and_model(config, model);
-            let mode = rt.api_mode.as_ref().unwrap_or(&config.api_mode);
-            let extra_body_for_call = extra_body_for_api_mode(config, mode);
-            let pool = credential_pool_for_route(primary_credential_pool, rt);
-            let routed_provider = build_runtime_provider(
-                config,
-                oauth,
-                rt.provider.as_deref().unwrap_or(provider_name.as_str()),
-                model_name,
-                rt.base_url.as_deref(),
-                rt.api_key_env.as_deref(),
-                None,
-                Some(mode),
-                pool,
-            );
-            match routed_provider {
-                Ok(provider) => {
-                    provider
-                        .chat_completion(
-                            &api_messages,
-                            tool_schemas,
-                            config.max_tokens,
-                            config.temperature,
-                            Some(request_model),
-                            extra_body_for_call.as_ref(),
-                        )
-                        .await
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Runtime route unavailable (reason={:?}), falling back to primary runtime: {}",
-                        rt.routing_reason,
-                        e
-                    );
-                    llm_provider
-                        .chat_completion(
-                            &api_messages,
-                            tool_schemas,
-                            config.max_tokens,
-                            config.temperature,
-                            Some(primary_request_model),
-                            default_extra_body.as_ref(),
-                        )
-                        .await
-                }
-            }
-        } else {
-            llm_provider
-                .chat_completion(
-                    &api_messages,
-                    tool_schemas,
-                    config.max_tokens,
-                    config.temperature,
-                    Some(request_model),
-                    default_extra_body.as_ref(),
-                )
-                .await
-        };
+
+        let result =
+            execute_llm_call(&provider, &api_messages, tool_schemas, config, &resolved_model, extra_body.as_ref()).await;
+
         let post_api_ctx = match &result {
             Ok(response) => serde_json::json!({
                 "attempt": attempt,
@@ -171,33 +193,66 @@ pub async fn call_llm_with_retry(
                 );
 
                 match class {
-                    ErrorClass::Auth | ErrorClass::Fatal => {
-                        return Err(AgentError::LlmApi(err_str));
+                    ErrorClass::Auth => {
+                        if !oauth_refreshed {
+                            tracing::info!("Auth error — attempting OAuth token refresh");
+                            oauth_refreshed = true;
+                            oauth.refresh_if_needed(
+                                &crate::runtime_provider::auth_tokens_path(config),
+                                &config.runtime_providers,
+                            )
+                            .await;
+                            // Rebuild provider with fresh token, retry without burning an attempt
+                            (provider, resolved_model) = build_provider_for_call(
+                                config, oauth, primary_credential_pool,
+                                llm_provider, route, model,
+                            )
+                            .await;
+                            continue;
+                        }
+                        return Err(AgentError::LlmApi(format!(
+                            "Auth error persisted after token refresh: {err_str}"
+                        )));
                     }
-                    ErrorClass::ContextOverflow => {
+                    ErrorClass::Fatal | ErrorClass::ContextOverflow => {
                         return Err(AgentError::LlmApi(err_str));
                     }
                     ErrorClass::RateLimit | ErrorClass::Retryable => {
                         if attempt >= effective_max_retries {
                             if let Some(ref fallback) = retry.fallback_model {
                                 if request_model != fallback.as_str() {
-                                    let (_, fallback_request_model) =
+                                    let (fallback_provider_name, fallback_model_only) =
                                         extract_provider_and_model(config, fallback);
                                     tracing::info!(
                                         "All retries exhausted on {}. Trying fallback: {}",
-                                        model,
-                                        fallback
+                                        model, fallback
                                     );
-                                    let fallback_result = llm_provider
-                                        .chat_completion(
-                                            &api_messages,
-                                            tool_schemas,
-                                            config.max_tokens,
-                                            config.temperature,
-                                            Some(fallback_request_model),
-                                            default_extra_body.as_ref(),
-                                        )
-                                        .await;
+                                    // Build a provider for the fallback model —
+                                    // llm_provider may not support it (e.g.
+                                    // Anthropic provider can't call openai:gpt-4o-mini).
+                                    let fallback_result = match build_runtime_provider(
+                                        config, oauth,
+                                        &fallback_provider_name, &fallback_model_only,
+                                        None, None, None, None, None,
+                                    ) {
+                                        Ok(fb_provider) => {
+                                            execute_llm_call(
+                                                &fb_provider,
+                                                &api_messages, tool_schemas, config,
+                                                &fallback_model_only,
+                                                extra_body_for_api_mode(config, &config.api_mode).as_ref(),
+                                            ).await
+                                        }
+                                        Err(_) => {
+                                            // Can't build fallback; try llm_provider as last resort
+                                            execute_llm_call(
+                                                llm_provider,
+                                                &api_messages, tool_schemas, config,
+                                                &fallback_model_only,
+                                                extra_body_for_api_mode(config, &config.api_mode).as_ref(),
+                                            ).await
+                                        }
+                                    };
                                     return fallback_result
                                         .map_err(|e| AgentError::LlmApi(e.to_string()));
                                 }

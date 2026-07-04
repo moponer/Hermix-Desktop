@@ -336,31 +336,63 @@ pub enum ErrorClass {
 
 pub fn classify_error(err: &str) -> ErrorClass {
     let lower = err.to_lowercase();
-    if lower.contains("rate limit") || lower.contains("429") || lower.contains("too many") {
-        ErrorClass::RateLimit
-    } else if lower.contains("context length")
+
+    // Rate limiting — exact status or well-known phrases
+    if lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("too many requests")
+        || lower.contains("quota exceeded")
+    {
+        return ErrorClass::RateLimit;
+    }
+
+    // Context overflow
+    if lower.contains("context length")
         || lower.contains("maximum context")
         || lower.contains("token limit")
         || lower.contains("context_length_exceeded")
+        || lower.contains("reduce the length")
     {
-        ErrorClass::ContextOverflow
-    } else if lower.contains("401")
-        || lower.contains("403")
+        return ErrorClass::ContextOverflow;
+    }
+
+    // Auth — exact status codes and well-known phrases
+    // Use word-boundary checks for status codes to avoid substring matches
+    if lower.contains("401") && !lower.contains("4010") && !lower.contains("4011")
+        || lower.contains("403") && !lower.contains("4030") && !lower.contains("4031")
         || lower.contains("unauthorized")
-        || lower.contains("authentication")
+        || lower.contains("unauthenticated")
+        || lower.contains("authentication failed")
+        || lower.contains("invalid api key")
+        || lower.contains("invalid_api_key")
+        || lower.contains("access denied")
+        || lower.contains("forbidden")
     {
-        ErrorClass::Auth
-    } else if lower.contains("500")
+        return ErrorClass::Auth;
+    }
+
+    // Retryable server / network errors
+    if lower.contains("500")
         || lower.contains("502")
         || lower.contains("503")
+        || lower.contains("504")
         || lower.contains("timeout")
-        || lower.contains("connection")
+        || lower.contains("timed out")
+        || lower.contains("connection refused")
+        || lower.contains("connection reset")
+        || lower.contains("eof")
+        || lower.contains("broken pipe")
+        || lower.contains("tls")
+        || lower.contains("dns")
         || lower.contains("overloaded")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("service unavailable")
     {
-        ErrorClass::Retryable
-    } else {
-        ErrorClass::Fatal
+        return ErrorClass::Retryable;
     }
+
+    // Default: fatal
+    ErrorClass::Fatal
 }
 
 /// Compute jittered exponential backoff delay.
