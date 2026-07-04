@@ -654,50 +654,11 @@ pub use crate::retry_counters::RetryCounters;
 /// The 2 fields stay co-located on `self.message_cache` and mutate
 /// in place. Reset / `Default` produce the same all-`None` state as
 /// before, so `LoopState::default()` semantics are unchanged.
-struct MessageCache {
-    /// Last checkpoint messages for crash recovery / auto-rollback.
-    last_checkpoint_messages: Option<Vec<Message>>,
-    /// Last assistant message that included `tool_use` (for the
-    /// codex-ack continuation logic on the next turn).
-    last_content_with_tools: Option<String>,
-}
-
-impl Default for MessageCache {
-    fn default() -> Self {
-        Self {
-            last_checkpoint_messages: None,
-            last_content_with_tools: None,
-        }
-    }
-}
-
-impl MessageCache {
-    /// Store a fresh checkpoint snapshot (taken from the context after
-    /// a successful turn). Overwrites any prior checkpoint.
-    fn store_checkpoint(&mut self, snapshot: Vec<Message>) {
-        self.last_checkpoint_messages = Some(snapshot);
-    }
-
-    /// Overwrite the cached assistant content (used by
-    /// `process_post_response` and `prepare_assistant_turn` when the
-    /// assistant's last visible text came bundled with tool calls).
-    fn store_content_with_tools(&mut self, content: Option<String>) {
-        self.last_content_with_tools = content;
-    }
-
-    /// Take the cached assistant content out (used by the finalize
-    /// path when handing off to the next session / persisting the
-    /// agent result). Leaves `None` behind.
-    fn take_content_with_tools(&mut self) -> Option<String> {
-        self.last_content_with_tools.take()
-    }
-
-    /// Borrow the checkpoint for rollback / publish — caller clones
-    /// if it needs ownership.
-    fn checkpoint(&self) -> Option<&Vec<Message>> {
-        self.last_checkpoint_messages.as_ref()
-    }
-}
+///
+/// Physically split to `message_cache.rs` (2026-07-04); re-exported
+/// here so existing `state.message_cache.*` call paths compile
+/// unchanged.
+pub use crate::message_cache::MessageCache;
 
 /// Phase 5 (2026-07-04 follow-up): turn-level timing bookkeeping consolidated
 /// into one struct. The two sibling `u64` fields (`total_api_time_ms`,

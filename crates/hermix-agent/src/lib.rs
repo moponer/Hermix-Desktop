@@ -40,6 +40,7 @@ pub mod interrupt;
 pub mod local_agent_service;
 pub mod memory_layer_adapter;
 pub mod memory_plugins;
+pub mod message_cache;
 pub mod oauth_refresh;
 pub mod pii_redact;
 pub mod plugins;
