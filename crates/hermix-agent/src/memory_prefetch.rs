@@ -18,6 +18,8 @@ use hermix_focus::{extract_time_window, fact_extractor, user_style, MemoryHit, M
 use hermix_intelligence::embedding::EmbeddingProvider;
 
 use crate::agent_config::AgentConfig;
+use crate::memory_hooks::memory_write_event_from_tool_call;
+use hermix_core::{ToolCall, ToolResult};
 
 /// Run the memory prefetch pipeline and return a markdown block
 /// (`"## Memory\n\n..."`) sized to the configured char budget.
@@ -293,5 +295,128 @@ pub fn memory_sync(
                 }
             }
         }
+    }
+}
+/// Phase 18 (架构-1): freeze the current session state into a
+/// `session_snapshots` row. Called every N turns (default 50)
+/// and on `on_session_end`. The `frame_ids` and `summary` are
+/// extracted from the router's embedded backend so this method
+/// is a no-op when the embedded backend is absent.
+///
+/// Designed to be cheap: the embedded SQLite path is O(visible
+/// frames) on `total_turns.is_multiple_of(N)` boundary calls,
+/// and O(1) on all other turns.
+pub fn maybe_freeze_snapshot(
+    config: &AgentConfig,
+    router: Option<&hermix_focus::MemoryRouter>,
+    session_id: &str,
+    turn_number: u32,
+) {
+    if config.skip_memory {
+        return;
+    }
+    let Some(router) = router else {
+        return;
+    };
+    let Some(embedded) = router.find_embedded_backend() else {
+        return;
+    };
+    // Snapshot at every 50 turns + at the final turn. Avoid
+    // snapshotting every turn (would saturate the table).
+    const SNAPSHOT_INTERVAL: u32 = 50;
+    let should_snapshot = turn_number > 0
+        && (turn_number.is_multiple_of(SNAPSHOT_INTERVAL) || turn_number == config.max_turns);
+    if !should_snapshot {
+        return;
+    }
+    // Build a short summary of the most recent turn. We pull
+    // the user message verbatim from the in-process message
+    // context if available; otherwise we fall back to a
+    // terse placeholder.
+    let summary = format!("Frozen at turn {turn_number} of session {session_id}");
+    let frame_ids: Vec<String> = Vec::new();
+    match embedded.record_session_snapshot(session_id, turn_number, &summary, &frame_ids) {
+        Ok(_) => tracing::debug!(
+            target: "hermix.agent",
+            session_id,
+            turn_number,
+            "snapshot frozen"
+        ),
+        Err(e) => tracing::warn!(
+            target: "hermix.agent",
+            session_id,
+            turn_number,
+            error = %e,
+            "snapshot freeze failed"
+        ),
+    }
+}
+
+/// Phase 18 (架构-2): enforce a hard cap on visible frames so
+/// memory.db doesn't grow unbounded. Called every 100 turns as a
+/// background cleanup. Default cap is 10000 — enough for ~3
+/// months of heavy chat, soft-hidden rows stay on disk for the
+/// audit trail and the 30-day janitor.
+pub fn maybe_enforce_frame_cap(
+    config: &AgentConfig,
+    router: Option<&hermix_focus::MemoryRouter>,
+    turn_number: u32,
+) {
+    if config.skip_memory {
+        return;
+    }
+    const CAP_INTERVAL: u32 = 100;
+    const FRAME_CAP: usize = 10_000;
+    if !turn_number.is_multiple_of(CAP_INTERVAL) || turn_number == 0 {
+        return;
+    }
+    let Some(router) = router else {
+        return;
+    };
+    let Some(embedded) = router.find_embedded_backend() else {
+        return;
+    };
+    match embedded.enforce_frame_cap(FRAME_CAP) {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(
+            target: "hermix.agent",
+            hidden = n,
+            cap = FRAME_CAP,
+            "frame cap enforced (oldest/lowest-salience hidden)"
+        ),
+        Err(e) => tracing::warn!(
+            target: "hermix.agent",
+            error = %e,
+            "frame cap enforcement failed"
+        ),
+    }
+}
+
+/// Route `memory` tool calls (action=add/replace/remove) through
+/// `MemoryRouter::on_memory_write` — replaces legacy
+/// `PluginManager::memory_providers` fan-out.
+pub fn notify_memory_writes(
+    config: &AgentConfig,
+    router: Option<&hermix_focus::MemoryRouter>,
+    tool_calls: &[ToolCall],
+    results: &[ToolResult],
+) {
+    if config.skip_memory {
+        return;
+    }
+    let Some(router) = router else {
+        return;
+    };
+    for result in results {
+        if result.is_error {
+            continue;
+        }
+        let Some(tc) = tool_calls.iter().find(|tc| tc.id == result.tool_call_id) else {
+            continue;
+        };
+        let Some((action, target, content)) = memory_write_event_from_tool_call(tc) else {
+            continue;
+        };
+        router.on_memory_write(&action, &target, &content);
     }
 }

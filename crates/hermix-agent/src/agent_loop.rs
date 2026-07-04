@@ -1584,52 +1584,12 @@ impl AgentLoop {
     /// frames) on `total_turns.is_multiple_of(N)` boundary calls,
     /// and O(1) on all other turns.
     fn maybe_freeze_snapshot(&self, session_id: &str, turn_number: u32) {
-        if self.config.skip_memory {
-            return;
-        }
-        let Some(ref router) = self.memory_router else {
-            return;
-        };
-        let Some(embedded) = router.find_embedded_backend() else {
-            return;
-        };
-        // Snapshot at every 50 turns + at the final turn. Avoid
-        // snapshotting every turn (would saturate the table).
-        const SNAPSHOT_INTERVAL: u32 = 50;
-        let should_snapshot = turn_number > 0
-            && (turn_number.is_multiple_of(SNAPSHOT_INTERVAL)
-                || turn_number == self.config.max_turns);
-        if !should_snapshot {
-            return;
-        }
-        // Build a short summary of the most recent turn. We pull
-        // the user message verbatim from the in-process message
-        // context if available; otherwise we fall back to a
-        // terse placeholder.
-        let summary = format!(
-            "Frozen at turn {turn_number} of session {session_id}"
-        );
-        let frame_ids: Vec<String> = Vec::new();
-        match embedded.record_session_snapshot(
+        crate::memory_prefetch::maybe_freeze_snapshot(
+            &self.config,
+            self.memory_router.as_deref(),
             session_id,
             turn_number,
-            &summary,
-            &frame_ids,
-        ) {
-            Ok(_) => tracing::debug!(
-                target: "hermix.agent",
-                session_id,
-                turn_number,
-                "snapshot frozen"
-            ),
-            Err(e) => tracing::warn!(
-                target: "hermix.agent",
-                session_id,
-                turn_number,
-                error = %e,
-                "snapshot freeze failed"
-            ),
-        }
+        )
     }
 
     /// Phase 18 (架构-2): enforce a hard cap on visible frames so
@@ -1638,64 +1598,20 @@ impl AgentLoop {
     /// months of heavy chat, soft-hidden rows stay on disk for the
     /// audit trail and the 30-day janitor.
     fn maybe_enforce_frame_cap(&self, turn_number: u32) {
-        if self.config.skip_memory {
-            return;
-        }
-        const CAP_INTERVAL: u32 = 100;
-        const FRAME_CAP: usize = 10_000;
-        if !turn_number.is_multiple_of(CAP_INTERVAL) || turn_number == 0 {
-            return;
-        }
-        let Some(ref router) = self.memory_router else {
-            return;
-        };
-        let Some(embedded) = router.find_embedded_backend() else {
-            return;
-        };
-        match embedded.enforce_frame_cap(FRAME_CAP) {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(
-                target: "hermix.agent",
-                hidden = n,
-                cap = FRAME_CAP,
-                "frame cap enforced (oldest/lowest-salience hidden)"
-            ),
-            Err(e) => tracing::warn!(
-                target: "hermix.agent",
-                error = %e,
-                "frame cap enforcement failed"
-            ),
-        }
-    }
-
-    fn memory_write_event_from_tool_call(tc: &ToolCall) -> Option<(String, String, String)> {
-        crate::memory_hooks::memory_write_event_from_tool_call(tc)
+        crate::memory_prefetch::maybe_enforce_frame_cap(
+            &self.config,
+            self.memory_router.as_deref(),
+            turn_number,
+        )
     }
 
     fn notify_memory_writes(&self, tool_calls: &[ToolCall], results: &[ToolResult]) {
-        if self.config.skip_memory {
-            return;
-        }
-        // Route `memory` tool calls (action=add/replace/remove) through
-        // MemoryRouter — replaces legacy `PluginManager::memory_providers`
-        // fan-out.
-        let router = match self.memory_router {
-            Some(ref r) => r,
-            None => return,
-        };
-        for result in results {
-            if result.is_error {
-                continue;
-            }
-            let Some(tc) = tool_calls.iter().find(|tc| tc.id == result.tool_call_id) else {
-                continue;
-            };
-            let Some((action, target, content)) = Self::memory_write_event_from_tool_call(tc)
-            else {
-                continue;
-            };
-            router.on_memory_write(&action, &target, &content);
-        }
+        crate::memory_prefetch::notify_memory_writes(
+            &self.config,
+            self.memory_router.as_deref(),
+            tool_calls,
+            results,
+        )
     }
 
     fn delegation_event_from_tool_result(
@@ -7600,7 +7516,7 @@ mod tests {
                     r#"{"action":"add","target":"user","content":"Prefers concise answers"}"#.into(),
             },
         };
-        let event = AgentLoop::memory_write_event_from_tool_call(&tc).unwrap();
+        let event = crate::memory_hooks::memory_write_event_from_tool_call(&tc).unwrap();
         assert_eq!(event.0, "add");
         assert_eq!(event.1, "user");
         assert_eq!(event.2, "Prefers concise answers");
@@ -7616,7 +7532,7 @@ mod tests {
                     .into(),
             },
         };
-        let event = AgentLoop::memory_write_event_from_tool_call(&tc).unwrap();
+        let event = crate::memory_hooks::memory_write_event_from_tool_call(&tc).unwrap();
         assert_eq!(event.0, "remove");
         assert_eq!(event.1, "memory");
         assert_eq!(event.2, "obsolete fact");
