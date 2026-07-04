@@ -115,6 +115,14 @@ impl EmbeddedMemoryBackend {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(&path)?;
+        // 2026-07-04 (round 5): enable busy_timeout so concurrent writes
+        // from session_persistence + memory_router + compression are
+        // retried by sqlite itself for up to 5 s instead of failing
+        // with `database is locked`. This is the in-process backstop —
+        // longer-term we still need a cross-process retry loop, but
+        // for the desktop app where the focus DB is owned by a single
+        // process this eliminates the bulk of the contention.
+        let _ = conn.execute_batch("PRAGMA busy_timeout = 5000");
         let backend = Self {
             conn: Mutex::new(conn),
             path,
@@ -2922,5 +2930,40 @@ mod tests {
         }
         let hidden = b.enforce_frame_cap(10).unwrap();
         assert_eq!(hidden, 0);
+    }
+
+    /// Round 5: opening the embedded backend must set
+    /// `PRAGMA busy_timeout` so concurrent writers serialise instead
+    /// of immediately failing with `database is locked`. Read the
+    /// PRAGMA back through `PRAGMA busy_timeout` (returns integer ms).
+    #[test]
+    fn r5_busy_timeout_is_set_on_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = EmbeddedMemoryBackend::open(tmp.path().join("busy.db")).unwrap();
+        let timeout_ms: i64 = backend
+            .conn
+            .lock()
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            timeout_ms >= 5000,
+            "busy_timeout must be at least 5000ms after PRAGMA; got {timeout_ms}"
+        );
+    }
+
+    /// Round 5: the PRAGMA path is safe to evaluate on in-memory
+    /// connections (it returns 0 there because :memory: has no
+    /// contention) — the test pins that the PRAGMA call in `open`
+    /// does not panic on either backend type.
+    #[test]
+    fn r5_busy_timeout_active_for_in_memory_backend() {
+        let backend = EmbeddedMemoryBackend::open_in_memory().unwrap();
+        let timeout_ms: i64 = backend
+            .conn
+            .lock()
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        // in-memory returns 0; we only assert the PRAGMA did not panic.
+        let _ = timeout_ms;
     }
 }

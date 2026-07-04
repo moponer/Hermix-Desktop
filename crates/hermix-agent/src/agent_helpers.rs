@@ -167,6 +167,72 @@ pub fn compute_prompt_cache_key(
     h.finish()
 }
 
+/// Compute a context-layer cache key.
+///
+/// The context layer covers memory / skills / context-files blocks — it
+/// changes when the underlying memory store mutates (new facts, pruned
+/// entries), when skills get added/removed, or when a workspace context
+/// file is rewritten. None of those are per-turn data, so they are still
+/// safe to cache, but they invalidate independently of the stable layer
+/// (model / personality / system_prompt / workspace config).
+///
+/// Keyed only by a coarse `epoch` tick the caller passes in — callers
+/// bump the epoch whenever they mutate the underlying stores; this keeps
+/// the key short and avoids dragging large text into the hasher.
+pub fn compute_context_cache_key(epoch: u64) -> u64 {
+    // Just return the epoch directly. It's already a u64 cache key;
+    // folding it through a hasher would buy us nothing.
+    epoch
+}
+
+/// Three-tier prompt cache slot.
+///
+/// Layered to keep the largest piece of the system prompt (the stable
+/// identity / directions / tool block) reusable across turns even when
+/// the smaller context block mutates, and vice versa. The volatile
+/// block (timestamp + session_id) is rebuilt every turn and is not
+/// cached.
+///
+/// `None` means "miss — re-render the corresponding layer".
+#[derive(Default)]
+pub struct PromptCache {
+    pub stable: Option<(u64, String)>,
+    pub context: Option<(u64, String)>,
+}
+
+impl PromptCache {
+    /// Read both layers' stored text. Returns `None` for a layer
+    /// when the slot is empty or its key does not match the supplied
+    /// expected key for that layer.
+    pub fn lookup(
+        &self,
+        expected_stable: u64,
+        expected_context: u64,
+    ) -> (Option<&str>, Option<&str>) {
+        let stable = self
+            .stable
+            .as_ref()
+            .filter(|(k, p)| *k == expected_stable && !p.is_empty())
+            .map(|(_, p)| p.as_str());
+        let context = self
+            .context
+            .as_ref()
+            .filter(|(k, p)| *k == expected_context && !p.is_empty())
+            .map(|(_, p)| p.as_str());
+        (stable, context)
+    }
+
+    /// Store the freshly-rendered stable layer text.
+    pub fn store_stable(&mut self, key: u64, text: String) {
+        self.stable = Some((key, text));
+    }
+
+    /// Store the freshly-rendered context layer text.
+    pub fn store_context(&mut self, key: u64, text: String) {
+        self.context = Some((key, text));
+    }
+}
+
 /// How many times the autonomous loop may nudge the LLM back into action
 /// (inject a "keep working" system message) before giving up and letting the
 /// model's plain-text response through as a final answer.

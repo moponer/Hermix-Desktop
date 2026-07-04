@@ -246,11 +246,17 @@ pub struct AgentLoop {
     /// calls use a smaller limit to avoid re-injecting the same memory
     /// every turn — the LLM already has it in the active context window.
     memory_recall_seeded: std::sync::atomic::AtomicBool,
-    /// Phase 18 (prompt caching): cached stable portion of the system
-    /// prompt (personality, formatting, tool-selection rules). Rebuilt
-    /// only when the model or personality config changes. `None` means
-    /// uninitialised.
-    cached_stable_prompt_key: std::sync::Mutex<Option<(u64, String)>>,
+    /// Phase 18 (prompt caching): three-tier prompt cache. Holds the
+    /// rendered stable layer (identity, directions, tool block,
+    /// personality, workspace, provider hint) and context layer
+    /// (memory / skills / context files), each independently keyed so
+    /// a context-store mutation does not force the larger stable layer
+    /// to re-render. The volatile layer (timestamp + session_id) is
+    /// rebuilt every turn and not cached.
+    prompt_cache: std::sync::Mutex<crate::agent_helpers::PromptCache>,
+    /// Monotonic epoch bumped when memory/skills/context-files stores
+    /// mutate; forms the key for the context cache layer.
+    context_epoch: std::sync::atomic::AtomicU64,
     /// Optional embedding provider for vector recall in memory prefetch.
     /// When set, `memory_prefetch` generates embeddings and passes them
     /// to `MemoryQuery` for cosine similarity search.
@@ -750,7 +756,8 @@ impl AgentLoop {
             latest_compression_metrics: std::sync::Mutex::new(None),
             last_archive_refs: std::sync::Mutex::new(Vec::new()),
             memory_recall_seeded: std::sync::atomic::AtomicBool::new(false),
-            cached_stable_prompt_key: std::sync::Mutex::new(None),
+            prompt_cache: std::sync::Mutex::new(crate::agent_helpers::PromptCache::default()),
+            context_epoch: std::sync::atomic::AtomicU64::new(0),
             embedding_provider: None,
         }
     }
@@ -794,7 +801,8 @@ impl AgentLoop {
             latest_compression_metrics: std::sync::Mutex::new(None),
             last_archive_refs: std::sync::Mutex::new(Vec::new()),
             memory_recall_seeded: std::sync::atomic::AtomicBool::new(false),
-            cached_stable_prompt_key: std::sync::Mutex::new(None),
+            prompt_cache: std::sync::Mutex::new(crate::agent_helpers::PromptCache::default()),
+            context_epoch: std::sync::atomic::AtomicU64::new(0),
             embedding_provider: None,
         }
     }
@@ -1293,7 +1301,7 @@ impl AgentLoop {
     ) -> (String, bool) {
         crate::prompt_assembly::resolve_initial_system_prompt(
             &self.config,
-            &self.cached_stable_prompt_key,
+            &self.prompt_cache,
             self.memory_router.as_deref(),
             &self.callbacks,
             user_message,
@@ -3174,7 +3182,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.cached_stable_prompt_key, agent.memory_router.as_deref(), "", &[], "gpt-4o");
+        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.prompt_cache, agent.memory_router.as_deref(), "", &[], "gpt-4o");
         assert!(prompt.contains("## Active Personality (coder)"));
         assert!(prompt.contains("`coder` persona"));
     }
@@ -3225,7 +3233,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.cached_stable_prompt_key, agent.memory_router.as_deref(), "", &[], "gpt-4o");
+        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.prompt_cache, agent.memory_router.as_deref(), "", &[], "gpt-4o");
         assert!(!prompt.contains("## Active Personality (unknown_persona)"));
     }
 
@@ -3274,7 +3282,7 @@ mod tests {
         );
         // No personality, no tools, no plugin context — formatting discipline
         // and thinking discipline must still be present in every prompt.
-        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.cached_stable_prompt_key, agent.memory_router.as_deref(), "", &[], "gpt-4o");
+        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.prompt_cache, agent.memory_router.as_deref(), "", &[], "gpt-4o");
         assert!(
             prompt.contains("Output formatting discipline"),
             "formatting discipline block missing from system prompt"
@@ -3333,7 +3341,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let prompt = crate::prompt_assembly::build_system_prompt(&no_ws_agent.config, &no_ws_agent.cached_stable_prompt_key, no_ws_agent.memory_router.as_deref(), "", &[], "gpt-4o");
+        let prompt = crate::prompt_assembly::build_system_prompt(&no_ws_agent.config, &no_ws_agent.prompt_cache, no_ws_agent.memory_router.as_deref(), "", &[], "gpt-4o");
         assert!(
             !prompt.contains("## Active Workspace"),
             "workspace block should be absent when no workspace is configured"
@@ -3347,7 +3355,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.cached_stable_prompt_key, agent.memory_router.as_deref(), "", &[], "gpt-4o");
+        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.prompt_cache, agent.memory_router.as_deref(), "", &[], "gpt-4o");
         assert!(
             prompt.contains("## Active Workspace"),
             "workspace block missing"
@@ -3406,7 +3414,7 @@ mod tests {
         );
 
         // 1. Guidance present for any model (even one not in the tool-enforcement list).
-        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.cached_stable_prompt_key, agent.memory_router.as_deref(), "", &[], "unknown-model-xyz");
+        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.prompt_cache, agent.memory_router.as_deref(), "", &[], "unknown-model-xyz");
         assert!(
             prompt.contains("Tool selection discipline"),
             "TOOL_USAGE_GUIDANCE block must be unconditional, not gated on model"
