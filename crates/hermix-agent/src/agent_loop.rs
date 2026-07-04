@@ -3132,12 +3132,7 @@ impl AgentLoop {
     }
 
     fn emit_status(&self, event_type: &str, message: &str) {
-        if self.config.quiet_mode {
-            return;
-        }
-        if let Some(cb) = self.callbacks.status_callback.as_ref() {
-            cb(event_type, message);
-        }
+        crate::message_helpers::emit_status(&self.config, &self.callbacks, event_type, message)
     }
 
     /// 2026-06-29: forward a `BreakerSnapshot` to whoever wired
@@ -3152,62 +3147,27 @@ impl AgentLoop {
     /// "context is overflowing" / "compression has been disabled"
     /// signals from the user.
     fn emit_compaction_status(&self, snapshot: &crate::compression::BreakerSnapshot) {
-        if let Some(cb) = self.callbacks.on_compaction_status.as_ref() {
-            cb(snapshot);
-        }
+        crate::message_helpers::emit_compaction_status(&self.callbacks, snapshot)
     }
 
     fn assistant_visible_text(m: &Message) -> bool {
-        m.content
-            .as_deref()
-            .map(str::trim)
-            .map(|s| !s.is_empty())
-            .unwrap_or(false)
+        crate::message_helpers::assistant_visible_text(m)
     }
 
     fn assistant_visible_text_after_think_blocks(m: &Message) -> bool {
-        let Some(content) = m.content.as_deref() else {
-            return false;
-        };
-        !strip_think_blocks_for_ack(content).trim().is_empty()
+        crate::message_helpers::assistant_visible_text_after_think_blocks(m)
     }
 
     fn assistant_has_reasoning(m: &Message) -> bool {
-        m.reasoning_content
-            .as_deref()
-            .map(str::trim)
-            .map(|s| !s.is_empty())
-            .unwrap_or(false)
+        crate::message_helpers::assistant_has_reasoning(m)
     }
 
     fn normalize_tool_call_arguments(tc: &mut ToolCall) -> Result<(), String> {
-        let trimmed = tc.function.arguments.trim();
-        if trimmed.is_empty() {
-            tc.function.arguments = "{}".to_string();
-            return Ok(());
-        }
-        serde_json::from_str::<Value>(trimmed)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        crate::message_helpers::normalize_tool_call_arguments(tc)
     }
 
     fn extra_body_for_api_mode(&self, api_mode: &ApiMode) -> Option<Value> {
-        let mut body = self
-            .config
-            .extra_body
-            .clone()
-            .unwrap_or_else(|| serde_json::json!({}));
-        if !body.is_object() {
-            return self.config.extra_body.clone();
-        }
-        if !matches!(api_mode, ApiMode::CodexResponses)
-            && body.get("strict_tool_calls").is_none()
-            && body.get("strict_api").is_none()
-            && body.get("provider_strict").is_none()
-        {
-            body["strict_api"] = Value::Bool(true);
-        }
-        Some(body)
+        crate::message_helpers::extra_body_for_api_mode(&self.config, api_mode)
     }
 
     // -- Retry-aware LLM call ---------------------------------------------
