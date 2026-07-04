@@ -18,9 +18,14 @@
 //! across `agent_loop.rs` (model rendering, fallback paths, smart
 //! routing) and not specific to cost routing.
 
+use std::sync::Arc;
+
 use hermix_core::Message;
 
-use crate::agent_loop::{AgentLoop, ApiMode, CheapModelRouteConfig, TurnRuntimeRoute};
+use crate::agent_config::AgentConfig;
+use crate::agent_loop::{ApiMode, CheapModelRouteConfig, TurnRuntimeRoute};
+use crate::credential_pool::CredentialPool;
+use crate::oauth_refresh::OAuthRefresh;
 use crate::smart_model_routing::{
     detect_api_mode_for_url, resolve_turn_route, PrimaryRuntime, ResolveTurnOutcome,
     ResolvedCheapRuntime,
@@ -46,9 +51,11 @@ pub(crate) fn latest_user_text<'a>(messages: &'a [Message]) -> Option<&'a str> {
 /// [`resolve_smart_runtime_route`] as the baseline for "current
 /// model" comparison. Mirrors what `run()` would default to if no
 /// smart-routing decision fires.
-pub(crate) fn primary_runtime_snapshot(loop_: &AgentLoop) -> PrimaryRuntime {
-    let provider = loop_
-        .config
+pub(crate) fn primary_runtime_snapshot(
+    config: &AgentConfig,
+    primary_credential_pool: Option<&Arc<CredentialPool>>,
+) -> PrimaryRuntime {
+    let provider = config
         .provider
         .as_deref()
         .map(str::trim)
@@ -56,7 +63,7 @@ pub(crate) fn primary_runtime_snapshot(loop_: &AgentLoop) -> PrimaryRuntime {
         .map(str::to_string);
     let base_url = provider
         .as_ref()
-        .and_then(|p| loop_.config.runtime_providers.get(p))
+        .and_then(|p| config.runtime_providers.get(p))
         .and_then(|c| {
             c.base_url
                 .as_ref()
@@ -64,15 +71,15 @@ pub(crate) fn primary_runtime_snapshot(loop_: &AgentLoop) -> PrimaryRuntime {
                 .filter(|s| !s.is_empty())
         });
     let (command, args) =
-        crate::runtime_provider::resolve_runtime_command_args(loop_, provider.as_deref());
+        crate::runtime_provider::resolve_runtime_command_args(config, provider.as_deref());
     PrimaryRuntime {
-        model: loop_.config.model.clone(),
+        model: config.model.clone(),
         provider,
         base_url,
-        api_mode: loop_.config.api_mode.clone(),
+        api_mode: config.api_mode.clone(),
         command,
         args,
-        credential_pool: loop_.primary_credential_pool.clone(),
+        credential_pool: primary_credential_pool.cloned(),
     }
 }
 
@@ -82,8 +89,12 @@ pub(crate) fn primary_runtime_snapshot(loop_: &AgentLoop) -> PrimaryRuntime {
 /// threshold is tripped. Route label is `"cost_guard"` and the
 /// credential pool fallback flag is `true` so the runtime pool is
 /// used unless the route itself opts out.
-pub(crate) fn turn_route_cost_guard(loop_: &AgentLoop, model: String) -> TurnRuntimeRoute {
-    let pri = primary_runtime_snapshot(loop_);
+pub(crate) fn turn_route_cost_guard(
+    config: &AgentConfig,
+    primary_credential_pool: Option<&Arc<CredentialPool>>,
+    model: String,
+) -> TurnRuntimeRoute {
+    let pri = primary_runtime_snapshot(config, primary_credential_pool);
     let mut sig = pri.to_signature();
     sig.model = model.clone();
     TurnRuntimeRoute {
@@ -94,7 +105,7 @@ pub(crate) fn turn_route_cost_guard(loop_: &AgentLoop, model: String) -> TurnRun
         api_mode: None,
         command: None,
         args: Vec::new(),
-        credential_pool: loop_.primary_credential_pool.clone(),
+        credential_pool: primary_credential_pool.cloned(),
         credential_pool_fallback: true,
         route_label: None,
         routing_reason: Some("cost_guard".to_string()),
@@ -110,7 +121,9 @@ pub(crate) fn turn_route_cost_guard(loop_: &AgentLoop, model: String) -> TurnRun
 /// back to the primary runtime.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_build_cheap_runtime(
-    loop_: &AgentLoop,
+    config: &AgentConfig,
+    oauth: &OAuthRefresh,
+    primary_credential_pool: Option<&Arc<CredentialPool>>,
     cheap: &CheapModelRouteConfig,
     explicit_api_key: Option<String>,
 ) -> Result<ResolvedCheapRuntime, ()> {
@@ -128,7 +141,7 @@ pub(crate) fn try_build_cheap_runtime(
         .map(|(_, m)| m)
         .unwrap_or(model_full);
     let base_url =
-        crate::runtime_provider::resolve_runtime_base_url(loop_, &provider_lc, cheap.base_url.as_deref());
+        crate::runtime_provider::resolve_runtime_base_url(config, &provider_lc, cheap.base_url.as_deref());
     let api_mode = base_url
         .as_deref()
         .and_then(detect_api_mode_for_url)
@@ -146,11 +159,12 @@ pub(crate) fn try_build_cheap_runtime(
     let pool_ref = if has_runtime_override {
         None
     } else {
-        loop_.primary_credential_pool.as_ref()
+        primary_credential_pool
     };
 
     crate::runtime_provider::build_runtime_provider(
-        loop_,
+        config,
+        oauth,
         &provider_lc,
         model_name,
         cheap.base_url.as_deref(),
@@ -162,7 +176,7 @@ pub(crate) fn try_build_cheap_runtime(
     .map_err(|_| ())?;
 
     let (command, args) =
-        crate::runtime_provider::resolve_runtime_command_args(loop_, Some(&provider_lc));
+        crate::runtime_provider::resolve_runtime_command_args(config, Some(&provider_lc));
     if provider_lc == "copilot-acp"
         && command
             .as_deref()
@@ -198,7 +212,7 @@ pub(crate) fn try_build_cheap_runtime(
         credential_pool: if has_runtime_override {
             None
         } else {
-            loop_.primary_credential_pool.clone()
+            primary_credential_pool.cloned()
         },
         skip_primary_credential_pool_fallback: has_runtime_override,
     })
@@ -210,16 +224,20 @@ pub(crate) fn try_build_cheap_runtime(
 /// `None` when smart routing is disabled or the primary runtime should
 /// be used as-is.
 pub(crate) fn resolve_smart_runtime_route(
-    loop_: &AgentLoop,
+    config: &AgentConfig,
+    oauth: &OAuthRefresh,
+    primary_credential_pool: Option<&Arc<CredentialPool>>,
     messages: &[Message],
 ) -> Option<TurnRuntimeRoute> {
     let text = latest_user_text(messages)?;
-    let primary = primary_runtime_snapshot(loop_);
+    let primary = primary_runtime_snapshot(config, primary_credential_pool);
     let outcome = resolve_turn_route(
         text,
-        &loop_.config.smart_model_routing,
+        &config.smart_model_routing,
         &primary,
-        |cheap, explicit_key| try_build_cheap_runtime(loop_, cheap, explicit_key),
+        |cheap, explicit_key| {
+            try_build_cheap_runtime(config, oauth, primary_credential_pool, cheap, explicit_key)
+        },
     );
 
     match outcome {
@@ -229,7 +247,7 @@ pub(crate) fn resolve_smart_runtime_route(
             runtime,
             signature,
         } => {
-            let cheap = loop_.config.smart_model_routing.cheap_model.as_ref()?;
+            let cheap = config.smart_model_routing.cheap_model.as_ref()?;
             Some(TurnRuntimeRoute {
                 model,
                 provider: Some(runtime.provider.clone()),
@@ -260,18 +278,18 @@ pub(crate) fn resolve_smart_runtime_route(
 /// 3. Hard-coded `openai:gpt-4o-mini`, unless the primary model
 ///    already is `openai:gpt-4o-mini` (in which case there's no
 ///    cheaper model to pick — return `None`).
-pub(crate) fn resolve_cost_degrade_model(loop_: &AgentLoop) -> Option<String> {
-    if let Some(ref m) = loop_.config.cost_guard_degrade_model {
+pub(crate) fn resolve_cost_degrade_model(config: &AgentConfig) -> Option<String> {
+    if let Some(ref m) = config.cost_guard_degrade_model {
         if !m.trim().is_empty() {
             return Some(m.trim().to_string());
         }
     }
-    if let Some(ref m) = loop_.config.retry.fallback_model {
+    if let Some(ref m) = config.retry.fallback_model {
         if !m.trim().is_empty() {
             return Some(m.trim().to_string());
         }
     }
-    if loop_.config.model.trim() != "openai:gpt-4o-mini" {
+    if config.model.trim() != "openai:gpt-4o-mini" {
         return Some("openai:gpt-4o-mini".to_string());
     }
     None

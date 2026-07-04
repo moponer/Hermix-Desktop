@@ -1235,7 +1235,7 @@ impl AgentLoop {
     }
 
     fn auth_tokens_path(&self) -> PathBuf {
-        crate::runtime_provider::auth_tokens_path(self)
+        crate::runtime_provider::auth_tokens_path(&self.config)
     }
 
     fn build_runtime_provider(
@@ -1249,7 +1249,8 @@ impl AgentLoop {
         credential_pool: Option<&Arc<CredentialPool>>,
     ) -> Result<Arc<dyn LlmProvider>, AgentError> {
         crate::runtime_provider::build_runtime_provider(
-            self,
+            &self.config,
+            &self.oauth_refresh,
             provider,
             model_name,
             route_base_url,
@@ -1264,7 +1265,7 @@ impl AgentLoop {
         &'a self,
         rt: &'a TurnRuntimeRoute,
     ) -> Option<&'a Arc<CredentialPool>> {
-        crate::runtime_provider::credential_pool_for_route(self, rt)
+        crate::runtime_provider::credential_pool_for_route(self.primary_credential_pool.as_ref(), rt)
     }
 
     fn messages_for_api_call(&self, ctx: &ContextManager) -> Vec<Message> {
@@ -3569,15 +3570,24 @@ impl AgentLoop {
     }
 
     fn turn_route_cost_guard(&self, model: String) -> TurnRuntimeRoute {
-        crate::cost_routing::turn_route_cost_guard(self, model)
+        crate::cost_routing::turn_route_cost_guard(
+            &self.config,
+            self.primary_credential_pool.as_ref(),
+            model,
+        )
     }
 
     fn resolve_smart_runtime_route(&self, messages: &[Message]) -> Option<TurnRuntimeRoute> {
-        crate::cost_routing::resolve_smart_runtime_route(self, messages)
+        crate::cost_routing::resolve_smart_runtime_route(
+            &self.config,
+            &self.oauth_refresh,
+            self.primary_credential_pool.as_ref(),
+            messages,
+        )
     }
 
     fn resolve_cost_degrade_model(&self) -> Option<String> {
-        crate::cost_routing::resolve_cost_degrade_model(self)
+        crate::cost_routing::resolve_cost_degrade_model(&self.config)
     }
 
     /// Ask the LLM for a final summary when the turn budget is exhausted.
@@ -6049,7 +6059,10 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let primary = crate::cost_routing::primary_runtime_snapshot(&agent);
+        let primary = crate::cost_routing::primary_runtime_snapshot(
+            &agent.config,
+            agent.primary_credential_pool.as_ref(),
+        );
         assert_eq!(primary.command.as_deref(), Some("copilot-language-server"));
         assert_eq!(
             primary.args,

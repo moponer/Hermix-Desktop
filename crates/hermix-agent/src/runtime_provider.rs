@@ -23,8 +23,8 @@ use std::sync::Arc;
 use hermix_config::env_compat;
 use hermix_core::{AgentError, LlmProvider};
 
-use crate::agent_config::RuntimeProviderConfig;
-use crate::agent_loop::{AgentLoop, ApiMode, TurnRuntimeRoute};
+use crate::agent_config::{AgentConfig, RuntimeProviderConfig};
+use crate::agent_loop::{ApiMode, TurnRuntimeRoute};
 use crate::api_bridge::CodexProvider;
 use crate::credential_pool::CredentialPool;
 use crate::oauth_refresh::OAuthRefresh;
@@ -34,9 +34,8 @@ use crate::provider::{AnthropicProvider, GenericProvider, OpenRouterProvider};
 /// loop. Resolves `<hermix_home>/auth/tokens.json`, falling back to
 /// the canonical `hermix_home()` when the config doesn't override the
 /// home.
-pub(crate) fn auth_tokens_path(loop_: &AgentLoop) -> PathBuf {
-    let hermix_home = loop_
-        .config
+pub(crate) fn auth_tokens_path(config: &AgentConfig) -> PathBuf {
+    let hermix_home = config
         .hermix_home
         .clone()
         .map(PathBuf::from)
@@ -53,7 +52,8 @@ pub(crate) fn auth_tokens_path(loop_: &AgentLoop) -> PathBuf {
 /// 5. `runtime_providers[provider].api_key` (literal or `${ENV}` form).
 /// 6. Provider-default env var (`OPENAI_API_KEY`, etc.).
 pub(crate) fn resolve_runtime_api_key(
-    loop_: &AgentLoop,
+    config: &AgentConfig,
+    oauth: &OAuthRefresh,
     provider: &str,
     api_key_env_override: Option<&str>,
     explicit_api_key: Option<&str>,
@@ -61,8 +61,7 @@ pub(crate) fn resolve_runtime_api_key(
     if provider == "copilot-acp" {
         return Some("copilot-acp".to_string());
     }
-    let oauth: &OAuthRefresh = &loop_.oauth_refresh;
-    if let Some(token) = oauth.resolve_api_key(&auth_tokens_path(loop_), provider) {
+    if let Some(token) = oauth.resolve_api_key(&auth_tokens_path(config), provider) {
         return Some(token);
     }
     if let Some(key) = explicit_api_key.map(str::trim).filter(|s| !s.is_empty()) {
@@ -78,7 +77,7 @@ pub(crate) fn resolve_runtime_api_key(
             }
         }
     }
-    if let Some(cfg) = loop_.config.runtime_providers.get(provider) {
+    if let Some(cfg) = config.runtime_providers.get(provider) {
         if let Some(ref key) = cfg.api_key {
             let trimmed = key.trim();
             if let Some(env_ref) = trimmed.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
@@ -115,14 +114,14 @@ pub(crate) fn resolve_runtime_api_key(
 /// provider-specific fallback (`COPILOT_ACP_BASE_URL`, codex/qwen-oauth
 /// defaults).
 pub(crate) fn resolve_runtime_base_url(
-    loop_: &AgentLoop,
+    config: &AgentConfig,
     provider: &str,
     route_base_url: Option<&str>,
 ) -> Option<String> {
     if let Some(b) = route_base_url.map(str::trim).filter(|s| !s.is_empty()) {
         return Some(b.to_string());
     }
-    let cfg_opt: Option<&RuntimeProviderConfig> = loop_.config.runtime_providers.get(provider);
+    let cfg_opt: Option<&RuntimeProviderConfig> = config.runtime_providers.get(provider);
     cfg_opt
         .and_then(|c| c.base_url.as_ref())
         .map(|s| s.trim().to_string())
@@ -150,18 +149,16 @@ pub(crate) fn resolve_runtime_base_url(
 /// default command is `copilot` (resolved via `which::which`) and
 /// default args are `--acp --stdio`.
 pub(crate) fn resolve_runtime_command_args(
-    loop_: &AgentLoop,
+    config: &AgentConfig,
     provider: Option<&str>,
 ) -> (Option<String>, Vec<String>) {
-    let mut command = loop_
-        .config
+    let mut command = config
         .acp_command
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let mut args: Vec<String> = loop_
-        .config
+    let mut args: Vec<String> = config
         .acp_args
         .iter()
         .map(|a| a.trim().to_string())
@@ -169,7 +166,7 @@ pub(crate) fn resolve_runtime_command_args(
         .collect();
 
     if let Some(provider) = provider {
-        if let Some(cfg) = loop_.config.runtime_providers.get(provider) {
+        if let Some(cfg) = config.runtime_providers.get(provider) {
             if let Some(cmd) = cfg
                 .command
                 .as_deref()
@@ -222,7 +219,8 @@ pub(crate) fn resolve_runtime_command_args(
 /// `credential_pool` is attached to providers that support rotation.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_runtime_provider(
-    loop_: &AgentLoop,
+    config: &AgentConfig,
+    oauth: &OAuthRefresh,
     provider: &str,
     model_name: &str,
     route_base_url: Option<&str>,
@@ -231,15 +229,15 @@ pub(crate) fn build_runtime_provider(
     api_mode: Option<&ApiMode>,
     credential_pool: Option<&Arc<CredentialPool>>,
 ) -> Result<Arc<dyn LlmProvider>, AgentError> {
-    let api_key = resolve_runtime_api_key(loop_, provider, api_key_env_override, explicit_api_key)
+    let api_key = resolve_runtime_api_key(config, oauth, provider, api_key_env_override, explicit_api_key)
         .ok_or_else(|| {
             AgentError::Config(format!(
                 "No API key configured for runtime-routed provider '{}'",
                 provider
             ))
         })?;
-    let base_url = resolve_runtime_base_url(loop_, provider, route_base_url);
-    let mode = api_mode.unwrap_or(&loop_.config.api_mode);
+    let base_url = resolve_runtime_base_url(config, provider, route_base_url);
+    let mode = api_mode.unwrap_or(&config.api_mode);
 
     let provider_obj: Arc<dyn LlmProvider> = match provider {
         "openai" | "codex" | "openai-codex" => {
@@ -323,13 +321,13 @@ pub(crate) fn build_runtime_provider(
 /// specify a pool and `credential_pool_fallback` is false (or there's no
 /// primary pool to fall back to).
 pub(crate) fn credential_pool_for_route<'a>(
-    loop_: &'a AgentLoop,
+    primary_credential_pool: Option<&'a Arc<CredentialPool>>,
     rt: &'a TurnRuntimeRoute,
 ) -> Option<&'a Arc<CredentialPool>> {
     if rt.credential_pool_fallback {
         rt.credential_pool
             .as_ref()
-            .or(loop_.primary_credential_pool.as_ref())
+            .or(primary_credential_pool)
     } else {
         rt.credential_pool.as_ref()
     }
