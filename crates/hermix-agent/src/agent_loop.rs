@@ -53,10 +53,7 @@ use crate::python_alignment::{
     strip_think_blocks_for_ack, ThinkBlockParser,
 };
 use crate::skill_orchestrator::SkillOrchestrator;
-use crate::smart_model_routing::{
-    detect_api_mode_for_url, resolve_turn_route, PrimaryRuntime, ResolveTurnOutcome,
-    ResolvedCheapRuntime, TurnRouteSignature,
-};
+use crate::smart_model_routing::TurnRouteSignature;
 pub use crate::smart_model_routing::{ApiMode, CheapModelRouteConfig, SmartModelRoutingConfig};
 use crate::steer::{
     apply_pending_steer_to_last_tool_message, concat_pending, normalize_accepted_steer_text,
@@ -614,7 +611,7 @@ pub use crate::context_pressure::ContextPressureMonitor;
 /// runtime publish path (`state.cost_guard.accumulated_usage`) keeps
 /// working without accessor-method churn.
 pub use crate::cost_guard::{CostGuard, CostGuardAction};
-pub(crate) use crate::cost_guard::{WarnEffect, WarnKind};
+pub(crate) use crate::cost_guard::WarnKind;
 
 /// Phase 5 (2026-07-03): per-loop retry counters consolidated into one
 /// struct so `LoopState` doesn't have to carry 3 sibling `u32` fields and
@@ -2794,23 +2791,8 @@ impl AgentLoop {
         (fallback_provider, model)
     }
 
-    fn resolve_runtime_base_url(
-        &self,
-        provider: &str,
-        route_base_url: Option<&str>,
-    ) -> Option<String> {
-        crate::runtime_provider::resolve_runtime_base_url(self, provider, route_base_url)
-    }
-
     fn auth_tokens_path(&self) -> PathBuf {
         crate::runtime_provider::auth_tokens_path(self)
-    }
-
-    fn resolve_runtime_command_args(
-        &self,
-        provider: Option<&str>,
-    ) -> (Option<String>, Vec<String>) {
-        crate::runtime_provider::resolve_runtime_command_args(self, provider)
     }
 
     fn build_runtime_provider(
@@ -5817,212 +5799,16 @@ impl AgentLoop {
         }
     }
 
-    fn latest_user_text<'a>(&self, messages: &'a [Message]) -> Option<&'a str> {
-        messages
-            .iter()
-            .rev()
-            .find(|m| matches!(m.role, hermix_core::MessageRole::User))
-            .and_then(|m| m.content.as_deref())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-    }
-
-    fn primary_runtime_snapshot(&self) -> PrimaryRuntime {
-        let provider = self
-            .config
-            .provider
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-        let base_url = provider
-            .as_ref()
-            .and_then(|p| self.config.runtime_providers.get(p))
-            .and_then(|c| {
-                c.base_url
-                    .as_ref()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            });
-        let (command, args) = self.resolve_runtime_command_args(provider.as_deref());
-        PrimaryRuntime {
-            model: self.config.model.clone(),
-            provider,
-            base_url,
-            api_mode: self.config.api_mode.clone(),
-            command,
-            args,
-            credential_pool: self.primary_credential_pool.clone(),
-        }
-    }
-
     fn turn_route_cost_guard(&self, model: String) -> TurnRuntimeRoute {
-        let pri = self.primary_runtime_snapshot();
-        let mut sig = pri.to_signature();
-        sig.model = model.clone();
-        TurnRuntimeRoute {
-            model,
-            provider: None,
-            base_url: None,
-            api_key_env: None,
-            api_mode: None,
-            command: None,
-            args: Vec::new(),
-            credential_pool: self.primary_credential_pool.clone(),
-            credential_pool_fallback: true,
-            route_label: None,
-            routing_reason: Some("cost_guard".to_string()),
-            signature: sig,
-        }
-    }
-
-    fn try_build_cheap_runtime(
-        &self,
-        cheap: &CheapModelRouteConfig,
-        explicit_api_key: Option<String>,
-    ) -> Result<ResolvedCheapRuntime, ()> {
-        let provider_raw = cheap.provider.as_deref().map(str::trim).unwrap_or("");
-        if provider_raw.is_empty() {
-            return Err(());
-        }
-        let provider_lc = provider_raw.to_lowercase();
-        let model_full = cheap.model.as_deref().map(str::trim).unwrap_or("");
-        if model_full.is_empty() {
-            return Err(());
-        }
-        let (_, model_name) = self.extract_provider_and_model(model_full);
-        let base_url = self.resolve_runtime_base_url(&provider_lc, cheap.base_url.as_deref());
-        let api_mode = base_url
-            .as_deref()
-            .and_then(detect_api_mode_for_url)
-            .unwrap_or(ApiMode::ChatCompletions);
-
-        let has_runtime_override = explicit_api_key
-            .as_ref()
-            .map(|s| !s.trim().is_empty())
-            .is_some()
-            || cheap
-                .base_url
-                .as_ref()
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false);
-        let pool_ref = if has_runtime_override {
-            None
-        } else {
-            self.primary_credential_pool.as_ref()
-        };
-
-        self.build_runtime_provider(
-            &provider_lc,
-            model_name,
-            cheap.base_url.as_deref(),
-            cheap.api_key_env.as_deref(),
-            explicit_api_key.as_deref(),
-            Some(&api_mode),
-            pool_ref,
-        )
-        .map_err(|_| ())?;
-
-        let (command, args) = self.resolve_runtime_command_args(Some(&provider_lc));
-        if provider_lc == "copilot-acp"
-            && command
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .is_none()
-            && !base_url
-                .as_deref()
-                .map(|u| u.starts_with("acp+tcp://"))
-                .unwrap_or(false)
-        {
-            return Err(());
-        }
-        if provider_lc == "copilot-acp"
-            && !base_url
-                .as_deref()
-                .map(|u| u.starts_with("acp+tcp://"))
-                .unwrap_or(false)
-        {
-            if let Some(cmd) = command.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                if which::which(cmd).is_err() {
-                    return Err(());
-                }
-            }
-        }
-        Ok(ResolvedCheapRuntime {
-            model: model_full.to_string(),
-            provider: provider_lc,
-            base_url,
-            api_mode,
-            command,
-            args,
-            credential_pool: if has_runtime_override {
-                None
-            } else {
-                self.primary_credential_pool.clone()
-            },
-            skip_primary_credential_pool_fallback: has_runtime_override,
-        })
+        crate::cost_routing::turn_route_cost_guard(self, model)
     }
 
     fn resolve_smart_runtime_route(&self, messages: &[Message]) -> Option<TurnRuntimeRoute> {
-        let text = self.latest_user_text(messages)?;
-        let primary = self.primary_runtime_snapshot();
-        let outcome = resolve_turn_route(
-            text,
-            &self.config.smart_model_routing,
-            &primary,
-            |cheap, explicit_key| self.try_build_cheap_runtime(cheap, explicit_key),
-        );
-
-        match outcome {
-            ResolveTurnOutcome::CheapRouted {
-                model,
-                label,
-                runtime,
-                signature,
-            } => {
-                let cheap = self.config.smart_model_routing.cheap_model.as_ref()?;
-                Some(TurnRuntimeRoute {
-                    model,
-                    provider: Some(runtime.provider.clone()),
-                    base_url: runtime.base_url.clone(),
-                    api_key_env: cheap
-                        .api_key_env
-                        .as_ref()
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty()),
-                    api_mode: Some(runtime.api_mode.clone()),
-                    command: runtime.command.clone(),
-                    args: runtime.args.clone(),
-                    credential_pool: runtime.credential_pool.clone(),
-                    credential_pool_fallback: !runtime.skip_primary_credential_pool_fallback,
-                    route_label: Some(label),
-                    routing_reason: Some("simple_turn".to_string()),
-                    signature,
-                })
-            }
-            ResolveTurnOutcome::Primary { .. } => None,
-        }
+        crate::cost_routing::resolve_smart_runtime_route(self, messages)
     }
 
-    /// Resolve the model used for automatic degradation when nearing
-    /// `max_cost_usd`.
     fn resolve_cost_degrade_model(&self) -> Option<String> {
-        if let Some(ref m) = self.config.cost_guard_degrade_model {
-            if !m.trim().is_empty() {
-                return Some(m.trim().to_string());
-            }
-        }
-        if let Some(ref m) = self.config.retry.fallback_model {
-            if !m.trim().is_empty() {
-                return Some(m.trim().to_string());
-            }
-        }
-        if self.config.model.trim() != "openai:gpt-4o-mini" {
-            return Some("openai:gpt-4o-mini".to_string());
-        }
-        None
+        crate::cost_routing::resolve_cost_degrade_model(self)
     }
 
     /// Ask the LLM for a final summary when the turn budget is exhausted.
@@ -7023,12 +6809,13 @@ fn summarize_background_review_result(messages: &[Message]) -> Option<String> {
 // `CostGuard` struct. Re-exported here so `merge_usage` call sites
 // (`run()` / `run_stream()` turn-usage accumulation) keep compiling
 // without renaming inline usages.
-pub(crate) use crate::cost_guard::{estimate_usage_cost_usd, merge_usage};
+pub(crate) use crate::cost_guard::merge_usage;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use hermix_core::JsonSchema;
+    use crate::cost_guard::{WarnEffect, estimate_usage_cost_usd};
 
     #[test]
     fn p1_loop_state_defaults_to_zero() {
@@ -8571,7 +8358,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let primary = agent.primary_runtime_snapshot();
+        let primary = crate::cost_routing::primary_runtime_snapshot(&agent);
         assert_eq!(primary.command.as_deref(), Some("copilot-language-server"));
         assert_eq!(
             primary.args,
