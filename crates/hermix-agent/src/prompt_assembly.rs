@@ -21,10 +21,13 @@
 //! - `build_dynamic_suffix` — per-turn timestamp + session_id block.
 
 use std::collections::HashSet;
+use std::sync::Mutex;
 
-use hermix_core::Message;
+use hermix_core::{Message, ToolSchema};
+use hermix_focus::MemoryRouter;
 
 use crate::agent_config::AgentConfig;
+use crate::context::{load_builtin_memory_snapshot, load_soul_md, resolve_personality, SystemPromptBuilder};
 use crate::context_files::{load_hermes_context_files, load_workspace_context};
 use crate::ContextManager;
 
@@ -318,4 +321,177 @@ pub fn build_dynamic_suffix(config: &AgentConfig, model_for_prompt: &str) -> Str
         suffix = suffix.with_block(timestamp_extras.trim_end());
     }
     suffix.build().to_string()
+}
+/// Build the full system prompt including identity, memory, and plugin context.
+///
+/// Aligns with Python behavior:
+/// - prefer `~/.hermix/SOUL.md` as identity
+/// - fallback to `DEFAULT_AGENT_IDENTITY`
+/// - then append optional configured `system_prompt`
+#[allow(clippy::too_many_arguments)]
+pub fn build_system_prompt(
+    config: &AgentConfig,
+    cached_stable_prompt_key: &Mutex<Option<(u64, String)>>,
+    memory_router: Option<&MemoryRouter>,
+    user_message: &str,
+    tool_schemas: &[ToolSchema],
+    model_for_prompt: &str,
+) -> String {
+    let soul = load_soul_md();
+    let mut builder = SystemPromptBuilder::new().with_personality(soul.as_deref());
+    if let Some(base) = config.system_prompt.as_deref() {
+        builder = builder.with_system_message(base);
+    }
+    // ★ directions[] — M1: collapse the six inline if/else cascades
+    //   below (format/think/tools/plan/autonomous/browser + tool-family
+    //   extras) into a typed route-gated queue assembled in
+    //   `context::DirRoute::matches`. The audit log is emitted via
+    //   `hermix.directions` tracing target and surfaced to the
+    //   frontend through `system_prompt_directions` hook events.
+    use crate::context::RouteContext;
+    let tool_names_set: HashSet<&str> =
+        tool_schemas.iter().map(|t| t.name.as_str()).collect();
+    let route_ctx = RouteContext {
+        user_message,
+        tool_names: &tool_names_set,
+        model_name: model_for_prompt,
+        autonomous_mode: config.autonomous_mode,
+    };
+    let directions = crate::directions::collect_directions(&route_ctx);
+    builder = builder.with_directions(directions);
+    builder.assemble_directions(&route_ctx);
+    let audit = builder.direction_audit();
+    let fired_count = audit.iter().filter(|a| a.fired).count();
+    let skipped_count = audit.len() - fired_count;
+    tracing::Span::current().record("dir_fired", fired_count);
+    tracing::Span::current().record("dir_skipped", skipped_count);
+    if !audit.is_empty() {
+        tracing::debug!(
+            target: "hermix.directions",
+            fired = fired_count,
+            skipped = skipped_count,
+            "build_system_prompt direction audit ({} fired / {} skipped)",
+            fired_count,
+            skipped_count
+        );
+    }
+
+    // ★ Inject the active tool list as a `<tools>` text block so the model
+    //   is *always* aware of what it can call — even if the native
+    //   OpenAI/Anthropic `tools` API field is ignored, filtered out by
+    //   the router, or the model is a text-only fine-tune that has no
+    //   notion of tool-calling wire protocols.
+    builder = builder.with_tools_section(tool_schemas);
+
+    if let Some(ref personality) = config.personality {
+        let requested = personality.trim();
+        if !requested.is_empty() {
+            if let Some(profile) =
+                resolve_personality(requested, config.hermix_home.as_deref())
+            {
+                builder = builder
+                    .with_block(&format!("## Active Personality ({requested})\n{profile}"));
+            } else if requested.contains(char::is_whitespace) {
+                builder = builder.with_block(&format!("Personality: {requested}"));
+                tracing::warn!(
+                    "personality '{requested}' not found as a named profile; using inline value"
+                );
+            } else {
+                tracing::warn!(
+                    "personality '{}' not found; falling back to default identity",
+                    requested
+                );
+            }
+        }
+    }
+
+    if !config.skip_memory {
+        let (memory_block, user_block) =
+            load_builtin_memory_snapshot(config.hermix_home.as_deref());
+        if let Some(block) = memory_block {
+            builder = builder.with_block(&block);
+        }
+        if let Some(block) = user_block {
+            builder = builder.with_block(&block);
+        }
+    }
+
+    let mem_block = memory_router
+        .map(|r| r.collect_system_prompt_blocks())
+        .unwrap_or_default();
+    if !mem_block.is_empty() {
+        builder = builder.with_memory_context(&mem_block);
+    }
+
+    if let Some(skills_prompt) = skills_system_prompt(config, &tool_names_set) {
+        builder = builder.with_skills_prompt(&skills_prompt);
+    }
+
+    if let Some(context_prompt) = context_files_prompt(config) {
+        builder = builder.with_context_files(&context_prompt);
+    }
+
+    let provider = effective_provider_for_prompt(config, model_for_prompt);
+
+    if provider.as_deref() == Some("alibaba") {
+        let model_short = model_for_prompt
+            .split('/')
+            .next_back()
+            .unwrap_or(model_for_prompt);
+        builder = builder.with_block(&format!(
+            "You are powered by the model named {}. The exact model ID is {}. When asked what model you are, always answer based on this information, not on any model name returned by the API.",
+            model_short, model_for_prompt
+        ));
+    }
+
+    if let Some(hint) = platform_hint_text(config) {
+        builder = builder.with_block(hint);
+    }
+
+    if let Some(ref ws) = config.workspace {
+        let trimmed = ws.trim();
+        if !trimmed.is_empty() {
+            builder = builder.with_block(&format!(
+                "## Active Workspace\nYour current working directory is `{}`. All relative paths in file/terminal commands resolve against this directory. When the user says \"the project\" or \"this folder\" or refers to files without an absolute path, default to this directory. If a command fails because the path does not exist here, tell the user the actual resolved path — do not guess.",
+                trimmed
+            ));
+        }
+    }
+
+    // P2.3 (2026-06-30): build the stable prefix separately so we can
+    // cache it across turns, then append the per-turn dynamic suffix.
+    let prefix_text = builder.build().to_string();
+
+    // Cache the stable prefix keyed on (model, personality, system_prompt,
+    // workspace).
+    let cache_key = crate::agent_helpers::compute_prompt_cache_key(
+        model_for_prompt,
+        config.personality.as_deref(),
+        config.system_prompt.as_deref(),
+        config.workspace.as_deref(),
+    );
+    let prefix_for_cache: Option<String> = if prefix_text.len() < 200_000 {
+        Some(prefix_text.clone())
+    } else {
+        None
+    };
+    if let Ok(mut slot) = cached_stable_prompt_key.lock() {
+        match &*slot {
+            Some((cached_key, cached_prefix))
+                if *cached_key == cache_key && !cached_prefix.is_empty() =>
+            {
+                // Cache hit on a populated slot — keep it.
+            }
+            _ => {
+                *slot = prefix_for_cache.map(|p| (cache_key, p));
+            }
+        }
+    }
+
+    let suffix_text = build_dynamic_suffix(config, model_for_prompt);
+
+    let prompt = format!("{prefix_text}{suffix_text}");
+    tracing::Span::current().record("out_chars", prompt.len());
+
+    prompt
 }

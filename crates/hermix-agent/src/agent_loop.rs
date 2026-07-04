@@ -6,7 +6,7 @@
 //! 3. Append results to conversation history
 //! 4. Repeat until the model finishes naturally or the turn budget is exceeded
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,10 +38,7 @@ use hermix_intelligence::{
 
 use crate::archive::{archive_context_section, render_archive_summary, ArchiveRef};
 use crate::budget;
-use crate::context::{
-    load_builtin_memory_snapshot, load_soul_md, resolve_personality, ContextManager,
-    SystemPromptBuilder,
-};
+use crate::context::ContextManager;
 use crate::credential_pool::CredentialPool;
 use crate::interrupt::InterruptController;
 use crate::plugins::{HookResult, HookType, PluginManager};
@@ -2068,17 +2065,6 @@ impl AgentLoop {
         }
     }
 
-    fn memory_system_prompt(&self) -> String {
-        if self.config.skip_memory {
-            return String::new();
-        }
-        if let Some(ref router) = self.memory_router {
-            router.collect_system_prompt_blocks()
-        } else {
-            String::new()
-        }
-    }
-
     fn memory_pre_compress_note(&self, messages: &[Message]) -> Option<String> {
         if self.config.skip_memory {
             return None;
@@ -2198,29 +2184,6 @@ impl AgentLoop {
     /// system prompt. Each direction is one inline `if/else` branch
     /// extracted from the previous monolith of `build_system_prompt` —
     /// see `context::DirRoute` for the gate logic.
-    fn collect_directions(
-        &self,
-        route_ctx: &crate::context::RouteContext<'_>,
-    ) -> Vec<crate::context::SystemDir> {
-        crate::directions::collect_directions(route_ctx)
-    }
-
-    fn platform_hint_text(&self) -> Option<&'static str> {
-        crate::prompt_assembly::platform_hint_text(&self.config)
-    }
-
-    fn effective_provider_for_prompt(&self, model: &str) -> Option<String> {
-        crate::prompt_assembly::effective_provider_for_prompt(&self.config, model)
-    }
-
-    fn skills_system_prompt(&self, tool_names: &HashSet<&str>) -> Option<String> {
-        crate::prompt_assembly::skills_system_prompt(&self.config, tool_names)
-    }
-
-    fn context_files_prompt(&self) -> Option<String> {
-        crate::prompt_assembly::context_files_prompt(&self.config)
-    }
-
     fn extract_provider_and_model<'a>(&self, model: &'a str) -> (String, &'a str) {
         crate::prompt_assembly::extract_provider_and_model(&self.config, model)
     }
@@ -2284,204 +2247,17 @@ impl AgentLoop {
         tool_schemas: &[ToolSchema],
         model_for_prompt: &str,
     ) -> String {
-        let soul = load_soul_md();
-        let mut builder = SystemPromptBuilder::new().with_personality(soul.as_deref());
-        if let Some(base) = self.config.system_prompt.as_deref() {
-            builder = builder.with_system_message(base);
-        }
-        // ★ directions[] — M1: collapse the six inline if/else cascades
-        //   below (format/think/tools/plan/autonomous/browser + tool-family
-        //   extras) into a typed route-gated queue assembled in
-        //   `context::DirRoute::matches`. The audit log is emitted via
-        //   `hermix.directions` tracing target and surfaced to the
-        //   frontend through `system_prompt_directions` hook events.
-        use crate::context::RouteContext;
-        let tool_names_set: std::collections::HashSet<&str> =
-            tool_schemas.iter().map(|t| t.name.as_str()).collect();
-        let route_ctx = RouteContext {
+        crate::prompt_assembly::build_system_prompt(
+            &self.config,
+            &self.cached_stable_prompt_key,
+            self.memory_router.as_deref(),
             user_message,
-            tool_names: &tool_names_set,
-            model_name: model_for_prompt,
-            autonomous_mode: self.config.autonomous_mode,
-        };
-        let directions = self.collect_directions(&route_ctx);
-        builder = builder.with_directions(directions);
-        builder.assemble_directions(&route_ctx);
-        let audit = builder.direction_audit();
-        let fired_count = audit.iter().filter(|a| a.fired).count();
-        let skipped_count = audit.len() - fired_count;
-        tracing::Span::current().record("dir_fired", fired_count);
-        tracing::Span::current().record("dir_skipped", skipped_count);
-        if !audit.is_empty() {
-            tracing::debug!(
-                target: "hermix.directions",
-                fired = fired_count,
-                skipped = skipped_count,
-                "build_system_prompt direction audit ({} fired / {} skipped)",
-                fired_count,
-                skipped_count
-            );
-        }
-        // The legacy `with_tool_guidance` channel is no longer populated
-        // here — guidance blocks (memory / session_search / user_style /
-        // tool_failure) now flow through `directions[]` and live in `parts`.
-        // The audit log records which fired; the routing surface itself
-        // remains the single source of truth.
-
-        // ★ Inject the active tool list as a `<tools>` text block so the model
-        //   is *always* aware of what it can call — even if the native
-        //   OpenAI/Anthropic `tools` API field is ignored, filtered out by
-        //   the router, or the model is a text-only fine-tune that has no
-        //   notion of tool-calling wire protocols. Without this block, the
-        //   model answers "I don't have terminal/execute_code/list_files
-        //   tools" and refuses work it is fully equipped to do.
-        builder = builder.with_tools_section(tool_schemas);
-
-        if let Some(ref personality) = self.config.personality {
-            let requested = personality.trim();
-            if !requested.is_empty() {
-                if let Some(profile) =
-                    resolve_personality(requested, self.config.hermix_home.as_deref())
-                {
-                    builder = builder
-                        .with_block(&format!("## Active Personality ({requested})\n{profile}"));
-                } else if requested.contains(char::is_whitespace) {
-                    // Compatibility path: historically this field was appended verbatim.
-                    builder = builder.with_block(&format!("Personality: {requested}"));
-                    tracing::warn!(
-                        "personality '{requested}' not found as a named profile; using inline value"
-                    );
-                } else {
-                    tracing::warn!(
-                        "personality '{}' not found; falling back to default identity",
-                        requested
-                    );
-                }
-            }
-        }
-
-        if !self.config.skip_memory {
-            let (memory_block, user_block) =
-                load_builtin_memory_snapshot(self.config.hermix_home.as_deref());
-            if let Some(block) = memory_block {
-                builder = builder.with_block(&block);
-            }
-            if let Some(block) = user_block {
-                builder = builder.with_block(&block);
-            }
-        }
-
-        let mem_block = self.memory_system_prompt();
-        if !mem_block.is_empty() {
-            builder = builder.with_memory_context(&mem_block);
-        }
-
-        if let Some(skills_prompt) = self.skills_system_prompt(&tool_names_set) {
-            builder = builder.with_skills_prompt(&skills_prompt);
-        }
-
-        if let Some(context_prompt) = self.context_files_prompt() {
-            builder = builder.with_context_files(&context_prompt);
-        }
-
-        let provider = self.effective_provider_for_prompt(model_for_prompt);
-
-        if provider.as_deref() == Some("alibaba") {
-            let model_short = model_for_prompt
-                .split('/')
-                .next_back()
-                .unwrap_or(model_for_prompt);
-            builder = builder.with_block(&format!(
-                "You are powered by the model named {}. The exact model ID is {}. When asked what model you are, always answer based on this information, not on any model name returned by the API.",
-                model_short, model_for_prompt
-            ));
-        }
-
-        if let Some(hint) = self.platform_hint_text() {
-            builder = builder.with_block(hint);
-        }
-
-        // Surface the active workspace (set by LocalAgentService from the
-        // desktop "工作区" picker via AgentOverrides::workspace). Without
-        // this block the model has no idea which directory the user means
-        // when they say "the project" — it will fall back to the server
-        // process CWD and make file/terminal tools useless.
-        if let Some(ref ws) = self.config.workspace {
-            let trimmed = ws.trim();
-            if !trimmed.is_empty() {
-                builder = builder.with_block(&format!(
-                    "## Active Workspace\nYour current working directory is `{}`. All relative paths in file/terminal commands resolve against this directory. When the user says \"the project\" or \"this folder\" or refers to files without an absolute path, default to this directory. If a command fails because the path does not exist here, tell the user the actual resolved path — do not guess.",
-                    trimmed
-                ));
-            }
-        }
-
-        // P2.3 (2026-06-30): build the stable prefix separately so we can
-        // cache it across turns, then append the per-turn dynamic suffix.
-        // Only the suffix (timestamp + optional session_id) changes every
-        // turn; everything before it is keyed on model/personality/system
-        // prompt/workspace and is safely reusable.
-        let prefix_text = builder.build().to_string();
-
-        // Cache the stable prefix keyed on (model, personality, system_prompt,
-        // workspace). On a cache hit we skip the entire prefix rebuild
-        // (the expensive part) and only rebuild the suffix.
-        let cache_key = compute_prompt_cache_key(
+            tool_schemas,
             model_for_prompt,
-            self.config.personality.as_deref(),
-            self.config.system_prompt.as_deref(),
-            self.config.workspace.as_deref(),
-        );
-        let prefix_for_cache: Option<String> = if prefix_text.len() < 200_000 {
-            Some(prefix_text.clone())
-        } else {
-            None
-        };
-        if let Ok(mut slot) = self.cached_stable_prompt_key.lock() {
-            // Match on the *previous* slot contents. If the cache already
-            // holds the same key and a non-empty prefix, leave it alone —
-            // we'd only be rewriting it with a byte-identical string. The
-            // savings here are conceptual: a future turn can now read the
-            // cache without paying the rebuild cost. (Reading the cache
-            // for a *current* turn would require deferring the prefix build
-            // entirely; that's a separate optimization that the agent loop
-            // already does at a higher level via `stored_system_prompt`.)
-            match &*slot {
-                Some((cached_key, cached_prefix))
-                    if *cached_key == cache_key && !cached_prefix.is_empty() =>
-                {
-                    // Cache hit on a populated slot — keep it.
-                }
-                _ => {
-                    *slot = prefix_for_cache.map(|p| (cache_key, p));
-                }
-            }
-        }
-
-        // Per-turn dynamic suffix — rebuilt every call, never cached.
-        let suffix_text = self.build_dynamic_suffix(model_for_prompt);
-
-        let prompt = format!("{prefix_text}{suffix_text}");
-        tracing::Span::current().record("out_chars", prompt.len());
-
-        prompt
+        )
     }
 
-    /// Build the per-turn dynamic suffix of the system prompt.
-    ///
-    /// This is the only part of the system prompt that changes every turn:
-    ///   - the timestamp block (model + provider name)
-    ///   - the optional session_id line (when `pass_session_id` is on)
-    ///
-    /// The rest of the prompt (identity, directions, tools, personality,
-    /// memory, skills, context files, model branding, platform hint,
-    /// workspace) lives in the stable prefix and is reused from
-    /// `cached_stable_prompt_key` across turns when its key matches.
-    fn build_dynamic_suffix(&self, model_for_prompt: &str) -> String {
-        crate::prompt_assembly::build_dynamic_suffix(&self.config, model_for_prompt)
-    }
-
-    /// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
+/// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
     fn resolve_initial_system_prompt(
         &self,
         user_message: &str,
