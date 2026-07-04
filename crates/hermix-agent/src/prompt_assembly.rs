@@ -254,10 +254,14 @@ pub fn messages_for_api_call(config: &AgentConfig, ctx: &ContextManager) -> Vec<
     messages
 }
 
-/// Anthropic-specific: mark the system message as `Persistent` cache and
-/// the last 4 user/assistant messages as `Ephemeral` cache. Other
-/// providers do not consume these markers, so the function is a no-op
-/// when `config.provider` is not Anthropic/Claude.
+/// Anthropic-specific: mark the system message and the last 4 user/assistant
+/// messages as `Ephemeral` cache. The system message gets the marker so the
+/// provider-side prompt cache (Anthropic's `cache_control: {type: "ephemeral"}`)
+/// can reuse the stable prefix across turns — the largest, most invariant
+/// block (soul + directions + tools) lives in `build_stable_layer`, which is
+/// rendered into the system message. Other providers do not consume these
+/// markers, so the function is a no-op when `config.provider` is not
+/// Anthropic/Claude.
 pub fn apply_prompt_cache_markers(config: &AgentConfig, messages: &mut [Message]) {
     use hermix_core::types::{CacheControl, CacheType, MessageRole};
     if messages.is_empty() {
@@ -275,7 +279,7 @@ pub fn apply_prompt_cache_markers(config: &AgentConfig, messages: &mut [Message]
     for msg in messages.iter_mut() {
         if msg.role == MessageRole::System {
             msg.cache_control = Some(CacheControl {
-                cache_type: CacheType::Persistent,
+                cache_type: CacheType::Ephemeral,
             });
             break;
         }

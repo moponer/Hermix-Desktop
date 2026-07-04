@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use hermix_core::{
-    AgentError, FunctionCall, FunctionCallDelta, LlmProvider, LlmResponse, Message, MessageRole,
-    StreamChunk, StreamDelta, ToolCall, ToolCallDelta, ToolSchema, UsageStats,
+    AgentError, CacheControl, FunctionCall, FunctionCallDelta, LlmProvider, LlmResponse, Message,
+    MessageRole, StreamChunk, StreamDelta, ToolCall, ToolCallDelta, ToolSchema, UsageStats,
 };
 
 use crate::credential_pool::CredentialPool;
@@ -957,8 +957,15 @@ impl AnthropicProvider {
     }
 
     /// Convert internal messages to Anthropic format, extracting system message.
-    fn convert_messages(messages: &[Message]) -> (Option<String>, Vec<Value>) {
+    ///
+    /// The returned `(system_value, anthropic_messages)` tuple's `system_value`
+    /// is a `serde_json::Value` rather than `String` — when the aggregated
+    /// system content carries `cache_control`, we emit it as an array of text
+    /// blocks (Anthropic API requirement) with the marker on the first block;
+    /// otherwise we fall back to the legacy plain string.
+    fn convert_messages(messages: &[Message]) -> (Option<Value>, Vec<Value>) {
         let mut system_text: Option<String> = None;
+        let mut system_cache_control: Option<CacheControl> = None;
         let mut anthropic_messages: Vec<Value> = Vec::new();
 
         for msg in messages {
@@ -970,6 +977,13 @@ impl AnthropicProvider {
                         Some(existing) => format!("{existing}\n\n{content}"),
                         None => content.to_string(),
                     });
+                    // Capture cache_control from the first system message that
+                    // sets one — multiple system messages get concatenated but
+                    // only the marker on the first chunk matters for the
+                    // provider's prefix-cache break point.
+                    if system_cache_control.is_none() {
+                        system_cache_control = msg.cache_control.clone();
+                    }
                 }
                 MessageRole::User => {
                     let mut content_blocks = Vec::new();
@@ -1027,7 +1041,18 @@ impl AnthropicProvider {
             }
         }
 
-        (system_text, anthropic_messages)
+        let system_value = system_text.map(|text| match system_cache_control {
+            Some(cc) => {
+                let mut block = serde_json::json!({"type": "text", "text": text});
+                block["cache_control"] = serde_json::json!({
+                    "type": format!("{:?}", cc.cache_type).to_lowercase()
+                });
+                Value::Array(vec![block])
+            }
+            None => Value::String(text),
+        });
+
+        (system_value, anthropic_messages)
     }
 
     /// Convert tool schemas to Anthropic tool format.
@@ -1159,8 +1184,8 @@ impl LlmProvider for AnthropicProvider {
             "max_tokens": max_tokens.unwrap_or(4096),
         });
 
-        if let Some(ref sys) = system_text {
-            body["system"] = serde_json::json!(sys);
+        if let Some(sys) = system_text {
+            body["system"] = sys;
         }
         if let Some(temp) = temperature {
             body["temperature"] = serde_json::json!(temp);
@@ -1231,8 +1256,8 @@ impl LlmProvider for AnthropicProvider {
                 "stream": true,
             });
 
-            if let Some(ref sys) = system_text {
-                body["system"] = serde_json::json!(sys);
+            if let Some(sys) = system_text {
+                body["system"] = sys;
             }
             if let Some(temp) = temperature {
                 body["temperature"] = serde_json::json!(temp);
@@ -2040,10 +2065,34 @@ mod tests {
             Message::assistant("Hi there!"),
         ];
         let (system, msgs) = AnthropicProvider::convert_messages(&messages);
-        assert_eq!(system.as_deref(), Some("You are helpful"));
+        assert_eq!(system.as_ref().and_then(|v| v.as_str()), Some("You are helpful"));
         assert_eq!(msgs.len(), 2); // user + assistant, system extracted
         assert_eq!(msgs[0]["role"], "user");
         assert_eq!(msgs[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn test_anthropic_convert_messages_emits_cache_control_on_system_block() {
+        use hermix_core::types::{CacheControl, CacheType};
+        let mut sys = Message::system("Stable soul + directions");
+        sys.cache_control = Some(CacheControl {
+            cache_type: CacheType::Ephemeral,
+        });
+        let messages = vec![sys, Message::user("Hello")];
+        let (system, msgs) = AnthropicProvider::convert_messages(&messages);
+        // System should now be an array (not a string) so Anthropic accepts
+        // the cache_control breakpoint on the prefix.
+        let blocks = system
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .expect("system should be an array when cache_control is set");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "Stable soul + directions");
+        assert_eq!(blocks[0]["cache_control"]["type"], "ephemeral");
+        // User message follows normally.
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["role"], "user");
     }
 
     #[test]
@@ -2071,7 +2120,7 @@ mod tests {
             Message::tool_result("tc_1", "file contents here", Some("read_file")),
         ];
         let (system, msgs) = AnthropicProvider::convert_messages(&messages);
-        assert_eq!(system.as_deref(), Some("System"));
+        assert_eq!(system.as_ref().and_then(|v| v.as_str()), Some("System"));
         assert_eq!(msgs.len(), 3); // user, assistant with tool_use, user with tool_result
                                    // Assistant message should have tool_use block
         let assistant_content = msgs[1]["content"].as_array().unwrap();
