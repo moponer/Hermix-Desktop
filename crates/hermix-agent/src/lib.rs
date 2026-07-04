@@ -39,6 +39,7 @@ pub mod fallback;
 pub mod focus_stack_ops;
 pub mod gatherer;
 pub mod hardline;
+pub mod hook_dispatch;
 pub mod interrupt;
 pub mod local_agent_service;
 pub mod memory_layer_adapter;

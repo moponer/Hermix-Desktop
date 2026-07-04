@@ -526,7 +526,6 @@ impl AgentLoop {
     fn should_emit_session_reset_hook(messages: &[Message]) -> bool {
         crate::session_lifecycle::should_emit_session_reset_hook(messages)
     }
-
     #[allow(clippy::too_many_arguments)]
     fn finalize_agent_result(
         &self,
@@ -541,89 +540,25 @@ impl AgentLoop {
         interrupted: bool,
         finish_reason: Option<String>,
     ) -> AgentResult {
-        let messages = ctx.get_messages();
-        let end_ctx = serde_json::json!({
-            "session_id": self.config.session_id,
-            "turns": total_turns,
-            "finished_naturally": finished_naturally,
-            "interrupted": interrupted,
-            "session_started_hooks_fired": session_started_hooks_fired,
-        });
-        let _ = self.invoke_hook(HookType::OnSessionEnd, &end_ctx);
-        if Self::should_emit_session_reset_hook(messages) {
-            let reset_ctx = serde_json::json!({
-                "session_id": self.config.session_id,
-                "turns": total_turns,
-                "source": "user_command",
-            });
-            let _ = self.invoke_hook(HookType::OnSessionReset, &reset_ctx);
-        }
-        self.memory_on_session_end(messages);
-        let finalize_ctx = serde_json::json!({
-            "session_id": self.config.session_id,
-            "turns": total_turns,
-            "tool_errors": tool_errors.len(),
-            "session_cost_usd": session_cost_usd,
-        });
-        let _ = self.invoke_hook(HookType::OnSessionFinalize, &finalize_ctx);
-
-        // P1-3 (2026-06-27): persist the final accumulated token usage
-        // to `token_usage` so `/insights` can chart real numbers. We
-        // do this *after* the session-end hooks fire (so a hook can
-        // still mutate usage if needed) and *before* we build the
-        // `AgentResult` (so callers see the same numbers in
-        // `result.usage` that we just wrote to disk).
-        //
-        // Best-effort: a failed insert never breaks the response. The
-        // `/insights` panel just shows "no usage data" instead of an
-        // HTTP error. This matches the existing pattern in
-        // `save_session_atomic` where the DB write failure is logged
-        // but the function still returns Ok.
-        if let (Some(ref sid), Some(usage)) =
-            (self.config.session_id.as_ref(), accumulated_usage.as_ref())
-        {
-            if !sid.trim().is_empty()
-                && (usage.prompt_tokens > 0 || usage.completion_tokens > 0)
-            {
-                let home_buf = self
-                    .config
-                    .hermix_home
-                    .as_ref()
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(hermix_config::paths::hermix_home);
-                let sp = crate::session_persistence::SessionPersistence::new(&home_buf);
-                if let Err(e) = sp.persist_token_usage(sid, &self.config.model, usage) {
-                    tracing::warn!(
-                        session_id = %sid,
-                        error = %e,
-                        "P1-3: failed to persist token_usage (non-fatal); /insights will show stale data"
-                    );
-                }
-            }
-        }
-
-        AgentResult {
-            messages: self.messages_for_persisted_result(ctx, persist_user_idx),
-            finished_naturally,
+        crate::session_lifecycle::finalize_agent_result(
+            &self.config,
+            &self.focus_stack,
+            self.memory_router.as_ref(),
+            self.plugin_manager.as_ref(),
+            &self.latest_compressed_summary,
+            &self.latest_compression_archived_turns,
+            &self.latest_compression_metrics,
+            ctx,
             total_turns,
-            tool_errors: tool_errors.to_vec(),
-            usage: accumulated_usage,
-            interrupted,
-            session_cost_usd: Some(session_cost_usd),
+            tool_errors,
+            accumulated_usage,
+            session_cost_usd,
             session_started_hooks_fired,
+            persist_user_idx,
+            finished_naturally,
+            interrupted,
             finish_reason,
-            compressed_summary: self.latest_compressed_summary.lock().ok().and_then(|g| g.clone()),
-            compression_archived_turns: self
-                .latest_compression_archived_turns
-                .lock()
-                .ok()
-                .and_then(|g| g.clone()),
-            compression_metrics: self
-                .latest_compression_metrics
-                .lock()
-                .ok()
-                .and_then(|g| g.as_ref().map(|m| m.to_snapshot())),
-        }
+        )
     }
 
     /// Phase 1.3a (2026-07-03): the post-LLM logic that was duplicated
@@ -1336,20 +1271,11 @@ impl AgentLoop {
     // -- Plugin hook helpers ------------------------------------------------
 
     fn invoke_hook(&self, hook: HookType, ctx_val: &Value) -> Vec<HookResult> {
-        if let Some(ref pm) = self.plugin_manager {
-            if let Ok(pm) = pm.lock() {
-                return pm.invoke_hook(hook, ctx_val);
-            }
-        }
-        Vec::new()
+        crate::hook_dispatch::invoke_hook(self.plugin_manager.as_ref(), hook, ctx_val)
     }
 
     fn inject_hook_context(&self, results: &[HookResult], ctx: &mut ContextManager) {
-        for r in results {
-            if let HookResult::InjectContext(text) = r {
-                ctx.add_message(Message::system(text));
-            }
-        }
+        crate::hook_dispatch::inject_hook_context(results, ctx)
     }
 
     // -- Memory helpers ----------------------------------------------------

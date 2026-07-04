@@ -20,12 +20,18 @@
 //!   `PostResponseFallback` match centralisation.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use hermix_core::{LlmResponse, Message, MessageRole, StreamChunk, ToolCall};
+use hermix_core::{
+    AgentError, AgentResult, LlmResponse, Message, MessageRole, StreamChunk, ToolCall, UsageStats,
+};
+use hermix_focus::{FocusStack, MemoryRouter, SessionFrame};
 
 use crate::agent_config::AgentConfig;
+use crate::compression::CompressionMetrics;
 use crate::context::ContextManager;
 use crate::message_cache::MessageCache;
+use crate::plugins::PluginManager;
 use crate::python_alignment::strip_think_blocks_for_ack;
 
 /// Populate [`AgentConfig::stored_system_prompt`] from SQLite
@@ -212,5 +218,126 @@ pub fn apply_fallback_outcome(
             false
         }
         PostResponseFallback::Finalize => false,
+    }
+}
+
+/// Phase 2.x (2026-07-04): consolidate the session-end side effects
+/// that fire at the end of every `run()` / `run_stream()` invocation:
+///
+/// 1. Build the session-end `Value` and fire `OnSessionEnd`.
+/// 2. Optionally fire `OnSessionReset` when the last user message was
+///    a `/reset` or `/new` command.
+/// 3. Route `memory_on_session_end` (persist session-level
+///    `FocusConclusion`, drain pending conclusions, call
+///    `MemoryRouter::on_session_end`).
+/// 4. Fire `OnSessionFinalize` (final turn count + cost snapshot).
+/// 5. P1-3: persist accumulated token usage so `/insights` can chart
+///    real numbers. Best-effort; failure logged but non-fatal.
+///
+/// All hooks are fire-and-forget (`let _ =`); failures never break
+/// the response. The same `finalize_agent_result` is also called by
+/// `graceful_interrupt_result` for non-natural exits.
+#[allow(clippy::too_many_arguments)]
+pub fn finalize_agent_result(
+    config: &AgentConfig,
+    focus_stack: &Mutex<FocusStack<SessionFrame>>,
+    memory_router: Option<&Arc<MemoryRouter>>,
+    plugin_manager: Option<&Arc<Mutex<PluginManager>>>,
+    latest_compressed_summary: &Mutex<Option<String>>,
+    latest_compression_archived_turns: &Mutex<Option<Vec<Message>>>,
+    latest_compression_metrics: &Mutex<Option<CompressionMetrics>>,
+    ctx: &ContextManager,
+    total_turns: u32,
+    tool_errors: &[hermix_core::ToolErrorRecord],
+    accumulated_usage: Option<UsageStats>,
+    session_cost_usd: f64,
+    session_started_hooks_fired: bool,
+    persist_user_idx: Option<usize>,
+    finished_naturally: bool,
+    interrupted: bool,
+    finish_reason: Option<String>,
+) -> AgentResult {
+    let messages = ctx.get_messages();
+    let _ = crate::hook_dispatch::invoke_hook(
+        plugin_manager,
+        crate::plugins::HookType::OnSessionEnd,
+        &serde_json::json!({
+            "session_id": config.session_id,
+            "turns": total_turns,
+            "finished_naturally": finished_naturally,
+            "interrupted": interrupted,
+            "session_started_hooks_fired": session_started_hooks_fired,
+        }),
+    );
+    if should_emit_session_reset_hook(messages) {
+        let _ = crate::hook_dispatch::invoke_hook(
+            plugin_manager,
+            crate::plugins::HookType::OnSessionReset,
+            &serde_json::json!({
+                "session_id": config.session_id,
+                "turns": total_turns,
+                "source": "user_command",
+            }),
+        );
+    }
+    crate::memory_prefetch::memory_on_session_end(config, memory_router, focus_stack, messages);
+    let _ = crate::hook_dispatch::invoke_hook(
+        plugin_manager,
+        crate::plugins::HookType::OnSessionFinalize,
+        &serde_json::json!({
+            "session_id": config.session_id,
+            "turns": total_turns,
+            "tool_errors": tool_errors.len(),
+            "session_cost_usd": session_cost_usd,
+        }),
+    );
+
+    // P1-3 (2026-06-27): persist the final accumulated token usage
+    // to `token_usage` so `/insights` can chart real numbers. We do
+    // this *after* the session-end hooks fire (so a hook can still
+    // mutate usage if needed) and *before* we build the `AgentResult`
+    // (so callers see the same numbers in `result.usage` that we
+    // just wrote to disk). Best-effort: a failed insert never
+    // breaks the response.
+    if let (Some(sid), Some(usage)) = (config.session_id.as_ref(), accumulated_usage.as_ref()) {
+        if !sid.trim().is_empty() && (usage.prompt_tokens > 0 || usage.completion_tokens > 0) {
+            let home_buf = config
+                .hermix_home
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(hermix_config::paths::hermix_home);
+            let sp = crate::session_persistence::SessionPersistence::new(&home_buf);
+            if let Err(e) = sp.persist_token_usage(sid, &config.model, usage) {
+                tracing::warn!(
+                    session_id = %sid,
+                    error = %e,
+                    "P1-3: failed to persist token_usage (non-fatal); /insights will show stale data"
+                );
+            }
+        }
+    }
+
+    AgentResult {
+        messages: messages_for_persisted_result(config, ctx, persist_user_idx),
+        finished_naturally,
+        total_turns,
+        tool_errors: tool_errors.to_vec(),
+        usage: accumulated_usage,
+        interrupted,
+        session_cost_usd: Some(session_cost_usd),
+        session_started_hooks_fired,
+        finish_reason,
+        compressed_summary: latest_compressed_summary
+            .lock()
+            .ok()
+            .and_then(|g| g.clone()),
+        compression_archived_turns: latest_compression_archived_turns
+            .lock()
+            .ok()
+            .and_then(|g| g.clone()),
+        compression_metrics: latest_compression_metrics
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|m| m.to_snapshot())),
     }
 }
