@@ -586,55 +586,10 @@ struct PreparedRun {
 /// `context_pressure_last_warn_at`, `context_pressure_last_warn_percent`)
 /// scattered across `LoopState`. The shared [`should_emit_warning`]
 /// method now owns the cooldown + tier-upgrade + percent-step rules.
-#[derive(Debug, Clone, Default)]
-struct ContextPressureMonitor {
-    /// Tier at which we last warned (0.0 = never). Different tiers
-    /// represent different pressure thresholds crossed (e.g. 0.5, 0.7, 0.85).
-    warned_tier: f64,
-    /// Wall-clock instant of the last warning (None = never).
-    last_warn_at: Option<Instant>,
-    /// Last progress percentage at which we emitted a warning.
-    last_warn_percent: f64,
-}
-
-impl ContextPressureMonitor {
-    /// Returns true if we should emit a context-pressure warning for the
-    /// current `progress_ratio` (0.0..=1.0) at the given `tier`.
-    ///
-    /// Rules (unchanged from the pre-extraction free function):
-    /// - `tier <= 0.0` is a no-op (caller suppressed this tier).
-    /// - Emit when the tier increased OR (cooldown elapsed AND
-    ///   progress advanced by ≥ `WARN_PERCENT_STEP` since last warn).
-    /// - On emit: store `tier` (only when it changed), `now`,
-    ///   and `progress_percent`.
-    fn should_emit_warning(&mut self, progress_ratio: f64, tier: f64) -> bool {
-        if tier <= 0.0 {
-            return false;
-        }
-        let progress_percent = progress_ratio * 100.0;
-        let now = Instant::now();
-        const WARN_COOLDOWN_SECS: u64 = 20;
-        const WARN_PERCENT_STEP: f64 = 5.0;
-
-        let tier_upgraded = tier > self.warned_tier;
-        let cooldown_elapsed = self
-            .last_warn_at
-            .map(|t| now.duration_since(t) >= Duration::from_secs(WARN_COOLDOWN_SECS))
-            .unwrap_or(true);
-        let percent_advanced =
-            (progress_percent - self.last_warn_percent) >= WARN_PERCENT_STEP;
-
-        if tier_upgraded || (cooldown_elapsed && percent_advanced) {
-            if tier_upgraded {
-                self.warned_tier = tier;
-            }
-            self.last_warn_at = Some(now);
-            self.last_warn_percent = progress_percent;
-            return true;
-        }
-        false
-    }
-}
+///
+/// Physically split to `context_pressure.rs` (2026-07-04); re-exported
+/// here so existing `state.context_pressure.*` call paths compile unchanged.
+pub use crate::context_pressure::ContextPressureMonitor;
 
 /// Phase 5 (2026-07-03): cost-guard bookkeeping consolidated into one
 /// struct. The four sibling fields (`accumulated_usage`,
