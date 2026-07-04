@@ -42,6 +42,7 @@ pub mod interrupt;
 pub mod local_agent_service;
 pub mod memory_layer_adapter;
 pub mod memory_plugins;
+pub mod memory_hooks;
 pub mod message_cache;
 pub mod message_helpers;
 pub mod oauth_refresh;

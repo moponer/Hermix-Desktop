@@ -1896,40 +1896,7 @@ impl AgentLoop {
     }
 
     fn memory_write_event_from_tool_call(tc: &ToolCall) -> Option<(String, String, String)> {
-        if tc.function.name != "memory" {
-            return None;
-        }
-        let args: Value = serde_json::from_str(&tc.function.arguments).ok()?;
-        let action = args
-            .get("action")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .unwrap_or("")
-            .to_lowercase();
-        if action != "add" && action != "replace" && action != "remove" {
-            return None;
-        }
-        let target = args
-            .get("target")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("memory")
-            .to_string();
-        let content = if action == "remove" {
-            args.get("old_text")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .unwrap_or("")
-                .to_string()
-        } else {
-            args.get("content")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .unwrap_or("")
-                .to_string()
-        };
-        Some((action, target, content))
+        crate::memory_hooks::memory_write_event_from_tool_call(tc)
     }
 
     fn notify_memory_writes(&self, tool_calls: &[ToolCall], results: &[ToolResult]) {
@@ -1962,29 +1929,7 @@ impl AgentLoop {
         tc: &ToolCall,
         result: &ToolResult,
     ) -> Option<(String, String)> {
-        if tc.function.name != "delegate_task" || result.is_error {
-            return None;
-        }
-        let args: Value = serde_json::from_str(&tc.function.arguments).ok()?;
-        let task = args
-            .get("task")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())?
-            .to_string();
-
-        let sub_agent_id = serde_json::from_str::<Value>(&result.content)
-            .ok()
-            .and_then(|v| {
-                v.get("sub_agent_id")
-                    .and_then(|id| id.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(ToString::to_string)
-            })
-            .unwrap_or_default();
-
-        Some((task, sub_agent_id))
+        crate::memory_hooks::delegation_event_from_tool_result(tc, result)
     }
 
     fn notify_delegations(&self, tool_calls: &[ToolCall], results: &[ToolResult]) {
@@ -2092,37 +2037,7 @@ impl AgentLoop {
     /// (e.g. an aborted / empty session) — in that case writing a
     /// meaningless empty row would only pollute recall.
     fn build_session_summary(messages: &[Message]) -> Option<String> {
-        let last_user = messages
-            .iter()
-            .rev()
-            .find(|m| m.role == MessageRole::User)?;
-        let user_text = last_user.content.as_deref().unwrap_or("").trim();
-        if user_text.is_empty() {
-            return None;
-        }
-        let user_truncated = if user_text.chars().count() > 200 {
-            format!("{}…", hermix_core::text_utils::truncate_chars(user_text, 200))
-        } else {
-            user_text.to_string()
-        };
-        let last_assistant = messages
-            .iter()
-            .rev()
-            .find(|m| m.role == MessageRole::Assistant)
-            .and_then(|m| m.content.as_deref())
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-        match last_assistant {
-            Some(a) => {
-                let a_truncated = if a.chars().count() > 400 {
-                    format!("{}…", hermix_core::text_utils::truncate_chars(a, 400))
-                } else {
-                    a.to_string()
-                };
-                Some(format!("USER: {user_truncated}\nASSISTANT: {a_truncated}"))
-            }
-            None => Some(format!("USER: {user_truncated}")),
-        }
+        crate::memory_hooks::build_session_summary(messages)
     }
 
     fn memory_on_session_end(&self, messages: &[Message]) {
