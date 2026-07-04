@@ -917,19 +917,7 @@ impl AgentLoop {
     /// pipeline is best-effort. A failure in the callback is logged
     /// and swallowed (the agent keeps running).
     pub fn emit_acui(&self, directive: AcuiDirective) {
-        let Some(ref cb) = self.callbacks.on_acui_directive else {
-            return;
-        };
-        match serde_json::to_string(&directive) {
-            Ok(payload) => cb(&payload),
-            Err(e) => {
-                tracing::warn!(
-                    target: "hermix.agent",
-                    error = %e,
-                    "failed to serialize AcuiDirective, dropping emit"
-                );
-            }
-        }
+        crate::acui_dispatch::emit_acui(&self.callbacks, directive)
     }
 
     /// Convenience: emit a `Show` directive.
@@ -939,57 +927,24 @@ impl AgentLoop {
         kind: impl Into<String>,
         props: serde_json::Value,
     ) {
-        self.emit_acui(AcuiDirective::Show(hermix_core::AcuiShow::new(
-            id, kind, props,
-        )));
+        crate::acui_dispatch::emit_acui_show(&self.callbacks, id, kind, props)
     }
 
     /// Convenience: emit an `Update` directive.
     pub fn emit_acui_update(&self, id: impl Into<String>, patch: serde_json::Value) {
-        self.emit_acui(AcuiDirective::Update(hermix_core::AcuiUpdate::new(
-            id, patch,
-        )));
+        crate::acui_dispatch::emit_acui_update(&self.callbacks, id, patch)
     }
 
     /// Convenience: emit a `Hide` directive.
     pub fn emit_acui_hide(&self, id: impl Into<String>) {
-        self.emit_acui(AcuiDirective::Hide(hermix_core::AcuiHide::new(id)));
+        crate::acui_dispatch::emit_acui_hide(&self.callbacks, id)
     }
 
     /// Build a default router (KeywordRouter + AlwaysInclude).
     /// Convenience for callers who want the Phase 7 H1 default without
     /// hand-rolling the wiring.
     pub fn default_tool_router() -> Arc<dyn ToolSchemaRouter> {
-        let kw = Arc::new(KeywordRouter::new());
-        Arc::new(AlwaysInclude::new(
-            kw,
-            vec![
-                "read_file".to_string(),
-                "write_file".to_string(),
-                "terminal".to_string(),
-                "memory".to_string(),
-                // read_pdf and list_files must be always-forwarded so the
-                // LLM does not fall back to "guess the path via terminal"
-                // when the user supplies an explicit file path (e.g.
-                // "根据 G:\…\112号…通知.pdf 起草通知").  Previously the
-                // KeywordRouter scored read_pdf ≈ 0 on CJK-heavy queries,
-                // causing the agent to waste turns on terminal cd/ls
-                // instead of calling the tool directly.
-                "read_pdf".to_string(),
-                "list_files".to_string(),
-                // Browser and computer-use tools must be always-forwarded
-                // so the LLM can access them when the user explicitly
-                // requests web browsing, page interaction, or GUI
-                // automation. Without this, KeywordRouter scores them ≈ 0
-                // on CJK-heavy queries and the LLM never sees them.
-                "browser_navigate".to_string(),
-                "browser_snapshot".to_string(),
-                "browser_click".to_string(),
-                "browser_type".to_string(),
-                "browser_scroll".to_string(),
-                "computer_use".to_string(),
-            ],
-        ))
+        crate::acui_dispatch::default_tool_router()
     }
 
     /// Resolve the tool schemas to send to the LLM this turn.

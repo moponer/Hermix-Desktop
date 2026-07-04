@@ -15,6 +15,7 @@
 //! context management into a fully autonomous loop that runs until the
 //! model finishes naturally or the turn budget is exhausted.
 
+pub mod acui_dispatch;
 pub mod agent_builder;
 pub mod agent_config;
 pub mod agent_helpers;
