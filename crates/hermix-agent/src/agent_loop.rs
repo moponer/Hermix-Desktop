@@ -1152,40 +1152,21 @@ impl AgentLoop {
     }
 
     fn drain_pending_steer(&self) -> Option<String> {
-        if let Ok(mut guard) = self.pending_steer.lock() {
-            return guard.take();
-        }
-        None
+        crate::steer::drain_pending_steer(&self.pending_steer)
     }
 
     fn restash_pending_steer(&self, text: String) {
-        if let Ok(mut guard) = self.pending_steer.lock() {
-            *guard = Some(text);
-        }
+        crate::steer::restash_pending_steer(&self.pending_steer, text)
     }
 
     /// Pre-LLM-call drain: inject steer into the last tool result if possible; otherwise restash.
     fn pre_api_apply_pending_steer(&self, ctx: &mut ContextManager) {
-        let Some(text) = self.drain_pending_steer() else {
-            return;
-        };
-        let msgs = ctx.get_messages_mut();
-        if apply_pending_steer_to_last_tool_message(msgs, &text) {
-            return;
-        }
-        self.restash_pending_steer(text);
+        crate::steer::pre_api_apply_pending_steer(&self.pending_steer, ctx)
     }
 
     /// Post-tool-call apply: inject steer into the last tool result if pending.
     fn post_tool_apply_pending_steer(&self, ctx: &mut ContextManager) {
-        let Some(text) = self.drain_pending_steer() else {
-            return;
-        };
-        let msgs = ctx.get_messages_mut();
-        if apply_pending_steer_to_last_tool_message(msgs, &text) {
-            return;
-        }
-        self.restash_pending_steer(text);
+        crate::steer::post_tool_apply_pending_steer(&self.pending_steer, ctx)
     }
 
     // -- Plugin hook helpers ------------------------------------------------

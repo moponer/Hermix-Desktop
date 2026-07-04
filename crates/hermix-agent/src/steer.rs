@@ -4,7 +4,11 @@
 //! **last tool result** in the conversation tail, prefixed with a provenance
 //! marker (`User guidance:`) so models don't confuse it with tool output.
 
+use std::sync::Mutex;
+
 use hermix_core::{Message, MessageRole};
+
+use crate::context::ContextManager;
 
 const USER_GUIDANCE_MARKER: &str = "User guidance:";
 
@@ -43,6 +47,61 @@ pub fn apply_pending_steer_to_last_tool_message(messages: &mut [Message], guidan
     let base = msg.content.clone().unwrap_or_default();
     msg.content = Some(append_user_guidance_to_text(&base, guidance));
     true
+}
+
+/// Drain the pending-steer buffer and return its current contents,
+/// if any. Returns `None` when the buffer is empty or the lock is
+/// poisoned.
+pub fn drain_pending_steer(pending_steer: &Mutex<Option<String>>) -> Option<String> {
+    pending_steer
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
+}
+
+/// Restash a previously-drained steer text back into the buffer.
+/// Used when the call site didn't find a `Tool` message to inject
+/// into (the steer would otherwise be silently dropped).
+pub fn restash_pending_steer(pending_steer: &Mutex<Option<String>>, text: String) {
+    if let Ok(mut guard) = pending_steer.lock() {
+        *guard = Some(text);
+    }
+}
+
+/// Pre-LLM-call drain: inject the pending steer text into the last
+/// tool result if one exists, otherwise restash so the post-tool-call
+/// path can try again on the next turn.
+pub fn pre_api_apply_pending_steer(
+    pending_steer: &Mutex<Option<String>>,
+    ctx: &mut ContextManager,
+) {
+    let Some(text) = drain_pending_steer(pending_steer) else {
+        return;
+    };
+    let msgs = ctx.get_messages_mut();
+    if apply_pending_steer_to_last_tool_message(msgs, &text) {
+        return;
+    }
+    restash_pending_steer(pending_steer, text);
+}
+
+/// Post-tool-call apply: same as `pre_api_apply_pending_steer` but
+/// called after tool dispatch — the typical case is that the previous
+/// `pre_api_apply_pending_steer` found no `Tool` message (because the
+/// loop was mid-tool-call when steer arrived) and restashed; this
+/// call lands the steer now that tool results are in the context.
+pub fn post_tool_apply_pending_steer(
+    pending_steer: &Mutex<Option<String>>,
+    ctx: &mut ContextManager,
+) {
+    let Some(text) = drain_pending_steer(pending_steer) else {
+        return;
+    };
+    let msgs = ctx.get_messages_mut();
+    if apply_pending_steer_to_last_tool_message(msgs, &text) {
+        return;
+    }
+    restash_pending_steer(pending_steer, text);
 }
 
 #[cfg(test)]
