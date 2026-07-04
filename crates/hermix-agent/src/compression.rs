@@ -549,6 +549,49 @@ impl Default for CompressorConfig {
     }
 }
 
+impl CompressorConfig {
+    /// Validate that the LLM-powered summariser has a chance of
+    /// succeeding at runtime.
+    ///
+    /// Returns `Ok(())` when **either**:
+    /// - `summary_model_override` is set to a non-empty model name
+    ///   (the compressor will use it directly, no chain needed), or
+    /// - the auxiliary client has at least one registered provider
+    ///   (`chain_len() > 0`).
+    ///
+    /// Returns `Err(msg)` when neither is true. In that case the
+    /// caller should fall back to the simple character-based
+    /// compressor and emit a clear warn-level message — otherwise
+    /// every compression attempt will silently fail at runtime (the
+    /// LLM call in `summarize_messages_with_llm` returns an error,
+    /// `compress()` propagates it, and `auto_compress_if_over_threshold`
+    /// only logs `summary_errors = N` without aborting the loop).
+    ///
+    /// Added 2026-07-04 so wiring a compressor without an LLM source
+    /// is detected once at startup instead of once per compression
+    /// attempt.
+    pub fn validate(&self, auxiliary: &AuxiliaryClient) -> Result<(), String> {
+        if self
+            .summary_model_override
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        if auxiliary.chain_len() == 0 {
+            return Err(format!(
+                "CompressorConfig.validate: no `summary_model_override` set and \
+                 auxiliary client has 0 registered providers — LLM summarisation \
+                 will fail at every compression attempt. Set \
+                 `summary_model_override` on CompressorConfig or wire an \
+                 auxiliary API key (HERMIX_AUX_*)."
+            ));
+        }
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ContextCompressor
 // ---------------------------------------------------------------------------
@@ -782,6 +825,20 @@ impl ContextCompressor {
     /// Total in-window threshold (tokens). Compression triggers above this.
     pub fn threshold_tokens(&self) -> u64 {
         self.threshold_tokens
+    }
+
+    /// Borrow the active `CompressorConfig` (used by callers that want
+    /// to call [`CompressorConfig::validate`] before deciding whether
+    /// to install this compressor).
+    pub fn config(&self) -> &CompressorConfig {
+        &self.config
+    }
+
+    /// Borrow the auxiliary LLM client (used by callers that want to
+    /// call [`CompressorConfig::validate`] before deciding whether to
+    /// install this compressor).
+    pub fn auxiliary(&self) -> &AuxiliaryClient {
+        &self.auxiliary
     }
 
     /// How many compactions this instance has performed.
@@ -2109,11 +2166,61 @@ mod tests {
         )
     }
 
+    fn aux_empty() -> Arc<AuxiliaryClient> {
+        Arc::new(AuxiliaryClient::builder().build())
+    }
+
     fn quiet_config() -> CompressorConfig {
         CompressorConfig {
             quiet_mode: true,
             ..CompressorConfig::default()
         }
+    }
+
+    // ---------- CompressorConfig::validate ----------
+    //
+    // 2026-07-04: validate() lets the wiring site detect "no LLM
+    // available" once at startup instead of every compression
+    // attempt silently failing at runtime.
+
+    #[test]
+    fn validate_ok_when_summary_model_override_is_set() {
+        let cfg = CompressorConfig {
+            summary_model_override: Some("anthropic/claude-haiku-4".into()),
+            ..quiet_config()
+        };
+        let aux = aux_empty(); // chain_len == 0, but override short-circuits
+        assert!(cfg.validate(&aux).is_ok());
+    }
+
+    #[test]
+    fn validate_ok_when_aux_has_providers_and_no_override() {
+        let aux = aux_with_provider(CannedSummaryProvider::new("ok"));
+        let cfg = quiet_config();
+        assert!(cfg.validate(&aux).is_ok());
+    }
+
+    #[test]
+    fn validate_err_when_no_override_and_aux_chain_is_empty() {
+        let cfg = quiet_config();
+        let aux = aux_empty();
+        let err = cfg.validate(&aux).expect_err("expected validation to fail");
+        assert!(
+            err.contains("summary_model_override") && err.contains("0 registered"),
+            "error message should mention both fields; got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_treats_blank_override_as_unset() {
+        // Override set but empty / whitespace → not a usable override,
+        // falls through to the chain_len check.
+        let cfg = CompressorConfig {
+            summary_model_override: Some("   ".into()),
+            ..quiet_config()
+        };
+        let aux = aux_empty();
+        assert!(cfg.validate(&aux).is_err());
     }
 
     // ---------- prefix normalisation ----------

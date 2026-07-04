@@ -9,6 +9,12 @@
 //! fields and makes `process_post_response`'s `publish_from` shrink
 //! another 4 args.
 //!
+//! Phase 5b (2026-07-04): the `forced_runtime_route` field was moved
+//! out — it is a routing decision, not a spend-tracking value. It now
+//! lives in [`crate::cost_routing::RouteState`], a sibling manager in
+//! `LoopState`. `evaluate_thresholds` reads `RouteState` via `&RouteState`
+//! and `install_downgrade` became a method on `RouteState`.
+//!
 //! Physically split out of `agent_loop.rs` (2026-07-04) so the file
 //! that owns the type also owns the type — no API change to callers
 //! (`state.cost_guard.*` call paths work unchanged).
@@ -17,18 +23,16 @@
 //! read `state.cost_guard.accumulated_usage` etc. at publish time)
 //! keep compiling without accessor-method churn.
 
-use std::sync::Arc;
-
 use hermix_core::UsageStats;
 
 use crate::agent_config::AgentConfig;
-use crate::agent_loop::TurnRuntimeRoute;
-use crate::credential_pool::CredentialPool;
+use crate::cost_routing::RouteState;
 
-/// Cost-guard bookkeeping consolidated into one struct. The four
+/// Cost-guard bookkeeping consolidated into one struct. The three
 /// sibling fields (`accumulated_usage`, `session_cost_usd`,
-/// `cost_warned`, `forced_runtime_route`) mutate in place via
-/// `record_usage` / `evaluate_thresholds` / `install_downgrade`.
+/// `cost_warned`) mutate in place via `record_usage` /
+/// `evaluate_thresholds`. The forced-route state lives in
+/// [`RouteState`] — see the Phase 5b note in the module docs.
 #[derive(Debug)]
 pub struct CostGuard {
     /// Cumulative usage stats across turns.
@@ -37,8 +41,6 @@ pub struct CostGuard {
     pub(crate) session_cost_usd: f64,
     /// Whether we've already warned about exceeding the cost threshold.
     pub(crate) cost_warned: bool,
-    /// Forced cheap model route for remaining turns (set by smart router).
-    pub(crate) forced_runtime_route: Option<TurnRuntimeRoute>,
 }
 
 impl Default for CostGuard {
@@ -47,7 +49,6 @@ impl Default for CostGuard {
             accumulated_usage: None,
             session_cost_usd: 0.0,
             cost_warned: false,
-            forced_runtime_route: None,
         }
     }
 }
@@ -144,8 +145,15 @@ impl CostGuard {
     /// the returned `model` (the struct doesn't have access to
     /// `AgentLoop::turn_route_cost_guard` which depends on
     /// `self.primary_runtime_snapshot()`).
+    ///
+    /// Phase 5b (2026-07-04): takes `&RouteState` so it can skip the
+    /// warn path when the session has already been downgraded. The
+    /// downgrade state itself is owned by `RouteState`, not by this
+    /// struct — passing `&RouteState` keeps `CostGuard` focused on
+    /// spend accounting.
     pub fn evaluate_thresholds(
         &mut self,
+        route_state: &RouteState,
         max_cost_usd: Option<f64>,
         degrade_at_ratio: f64,
         resolve_degrade_model: impl FnOnce() -> Option<String>,
@@ -161,7 +169,7 @@ impl CostGuard {
         let mut warn = None;
         if !self.cost_warned && self.session_cost_usd >= limit * degrade_at_ratio {
             self.cost_warned = true;
-            if self.forced_runtime_route.is_none() {
+            if route_state.forced_runtime_route.is_none() {
                 if let Some(model) = resolve_degrade_model() {
                     warn = Some(WarnEffect {
                         kind: WarnKind::Downgrade { model },
@@ -186,15 +194,6 @@ impl CostGuard {
             None
         };
         CostGuardAction { warn, trip }
-    }
-
-    /// Mark the route as downgraded. Called by the caller after
-    /// building the `TurnRuntimeRoute` from the model name returned
-    /// by [`Self::evaluate_thresholds`]. `pub(crate)` because
-    /// `TurnRuntimeRoute` is `pub(crate)` and the method's argument
-    /// type visibility must not exceed that of the type itself.
-    pub(crate) fn install_downgrade(&mut self, route: TurnRuntimeRoute) {
-        self.forced_runtime_route = Some(route);
     }
 }
 
@@ -277,7 +276,8 @@ mod tests {
     #[test]
     fn evaluate_returns_no_action_when_limit_is_none() {
         let mut g = CostGuard::default();
-        let a = g.evaluate_thresholds(None, 0.8, || None);
+        let rs = RouteState::default();
+        let a = g.evaluate_thresholds(&rs, None, 0.8, || None);
         assert_eq!(a, CostGuardAction { warn: None, trip: None });
     }
 
@@ -285,7 +285,8 @@ mod tests {
     fn evaluate_warns_with_downgrade_when_model_resolver_succeeds() {
         let mut g = CostGuard::default();
         g.session_cost_usd = 9.0;
-        let a = g.evaluate_thresholds(Some(10.0), 0.8, || Some("gpt-4o-mini".into()));
+        let rs = RouteState::default();
+        let a = g.evaluate_thresholds(&rs, Some(10.0), 0.8, || Some("gpt-4o-mini".into()));
         // warn crossed, trip not crossed
         assert!(a.warn.is_some());
         assert!(a.trip.is_none());
@@ -294,7 +295,7 @@ mod tests {
             WarnKind::Downgrade { .. }
         ));
         // cost_warned flipped — second call won't re-warn
-        let a2 = g.evaluate_thresholds(Some(10.0), 0.8, || Some("gpt-4o-mini".into()));
+        let a2 = g.evaluate_thresholds(&rs, Some(10.0), 0.8, || Some("gpt-4o-mini".into()));
         assert_eq!(a2, CostGuardAction { warn: None, trip: None });
     }
 
@@ -302,7 +303,8 @@ mod tests {
     fn evaluate_warns_plainly_when_model_resolver_returns_none() {
         let mut g = CostGuard::default();
         g.session_cost_usd = 9.0;
-        let a = g.evaluate_thresholds(Some(10.0), 0.8, || None);
+        let rs = RouteState::default();
+        let a = g.evaluate_thresholds(&rs, Some(10.0), 0.8, || None);
         assert!(matches!(a.warn.as_ref().unwrap().kind, WarnKind::Warn));
     }
 
@@ -310,12 +312,13 @@ mod tests {
     fn evaluate_trips_only_when_session_passes_limit() {
         let mut g = CostGuard::default();
         g.session_cost_usd = 5.0;
+        let rs = RouteState::default();
         // under limit
-        let a = g.evaluate_thresholds(Some(10.0), 0.8, || None);
+        let a = g.evaluate_thresholds(&rs, Some(10.0), 0.8, || None);
         assert_eq!(a, CostGuardAction { warn: None, trip: None });
         // over limit, no downgrade model
         g.session_cost_usd = 12.0;
-        let a = g.evaluate_thresholds(Some(10.0), 0.8, || None);
+        let a = g.evaluate_thresholds(&rs, Some(10.0), 0.8, || None);
         // past warn ratio AND past limit in same call → warn + trip
         assert!(a.warn.is_some());
         assert!(a.trip.is_some());
@@ -327,35 +330,30 @@ mod tests {
     fn evaluate_skips_warn_when_already_holds_downgrade_route() {
         let mut g = CostGuard::default();
         g.session_cost_usd = 9.0;
-        g.forced_runtime_route = Some(empty_route());
+        let mut rs = RouteState::default();
+        rs.install_downgrade(empty_route());
         // downgrade already installed → don't re-warn
-        let a = g.evaluate_thresholds(Some(10.0), 0.8, || Some("gpt-4o-mini".into()));
+        let a = g.evaluate_thresholds(&rs, Some(10.0), 0.8, || Some("gpt-4o-mini".into()));
         assert_eq!(a, CostGuardAction { warn: None, trip: None });
         // cost_warned flipped on the call above; a fresh guard is the
         // only way to verify that the absence-of-route path re-fires.
         let mut g = CostGuard::default();
         g.session_cost_usd = 9.0;
-        g.forced_runtime_route = Some(empty_route());
+        let mut rs = RouteState::default();
+        rs.install_downgrade(empty_route());
         // remove the route WITHOUT crossing the warn threshold...
-        g.forced_runtime_route = None;
+        rs.forced_runtime_route = None;
         // ...now cross the warn threshold. cost_warned is false → branch enters,
         // forced_route.is_none() is true → warn set.
-        let a2 = g.evaluate_thresholds(Some(10.0), 0.8, || Some("gpt-4o-mini".into()));
+        let a2 = g.evaluate_thresholds(&rs, Some(10.0), 0.8, || Some("gpt-4o-mini".into()));
         assert!(a2.warn.is_some());
     }
 
     #[test]
-    fn install_downgrade_stores_route() {
-        let mut g = CostGuard::default();
-        assert!(g.forced_runtime_route.is_none());
-        g.install_downgrade(empty_route());
-        assert!(g.forced_runtime_route.is_some());
+    fn route_state_install_downgrade_stores_route() {
+        let mut rs = RouteState::default();
+        assert!(rs.forced_runtime_route.is_none());
+        rs.install_downgrade(empty_route());
+        assert!(rs.forced_runtime_route.is_some());
     }
-}
-
-// `Arc<CredentialPool>` is named in `TurnRuntimeRoute`, include it to
-// keep the import surface tidy even though we never construct one here.
-#[allow(dead_code)]
-fn _import_anchor() -> Arc<CredentialPool> {
-    unreachable!()
 }

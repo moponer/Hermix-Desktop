@@ -54,7 +54,7 @@ pub mod message_helpers;
 pub mod oauth_refresh;
 pub mod pii_redact;
 pub mod plugins;
-pub mod post_response_fallback;
+pub mod empty_response_handler;
 pub mod prompt_assembly;
 pub mod provider;
 pub mod python_alignment;
@@ -75,6 +75,7 @@ pub mod tool_dispatch;
 pub mod turn_timings;
 pub mod sub_agent_safety;
 pub mod subdirectory_hints;
+pub mod tool_executor;
 
 // Re-export primary agent types
 pub use agent_loop::{

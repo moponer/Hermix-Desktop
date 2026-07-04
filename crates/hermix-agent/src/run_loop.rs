@@ -159,7 +159,7 @@ impl AgentLoop {
             self.maybe_enforce_frame_cap(total_turns);
 
             // --- Pre-LLM hook ---
-            let turn_runtime_route = state.cost_guard.forced_runtime_route
+            let turn_runtime_route = state.route_state.forced_runtime_route
                 .clone()
                 .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
             let active_model = turn_runtime_route
@@ -318,7 +318,7 @@ impl AgentLoop {
             // of duplication with `run_stream()` collapsed into one helper
             // call. Only the `CostGuardTripped` variant short-circuits the
             // loop here; `Finalize` (no tool calls) falls through to the
-            // existing `decide_post_response_fallback` block below.
+            // existing `decide_empty_response` block below.
             if matches!(
                 self.process_post_response(
                     &mut ctx,
@@ -327,6 +327,7 @@ impl AgentLoop {
                     total_turns,
                     api_elapsed,
                     &mut state.cost_guard,
+                    &mut state.route_state,
                     &mut state.message_cache,
                     false, // stream_mode
                 )?,
@@ -361,13 +362,13 @@ impl AgentLoop {
             // (Codex ack continuation / autonomous nudge / patch last
             // assistant content / finalize) used to be open-coded here
             // and duplicated in `run()`. C2 consolidated that logic
-            // into `crate::post_response_fallback::decide_post_response_fallback`
+            // into `crate::empty_response_handler::decide_empty_response`
             // so both call sites use the same single authority.
             let tool_calls = match tool_calls {
                 Some(calls) if !calls.is_empty() => calls,
                 _ => {
-                    let outcome = crate::post_response_fallback::decide_post_response_fallback(
-                        crate::post_response_fallback::PostResponseFallbackInput {
+                    let outcome = crate::empty_response_handler::decide_empty_response(
+                        crate::empty_response_handler::EmptyResponseInput {
                             assistant_msg: &assistant_msg,
                             api_mode: self.config.api_mode.clone(),
                             has_tool_schemas: !tool_schemas.is_empty(),
@@ -722,11 +723,16 @@ impl AgentLoop {
 
             self.auto_compress_if_over_threshold(&mut ctx).await;
 
-            // Write the only remaining loop-local back to `state` so the
-            // future `run_shared_loop(state, llm_caller)` helper can read
-            // it without taking 11+ locals. See the bridge comment at the
-            // top of `run()` for the full history of the 14 -> 1
-            // writeback shrink.
+            // TODO(2026-07-04): `total_turns` is aliased into both a
+            // local and `state.total_turns` (dual-source). The
+            // single-source fix is to extract `run_shared_loop(state,
+            // llm_caller)` once both call sites share the same
+            // continuation shape — at that point the local disappears
+            // and the writeback goes away. Until then this writeback
+            // bridges the value into the manager struct so callers that
+            // only see `LoopState` (post-run) read a fresh value. See
+            // the bridge comment at the top of `run()` for the full
+            // history of the 14 -> 1 writeback shrink.
             state.total_turns = total_turns;
         }
     }
@@ -922,7 +928,7 @@ impl AgentLoop {
             self.maybe_enforce_frame_cap(total_turns);
 
             // Pre-LLM hook
-            let turn_runtime_route = state.cost_guard.forced_runtime_route
+            let turn_runtime_route = state.route_state.forced_runtime_route
                 .clone()
                 .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
             let active_model = turn_runtime_route
@@ -1079,6 +1085,7 @@ impl AgentLoop {
                     total_turns,
                     api_elapsed_ms,
                     &mut state.cost_guard,
+                    &mut state.route_state,
                     &mut state.message_cache,
                     true, // stream_mode
                 )?,
@@ -1139,9 +1146,9 @@ impl AgentLoop {
                 // Codex-ack / autonomous-nudge / patch-last-assistant /
                 // finalize decisions used to be open-coded here and
                 // duplicated in `run_blocking`. Now both call sites
-                // delegate to `decide_post_response_fallback`.
-                let outcome = crate::post_response_fallback::decide_post_response_fallback(
-                    crate::post_response_fallback::PostResponseFallbackInput {
+                // delegate to `decide_empty_response`.
+                let outcome = crate::empty_response_handler::decide_empty_response(
+                    crate::empty_response_handler::EmptyResponseInput {
                         assistant_msg: &assistant_msg,
                         api_mode: self.config.api_mode.clone(),
                         has_tool_schemas: !tool_schemas.is_empty(),
@@ -1485,6 +1492,9 @@ impl AgentLoop {
 
             // Mirror of the writeback at the end of `run()`: the only
             // loop-local still bridged into `state` is `total_turns`.
+            // TODO(2026-07-04): see the dual-source note in `run()`
+            // for the planned single-source collapse once
+            // `run_shared_loop` lands.
             // See the bridge comment at the top of `run()` for history.
             state.total_turns = total_turns;
         }

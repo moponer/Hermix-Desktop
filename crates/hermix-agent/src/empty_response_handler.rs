@@ -25,11 +25,11 @@
 //! the LLM produces no tool calls, so any divergence between the two
 //! paths was a silent UX bug (different code, different fallback rules).
 //!
-//! `decide_post_response_fallback` is the **single authority** for that
+//! `decide_empty_response` is the **single authority** for that
 //! decision. Both call sites now reduce to:
 //!
 //! ```ignore
-//! let outcome = decide_post_response_fallback(input);
+//! let outcome = decide_empty_response(input);
 //! match outcome.action { /* continue / patch / finalize */ }
 //! ```
 //!
@@ -49,7 +49,7 @@ pub const CODEX_MAX_ACK_CONTINUATIONS: u32 = 2;
 /// calls? This enum is the entire fallback surface — there is no
 /// "default" branch at the call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PostResponseFallback {
+pub enum EmptyResponseAction {
     /// Inject a user message (e.g. Codex continue) and start the next
     /// turn immediately.
     ContinueWithUserMsg(String),
@@ -68,7 +68,7 @@ pub enum PostResponseFallback {
 /// by value/reference so the call site does not need to know which
 /// internal state the decision touches.
 #[derive(Debug)]
-pub struct PostResponseFallbackInput<'a> {
+pub struct EmptyResponseInput<'a> {
     /// The assistant message returned by the LLM this turn.
     pub assistant_msg: &'a Message,
     /// The API mode in use (CodexResponses needs ack continuation,
@@ -108,8 +108,8 @@ pub struct PostResponseFallbackInput<'a> {
 /// The decision, plus the counter increments the caller should apply
 /// before re-entering the loop body.
 #[derive(Debug)]
-pub struct PostResponseFallbackOutput {
-    pub action: PostResponseFallback,
+pub struct EmptyResponseOutput {
+    pub action: EmptyResponseAction,
     pub new_codex_ack_continuations: u32,
     pub new_autonomous_nudge_count: u32,
 }
@@ -118,9 +118,9 @@ pub struct PostResponseFallbackOutput {
 /// no tool calls this turn". Priority order matches the original inline
 /// code (Codex ack first, autonomous nudge second, fallback content
 /// third, finalize last).
-pub fn decide_post_response_fallback(
-    input: PostResponseFallbackInput<'_>,
-) -> PostResponseFallbackOutput {
+pub fn decide_empty_response(
+    input: EmptyResponseInput<'_>,
+) -> EmptyResponseOutput {
     // 1. Codex ack continuation — only relevant on the Codex Responses
     //    API when the model emitted a planning/ack reply.
     if input.api_mode == ApiMode::CodexResponses
@@ -132,8 +132,8 @@ pub fn decide_post_response_fallback(
             input.history_includes_tool,
         )
     {
-        return PostResponseFallbackOutput {
-            action: PostResponseFallback::ContinueWithUserMsg(
+        return EmptyResponseOutput {
+            action: EmptyResponseAction::ContinueWithUserMsg(
                 CODEX_CONTINUE_USER_MESSAGE.to_string(),
             ),
             new_codex_ack_continuations: input.codex_ack_continuations + 1,
@@ -156,8 +156,8 @@ pub fn decide_post_response_fallback(
              Resume immediately with the next tool call.",
             input.total_turns, input.max_turns
         );
-        return PostResponseFallbackOutput {
-            action: PostResponseFallback::ContinueWithSystemNudge(nudge),
+        return EmptyResponseOutput {
+            action: EmptyResponseAction::ContinueWithSystemNudge(nudge),
             new_codex_ack_continuations: input.codex_ack_continuations,
             new_autonomous_nudge_count: input.autonomous_nudge_count + 1,
         };
@@ -168,8 +168,8 @@ pub fn decide_post_response_fallback(
     //    text of its own.
     if !(input.assistant_has_visible_text)(input.assistant_msg) {
         if let Some(fallback) = input.last_content_with_tools {
-            return PostResponseFallbackOutput {
-                action: PostResponseFallback::PatchLastAssistant { content: fallback },
+            return EmptyResponseOutput {
+                action: EmptyResponseAction::PatchLastAssistant { content: fallback },
                 new_codex_ack_continuations: input.codex_ack_continuations,
                 new_autonomous_nudge_count: input.autonomous_nudge_count,
             };
@@ -177,8 +177,8 @@ pub fn decide_post_response_fallback(
     }
 
     // 4. Default: let the loop finalize.
-    PostResponseFallbackOutput {
-        action: PostResponseFallback::Finalize,
+    EmptyResponseOutput {
+        action: EmptyResponseAction::Finalize,
         new_codex_ack_continuations: input.codex_ack_continuations,
         new_autonomous_nudge_count: input.autonomous_nudge_count,
     }
@@ -212,8 +212,8 @@ mod tests {
         !c.trim().is_empty()
     }
 
-    fn base_input<'a>(assistant: &'a Message) -> PostResponseFallbackInput<'a> {
-        PostResponseFallbackInput {
+    fn base_input<'a>(assistant: &'a Message) -> EmptyResponseInput<'a> {
+        EmptyResponseInput {
             assistant_msg: assistant,
             api_mode: ApiMode::ChatCompletions,
             has_tool_schemas: true,
@@ -233,8 +233,8 @@ mod tests {
     #[test]
     fn default_is_finalize() {
         let m = make_assistant_msg(Some("ok done"), false);
-        let out = decide_post_response_fallback(base_input(&m));
-        assert_eq!(out.action, PostResponseFallback::Finalize);
+        let out = decide_empty_response(base_input(&m));
+        assert_eq!(out.action, EmptyResponseAction::Finalize);
     }
 
     #[test]
@@ -252,9 +252,9 @@ mod tests {
         input.api_mode = ApiMode::CodexResponses;
         input.history_includes_tool = false;
         input.task_hint = "scan the directory and list files";
-        let out = decide_post_response_fallback(input);
+        let out = decide_empty_response(input);
         match out.action {
-            PostResponseFallback::ContinueWithUserMsg(text) => {
+            EmptyResponseAction::ContinueWithUserMsg(text) => {
                 assert!(text.contains("Continue now"));
             }
             other => panic!("expected ContinueWithUserMsg, got {:?}", other),
@@ -276,8 +276,8 @@ mod tests {
         // Hits the cap → falls through to autonomous/finalize. With
         // autonomous_mode=false, history_includes_tool=true (base) but
         // no fallback set, expect Finalize.
-        let out = decide_post_response_fallback(input);
-        assert_eq!(out.action, PostResponseFallback::Finalize);
+        let out = decide_empty_response(input);
+        assert_eq!(out.action, EmptyResponseAction::Finalize);
     }
 
     #[test]
@@ -286,9 +286,9 @@ mod tests {
         let mut input = base_input(&m);
         input.autonomous_mode = true;
         // history_includes_tool=true (set in base_input)
-        let out = decide_post_response_fallback(input);
+        let out = decide_empty_response(input);
         match out.action {
-            PostResponseFallback::ContinueWithSystemNudge(text) => {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
                 assert!(text.contains("3 of 30"));
             }
             other => panic!("expected ContinueWithSystemNudge, got {:?}", other),
@@ -302,8 +302,8 @@ mod tests {
         let mut input = base_input(&m);
         input.autonomous_mode = true;
         input.autonomous_nudge_count = input.max_autonomous_nudges;
-        let out = decide_post_response_fallback(input);
-        assert_eq!(out.action, PostResponseFallback::Finalize);
+        let out = decide_empty_response(input);
+        assert_eq!(out.action, EmptyResponseAction::Finalize);
     }
 
     #[test]
@@ -313,8 +313,8 @@ mod tests {
         input.autonomous_mode = true;
         input.history_includes_tool = false;
         // No fallback content set either → Finalize.
-        let out = decide_post_response_fallback(input);
-        assert_eq!(out.action, PostResponseFallback::Finalize);
+        let out = decide_empty_response(input);
+        assert_eq!(out.action, EmptyResponseAction::Finalize);
     }
 
     #[test]
@@ -322,10 +322,10 @@ mod tests {
         let m = make_assistant_msg(None, false);
         let mut input = base_input(&m);
         input.last_content_with_tools = Some("previous text".to_string());
-        let out = decide_post_response_fallback(input);
+        let out = decide_empty_response(input);
         assert_eq!(
             out.action,
-            PostResponseFallback::PatchLastAssistant {
+            EmptyResponseAction::PatchLastAssistant {
                 content: "previous text".to_string()
             }
         );
@@ -337,8 +337,8 @@ mod tests {
         let mut input = base_input(&m);
         input.last_content_with_tools = Some("previous text".to_string());
         // Current message has visible text → no patch, finalize.
-        let out = decide_post_response_fallback(input);
-        assert_eq!(out.action, PostResponseFallback::Finalize);
+        let out = decide_empty_response(input);
+        assert_eq!(out.action, EmptyResponseAction::Finalize);
     }
 
     #[test]
@@ -346,8 +346,8 @@ mod tests {
         let m = make_assistant_msg(None, false);
         let mut input = base_input(&m);
         input.last_content_with_tools = None;
-        let out = decide_post_response_fallback(input);
-        assert_eq!(out.action, PostResponseFallback::Finalize);
+        let out = decide_empty_response(input);
+        assert_eq!(out.action, EmptyResponseAction::Finalize);
     }
 
     #[test]
@@ -363,10 +363,10 @@ mod tests {
         input.history_includes_tool = false;
         input.task_hint = "scan the directory and list files";
         input.autonomous_mode = true;
-        let out = decide_post_response_fallback(input);
+        let out = decide_empty_response(input);
         assert!(matches!(
             out.action,
-            PostResponseFallback::ContinueWithUserMsg(_)
+            EmptyResponseAction::ContinueWithUserMsg(_)
         ));
     }
 }

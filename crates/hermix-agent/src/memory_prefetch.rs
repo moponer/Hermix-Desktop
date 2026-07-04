@@ -10,6 +10,28 @@
 //!   respecting the char budget.
 //! - `memory_sync` — route per-turn sync to the router + write
 //!   user-style / fact-extraction rows to the embedded backend.
+//!
+//! ## `recall_seeded` is per-`AgentLoop`, not global
+//!
+//! `memory_prefetch` takes `recall_seeded: &AtomicBool` so the first
+//! turn of an `AgentLoop` uses `memory_recall_limit_first` (default 50)
+//! and subsequent turns drop to `memory_recall_limit_subsequent`
+//! (default 5). The flag is **owned by `AgentLoop`** — see
+//! `AgentLoop::memory_recall_seeded` in `agent_loop.rs` — and is
+//! initialised fresh per `AgentLoop::new`. Each session / user
+//! conversation gets its own `AgentLoop` instance, so the flag cannot
+//! leak between sessions in the desktop process model (one process
+//! per session).
+//!
+//! Multi-tenant server deployments that share one process across
+//! sessions would still see per-`AgentLoop` isolation as long as
+//! each session spins up its own `AgentLoop`. If a future deployment
+//! pattern ever reuses one `AgentLoop` across sessions (e.g.
+//! pooling), the recall budget would degrade after the first
+//! session's first turn — at that point switch `recall_seeded` to
+//! a `HashMap<SessionId, AtomicBool>` keyed by session id. Documented
+//! here so the assumption is visible at the recall site, not buried
+//! in `AgentLoop`.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};

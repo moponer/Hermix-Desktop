@@ -31,6 +31,32 @@ use crate::smart_model_routing::{
     ResolvedCheapRuntime,
 };
 
+/// Per-run route decision state. Holds the route chosen by the
+/// cost-guard downgrade path (or any other path that wants to force
+/// a specific route for the rest of the session).
+///
+/// Phase 5b (2026-07-04): extracted from `CostGuard::forced_runtime_route`
+/// — that field belonged to routing, not spend accounting. The cost
+/// guard now reads `route_state.forced_runtime_route` via `&RouteState`
+/// in `evaluate_thresholds` and writes it via [`RouteState::install_downgrade`].
+/// `CostGuard` only owns USD/usage/cost_warned; `RouteState` owns the
+/// forced route decision.
+#[derive(Debug, Default)]
+pub(crate) struct RouteState {
+    /// Forced cheap-model route for remaining turns. `None` when no
+    /// downgrade has fired yet.
+    pub(crate) forced_runtime_route: Option<TurnRuntimeRoute>,
+}
+
+impl RouteState {
+    /// Install a forced route for the rest of the session. Called by
+    /// the cost-guard warn path after the downgrade model resolves.
+    /// `pub(crate)` because `TurnRuntimeRoute` is `pub(crate)`.
+    pub(crate) fn install_downgrade(&mut self, route: TurnRuntimeRoute) {
+        self.forced_runtime_route = Some(route);
+    }
+}
+
 /// Find the most-recent user message text in a slice, or `None` if
 /// there is no user message or the latest has no text content.
 ///

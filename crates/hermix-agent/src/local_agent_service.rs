@@ -637,13 +637,26 @@ impl LocalAgentService {
                     aux,
                 )
                 .with_breaker_config(breaker_threshold, breaker_cooldown_secs);
-                agent = agent.with_compressor(compressor);
-                tracing::info!(
-                    "Advanced context compressor wired (aux providers: {:?}, breaker threshold={}, cooldown={}s)",
-                    summary.registered,
-                    breaker_threshold,
-                    breaker_cooldown_secs,
-                );
+                // 2026-07-04: validate that the LLM-powered summariser
+                // actually has a model to call. Without this, every
+                // compression attempt would silently fail at runtime
+                // (the aux call returns an error, `compress()` records
+                // it as a summary_error, and `auto_compress_if_over_threshold`
+                // only logs the failure without aborting the loop).
+                if let Err(msg) = compressor.config().validate(compressor.auxiliary()) {
+                    tracing::warn!(
+                        "Disabling advanced context compressor: {msg}. \
+                         Falling back to character-based compressor."
+                    );
+                } else {
+                    agent = agent.with_compressor(compressor);
+                    tracing::info!(
+                        "Advanced context compressor wired (aux providers: {:?}, breaker threshold={}, cooldown={}s)",
+                        summary.registered,
+                        breaker_threshold,
+                        breaker_cooldown_secs,
+                    );
+                }
             }
             _ => {
                 tracing::info!(

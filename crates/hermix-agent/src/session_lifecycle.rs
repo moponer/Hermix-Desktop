@@ -17,7 +17,7 @@
 //! - `prepare_assistant_turn` — Phase 2.2 per-turn post-LLM setup
 //!   shared between `run()` and `run_stream()`.
 //! - `apply_fallback_outcome` — Phase 2.1 four-variant
-//!   `PostResponseFallback` match centralisation.
+//!   `EmptyResponseAction` match centralisation.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -33,6 +33,7 @@ use crate::agent_helpers::AgentCallbacks;
 use crate::agent_loop::PostLlmAction;
 use crate::compression::CompressionMetrics;
 use crate::context::ContextManager;
+use crate::agent_loop::RouteState;
 use crate::cost_guard::CostGuard;
 use crate::message_cache::MessageCache;
 use crate::message_helpers::{
@@ -141,7 +142,7 @@ pub fn emit_mute_transition(
 /// Returns the three locals the caller needs:
 /// - `history_includes_tool`: did any earlier turn leave a `Tool`
 ///   message in the context? Used by
-///   `decide_post_response_fallback` to know whether tool execution
+///   `decide_empty_response` to know whether tool execution
 ///   is part of the protocol context.
 /// - `assistant_msg`: the LLM's response, freshly appended to the
 ///   context.
@@ -178,9 +179,9 @@ pub fn prepare_assistant_turn(
     (history_includes_tool, assistant_msg, tool_calls)
 }
 
-/// Phase 2.1 (2026-07-03): apply the four-variant `PostResponseFallback`
+/// Phase 2.1 (2026-07-03): apply the four-variant `EmptyResponseAction`
 /// outcome produced by
-/// `crate::post_response_fallback::decide_post_response_fallback`.
+/// `crate::empty_response_handler::decide_empty_response`.
 /// Both `run()` and `run_stream()` previously open-coded this match
 /// arm — the only difference between the two call sites was the
 /// tracing message text. This helper centralises the match and
@@ -195,18 +196,18 @@ pub fn prepare_assistant_turn(
 /// through to its terminal finalize path.
 pub fn apply_fallback_outcome(
     ctx: &mut ContextManager,
-    action: crate::post_response_fallback::PostResponseFallback,
+    action: crate::empty_response_handler::EmptyResponseAction,
     stream_mode: bool,
     total_turns: u32,
     autonomous_nudge_count: u32,
 ) -> bool {
-    use crate::post_response_fallback::PostResponseFallback;
+    use crate::empty_response_handler::EmptyResponseAction;
     match action {
-        PostResponseFallback::ContinueWithUserMsg(msg) => {
+        EmptyResponseAction::ContinueWithUserMsg(msg) => {
             ctx.add_message(Message::user(&msg));
             true
         }
-        PostResponseFallback::ContinueWithSystemNudge(msg) => {
+        EmptyResponseAction::ContinueWithSystemNudge(msg) => {
             tracing::debug!(
                 nudge_count = autonomous_nudge_count,
                 total_turns,
@@ -216,7 +217,7 @@ pub fn apply_fallback_outcome(
             ctx.add_message(Message::system(&msg));
             true
         }
-        PostResponseFallback::PatchLastAssistant { content } => {
+        EmptyResponseAction::PatchLastAssistant { content } => {
             if let Some(last) = ctx.get_messages_mut().last_mut() {
                 if last.role == MessageRole::Assistant {
                     last.content = Some(content);
@@ -224,7 +225,7 @@ pub fn apply_fallback_outcome(
             }
             false
         }
-        PostResponseFallback::Finalize => false,
+        EmptyResponseAction::Finalize => false,
     }
 }
 
@@ -266,6 +267,7 @@ pub fn process_post_response<F, G>(
     total_turns: u32,
     api_elapsed: u64,
     cost_guard: &mut CostGuard,
+    route_state: &mut RouteState,
     message_cache: &mut MessageCache,
     stream_mode: bool,
     cost_degrade_model: F,
@@ -307,6 +309,7 @@ where
 
     // --- Cost guard ---
     let action = cost_guard.evaluate_thresholds(
+        route_state,
         config.max_cost_usd,
         config.cost_guard_degrade_at_ratio,
         cost_degrade_model,
@@ -321,7 +324,7 @@ where
         match warn.kind {
             crate::cost_guard::WarnKind::Downgrade { model } => {
                 let route = turn_route_cost_guard_fn(model.clone());
-                cost_guard.install_downgrade(route);
+                route_state.install_downgrade(route);
                 ctx.add_message(Message::system(format!(
                     "Cost guard: session spend is now ${:.4}/${:.4}. Switching to cheaper model `{}`.",
                     warn.session_cost_usd, warn.limit, model
