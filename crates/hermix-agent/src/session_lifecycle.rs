@@ -30,6 +30,7 @@ use hermix_focus::{FocusStack, MemoryRouter, SessionFrame};
 use crate::agent_config::AgentConfig;
 use crate::compression::CompressionMetrics;
 use crate::context::ContextManager;
+use crate::cost_guard::CostGuard;
 use crate::message_cache::MessageCache;
 use crate::plugins::PluginManager;
 use crate::python_alignment::strip_think_blocks_for_ack;
@@ -219,6 +220,153 @@ pub fn apply_fallback_outcome(
         }
         PostResponseFallback::Finalize => false,
     }
+}
+
+/// Phase 1.3a (2026-07-03): the post-LLM logic that was duplicated
+/// ~200 lines in `run()` and `run_stream()`. Fires the PostLlmCall
+/// hook, accumulates usage, runs the cost guard (with auto-degrade
+/// to the configured cheap model), and decides between
+/// `Finalize` (no tool calls → caller returns) and `Continue`
+/// (tool calls → caller falls through to `execute_tool_calls`).
+///
+/// `stream_mode` is `true` for `run_stream()` — the helper uses
+/// this to emit a stream-specific `tracing` line and to forward
+/// the `finish_reason` through the finalize path.
+///
+/// Phase 5 (2026-07-03): 7 mutable scalar args collapsed to
+/// `&mut CostGuard` + `&mut Option<String>` (4 args shrunk to 1
+/// struct). `record_usage` / `evaluate_thresholds` / `install_downgrade`
+/// on [`CostGuard`] absorb the 4-field atomic-mutation, so the
+/// helper signature dropped from 11 args to 7.
+///
+/// Phase 5 (2026-07-04 follow-up): `&mut Option<String>` for
+/// `last_content_with_tools` collapsed to `&mut MessageCache`,
+/// dropping the helper to 6 mutable args (the `Option<String>` is
+/// now reached via `cache.store_content_with_tools(...)` inside
+/// the helper). The companion helper `prepare_assistant_turn`
+/// also takes `&mut MessageCache` for the same reason.
+///
+/// Phase 2.x (2026-07-04): extracted to this module so `agent_loop.rs`
+/// can shrink. Callers pass `cost_degrade_model` and
+/// `turn_route_cost_guard` closures that capture `&AgentLoop`,
+/// since those helpers still live on the type.
+#[allow(clippy::too_many_arguments)]
+pub fn process_post_response<F, G>(
+    config: &AgentConfig,
+    plugin_manager: Option<&Arc<Mutex<PluginManager>>>,
+    ctx: &mut ContextManager,
+    response: &LlmResponse,
+    turn_usage_acc: Option<&UsageStats>,
+    total_turns: u32,
+    api_elapsed: u64,
+    cost_guard: &mut CostGuard,
+    message_cache: &mut MessageCache,
+    stream_mode: bool,
+    cost_degrade_model: F,
+    turn_route_cost_guard_fn: G,
+) -> Result<crate::agent_loop::PostResponseAction, AgentError>
+where
+    F: FnOnce() -> Option<String>,
+    G: FnOnce(String) -> crate::agent_loop::TurnRuntimeRoute,
+{
+    let has_tool_calls = response
+        .message
+        .tool_calls
+        .as_ref()
+        .is_some_and(|tc| !tc.is_empty());
+
+    if stream_mode {
+        tracing::info!(
+            turn = total_turns,
+            has_tool_calls,
+            finish_reason = response.finish_reason.as_deref().unwrap_or(""),
+            "llm_response_received"
+        );
+    }
+
+    // --- Post-LLM hook ---
+    let post_ctx = serde_json::json!({
+        "turn": total_turns,
+        "api_time_ms": api_elapsed,
+        "has_tool_calls": has_tool_calls,
+    });
+    let post_results = crate::hook_dispatch::invoke_hook(
+        plugin_manager,
+        crate::plugins::HookType::PostLlmCall,
+        &post_ctx,
+    );
+    crate::hook_dispatch::inject_hook_context(&post_results, ctx);
+
+    cost_guard.record_usage(turn_usage_acc, response.model.as_str(), config);
+
+    // --- Cost guard ---
+    let action = cost_guard.evaluate_thresholds(
+        config.max_cost_usd,
+        config.cost_guard_degrade_at_ratio,
+        cost_degrade_model,
+    );
+    // Two independent side effects: warn (system message, route
+    // downgrade) and trip (system message, terminate loop). Both
+    // can fire on the same call when spend jumped past both
+    // thresholds in one turn — fire warn first, then trip, so the
+    // user sees "switching to cheaper model" before the
+    // terminating "stopping loop" message.
+    if let Some(warn) = action.warn {
+        match warn.kind {
+            crate::cost_guard::WarnKind::Downgrade { model } => {
+                let route = turn_route_cost_guard_fn(model.clone());
+                cost_guard.install_downgrade(route);
+                ctx.add_message(Message::system(format!(
+                    "Cost guard: session spend is now ${:.4}/${:.4}. Switching to cheaper model `{}`.",
+                    warn.session_cost_usd, warn.limit, model
+                )));
+            }
+            crate::cost_guard::WarnKind::Warn => {
+                ctx.add_message(Message::system(format!(
+                    "Cost guard warning: session spend is now ${:.4}/${:.4}.",
+                    warn.session_cost_usd, warn.limit
+                )));
+            }
+        }
+    }
+    if let Some(trip) = action.trip {
+        ctx.add_message(Message::system(format!(
+            "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
+            trip.session_cost_usd, trip.limit
+        )));
+        return Ok(crate::agent_loop::PostResponseAction::CostGuardTripped);
+    }
+
+    let tool_calls_present = response
+        .message
+        .tool_calls
+        .as_ref()
+        .is_some_and(|tc| !tc.is_empty());
+
+    if !tool_calls_present {
+        // No tool calls — agent is done. Save the last assistant
+        // content for ack-continuation tracking.
+        if response
+            .message
+            .content
+            .as_deref()
+            .is_some_and(|s| !s.is_empty())
+        {
+            message_cache.store_content_with_tools(
+                response
+                    .message
+                    .content
+                    .as_deref()
+                    .map(strip_think_blocks_for_ack)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            );
+        }
+        return Ok(crate::agent_loop::PostResponseAction::Finalize);
+    }
+
+    // Tool calls present — caller continues to dispatch.
+    Ok(crate::agent_loop::PostResponseAction::Continue)
 }
 
 /// Phase 2.x (2026-07-04): consolidate the session-end side effects

@@ -460,7 +460,7 @@ struct LoopState {
 /// - `Finalize`: no tool calls → no work left, return the AgentResult.
 /// - `Continue`: tool calls present → fall through to tool dispatch.
 #[derive(Debug, PartialEq, Eq)]
-enum PostResponseAction {
+pub(crate) enum PostResponseAction {
     /// No tool calls: stop the loop. The caller should `return`
     /// `Ok(self.finalize_agent_result(...))`.
     Finalize,
@@ -600,100 +600,20 @@ impl AgentLoop {
         message_cache: &mut MessageCache,
         stream_mode: bool,
     ) -> Result<PostResponseAction, AgentError> {
-        let has_tool_calls = response
-            .message
-            .tool_calls
-            .as_ref()
-            .is_some_and(|tc| !tc.is_empty());
-
-        if stream_mode {
-            tracing::info!(
-                turn = total_turns,
-                has_tool_calls,
-                finish_reason = response.finish_reason.as_deref().unwrap_or(""),
-                "llm_response_received"
-            );
-        }
-
-        // --- Post-LLM hook ---
-        let post_ctx = serde_json::json!({
-            "turn": total_turns,
-            "api_time_ms": api_elapsed,
-            "has_tool_calls": has_tool_calls,
-        });
-        let post_results = self.invoke_hook(HookType::PostLlmCall, &post_ctx);
-        self.inject_hook_context(&post_results, ctx);
-
-        cost_guard.record_usage(turn_usage_acc, response.model.as_str(), &self.config);
-
-        // --- Cost guard ---
-        let action = cost_guard.evaluate_thresholds(
-            self.config.max_cost_usd,
-            self.config.cost_guard_degrade_at_ratio,
+        crate::session_lifecycle::process_post_response(
+            &self.config,
+            self.plugin_manager.as_ref(),
+            ctx,
+            response,
+            turn_usage_acc,
+            total_turns,
+            api_elapsed,
+            cost_guard,
+            message_cache,
+            stream_mode,
             || self.resolve_cost_degrade_model(),
-        );
-        // Two independent side effects: warn (system message, route
-        // downgrade) and trip (system message, terminate loop). Both
-        // can fire on the same call when spend jumped past both
-        // thresholds in one turn — fire warn first, then trip, so the
-        // user sees "switching to cheaper model" before the
-        // terminating "stopping loop" message.
-        if let Some(warn) = action.warn {
-            match warn.kind {
-                WarnKind::Downgrade { model } => {
-                    let route = self.turn_route_cost_guard(model.clone());
-                    cost_guard.install_downgrade(route);
-                    ctx.add_message(Message::system(format!(
-                        "Cost guard: session spend is now ${:.4}/${:.4}. Switching to cheaper model `{}`.",
-                        warn.session_cost_usd, warn.limit, model
-                    )));
-                }
-                WarnKind::Warn => {
-                    ctx.add_message(Message::system(format!(
-                        "Cost guard warning: session spend is now ${:.4}/${:.4}.",
-                        warn.session_cost_usd, warn.limit
-                    )));
-                }
-            }
-        }
-        if let Some(trip) = action.trip {
-            ctx.add_message(Message::system(format!(
-                "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
-                trip.session_cost_usd, trip.limit
-            )));
-            return Ok(PostResponseAction::CostGuardTripped);
-        }
-
-        let tool_calls_present = response
-            .message
-            .tool_calls
-            .as_ref()
-            .is_some_and(|tc| !tc.is_empty());
-
-        if !tool_calls_present {
-            // No tool calls — agent is done. Save the last assistant content
-            // for ack-continuation tracking.
-            if response
-                .message
-                .content
-                .as_deref()
-                .is_some_and(|s| !s.is_empty())
-            {
-                message_cache.store_content_with_tools(
-                    response
-                        .message
-                        .content
-                        .as_deref()
-                        .map(strip_think_blocks_for_ack)
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty()),
-                );
-            }
-            return Ok(PostResponseAction::Finalize);
-        }
-
-        // Tool calls present — caller continues to dispatch.
-        Ok(PostResponseAction::Continue)
+            |model| self.turn_route_cost_guard(model),
+        )
     }
 
     /// Phase 2.2 (2026-07-03): shared per-turn post-LLM setup that
