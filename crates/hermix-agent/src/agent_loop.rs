@@ -629,61 +629,11 @@ pub(crate) use crate::cost_guard::{TripEffect, WarnEffect, WarnKind};
 ///   the action on max differs between the three (finalize vs.
 ///   continue-with-error vs. fall-through) — folding that decision
 ///   into the helper would force one path on all three.
-struct RetryCounters {
-    /// Retries against invalid tool names.
-    invalid_tool: u32,
-    /// Retries against invalid JSON in tool arguments.
-    invalid_json: u32,
-    /// Retries when the streaming provider truncated a tool call's JSON.
-    /// `run_stream()`-only — non-stream `run()` cannot observe truncation.
-    truncated_tool: u32,
-}
-
-impl Default for RetryCounters {
-    fn default() -> Self {
-        Self {
-            invalid_tool: 0,
-            invalid_json: 0,
-            truncated_tool: 0,
-        }
-    }
-}
-
-impl RetryCounters {
-    /// Saturating-increment the invalid tool name counter and return the
-    /// new value. Caller compares to `config.invalid_tool_call_max_retries`.
-    fn bump_invalid_tool(&mut self) -> u32 {
-        self.invalid_tool = self.invalid_tool.saturating_add(1);
-        self.invalid_tool
-    }
-
-    /// Saturating-increment the invalid JSON counter and return the new
-    /// value. Caller compares to `config.invalid_tool_json_max_retries`.
-    fn bump_invalid_json(&mut self) -> u32 {
-        self.invalid_json = self.invalid_json.saturating_add(1);
-        self.invalid_json
-    }
-
-    /// Saturating-increment the truncated tool call counter and return the
-    /// new value. Caller compares to
-    /// `config.truncated_tool_call_max_retries`.
-    fn bump_truncated_tool(&mut self) -> u32 {
-        self.truncated_tool = self.truncated_tool.saturating_add(1);
-        self.truncated_tool
-    }
-
-    fn reset_invalid_tool(&mut self) {
-        self.invalid_tool = 0;
-    }
-
-    fn reset_invalid_json(&mut self) {
-        self.invalid_json = 0;
-    }
-
-    fn reset_truncated_tool(&mut self) {
-        self.truncated_tool = 0;
-    }
-}
+///
+/// Physically split to `retry_counters.rs` (2026-07-04); re-exported
+/// here so existing `state.retry_counters.*` call paths compile
+/// unchanged.
+pub use crate::retry_counters::RetryCounters;
 
 /// Phase 5 (2026-07-04 follow-up): per-run LLM-result caches consolidated
 /// into one struct. The two sibling `Option` fields

@@ -48,6 +48,7 @@ pub mod provider;
 pub mod python_alignment;
 pub mod rate_limit;
 pub mod reasoning;
+pub mod retry_counters;
 pub mod session_persistence;
 pub mod skill_orchestrator;
 pub mod smart_model_routing;
