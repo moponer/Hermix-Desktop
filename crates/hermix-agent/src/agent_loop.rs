@@ -37,7 +37,6 @@ use hermix_intelligence::{
     AlwaysInclude, KeywordRouter, ToolSchemaRouter, TurnContext,
 };
 
-use crate::api_bridge::CodexProvider;
 use crate::archive::{archive_context_section, render_archive_summary, ArchiveRef};
 use crate::budget;
 use crate::context::{
@@ -48,7 +47,6 @@ use crate::context_files::{load_hermes_context_files, load_workspace_context};
 use crate::credential_pool::CredentialPool;
 use crate::interrupt::InterruptController;
 use crate::plugins::{HookResult, HookType, PluginManager};
-use crate::provider::{AnthropicProvider, GenericProvider, OpenRouterProvider};
 use crate::python_alignment::{
     budget_pressure_text, inject_budget_pressure_into_last_tool_result,
     sanitize_surrogates, strip_budget_warnings_from_messages,
@@ -616,7 +614,7 @@ pub use crate::context_pressure::ContextPressureMonitor;
 /// runtime publish path (`state.cost_guard.accumulated_usage`) keeps
 /// working without accessor-method churn.
 pub use crate::cost_guard::{CostGuard, CostGuardAction};
-pub(crate) use crate::cost_guard::{TripEffect, WarnEffect, WarnKind};
+pub(crate) use crate::cost_guard::{WarnEffect, WarnKind};
 
 /// Phase 5 (2026-07-03): per-loop retry counters consolidated into one
 /// struct so `LoopState` doesn't have to carry 3 sibling `u32` fields and
@@ -2796,168 +2794,23 @@ impl AgentLoop {
         (fallback_provider, model)
     }
 
-    fn resolve_runtime_api_key(
-        &self,
-        provider: &str,
-        api_key_env_override: Option<&str>,
-        explicit_api_key: Option<&str>,
-    ) -> Option<String> {
-        if provider == "copilot-acp" {
-            return Some("copilot-acp".to_string());
-        }
-        if let Some(token) = self
-            .oauth_refresh
-            .resolve_api_key(&self.auth_tokens_path(), provider)
-        {
-            return Some(token);
-        }
-        if let Some(key) = explicit_api_key.map(str::trim).filter(|s| !s.is_empty()) {
-            return Some(key.to_string());
-        }
-        if let Some(env_name) = api_key_env_override
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            if let Ok(v) = std::env::var(env_name) {
-                if !v.trim().is_empty() {
-                    return Some(v);
-                }
-            }
-        }
-        if let Some(cfg) = self.config.runtime_providers.get(provider) {
-            if let Some(ref key) = cfg.api_key {
-                let trimmed = key.trim();
-                if let Some(env_ref) = trimmed.strip_prefix("${").and_then(|s| s.strip_suffix('}'))
-                {
-                    if let Ok(v) = std::env::var(env_ref) {
-                        if !v.trim().is_empty() {
-                            return Some(v);
-                        }
-                    }
-                } else if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-        let env_var = match provider {
-            "openai" | "codex" | "openai-codex" => "OPENAI_API_KEY",
-            "anthropic" => "ANTHROPIC_API_KEY",
-            "openrouter" => "OPENROUTER_API_KEY",
-            "qwen" | "qwen-oauth" => "DASHSCOPE_API_KEY",
-            "kimi" | "moonshot" => "MOONSHOT_API_KEY",
-            "minimax" => "MINIMAX_API_KEY",
-            "nous" => "NOUS_API_KEY",
-            "copilot" | "copilot-acp" => "GITHUB_COPILOT_TOKEN",
-            _ => "",
-        };
-        if env_var.is_empty() {
-            None
-        } else {
-            std::env::var(env_var).ok().filter(|v| !v.trim().is_empty())
-        }
-    }
-
     fn resolve_runtime_base_url(
         &self,
         provider: &str,
         route_base_url: Option<&str>,
     ) -> Option<String> {
-        if let Some(b) = route_base_url.map(str::trim).filter(|s| !s.is_empty()) {
-            return Some(b.to_string());
-        }
-        self.config
-            .runtime_providers
-            .get(provider)
-            .and_then(|c| c.base_url.as_ref())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                if provider == "copilot-acp" {
-                    std::env::var("COPILOT_ACP_BASE_URL")
-                        .ok()
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .or_else(|| Some("acp://copilot".to_string()))
-                } else if provider == "openai-codex" || provider == "codex" {
-                    Some("https://api.openai.com/v1".to_string())
-                } else if provider == "qwen-oauth" {
-                    Some("https://dashscope.aliyuncs.com/compatible-mode/v1".to_string())
-                } else {
-                    None
-                }
-            })
+        crate::runtime_provider::resolve_runtime_base_url(self, provider, route_base_url)
     }
 
     fn auth_tokens_path(&self) -> PathBuf {
-        let hermix_home = self
-            .config
-            .hermix_home
-            .clone()
-            .map(PathBuf::from)
-            .unwrap_or_else(hermix_config::paths::hermix_home);
-        hermix_home.join("auth").join("tokens.json")
+        crate::runtime_provider::auth_tokens_path(self)
     }
 
     fn resolve_runtime_command_args(
         &self,
         provider: Option<&str>,
     ) -> (Option<String>, Vec<String>) {
-        let mut command = self
-            .config
-            .acp_command
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-        let mut args: Vec<String> = self
-            .config
-            .acp_args
-            .iter()
-            .map(|a| a.trim().to_string())
-            .filter(|a| !a.is_empty())
-            .collect();
-
-        if let Some(provider) = provider {
-            if let Some(cfg) = self.config.runtime_providers.get(provider) {
-                if let Some(cmd) = cfg
-                    .command
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                {
-                    command = Some(cmd.to_string());
-                }
-                if !cfg.args.is_empty() {
-                    args = cfg
-                        .args
-                        .iter()
-                        .map(|a| a.trim().to_string())
-                        .filter(|a| !a.is_empty())
-                        .collect();
-                }
-            }
-            if provider == "copilot-acp" {
-                if command.is_none() {
-                    command = env_compat("HERMIX_COPILOT_ACP_COMMAND", "HERMES_COPILOT_ACP_COMMAND")
-                        .or_else(|| std::env::var("COPILOT_CLI_PATH").ok())
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .or_else(|| Some("copilot".to_string()));
-                }
-                if args.is_empty() {
-                    args = env_compat("HERMIX_COPILOT_ACP_ARGS", "HERMES_COPILOT_ACP_ARGS")
-                        .and_then(|raw| shlex::split(raw.trim()))
-                        .filter(|v| !v.is_empty())
-                        .unwrap_or_else(|| vec!["--acp".to_string(), "--stdio".to_string()]);
-                }
-                if let Some(cmd) = command.as_deref() {
-                    if let Ok(resolved) = which::which(cmd) {
-                        command = Some(resolved.to_string_lossy().to_string());
-                    }
-                }
-            }
-        }
-        (command, args)
+        crate::runtime_provider::resolve_runtime_command_args(self, provider)
     }
 
     fn build_runtime_provider(
@@ -2970,100 +2823,23 @@ impl AgentLoop {
         api_mode: Option<&ApiMode>,
         credential_pool: Option<&Arc<CredentialPool>>,
     ) -> Result<Arc<dyn LlmProvider>, AgentError> {
-        let api_key = self
-            .resolve_runtime_api_key(provider, api_key_env_override, explicit_api_key)
-            .ok_or_else(|| {
-                AgentError::Config(format!(
-                    "No API key configured for runtime-routed provider '{}'",
-                    provider
-                ))
-            })?;
-        let base_url = self.resolve_runtime_base_url(provider, route_base_url);
-        let mode = api_mode.unwrap_or(&self.config.api_mode);
-
-        let provider_obj: Arc<dyn LlmProvider> = match provider {
-            "openai" | "codex" | "openai-codex" => {
-                if matches!(mode, ApiMode::CodexResponses) {
-                    let mut p = CodexProvider::new(&api_key).with_model(model_name);
-                    if let Some(ref url) = base_url {
-                        p = p.with_base_url(url.clone());
-                    }
-                    if let Some(pool) = credential_pool {
-                        p = p.with_credential_pool(pool.clone());
-                    }
-                    Arc::new(p)
-                } else {
-                    let url = base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-                    let mut p = GenericProvider::new(url, &api_key, model_name);
-                    if let Some(pool) = credential_pool {
-                        p = p.with_credential_pool(pool.clone());
-                    }
-                    Arc::new(p)
-                }
-            }
-            "anthropic" => {
-                let mut p = AnthropicProvider::new(&api_key).with_model(model_name);
-                if let Some(url) = base_url {
-                    p = p.with_base_url(url);
-                }
-                if let Some(pool) = credential_pool {
-                    p = p.with_credential_pool(pool.clone());
-                }
-                Arc::new(p)
-            }
-            "openrouter" => {
-                let mut p = OpenRouterProvider::new(&api_key).with_model(model_name);
-                if let Some(url) = base_url {
-                    p = p.with_base_url(url);
-                }
-                if let Some(pool) = credential_pool {
-                    p = p.with_credential_pool(pool.clone());
-                }
-                Arc::new(p)
-            }
-            "qwen" | "qwen-oauth" => {
-                let url = base_url.unwrap_or_else(|| "https://dashscope.aliyuncs.com/compatible-mode/v1".to_string());
-                Arc::new(GenericProvider::new(url, &api_key, model_name))
-            }
-            "kimi" | "moonshot" => {
-                let url = base_url.unwrap_or_else(|| "https://api.moonshot.cn/v1".to_string());
-                Arc::new(GenericProvider::new(url, &api_key, model_name))
-            }
-            "minimax" => {
-                let url = base_url.unwrap_or_else(|| "https://api.minimax.chat/v1".to_string());
-                Arc::new(GenericProvider::new(url, &api_key, model_name))
-            }
-            "nous" => {
-                let url = base_url.unwrap_or_else(|| "https://api.nousresearch.com/v1".to_string());
-                Arc::new(GenericProvider::new(url, &api_key, model_name))
-            }
-            "copilot" | "copilot-acp" => {
-                let url = base_url.unwrap_or_else(|| "https://api.github.com/copilot".to_string());
-                Arc::new(GenericProvider::new(url, &api_key, model_name))
-            }
-            _ => {
-                let url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-                let mut g = GenericProvider::new(url, &api_key, model_name);
-                if let Some(pool) = credential_pool {
-                    g = g.with_credential_pool(pool.clone());
-                }
-                Arc::new(g)
-            }
-        };
-        Ok(provider_obj)
+        crate::runtime_provider::build_runtime_provider(
+            self,
+            provider,
+            model_name,
+            route_base_url,
+            api_key_env_override,
+            explicit_api_key,
+            api_mode,
+            credential_pool,
+        )
     }
 
     fn credential_pool_for_route<'a>(
         &'a self,
         rt: &'a TurnRuntimeRoute,
     ) -> Option<&'a Arc<CredentialPool>> {
-        if rt.credential_pool_fallback {
-            rt.credential_pool
-                .as_ref()
-                .or(self.primary_credential_pool.as_ref())
-        } else {
-            rt.credential_pool.as_ref()
-        }
+        crate::runtime_provider::credential_pool_for_route(self, rt)
     }
 
     fn messages_for_api_call(&self, ctx: &ContextManager) -> Vec<Message> {
