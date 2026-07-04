@@ -3155,23 +3155,12 @@ impl AgentLoop {
         &self,
         ctx: &mut ContextManager,
     ) -> Result<Option<Message>, AgentError> {
-        ctx.add_message(Message::system(
-            "[SYSTEM] Maximum conversation turns reached. Please provide a brief summary of \
-             what was accomplished and any remaining tasks.",
-        ));
-        let response = self
-            .llm_provider
-            .chat_completion(
-                ctx.get_messages(),
-                &[],
-                self.config.max_tokens,
-                self.config.temperature,
-                Some(self.config.model.as_str()),
-                self.extra_body_for_api_mode(&self.config.api_mode).as_ref(),
-            )
-            .await
-            .map_err(|e| AgentError::LlmApi(e.to_string()))?;
-        Ok(Some(response.message))
+        crate::session_lifecycle::handle_max_iterations(
+            &self.config,
+            &self.llm_provider,
+            ctx,
+        )
+        .await
     }
 
     /// Build a per-tool hint that we append to a user-denial reason so the
@@ -3846,50 +3835,14 @@ impl AgentLoop {
         inner_empty: &mut u32,
         ctx: &mut ContextManager,
     ) -> PostLlmAction {
-        let has_tools = r
-            .message
-            .tool_calls
-            .as_ref()
-            .is_some_and(|tc| !tc.is_empty());
-        if has_tools {
-            return PostLlmAction::Break(r);
-        }
-        if Self::assistant_visible_text(&r.message) {
-            return PostLlmAction::Break(r);
-        }
-        if Self::assistant_has_reasoning(&r.message)
-            && *inner_thinking < self.config.thinking_prefill_max_retries
-        {
-            *inner_thinking += 1;
-            self.emit_status(
-                "lifecycle",
-                &format!(
-                    "Reasoning-only response — retrying ({}/{})",
-                    *inner_thinking, self.config.thinking_prefill_max_retries
-                ),
-            );
-            ctx.add_message(r.message.clone());
-            return PostLlmAction::RetryReasoning;
-        }
-        if !Self::assistant_has_reasoning(&r.message)
-            && *inner_empty < self.config.empty_content_max_retries
-        {
-            *inner_empty += 1;
-            tracing::warn!(
-                "empty assistant response — retrying ({}/{})",
-                *inner_empty,
-                self.config.empty_content_max_retries
-            );
-            self.emit_status(
-                "lifecycle",
-                &format!(
-                    "Empty assistant response — retrying ({}/{})",
-                    *inner_empty, self.config.empty_content_max_retries
-                ),
-            );
-            return PostLlmAction::RetryEmpty;
-        }
-        PostLlmAction::Break(r)
+        crate::session_lifecycle::classify_post_llm_response(
+            &self.config,
+            &self.callbacks,
+            r,
+            inner_thinking,
+            inner_empty,
+            ctx,
+        )
     }
 }
 

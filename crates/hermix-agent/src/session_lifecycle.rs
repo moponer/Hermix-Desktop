@@ -23,15 +23,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hermix_core::{
-    AgentError, AgentResult, LlmResponse, Message, MessageRole, StreamChunk, ToolCall, UsageStats,
+    AgentError, AgentResult, LlmProvider, LlmResponse, Message, MessageRole, StreamChunk, ToolCall,
+    UsageStats,
 };
 use hermix_focus::{FocusStack, MemoryRouter, SessionFrame};
 
 use crate::agent_config::AgentConfig;
+use crate::agent_helpers::AgentCallbacks;
+use crate::agent_loop::PostLlmAction;
 use crate::compression::CompressionMetrics;
 use crate::context::ContextManager;
 use crate::cost_guard::CostGuard;
 use crate::message_cache::MessageCache;
+use crate::message_helpers::{
+    assistant_has_reasoning, assistant_visible_text, emit_status, extra_body_for_api_mode,
+};
 use crate::plugins::PluginManager;
 use crate::python_alignment::strip_think_blocks_for_ack;
 
@@ -488,4 +494,89 @@ pub fn finalize_agent_result(
             .ok()
             .and_then(|g| g.as_ref().map(|m| m.to_snapshot())),
     }
+}
+
+/// Per-attempt classification inside the retry loop (shared by
+/// `run()` and `run_stream()`). Decides whether the LLM response
+/// warrants a retry (empty content, reasoning-only) or breaks out.
+pub fn classify_post_llm_response(
+    config: &AgentConfig,
+    callbacks: &AgentCallbacks,
+    r: LlmResponse,
+    inner_thinking: &mut u32,
+    inner_empty: &mut u32,
+    ctx: &mut ContextManager,
+) -> PostLlmAction {
+    let has_tools = r
+        .message
+        .tool_calls
+        .as_ref()
+        .is_some_and(|tc| !tc.is_empty());
+    if has_tools {
+        return PostLlmAction::Break(r);
+    }
+    if assistant_visible_text(&r.message) {
+        return PostLlmAction::Break(r);
+    }
+    if assistant_has_reasoning(&r.message)
+        && *inner_thinking < config.thinking_prefill_max_retries
+    {
+        *inner_thinking += 1;
+        emit_status(
+            config,
+            callbacks,
+            "lifecycle",
+            &format!(
+                "Reasoning-only response — retrying ({}/{})",
+                *inner_thinking, config.thinking_prefill_max_retries
+            ),
+        );
+        ctx.add_message(r.message.clone());
+        return PostLlmAction::RetryReasoning;
+    }
+    if !assistant_has_reasoning(&r.message)
+        && *inner_empty < config.empty_content_max_retries
+    {
+        *inner_empty += 1;
+        tracing::warn!(
+            "empty assistant response — retrying ({}/{})",
+            *inner_empty,
+            config.empty_content_max_retries
+        );
+        emit_status(
+            config,
+            callbacks,
+            "lifecycle",
+            &format!(
+                "Empty assistant response — retrying ({}/{})",
+                *inner_empty, config.empty_content_max_retries
+            ),
+        );
+        return PostLlmAction::RetryEmpty;
+    }
+    PostLlmAction::Break(r)
+}
+
+/// Ask the LLM for a final summary when the turn budget is exhausted.
+pub async fn handle_max_iterations(
+    config: &AgentConfig,
+    llm_provider: &Arc<dyn LlmProvider>,
+    ctx: &mut ContextManager,
+) -> Result<Option<Message>, AgentError> {
+    ctx.add_message(Message::system(
+        "[SYSTEM] Maximum conversation turns reached. Please provide a brief summary of \
+         what was accomplished and any remaining tasks.",
+    ));
+    let response = llm_provider
+        .chat_completion(
+            ctx.get_messages(),
+            &[],
+            config.max_tokens,
+            config.temperature,
+            Some(config.model.as_str()),
+            extra_body_for_api_mode(config, &config.api_mode).as_ref(),
+        )
+        .await
+        .map_err(|e| AgentError::LlmApi(e.to_string()))?;
+    Ok(Some(response.message))
 }
