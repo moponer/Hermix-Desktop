@@ -37,8 +37,7 @@ use std::collections::{HashMap, HashSet};
 use hermix_config::env_compat;
 use hermix_core::ToolCall;
 
-use crate::agent_helpers::ToolDispatchDecision;
-use crate::agent_loop::AgentLoop;
+use crate::agent_helpers::{ToolDispatchDecision, ToolRegistry};
 
 /// Remove duplicate tool calls that share the same `function.name`
 /// and `function.arguments`. Order-stable: first occurrence wins.
@@ -60,11 +59,11 @@ pub(crate) fn deduplicate_tool_calls(calls: &[ToolCall]) -> Vec<ToolCall> {
 /// substring matching. Returns `true` if `tc.function.name` was
 /// rewritten in-place. The fuzzy-match threshold is "target ⊆ name
 /// OR name ⊆ target" — both lowercase.
-pub(crate) fn repair_tool_call(loop_: &AgentLoop, tc: &mut ToolCall) -> bool {
-    if loop_.tool_registry.get(&tc.function.name).is_some() {
+pub(crate) fn repair_tool_call(tool_registry: &ToolRegistry, tc: &mut ToolCall) -> bool {
+    if tool_registry.get(&tc.function.name).is_some() {
         return false;
     }
-    let names = loop_.tool_registry.names();
+    let names = tool_registry.names();
     let target = tc.function.name.to_lowercase();
 
     if let Some(name) = names.iter().find(|n| n.to_lowercase() == target) {
@@ -92,11 +91,11 @@ pub(crate) fn repair_tool_call(loop_: &AgentLoop, tc: &mut ToolCall) -> bool {
 /// the field is missing. Trims whitespace + skips when `session_id`
 /// itself is empty. The new args string only round-trips if
 /// `tc.function.arguments` was a JSON object.
-pub(crate) fn hydrate_session_search_args(loop_: &AgentLoop, tc: &mut ToolCall) {
+pub(crate) fn hydrate_session_search_args(session_id: Option<&str>, tc: &mut ToolCall) {
     if tc.function.name != "session_search" {
         return;
     }
-    let Some(session_id) = loop_.config.session_id.as_deref() else {
+    let Some(session_id) = session_id else {
         return;
     };
     let session_id = session_id.trim();
@@ -174,10 +173,10 @@ pub(crate) fn denial_repick_hint(tool_name: &str, raw_args: &str) -> &'static st
 /// returned map is keyed by `ToolCall::id` and consumed by both the
 /// orchestrated `delegate_task` path and the `JoinSet` path.
 pub(crate) async fn resolve_pre_dispatch(
-    loop_: &AgentLoop,
+    on_pre_tool_dispatch: Option<&(dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync)>,
     tool_calls: &[ToolCall],
 ) -> HashMap<String, Result<(), String>> {
-    let Some(hook) = loop_.callbacks.on_pre_tool_dispatch.as_ref() else {
+    let Some(hook) = on_pre_tool_dispatch else {
         return HashMap::new();
     };
     let mut decisions = HashMap::with_capacity(tool_calls.len());
@@ -213,22 +212,22 @@ pub(crate) fn resolve_max_delegate_depth() -> u32 {
 /// calls are passed through untouched. The cap is per-batch — the
 /// caller (AgentLoop::execute_tool_calls) iterates over a single
 /// resolved batch.
-pub(crate) fn cap_delegates(loop_: &AgentLoop, tool_calls: &mut Vec<ToolCall>) {
+pub(crate) fn cap_delegates(max_concurrent_delegates: u32, tool_calls: &mut Vec<ToolCall>) {
     let delegate_count = tool_calls
         .iter()
         .filter(|tc| tc.function.name == "delegate_task")
         .count() as u32;
-    if delegate_count > loop_.config.max_concurrent_delegates {
+    if delegate_count > max_concurrent_delegates {
         tracing::warn!(
             "Capping delegate_task calls from {} to {}",
             delegate_count,
-            loop_.config.max_concurrent_delegates
+            max_concurrent_delegates
         );
         let mut kept_delegates = 0u32;
         tool_calls.retain(|tc| {
             if tc.function.name == "delegate_task" {
                 kept_delegates += 1;
-                kept_delegates <= loop_.config.max_concurrent_delegates
+                kept_delegates <= max_concurrent_delegates
             } else {
                 true
             }

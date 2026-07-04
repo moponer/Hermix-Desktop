@@ -241,8 +241,11 @@ mod tests {
 
     #[test]
     fn jittered_backoff_smoke() {
+        // agent_helpers::jittered_backoff(0, 1000, 30000):
+        //   exp=1000, capped=1000, jitter=250
+        //   delay in [875, 1125)
         let d = jittered_backoff(0, 1000, 30000);
-        assert!(d.as_millis() >= 500);
-        assert!(d.as_millis() <= 1000);
+        assert!(d.as_millis() >= 850);
+        assert!(d.as_millis() <= 1150);
     }
 }

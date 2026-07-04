@@ -3391,12 +3391,12 @@ impl AgentLoop {
     /// Try to repair an unknown tool name via case-insensitive or substring matching.
     /// Returns `true` if the tool call was repaired.
     fn repair_tool_call(&self, tc: &mut ToolCall) -> bool {
-        crate::tool_dispatch::repair_tool_call(self, tc)
+        crate::tool_dispatch::repair_tool_call(&self.tool_registry, tc)
     }
 
     /// Inject current session id into `session_search` calls when absent.
     fn hydrate_session_search_args(&self, tc: &mut ToolCall) {
-        crate::tool_dispatch::hydrate_session_search_args(self, tc)
+        crate::tool_dispatch::hydrate_session_search_args(self.config.session_id.as_deref(), tc)
     }
 
     fn turn_route_cost_guard(&self, model: String) -> TurnRuntimeRoute {
@@ -3484,7 +3484,11 @@ impl AgentLoop {
         &self,
         tool_calls: &[ToolCall],
     ) -> HashMap<String, Result<(), String>> {
-        crate::tool_dispatch::resolve_pre_dispatch(self, tool_calls).await
+        crate::tool_dispatch::resolve_pre_dispatch(
+            self.callbacks.on_pre_tool_dispatch.as_ref().map(|b| b.as_ref()),
+            tool_calls,
+        )
+        .await
     }
 
     /// Execute a batch of tool calls in parallel using a JoinSet.
@@ -3974,7 +3978,7 @@ impl AgentLoop {
 
     /// Cap concurrent delegate_task calls based on config.
     fn cap_delegates(&self, tool_calls: &mut Vec<ToolCall>) {
-        crate::tool_dispatch::cap_delegates(self, tool_calls)
+        crate::tool_dispatch::cap_delegates(self.config.max_concurrent_delegates, tool_calls)
     }
 
     fn emit_background_review_metrics(&self, turn: u32, ctx: &ContextManager) {
