@@ -1,5 +1,5 @@
 // Hermix Desktop API Client — routes aligned to hermix-server
-import type { AutomationTask, ChatMessage } from "./types";
+import type { AutomationTask, ChatMessage, Session } from "./types";
 import { storage, STORAGE_KEYS } from "./utils/storageCompat";
 // v5: reuse detectToolError from messageParser for errorReason extraction
 // on reloaded tool messages — same helper as the live-streaming path.
@@ -93,56 +93,23 @@ export interface ProtocolMessage {
     created_at: string;
   }>;
   /** Approval metadata for `role === "approval"` messages — mirrors
-   *  the server-side `ApprovalRecord`. */
+   *  the server-side `ApprovalRecord` 1:1 (snake_case, matching
+   *  the Rust `serde` defaults). */
   extra?: {
     request_id?: string;
-    requestId?: string;
     tool?: string;
     arguments?: unknown;
     risk?: string;
-    riskLevel?: string;
     decision?: "approved" | "denied" | null;
     decided_at?: string | null;
-    decidedAt?: string | null;
     /** Wall-clock deadline (Unix ms) when the server will
      *  auto-deny this request. Persisted in the `ApprovalRecord`
      *  and forwarded as `StreamEvent::RequestApproval::expires_at`
      *  on the wire. Mirrors the front-end
-     *  `ApprovalMessageMeta::expiresAt` field 1:1 — accepting
-     *  both casings because the server emits snake_case while
-     *  older drafts used camelCase. */
+     *  `ApprovalMessageMeta::expiresAt` field 1:1. */
     expires_at?: number | null;
-    expiresAt?: number | null;
     linked_assistant_id?: string | null;
-    linkedAssistantId?: string | null;
   };
-}
-
-export interface Session {
-  id: string;
-  title: string;
-  created_at: string;
-  updated_at: string;
-  messages: ChatMessage[];
-  /**
-   * Backend-reported message count for the session. Loaded eagerly from
-   * `GET /v1/sessions` (which always returns it) — unlike `messages`,
-   * which only loads when the user opens the session. Used by the
-   * sidebar to render the "N 条" badge and by `handleNewChat` to
-   * decide whether an existing empty session can be reused.
-   *
-   * `messages.length` is NOT a reliable indicator of emptiness:
-   * `toSession()` always seeds it as `[]`, so `messages.length === 0`
-   * is true for *every* session until the user has clicked into it.
-   */
-  message_count?: number;
-  project?: string;
-  /** Workspace path (from sessions.workspace column). */
-  workspace?: string;
-  /** Selected expert ID for this session (from sessions.expert_id column). */
-  expert_id?: string;
-  /** Selected model for this session (from sessions.model column). */
-  model?: string;
 }
 
 export interface DashboardSession {
@@ -178,12 +145,6 @@ export interface SkillInfo {
   description: string;
   category: string;
   enabled: boolean;
-}
-
-export interface ThemeInfo {
-  name: string;
-  label: string;
-  description: string;
 }
 
 export interface PluginSettings {
@@ -415,10 +376,7 @@ export const getSessionMessages = async (id: string): Promise<ChatMessage[]> => 
     )
     .map((m, i) => {
       if (m.role === "approval") {
-        // The server's `extra` is snake_case (`request_id`, etc.).
-        // We accept both casings because some server drafts use
-        // camelCase; the UI is the only consumer and should be
-        // robust to either.
+        // Server emits `extra` as snake_case (mirrors `ApprovalRecord`).
         const ex = m.extra ?? {};
         return {
           id: m.id ?? `${id}-approval-${i}`,
@@ -426,12 +384,12 @@ export const getSessionMessages = async (id: string): Promise<ChatMessage[]> => 
           content: "",
           timestamp: m.timestamp ?? new Date().toISOString(),
           approval: {
-            requestId: ex.requestId ?? ex.request_id ?? "",
+            requestId: ex.request_id ?? "",
             tool: ex.tool ?? "tool",
             args: ex.arguments,
-            riskLevel: ex.riskLevel ?? ex.risk,
+            riskLevel: ex.risk,
             decision: ex.decision ?? null,
-            decidedAt: ex.decidedAt ?? ex.decided_at ?? null,
+            decidedAt: ex.decided_at ?? null,
             // Persist the original server-side deadline so a session
             // reload re-renders the countdown against the same wall
             // clock the server is going to auto-deny on. Without
@@ -442,12 +400,8 @@ export const getSessionMessages = async (id: string): Promise<ChatMessage[]> => 
             // reloading). See the comment on
             // `ApprovalMessageMeta::expiresAt` in `types.ts`.
             expiresAt:
-              typeof ex.expiresAt === "number"
-                ? ex.expiresAt
-                : typeof ex.expires_at === "number"
-                  ? ex.expires_at
-                  : null,
-            linkedAssistantId: ex.linkedAssistantId ?? ex.linked_assistant_id ?? null,
+              typeof ex.expires_at === "number" ? ex.expires_at : null,
+            linkedAssistantId: ex.linked_assistant_id ?? null,
           },
         };
       }
@@ -664,7 +618,7 @@ export const updateEnabledToolsets = async (
   fetchJSON<ToolsetToggleResult>("/api/tools/toolsets/enabled", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enabled, disabled: [] }),
+    body: JSON.stringify({ enabled }),
   });
 
 export interface PluginManifest {
@@ -701,16 +655,6 @@ export const inspectAllPlugins = async (): Promise<Record<string, PluginInspect>
     );
   } catch {
     return {};
-  }
-};
-
-export const inspectPlugin = async (id: string): Promise<PluginInspect> => {
-  try {
-    return await fetchJSON<PluginInspect>(
-      `/api/dashboard/plugin-inspect/${encodeURIComponent(id)}`,
-    );
-  } catch {
-    return { id, availability: "seeded", toolset: null, tools: [], total: 0 };
   }
 };
 
@@ -900,11 +844,12 @@ interface McpServerListResponse {
 export const getMcpServers = async (): Promise<McpServerEntry[]> => {
   try {
     const res = await fetchJSON<McpServerListResponse>("/api/mcp/servers");
-    const list = res.servers.map(fromBackend);
-    saveMcpServersCache(list);
-    return list;
+    return res.servers.map(fromBackend);
   } catch {
     // Backend offline (sidecar still starting, etc.) — fall back to cache.
+    // The cache is only ever populated by user mutations (add/update/delete)
+    // or an explicit reset, never by this read path: the backend is the
+    // single source of truth on GET.
     return loadMcpServersCache();
   }
 };
@@ -987,18 +932,6 @@ export const resetMcpServersToOfficial = async (): Promise<McpServerEntry[]> => 
     saveMcpServersCache(fresh);
     return fresh;
   }
-};
-
-export const getThemes = async (): Promise<{ active: string; themes: ThemeInfo[] }> =>
-  fetchJSON("/api/dashboard/themes");
-
-export const setTheme = async (name: string): Promise<boolean> => {
-  await fetchJSON("/api/dashboard/theme", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  return true;
 };
 
 export const getLogs = async (file = "agent", lines = 100): Promise<{ lines: string[] }> =>

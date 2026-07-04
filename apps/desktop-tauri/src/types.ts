@@ -313,4 +313,4 @@ export type NavPage = "chat" | "search" | "plugins" | "automation" | "settings" 
 //     with initialTab="builtin". Sidebar no longer exposes it directly.
 
 // Re-export from api
-export type { SessionSummary, ProtocolMessage, SystemStatus, HermesConfig, SkillInfo, ThemeInfo } from "./api";
+export type { SessionSummary, ProtocolMessage, SystemStatus, HermesConfig, SkillInfo } from "./api";

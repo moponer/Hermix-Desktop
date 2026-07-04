@@ -31,19 +31,6 @@ export async function openDataDir(): Promise<void> {
   await invoke("open_external_url", { url: path });
 }
 
-/**
- * **Deprecated**: kept for one release as an alias for [`openDataDir`].
- *
- * Migrate to `openDataDir`. Internally it now calls the same Tauri
- * command as the new function, but the Rust side emits a deprecation
- * warning to stderr on every call so the legacy behaviour is
- * observable during the migration window.
- */
-export async function openSettingsDir(): Promise<void> {
-  const path = await invoke<string>("get_settings_dir");
-  await invoke("open_external_url", { url: path });
-}
-
 export async function openExternalUrl(url: string): Promise<void> {
   try {
     await invoke("open_external_url", { url });
@@ -128,9 +115,7 @@ export async function renderOfficePreview(
 // Aliases for SettingsView compatibility
 //
 // `openSettingsDirectory` is the legacy name used by SettingsView.
-// It's kept as a deprecated alias for `openDataDir` (NOT for
-// `openSettingsDir`, which routes through the deprecated Tauri
-// command). One release window: callers should migrate to
-// `openDataDir` directly.
+// It's a deprecated alias for `openDataDir`; callers should migrate
+// to `openDataDir` directly.
 export const openSettingsDirectory = openDataDir;
 export const restartApp = restartDesktopApp;
