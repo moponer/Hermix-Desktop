@@ -1428,69 +1428,12 @@ impl AgentLoop {
     /// silently. Only the embedded SQLite backend (and any future
     /// write-capable backend) actually writes to long-term store.
     pub fn drain_focus_conclusions_to_memory_router(&self) -> usize {
-        let conclusions = {
-            let Ok(mut stack) = self.focus_stack.lock() else {
-                return 0;
-            };
-            stack.drain_conclusions()
-        };
-        if conclusions.is_empty() {
-            return 0;
-        }
-        let Some(router) = self.memory_router.as_ref() else {
-            tracing::debug!(
-                target: "hermix.agent",
-                count = conclusions.len(),
-                "drain_focus_conclusions: no memory_router attached, dropping conclusions"
-            );
-            return 0;
-        };
         let session_id = self.config.session_id.clone().unwrap_or_default();
-        let router = router.clone();
-        let count = conclusions.len();
-        // Phase 17 (BaiLongma compression backfill): deterministic
-        // fact extraction. Each conclusion becomes a row in the
-        // `facts` table with a canonical_key derived from
-        // (session_id, source_frame_id) so re-running is idempotent.
-        // This is sync (SQLite is sub-ms) — we do it before spawning
-        // the async persistence so the fact row lands in the same
-        // SQLite connection window as the conclusion row.
-        //
-        // We only call backfill on the embedded backend (the only
-        // backend that owns the `facts` table). The router-level
-        // `upsert_conclusion` already fans out to every backend.
-        for c in &conclusions {
-            if let Some(embedded) = router
-                .find_embedded_backend()
-            {
-                if let Err(e) = embedded.backfill_compression_fact(&session_id, c) {
-                    tracing::warn!(
-                        target: "hermix.agent",
-                        session_id = %session_id,
-                        conclusion_id = %c.source_frame_id,
-                        error = %e,
-                        "drain_focus_conclusions: backfill_compression_fact failed"
-                    );
-                }
-            }
-        }
-        // Persist asynchronously — don't block the agent loop on
-        // SQLite writes. Errors are logged via the router's
-        // tolerate_errors policy (default: log + continue).
-        tokio::spawn(async move {
-            for c in &conclusions {
-                if let Err(e) = router.upsert_conclusion(c).await {
-                    tracing::warn!(
-                        target: "hermix.agent",
-                        session_id = %session_id,
-                        conclusion_id = %c.source_frame_id,
-                        error = %e,
-                        "drain_focus_conclusions: router.upsert_conclusion failed"
-                    );
-                }
-            }
-        });
-        count
+        crate::memory_prefetch::drain_focus_conclusions(
+            &self.focus_stack,
+            self.memory_router.as_ref(),
+            &session_id,
+        )
     }
 
     fn drain_pending_steer(&self) -> Option<String> {
@@ -1691,96 +1634,29 @@ impl AgentLoop {
     }
 
     fn memory_on_turn_start(&self, turn: u32, message: &str) {
-        if self.config.skip_memory {
-            return;
-        }
-        if let Some(ref router) = self.memory_router {
-            router.on_turn_start(turn, message);
-        }
+        crate::memory_prefetch::memory_on_turn_start(
+            &self.config,
+            self.memory_router.as_deref(),
+            turn,
+            message,
+        );
     }
 
     fn memory_pre_compress_note(&self, messages: &[Message]) -> Option<String> {
-        if self.config.skip_memory {
-            return None;
-        }
-        let router = match self.memory_router {
-            Some(ref r) => r,
-            None => return None,
-        };
-        let as_values: Vec<Value> = messages
-            .iter()
-            .filter_map(|m| serde_json::to_value(m).ok())
-            .collect();
-        let combined = router.on_pre_compress(&as_values);
-        if combined.trim().is_empty() { None } else { Some(combined) }
-    }
-
-    /// Build a short human-readable summary of the session from the
-    /// last user turn + last assistant turn. Used by
-    /// [`Self::memory_on_session_end`] to write a session-level
-    /// `FocusConclusion` to the embedded SQLite (memory.db) so
-    /// cross-session recall works even when the session never used
-    /// `delegate_task`.
-    ///
-    /// Returns `None` when the messages vector has no user content
-    /// (e.g. an aborted / empty session) — in that case writing a
-    /// meaningless empty row would only pollute recall.
-    fn build_session_summary(messages: &[Message]) -> Option<String> {
-        crate::memory_hooks::build_session_summary(messages)
+        crate::memory_prefetch::memory_pre_compress_note(
+            &self.config,
+            self.memory_router.as_deref(),
+            messages,
+        )
     }
 
     fn memory_on_session_end(&self, messages: &[Message]) {
-        if self.config.skip_memory {
-            return;
-        }
-        // M1.6.5: persist a session-level FocusConclusion to the
-        // embedded SQLite (memory.db) so cross-session recall works
-        // even when the session never used `delegate_task`. Without
-        // this hook the only writes to memory.db came from
-        // `note_delegation_end`, leaving single-shot sessions with
-        // 0 rows — the symptom the user reported as "会话记忆不工作".
-        if let Some(ref router) = self.memory_router {
-            if let Some(text) = Self::build_session_summary(messages) {
-                let router = router.clone();
-                let session_id = self.config.session_id.clone().unwrap_or_default();
-                let conclusion = hermix_focus::FocusConclusion {
-                    source_frame_id: uuid::Uuid::new_v4(),
-                    text,
-                    salience: 0.5,
-                    tags: vec!["session".to_string()],
-                    created_at: chrono::Utc::now(),
-                };
-                tokio::spawn(async move {
-                    if let Err(e) = router.upsert_conclusion(&conclusion).await {
-                        tracing::warn!(
-                            target: "hermix.agent",
-                            session_id = %session_id,
-                            error = %e,
-                            "memory_on_session_end: upsert_conclusion failed"
-                        );
-                    }
-                });
-            }
-        }
-
-        // Drain any pending focus conclusions.
-        let drained = self.drain_focus_conclusions_to_memory_router();
-        if drained > 0 {
-            tracing::debug!(
-                target: "hermix.agent",
-                count = drained,
-                "memory_on_session_end: drained leftover focus conclusions"
-            );
-        }
-
-        // Route session-end notification through MemoryRouter.
-        if let Some(ref router) = self.memory_router {
-            let as_values: Vec<Value> = messages
-                .iter()
-                .filter_map(|m| serde_json::to_value(m).ok())
-                .collect();
-            router.on_session_end(&as_values);
-        }
+        crate::memory_prefetch::memory_on_session_end(
+            &self.config,
+            self.memory_router.as_ref(),
+            &self.focus_stack,
+            messages,
+        );
     }
 
     /// M1: collect the typed, route-gated directions that will be
@@ -5437,13 +5313,13 @@ mod tests {
     #[test]
     fn build_session_summary_returns_none_without_user_turns() {
         let msgs = vec![msg_assistant("hi")];
-        assert!(AgentLoop::build_session_summary(&msgs).is_none());
+        assert!(crate::memory_hooks::build_session_summary(&msgs).is_none());
     }
 
     #[test]
     fn build_session_summary_returns_none_for_empty_user_content() {
         let msgs = vec![msg_user("   ")];
-        assert!(AgentLoop::build_session_summary(&msgs).is_none());
+        assert!(crate::memory_hooks::build_session_summary(&msgs).is_none());
     }
 
     #[test]
@@ -5454,7 +5330,7 @@ mod tests {
             msg_user("second question"),
             msg_assistant("second answer"),
         ];
-        let s = AgentLoop::build_session_summary(&msgs).expect("some summary");
+        let s = crate::memory_hooks::build_session_summary(&msgs).expect("some summary");
         assert!(s.contains("second question"));
         assert!(s.contains("second answer"));
         assert!(!s.contains("first question"));
@@ -5463,7 +5339,7 @@ mod tests {
     #[test]
     fn build_session_summary_handles_user_only() {
         let msgs = vec![msg_user("hello")];
-        let s = AgentLoop::build_session_summary(&msgs).expect("some summary");
+        let s = crate::memory_hooks::build_session_summary(&msgs).expect("some summary");
         assert_eq!(s, "USER: hello");
     }
 
@@ -5472,7 +5348,7 @@ mod tests {
         let long_user: String = "x".repeat(500);
         let long_assistant: String = "y".repeat(1000);
         let msgs = vec![msg_user(&long_user), msg_assistant(&long_assistant)];
-        let s = AgentLoop::build_session_summary(&msgs).expect("some summary");
+        let s = crate::memory_hooks::build_session_summary(&msgs).expect("some summary");
         // The 200-char user truncation produces 200 chars + "…" appended
         // to the prefix — assert no runaway growth.
         assert!(

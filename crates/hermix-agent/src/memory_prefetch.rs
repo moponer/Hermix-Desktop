@@ -13,13 +13,18 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use hermix_focus::{extract_time_window, fact_extractor, user_style, MemoryHit, MemoryLayer, MemoryQuery};
+use hermix_focus::{
+    extract_time_window, fact_extractor, user_style, FocusConclusion, FocusStack, MemoryHit,
+    MemoryLayer, MemoryQuery, MemoryRouter, SessionFrame,
+};
 use hermix_intelligence::embedding::EmbeddingProvider;
 
 use crate::agent_config::AgentConfig;
-use crate::memory_hooks::memory_write_event_from_tool_call;
-use hermix_core::{ToolCall, ToolResult};
+use crate::memory_hooks::{build_session_summary, memory_write_event_from_tool_call};
+use hermix_core::{Message, ToolCall, ToolResult};
+use serde_json::Value;
 
 /// Run the memory prefetch pipeline and return a markdown block
 /// (`"## Memory\n\n..."`) sized to the configured char budget.
@@ -419,4 +424,197 @@ pub fn notify_memory_writes(
         };
         router.on_memory_write(&action, &target, &content);
     }
+}
+
+/// Route a `on_turn_start` notification through `MemoryRouter`.
+/// No-op when `skip_memory` is set or no router is attached.
+pub fn memory_on_turn_start(
+    config: &AgentConfig,
+    router: Option<&MemoryRouter>,
+    turn: u32,
+    message: &str,
+) {
+    if config.skip_memory {
+        return;
+    }
+    if let Some(router) = router {
+        router.on_turn_start(turn, message);
+    }
+}
+
+/// Ask `MemoryRouter` for a pre-compression note to splice into the
+/// compression summary. Returns `None` when `skip_memory` is set,
+/// no router is attached, or the router produced an empty string.
+pub fn memory_pre_compress_note(
+    config: &AgentConfig,
+    router: Option<&MemoryRouter>,
+    messages: &[Message],
+) -> Option<String> {
+    if config.skip_memory {
+        return None;
+    }
+    let router = router?;
+    let as_values: Vec<Value> = messages
+        .iter()
+        .filter_map(|m| serde_json::to_value(m).ok())
+        .collect();
+    let combined = router.on_pre_compress(&as_values);
+    if combined.trim().is_empty() {
+        None
+    } else {
+        Some(combined)
+    }
+}
+
+/// Drain pending `FocusConclusion`s from the focus stack and forward
+/// them to the long-term memory backend. Returns the number of
+/// conclusions processed.
+///
+/// No-op when no router is attached — conclusions are still drained
+/// from the focus stack so they don't pile up. Each conclusion is
+/// persisted via `router.upsert_conclusion` (async, fan-out to all
+/// backends) and, when the embedded backend is present, a
+/// deterministic compression fact row is backfilled into the `facts`
+/// table for cross-session recall.
+pub fn drain_focus_conclusions(
+    focus_stack: &Mutex<FocusStack<SessionFrame>>,
+    router: Option<&Arc<MemoryRouter>>,
+    session_id: &str,
+) -> usize {
+    let conclusions: Vec<FocusConclusion> = {
+        let Ok(mut stack) = focus_stack.lock() else {
+            return 0;
+        };
+        stack.drain_conclusions()
+    };
+    if conclusions.is_empty() {
+        return 0;
+    }
+    let Some(router_ref) = router else {
+        tracing::debug!(
+            target: "hermix.agent",
+            count = conclusions.len(),
+            "drain_focus_conclusions: no memory_router attached, dropping conclusions"
+        );
+        return 0;
+    };
+    let session_id = session_id.to_string();
+    // Clone the Arc so the async task owns its handle — keeps the
+    // caller's borrow free after we return.
+    let router: Arc<MemoryRouter> = Arc::clone(router_ref);
+    let count = conclusions.len();
+    // Phase 17 (BaiLongma compression backfill): deterministic
+    // fact extraction. Each conclusion becomes a row in the
+    // `facts` table with a canonical_key derived from
+    // (session_id, source_frame_id) so re-running is idempotent.
+    // Sync (SQLite is sub-ms) — done before spawning the async
+    // persistence so the fact row lands in the same SQLite
+    // connection window as the conclusion row.
+    //
+    // Only on the embedded backend (the only one that owns the
+    // `facts` table); the router-level `upsert_conclusion` already
+    // fans out to every backend.
+    for c in &conclusions {
+        if let Some(embedded) = router.find_embedded_backend() {
+            if let Err(e) = embedded.backfill_compression_fact(&session_id, c) {
+                tracing::warn!(
+                    target: "hermix.agent",
+                    session_id = %session_id,
+                    conclusion_id = %c.source_frame_id,
+                    error = %e,
+                    "drain_focus_conclusions: backfill_compression_fact failed"
+                );
+            }
+        }
+    }
+    // Persist asynchronously — don't block the agent loop on SQLite
+    // writes. Errors are logged via the router's tolerate_errors
+    // policy (default: log + continue).
+    tokio::spawn(async move {
+        for c in &conclusions {
+            if let Err(e) = router.upsert_conclusion(c).await {
+                tracing::warn!(
+                    target: "hermix.agent",
+                    session_id = %session_id,
+                    conclusion_id = %c.source_frame_id,
+                    error = %e,
+                    "drain_focus_conclusions: router.upsert_conclusion failed"
+                );
+            }
+        }
+    });
+    count
+}
+
+/// Session-end side-effects:
+/// 1. Persist a session-level `FocusConclusion` to the embedded
+///    SQLite (memory.db) so cross-session recall works even when the
+///    session never used `delegate_task`.
+/// 2. Drain any pending focus conclusions from the focus stack.
+/// 3. Route `on_session_end` through `MemoryRouter`.
+///
+/// No-op when `skip_memory` is set. The session-level conclusion is
+/// spawned on the runtime so the agent loop doesn't block on SQLite
+/// writes; errors are logged and swallowed.
+#[allow(clippy::too_many_arguments)]
+pub fn memory_on_session_end(
+    config: &AgentConfig,
+    router: Option<&Arc<MemoryRouter>>,
+    focus_stack: &Mutex<FocusStack<SessionFrame>>,
+    messages: &[Message],
+) {
+    if config.skip_memory {
+        return;
+    }
+    let Some(router_ref) = router else {
+        // Even with no router, drain so conclusions don't pile up.
+        let _ = drain_focus_conclusions(focus_stack, None, "");
+        return;
+    };
+    let router_owned: Arc<MemoryRouter> = Arc::clone(router_ref);
+    // M1.6.5: persist a session-level FocusConclusion to the
+    // embedded SQLite (memory.db) so cross-session recall works
+    // even when the session never used `delegate_task`. Without
+    // this hook the only writes to memory.db came from
+    // `note_delegation_end`, leaving single-shot sessions with
+    // 0 rows — the symptom the user reported as "会话记忆不工作".
+    if let Some(text) = build_session_summary(messages) {
+        let router = router_owned.clone();
+        let session_id = config.session_id.clone().unwrap_or_default();
+        let conclusion = FocusConclusion {
+            source_frame_id: uuid::Uuid::new_v4(),
+            text,
+            salience: 0.5,
+            tags: vec!["session".to_string()],
+            created_at: chrono::Utc::now(),
+        };
+        tokio::spawn(async move {
+            if let Err(e) = router.upsert_conclusion(&conclusion).await {
+                tracing::warn!(
+                    target: "hermix.agent",
+                    session_id = %session_id,
+                    error = %e,
+                    "memory_on_session_end: upsert_conclusion failed"
+                );
+            }
+        });
+    }
+
+    // Drain any pending focus conclusions.
+    let session_id = config.session_id.clone().unwrap_or_default();
+    let drained = drain_focus_conclusions(focus_stack, Some(&router_owned), &session_id);
+    if drained > 0 {
+        tracing::debug!(
+            target: "hermix.agent",
+            count = drained,
+            "memory_on_session_end: drained leftover focus conclusions"
+        );
+    }
+
+    // Route session-end notification through MemoryRouter.
+    let as_values: Vec<Value> = messages
+        .iter()
+        .filter_map(|m| serde_json::to_value(m).ok())
+        .collect();
+    router_owned.on_session_end(&as_values);
 }
