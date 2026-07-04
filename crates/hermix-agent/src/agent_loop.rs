@@ -3423,29 +3423,7 @@ impl AgentLoop {
         reasoning_content: &str,
         tool_calls: &[ToolCall],
     ) -> Message {
-        if tool_calls.is_empty() || tool_calls.iter().all(|tc| tc.function.name.is_empty()) {
-            let mut m = Message::assistant(content.to_string());
-            if !reasoning_content.is_empty() {
-                m.reasoning_content = Some(reasoning_content.to_string());
-            }
-            m
-        } else {
-            // Always set a `content` string when tool_calls are
-            // present, even when the sanitizer has stripped the raw
-            // XML to an empty string.  Some API providers (MiniMax
-            // M3) reject assistant messages whose `content` field is
-            // `null` or missing when they carry `tool_calls`.
-            let content_opt = Some(if content.is_empty() {
-                String::new()
-            } else {
-                content.to_string()
-            });
-            let mut m = Message::assistant_with_tool_calls(content_opt, tool_calls.to_vec());
-            if !reasoning_content.is_empty() {
-                m.reasoning_content = Some(reasoning_content.to_string());
-            }
-            m
-        }
+        crate::stream_collect::assemble_stream_assistant_message(content, reasoning_content, tool_calls)
     }
 
     /// Apply one streaming [`StreamChunk`] during [`Self::collect_stream_llm_response`].
@@ -3476,84 +3454,19 @@ impl AgentLoop {
         finish_reason: &mut Option<String>,
         on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
     ) {
-        let mut chunk = chunk;
-        if let Some(ref mut delta) = chunk.delta {
-            if let Some(ref mut text) = delta.content {
-                let (clean_text, think_text) = think_parser.feed(text);
-                // Keep a copy of the pre-sanitizer text so we can
-                // later parse it for tool calls hidden inside
-                // `<minimax:tool_call>` blocks (MiniMax-M2 / M2.5).
-                raw_content.push_str(&clean_text);
-                // Second pass: scrub raw tool-call XML out of the
-                // *clean* text. We do this BEFORE both
-                //   (a) the local `content` accumulator (so the
-                //       persisted assistant message is clean on
-                //       reload) and
-                //   (b) the chunk we forward to the WS layer (so
-                //       the live stream never shows leaked XML).
-                let visible_text = tool_call_sanitizer.feed(&clean_text);
-                if !visible_text.is_empty() {
-                    content.push_str(&visible_text);
-                    if let Some(ref cb) = self.callbacks.on_stream_delta {
-                        cb(&visible_text);
-                    }
-                }
-                // If the sanitizer ate the whole clean text,
-                // rewrite `delta.content` to the (possibly empty)
-                // visible text so the downstream `on_chunk` wrapper
-                // doesn't forward the raw XML. This is the part
-                // that fixes the user-visible leak.
-                *text = visible_text;
-                if !think_text.is_empty() {
-                    reasoning_content.push_str(&think_text);
-                    if let Some(ref cb) = self.callbacks.on_thinking {
-                        cb(&think_text);
-                    }
-                }
-            }
-            if let Some(ref extra) = delta.extra {
-                if let Some(thinking) = extra.get("thinking").and_then(|v| v.as_str()) {
-                    reasoning_content.push_str(thinking);
-                    if let Some(ref cb) = self.callbacks.on_thinking {
-                        cb(thinking);
-                    }
-                }
-            }
-            if let Some(ref tc_deltas) = delta.tool_calls {
-                for tcd in tc_deltas {
-                    let idx = tcd.index as usize;
-                    while tool_calls.len() <= idx {
-                        tool_calls.push(ToolCall {
-                            id: String::new(),
-                            function: hermix_core::FunctionCall {
-                                name: String::new(),
-                                arguments: String::new(),
-                            },
-                        });
-                    }
-                    if let Some(ref id) = tcd.id {
-                        tool_calls[idx].id = id.clone();
-                    }
-                    if let Some(ref fc) = tcd.function {
-                        if let Some(ref name) = fc.name {
-                            tool_calls[idx].function.name = name.clone();
-                        }
-                        if let Some(ref args) = fc.arguments {
-                            tool_calls[idx].function.arguments.push_str(args);
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(ref usage) = chunk.usage {
-            *last_usage = Some(usage.clone());
-        }
-        if let Some(ref fr) = chunk.finish_reason {
-            *finish_reason = Some(fr.clone());
-        }
-
-        on_chunk(chunk);
+        crate::stream_collect::apply_stream_collect_chunk(
+            &self.callbacks,
+            chunk,
+            content,
+            raw_content,
+            reasoning_content,
+            think_parser,
+            tool_call_sanitizer,
+            tool_calls,
+            last_usage,
+            finish_reason,
+            on_chunk,
+        );
     }
 
     /// Collect one streaming completion into [`LlmResponse`] (first attempt in `run_stream` D-step).

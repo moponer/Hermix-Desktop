@@ -56,6 +56,7 @@ pub mod retry_counters;
 pub mod session_persistence;
 pub mod skill_orchestrator;
 pub mod smart_model_routing;
+pub mod stream_collect;
 pub mod steer;
 pub mod sub_agent_orchestrator;
 pub mod tool_dispatch;
