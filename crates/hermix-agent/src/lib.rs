@@ -70,6 +70,7 @@ pub mod smart_model_routing;
 pub mod stream_collect;
 pub mod steer;
 pub mod sub_agent_orchestrator;
+pub mod tool_result_processor;
 pub mod tool_dispatch;
 pub mod turn_timings;
 pub mod sub_agent_safety;

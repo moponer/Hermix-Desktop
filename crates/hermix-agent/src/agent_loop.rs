@@ -2535,10 +2535,7 @@ fn summarize_background_review_result(messages: &[Message]) -> Option<String> {
 }
 
 // Physically moved to `cost_guard.rs` (2026-07-04) alongside the
-// `CostGuard` struct. Re-exported here so `merge_usage` call sites
-// (`run()` / `run_stream()` turn-usage accumulation) keep compiling
-// without renaming inline usages.
-pub(crate) use crate::cost_guard::merge_usage;
+use crate::cost_guard::merge_usage;
 
 #[cfg(test)]
 mod tests {

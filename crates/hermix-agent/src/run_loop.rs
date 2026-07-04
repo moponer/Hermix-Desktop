@@ -21,6 +21,7 @@ use crate::plugins::HookType;
 use crate::python_alignment::{budget_pressure_text, inject_budget_pressure_into_last_tool_result};
 use crate::stream_collect::StreamCollectOutcome;
 use crate::message_helpers::assistant_visible_text_after_think_blocks;
+use crate::tool_result_processor::push_tool_result;
 
 impl AgentLoop {
     pub async fn run(
@@ -469,7 +470,7 @@ impl AgentLoop {
                     } else {
                         "Skipped: another tool call in this turn used an invalid name. Please retry this tool call.".to_string()
                     };
-                    ctx.add_message(Message::tool_result(tc.id.clone(), content, Some(tc.function.name.as_str())));
+                    push_tool_result(&mut ctx, &tool_calls, &tc.id, &content);
                 }
                 continue;
             }
@@ -514,7 +515,7 @@ impl AgentLoop {
                     } else {
                         "Skipped: other tool call in this response had invalid JSON.".to_string()
                     };
-                    ctx.add_message(Message::tool_result(tc.id.clone(), content, Some(tc.function.name.as_str())));
+                    push_tool_result(&mut ctx, &tool_calls, &tc.id, &content);
                 }
                 continue;
             }
@@ -684,17 +685,7 @@ impl AgentLoop {
                 // label. Without this the persisted `Message::name`
                 // is None and the UI falls back to a generic "tool"
                 // pill on reload.
-                let tool_name = tool_calls
-                    .iter()
-                    .find(|tc| tc.id == result.tool_call_id)
-                    .map(|tc| tc.function.name.as_str());
-                // Truncation is owned by budget::enforce_budget (above),
-                // which is now the single char-safe path. See A1 commit.
-                ctx.add_message(Message::tool_result(
-                    &result.tool_call_id,
-                    &result.content,
-                    tool_name,
-                ));
+                push_tool_result(&mut ctx, &tool_calls, &result.tool_call_id, &result.content);
             }
             self.post_tool_apply_pending_steer(&mut ctx);
             if !tool_calls.is_empty()
@@ -1261,7 +1252,7 @@ impl AgentLoop {
                     } else {
                         "Skipped: another tool call in this turn used an invalid name. Please retry this tool call.".to_string()
                     };
-                    ctx.add_message(Message::tool_result(tc.id.clone(), content, Some(tc.function.name.as_str())));
+                    push_tool_result(&mut ctx, &tool_calls, &tc.id, &content);
                 }
                 continue;
             }
@@ -1306,7 +1297,7 @@ impl AgentLoop {
                     } else {
                         "Skipped: other tool call in this response had invalid JSON.".to_string()
                     };
-                    ctx.add_message(Message::tool_result(tc.id.clone(), content, Some(tc.function.name.as_str())));
+                    push_tool_result(&mut ctx, &tool_calls, &tc.id, &content);
                 }
                 continue;
             }
@@ -1445,17 +1436,7 @@ impl AgentLoop {
                 // label. Without this the persisted `Message::name`
                 // is None and the UI falls back to a generic "tool"
                 // pill on reload.
-                let tool_name = tool_calls
-                    .iter()
-                    .find(|tc| tc.id == result.tool_call_id)
-                    .map(|tc| tc.function.name.as_str());
-                // Truncation is owned by budget::enforce_budget (above),
-                // which is now the single char-safe path. See A1 commit.
-                ctx.add_message(Message::tool_result(
-                    &result.tool_call_id,
-                    &result.content,
-                    tool_name,
-                ));
+                push_tool_result(&mut ctx, &tool_calls, &result.tool_call_id, &result.content);
             }
             self.post_tool_apply_pending_steer(&mut ctx);
             if !tool_calls.is_empty()
