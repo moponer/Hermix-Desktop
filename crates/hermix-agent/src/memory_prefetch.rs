@@ -22,8 +22,11 @@ use hermix_focus::{
 use hermix_intelligence::embedding::EmbeddingProvider;
 
 use crate::agent_config::AgentConfig;
-use crate::memory_hooks::{build_session_summary, memory_write_event_from_tool_call};
+use crate::consciousness::ConsciousnessTracker;
+use crate::focus_stack_ops::{current_focus_depth, note_delegation_end};
+use crate::memory_hooks::{build_session_summary, delegation_event_from_tool_result, memory_write_event_from_tool_call};
 use hermix_core::{Message, ToolCall, ToolResult};
+use hermix_focus::SessionFrameStatus;
 use serde_json::Value;
 
 /// Run the memory prefetch pipeline and return a markdown block
@@ -617,4 +620,102 @@ pub fn memory_on_session_end(
         .filter_map(|m| serde_json::to_value(m).ok())
         .collect();
     router_owned.on_session_end(&as_values);
+}
+
+/// Dispatch delegation tool-call results through the memory subsystem:
+/// 1. Fan out `on_delegation` hooks through `MemoryRouter`.
+/// 2. Pop the matching `Delegation` frame on the focus stack so a
+///    `FocusConclusion` is buffered for the next drain.
+/// 3. Drain pending focus conclusions to long-term memory.
+/// 4. Broadcast the live focus depth to the consciousness tracker.
+///
+/// M1 wires (1)–(3); M1.6.3 added (4). The push side
+/// (`note_delegation_start`) is invoked from the tool-dispatch
+/// path; the pop side here is a safe no-op when no matching frame
+/// is on the stack.
+#[allow(clippy::too_many_arguments)]
+pub fn notify_delegations(
+    config: &AgentConfig,
+    router: Option<&Arc<MemoryRouter>>,
+    focus_stack: &Mutex<FocusStack<SessionFrame>>,
+    tool_calls: &[ToolCall],
+    results: &[ToolResult],
+    consciousness_tracker: Option<&Arc<ConsciousnessTracker>>,
+) {
+    if config.skip_memory {
+        return;
+    }
+    let router = match router {
+        Some(r) => r,
+        None => return,
+    };
+    let session_id = config.session_id.clone().unwrap_or_default();
+    let router_owned: Arc<MemoryRouter> = Arc::clone(router);
+
+    // Step 1: route on_delegation hooks through MemoryRouter.
+    for result in results {
+        let Some(tc) = tool_calls
+            .iter()
+            .find(|tc| tc.id == result.tool_call_id)
+        else {
+            continue;
+        };
+        let Some((task, sub_agent_id)) = delegation_event_from_tool_result(tc, result) else {
+            continue;
+        };
+        router_owned.on_delegation(&task, &sub_agent_id);
+    }
+
+    // Step 2: pop the matching `Delegation` frame on every
+    // delegate_task result so the next pop generates a
+    // `FocusConclusion`. Best-effort second source for
+    // sub_agent_id (args or result.content).
+    for result in results {
+        let Some(tc) = tool_calls
+            .iter()
+            .find(|tc| tc.id == result.tool_call_id)
+        else {
+            continue;
+        };
+        if tc.function.name != "delegate_task" {
+            continue;
+        }
+        let args: Option<Value> = serde_json::from_str(&tc.function.arguments).ok();
+        let sub_agent_id = args
+            .as_ref()
+            .and_then(|v| v.get("sub_agent_id"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_default();
+        let result_sub = serde_json::from_str::<Value>(&result.content)
+            .ok()
+            .and_then(|v| {
+                v.get("sub_agent_id")
+                    .and_then(|id| id.as_str())
+                    .map(str::to_string)
+            });
+        let effective_sub = result_sub
+            .filter(|s| !s.is_empty())
+            .or(if sub_agent_id.is_empty() {
+                None
+            } else {
+                Some(sub_agent_id)
+            })
+            .unwrap_or_default();
+        let status = if result.is_error {
+            SessionFrameStatus::Failed
+        } else {
+            SessionFrameStatus::Completed
+        };
+        let _ = note_delegation_end(focus_stack, &effective_sub, status);
+    }
+
+    // Step 3: drain any pending focus conclusions.
+    drain_focus_conclusions(focus_stack, Some(&router_owned), &session_id);
+
+    // Step 4: broadcast the current focus depth to the consciousness
+    // tracker (no-op when no tracker is attached).
+    if let Some(tracker) = consciousness_tracker {
+        tracker.set_focus_depth(current_focus_depth(focus_stack));
+    }
 }

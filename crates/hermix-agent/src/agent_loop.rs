@@ -12,10 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hermix_focus::{
-    FocusFrame, FocusStack, MemoryLayer,
-    SessionFrame, SessionFrameStatus,
-};
+use hermix_focus::{FocusStack, SessionFrame, SessionFrameStatus};
+#[cfg(test)]
+use hermix_focus::MemoryLayer;
 // `chrono` (DateTime/Utc) dropped on 2026-07-04 when `OAuthStoreCredential`
 // moved to `crate::oauth_refresh`.
 use futures::StreamExt;
@@ -1313,18 +1312,7 @@ impl AgentLoop {
     /// — a second call is a no-op if a root frame is already on the
     /// stack. Callers should invoke this once at `run()` start.
     pub fn note_session_started(&self, task: impl Into<String>) {
-        let mut stack = match self.focus_stack.lock() {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        if stack
-            .frames()
-            .iter()
-            .any(|f| matches!(f.payload.kind, hermix_focus::SessionFrameKind::SessionRoot))
-        {
-            return;
-        }
-        stack.push(FocusFrame::new(SessionFrame::root(task)));
+        crate::focus_stack_ops::note_session_started(&self.focus_stack, task);
     }
 
     /// Push a `Delegation` frame for a `delegate_task` invocation.
@@ -1338,10 +1326,12 @@ impl AgentLoop {
         task: impl Into<String>,
         sub_agent_id: impl Into<String>,
     ) -> Option<hermix_focus::FocusFrameId> {
-        let mut stack = self.focus_stack.lock().ok()?;
-        let depth = self.delegate_depth;
-        let frame = FocusFrame::new(SessionFrame::delegation(task, sub_agent_id, depth));
-        Some(stack.push(frame))
+        crate::focus_stack_ops::note_delegation_start(
+            &self.focus_stack,
+            self.delegate_depth,
+            task,
+            sub_agent_id,
+        )
     }
 
     /// Pop the topmost `Delegation` frame whose payload matches
@@ -1356,51 +1346,7 @@ impl AgentLoop {
         sub_agent_id: &str,
         status: SessionFrameStatus,
     ) -> Option<u32> {
-        let mut stack = self.focus_stack.lock().ok()?;
-        // Find the target frame: topmost Delegation matching
-        // sub_agent_id, or just the topmost Delegation if the id
-        // is empty.
-        let target_idx = {
-            let frames = stack.frames();
-            let mut found: Option<usize> = None;
-            for (i, f) in frames.iter().enumerate().rev() {
-                if !matches!(f.payload.kind, hermix_focus::SessionFrameKind::Delegation) {
-                    continue;
-                }
-                if sub_agent_id.is_empty() || f.payload.sub_agent_id == sub_agent_id {
-                    found = Some(i);
-                    break;
-                }
-            }
-            found?
-        };
-        let popped_depth = stack.frames()[target_idx].payload.depth;
-        // Finish the payload first (status + ended_at), then
-        // mark_clear (idempotent) and pop.
-        let target_id = stack.frames()[target_idx].id;
-        if let Some(frame) = stack.get_mut(target_id) {
-            frame.payload.finish(status);
-            frame.mark_clear();
-        }
-        // The pop API only pops the top, so to pop an interior
-        // frame we have to drain-and-rebuild. This is cheap
-        // because the stack is shallow (one entry per
-        // in-flight delegate_task).
-        let frames_after_target = stack.frames().len() - target_idx - 1;
-        let mut stash: Vec<FocusFrame<SessionFrame>> = Vec::with_capacity(frames_after_target);
-        for _ in 0..frames_after_target {
-            stash.push(stack.pop().expect("stack non-empty by len arithmetic"));
-        }
-        // Discard the popped target frame: the relevant data (depth,
-        // status, ended_at) was extracted into `popped_depth` and
-        // `target_id` above, and `finish()` + `mark_clear()` already
-        // ran before the pop.
-        let _popped = stack.pop().expect("target frame exists");
-        stash.reverse();
-        for f in stash {
-            stack.push(f);
-        }
-        Some(popped_depth)
+        crate::focus_stack_ops::note_delegation_end(&self.focus_stack, sub_agent_id, status)
     }
 
     /// Current depth of the focus stack (number of frames on it).
@@ -1408,10 +1354,7 @@ impl AgentLoop {
     /// `set_focus_depth` takes `u8` and the stack never grows past
     /// `MAX_DELEGATE_DEPTH` (typically 5) in practice.
     pub fn current_focus_depth(&self) -> u8 {
-        self.focus_stack
-            .lock()
-            .map(|s| s.depth() as u8)
-            .unwrap_or(0)
+        crate::focus_stack_ops::current_focus_depth(&self.focus_stack)
     }
 
     /// Drain pending `FocusConclusion`s from the focus stack and
@@ -1557,80 +1500,15 @@ impl AgentLoop {
         )
     }
 
-    fn delegation_event_from_tool_result(
-        tc: &ToolCall,
-        result: &ToolResult,
-    ) -> Option<(String, String)> {
-        crate::memory_hooks::delegation_event_from_tool_result(tc, result)
-    }
-
     fn notify_delegations(&self, tool_calls: &[ToolCall], results: &[ToolResult]) {
-        if self.config.skip_memory {
-            return;
-        }
-        // Route on_delegation hooks through MemoryRouter.
-        let router = match self.memory_router {
-            Some(ref r) => r,
-            None => return,
-        };
-        for result in results {
-            let Some(tc) = tool_calls.iter().find(|tc| tc.id == result.tool_call_id) else {
-                continue;
-            };
-            let Some((task, sub_agent_id)) = Self::delegation_event_from_tool_result(tc, result)
-            else {
-                continue;
-            };
-            router.on_delegation(&task, &sub_agent_id);
-        }
-        // M1: pop the matching `Delegation` frame and ship its
-        // conclusion to the memory router. The push side is the
-        // tool-dispatch path's `note_delegation_start` call (not
-        // wired in M1.3 — public method is ready for the next
-        // pass). When the push side is wired, the pop here will
-        // always find a matching frame; until then it is a safe
-        // no-op.
-        for result in results {
-            let Some(tc) = tool_calls.iter().find(|tc| tc.id == result.tool_call_id) else {
-                continue;
-            };
-            if tc.function.name != "delegate_task" {
-                continue;
-            }
-            let args: Option<Value> = serde_json::from_str(&tc.function.arguments).ok();
-            let sub_agent_id = args
-                .as_ref()
-                .and_then(|v| v.get("sub_agent_id"))
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-                .unwrap_or_default();
-            // The result.content for a delegate_task that the
-            // orchestrator handled contains the sub_agent_id; for
-            // the legacy signal-envelope path, the args might
-            // carry it. We re-parse the result.content as a
-            // best-effort second source.
-            let result_sub = serde_json::from_str::<Value>(&result.content)
-                .ok()
-                .and_then(|v| v.get("sub_agent_id").and_then(|id| id.as_str()).map(str::to_string));
-            let effective_sub = result_sub
-                .filter(|s| !s.is_empty())
-                .or(if sub_agent_id.is_empty() { None } else { Some(sub_agent_id) })
-                .unwrap_or_default();
-            let status = if result.is_error {
-                SessionFrameStatus::Failed
-            } else {
-                SessionFrameStatus::Completed
-            };
-            let _ = self.note_delegation_end(&effective_sub, status);
-        }
-        self.drain_focus_conclusions_to_memory_router();
-
-        // M1.6.3: broadcast the current focus depth to the
-        // consciousness tracker (if wired). This is a no-op when no
-        // tracker is attached (e.g. tests, headless runs).
-        if let Some(ref tracker) = self.consciousness_tracker {
-            tracker.set_focus_depth(self.current_focus_depth());
-        }
+        crate::memory_prefetch::notify_delegations(
+            &self.config,
+            self.memory_router.as_ref(),
+            &self.focus_stack,
+            tool_calls,
+            results,
+            self.consciousness_tracker.as_ref(),
+        );
     }
 
     fn memory_on_turn_start(&self, turn: u32, message: &str) {

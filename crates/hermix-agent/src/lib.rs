@@ -36,6 +36,7 @@ pub mod cost_routing;
 pub mod credential_pool;
 pub mod environment;
 pub mod fallback;
+pub mod focus_stack_ops;
 pub mod gatherer;
 pub mod hardline;
 pub mod interrupt;

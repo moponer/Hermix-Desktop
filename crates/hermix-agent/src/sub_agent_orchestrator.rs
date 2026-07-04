@@ -13,7 +13,7 @@
 //!   started/ended timestamps, status, turn count, usage and cost
 //! - returning a JSON string that the agent loop feeds back to the LLM as the
 //!   tool result (must include `sub_agent_id` so
-//!   [`AgentLoop::delegation_event_from_tool_result`] still fires).
+//!   [`crate::memory_hooks::delegation_event_from_tool_result`] still fires).
 //!
 //! Registration: consumers build an [`AgentLoop`] via
 //! [`crate::AgentLoop::with_sub_agent_orchestrator`] to swap the default
