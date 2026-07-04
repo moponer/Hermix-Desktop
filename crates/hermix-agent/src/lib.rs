@@ -60,6 +60,7 @@ pub mod provider;
 pub mod python_alignment;
 pub mod rate_limit;
 pub mod reasoning;
+pub mod run_loop;
 pub mod runtime_provider;
 pub mod retry_counters;
 pub mod session_persistence;
