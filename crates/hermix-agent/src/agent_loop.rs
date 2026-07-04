@@ -42,7 +42,6 @@ use crate::context::{
     load_builtin_memory_snapshot, load_soul_md, resolve_personality, ContextManager,
     SystemPromptBuilder,
 };
-use crate::context_files::{load_hermes_context_files, load_workspace_context};
 use crate::credential_pool::CredentialPool;
 use crate::interrupt::InterruptController;
 use crate::plugins::{HookResult, HookType, PluginManager};
@@ -51,7 +50,6 @@ use crate::python_alignment::{
     sanitize_surrogates, strip_budget_warnings_from_messages,
     strip_think_blocks_for_ack, ThinkBlockParser,
 };
-use crate::skill_orchestrator::SkillOrchestrator;
 use crate::smart_model_routing::TurnRouteSignature;
 pub use crate::smart_model_routing::{ApiMode, CheapModelRouteConfig, SmartModelRoutingConfig};
 use crate::steer::{
@@ -2618,176 +2616,27 @@ impl AgentLoop {
     }
 
     fn should_inject_tool_enforcement(&self, model: &str) -> bool {
-        let model_lower = model.to_lowercase();
-        ["gpt", "codex", "gemini", "gemma", "grok", "minimax", "m2"]
-            .iter()
-            .any(|p| model_lower.contains(p))
+        crate::prompt_assembly::should_inject_tool_enforcement(model)
     }
 
     fn platform_hint_text(&self) -> Option<&'static str> {
-        let platform_key = self
-            .config
-            .platform
-            .as_deref()
-            .map(|s| s.trim().to_lowercase())
-            .unwrap_or_default();
-        match platform_key.as_str() {
-            "cli" => Some("You are a CLI AI Agent. Prefer concise plain text output suitable for terminals."),
-            "telegram" | "discord" | "slack" => {
-                Some("You are responding on a chat platform. Keep responses concise and avoid heavy formatting.")
-            }
-            "email" => Some("You are responding over email. Use clear structure and complete sentences."),
-            "sms" => Some("You are responding over SMS. Keep responses short and high-signal."),
-            _ => None,
-        }
+        crate::prompt_assembly::platform_hint_text(&self.config)
     }
 
     fn effective_provider_for_prompt(&self, model: &str) -> Option<String> {
-        if let Some(ref p) = self.config.provider {
-            let trimmed = p.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-        model
-            .split_once(':')
-            .map(|(provider, _)| provider.trim().to_string())
-            .filter(|s| !s.is_empty())
+        crate::prompt_assembly::effective_provider_for_prompt(&self.config, model)
     }
 
     fn skills_system_prompt(&self, tool_names: &HashSet<&str>) -> Option<String> {
-        let has_skills_tools = ["skills_list", "skill_view", "skill_manage"]
-            .iter()
-            .any(|t| tool_names.contains(*t));
-        // Ephemeral per-turn skills (set by the desktop "扩展 → 技能" picker
-        // via `AgentOverrides::skills`) always surface — they explicitly
-        // request their content in the prompt, regardless of whether the
-        // skills-management tools are also loaded.
-        let ephemeral: Vec<String> = self
-            .config
-            .ephemeral_skills
-            .iter()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if !has_skills_tools && ephemeral.is_empty() {
-            return None;
-        }
-        let mut orch = SkillOrchestrator::default_dir();
-        let commands = orch.scan_skill_commands();
-        let mut body = String::from(
-            "## Skills (mandatory)\nBefore replying, check whether an existing skill applies. If yes, inspect it with `skill_view` and follow it.\n<available_skills>\n",
-        );
-        if commands.is_empty() {
-            body.push_str("(no installed skills discovered via skill_manage — only ephemeral skills below are active)\n");
-        } else {
-            let mut rows: Vec<_> = commands.iter().collect();
-            rows.sort_by(|a, b| a.0.cmp(b.0));
-            for (cmd, info) in rows.into_iter().take(80) {
-                body.push_str(&format!(
-                    "- {}: {} ({})\n",
-                    cmd,
-                    info.name,
-                    info.description.trim()
-                ));
-            }
-        }
-        body.push_str("</available_skills>");
-
-        // Render ephemeral skills (set per-turn from AgentOverrides::skills).
-        // These are the user's "I want this skill active for this chat"
-        // picks — even if the skill isn't enabled server-side, we inline
-        // its SKILL.md content here so the model can follow it. The
-        // server-side enabled list is still the floor for which skills
-        // `skill_manage` / `skills_list` can surface; this block is the
-        // ceiling for which skills the prompt actually sees content from.
-        if !ephemeral.is_empty() {
-            let orch2 = SkillOrchestrator::default_dir();
-            let (ephemeral_body, loaded, missing) =
-                orch2.build_preloaded_skills_prompt(&ephemeral);
-            if !loaded.is_empty() {
-                body.push_str("\n\n## Active Skills (this turn)\n");
-                body.push_str(
-                    "The user explicitly enabled the following skills for this conversation. \
-                     Treat their instructions as active guidance for the duration of this \
-                     session unless the user overrides them.\n",
-                );
-                body.push_str(&ephemeral_body);
-            }
-            if !missing.is_empty() {
-                body.push_str("\n\n## Skills Not Found\n");
-                body.push_str(
-                    "The user requested the following skills but they are not installed on \
-                     disk. Ask the user to install them or use the plugin center:\n",
-                );
-                for name in &missing {
-                    body.push_str(&format!("- `{}`\n", name));
-                }
-            }
-        }
-        Some(body)
+        crate::prompt_assembly::skills_system_prompt(&self.config, tool_names)
     }
 
     fn context_files_prompt(&self) -> Option<String> {
-        // Priority: explicit TERMINAL_CWD env var (legacy escape hatch) →
-        // per-turn self.config.workspace (set by LocalAgentService from
-        // AgentOverrides::workspace, the desktop "工作区" picker) →
-        // server process CWD. This is what the agent should treat as its
-        // working directory when scanning for AGENTS.md / .hermes.md.
-        let cwd = std::env::var("TERMINAL_CWD")
-            .ok()
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                self.config
-                    .workspace
-                    .as_deref()
-                    .map(std::path::PathBuf::from)
-            })
-            .unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-            });
-
-        let mut sections = Vec::new();
-        if let Some(workspace) = load_workspace_context(&cwd) {
-            sections.push(format!("## Workspace Context\n{}", workspace));
-        }
-
-        let hermix_home = self
-            .config
-            .hermix_home
-            .clone()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(hermix_config::paths::hermix_home);
-
-        let personal_ctx = load_hermes_context_files(&hermix_home);
-        if !personal_ctx.trim().is_empty() {
-            sections.push(format!("## Personal Context\n{}", personal_ctx));
-        }
-
-        if sections.is_empty() {
-            None
-        } else {
-            Some(sections.join("\n\n"))
-        }
+        crate::prompt_assembly::context_files_prompt(&self.config)
     }
 
     fn extract_provider_and_model<'a>(&self, model: &'a str) -> (String, &'a str) {
-        if let Some((p, m)) = model.split_once(':') {
-            let p = p.trim();
-            let m = m.trim();
-            if !p.is_empty() && !m.is_empty() {
-                return (p.to_string(), m);
-            }
-        }
-        let fallback_provider = self
-            .config
-            .provider
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("openai")
-            .to_string();
-        (fallback_provider, model)
+        crate::prompt_assembly::extract_provider_and_model(&self.config, model)
     }
 
     fn auth_tokens_path(&self) -> PathBuf {
@@ -2824,69 +2673,7 @@ impl AgentLoop {
     }
 
     fn messages_for_api_call(&self, ctx: &ContextManager) -> Vec<Message> {
-        let mut messages = ctx.get_messages().to_vec();
-        if let Some(ephemeral) = self
-            .config
-            .ephemeral_system_prompt
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            messages.push(Message::system(ephemeral));
-        }
-        // Strip reasoning_content from all but the last assistant message.
-        // Old thinking blocks are noise once the LLM has moved on — it doesn't
-        // need to re-read its own previous reasoning every turn.
-        for i in (0..messages.len()).rev() {
-            if messages[i].reasoning_content.is_some() {
-                // Keep the last one (most recent assistant), clear the rest.
-                // Scan backwards: the first hit is the last assistant.
-                for j in (0..i).rev() {
-                    messages[j].reasoning_content = None;
-                }
-                break;
-            }
-        }
-        self.apply_prompt_cache_markers(&mut messages);
-        messages
-    }
-
-    fn apply_prompt_cache_markers(&self, messages: &mut Vec<Message>) {
-        use hermix_core::types::{CacheControl, CacheType, MessageRole};
-        if messages.is_empty() {
-            return;
-        }
-        let provider = self
-            .config
-            .provider
-            .as_deref()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let is_anthropic = provider.contains("anthropic") || provider.contains("claude");
-        if !is_anthropic {
-            return;
-        }
-        for msg in messages.iter_mut() {
-            if msg.role == MessageRole::System {
-                msg.cache_control = Some(CacheControl {
-                    cache_type: CacheType::Persistent,
-                });
-                break;
-            }
-        }
-        let ephemeral_budget = 4;
-        let mut marked = 0;
-        for msg in messages.iter_mut().rev() {
-            if marked >= ephemeral_budget {
-                break;
-            }
-            if msg.role == MessageRole::User || msg.role == MessageRole::Assistant {
-                msg.cache_control = Some(CacheControl {
-                    cache_type: CacheType::Ephemeral,
-                });
-                marked += 1;
-            }
-        }
+        crate::prompt_assembly::messages_for_api_call(&self.config, ctx)
     }
 
     /// Build the full system prompt including identity, memory, and plugin context.
@@ -3105,22 +2892,7 @@ impl AgentLoop {
     /// workspace) lives in the stable prefix and is reused from
     /// `cached_stable_prompt_key` across turns when its key matches.
     fn build_dynamic_suffix(&self, model_for_prompt: &str) -> String {
-        let provider = self.effective_provider_for_prompt(model_for_prompt);
-        let mut suffix = SystemPromptBuilder::new();
-        suffix = suffix.with_timestamp(Some(model_for_prompt), provider.as_deref());
-
-        let mut timestamp_extras = String::new();
-        if self.config.pass_session_id {
-            if let Some(ref sid) = self.config.session_id {
-                if !sid.trim().is_empty() {
-                    timestamp_extras.push_str(&format!("Session ID: {}\n", sid.trim()));
-                }
-            }
-        }
-        if !timestamp_extras.trim().is_empty() {
-            suffix = suffix.with_block(timestamp_extras.trim_end());
-        }
-        suffix.build().to_string()
+        crate::prompt_assembly::build_dynamic_suffix(&self.config, model_for_prompt)
     }
 
     /// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.

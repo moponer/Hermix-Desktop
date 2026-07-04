@@ -46,6 +46,7 @@ pub mod oauth_refresh;
 pub mod pii_redact;
 pub mod plugins;
 pub mod post_response_fallback;
+pub mod prompt_assembly;
 pub mod provider;
 pub mod python_alignment;
 pub mod rate_limit;
