@@ -57,6 +57,7 @@ pub mod skill_orchestrator;
 pub mod smart_model_routing;
 pub mod steer;
 pub mod sub_agent_orchestrator;
+pub mod tool_dispatch;
 pub mod turn_timings;
 pub mod sub_agent_safety;
 pub mod subdirectory_hints;

@@ -7,7 +7,6 @@
 //! 4. Repeat until the model finishes naturally or the turn budget is exceeded
 
 use std::collections::{HashMap, HashSet};
-use hermix_config::env_compat;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -81,7 +80,7 @@ use tracing::{info, instrument};
 pub use crate::agent_config::{AgentConfig, RetryConfig, RuntimeProviderConfig};
 pub use crate::agent_helpers::{
     classify_error, classify_tool_error, compute_prompt_cache_key, default_max_autonomous_nudges,
-    is_interactive_tool, jittered_backoff, rand_u64_range, AgentCallbacks,
+    jittered_backoff, rand_u64_range, AgentCallbacks,
     ErrorClass, EvolutionCounters, ToolDispatchDecision, ToolEntry, ToolErrorClass, ToolRecovery,
     ToolRegistry, TurnMetrics,
 };
@@ -5720,83 +5719,18 @@ impl AgentLoop {
 
     /// Remove duplicate tool calls that share the same function name and arguments.
     fn deduplicate_tool_calls(calls: &[ToolCall]) -> Vec<ToolCall> {
-        let mut seen = HashSet::new();
-        let mut deduped = Vec::new();
-        for tc in calls {
-            let key = format!("{}:{}", tc.function.name, tc.function.arguments);
-            if seen.insert(key) {
-                deduped.push(tc.clone());
-            } else {
-                tracing::warn!("Deduplicated tool call: {}", tc.function.name);
-            }
-        }
-        deduped
+        crate::tool_dispatch::deduplicate_tool_calls(calls)
     }
 
     /// Try to repair an unknown tool name via case-insensitive or substring matching.
     /// Returns `true` if the tool call was repaired.
     fn repair_tool_call(&self, tc: &mut ToolCall) -> bool {
-        if self.tool_registry.get(&tc.function.name).is_some() {
-            return false;
-        }
-        let names = self.tool_registry.names();
-        let target = tc.function.name.to_lowercase();
-
-        if let Some(name) = names.iter().find(|n| n.to_lowercase() == target) {
-            tracing::info!("Repaired tool call: '{}' → '{}'", tc.function.name, name);
-            tc.function.name = name.clone();
-            return true;
-        }
-
-        if let Some(name) = names
-            .iter()
-            .find(|n| n.to_lowercase().contains(&target) || target.contains(&n.to_lowercase()))
-        {
-            tracing::info!(
-                "Repaired tool call (fuzzy): '{}' → '{}'",
-                tc.function.name,
-                name
-            );
-            tc.function.name = name.clone();
-            return true;
-        }
-        false
+        crate::tool_dispatch::repair_tool_call(self, tc)
     }
 
     /// Inject current session id into `session_search` calls when absent.
     fn hydrate_session_search_args(&self, tc: &mut ToolCall) {
-        if tc.function.name != "session_search" {
-            return;
-        }
-        let Some(session_id) = self.config.session_id.as_deref() else {
-            return;
-        };
-        let session_id = session_id.trim();
-        if session_id.is_empty() {
-            return;
-        }
-
-        let mut args: Value =
-            serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| serde_json::json!({}));
-        let Some(obj) = args.as_object_mut() else {
-            return;
-        };
-        let has_current = obj
-            .get("current_session_id")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .is_some();
-        if has_current {
-            return;
-        }
-        obj.insert(
-            "current_session_id".to_string(),
-            Value::String(session_id.to_string()),
-        );
-        if let Ok(updated) = serde_json::to_string(&args) {
-            tc.function.arguments = updated;
-        }
+        crate::tool_dispatch::hydrate_session_search_args(self, tc)
     }
 
     fn turn_route_cost_guard(&self, model: String) -> TurnRuntimeRoute {
@@ -5863,38 +5797,6 @@ impl AgentLoop {
     /// - **Tool-specific** — generic "consider another tool" hints are
     ///   too vague. We map the most-mis-picked tools to the right
     ///   replacement so the LLM has a concrete noun to call.
-    /// - **Non-prescriptive for risky tools** — for tools like `terminal`
-    ///   the user may have denied for any number of reasons (the command
-    ///   shape was wrong, the path was wrong, the timing was off). We
-    ///   don't second-guess.
-    fn denial_repick_hint(tool_name: &str, raw_args: &str) -> &'static str {
-        match tool_name {
-            "computer_use" => {
-                // Parse out the `action` so we can be specific. Default
-                // to screenshot if the field is missing.
-                let action = serde_json::from_str::<Value>(raw_args)
-                    .ok()
-                    .and_then(|v| v.get("action").and_then(|x| x.as_str()).map(str::to_string))
-                    .unwrap_or_else(|| "screenshot".to_string());
-                if action == "screenshot" {
-                    " The user may have denied this because the question can be \
-                     answered without a screen capture — try `terminal` (e.g. `dir` \
-                     / `ls`), `list_files`, or `read_file` first."
-                } else {
-                    " The user may have denied this because a non-GUI tool would \
-                     have worked — try `terminal` first (it can click via the \
-                     user32 API too, but most tasks don't need that)."
-                }
-            }
-            "browser" | "browser_use" => {
-                " The user may have denied this because the same information is \
-                 reachable via `terminal` (curl / wget) or `web_extract` — try \
-                 those first."
-            }
-            _ => "",
-        }
-    }
-
     /// Resolve the pre-tool-dispatch hook for every tool call up front.
     ///
     /// When `AgentCallbacks::on_pre_tool_dispatch` is set, this invokes the
@@ -5907,27 +5809,7 @@ impl AgentLoop {
         &self,
         tool_calls: &[ToolCall],
     ) -> HashMap<String, Result<(), String>> {
-        let Some(hook) = self.callbacks.on_pre_tool_dispatch.as_ref() else {
-            return HashMap::new();
-        };
-        let mut decisions = HashMap::with_capacity(tool_calls.len());
-        for tc in tool_calls {
-            let id = tc.id.clone();
-            let outcome = match hook(tc) {
-                ToolDispatchDecision::Allow => Ok(()),
-                ToolDispatchDecision::Deny { reason } => Err(reason),
-                ToolDispatchDecision::AwaitApproval(rx) => match rx.await {
-                    Ok(true) => Ok(()),
-                    Ok(false) => Err(format!(
-                        "User denied the tool call.{hint}",
-                        hint = Self::denial_repick_hint(&tc.function.name, &tc.function.arguments),
-                    )),
-                    Err(_) => Err("Approval channel closed before response.".to_string()),
-                },
-            };
-            decisions.insert(id, outcome);
-        }
-        decisions
+        crate::tool_dispatch::resolve_pre_dispatch(self, tool_calls).await
     }
 
     /// Execute a batch of tool calls in parallel using a JoinSet.
@@ -6074,7 +5956,7 @@ impl AgentLoop {
         // the LLM context. delegate_task is already handled above by
         // the orchestrator path and is filtered out of this loop.
         for tc in tool_calls {
-            if !is_interactive_tool(&tc.function.name)
+            if !crate::agent_helpers::is_interactive_tool(&tc.function.name)
                 || tc.function.name == "delegate_task"
             {
                 continue;
@@ -6135,7 +6017,7 @@ impl AgentLoop {
             // — never enter this JoinSet at all. We extract and handle
             // them right after the orchestrator loop. Skipping them here
             // keeps the JoinSet reserved for genuinely-independent work.
-            if is_interactive_tool(&tc.function.name)
+            if crate::agent_helpers::is_interactive_tool(&tc.function.name)
                 && !matches!(tc.function.name.as_str(), "delegate_task")
             {
                 continue;
@@ -6412,38 +6294,12 @@ impl AgentLoop {
     }
 
     fn resolve_max_delegate_depth(&self) -> u32 {
-        env_compat("HERMIX_MAX_DELEGATE_DEPTH", "HERMES_MAX_DELEGATE_DEPTH")
-            .and_then(|v| v.parse::<u32>().ok())
-            .filter(|v| *v > 0)
-            .unwrap_or(4)
+        crate::tool_dispatch::resolve_max_delegate_depth()
     }
 
     /// Cap concurrent delegate_task calls based on config.
     fn cap_delegates(&self, tool_calls: &mut Vec<ToolCall>) {
-        let delegate_count = tool_calls
-            .iter()
-            .filter(|tc| tc.function.name == "delegate_task")
-            .count() as u32;
-        if delegate_count > self.config.max_concurrent_delegates {
-            tracing::warn!(
-                "Capping delegate_task calls from {} to {}",
-                delegate_count,
-                self.config.max_concurrent_delegates
-            );
-            let mut kept_delegates = 0u32;
-            tool_calls.retain(|tc| {
-                if tc.function.name == "delegate_task" {
-                    if kept_delegates < self.config.max_concurrent_delegates {
-                        kept_delegates += 1;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    true
-                }
-            });
-        }
+        crate::tool_dispatch::cap_delegates(self, tool_calls)
     }
 
     fn emit_background_review_metrics(&self, turn: u32, ctx: &ContextManager) {
