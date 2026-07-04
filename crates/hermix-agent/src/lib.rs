@@ -28,6 +28,7 @@ pub mod compression;
 pub mod context;
 pub mod context_files;
 pub mod context_pressure;
+pub mod directions;
 pub mod context_references;
 pub mod copilot_acp;
 pub mod cost_guard;
