@@ -530,7 +530,12 @@ impl LocalAgentService {
         let mut agent = AgentLoop::new(agent_config, agent_tool_registry, provider);
 
         // Wire Phase 7 H1: tool schema router (KeywordRouter + AlwaysInclude).
-        agent = agent.with_tool_router(AgentLoop::default_tool_router());
+        // `with_tool_router` consumes `agent`, so the call order is:
+        // build the router first (borrows `&agent`), then move `agent`
+        // into `with_tool_router`. Pre-2026-07-04 the router was a
+        // static call that ignored `agent.always_include`.
+        let router = agent.default_tool_router();
+        agent = agent.with_tool_router(router);
 
         // Wire Phase 15: time-aware recall via MemoryRouter.
         //

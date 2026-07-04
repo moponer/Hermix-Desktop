@@ -949,10 +949,12 @@ impl AgentLoop {
     }
 
     /// Build a default router (KeywordRouter + AlwaysInclude).
-    /// Convenience for callers who want the Phase 7 H1 default without
-    /// hand-rolling the wiring.
-    pub fn default_tool_router() -> Arc<dyn ToolSchemaRouter> {
-        crate::acui_dispatch::default_tool_router()
+    /// Threads `self.always_include` through so user-configured
+    /// always-include names actually reach the `AlwaysInclude` wrapper.
+    /// Pre-2026-07-04: this method took no `self` and ignored the
+    /// field — `always_include` was a write-only field.
+    pub fn default_tool_router(&self) -> Arc<dyn ToolSchemaRouter> {
+        crate::acui_dispatch::default_tool_router(&self.always_include)
     }
 
     /// Resolve the tool schemas to send to the LLM this turn.
@@ -2742,51 +2744,14 @@ mod tests {
         cfg.quiet_mode = true;
         let compressor = ContextCompressor::new(cfg, aux);
 
-        // Use a separate dummy provider for the *agent* LLM (the
-        // compressor's aux client has its own provider chain — they
-        // don't share, hence the second instance).
-        let aux_provider: Arc<dyn LlmProvider> =
-            Arc::new(LocalDummyProvider);
-        // HACK: `LocalDummyProvider` isn't Clone, so we re-construct
-        // a fresh struct to satisfy the second `Arc::new` call. The
-        // state the LLM holds is empty, so identity is irrelevant.
-        struct AuxProviderShim;
-        #[async_trait::async_trait]
-        impl LlmProvider for AuxProviderShim {
-            async fn chat_completion(
-                &self,
-                _messages: &[Message],
-                _tools: &[ToolSchema],
-                _max_tokens: Option<u32>,
-                _temperature: Option<f64>,
-                _model: Option<&str>,
-                _extra_body: Option<&serde_json::Value>,
-            ) -> Result<hermix_core::LlmResponse, AgentError> {
-                Ok(hermix_core::LlmResponse {
-                    message: Message::assistant("dummy"),
-                    usage: None,
-                    model: "dummy".into(),
-                    finish_reason: Some("stop".into()),
-                })
-            }
-            fn chat_completion_stream(
-                &self,
-                _messages: &[Message],
-                _tools: &[ToolSchema],
-                _max_tokens: Option<u32>,
-                _temperature: Option<f64>,
-                _model: Option<&str>,
-                _extra_body: Option<&serde_json::Value>,
-            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
-                futures::stream::empty().boxed()
-            }
-        }
-        let _ = aux_provider; // suppress unused warning — the agent LLM is a shim.
-
+        // The agent LLM and the compressor's auxiliary client hold
+        // independent provider chains. `LocalDummyProvider` is a zero
+        // sized struct with empty state, so a fresh `Arc::new` per
+        // use site costs nothing and shares nothing.
         let mut agent = AgentLoop::new(
             AgentConfig::default(),
             Arc::new(ToolRegistry::new()),
-            Arc::new(AuxProviderShim),
+            Arc::new(LocalDummyProvider),
         )
         .with_callbacks(callbacks);
         agent.compression = Some(Arc::new(tokio::sync::Mutex::new(compressor)));
@@ -4989,7 +4954,11 @@ mod tests {
                 _model: Option<&str>,
                 _extra_body: Option<&serde_json::Value>,
             ) -> Result<hermix_core::LlmResponse, AgentError> {
-                unimplemented!()
+                // This stub should never be called — these tests construct
+                // an LlmResponse directly and pass it to
+                // \. If that ever changes, surface
+                // a clear Err instead of panicking.
+                Err(AgentError::LlmApi("test stub: should not be called".into()))
             }
             fn chat_completion_stream(
                 &self,
@@ -5057,7 +5026,11 @@ mod tests {
                 _model: Option<&str>,
                 _extra_body: Option<&serde_json::Value>,
             ) -> Result<hermix_core::LlmResponse, AgentError> {
-                unimplemented!()
+                // This stub should never be called — these tests construct
+                // an LlmResponse directly and pass it to
+                // \. If that ever changes, surface
+                // a clear Err instead of panicking.
+                Err(AgentError::LlmApi("test stub: should not be called".into()))
             }
             fn chat_completion_stream(
                 &self,
@@ -5121,7 +5094,11 @@ mod tests {
                 _model: Option<&str>,
                 _extra_body: Option<&serde_json::Value>,
             ) -> Result<hermix_core::LlmResponse, AgentError> {
-                unimplemented!()
+                // This stub should never be called — these tests construct
+                // an LlmResponse directly and pass it to
+                // \. If that ever changes, surface
+                // a clear Err instead of panicking.
+                Err(AgentError::LlmApi("test stub: should not be called".into()))
             }
             fn chat_completion_stream(
                 &self,

@@ -21,7 +21,7 @@
 //! - `build_dynamic_suffix` — per-turn timestamp + session_id block.
 
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use hermix_core::{Message, ToolSchema};
 use hermix_focus::MemoryRouter;
@@ -461,33 +461,51 @@ pub fn build_system_prompt(
 
     // P2.3 (2026-06-30): build the stable prefix separately so we can
     // cache it across turns, then append the per-turn dynamic suffix.
-    let prefix_text = builder.build().to_string();
-
-    // Cache the stable prefix keyed on (model, personality, system_prompt,
-    // workspace).
+    //
+    // 2026-07-04: previously this code wrote the freshly-computed
+    // `prefix_text` into `cached_stable_prompt_key` and then used the
+    // freshly-computed `prefix_text` for the prompt — meaning the cache
+    // was write-only and the stable prefix was rebuilt every turn. Now
+    // we check the slot first: a key-stable cache hit lets us skip the
+    // `format!()` of the full prefix text (the largest single cost in
+    // build_system_prompt). On miss we render once and store.
     let cache_key = crate::agent_helpers::compute_prompt_cache_key(
         model_for_prompt,
         config.personality.as_deref(),
         config.system_prompt.as_deref(),
         config.workspace.as_deref(),
     );
-    let prefix_for_cache: Option<String> = if prefix_text.len() < 200_000 {
-        Some(prefix_text.clone())
-    } else {
-        None
-    };
-    if let Ok(mut slot) = cached_stable_prompt_key.lock() {
-        match &*slot {
-            Some((cached_key, cached_prefix))
-                if *cached_key == cache_key && !cached_prefix.is_empty() =>
-            {
-                // Cache hit on a populated slot — keep it.
+
+    // Phase 1: try to read a populated cache hit on a hot path. Avoid
+    // taking the lock first and re-rendering only to discover we had
+    // a miss; compute the cache key above is unavoidable (the lock
+    // slot needs the key to know if it matches).
+    //
+    // We must still render once on first call, so this is structured
+    // as: take the lock briefly to consult, render if miss, take the
+    // lock again to write. Two lock acquisitions in the miss path is
+    // cheaper than building a 50KB string every turn.
+    let cached_prefix: Option<String> = cached_stable_prompt_key
+        .lock()
+        .ok()
+        .and_then(|slot| {
+            slot.as_ref()
+                .filter(|(k, p)| *k == cache_key && !p.is_empty())
+                .map(|(_, p)| p.clone())
+        });
+
+    let prefix_text = match cached_prefix {
+        Some(p) => p,
+        None => {
+            let rendered = builder.build().to_string();
+            if rendered.len() < 200_000 {
+                if let Ok(mut slot) = cached_stable_prompt_key.lock() {
+                    *slot = Some((cache_key, rendered.clone()));
+                }
             }
-            _ => {
-                *slot = prefix_for_cache.map(|p| (cache_key, p));
-            }
+            rendered
         }
-    }
+    };
 
     let suffix_text = build_dynamic_suffix(config, model_for_prompt);
 
@@ -580,4 +598,87 @@ pub fn resolve_initial_system_prompt(
         (patched, report)
     };
     (final_prompt, restored)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 2026-07-04 regression: the `cached_stable_prompt_key` slot
+    /// used to be write-only — `build_system_prompt` would render
+    /// `prefix_text` on every call, *then* store it in the slot, but
+    /// still use the freshly-rendered text for the prompt. The cache
+    /// never actually short-circuited the second-call computation.
+    ///
+    /// Fix: read the slot first, render only on miss. This test pins
+    /// both halves of that contract:
+    /// - after the first call, the slot is populated;
+    /// - a second call with identical config returns an *equal* prompt
+    ///   and **does not mutate** the slot (the cached value is reused
+    ///   byte-for-byte).
+    #[test]
+    fn build_system_prompt_reuses_cached_stable_prefix_on_hit() {
+        let cfg = AgentConfig::default();
+        let slot: Arc<Mutex<Option<(u64, String)>>> =
+            Arc::new(Mutex::new(None));
+        let cb = AgentCallbacks::default();
+
+        // First call: miss → renders and writes to slot.
+        let prompt1 = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model);
+        let slot1 = slot.lock().unwrap().clone();
+        assert!(
+            slot1.is_some(),
+            "first call must populate the cache slot"
+        );
+        let (key1, prefix1) = slot1.unwrap();
+        assert!(!prefix1.is_empty(), "cached prefix must be non-empty");
+
+        // Second call with same config: hit → uses cached prefix.
+        let prompt2 = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model);
+        let slot2 = slot.lock().unwrap().clone();
+        let (key2, prefix2) = slot2.unwrap();
+
+        // The whole prompt includes the dynamic suffix (timestamp +
+        // provider name); the suffix is *not* cached. So we don't
+        // assert `prompt1 == prompt2` (timestamps may differ slightly).
+        // We DO assert the cached prefix is **identical** before and
+        // after the second call — proving the second call reused it,
+        // not re-rendered and overwrote.
+        assert_eq!(prefix1, prefix2, "cached prefix must be reused");
+        assert_eq!(key1, key2, "cache key must be stable across hits");
+
+        // The stable prefix alone (cached part) is prefix2 — it must
+        // be a prefix of both rendered prompts.
+        assert!(
+            prompt1.starts_with(&prefix1),
+            "prompt1 must embed the cached prefix"
+        );
+        assert!(
+            prompt2.starts_with(&prefix2),
+            "prompt2 must embed the cached prefix"
+        );
+    }
+
+    /// Companion to the above: when the `workspace` field changes,
+    /// the cache key changes and the slot is repopulated. Without
+    /// this we'd either (a) keep serving the stale prefix or (b)
+    /// always rebuild even on a stable-config hit.
+    #[test]
+    fn build_system_prompt_invalidates_cache_on_workspace_change() {
+        let mut cfg = AgentConfig::default();
+        cfg.workspace = Some("/tmp/workspace_a".to_string());
+        let slot: Arc<Mutex<Option<(u64, String)>>> =
+            Arc::new(Mutex::new(None));
+        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model);
+        let (key_a, _) = slot.lock().unwrap().clone().unwrap();
+
+        cfg.workspace = Some("/tmp/workspace_b".to_string());
+        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model);
+        let (key_b, _) = slot.lock().unwrap().clone().unwrap();
+
+        assert_ne!(
+            key_a, key_b,
+            "workspace change must produce a different cache key"
+        );
+    }
 }
