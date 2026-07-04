@@ -44,6 +44,7 @@ pub mod hardline;
 pub mod hook_dispatch;
 pub mod interrupt;
 pub mod local_agent_service;
+pub mod llm_retry;
 pub mod memory_layer_adapter;
 pub mod memory_plugins;
 pub mod memory_hooks;
