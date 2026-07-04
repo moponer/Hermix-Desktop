@@ -38,7 +38,7 @@ pub mod interrupt;
 pub mod local_agent_service;
 pub mod memory_layer_adapter;
 pub mod memory_plugins;
-pub mod oauth;
+pub mod oauth_refresh;
 pub mod pii_redact;
 pub mod plugins;
 pub mod post_response_fallback;
@@ -93,7 +93,7 @@ pub use provider::{AnthropicProvider, GenericProvider, OpenRouterProvider};
 // Re-export rate limiting, credential pool, and fallback chain
 pub use credential_pool::CredentialPool;
 pub use fallback::FallbackChain;
-pub use oauth::{OAuthManager, OAuthToken, TokenFetcher};
+pub use oauth_refresh::{OAuthRefresh, OAuthStoreCredential};
 pub use rate_limit::RateLimitTracker;
 
 // Re-export reasoning parser
