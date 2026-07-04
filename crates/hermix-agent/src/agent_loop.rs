@@ -483,18 +483,7 @@ impl AgentLoop {
         config: &mut AgentConfig,
         hermix_home: &std::path::Path,
     ) -> Result<(), AgentError> {
-        let Some(ref sid) = config.session_id else {
-            return Ok(());
-        };
-        if sid.trim().is_empty() {
-            return Ok(());
-        }
-        let sp = crate::session_persistence::SessionPersistence::new(hermix_home);
-        sp.ensure_db()?;
-        if let Some(prompt) = sp.get_system_prompt(sid)? {
-            config.stored_system_prompt = Some(prompt);
-        }
-        Ok(())
+        crate::session_lifecycle::hydrate_stored_system_prompt_from_hermes_home(config, hermix_home)
     }
 
     /// Build [`AgentResult`] messages for return / persistence (applies `persist_user_message` override).
@@ -503,18 +492,11 @@ impl AgentLoop {
         ctx: &ContextManager,
         persist_user_idx: Option<usize>,
     ) -> Vec<Message> {
-        let mut msgs = ctx.get_messages().to_vec();
-        if let (Some(idx), Some(override_text)) = (
+        crate::session_lifecycle::messages_for_persisted_result(
+            &self.config,
+            ctx,
             persist_user_idx,
-            self.config.persist_user_message.as_deref(),
-        ) {
-            if let Some(msg) = msgs.get_mut(idx) {
-                if msg.role == MessageRole::User {
-                    msg.content = Some(override_text.to_string());
-                }
-            }
-        }
-        msgs
+        )
     }
 
     fn graceful_interrupt_result(
@@ -542,16 +524,7 @@ impl AgentLoop {
     }
 
     fn should_emit_session_reset_hook(messages: &[Message]) -> bool {
-        messages
-            .iter()
-            .rev()
-            .find(|m| m.role == MessageRole::User)
-            .and_then(|m| m.content.as_deref())
-            .map(|content| {
-                let trimmed = content.trim();
-                matches!(trimmed, "/reset" | "/new")
-            })
-            .unwrap_or(false)
+        crate::session_lifecycle::should_emit_session_reset_hook(messages)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -812,29 +785,7 @@ impl AgentLoop {
         response: &hermix_core::LlmResponse,
         message_cache: &mut MessageCache,
     ) -> (bool, Message, Option<Vec<ToolCall>>) {
-        let history_includes_tool = ctx
-            .get_messages()
-            .iter()
-            .any(|m| m.role == MessageRole::Tool);
-        let assistant_msg = response.message.clone();
-        let tool_calls = assistant_msg.tool_calls.clone();
-        ctx.add_message(assistant_msg.clone());
-        if assistant_msg
-            .tool_calls
-            .as_ref()
-            .is_some_and(|v| !v.is_empty())
-            && Self::assistant_visible_text_after_think_blocks(&assistant_msg)
-        {
-            message_cache.store_content_with_tools(
-                assistant_msg
-                    .content
-                    .as_deref()
-                    .map(strip_think_blocks_for_ack)
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-            );
-        }
-        (history_includes_tool, assistant_msg, tool_calls)
+        crate::session_lifecycle::prepare_assistant_turn(ctx, response, message_cache)
     }
 
     /// Phase 2.3 (2026-07-03): centralised `mute_post_response`
@@ -851,22 +802,7 @@ impl AgentLoop {
         stream_mute: &std::sync::atomic::AtomicBool,
         next_muted: bool,
     ) {
-        use std::sync::atomic::Ordering;
-        let was_muted = stream_mute.swap(next_muted, Ordering::AcqRel);
-        if was_muted != next_muted {
-            on_chunk(StreamChunk {
-                delta: Some(hermix_core::StreamDelta {
-                    content: None,
-                    tool_calls: None,
-                    extra: Some(serde_json::json!({
-                        "control": "mute_post_response",
-                        "enabled": next_muted
-                    })),
-                }),
-                finish_reason: None,
-                usage: None,
-            });
-        }
+        crate::session_lifecycle::emit_mute_transition(on_chunk, stream_mute, next_muted)
     }
 
     /// Phase 2.1 (2026-07-03): apply the four-variant
@@ -892,32 +828,13 @@ impl AgentLoop {
         total_turns: u32,
         autonomous_nudge_count: u32,
     ) -> bool {
-        use crate::post_response_fallback::PostResponseFallback;
-        match action {
-            PostResponseFallback::ContinueWithUserMsg(msg) => {
-                ctx.add_message(Message::user(&msg));
-                true
-            }
-            PostResponseFallback::ContinueWithSystemNudge(msg) => {
-                tracing::debug!(
-                    nudge_count = autonomous_nudge_count,
-                    total_turns,
-                    "autonomous_mode{}: nudging LLM back into action",
-                    if stream_mode { "" } else { " [non-stream]" }
-                );
-                ctx.add_message(Message::system(&msg));
-                true
-            }
-            PostResponseFallback::PatchLastAssistant { content } => {
-                if let Some(last) = ctx.get_messages_mut().last_mut() {
-                    if last.role == MessageRole::Assistant {
-                        last.content = Some(content);
-                    }
-                }
-                false
-            }
-            PostResponseFallback::Finalize => false,
-        }
+        crate::session_lifecycle::apply_fallback_outcome(
+            ctx,
+            action,
+            stream_mode,
+            total_turns,
+            autonomous_nudge_count,
+        )
     }
 
     /// v2 (2026-06-21): most recent archive refs produced by

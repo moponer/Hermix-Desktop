@@ -59,6 +59,7 @@ pub mod reasoning;
 pub mod runtime_provider;
 pub mod retry_counters;
 pub mod session_persistence;
+pub mod session_lifecycle;
 pub mod skill_orchestrator;
 pub mod smart_model_routing;
 pub mod stream_collect;
