@@ -27,6 +27,7 @@ use hermix_core::{Message, ToolSchema};
 use hermix_focus::MemoryRouter;
 
 use crate::agent_config::AgentConfig;
+use crate::agent_helpers::AgentCallbacks;
 use crate::context::{load_builtin_memory_snapshot, load_soul_md, resolve_personality, SystemPromptBuilder};
 use crate::context_files::{load_hermes_context_files, load_workspace_context};
 use crate::ContextManager;
@@ -494,4 +495,89 @@ pub fn build_system_prompt(
     tracing::Span::current().record("out_chars", prompt.len());
 
     prompt
+}
+
+/// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
+pub fn resolve_initial_system_prompt(
+    config: &AgentConfig,
+    cached_stable_prompt_key: &Mutex<Option<(u64, String)>>,
+    memory_router: Option<&MemoryRouter>,
+    callbacks: &AgentCallbacks,
+    user_message: &str,
+    tool_schemas: &[ToolSchema],
+) -> (String, bool) {
+    let (prompt, restored) = if let Some(ref s) = config.stored_system_prompt {
+        let t = s.trim();
+        if !t.is_empty() {
+            (s.clone(), true)
+        } else {
+            (
+                build_system_prompt(
+                    config,
+                    cached_stable_prompt_key,
+                    memory_router,
+                    user_message,
+                    tool_schemas,
+                    &config.model,
+                ),
+                false,
+            )
+        }
+    } else {
+        (
+            build_system_prompt(
+                config,
+                cached_stable_prompt_key,
+                memory_router,
+                user_message,
+                tool_schemas,
+                &config.model,
+            ),
+            false,
+        )
+    };
+    // ★ M2: protocol-completeness single choke point. Audit the
+    //   produced prompt against the section gate; if any required
+    //   marker is missing, splice in the default body. This is the
+    //   *only* function in `agent_loop` that mutates the system
+    //   prompt for completeness — every other code path that builds
+    //   a prompt must funnel through here.
+    let (final_prompt, _report) = {
+        use crate::context::{RouteContext, Section};
+        let tool_names_set: HashSet<&str> =
+            tool_schemas.iter().map(|t| t.name.as_str()).collect();
+        let route_ctx = RouteContext {
+            user_message,
+            tool_names: &tool_names_set,
+            model_name: &config.model,
+            autonomous_mode: config.autonomous_mode,
+        };
+        let (patched, report) = Section::audit_and_patch(&prompt, &route_ctx);
+        if report.had_patches() {
+            tracing::warn!(
+                target: "hermix.section_gate",
+                patched = report.patched.len(),
+                pending = report.pending.len(),
+                restored_from_storage = restored,
+                "SectionGate auto-patched {} missing required sections",
+                report.patched.len()
+            );
+        } else if !report.pending.is_empty() {
+            tracing::debug!(
+                target: "hermix.section_gate",
+                pending = report.pending.len(),
+                "SectionGate: {} optional sections absent (not required for this turn)",
+                report.pending.len()
+            );
+        }
+        // 2026-06-29 (C3 marker protocol): forward the audit report
+        // to the upstream `on_section_gate` callback so the trace
+        // panel can render "SectionGate patched Identity, Timestamp"
+        // in real time.
+        if let Some(cb) = callbacks.on_section_gate.as_ref() {
+            cb(&report);
+        }
+        (patched, report)
+    };
+    (final_prompt, restored)
 }

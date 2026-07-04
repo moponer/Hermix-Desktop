@@ -2225,107 +2225,20 @@ impl AgentLoop {
         crate::prompt_assembly::messages_for_api_call(&self.config, ctx)
     }
 
-    /// Build the full system prompt including identity, memory, and plugin context.
-    ///
-    /// Aligns with Python behavior:
-    /// - prefer `~/.hermix/SOUL.md` as identity
-    /// - fallback to `DEFAULT_AGENT_IDENTITY`
-    /// - then append optional configured `system_prompt`
-    #[instrument(
-        name = "build_system_prompt",
-        level = "debug",
-        skip_all,
-        fields(
-            model = %model_for_prompt,
-            tool_count = tool_schemas.len(),
-            out_chars = tracing::field::Empty,
-        )
-    )]
-    fn build_system_prompt(
-        &self,
-        user_message: &str,
-        tool_schemas: &[ToolSchema],
-        model_for_prompt: &str,
-    ) -> String {
-        crate::prompt_assembly::build_system_prompt(
-            &self.config,
-            &self.cached_stable_prompt_key,
-            self.memory_router.as_deref(),
-            user_message,
-            tool_schemas,
-            model_for_prompt,
-        )
-    }
-
 /// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
     fn resolve_initial_system_prompt(
         &self,
         user_message: &str,
         tool_schemas: &[ToolSchema],
     ) -> (String, bool) {
-        let (prompt, restored) = if let Some(ref s) = self.config.stored_system_prompt {
-            let t = s.trim();
-            if !t.is_empty() {
-                (s.clone(), true)
-            } else {
-                (
-                    self.build_system_prompt(user_message, tool_schemas, &self.config.model),
-                    false,
-                )
-            }
-        } else {
-            (
-                self.build_system_prompt(user_message, tool_schemas, &self.config.model),
-                false,
-            )
-        };
-        // ★ M2: protocol-completeness single choke point. Audit the
-        //   produced prompt against the section gate; if any required
-        //   marker is missing, splice in the default body. This is the
-        //   *only* function in `agent_loop` that mutates the system
-        //   prompt for completeness — every other code path that builds
-        //   a prompt must funnel through here.
-        let (final_prompt, _report) = {
-            use crate::context::{RouteContext, Section};
-            let tool_names_set: std::collections::HashSet<&str> =
-                tool_schemas.iter().map(|t| t.name.as_str()).collect();
-            let route_ctx = RouteContext {
-                user_message,
-                tool_names: &tool_names_set,
-                model_name: &self.config.model,
-                autonomous_mode: self.config.autonomous_mode,
-            };
-            let (patched, report) = Section::audit_and_patch(&prompt, &route_ctx);
-            if report.had_patches() {
-                tracing::warn!(
-                    target: "hermix.section_gate",
-                    patched = report.patched.len(),
-                    pending = report.pending.len(),
-                    restored_from_storage = restored,
-                    "SectionGate auto-patched {} missing required sections",
-                    report.patched.len()
-                );
-            } else if !report.pending.is_empty() {
-                tracing::debug!(
-                    target: "hermix.section_gate",
-                    pending = report.pending.len(),
-                    "SectionGate: {} optional sections absent (not required for this turn)",
-                    report.pending.len()
-                );
-            }
-            // 2026-06-29 (C3 marker protocol): forward the audit report
-            // to the upstream `on_section_gate` callback so the trace
-            // panel can render "SectionGate patched Identity, Timestamp"
-            // in real time. We forward on *every* call (even when
-            // nothing was patched) so the panel can show the "all
-            // sections present" state. The callback is best-effort
-            // — failure to serialise is logged and swallowed.
-            if let Some(cb) = self.callbacks.on_section_gate.as_ref() {
-                cb(&report);
-            }
-            (patched, report)
-        };
-        (final_prompt, restored)
+        crate::prompt_assembly::resolve_initial_system_prompt(
+            &self.config,
+            &self.cached_stable_prompt_key,
+            self.memory_router.as_deref(),
+            &self.callbacks,
+            user_message,
+            tool_schemas,
+        )
     }
 
     /// Compress when total chars exceed 80% of the context budget (Python auto-compaction).
@@ -6810,7 +6723,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let prompt = agent.build_system_prompt("", &[], "gpt-4o");
+        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.cached_stable_prompt_key, agent.memory_router.as_deref(), "", &[], "gpt-4o");
         assert!(prompt.contains("## Active Personality (coder)"));
         assert!(prompt.contains("`coder` persona"));
     }
@@ -6861,7 +6774,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let prompt = agent.build_system_prompt("", &[], "gpt-4o");
+        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.cached_stable_prompt_key, agent.memory_router.as_deref(), "", &[], "gpt-4o");
         assert!(!prompt.contains("## Active Personality (unknown_persona)"));
     }
 
@@ -6910,7 +6823,7 @@ mod tests {
         );
         // No personality, no tools, no plugin context — formatting discipline
         // and thinking discipline must still be present in every prompt.
-        let prompt = agent.build_system_prompt("", &[], "gpt-4o");
+        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.cached_stable_prompt_key, agent.memory_router.as_deref(), "", &[], "gpt-4o");
         assert!(
             prompt.contains("Output formatting discipline"),
             "formatting discipline block missing from system prompt"
@@ -6969,7 +6882,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let prompt = no_ws_agent.build_system_prompt("", &[], "gpt-4o");
+        let prompt = crate::prompt_assembly::build_system_prompt(&no_ws_agent.config, &no_ws_agent.cached_stable_prompt_key, no_ws_agent.memory_router.as_deref(), "", &[], "gpt-4o");
         assert!(
             !prompt.contains("## Active Workspace"),
             "workspace block should be absent when no workspace is configured"
@@ -6983,7 +6896,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let prompt = agent.build_system_prompt("", &[], "gpt-4o");
+        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.cached_stable_prompt_key, agent.memory_router.as_deref(), "", &[], "gpt-4o");
         assert!(
             prompt.contains("## Active Workspace"),
             "workspace block missing"
@@ -7042,7 +6955,7 @@ mod tests {
         );
 
         // 1. Guidance present for any model (even one not in the tool-enforcement list).
-        let prompt = agent.build_system_prompt("", &[], "unknown-model-xyz");
+        let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.cached_stable_prompt_key, agent.memory_router.as_deref(), "", &[], "unknown-model-xyz");
         assert!(
             prompt.contains("Tool selection discipline"),
             "TOOL_USAGE_GUIDANCE block must be unconditional, not gated on model"
