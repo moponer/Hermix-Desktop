@@ -25,6 +25,7 @@ pub mod auxiliary_builder;
 pub mod budget;
 pub mod consciousness;
 pub mod compression;
+pub mod compression_ops;
 pub mod context;
 pub mod context_files;
 pub mod context_pressure;
