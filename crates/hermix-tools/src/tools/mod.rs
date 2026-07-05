@@ -27,6 +27,7 @@ pub mod gpt_image;
 pub mod hermix_achievements;
 pub mod homeassistant;
 pub mod image_gen;
+// pub mod jira; // Untracked, broken - removed until fixed
 pub mod kanban;
 pub mod media_workflow;
 pub mod memory;
@@ -40,6 +41,7 @@ pub mod session_search;
 pub mod skill_commands;
 pub mod skill_utils;
 pub mod skills;
+// pub mod slack; // Untracked, broken - removed until fixed
 pub mod terminal;
 pub mod todo;
 pub mod tool_search;
@@ -155,7 +157,9 @@ pub fn register_all(
     memory::register(registry);
     // P1.3: skills tools (skills_list / skill_view / skill_manage).
     skills::register(registry, skill_provider);
+    // slack::register(registry); // Untracked, broken - removed until fixed
     // P1.3: browser tools (10 handlers backed by the sessioned
     // backend so per-session CDP state stays isolated).
     browser::register(registry, browser_backend);
+    // jira::register(registry); // Untracked, broken - removed until fixed
 }

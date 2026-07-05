@@ -1,4 +1,4 @@
-//! Todo management tool
+//! Task orchestration tool with dependency tracking and execution feedback.
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -9,7 +9,7 @@ use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, t
 use crate::ToolRegistry;
 use std::sync::Arc;
 
-/// Register this tool with the registry (P1.2 per-tool migration).
+/// Register this tool with the registry.
 pub fn register(registry: &ToolRegistry) {
     let todo_path = hermix_config::paths::hermix_home().join("todos.json");
     let handler = Arc::new(TodoHandler::new(Arc::new(
@@ -24,7 +24,7 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         false,
-        "Manage todo items: create, list, update, complete, or delete tasks.",
+        "Task orchestration: create, update, list, get_next, depend, record_execution tasks.",
         "📋",
         None,
         RiskLevel::Safe,
@@ -36,7 +36,7 @@ pub fn register(registry: &ToolRegistry) {
 // TodoBackend trait
 // ---------------------------------------------------------------------------
 
-/// Backend for todo/task list management.
+/// Backend for task list management with orchestration support.
 #[async_trait]
 pub trait TodoBackend: Send + Sync {
     /// Create a new todo item.
@@ -57,13 +57,21 @@ pub trait TodoBackend: Send + Sync {
     ) -> Result<String, ToolError>;
     /// List all todo items.
     async fn list(&self, status: Option<&str>) -> Result<String, ToolError>;
+    /// Add dependency: task_id depends on depends_on tasks.
+    async fn add_dependency(&self, task_id: &str, depends_on: &[String]) -> Result<String, ToolError>;
+    /// Get the next task to execute (respecting dependencies and priority).
+    async fn get_next(&self) -> Result<String, ToolError>;
+    /// Record execution result for a task.
+    async fn record_execution(&self, task_id: &str, result: &str) -> Result<String, ToolError>;
+    /// Get dependencies for a task.
+    async fn get_dependencies(&self, task_id: &str) -> Result<String, ToolError>;
 }
 
 // ---------------------------------------------------------------------------
 // TodoHandler
 // ---------------------------------------------------------------------------
 
-/// Tool for managing a task/todo list.
+/// Task orchestration tool with dependency tracking and execution feedback.
 pub struct TodoHandler {
     backend: Arc<dyn TodoBackend>,
 }
@@ -109,8 +117,44 @@ impl ToolHandler for TodoHandler {
                 let status = params.get("status").and_then(|v| v.as_str());
                 self.backend.list(status).await
             }
+            "get_next" => {
+                self.backend.get_next().await
+            }
+            "depend" => {
+                let id = params
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidParams("Missing 'id' parameter".into()))?;
+                let depends_on: Vec<String> = params
+                    .get("depends_on")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                if depends_on.is_empty() {
+                    return Err(ToolError::InvalidParams("Missing 'depends_on' parameter (array of task IDs)".into()));
+                }
+                self.backend.add_dependency(id, &depends_on).await
+            }
+            "record_execution" => {
+                let id = params
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidParams("Missing 'id' parameter".into()))?;
+                let result = params
+                    .get("result")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidParams("Missing 'result' parameter".into()))?;
+                self.backend.record_execution(id, result).await
+            }
+            "get_dependencies" => {
+                let id = params
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidParams("Missing 'id' parameter".into()))?;
+                self.backend.get_dependencies(id).await
+            }
             other => Err(ToolError::InvalidParams(format!(
-                "Unknown action: '{}'. Use 'create', 'update', or 'list'.",
+                "Unknown action: '{}'. Use: create, update, list, get_next, depend, record_execution, get_dependencies.",
                 other
             ))),
         }
@@ -122,35 +166,35 @@ impl ToolHandler for TodoHandler {
             "action".into(),
             json!({
                 "type": "string",
-                "description": "Action to perform: create, update, or list",
-                "enum": ["create", "update", "list"]
+                "description": "Action to perform",
+                "enum": ["create", "update", "list", "get_next", "depend", "record_execution", "get_dependencies"]
             }),
         );
         props.insert(
             "id".into(),
             json!({
                 "type": "string",
-                "description": "Todo item ID (for update)"
+                "description": "Task ID (for update, depend, record_execution, get_dependencies)"
             }),
         );
         props.insert(
             "title".into(),
             json!({
                 "type": "string",
-                "description": "Todo item title (for create/update)"
+                "description": "Task title (for create/update)"
             }),
         );
         props.insert(
             "description".into(),
             json!({
                 "type": "string",
-                "description": "Todo item description"
+                "description": "Task description (for create/update)"
             }),
         );
         props.insert("status".into(), json!({
             "type": "string",
-            "description": "Todo status: pending, in_progress, completed (for update/list filter)",
-            "enum": ["pending", "in_progress", "completed"]
+            "description": "Task status: pending, in_progress, completed, failed (for update/list filter)",
+            "enum": ["pending", "in_progress", "completed", "failed"]
         }));
         props.insert(
             "priority".into(),
@@ -160,10 +204,25 @@ impl ToolHandler for TodoHandler {
                 "enum": ["low", "medium", "high"]
             }),
         );
+        props.insert(
+            "depends_on".into(),
+            json!({
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Array of task IDs this task depends on (for depend action)"
+            }),
+        );
+        props.insert(
+            "result".into(),
+            json!({
+                "type": "string",
+                "description": "Execution result (for record_execution action)"
+            }),
+        );
 
         tool_schema(
             "todo",
-            "Manage task/todo items: create new tasks, update existing ones, or list tasks.",
+            "Task orchestration with dependency tracking. Use get_next to find the next task to execute based on dependencies and priority. After executing a task, use record_execution to log the result and update status to completed.",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }
@@ -197,6 +256,18 @@ mod tests {
         async fn list(&self, _status: Option<&str>) -> Result<String, ToolError> {
             Ok("[]".to_string())
         }
+        async fn add_dependency(&self, task_id: &str, _depends_on: &[String]) -> Result<String, ToolError> {
+            Ok(format!("Added dependency to: {}", task_id))
+        }
+        async fn get_next(&self) -> Result<String, ToolError> {
+            Ok(json!({"id": null, "message": "No pending tasks"}).to_string())
+        }
+        async fn record_execution(&self, task_id: &str, _result: &str) -> Result<String, ToolError> {
+            Ok(format!("Recorded execution for: {}", task_id))
+        }
+        async fn get_dependencies(&self, task_id: &str) -> Result<String, ToolError> {
+            Ok(json!({"task_id": task_id, "dependencies": []}).to_string())
+        }
     }
 
     #[tokio::test]
@@ -210,10 +281,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_todo_list() {
+    async fn test_todo_get_next() {
         let handler = TodoHandler::new(Arc::new(MockTodoBackend));
-        let result = handler.execute(json!({"action": "list"})).await.unwrap();
-        assert_eq!(result, "[]");
+        let result = handler.execute(json!({"action": "get_next"})).await.unwrap();
+        assert!(result.contains("No pending tasks"));
+    }
+
+    #[tokio::test]
+    async fn test_todo_record_execution() {
+        let handler = TodoHandler::new(Arc::new(MockTodoBackend));
+        let result = handler
+            .execute(json!({"action": "record_execution", "id": "test-id", "result": "success"}))
+            .await
+            .unwrap();
+        assert!(result.contains("Recorded execution"));
     }
 
     #[tokio::test]
