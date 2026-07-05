@@ -45,13 +45,17 @@ pub fn should_inject_tool_enforcement(model: &str) -> bool {
 /// Short format hint string that nudges the model toward the
 /// appropriate output style for the active platform (CLI / chat / email / SMS).
 /// Returns `None` when no platform-specific hint applies.
-pub fn platform_hint_text(config: &AgentConfig) -> Option<&'static str> {
+///
+/// When `AgentConfig::platform_hint_override` is set:
+/// - If the override starts with `+`, it is **appended** to the built-in hint.
+/// - Otherwise it **replaces** the built-in hint entirely.
+pub fn platform_hint_text(config: &AgentConfig) -> Option<String> {
     let platform_key = config
         .platform
         .as_deref()
         .map(|s| s.trim().to_lowercase())
         .unwrap_or_default();
-    match platform_key.as_str() {
+    let built_in: Option<&'static str> = match platform_key.as_str() {
         "cli" => Some("You are a CLI AI Agent. Prefer concise plain text output suitable for terminals."),
         "telegram" | "discord" | "slack" => {
             Some("You are responding on a chat platform. Keep responses concise and avoid heavy formatting.")
@@ -59,6 +63,22 @@ pub fn platform_hint_text(config: &AgentConfig) -> Option<&'static str> {
         "email" => Some("You are responding over email. Use clear structure and complete sentences."),
         "sms" => Some("You are responding over SMS. Keep responses short and high-signal."),
         _ => None,
+    };
+    match (&built_in, &config.platform_hint_override) {
+        (_, Some(override_text)) if override_text.starts_with('+') => {
+            // Append mode: built-in + override (skip the leading '+')
+            let extra = &override_text[1..];
+            Some(match built_in {
+                Some(bi) => format!("{} {}", bi, extra.trim()),
+                None => extra.trim().to_string(),
+            })
+        }
+        (_, Some(override_text)) => {
+            // Replace mode: override only
+            Some(override_text.clone())
+        }
+        (Some(bi), None) => Some(bi.to_string()),
+        (None, None) => None,
     }
 }
 
@@ -351,6 +371,7 @@ pub fn build_system_prompt(
     user_message: &str,
     tool_schemas: &[ToolSchema],
     model_for_prompt: &str,
+    tool_call_count: usize,
 ) -> String {
     // ★ Record direction audit counters on the active span. Rendered once
     //   per turn on the stable layer because directions depend on the
@@ -366,6 +387,7 @@ pub fn build_system_prompt(
         tool_schemas,
         &tool_names_set,
         model_for_prompt,
+        tool_call_count,
     );
     let context_text = build_context_layer(
         config,
@@ -378,6 +400,35 @@ pub fn build_system_prompt(
 
     let prompt = format!("{stable_text}{context_text}{suffix_text}");
     tracing::Span::current().record("out_chars", prompt.len());
+
+    // ★ Cache-effectiveness summary (2026-07-05): one info event per
+    //   turn so operators can compare token usage before vs after the
+    //   three-tier cache was enabled.  Token estimates use chars ÷ 4.
+    let stable_est = stable_text.len() / 4;
+    let context_est = context_text.len() / 4;
+    let volatile_est = suffix_text.len() / 4;
+    let total_est = prompt.len() / 4;
+    let (cached_stable_key, cached_stable_len, cached_context_key, cached_context_len) =
+        prompt_cache
+            .lock()
+            .map(|s| s.snapshot())
+            .unwrap_or((None, 0, None, 0));
+    tracing::info!(
+        target: "hermix.prompt_cache",
+        stable_chars = stable_text.len(),
+        stable_est_tokens = stable_est,
+        context_chars = context_text.len(),
+        context_est_tokens = context_est,
+        volatile_chars = suffix_text.len(),
+        volatile_est_tokens = volatile_est,
+        total_chars = prompt.len(),
+        total_est_tokens = total_est,
+        cached_stable_prompt_key = ?cached_stable_key,
+        cached_context_prompt_key = ?cached_context_key,
+        cached_stable_chars = cached_stable_len,
+        cached_context_chars = cached_context_len,
+        "prompt_cache: assembled prompt (stable={stable_est}t context={context_est}t volatile={volatile_est}t → total={total_est}t)"
+    );
 
     prompt
 }
@@ -393,6 +444,7 @@ fn build_stable_layer(
     tool_schemas: &[ToolSchema],
     tool_names_set: &HashSet<&str>,
     model_for_prompt: &str,
+    tool_call_count: usize,
 ) -> String {
     let cache_key = crate::agent_helpers::compute_prompt_cache_key(
         model_for_prompt,
@@ -404,8 +456,20 @@ fn build_stable_layer(
     // Hot-path read: peek the cache without re-rendering. The lookup
     // uses the supplied key so a config change invalidates immediately.
     if let Ok(slot) = prompt_cache.lock() {
-        if let Some((cached_key, text)) = slot.stable.as_ref() {
-            if *cached_key == cache_key && !text.is_empty() {
+        if let (Some(k), Some(text)) = (
+            slot.cached_stable_prompt_key.as_ref(),
+            slot.stable.as_ref(),
+        ) {
+            if *k == cache_key && !text.is_empty() {
+                tracing::debug!(
+                    target: "hermix.prompt_cache",
+                    layer = "stable",
+                    hit = true,
+                    cached_stable_prompt_key = cache_key,
+                    chars = text.len(),
+                    estimated_tokens = text.len() / 4,
+                    "prompt_cache: stable layer hit"
+                );
                 return text.clone();
             }
         }
@@ -430,6 +494,7 @@ fn build_stable_layer(
         tool_names: tool_names_set,
         model_name: model_for_prompt,
         autonomous_mode: config.autonomous_mode,
+        tool_call_count,
     };
     let directions = crate::directions::collect_directions(&route_ctx);
     builder = builder.with_directions(directions);
@@ -493,7 +558,7 @@ fn build_stable_layer(
     }
 
     if let Some(hint) = platform_hint_text(config) {
-        builder = builder.with_block(hint);
+        builder = builder.with_block(&hint);
     }
 
     if let Some(ref ws) = config.workspace {
@@ -507,6 +572,16 @@ fn build_stable_layer(
     }
 
     let rendered = builder.build().to_string();
+
+    tracing::debug!(
+        target: "hermix.prompt_cache",
+        layer = "stable",
+        hit = false,
+        cached_stable_prompt_key = cache_key,
+        chars = rendered.len(),
+        estimated_tokens = rendered.len() / 4,
+        "prompt_cache: stable layer miss — rendered"
+    );
 
     // Write the rendered text back. We size-cap at 200 KB to keep the
     // cache slot from growing unbounded for unusually large configs.
@@ -541,8 +616,20 @@ fn build_context_layer(
     let cache_key = crate::agent_helpers::compute_context_cache_key(0);
 
     if let Ok(slot) = prompt_cache.lock() {
-        if let Some((cached_key, text)) = slot.context.as_ref() {
-            if *cached_key == cache_key && !text.is_empty() {
+        if let (Some(k), Some(text)) = (
+            slot.cached_context_prompt_key.as_ref(),
+            slot.context.as_ref(),
+        ) {
+            if *k == cache_key && !text.is_empty() {
+                tracing::debug!(
+                    target: "hermix.prompt_cache",
+                    layer = "context",
+                    hit = true,
+                    cached_context_prompt_key = cache_key,
+                    chars = text.len(),
+                    estimated_tokens = text.len() / 4,
+                    "prompt_cache: context layer hit"
+                );
                 return text.clone();
             }
         }
@@ -578,6 +665,16 @@ fn build_context_layer(
 
     let rendered = builder.build().to_string();
 
+    tracing::debug!(
+        target: "hermix.prompt_cache",
+        layer = "context",
+        hit = false,
+        cached_context_prompt_key = cache_key,
+        chars = rendered.len(),
+        estimated_tokens = rendered.len() / 4,
+        "prompt_cache: context layer miss — rendered"
+    );
+
     if rendered.len() < 200_000 {
         if let Ok(mut slot) = prompt_cache.lock() {
             slot.store_context(cache_key, rendered.clone());
@@ -595,6 +692,7 @@ pub fn resolve_initial_system_prompt(
     callbacks: &AgentCallbacks,
     user_message: &str,
     tool_schemas: &[ToolSchema],
+    tool_call_count: usize,
 ) -> (String, bool) {
     let (prompt, restored) = if let Some(ref s) = config.stored_system_prompt {
         let t = s.trim();
@@ -609,6 +707,7 @@ pub fn resolve_initial_system_prompt(
                     user_message,
                     tool_schemas,
                     &config.model,
+                    tool_call_count,
                 ),
                 false,
             )
@@ -622,6 +721,7 @@ pub fn resolve_initial_system_prompt(
                 user_message,
                 tool_schemas,
                 &config.model,
+                tool_call_count,
             ),
             false,
         )
@@ -641,6 +741,7 @@ pub fn resolve_initial_system_prompt(
             tool_names: &tool_names_set,
             model_name: &config.model,
             autonomous_mode: config.autonomous_mode,
+            tool_call_count,
         };
         let (patched, report) = Section::audit_and_patch(&prompt, &route_ctx);
         if report.had_patches() {
@@ -694,19 +795,25 @@ mod tests {
             Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
 
         // First call: miss → renders and writes the stable slot.
-        let prompt1 = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model);
-        let slot1 = slot.lock().unwrap().stable.clone();
-        assert!(
-            slot1.is_some(),
-            "first call must populate the stable cache slot"
-        );
-        let (key1, stable1) = slot1.unwrap();
+        let prompt1 = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model, 0);
+        let (key1, stable1) = {
+            let guard = slot.lock().unwrap();
+            (
+                guard.cached_stable_prompt_key,
+                guard.stable.clone().expect("first call must populate the stable cache slot"),
+            )
+        };
         assert!(!stable1.is_empty(), "cached stable layer must be non-empty");
 
         // Second call with same config: hit → reuses cached stable layer.
-        let prompt2 = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model);
-        let slot2 = slot.lock().unwrap().stable.clone();
-        let (key2, stable2) = slot2.unwrap();
+        let prompt2 = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model, 0);
+        let (key2, stable2) = {
+            let guard = slot.lock().unwrap();
+            (
+                guard.cached_stable_prompt_key,
+                guard.stable.clone().expect("second call must reuse the stable cache slot"),
+            )
+        };
 
         // Stable layer must be byte-identical before and after — proving
         // the second call reused the cached text instead of re-rendering.
@@ -733,12 +840,12 @@ mod tests {
         cfg.workspace = Some("/tmp/workspace_a".to_string());
         let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
             Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
-        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model);
-        let (key_a, _) = slot.lock().unwrap().stable.clone().unwrap();
+        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model, 0);
+        let key_a = slot.lock().unwrap().cached_stable_prompt_key;
 
         cfg.workspace = Some("/tmp/workspace_b".to_string());
-        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model);
-        let (key_b, _) = slot.lock().unwrap().stable.clone().unwrap();
+        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model, 0);
+        let key_b = slot.lock().unwrap().cached_stable_prompt_key;
 
         assert_ne!(
             key_a, key_b,
@@ -757,13 +864,13 @@ mod tests {
         let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
             Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
 
-        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model);
+        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model, 0);
         let context_after_first = slot.lock().unwrap().context.clone();
 
         // With the same config the second call should keep the context
         // slot populated (either reused from cache or re-rendered into
         // the same slot — either way the slot must be Some).
-        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model);
+        let _ = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model, 0);
         let context_after_second = slot.lock().unwrap().context.clone();
 
         assert!(
@@ -799,6 +906,7 @@ mod tests {
             "",
             &[],
             &cfg_with.model,
+            0,
         );
         let prompt_skip = build_system_prompt(
             &cfg_skip,
@@ -807,13 +915,14 @@ mod tests {
             "",
             &[],
             &cfg_skip.model,
+            0,
         );
 
         // The volatile suffix is a handful of chars; the stable layer is
         // identical between the two configs. So any size delta comes
         // from the context layer.
-        let len_with = slot_with.lock().unwrap().context.as_ref().map(|(_, t)| t.len()).unwrap_or(0);
-        let len_skip = slot_skip.lock().unwrap().context.as_ref().map(|(_, t)| t.len()).unwrap_or(0);
+        let len_with = slot_with.lock().unwrap().context.as_ref().map(|t| t.len()).unwrap_or(0);
+        let len_skip = slot_skip.lock().unwrap().context.as_ref().map(|t| t.len()).unwrap_or(0);
         assert!(
             len_skip <= len_with,
             "skip_memory=true must produce a context layer no larger than the default \

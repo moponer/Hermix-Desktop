@@ -3,13 +3,10 @@ use crate::budget;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::{Duration, Instant};
-use futures::stream::BoxStream;
-use futures::StreamExt;
+use std::time::Instant;
 use serde_json::{json, Value};
-use tokio::time::sleep;
 use tracing::{info, instrument};
-use hermix_core::{AgentError,AgentResult,format_token_count,LlmResponse,Message,MessageRole,StreamChunk,ToolCall,ToolErrorRecord,ToolSchema,UsageStats};
+use hermix_core::{AgentError,AgentResult,format_token_count,Message,MessageRole,StreamChunk,ToolCall,ToolErrorRecord,ToolSchema,UsageStats};
 use crate::agent_helpers::default_max_autonomous_nudges;
 use crate::agent_loop::{
     AgentLoop, LoopState, PostLlmAction, PostResponseAction, PreparedRun, TurnRuntimeRoute,
@@ -20,10 +17,389 @@ use crate::cost_guard::merge_usage;
 use crate::plugins::HookType;
 use crate::python_alignment::{budget_pressure_text, inject_budget_pressure_into_last_tool_result};
 use crate::stream_collect::StreamCollectOutcome;
-use crate::message_helpers::assistant_visible_text_after_think_blocks;
 use crate::tool_result_processor::push_tool_result;
 
+/// O1.1: return type for `do_pre_turn_setup` — either the agent
+/// should stop (graceful interrupt / max-turns) or continue with
+/// routing information for the LLM call.
+enum PreTurnAction {
+    /// Agent should stop with this result.
+    Stop(AgentResult),
+    /// Continue to LLM call with route + model info.
+    Continue {
+        turn_runtime_route: Option<TurnRuntimeRoute>,
+        active_model: String,
+    },
+}
+
+/// O1.1: return type for `do_post_llm_iteration` — tells the caller
+/// whether to continue the loop or stop.
+enum PostIterationAction {
+    /// Agent should continue to the next iteration.
+    Continue,
+    /// Agent should stop with this result.
+    Stop(AgentResult),
+}
+
 impl AgentLoop {
+    #[allow(clippy::too_many_arguments)]
+    async fn do_pre_turn_setup(
+        &self,
+        ctx: &mut ContextManager,
+        total_turns: &mut u32,
+        state: &mut LoopState,
+        session_id: &str,
+        tool_errors: &[ToolErrorRecord],
+        session_started_hooks_fired: bool,
+        persist_user_idx: Option<usize>,
+        finish_reason: Option<&str>,
+    ) -> Result<PreTurnAction, AgentError> {
+        // --- Graceful interrupt ---
+        if self.interrupt.take_interrupt_graceful().is_some() {
+            return Ok(PreTurnAction::Stop(self.graceful_interrupt_result(
+                ctx,
+                *total_turns,
+                tool_errors,
+                state.cost_guard.accumulated_usage.clone(),
+                state.cost_guard.session_cost_usd,
+                session_started_hooks_fired,
+                persist_user_idx,
+            )));
+        }
+
+        // --- `/steer` pre-API drain ---
+        self.pre_api_apply_pending_steer(ctx);
+
+        // --- Max turns guard ---
+        if *total_turns >= self.config.max_turns {
+            tracing::warn!(
+                "Max turns ({}) exceeded, requesting final summary",
+                self.config.max_turns
+            );
+            let summary_msg = self.handle_max_iterations(ctx).await?;
+            if let Some(msg) = summary_msg {
+                ctx.add_message(msg);
+            }
+            return Ok(PreTurnAction::Stop(self.finalize_agent_result(
+                ctx,
+                *total_turns,
+                tool_errors,
+                state.cost_guard.accumulated_usage.clone(),
+                state.cost_guard.session_cost_usd,
+                session_started_hooks_fired,
+                persist_user_idx,
+                false,
+                false,
+                finish_reason.map(|s| s.to_string()),
+            )));
+        }
+
+        // --- Turn counter ---
+        *total_turns += 1;
+        tracing::debug!("Agent turn {}", total_turns);
+
+        // --- OAuth refresh ---
+        self.oauth_refresh
+            .refresh_if_needed(&self.auth_tokens_path(), &self.config.runtime_providers)
+            .await;
+
+        // --- Skill nudge counter ---
+        if self.config.skill_creation_nudge_interval > 0
+            && self
+                .tool_registry
+                .names()
+                .iter()
+                .any(|n| n == "skill_manage")
+        {
+            if let Ok(mut c) = self.evolution_counters.lock() {
+                c.iters_since_skill = c.iters_since_skill.saturating_add(1);
+            }
+        }
+
+        // --- Checkpoint ---
+        if self.config.checkpoint_interval_turns > 0
+            && (*total_turns - 1).is_multiple_of(self.config.checkpoint_interval_turns)
+        {
+            state.message_cache.store_checkpoint(ctx.get_messages().to_vec());
+        }
+
+        // --- Memory turn-start notification ---
+        self.memory_on_turn_start(*total_turns, "");
+
+        // --- Memory review hint (every 20 turns) ---
+        if *total_turns > 0 && total_turns.is_multiple_of(20) {
+            let review_hint = "Hint: Review and consolidate your recent memory entries. \
+                Remove redundant or outdated information using the memory tool.";
+            ctx.add_message(Message::system(review_hint));
+        }
+
+        // --- Memory sync at flush interval ---
+        if total_turns.is_multiple_of(self.config.memory_flush_interval) && *total_turns > 0 {
+            let msgs = ctx.get_messages();
+            let (u, a) = extract_last_user_assistant(msgs);
+            self.memory_sync(&u, &a, session_id);
+        }
+
+        // --- Background snapshot + frame cap ---
+        self.maybe_freeze_snapshot(session_id, *total_turns);
+        self.maybe_enforce_frame_cap(*total_turns);
+
+        // --- Pre-LLM hook + route resolution ---
+        let turn_runtime_route = state
+            .route_state
+            .forced_runtime_route
+            .clone()
+            .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
+        let active_model = turn_runtime_route
+            .as_ref()
+            .map(|r| r.model.as_str())
+            .unwrap_or(self.config.model.as_str())
+            .to_string();
+        let hook_ctx = serde_json::json!({"turn": total_turns, "model": active_model});
+        let pre_results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
+        self.inject_hook_context(&pre_results, ctx);
+
+        Ok(PreTurnAction::Continue {
+            turn_runtime_route,
+            active_model,
+        })
+    }
+
+    /// O1.1: shared prefetch block — was ~80 lines of duplication between
+    /// run() and run_stream(). Identical logic: intent classification,
+    /// safe tool dispatch, thinking mode selection, ACUI emission.
+    async fn do_prefetch(
+        &self,
+        ctx: &mut ContextManager,
+        tool_schemas: &[ToolSchema],
+        total_turns: u32,
+    ) {
+        let Some(ref prefetcher) = self.prefetcher else {
+            return;
+        };
+        let tool_names: Vec<String> = tool_schemas.iter().map(|t| t.name.clone()).collect();
+        let user_text: String = ctx
+            .get_messages()
+            .iter()
+            .filter(|m| m.role == MessageRole::User)
+            .filter_map(|m| m.content.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let recent_msgs: Vec<Message> = ctx
+            .get_messages()
+            .iter()
+            .cloned()
+            .rev()
+            .take(10)
+            .collect();
+        let tc = hermix_intelligence::TurnContext::from_user_message(user_text.clone())
+            .with_recent_messages(recent_msgs);
+        if let Some(ref outcome) = prefetcher.run(&tc, &tool_names).await {
+            let block = outcome.to_system_prompt_block();
+            if !block.is_empty() {
+                ctx.add_message(Message::system(&block));
+                tracing::trace!(intent = ?outcome.intent, confidence = outcome.confidence, "prefetch result injected as system prompt block");
+            }
+            if let Some(ref on_prefetch_intent) = self.callbacks.on_prefetch_intent {
+                let json = serde_json::to_string(&json!({
+                    "intent": serde_json::to_value(outcome.intent.clone()).unwrap_or_default(),
+                    "confidence": outcome.confidence,
+                    "results": outcome.results.iter().map(|r| json!({
+                        "tool": &r.tool,
+                        "args": &r.args,
+                        "output": &r.output,
+                        "errored": r.errored,
+                        "duration_ms": r.duration_ms,
+                    })).collect::<Value>(),
+                }));
+                if let Ok(ref payload) = json {
+                    on_prefetch_intent(payload);
+                }
+            }
+        }
+
+        // L4: dual-layer thinking mode selection
+        let thinking_decision = {
+            use hermix_intelligence::{select_mode, ThinkingConfig};
+            let cfg = ThinkingConfig::default();
+            let history_len = ctx.get_messages().len();
+            select_mode(user_text.as_str(), history_len, &cfg)
+        };
+        tracing::trace!(
+            mode = thinking_decision.mode.as_str(),
+            reason = thinking_decision.reason.as_str(),
+            confidence = thinking_decision.confidence,
+            "L4 thinking mode selected for this turn"
+        );
+        if let Some(ref on_acui) = self.callbacks.on_acui_directive {
+            let directive = hermix_core::AcuiDirective::Show(
+                hermix_core::AcuiShow::new(
+                    format!("thinking-mode-{}", total_turns),
+                    "thinking_mode",
+                    serde_json::json!({
+                        "mode": thinking_decision.mode.as_str(),
+                        "reason": thinking_decision.reason.as_str(),
+                        "confidence": thinking_decision.confidence,
+                    }),
+                ),
+            );
+            if let Ok(json) = serde_json::to_string(&directive) {
+                on_acui(&json);
+            }
+        }
+    }
+
+    /// O1.1: shared post-tool iteration block — was ~200 lines of
+    /// duplication between run() and run_stream(). Handles: post-tool
+    /// hooks, file-change events, memory/delegation notifications,
+    /// budget enforcement, budget pressure, push results, steer,
+    /// execute_code deduction, background review, context pressure,
+    /// auto-compression, state writeback.
+    #[allow(clippy::too_many_arguments)]
+    async fn do_post_tool_iteration(
+        &self,
+        ctx: &mut ContextManager,
+        tool_calls: &[ToolCall],
+        results: Vec<hermix_core::ToolResult>,
+        state: &mut LoopState,
+        _session_id: &str,
+        _tool_errors: &mut Vec<ToolErrorRecord>,
+        _session_started_hooks_fired: bool,
+        _persist_user_idx: Option<usize>,
+        _review_memory_at_end: bool,
+        total_turns: &mut u32,
+        tool_call_ids: &HashMap<String, String>,
+        stream_needs_break: Option<&AtomicBool>,
+        on_chunk: Option<&(dyn Fn(StreamChunk) + Send + Sync)>,
+    ) {
+        // Post-tool hooks + callbacks
+        for res in &results {
+            let Some(tc) = tool_calls.iter().find(|tc| tc.id == res.tool_call_id) else {
+                continue;
+            };
+            let tc_ctx = serde_json::json!({"tool": &tc.function.name, "is_error": res.is_error, "turn": total_turns});
+            self.invoke_hook(HookType::PostToolCall, &tc_ctx);
+            if let Some(ref cb) = self.callbacks.on_tool_complete {
+                let tool_call_id = tool_call_ids
+                    .get(&tc.id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("legacy-{}", tc.function.name));
+                cb(&tool_call_id, &tc.function.name, &res.content);
+            }
+        }
+
+        // File-change summary events
+        for res in &results {
+            let Some(tc) = tool_calls.iter().find(|tc| tc.id == res.tool_call_id) else {
+                continue;
+            };
+            if res.is_error {
+                continue;
+            }
+            if let Some(change) = extract_file_change(&tc.function.name, &tc.function.arguments, &res.content) {
+                if let Some(ref cb) = self.callbacks.on_tool_complete {
+                    let synth_id = format!("file_change::{}", change.path);
+                    let synth_name = format!("file_change::{}", change.path);
+                    let payload = serde_json::json!({
+                        "change_type": change.change_type,
+                        "file_path": change.path,
+                        "file_summary": change.summary,
+                    }).to_string();
+                    cb(&synth_id, &synth_name, &payload);
+                }
+            }
+        }
+
+        self.notify_memory_writes(tool_calls, &results);
+        self.notify_delegations(tool_calls, &results);
+
+        // Enforce budget on tool results
+        let mut results = results;
+        budget::enforce_budget(&mut results, &self.config.budget);
+
+        if !results.is_empty() {
+            let w = budget_pressure_text(
+                *total_turns,
+                self.config.max_turns,
+                self.config.budget_caution_threshold,
+                self.config.budget_warning_threshold,
+                self.config.budget_pressure_enabled,
+            );
+            if let Some(ref text) = w {
+                tracing::info!("{}", text);
+            }
+            inject_budget_pressure_into_last_tool_result(&mut results, w.as_deref());
+        }
+
+        for result in results {
+            push_tool_result(ctx, tool_calls, &result.tool_call_id, &result.content);
+        }
+        self.post_tool_apply_pending_steer(ctx);
+        if !tool_calls.is_empty()
+            && tool_calls
+                .iter()
+                .all(|tc| tc.function.name == "execute_code")
+        {
+            *total_turns = total_turns.saturating_sub(1);
+        }
+
+        // Stream break control (stream-only)
+        if let (Some(snb), Some(on_c)) = (stream_needs_break, on_chunk) {
+            snb.store(true, Ordering::Release);
+            on_c(StreamChunk {
+                delta: Some(hermix_core::StreamDelta {
+                    content: None,
+                    tool_calls: None,
+                    extra: Some(serde_json::json!({"control": "stream_break"})),
+                }),
+                finish_reason: None,
+                usage: None,
+            });
+        }
+
+        self.emit_background_review_metrics(*total_turns, ctx);
+
+        // Context pressure check
+        let total_tokens = ctx.total_tokens();
+        let threshold = ctx.pressure_threshold_tokens();
+        if threshold > 0 {
+            let progress = total_tokens as f64 / threshold as f64;
+            let tier = if progress >= 0.95 {
+                0.95
+            } else if progress >= 0.85 {
+                0.85
+            } else {
+                0.0
+            };
+            if state.context_pressure.should_emit_warning(progress, tier) {
+                let message = format!(
+                    "Context pressure {:.0}% of compaction threshold ({} / {})",
+                    progress * 100.0,
+                    format_token_count(total_tokens),
+                    format_token_count(threshold)
+                );
+                tracing::warn!("{}", message);
+                self.emit_status("lifecycle", &message);
+            }
+        }
+
+        self.auto_compress_if_over_threshold(ctx).await;
+        state.total_turns = *total_turns;
+    }
+
+    #[instrument(
+        name = "run",
+        level = "info",
+        skip_all,
+        fields(
+            model = %self.config.model,
+            provider = %self.config.provider.as_deref().unwrap_or(""),
+            msg_count = messages.len(),
+            tool_count = tools.as_ref().map(|t| t.len()).unwrap_or(0),
+            total_turns = tracing::field::Empty,
+            total_ms = tracing::field::Empty,
+        )
+    )]
     pub async fn run(
         &self,
         messages: Vec<Message>,
@@ -71,185 +447,25 @@ impl AgentLoop {
         let mut total_turns: u32 = state.total_turns;
 
         loop {
-            if self.interrupt.take_interrupt_graceful().is_some() {
-                return Ok(self.graceful_interrupt_result(
-                    &ctx,
-                    total_turns,
-                    &tool_errors,
-                    state.cost_guard.accumulated_usage.clone(),
-                    state.cost_guard.session_cost_usd,
-                    session_started_hooks_fired,
-                    persist_user_idx,
-                ));
-            }
-
-            // `/steer` pre-API drain — inject into last tool result before the next LLM call.
-            self.pre_api_apply_pending_steer(&mut ctx);
-
-            if total_turns >= self.config.max_turns {
-                tracing::warn!(
-                    "Max turns ({}) exceeded, requesting final summary",
-                    self.config.max_turns
-                );
-                let summary_msg = self.handle_max_iterations(&mut ctx).await?;
-                if let Some(msg) = summary_msg {
-                    ctx.add_message(msg);
-                }
-                return Ok(self.finalize_agent_result(
-                    &ctx,
-                    total_turns,
-                    &tool_errors,
-                    state.cost_guard.accumulated_usage.clone(),
-                    state.cost_guard.session_cost_usd,
-                    session_started_hooks_fired,
-                    persist_user_idx,
-                    false,
-                    false,
-                    None,
-                ));
-            }
-
-            total_turns += 1;
-            tracing::debug!("Agent turn {}", total_turns);
-
-            // Refresh oauth-backed runtime credentials before routing/provider selection.
-            self.oauth_refresh
-                .refresh_if_needed(&self.auth_tokens_path(), &self.config.runtime_providers)
-                .await;
-
-            // Skill nudge counter — Python `run_agent.py`: increment at the start of each inner API iteration.
-            if self.config.skill_creation_nudge_interval > 0
-                && self
-                    .tool_registry
-                    .names()
-                    .iter()
-                    .any(|n| n == "skill_manage")
-            {
-                if let Ok(mut c) = self.evolution_counters.lock() {
-                    c.iters_since_skill = c.iters_since_skill.saturating_add(1);
-                }
-            }
-
-            if self.config.checkpoint_interval_turns > 0
-                && (total_turns - 1).is_multiple_of(self.config.checkpoint_interval_turns)
-            {
-                // Phase 5 (2026-07-04): store checkpoint directly on
-                // the `state.message_cache` (no more local alias).
-                state.message_cache.store_checkpoint(ctx.get_messages().to_vec());
-            }
-
-            // Notify memory + plugins of new turn
-            self.memory_on_turn_start(total_turns, "");
-
-            // Memory review hint: every 20 turns, remind LLM to consolidate.
-            if total_turns > 0 && total_turns.is_multiple_of(20) {
-                let review_hint = "Hint: Review and consolidate your recent memory entries. \
-                    Remove redundant or outdated information using the memory tool.";
-                ctx.add_message(Message::system(review_hint));
-            }
-
-            // Memory sync at flush interval
-            if total_turns.is_multiple_of(self.config.memory_flush_interval) && total_turns > 0 {
-                let msgs = ctx.get_messages();
-                let (u, a) = extract_last_user_assistant(msgs);
-                self.memory_sync(&u, &a, session_id);
-            }
-            // Phase 18 (架构-1 + 架构-2): background snapshot + cap.
-            self.maybe_freeze_snapshot(session_id, total_turns);
-            self.maybe_enforce_frame_cap(total_turns);
-
-            // --- Pre-LLM hook ---
-            let turn_runtime_route = state.route_state.forced_runtime_route
-                .clone()
-                .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
-            let active_model = turn_runtime_route
-                .as_ref()
-                .map(|r| r.model.as_str())
-                .unwrap_or(self.config.model.as_str());
-            let hook_ctx = serde_json::json!({"turn": total_turns, "model": active_model});
-            let pre_results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
-            self.inject_hook_context(&pre_results, &mut ctx);
+            // O1.1: shared pre-turn setup (was ~100 lines of duplication
+            // between run() and run_stream()). Extracted to do_pre_turn_setup.
+            let (turn_runtime_route, _active_model) = match self.do_pre_turn_setup(
+                &mut ctx,
+                &mut total_turns,
+                &mut state,
+                session_id,
+                &tool_errors,
+                session_started_hooks_fired,
+                persist_user_idx,
+                None, // finish_reason — run() doesn't track this
+            ).await? {
+                PreTurnAction::Continue { turn_runtime_route, active_model } =>
+                    (turn_runtime_route, active_model),
+                PreTurnAction::Stop(result) => return Ok(result),
+            };
 
             // --- Prefetch: identify user intent, run safe tools, inject results as system prompt ---
-            if let Some(ref prefetcher) = self.prefetcher {
-                let tool_names: Vec<String> = tool_schemas.iter().map(|t| t.name.clone()).collect();
-                let user_text: String = ctx
-                    .get_messages()
-                    .iter()
-                    .filter(|m| m.role == MessageRole::User)
-                    .filter_map(|m| m.content.as_deref())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let recent_msgs: Vec<Message> = ctx
-                    .get_messages()
-                    .iter()
-                    .cloned()
-                    .rev()
-                    .take(10)
-                    .collect();
-                let tc = hermix_intelligence::TurnContext::from_user_message(user_text.clone())
-                    .with_recent_messages(recent_msgs);
-                if let Some(ref outcome) = prefetcher.run(&tc, &tool_names).await {
-                    let block = outcome.to_system_prompt_block();
-                    if !block.is_empty() {
-                        ctx.add_message(Message::system(&block));
-                        tracing::trace!(intent = ?outcome.intent, confidence = outcome.confidence, "prefetch result injected as system prompt block");
-                    }
-                    // H3: forward prefetch intent to UI layer
-                    if let Some(ref on_prefetch_intent) = self.callbacks.on_prefetch_intent {
-                        let json = serde_json::to_string(&json!({
-                            "intent": serde_json::to_value(outcome.intent.clone()).unwrap_or_default(),
-                            "confidence": outcome.confidence,
-                            "results": outcome.results.iter().map(|r| json!({
-                                "tool": &r.tool,
-                                "args": &r.args,
-                                "output": &r.output,
-                                "errored": r.errored,
-                                "duration_ms": r.duration_ms,
-                            })).collect::<Value>(),
-                        }));
-                        if let Ok(ref payload) = json {
-                            on_prefetch_intent(payload);
-                        }
-                    }
-                }
-
-                // L4: dual-layer thinking — pick L1 (Quick) or L2 (Deep)
-                // for this turn. The mode is informed by the prefetch
-                // outcome (intent) and the user text. We only emit a
-                // tracing event + ACUI directive here; the actual prompt
-                // branching (when to use L1 vs L2 prefix) is the
-                // responsibility of the prompt builder that consumes
-                // this decision.
-                let thinking_decision = {
-                    use hermix_intelligence::{select_mode, ThinkingConfig};
-                    let cfg = ThinkingConfig::default();
-                    let history_len = ctx.get_messages().len();
-                    select_mode(user_text.as_str(), history_len, &cfg)
-                };
-                tracing::trace!(
-                    mode = thinking_decision.mode.as_str(),
-                    reason = thinking_decision.reason.as_str(),
-                    confidence = thinking_decision.confidence,
-                    "L4 thinking mode selected for this turn"
-                );
-                if let Some(ref on_acui) = self.callbacks.on_acui_directive {
-                    let directive = hermix_core::AcuiDirective::Show(
-                        hermix_core::AcuiShow::new(
-                            format!("thinking-mode-{}", total_turns),
-                            "thinking_mode",
-                            serde_json::json!({
-                                "mode": thinking_decision.mode.as_str(),
-                                "reason": thinking_decision.reason.as_str(),
-                                "confidence": thinking_decision.confidence,
-                            }),
-                        ),
-                    );
-                    if let Ok(json) = serde_json::to_string(&directive) {
-                        on_acui(&json);
-                    }
-                }
-            }
+            self.do_prefetch(&mut ctx, &tool_schemas, total_turns).await;
 
             // --- LLM API call with transport retry + semantic empty/thinking recovery (Python parity) ---
             let api_start = Instant::now();
@@ -494,6 +710,7 @@ impl AgentLoop {
                         ),
                     );
                     let _ = ctx.get_messages_mut().pop();
+                    ctx.recompute_total_tokens();
                     continue;
                 }
                 self.emit_status(
@@ -561,6 +778,13 @@ impl AgentLoop {
                     tool_call_ids.insert(tc.id.clone(), tool_call_id.clone());
                     cb(&tool_call_id, &tc.function.name, &args);
                 }
+                // O7.2: fire clarify callback when the agent asks the user a question
+                if tc.function.name == "clarify" {
+                    if let Some(ref cb) = self.callbacks.on_clarify {
+                        let question = tc.function.arguments.clone();
+                        cb(&question);
+                    }
+                }
             }
 
             // --- Execute tool calls in parallel ---
@@ -600,140 +824,31 @@ impl AgentLoop {
                         "Auto-rollback: {} tool call(s) failed in one turn. Restored latest checkpoint and continuing.",
                         turn_tool_error_count
                     )));
+                    // `add_message` updates the token cache for the
+                    // injected system message; the bulk-replace above
+                    // still needs an explicit refresh to match the
+                    // snapshot.
+                    ctx.recompute_total_tokens();
                     continue;
                 }
             }
 
-            // --- Post-tool hook ---
-            for res in &results {
-                let Some(tc) = tool_calls.iter().find(|tc| tc.id == res.tool_call_id) else {
-                    continue;
-                };
-                let tc_ctx = serde_json::json!({
-                    "tool": &tc.function.name,
-                    "is_error": res.is_error,
-                    "turn": total_turns,
-                });
-                self.invoke_hook(HookType::PostToolCall, &tc_ctx);
-
-                if let Some(ref cb) = self.callbacks.on_tool_complete {
-                    // Fall back to a synthetic id if the pre-loop
-                    // somehow didn't seed one (e.g. a tool call
-                    // skipped by `cap_delegates` after the
-                    // map was built). In practice this branch
-                    // is never hit — every pre-loop `tc` gets
-                    // a uuid — but keeping the fallback means a
-                    // missing map entry doesn't blow up the
-                    // dispatch.
-                    let tool_call_id = tool_call_ids
-                        .get(&tc.id)
-                        .cloned()
-                        .unwrap_or_else(|| format!("legacy-{}", tc.function.name));
-                    cb(&tool_call_id, &tc.function.name, &res.content);
-                }
-            }
-
-            // --- File-change summary events ---
-            // Emit a `file_change` timeline event for tools that mutate
-            // the filesystem (write_file, patch, delete). The chat UI
-            // renders these as a WorkBuddy-style "文件变更 (N个)" row.
-            for res in &results {
-                let Some(tc) = tool_calls.iter().find(|tc| tc.id == res.tool_call_id) else {
-                    continue;
-                };
-                if res.is_error {
-                    continue;
-                }
-                if let Some(change) = extract_file_change(&tc.function.name, &tc.function.arguments, &res.content) {
-                    if let Some(ref cb) = self.callbacks.on_tool_complete {
-                        let synth_id = format!("file_change::{}", change.path);
-                        let synth_name = format!("file_change::{}", change.path);
-                        let payload = serde_json::json!({
-                            "change_type": change.change_type,
-                            "file_path": change.path,
-                            "file_summary": change.summary,
-                        }).to_string();
-                        cb(&synth_id, &synth_name, &payload);
-                    }
-                }
-            }
-
-            self.notify_memory_writes(&tool_calls, &results);
-            self.notify_delegations(&tool_calls, &results);
-
-            // Enforce budget on tool results
-            let mut results = results;
-            budget::enforce_budget(&mut results, &self.config.budget);
-
-            if !results.is_empty() {
-                let w = budget_pressure_text(
-                    total_turns,
-                    self.config.max_turns,
-                    self.config.budget_caution_threshold,
-                    self.config.budget_warning_threshold,
-                    self.config.budget_pressure_enabled,
-                );
-                if let Some(ref text) = w {
-                    tracing::info!("{}", text);
-                }
-                inject_budget_pressure_into_last_tool_result(&mut results, w.as_deref());
-            }
-
-            for result in results {
-                // Look up the original tool name (e.g. "terminal")
-                // from the matching tool_calls entry so reloaded
-                // sessions can rebuild ToolMessageMeta with the real
-                // label. Without this the persisted `Message::name`
-                // is None and the UI falls back to a generic "tool"
-                // pill on reload.
-                push_tool_result(&mut ctx, &tool_calls, &result.tool_call_id, &result.content);
-            }
-            self.post_tool_apply_pending_steer(&mut ctx);
-            if !tool_calls.is_empty()
-                && tool_calls
-                    .iter()
-                    .all(|tc| tc.function.name == "execute_code")
-            {
-                total_turns = total_turns.saturating_sub(1);
-            }
-            self.emit_background_review_metrics(total_turns, &ctx);
-
-            let total_tokens = ctx.total_tokens();
-            let threshold = ctx.pressure_threshold_tokens();
-            if threshold > 0 {
-                let progress = total_tokens as f64 / threshold as f64;
-                let tier = if progress >= 0.95 {
-                    0.95
-                } else if progress >= 0.85 {
-                    0.85
-                } else {
-                    0.0
-                };
-                if state.context_pressure.should_emit_warning(progress, tier) {
-                    let message = format!(
-                        "Context pressure {:.0}% of compaction threshold ({} / {})",
-                        progress * 100.0,
-                        format_token_count(total_tokens),
-                        format_token_count(threshold)
-                    );
-                    tracing::warn!("{}", message);
-                    self.emit_status("lifecycle", &message);
-                }
-            }
-
-            self.auto_compress_if_over_threshold(&mut ctx).await;
-
-            // TODO(2026-07-04): `total_turns` is aliased into both a
-            // local and `state.total_turns` (dual-source). The
-            // single-source fix is to extract `run_shared_loop(state,
-            // llm_caller)` once both call sites share the same
-            // continuation shape — at that point the local disappears
-            // and the writeback goes away. Until then this writeback
-            // bridges the value into the manager struct so callers that
-            // only see `LoopState` (post-run) read a fresh value. See
-            // the bridge comment at the top of `run()` for the full
-            // history of the 14 -> 1 writeback shrink.
-            state.total_turns = total_turns;
+            // --- Post-tool iteration (shared with run_stream) ---
+            self.do_post_tool_iteration(
+                &mut ctx,
+                &tool_calls,
+                results,
+                &mut state,
+                session_id,
+                &mut tool_errors,
+                session_started_hooks_fired,
+                persist_user_idx,
+                review_memory_at_end,
+                &mut total_turns,
+                &tool_call_ids,
+                None, // no stream_needs_break in non-stream mode
+                None, // no on_chunk in non-stream mode
+            ).await;
         }
     }
 
@@ -852,92 +967,22 @@ impl AgentLoop {
         let mut total_turns: u32 = state.total_turns;
 
         loop {
-            if self.interrupt.take_interrupt_graceful().is_some() {
-                return Ok(self.graceful_interrupt_result(
-                    &ctx,
-                    total_turns,
-                    &tool_errors,
-                    state.cost_guard.accumulated_usage.clone(),
-                    state.cost_guard.session_cost_usd,
-                    session_started_hooks_fired,
-                    persist_user_idx,
-                ));
-            }
-
-            // `/steer` pre-API drain — inject into last tool result before the next LLM call.
-            self.pre_api_apply_pending_steer(&mut ctx);
-
-            if total_turns >= self.config.max_turns {
-                tracing::warn!(
-                    "Max turns ({}) exceeded, requesting final summary",
-                    self.config.max_turns
-                );
-                let summary_msg = self.handle_max_iterations(&mut ctx).await?;
-                if let Some(msg) = summary_msg {
-                    ctx.add_message(msg);
-                }
-                return Ok(self.finalize_agent_result(
-                    &ctx,
-                    total_turns,
-                    &tool_errors,
-                    state.cost_guard.accumulated_usage.clone(),
-                    state.cost_guard.session_cost_usd,
-                    session_started_hooks_fired,
-                    persist_user_idx,
-                    false,
-                    false,
-                    last_finish_reason.clone(),
-                ));
-            }
-
-            total_turns += 1;
-
-            // Refresh oauth-backed runtime credentials before routing/provider selection.
-            self.oauth_refresh
-                .refresh_if_needed(&self.auth_tokens_path(), &self.config.runtime_providers)
-                .await;
-
-            if self.config.skill_creation_nudge_interval > 0
-                && self
-                    .tool_registry
-                    .names()
-                    .iter()
-                    .any(|n| n == "skill_manage")
-            {
-                if let Ok(mut c) = self.evolution_counters.lock() {
-                    c.iters_since_skill = c.iters_since_skill.saturating_add(1);
-                }
-            }
-
-            self.memory_on_turn_start(total_turns, "");
-
-            if self.config.checkpoint_interval_turns > 0
-                && (total_turns - 1).is_multiple_of(self.config.checkpoint_interval_turns)
-            {
-                // Phase 5 (2026-07-04): store checkpoint directly on
-                // the `state.message_cache` (no more local alias).
-                state.message_cache.store_checkpoint(ctx.get_messages().to_vec());
-            }
-
-            if total_turns.is_multiple_of(self.config.memory_flush_interval) && total_turns > 0 {
-                let (u, a) = extract_last_user_assistant(ctx.get_messages());
-                self.memory_sync(&u, &a, session_id);
-            }
-            // Phase 18 (架构-1 + 架构-2): background snapshot + cap.
-            self.maybe_freeze_snapshot(session_id, total_turns);
-            self.maybe_enforce_frame_cap(total_turns);
-
-            // Pre-LLM hook
-            let turn_runtime_route = state.route_state.forced_runtime_route
-                .clone()
-                .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
-            let active_model = turn_runtime_route
-                .as_ref()
-                .map(|r| r.model.as_str())
-                .unwrap_or(self.config.model.as_str());
-            let hook_ctx = serde_json::json!({"turn": total_turns, "model": active_model});
-            let pre_results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
-            self.inject_hook_context(&pre_results, &mut ctx);
+            // O1.1: shared pre-turn setup (was ~90 lines of duplication
+            // between run() and run_stream()). Extracted to do_pre_turn_setup.
+            let (turn_runtime_route, active_model) = match self.do_pre_turn_setup(
+                &mut ctx,
+                &mut total_turns,
+                &mut state,
+                session_id,
+                &tool_errors,
+                session_started_hooks_fired,
+                persist_user_idx,
+                last_finish_reason.as_deref(),
+            ).await? {
+                PreTurnAction::Continue { turn_runtime_route, active_model } =>
+                    (turn_runtime_route, active_model),
+                PreTurnAction::Stop(result) => return Ok(result),
+            };
 
             // --- Streaming first attempt + same D-step semantic recovery as `run()` (retries use non-stream) ---
             let api_start = Instant::now();
@@ -972,7 +1017,7 @@ impl AgentLoop {
                             &ctx,
                             &tool_schemas,
                             turn_runtime_route.as_ref(),
-                            active_model,
+                            &active_model,
                             &*on_chunk,
                         )
                         .await;
@@ -1068,6 +1113,10 @@ impl AgentLoop {
                 }
             };
             let api_elapsed_ms = api_start.elapsed().as_millis() as u64;
+            // O1.1 fix: run_stream() was missing the API timing record
+            // that run() has at line 327. Without it, dashboard cost
+            // reports under-count stream-path API time.
+            state.timings.record_api(api_elapsed_ms);
 
             // Phase 1.3c (2026-07-03): mirrors 1.3b on the run_stream()
             // side. Post-LLM hook + usage accumulate + cost guard move
@@ -1126,6 +1175,7 @@ impl AgentLoop {
                         ),
                     );
                     let _ = ctx.get_messages_mut().pop();
+                    ctx.recompute_total_tokens();
                     continue;
                 }
             }
@@ -1282,6 +1332,7 @@ impl AgentLoop {
                         ),
                     );
                     let _ = ctx.get_messages_mut().pop();
+                    ctx.recompute_total_tokens();
                     continue;
                 }
                 self.emit_status(
@@ -1338,6 +1389,13 @@ impl AgentLoop {
                     tool_call_ids.insert(tc.id.clone(), tool_call_id.clone());
                     cb(&tool_call_id, &tc.function.name, &args);
                 }
+                // O7.2: fire clarify callback when the agent asks the user a question
+                if tc.function.name == "clarify" {
+                    if let Some(ref cb) = self.callbacks.on_clarify {
+                        let question = tc.function.arguments.clone();
+                        cb(&question);
+                    }
+                }
             }
 
             if self.interrupt.take_interrupt_graceful().is_some() {
@@ -1352,7 +1410,11 @@ impl AgentLoop {
                 ));
             }
 
-            let mut results = self
+            // O1.1 fix: tool timing was measured in run() but missing
+            // from run_stream(). Without this, the TurnTimings
+            // panel shows zero tool time for all stream-path sessions.
+            let tool_start = std::time::Instant::now();
+            let results = self
                 .execute_tool_calls(
                     &tool_calls,
                     total_turns,
@@ -1362,6 +1424,9 @@ impl AgentLoop {
                     &mut tool_errors,
                 )
                 .await;
+            state
+                .timings
+                .record_tool(tool_start.elapsed().as_millis() as u64);
 
             let turn_tool_error_count = results.iter().filter(|r| r.is_error).count() as u32;
             if self.config.rollback_on_tool_error_threshold > 0
@@ -1373,130 +1438,31 @@ impl AgentLoop {
                         "Auto-rollback: {} tool call(s) failed in one turn. Restored latest checkpoint and continuing.",
                         turn_tool_error_count
                     )));
+                    // `add_message` updates the token cache for the
+                    // injected system message; the bulk-replace above
+                    // still needs an explicit refresh to match the
+                    // snapshot.
+                    ctx.recompute_total_tokens();
                     continue;
                 }
             }
 
-            // Post-tool hooks + callbacks. Look up the uuid we
-            // stashed in the pre-loop keyed by the same `tc.id` so
-            // callers can correlate start/complete events.
-            for res in &results {
-                let Some(tc) = tool_calls.iter().find(|tc| tc.id == res.tool_call_id) else {
-                    continue;
-                };
-                let tc_ctx = serde_json::json!({"tool": &tc.function.name, "is_error": res.is_error, "turn": total_turns});
-                self.invoke_hook(HookType::PostToolCall, &tc_ctx);
-                if let Some(ref cb) = self.callbacks.on_tool_complete {
-                    let tool_call_id = tool_call_ids
-                        .get(&tc.id)
-                        .cloned()
-                        .unwrap_or_else(|| format!("legacy-{}", tc.function.name));
-                    cb(&tool_call_id, &tc.function.name, &res.content);
-                }
-            }
-
-            // File-change summary events (mirrors the first on_tool_complete block).
-            for res in &results {
-                let Some(tc) = tool_calls.iter().find(|tc| tc.id == res.tool_call_id) else {
-                    continue;
-                };
-                if res.is_error {
-                    continue;
-                }
-                if let Some(change) = extract_file_change(&tc.function.name, &tc.function.arguments, &res.content) {
-                    if let Some(ref cb) = self.callbacks.on_tool_complete {
-                        let synth_id = format!("file_change::{}", change.path);
-                        let synth_name = format!("file_change::{}", change.path);
-                        let payload = serde_json::json!({
-                            "change_type": change.change_type,
-                            "file_path": change.path,
-                            "file_summary": change.summary,
-                        }).to_string();
-                        cb(&synth_id, &synth_name, &payload);
-                    }
-                }
-            }
-
-            self.notify_memory_writes(&tool_calls, &results);
-            self.notify_delegations(&tool_calls, &results);
-
-            budget::enforce_budget(&mut results, &self.config.budget);
-
-            if !results.is_empty() {
-                let w = budget_pressure_text(
-                    total_turns,
-                    self.config.max_turns,
-                    self.config.budget_caution_threshold,
-                    self.config.budget_warning_threshold,
-                    self.config.budget_pressure_enabled,
-                );
-                if let Some(ref text) = w {
-                    tracing::info!("{}", text);
-                }
-                inject_budget_pressure_into_last_tool_result(&mut results, w.as_deref());
-            }
-
-            for result in results {
-                // Look up the original tool name (e.g. "terminal")
-                // from the matching tool_calls entry so reloaded
-                // sessions can rebuild ToolMessageMeta with the real
-                // label. Without this the persisted `Message::name`
-                // is None and the UI falls back to a generic "tool"
-                // pill on reload.
-                push_tool_result(&mut ctx, &tool_calls, &result.tool_call_id, &result.content);
-            }
-            self.post_tool_apply_pending_steer(&mut ctx);
-            if !tool_calls.is_empty()
-                && tool_calls
-                    .iter()
-                    .all(|tc| tc.function.name == "execute_code")
-            {
-                total_turns = total_turns.saturating_sub(1);
-            }
-            stream_needs_break.store(true, Ordering::Release);
-            on_chunk(StreamChunk {
-                delta: Some(hermix_core::StreamDelta {
-                    content: None,
-                    tool_calls: None,
-                    extra: Some(serde_json::json!({"control": "stream_break"})),
-                }),
-                finish_reason: None,
-                usage: None,
-            });
-            self.emit_background_review_metrics(total_turns, &ctx);
-
-            let total_tokens = ctx.total_tokens();
-            let threshold = ctx.pressure_threshold_tokens();
-            if threshold > 0 {
-                let progress = total_tokens as f64 / threshold as f64;
-                let tier = if progress >= 0.95 {
-                    0.95
-                } else if progress >= 0.85 {
-                    0.85
-                } else {
-                    0.0
-                };
-                if state.context_pressure.should_emit_warning(progress, tier) {
-                    let message = format!(
-                        "Context pressure {:.0}% of compaction threshold ({} / {})",
-                        progress * 100.0,
-                        format_token_count(total_tokens),
-                        format_token_count(threshold)
-                    );
-                    tracing::warn!("{}", message);
-                    self.emit_status("lifecycle", &message);
-                }
-            }
-
-            self.auto_compress_if_over_threshold(&mut ctx).await;
-
-            // Mirror of the writeback at the end of `run()`: the only
-            // loop-local still bridged into `state` is `total_turns`.
-            // TODO(2026-07-04): see the dual-source note in `run()`
-            // for the planned single-source collapse once
-            // `run_shared_loop` lands.
-            // See the bridge comment at the top of `run()` for history.
-            state.total_turns = total_turns;
+            // --- Post-tool iteration (shared with run) ---
+            self.do_post_tool_iteration(
+                &mut ctx,
+                &tool_calls,
+                results,
+                &mut state,
+                session_id,
+                &mut tool_errors,
+                session_started_hooks_fired,
+                persist_user_idx,
+                review_memory_at_end,
+                &mut total_turns,
+                &tool_call_ids,
+                Some(&stream_needs_break), // stream-specific
+                Some(on_chunk.as_ref()),   // stream-specific
+            ).await;
         }
     }
 

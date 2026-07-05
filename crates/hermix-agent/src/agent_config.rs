@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use hermix_core::traits::PermissionLevel;
-use hermix_core::BudgetConfig;
+use hermix_core::{BudgetConfig, BudgetConfigError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -224,6 +224,14 @@ pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
 
+    /// Optional platform hint override text. When set, replaces the
+    /// built-in platform hint for the active platform. Supports Hermes
+    /// Agent-style `append` / `replace` semantics: if the value starts
+    /// with `+`, it is appended to the built-in hint; otherwise it
+    /// replaces it entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_hint_override: Option<String>,
+
     /// Include session_id in system prompt timestamp block.
     #[serde(default)]
     pub pass_session_id: bool,
@@ -396,6 +404,25 @@ pub struct AgentConfig {
 // Default value functions
 // ---------------------------------------------------------------------------
 
+/// N-07 (startup guard): validate the assembled `AgentConfig` before the
+/// loop starts running. Returns the first `BudgetConfig` error so the
+/// caller can convert it into a config-load error. Currently delegates to
+/// `BudgetConfig::validate()` — additional checks (e.g. `max_cost_usd`
+/// positivity) can be appended here as the config schema grows.
+pub fn validate(config: &AgentConfig) -> Result<(), BudgetConfigError> {
+    config.budget.validate()?;
+    if let Some(cap) = config.max_cost_usd {
+        if cap.is_nan() || cap < 0.0 {
+            tracing::warn!(
+                target: "hermix.agent",
+                max_cost_usd = cap,
+                "AgentConfig::max_cost_usd is NaN or negative; cost guard will misbehave"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn default_max_turns() -> u32 {
     30
 }
@@ -547,6 +574,7 @@ impl Default for AgentConfig {
             smart_model_routing: SmartModelRoutingConfig::default(),
             provider: None,
             platform: None,
+            platform_hint_override: None,
             pass_session_id: false,
             runtime_providers: HashMap::new(),
             ephemeral_system_prompt: None,

@@ -192,6 +192,27 @@ pub struct ApprovalManager {
     /// allowlist pattern is downgraded to `Approved`. `Denied` is
     /// never overridden — see module docs.
     user_allowlist: Option<UserAllowlist>,
+    /// Session-level approved commands. Commands approved once in a
+    /// session are remembered — subsequent matches skip the confirmation
+    /// prompt. Cleared on session reset. Mirrors Hermes Agent's
+    /// session-scoped approval memory.
+    ///
+    /// ### 2026-07-05: optional disk persistence
+    ///
+    /// The in-memory set is still authoritative, but callers can
+    /// opt into persisting the set to `<hermix_home>/session_approvals.json`
+    /// via [`Self::approve_for_session_with_persist`] (which calls
+    /// [`persist_session_approvals`] under the hood). On startup,
+    /// [`load_session_approvals`] restores the previous session's
+    /// approved commands so a restart doesn't re-prompt for every
+    /// command the user already approved.
+    ///
+    /// We deliberately use a separate file from `approval_allowlist.json`
+    /// (the "always allow" persistent patterns) — the allowlist is
+    /// pattern-based and survives forever; session approvals are
+    /// exact-match commands and survive across restarts but can be
+    /// wiped by `clear_session_approvals()` (e.g. on `/new`).
+    session_approved: std::collections::HashSet<String>,
 }
 
 impl ApprovalManager {
@@ -203,6 +224,7 @@ impl ApprovalManager {
             denied_patterns: Vec::new(),
             confirm_patterns: Vec::new(),
             user_allowlist: None,
+            session_approved: std::collections::HashSet::new(),
         }
     }
 
@@ -272,6 +294,13 @@ impl ApprovalManager {
     ///   pattern but is not in the allowlist.
     /// - `Approved` if no patterns match (implicit allowlist).
     pub fn check_approval(&self, command: &str) -> ApprovalDecision {
+        // 0. Session-level approval — if this exact command was approved
+        //    in the current session, skip re-prompting. Does NOT override
+        //    Denied decisions (catastrophic patterns stay catastrophic).
+        if self.session_approved.contains(command) {
+            return ApprovalDecision::Approved;
+        }
+
         // 1. Denied patterns — built-in then custom. NEVER overridden
         //    by the user allowlist (catastrophic operations stay
         //    catastrophic regardless of "always allow" preferences).
@@ -325,6 +354,143 @@ impl ApprovalManager {
     pub async fn check_approval_async(&self, command: &str) -> ApprovalDecision {
         self.check_approval(command)
     }
+
+    /// Record a command as approved for the current session.
+    /// Subsequent `check_approval` calls for the same command will
+    /// return `Approved` without prompting. Does NOT override `Denied`
+    /// decisions (catastrophic patterns stay catastrophic).
+    ///
+    /// Use [`Self::approve_for_session_with_persist`] when you also
+    /// want the approval to survive a process restart.
+    pub fn approve_for_session(&mut self, command: &str) {
+        self.session_approved.insert(command.to_string());
+    }
+
+    /// Like [`Self::approve_for_session`] but also writes the in-memory
+    /// set to disk at `path` so the approval survives a process restart.
+    ///
+    /// Persistence is opt-in (callers pass the path explicitly) so
+    /// ephemeral test / CLI flows can avoid touching the filesystem.
+    /// `path` is typically `$HERMIX_HOME/session_approvals.json`; pass
+    /// `None` to skip persistence and behave like
+    /// [`Self::approve_for_session`].
+    pub fn approve_for_session_with_persist(
+        &mut self,
+        command: &str,
+        persist_path: Option<&Path>,
+    ) -> std::io::Result<()> {
+        self.session_approved.insert(command.to_string());
+        if let Some(path) = persist_path {
+            persist_session_approvals(path, &self.session_approved)?;
+        }
+        Ok(())
+    }
+
+    /// Clear all session-level approvals (call on session reset).
+    /// Also wipes the on-disk file if `persist_path` is `Some`.
+    pub fn clear_session_approvals(&mut self, persist_path: Option<&Path>) {
+        self.session_approved.clear();
+        if let Some(path) = persist_path {
+            // Best-effort: a missing file is fine; only log other errors.
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => eprintln!(
+                    "[hermix-approval] session_approvals clear error ({}); \
+                     in-memory set cleared but file may still exist on disk",
+                    e
+                ),
+            }
+        }
+    }
+
+    /// Check if a command was previously approved in this session.
+    pub fn is_approved_in_session(&self, command: &str) -> bool {
+        self.session_approved.contains(command)
+    }
+
+    /// Borrow the current session-approved set (read-only).
+    pub fn session_approvals(&self) -> &std::collections::HashSet<String> {
+        &self.session_approved
+    }
+
+    /// Restore a previously-persisted session-approval set.
+    /// Replaces the current in-memory set (does not merge).
+    pub fn restore_session_approvals(&mut self, set: std::collections::HashSet<String>) {
+        self.session_approved = set;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session-approval persistence (2026-07-05)
+// ---------------------------------------------------------------------------
+
+/// Load a previously-persisted session-approval set from `path`.
+///
+/// Failure matrix (mirrors `UserAllowlist::load`):
+///
+/// | File state        | Result                                          |
+/// |-------------------|-------------------------------------------------|
+/// | Missing           | empty set (no warning)                          |
+/// | Empty             | empty set (no warning)                          |
+/// | Valid JSON array  | populated set                                   |
+/// | Corrupt JSON      | empty set + warning                             |
+/// | Permission denied | empty set + warning                             |
+///
+/// Load is **never** fatal — a corrupt or unreadable file must not
+/// stop the agent from starting.
+pub fn load_session_approvals(path: &Path) -> std::collections::HashSet<String> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Default::default(),
+        Err(e) => {
+            eprintln!(
+                "[hermix-approval] session_approvals read error ({}); starting with empty set",
+                e
+            );
+            return Default::default();
+        }
+    };
+    if bytes.is_empty() {
+        return Default::default();
+    }
+    match serde_json::from_slice::<Vec<String>>(&bytes) {
+        Ok(entries) => entries.into_iter().collect(),
+        Err(e) => {
+            eprintln!(
+                "[hermix-approval] session_approvals parse error ({}); starting with empty set",
+                e
+            );
+            Default::default()
+        }
+    }
+}
+
+/// Persist the session-approval set to `path` (atomic via tmp + rename).
+/// Creates the parent directory if missing. Windows needs the target
+/// removed before rename (`std::fs::rename` fails if target exists on
+/// Windows); POSIX rename atomically replaces.
+pub fn persist_session_approvals(
+    path: &Path,
+    set: &std::collections::HashSet<String>,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Stable order so re-saving the same set produces byte-identical
+    // output (makes file diffs / change-detection trivial in tests).
+    let mut entries: Vec<&String> = set.iter().collect();
+    entries.sort();
+    let bytes = serde_json::to_vec_pretty(&entries)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &bytes)?;
+    #[cfg(windows)]
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 impl Default for ApprovalManager {
@@ -1242,5 +1408,85 @@ mod tests {
             m2.check_approval("systemctl restart mysql"),
             ApprovalDecision::RequiresConfirmation
         );
+    }
+
+    // ----- 2026-07-05: session-approval persistence -----
+
+    /// `approve_for_session_with_persist` writes the in-memory set to
+    /// disk atomically, and `load_session_approvals` reconstructs it
+    /// on a fresh manager so a restart doesn't re-prompt for already-
+    /// approved commands.
+    #[test]
+    fn session_approvals_persist_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session_approvals.json");
+
+        let mut m = ApprovalManager::new();
+        m.approve_for_session_with_persist("systemctl restart nginx", Some(&path))
+            .unwrap();
+        m.approve_for_session_with_persist("apt install foo", Some(&path))
+            .unwrap();
+        // Re-approving an already-approved command should be idempotent.
+        m.approve_for_session_with_persist("systemctl restart nginx", Some(&path))
+            .unwrap();
+
+        assert!(path.exists());
+        assert_eq!(m.session_approvals().len(), 2);
+
+        let loaded = load_session_approvals(&path);
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.contains("systemctl restart nginx"));
+        assert!(loaded.contains("apt install foo"));
+
+        // Fresh manager sees the same session approvals.
+        let mut m2 = ApprovalManager::new();
+        m2.restore_session_approvals(loaded);
+        assert!(m2.is_approved_in_session("systemctl restart nginx"));
+        assert_eq!(
+            m2.check_approval("systemctl restart nginx"),
+            ApprovalDecision::Approved,
+            "loaded session approval must skip confirmation"
+        );
+    }
+
+    /// `clear_session_approvals(Some(path))` removes the on-disk file
+    /// so a `/new` command fully resets the session.
+    #[test]
+    fn session_approvals_clear_wipes_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("session_approvals.json");
+
+        let mut m = ApprovalManager::new();
+        m.approve_for_session_with_persist("cmd", Some(&path)).unwrap();
+        assert!(path.exists());
+
+        m.clear_session_approvals(Some(&path));
+        assert!(m.session_approvals().is_empty());
+        assert!(
+            !path.exists(),
+            "clear must delete the on-disk file, got: {:?}",
+            path.exists()
+        );
+    }
+
+    /// `load_session_approvals` returns an empty set for a missing
+    /// file (never fatal at agent startup).
+    #[test]
+    fn session_approvals_load_missing_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("does_not_exist.json");
+        let set = load_session_approvals(&path);
+        assert!(set.is_empty());
+    }
+
+    /// Corrupt JSON yields an empty set + a warning, not a panic.
+    /// The agent must always be able to start.
+    #[test]
+    fn session_approvals_load_corrupt_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bad.json");
+        std::fs::write(&path, b"{not valid json").unwrap();
+        let set = load_session_approvals(&path);
+        assert!(set.is_empty());
     }
 }

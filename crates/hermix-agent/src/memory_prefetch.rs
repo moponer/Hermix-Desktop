@@ -47,7 +47,7 @@ use crate::agent_config::AgentConfig;
 use crate::consciousness::ConsciousnessTracker;
 use crate::focus_stack_ops::{current_focus_depth, note_delegation_end};
 use crate::memory_hooks::{build_session_summary, delegation_event_from_tool_result, memory_write_event_from_tool_call};
-use hermix_core::{Message, ToolCall, ToolResult};
+use hermix_core::{Message, MessageRole, ToolCall, ToolResult};
 use hermix_focus::SessionFrameStatus;
 use serde_json::Value;
 
@@ -65,6 +65,7 @@ pub async fn memory_prefetch(
     hermix_home: Option<&Path>,
     query: &str,
     session_id: &str,
+    messages: Option<&[Message]>,
 ) -> String {
     if config.skip_memory {
         return String::new();
@@ -85,9 +86,26 @@ pub async fn memory_prefetch(
     // --- Phase 15: Time-aware recall via MemoryLayer path ----------
     let time_window = extract_time_window(query);
 
+    // Extract task context from recent messages for better recall
+    let task_context = messages.map(|msgs| extract_task_context(msgs));
+
     let recall_start = std::time::Instant::now();
     let structured_hits: Vec<MemoryHit> = if let Some(router) = router {
-        let mut q = MemoryQuery::recall(query)
+        // Enhance query with task context for better recall
+        let enhanced_query = if let Some(ref tc) = task_context {
+            let mut q = query.to_string();
+            if !tc.active_files.is_empty() {
+                q.push_str(&format!(" files: {}", tc.active_files.join(", ")));
+            }
+            if !tc.recent_errors.is_empty() {
+                q.push_str(&format!(" error: {}", tc.recent_errors[0]));
+            }
+            q
+        } else {
+            query.to_string()
+        };
+
+        let mut q = MemoryQuery::recall(&enhanced_query)
             .with_limit(limit)
             .with_session_id(session_id.to_string());
         if let Some(tw) = time_window {
@@ -239,6 +257,17 @@ pub async fn memory_prefetch(
 ///    backend's `facts` table.
 /// 3. Run `user_style::detect_user_style` and write a `user.style:<style>`
 ///    fact if a style was detected with sufficient confidence.
+#[tracing::instrument(
+    name = "memory_sync",
+    level = "debug",
+    skip_all,
+    fields(
+        session_id = %session_id,
+        user_chars = user.chars().count(),
+        assistant_chars = assistant.chars().count(),
+        fact_writes = tracing::field::Empty,
+    )
+)]
 pub fn memory_sync(
     config: &AgentConfig,
     router: Option<&hermix_focus::MemoryRouter>,
@@ -453,6 +482,15 @@ pub fn notify_memory_writes(
 
 /// Route a `on_turn_start` notification through `MemoryRouter`.
 /// No-op when `skip_memory` is set or no router is attached.
+#[tracing::instrument(
+    name = "memory_on_turn_start",
+    level = "debug",
+    skip_all,
+    fields(
+        turn = turn,
+        router_attached = router.is_some(),
+    )
+)]
 pub fn memory_on_turn_start(
     config: &AgentConfig,
     router: Option<&MemoryRouter>,
@@ -582,6 +620,15 @@ pub fn drain_focus_conclusions(
 /// spawned on the runtime so the agent loop doesn't block on SQLite
 /// writes; errors are logged and swallowed.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    name = "memory_on_session_end",
+    level = "debug",
+    skip_all,
+    fields(
+        msg_count = messages.len(),
+        router_attached = router.is_some(),
+    )
+)]
 pub fn memory_on_session_end(
     config: &AgentConfig,
     router: Option<&Arc<MemoryRouter>>,
@@ -741,3 +788,53 @@ pub fn notify_delegations(
         tracker.set_focus_depth(current_focus_depth(focus_stack));
     }
 }
+
+/// Task context extracted from recent messages for better memory recall.
+struct TaskContext {
+    active_files: Vec<String>,
+    recent_errors: Vec<String>,
+}
+
+/// Extract task context from recent messages to enhance memory recall.
+/// Looks at the last 10 messages for file paths and error messages.
+fn extract_task_context(messages: &[Message]) -> TaskContext {
+    let mut active_files = Vec::new();
+    let mut recent_errors = Vec::new();
+
+    for msg in messages.iter().rev().take(10) {
+        if let Some(tool_calls) = &msg.tool_calls {
+            for tc in tool_calls {
+                if let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
+                    if let Some(path) = args.get("path").or(args.get("file_path")) {
+                        if let Some(p) = path.as_str() {
+                            if !active_files.contains(&p.to_string()) {
+                                active_files.push(p.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if msg.role == MessageRole::Tool {
+            if let Some(content) = &msg.content {
+                if content.contains("Error") || content.contains("error") {
+                    let truncated = content.chars().take(200).collect();
+                    recent_errors.push(truncated);
+                }
+            }
+        }
+    }
+
+    TaskContext {
+        active_files,
+        recent_errors,
+    }
+}
+
+// 2026-07-05 (N-05): integration tests covering the
+// memory-recall → pre-compress → persist round-trip that the
+// agent loop relies on. Previously only `compression::tests`
+// had end-to-end coverage; memory_prefetch was completely
+// uncovered. These tests pin the contract from the outside
+// Integration tests for the boundary functions in this module
+// live in `tests/memory_prefetch_integration.rs` (N-10).

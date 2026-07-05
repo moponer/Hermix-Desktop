@@ -39,6 +39,18 @@ use crate::agent_loop::AgentLoop;
 
 impl AgentLoop {
     /// Execute a batch of tool calls in parallel using a JoinSet.
+    #[tracing::instrument(
+        name = "execute_tool_calls",
+        level = "debug",
+        skip_all,
+        fields(
+            turn = turn,
+            batch_size = tool_calls.len(),
+            tool_names = tracing::field::Empty,
+            error_count = tracing::field::Empty,
+            elapsed_ms = tracing::field::Empty,
+        )
+    )]
     pub(crate) async fn execute_tool_calls(
         &self,
         tool_calls: &[ToolCall],
@@ -46,6 +58,18 @@ impl AgentLoop {
         parent_budget_remaining_usd: Option<f64>,
         tool_errors: &mut Vec<ToolErrorRecord>,
     ) -> Vec<ToolResult> {
+        let span = tracing::Span::current();
+        span.record(
+            "tool_names",
+            tracing::field::display(
+                tool_calls
+                    .iter()
+                    .map(|t| t.function.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+        );
+        let _t = std::time::Instant::now();
         // Resolve pre-dispatch decisions for every tool call up front.
         // Allow/Deny resolve synchronously; AwaitApproval blocks on the
         // oneshot channel until upstream resolves the approval request.
@@ -165,6 +189,10 @@ impl AgentLoop {
                     child_depth: current_delegate_depth + 1,
                     max_depth: max_delegate_depth,
                     parent_budget_remaining_usd,
+                    max_iterations: parsed
+                        .get("max_iterations")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as u32),
                 };
                 // Orchestrator internally runs the child on its own
                 // `tokio::spawn` task, which erases the child future and breaks

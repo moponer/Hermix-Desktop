@@ -23,16 +23,20 @@ const USER_CHAR_LIMIT: usize = 1375;
 
 /// Pressure ratio at which auto-compression / context-pressure warnings fire.
 ///
-/// 0.8 = leave 20% headroom for tool outputs and assistant generation.
+/// 0.50 = match Hermes Agent Python reference default (conservative,
+/// leaves 50% headroom for tool outputs and assistant generation).
 /// See `agent_loop::auto_compress_if_over_threshold` and the inline
 /// `Context pressure` warn tier ladder (`>= 0.95` high, `>= 0.85` medium).
 ///
-/// As of Day 3 this constant is the **fallback default** used when no
+/// This constant is the **fallback default** used when no
 /// [`crate::compression::CompressorConfig`] is supplied (e.g. tests and
 /// the smoke `resolve_context` example). Production callers read the
 /// ratio off `CompressorConfig.pressure_threshold_percent`, which is
 /// the single source of truth at runtime.
-pub const CONTEXT_PRESSURE_TRIGGER_RATIO: f64 = 0.8;
+///
+/// Aligned with Hermes Agent reference: 0.50 trigger (Agent layer) + 0.85
+/// Gateway safety net (not implemented here — see O3.2).
+pub const CONTEXT_PRESSURE_TRIGGER_RATIO: f64 = 0.50;
 
 /// Default output reservation in tokens.
 ///
@@ -54,6 +58,23 @@ pub const DEFAULT_OUTPUT_RESERVE_TOKENS: usize = 4096;
 /// the Anthropic SDK's tokenizer) once a per-model wiring layer
 /// exists; the call sites (`total_tokens`, `truncate_to_budget`) do
 /// not need to change.
+///
+/// ### Why two estimators coexist (2026-07-05)
+///
+/// `ContextManager::estimate_tokens` (here) and
+/// `compression::count_tokens` (`tiktoken_rs::cl100k_base`) are
+/// deliberately **not** the same:
+/// - `estimate_tokens` drives the **pressure threshold** the agent
+///   uses to decide "time to compress". Under-counting CJK is the
+///   safe direction: we never trigger compression too early, and a
+///   short over-budget is far cheaper than a mid-stream truncation.
+/// - `count_tokens` drives the **summary sizing budget** (how many
+///   tokens to budget for the LLM-generated handoff summary).
+///   Under-counting there would mean we ask the LLM for "2000 tokens
+///   of summary" and get 4000 tokens back, blowing the output window.
+///   So the summary budget gets the accurate (tiktoken) count.
+///
+/// The pressure-vs-summary mismatch is documented and intentional.
 #[inline]
 pub fn estimate_tokens(s: &str) -> usize {
     // Ceiling division: (n + d - 1) / d
@@ -80,6 +101,15 @@ pub struct ContextManager {
     /// we don't fire the pressure warning while the model still has
     /// legitimate headroom to emit its output.
     output_reserve_tokens: usize,
+    /// 2026-07-05: running sum of [`estimate_tokens`] for every message
+    /// currently held. Maintained incrementally in
+    /// [`Self::add_message`] / [`Self::reset`] / [`Self::truncate_to_budget`]
+    /// so [`Self::total_tokens`] is O(1) instead of O(N). The
+    /// previous implementation re-summed every call, which is what
+    /// the agent loop does on every turn — at 200 messages per
+    /// context this is 200× `estimate_tokens` per turn for no
+    /// observable reason.
+    cached_total_tokens: usize,
 }
 
 impl ContextManager {
@@ -92,6 +122,7 @@ impl ContextManager {
             messages: Vec::new(),
             max_context_tokens,
             output_reserve_tokens: DEFAULT_OUTPUT_RESERVE_TOKENS,
+            cached_total_tokens: 0,
         }
     }
 
@@ -194,16 +225,42 @@ impl ContextManager {
         self
     }
 
+    /// Construct a `ContextManager` with a custom token budget.
+    ///
+    /// **Deprecated**: the `_compressor: ()` parameter was always a
+    /// placeholder — actual compression wiring lives in
+    /// `crate::compression::ContextCompressor` and is plumbed via
+    /// `auto_compress_if_over_threshold` in `compression_ops.rs`, not
+    /// via `ContextManager`. Use [`Self::new`] (or [`Self::for_model`]
+    /// for model-aware sizing) instead.
+    #[deprecated(
+        since = "0.4.0",
+        note = "with_compressor(_, ()) had a dead `()` parameter. Use ContextManager::new or \
+                ContextManager::for_model instead. Compression is plumbed via \
+                auto_compress_if_over_threshold (compression_ops.rs)."
+    )]
+    #[allow(deprecated)]
     pub fn with_compressor(max_context_tokens: usize, _compressor: ()) -> Self {
         Self {
             messages: Vec::new(),
             max_context_tokens,
             output_reserve_tokens: DEFAULT_OUTPUT_RESERVE_TOKENS,
+            cached_total_tokens: 0,
         }
     }
 
     /// Add a message to the conversation history.
+    ///
+    /// Maintains `cached_total_tokens` incrementally — the agent loop
+    /// calls `total_tokens()` on every turn, so re-summing from scratch
+    /// per call would be O(N) per turn for no good reason.
     pub fn add_message(&mut self, message: Message) {
+        let tokens = message
+            .content
+            .as_deref()
+            .map(estimate_tokens)
+            .unwrap_or(0);
+        self.cached_total_tokens = self.cached_total_tokens.saturating_add(tokens);
         self.messages.push(message);
     }
 
@@ -235,47 +292,76 @@ impl ContextManager {
     /// - The most recent assistant messages
     ///
     /// Older messages are removed from the middle until the total fits.
+    ///
+    /// ### Performance (2026-07-05)
+    ///
+    /// The previous implementation called `Vec::remove(idx)` in a loop,
+    /// which is O(n) per call (shifts every later element down). For a
+    /// conversation with 200 messages that needed 50 removals to fit
+    /// the budget, that was ~50 × 100 = 5 000 element shifts — not
+    /// catastrophic but wasteful. The current implementation walks the
+    /// history once, computes the prefix length to drop, then drains
+    /// that prefix with a single O(n) memcpy. Same observable behaviour,
+    /// ~50× fewer shifts in the worst case.
+    ///
+    /// `cached_total_tokens` is updated incrementally (we subtract each
+    /// evicted message's token estimate) so [`Self::total_tokens`] stays
+    /// O(1) after the truncation completes.
     pub fn truncate_to_budget(&mut self, budget: &BudgetConfig) {
         let max_chars = budget.max_aggregate_chars.min(self.max_context_tokens);
-        let total_tokens: usize = self
-            .messages
-            .iter()
-            .map(|m| m.content.as_deref().map(estimate_tokens).unwrap_or(0))
-            .sum();
 
-        if total_tokens <= max_chars {
+        if self.cached_total_tokens <= max_chars {
             return;
         }
 
-        // Identify system messages (to preserve) and the last user message
+        // Identify system messages (to preserve).
         let system_end = self
             .messages
             .iter()
             .take_while(|m| m.role == MessageRole::System)
             .count();
 
-        // Keep removing oldest non-system messages until we're under budget
-        loop {
-            let current_total: usize = self
-                .messages
-                .iter()
-                .map(|m| m.content.as_deref().map(estimate_tokens).unwrap_or(0))
-                .sum();
-
-            if current_total <= max_chars {
+        // Walk from the tail backwards, accumulating token counts until
+        // the kept tail + system messages would fit the budget. The
+        // cut point is then `system_end + (n - kept_tail_start)`.
+        let n = self.messages.len();
+        let mut tail_cost: usize = 0;
+        let mut first_kept_from_tail = n;
+        for i in (system_end..n).rev() {
+            let msg_cost = self.messages[i]
+                .content
+                .as_deref()
+                .map(estimate_tokens)
+                .unwrap_or(0);
+            if tail_cost + msg_cost > max_chars {
+                // Even one more message blows the budget; stop here.
                 break;
             }
-
-            // Find the first removable message (after system messages, not the last one)
-            if self.messages.len() <= system_end + 2 {
-                // Can't remove any more without losing essential context
+            tail_cost += msg_cost;
+            first_kept_from_tail = i;
+            // Always keep at least the last user/assistant exchange so
+            // the model sees the most recent turn context.
+            if first_kept_from_tail + 1 <= system_end + 2 {
                 break;
             }
-
-            // Remove the oldest non-system message
-            let remove_idx = system_end;
-            self.messages.remove(remove_idx);
         }
+        let cutoff = first_kept_from_tail;
+        if cutoff <= system_end {
+            // Nothing left to drop — keep the system messages and the
+            // last 2 turns as required.
+            return;
+        }
+
+        // Subtract evicted tokens from the cached running total.
+        let evicted_tokens: usize = self.messages[system_end..cutoff]
+            .iter()
+            .map(|m| m.content.as_deref().map(estimate_tokens).unwrap_or(0))
+            .sum();
+        self.cached_total_tokens = self.cached_total_tokens.saturating_sub(evicted_tokens);
+
+        // O(n) single-shift drain (vs the previous O(n²) loop of
+        // `Vec::remove(idx)` calls).
+        self.messages.drain(system_end..cutoff);
     }
 
     /// Compress the conversation history — now a no-op.
@@ -283,6 +369,18 @@ impl ContextManager {
     /// All compression is handled by `compression::ContextCompressor` in
     /// the agent loop's `auto_compress_if_over_threshold`. This method
     /// is retained only for call-site compatibility.
+    ///
+    /// **Deprecated**: do not call. Production code should rely on
+    /// `auto_compress_if_over_threshold` (the LLM-compressor path) or
+    /// `truncate_to_budget` (the cheap budget-enforcement path).
+    /// Tests that previously called `compress()` should use
+    /// `truncate_to_budget` instead.
+    #[deprecated(
+        since = "0.4.0",
+        note = "ContextManager::compress() is a no-op. Use \
+                compression::ContextCompressor via auto_compress_if_over_threshold, \
+                or ContextManager::truncate_to_budget for budget enforcement."
+    )]
     pub fn compress(&mut self) {
         // No-op: advanced compression is handled externally.
     }
@@ -290,6 +388,7 @@ impl ContextManager {
     /// Reset the conversation history, clearing all messages.
     pub fn reset(&mut self) {
         self.messages.clear();
+        self.cached_total_tokens = 0;
     }
 
     /// Calculate the total token count of all message content.
@@ -297,11 +396,33 @@ impl ContextManager {
     /// Uses the 4-chars-per-token heuristic in [`estimate_tokens`] — for
     /// CJK / emoji-heavy corpora this under-counts, which is the safe
     /// direction (we never trigger compression too early).
+    ///
+    /// **Performance**: O(1) since 2026-07-05. The agent loop calls
+    /// this on every turn (pressure check), so the previous O(N)
+    /// re-summation was a hot-path tax. The cache is maintained by
+    /// `add_message` / `reset` / `truncate_to_budget`; tests that
+    /// mutate `messages` directly via `get_messages_mut()` should
+    /// call [`Self::recompute_total_tokens`] afterwards to keep the
+    /// cache honest.
     pub fn total_tokens(&self) -> usize {
-        self.messages
+        self.cached_total_tokens
+    }
+
+    /// Recompute `cached_total_tokens` from the current message list.
+    ///
+    /// Call this after directly mutating `messages` via
+    /// `get_messages_mut()` (e.g. in tests, or in the agent loop's
+    /// post-compression path). Production code paths that go through
+    /// `add_message` / `reset` / `truncate_to_budget` keep the cache
+    /// honest automatically.
+    pub fn recompute_total_tokens(&mut self) -> usize {
+        let total: usize = self
+            .messages
             .iter()
             .map(|m| m.content.as_deref().map(estimate_tokens).unwrap_or(0))
-            .sum()
+            .sum();
+        self.cached_total_tokens = total;
+        total
     }
 
     /// Configured maximum context token budget (same units as [`Self::total_tokens`]).
@@ -649,6 +770,8 @@ pub enum DirRoute {
     OpenAiFamily,
     /// Model name contains "minimax" / "m2" / "hermes" — fine-tune extras.
     MiniMaxFamily,
+    /// Conversation has 5+ tool calls — multi-step task focus guidance.
+    MultiStepTask,
     /// Always-on (USER_STYLE_GUIDANCE, tool failure rule).
     Always,
 }
@@ -675,6 +798,7 @@ pub struct RouteContext<'a> {
     pub tool_names: &'a std::collections::HashSet<&'a str>,
     pub model_name: &'a str,
     pub autonomous_mode: bool,
+    pub tool_call_count: usize,
 }
 
 impl<'a> Default for RouteContext<'a> {
@@ -684,6 +808,7 @@ impl<'a> Default for RouteContext<'a> {
             tool_names: &EMPTY_TOOL_NAMES,
             model_name: "",
             autonomous_mode: false,
+            tool_call_count: 0,
         }
     }
 }
@@ -764,6 +889,10 @@ impl DirRoute {
             DirRoute::MiniMaxFamily => {
                 if is_g("minimax") || is_g("m2") { (true, None) }
                 else { (false, Some("not a MiniMax-family fine-tune".into())) }
+            }
+            DirRoute::MultiStepTask => {
+                if ctx.tool_call_count >= 5 { (true, None) }
+                else { (false, Some(format!("tool_call_count {} < 5", ctx.tool_call_count))) }
             }
             DirRoute::Always => (true, None),
         }
@@ -1293,12 +1422,13 @@ mod tests {
     fn directions_first_turn_fires_format_full_not_short() {
         let mut tool_names = std::collections::HashSet::new();
         tool_names.insert("browser_navigate");
-        let ctx = RouteContext {
-            user_message: "",
-            tool_names: &tool_names,
-            model_name: "gpt-4o",
-            autonomous_mode: false,
-        };
+let ctx = RouteContext {
+                    user_message: "",
+                    tool_names: &tool_names,
+                    model_name: "gpt-4o",
+                    autonomous_mode: false,
+                    tool_call_count: 0,
+                };
         let mut b = SystemPromptBuilder::new();
         b = b.with_directions(vec![
             SystemDir::new("format.full", DirRoute::FirstTurn, "FULL"),
@@ -1331,6 +1461,7 @@ mod tests {
             tool_names: &tool_names,
             model_name: "gemini-1.5-flash",
             autonomous_mode: false,
+            tool_call_count: 0,
         };
         let mut b = SystemPromptBuilder::new();
         b = b.with_directions(vec![
@@ -1382,12 +1513,13 @@ mod tests {
     #[test]
     fn section_gate_healthy_prompt_yields_zero_patches() {
         let tool_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let ctx = RouteContext {
-            user_message: "hello",
-            tool_names: &tool_names,
-            model_name: "gpt-4o",
-            autonomous_mode: false,
-        };
+let ctx = RouteContext {
+                    user_message: "hello",
+                    tool_names: &tool_names,
+                    model_name: "gpt-4o",
+                    autonomous_mode: false,
+                    tool_call_count: 0,
+                };
         let prompt = format!(
             "{}\n\n{}\n\n{}\n\n{}\n\n{}",
             Section::Identity.default_body(),
@@ -1413,12 +1545,13 @@ mod tests {
     #[test]
     fn section_gate_missing_identity_gets_patched() {
         let tool_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let ctx = RouteContext {
-            user_message: "hello",
-            tool_names: &tool_names,
-            model_name: "gpt-4o",
-            autonomous_mode: false,
-        };
+let ctx = RouteContext {
+                    user_message: "hello",
+                    tool_names: &tool_names,
+                    model_name: "gpt-4o",
+                    autonomous_mode: false,
+                    tool_call_count: 0,
+                };
         let prompt = "no identity block at all, just some prose.";
         let (patched, report) = Section::audit_and_patch(prompt, &ctx);
         // With empty tool_names, required = {Identity, Timestamp, WorkingDir}.
@@ -1454,6 +1587,7 @@ mod tests {
             tool_names: &tool_names,
             model_name: "gpt-4o",
             autonomous_mode: false,
+            tool_call_count: 0,
         };
         // Provide identity + timestamp + working_dir (the three always-
         // required sections); tool sections deliberately missing.
@@ -1489,6 +1623,7 @@ mod tests {
             tool_names: &tool_names,
             model_name: "gpt-4o",
             autonomous_mode: false,
+            tool_call_count: 0,
         };
         // Only identity present, no tool / no working-dir / no timestamp.
         let prompt = Section::Identity.default_body().to_string();
@@ -1608,18 +1743,22 @@ mod tests {
         cm.add_message(Message::assistant("Hello!"));
 
         let len_before = cm.len();
+        // Pin the no-op contract while the deprecated method still exists.
+        #[allow(deprecated)]
         cm.compress();
         assert_eq!(cm.len(), len_before);
     }
 
     #[test]
     fn test_with_compressor_noop() {
+        #[allow(deprecated)]
         let mut cm = ContextManager::with_compressor(10_000, ());
         cm.add_message(Message::system("System prompt"));
         cm.add_message(Message::user("Hi"));
         cm.add_message(Message::assistant("Hello!"));
 
         let len_before = cm.len();
+        #[allow(deprecated)]
         cm.compress();
         assert_eq!(cm.len(), len_before);
     }
@@ -1670,37 +1809,35 @@ mod tests {
             DEFAULT_FALLBACK_CONTEXT as usize,
             "default_budget() must route through DEFAULT_FALLBACK_CONTEXT"
         );
-        // (128_000 - 4096) * 0.8 = 99_123
-        assert_eq!(cm.pressure_threshold_tokens(), 99_123);
+        // (128_000 - 4096) * 0.50 = 61_952
+        assert_eq!(cm.pressure_threshold_tokens(), 61_952);
     }
 
     #[test]
     fn test_pressure_threshold_tokens_default() {
         let cm = ContextManager::new(200_000);
-        // (200_000 - 4096 reserve) * 0.8 = 195_904 * 0.8 = 156_723 (the master_regression case)
-        // Day 3 added an output reserve, so the threshold is now slightly lower
-        // than the legacy 160_000 (which assumed reserve=0). The intent is
-        // identical: warn well before the model runs out of room.
-        assert_eq!(cm.pressure_threshold_tokens(), 156_723);
+        // (200_000 - 4096 reserve) * 0.50 = 195_904 * 0.50 = 97_952
+        // Aligned with Hermes Agent reference: 0.50 trigger threshold.
+        assert_eq!(cm.pressure_threshold_tokens(), 97_952);
     }
 
     #[test]
     fn test_pressure_threshold_tokens_per_model() {
         let gpt = ContextManager::for_model("gpt-4o");     // 128k tokens
-        // (128_000 - 4096) * 0.8 = 123_904 * 0.8 = 99_123
-        assert_eq!(gpt.pressure_threshold_tokens(), 99_123);
+        // (128_000 - 4096) * 0.50 = 123_904 * 0.50 = 61_952
+        assert_eq!(gpt.pressure_threshold_tokens(), 61_952);
 
         let gemini = ContextManager::for_model("gemini-1.5-pro"); // 1_048_576 tokens
-        // (1_048_576 - 4096) * 0.8 = 1_044_480 * 0.8 = 835_584
-        assert_eq!(gemini.pressure_threshold_tokens(), 835_584);
+        // (1_048_576 - 4096) * 0.50 = 1_044_480 * 0.50 = 522_240
+        assert_eq!(gemini.pressure_threshold_tokens(), 522_240);
     }
 
     #[test]
     fn test_pressure_threshold_tokens_with_zero_reserve_matches_legacy() {
         // When reserve = 0, the threshold degenerates to the legacy
-        // `max * 0.8` formula. This is the canonical regression guard.
+        // `max * 0.50` formula. This is the canonical regression guard.
         let cm = ContextManager::new(200_000).with_output_reserve(0);
-        assert_eq!(cm.pressure_threshold_tokens(), 160_000);
+        assert_eq!(cm.pressure_threshold_tokens(), 100_000);
     }
 
     #[test]
@@ -1733,6 +1870,82 @@ mod tests {
         cm.add_message(Message::user("Hello world"));  // 11 chars → 3 tokens
         cm.add_message(Message::assistant("Hi there")); // 8 chars → 2 tokens
         assert_eq!(cm.total_tokens(), 5);
+    }
+
+    /// 2026-07-05: `add_message` must maintain `cached_total_tokens`
+    /// incrementally. Without this, `total_tokens()` would re-sum
+    /// every call, and the agent loop's per-turn pressure check
+    /// (which calls `total_tokens()` on every turn) would be O(N).
+    #[test]
+    fn test_total_tokens_incremental_after_add() {
+        let mut cm = ContextManager::new(10_000);
+        assert_eq!(cm.total_tokens(), 0, "empty context starts at 0");
+        cm.add_message(Message::user("a".repeat(40).as_str())); // 40 chars → 10 tokens
+        assert_eq!(cm.total_tokens(), 10);
+        cm.add_message(Message::assistant("b".repeat(20).as_str())); // 20 chars → 5 tokens
+        assert_eq!(cm.total_tokens(), 15, "cache should track both messages");
+    }
+
+    /// 2026-07-05: `truncate_to_budget` must keep the cached token
+    /// total in sync with the actual message list. A naive O(n²)
+    /// implementation that did `Vec::remove(idx)` in a loop could
+    /// leave the cache stale.
+    #[test]
+    fn test_total_tokens_in_sync_after_truncate() {
+        let mut cm = ContextManager::new(10_000);
+        for i in 0..50 {
+            cm.add_message(Message::user(format!("user message {}", i)));
+        }
+        // Each "user message N" is ~16 chars → 4 tokens; total ≈ 200.
+        let before = cm.total_tokens();
+        assert!(before > 100, "should have built up tokens");
+
+        let budget = BudgetConfig {
+            max_result_size_chars: 100_000,
+            max_aggregate_chars: 60, // tight enough to force truncation
+        };
+        cm.truncate_to_budget(&budget);
+
+        // Cache must agree with the actual sum after the drain.
+        let recomputed = cm.recompute_total_tokens();
+        assert_eq!(cm.total_tokens(), recomputed, "cache must stay in sync");
+        assert!(cm.total_tokens() <= 60, "budget enforced");
+    }
+
+    /// 2026-07-05: `reset` clears the cached token counter along
+    /// with the messages vector.
+    #[test]
+    fn test_total_tokens_resets_on_clear() {
+        let mut cm = ContextManager::new(10_000);
+        for _ in 0..20 {
+            cm.add_message(Message::user("hello"));
+        }
+        assert!(cm.total_tokens() > 0);
+        cm.reset();
+        assert_eq!(cm.total_tokens(), 0);
+    }
+
+    /// 2026-07-05: `truncate_to_budget` is now O(n) per call (single
+    /// drain) — a 200-message conversation with aggressive budget
+    /// still completes in microseconds. Functional verification only
+    /// here; the algorithmic improvement is the absence of the
+    /// `Vec::remove(idx)` loop.
+    #[test]
+    fn test_truncate_handles_large_conversation() {
+        let mut cm = ContextManager::new(10_000_000);
+        for i in 0..500 {
+            cm.add_message(Message::assistant(format!("turn {i} content here")));
+        }
+        cm.add_message(Message::user("latest question"));
+        let budget = BudgetConfig {
+            max_result_size_chars: 100_000,
+            max_aggregate_chars: 500, // very tight
+        };
+        cm.truncate_to_budget(&budget);
+        // System messages + last user message must survive.
+        let last = cm.get_messages().last().unwrap();
+        assert_eq!(last.role, MessageRole::User);
+        assert!(cm.total_tokens() <= 500);
     }
 
     #[test]

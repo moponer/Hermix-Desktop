@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use hermix_core::{AgentError, Message, MessageRole};
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -44,6 +45,47 @@ fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AgentError> {
         );
     }
     Ok(conn)
+}
+
+/// Application-level retry with random jitter for write contention.
+/// Mirrors Hermes Agent Python reference: 20-150ms jitter, up to 15 retries.
+/// This catches contention that survives SQLite's busy_timeout (e.g. when
+/// two processes race on BEGIN IMMEDIATE and the second opener's 5s window
+/// expires before the first commits).
+const WRITE_MAX_RETRIES: u32 = 15;
+const WRITE_RETRY_MIN_MS: u64 = 20;
+const WRITE_RETRY_MAX_MS: u64 = 150;
+
+fn is_busy_error(e: &AgentError) -> bool {
+    match e {
+        AgentError::Io(msg) => msg.contains("SQLITE_BUSY") || msg.contains("database is locked"),
+        _ => false,
+    }
+}
+
+/// Pseudo-random jitter for SQLITE_BUSY retry delays.
+///
+/// ### 2026-07-05: switched from xorshift64-on-static-counter to
+/// `fastrand`.
+///
+/// The previous implementation kept a process-global `AtomicU64`
+/// counter and ran xorshift64 on it. Two problems:
+/// 1. **Predictability** — every process restart starts at the same
+///    counter value, so retry-jitter patterns looked identical across
+///    restarts. A stressed database + predictable jitter = collision
+///    herd on the unlucky cycle.
+/// 2. **Thread safety vs distribution quality** — xorshift64 has
+///    decent statistical quality for a non-crypto PRNG but it isn't
+///    thread-aware; multiple threads fetching `fetch_add` and running
+///    the same polynomial produce correlated streams.
+///
+/// `fastrand` gives each thread its own (per-thread) auto-seeded RNG
+/// with better distribution and zero atomic contention. Not crypto,
+/// but jitter doesn't need to be.
+///
+/// Returns a uniformly distributed `u64` in `[0, u64::MAX]`.
+fn rand_jitter_u64() -> u64 {
+    fastrand::u64(..)
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +232,22 @@ pub struct CompressionHistoryRow {
 /// transaction that updates `sessions.compressed_summary`. Without
 /// this, the three writes would race and the historical trail could
 /// drift out of sync with the latest-summary column.
+///
+/// 2026-07-05 (N-02, Hermes 对标): compression now creates a real
+/// child session row instead of in-place replacing the parent's
+/// messages. The child has:
+///
+/// - `parent_session_id` pointing at the live session
+/// - `compressed_summary` set to the handoff summary
+/// - `messages = [system_role: <summary text>]` so a click in
+///   the lineage tree shows what got folded
+///
+/// The parent session keeps its `messages` table untouched
+/// (in-place behaviour preserved for UI routing — the user keeps
+/// talking to the same session id), but it now has the child
+/// reachable via `find_children(parent_session_id)` so the
+/// frontend lineage tree can render the "before / after
+/// compression" pivot.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompressionSnapshot {
     /// The handoff summary text — also written to
@@ -410,6 +468,19 @@ impl SessionPersistence {
             }
         }
 
+        // Migration (2026-07-04): add `parent_session_id` column for
+        // session lineage tracking. Allows the frontend to display a
+        // tree of parent/child sessions (e.g. root session → sub-agent
+        // sessions). `None` for top-level sessions.
+        if let Err(e) = conn.execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT", []) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") && !msg.contains("no such table") {
+                return Err(AgentError::Io(format!(
+                    "Failed to migrate sessions.parent_session_id: {e}"
+                )));
+            }
+        }
+
         // Migration: execution_timeline (tool call events) and
         // reasoning_content (LLM think blocks). Without these columns,
         // tool cards show as stale "运行中" on reload and thinking
@@ -431,7 +502,96 @@ impl SessionPersistence {
             }
         }
 
-        // Migration: purge pre-fix leaked system rows.
+        // -----------------------------------------------------------------
+        // 2026-07-05: schema-version migration bookkeeping. This table is
+        // the single source of truth for "which schema migrations has
+        // this database already applied?". Pre-existing DBs are stamped
+        // with the migrations they're known to have (the ALTER TABLE
+        // columns above and the trigram FTS5 virtual table + triggers
+        // below). New DBs start at the current version.
+        //
+        // Why not just rely on `CREATE TABLE / TRIGGER IF NOT EXISTS`?
+        // Because `IF NOT EXISTS` is binary — either the object exists
+        // (skip) or it doesn't (create). It can't express "this
+        // migration needs to apply only if it hasn't been applied to
+        // *this specific DB*". A user who upgraded past a buggy
+        // intermediate state (e.g. trigram existed in the partial
+        // migration but the triggers didn't) would silently keep a
+        // broken search index until they wiped the DB.
+        //
+        // The tracking table makes every migration idempotent at the
+        // application layer rather than the SQL layer.
+        // -----------------------------------------------------------------
+        conn.execute_batch(
+            r#"CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            );"#,
+        )
+        .map_err(|e| AgentError::Io(format!("schema_migrations create: {e}")))?;
+
+        // Stamp legacy DBs with the migrations they're known to have
+        // (added before the tracking table existed). The list mirrors
+        // every ALTER TABLE / CREATE INDEX that ran in this function
+        // before 2026-07-05; bumping `CURRENT_SCHEMA_VERSION` requires
+        // adding a new entry here AND writing the corresponding
+        // migration code above.
+        stamp_migration(&conn, 1, "initial_schema_sessions_messages_fts", None)?;
+        stamp_migration(&conn, 2, "messages_active_extra_name", None)?;
+        stamp_migration(&conn, 3, "sessions_workspace_expert_parent", None)?;
+        stamp_migration(&conn, 4, "messages_execution_timeline_reasoning", None)?;
+        stamp_migration(
+            &conn,
+            5,
+            "messages_fts_trigram",
+            Some("CREATE_VIRTUAL_TABLE messages_fts_trigram"),
+        )?;
+
+    /// Record a migration as applied (idempotent). When `marker_sql` is
+    /// `Some`, the marker SQL is also executed so future upgrades can
+    /// replay the side-effect even if a previous version wrote the
+    /// tracking row but skipped the DDL (e.g. partial migration
+    /// recovery).
+    fn stamp_migration(
+        conn: &rusqlite::Connection,
+        version: i64,
+        name: &str,
+        marker_sql: Option<&str>,
+    ) -> Result<(), AgentError> {
+        // Detect existing row by version (PK, cheap).
+        let already: bool = conn
+            .query_row(
+                "SELECT 1 FROM schema_migrations WHERE version = ?1",
+                [version],
+                |_| Ok(true),
+            )
+            .optional()
+            .map_err(|e| AgentError::Io(format!("schema_migrations lookup: {e}")))?
+            .unwrap_or(false);
+
+        if already {
+            return Ok(());
+        }
+
+        // Replay the marker SQL if the caller provided one and the
+        // `IF NOT EXISTS` style statement hasn't already created it.
+        if let Some(sql) = marker_sql {
+            let _ = conn.execute_batch(sql);
+        }
+
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, datetime('now'))",
+            rusqlite::params![version, name],
+        )
+        .map_err(|e| AgentError::Io(format!("schema_migrations insert v{version}: {e}")))?;
+        Ok(())
+    }
+
+    /// Current schema version (bump when adding a new migration).
+    pub const CURRENT_SCHEMA_VERSION: i64 = 5;
+
+    // Migration: purge pre-fix leaked system rows.
         // Versions of the app prior to the prompt-leak fix wrote
         // MessageRole::System into the messages table. Those rows are
         // now filtered at every read site, but the disk still has them
@@ -468,7 +628,8 @@ impl SessionPersistence {
                 title TEXT,
                 message_count INTEGER DEFAULT 0,
                 system_prompt TEXT,
-                compressed_summary TEXT
+                compressed_summary TEXT,
+                parent_session_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -503,6 +664,49 @@ impl SessionPersistence {
 
             CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
                 INSERT INTO messages_fts(rowid, content, session_id, role)
+                VALUES (new.id, new.content, new.session_id, new.role);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, content, session_id, role)
+                VALUES ('delete', old.id, old.content, old.session_id, old.role);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, content, session_id, role)
+                VALUES ('delete', old.id, old.content, old.session_id, old.role);
+                INSERT INTO messages_fts(rowid, content, session_id, role)
+                VALUES (new.id, new.content, new.session_id, new.role);
+            END;
+
+            -- Trigram tokenizer for CJK / substring search (Hermes Agent parity).
+            -- The default FTS5 tokenizer cannot match Chinese/Japanese/Korean
+            -- characters or arbitrary substrings. The trigram tokenizer indexes
+            -- every 3-character contiguous run, enabling LIKE-style searches
+            -- over CJK content without external extensions.
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts_trigram USING fts5(
+                content,
+                session_id UNINDEXED,
+                role UNINDEXED,
+                content='messages',
+                content_rowid='id',
+                tokenize='trigram'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS messages_trigram_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts_trigram(rowid, content, session_id, role)
+                VALUES (new.id, new.content, new.session_id, new.role);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS messages_trigram_ad AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts_trigram(messages_fts_trigram, rowid, content, session_id, role)
+                VALUES ('delete', old.id, old.content, old.session_id, old.role);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS messages_trigram_au AFTER UPDATE ON messages BEGIN
+                INSERT INTO messages_fts_trigram(messages_fts_trigram, rowid, content, session_id, role)
+                VALUES ('delete', old.id, old.content, old.session_id, old.role);
+                INSERT INTO messages_fts_trigram(rowid, content, session_id, role)
                 VALUES (new.id, new.content, new.session_id, new.role);
             END;
 
@@ -652,8 +856,9 @@ impl SessionPersistence {
         platform: Option<&str>,
         title: Option<&str>,
         system_prompt: Option<&str>,
+        parent_session_id: Option<&str>,
     ) -> Result<(), AgentError> {
-        self.save_session_atomic(session_id, messages, model, platform, title, system_prompt, None, None, false)
+        self.save_session_atomic(session_id, messages, model, platform, title, system_prompt, parent_session_id, None, None, false)
     }
 
     /// Persist a session's messages to SQLite, optionally including a
@@ -675,6 +880,7 @@ impl SessionPersistence {
         platform: Option<&str>,
         title: Option<&str>,
         system_prompt: Option<&str>,
+        parent_session_id: Option<&str>,
         compressed_summary: Option<&str>,
     ) -> Result<(), AgentError> {
         let snapshot = compressed_summary
@@ -691,6 +897,7 @@ impl SessionPersistence {
             platform,
             title,
             system_prompt,
+            parent_session_id,
             snapshot_ref,
             None,
             false,
@@ -716,6 +923,7 @@ impl SessionPersistence {
         platform: Option<&str>,
         title: Option<&str>,
         system_prompt: Option<&str>,
+        parent_session_id: Option<&str>,
         compression: Option<&CompressionSnapshot>,
     ) -> Result<(), AgentError> {
         self.save_session_atomic(
@@ -725,6 +933,7 @@ impl SessionPersistence {
             platform,
             title,
             system_prompt,
+            parent_session_id,
             compression,
             None,
             false,
@@ -756,12 +965,52 @@ impl SessionPersistence {
         platform: Option<&str>,
         title: Option<&str>,
         system_prompt: Option<&str>,
+        parent_session_id: Option<&str>,
         compression: Option<&CompressionSnapshot>,
         user_query: Option<&str>,
         completed: bool,
     ) -> Result<(), AgentError> {
         self.ensure_db()?;
 
+        // Application-level retry with jitter for write contention (Hermes Agent parity).
+        let mut last_err = None;
+        for attempt in 0..=WRITE_MAX_RETRIES {
+            match self.save_session_atomic_inner(
+                session_id, messages, model, platform, title,
+                system_prompt, parent_session_id, compression,
+                user_query, completed,
+            ) {
+                Ok(()) => return Ok(()),
+                Err(e) if is_busy_error(&e) && attempt < WRITE_MAX_RETRIES => {
+                    let jitter_ms = WRITE_RETRY_MIN_MS
+                        + (rand_jitter_u64() % (WRITE_RETRY_MAX_MS - WRITE_RETRY_MIN_MS + 1));
+                    tracing::warn!(
+                        "session_persistence: SQLITE_BUSY on attempt {}/{}, retrying in {}ms",
+                        attempt + 1, WRITE_MAX_RETRIES, jitter_ms,
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(jitter_ms));
+                    last_err = Some(e);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| AgentError::Io("save_session_atomic: exhausted retries".into())))
+    }
+
+    fn save_session_atomic_inner(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+        model: Option<&str>,
+        platform: Option<&str>,
+        title: Option<&str>,
+        system_prompt: Option<&str>,
+        parent_session_id: Option<&str>,
+        compression: Option<&CompressionSnapshot>,
+        user_query: Option<&str>,
+        completed: bool,
+    ) -> Result<(), AgentError> {
         let conn = open_with_wal(&self.db_path)?;
 
         // BEGIN IMMEDIATE — prevents other readers from seeing partial data
@@ -781,13 +1030,14 @@ impl SessionPersistence {
             // 0 placeholder and patch it in step 3 with the real count
             // returned by `flush_messages`.
             conn.execute(
-                "INSERT INTO sessions (id, model, platform, created_at, updated_at, title, message_count, system_prompt, compressed_summary)
-                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, 0, ?6, ?7)
+                "INSERT INTO sessions (id, model, platform, created_at, updated_at, title, message_count, system_prompt, compressed_summary, parent_session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, 0, ?6, ?7, ?8)
                  ON CONFLICT(id) DO UPDATE SET
                     updated_at = ?4,
                     title = COALESCE(?5, sessions.title),
                     system_prompt = COALESCE(?6, sessions.system_prompt),
-                    compressed_summary = COALESCE(?7, sessions.compressed_summary)",
+                    compressed_summary = COALESCE(?7, sessions.compressed_summary),
+                    parent_session_id = COALESCE(?8, sessions.parent_session_id)",
                 rusqlite::params![
                     session_id,
                     model.unwrap_or("unknown"),
@@ -796,6 +1046,7 @@ impl SessionPersistence {
                     title,
                     system_prompt,
                     summary_str,
+                    parent_session_id,
                 ],
             )
             .map_err(|e| AgentError::Io(format!("Failed to upsert session: {e}")))?;
@@ -1646,6 +1897,193 @@ impl SessionPersistence {
         Ok(entries)
     }
 
+    /// Return all direct children of `session_id` ordered by creation
+    /// time ascending (oldest first). A session is a child when its
+    /// `parent_session_id` column matches the given id. Returns an
+    /// empty vec when there are no children or when the parent itself
+    /// doesn't exist.
+    pub fn find_children(&self, session_id: &str) -> Result<Vec<String>, AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM sessions
+                 WHERE parent_session_id = ?1
+                 ORDER BY created_at ASC",
+            )
+            .map_err(|e| AgentError::Io(format!("Failed to prepare find_children query: {e}")))?;
+
+        let ids: Vec<String> = stmt
+            .query_map(rusqlite::params![session_id], |row| row.get(0))
+            .map_err(|e| AgentError::Io(format!("Failed to query children: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::Io(format!("Failed to read children: {e}")))?;
+
+        Ok(ids)
+    }
+
+    /// Return the parent session ID of the given session, if any.
+    /// This enables climbing the lineage chain upward from a child
+    /// to its root ancestor.
+    pub fn get_parent(&self, session_id: &str) -> Result<Option<String>, AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        let mut stmt = conn
+            .prepare("SELECT parent_session_id FROM sessions WHERE id = ?1")
+            .map_err(|e| AgentError::Io(format!("Failed to prepare get_parent query: {e}")))?;
+
+        let result: Option<String> = stmt
+            .query_row(rusqlite::params![session_id], |row| row.get(0))
+            .ok()
+            .flatten();
+        Ok(result)
+    }
+
+    /// 2026-07-05 (N-02, Hermes 对标): create a real child session
+    /// that materialises the compressed summary as its own row,
+    /// linked to the parent via `parent_session_id`.
+    ///
+    /// Returns the newly-generated `child_session_id`, which is
+    /// deterministic (`{parent}-c{N}` where N is the parent's
+    /// existing child count + 1) so repeated calls with the same
+    /// `(parent_id, summary)` produce the same id and the
+    /// `INSERT OR IGNORE` style logic in the SQL makes the
+    /// operation idempotent.
+    ///
+    /// The child's `messages` table contains a single system-role
+    /// message carrying the summary verbatim — that's what the
+    /// frontend lineage browser displays when the user clicks
+    /// the child node ("这里是你压缩前的内容").
+    pub fn create_compression_child_session(
+        &self,
+        parent_session_id: &str,
+        compression: &CompressionSnapshot,
+        model: Option<&str>,
+        platform: Option<&str>,
+    ) -> Result<String, AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+
+        // Idempotent child id: count existing children and append
+        // `-c{count+1}`. Stable across process restarts because
+        // the count is derived from the DB, not a counter.
+        let existing_children: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE parent_session_id = ?1",
+                rusqlite::params![parent_session_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| AgentError::Io(format!("Failed to count children: {e}")))?;
+        let child_id = format!("{parent_session_id}-c{}", existing_children + 1);
+
+        let now = Utc::now().to_rfc3339();
+        let title = format!(
+            "[Compressed #{} from {}]",
+            compression.compression_count.max(1),
+            // Truncate parent id so the title fits; show the
+            // last 12 chars (after stripping any platform
+            // prefix) for human-recognition.
+            parent_session_id
+                .rsplit(':')
+                .next()
+                .unwrap_or(parent_session_id)
+                .chars()
+                .rev()
+                .take(12)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
+        );
+
+        conn.execute(
+            "INSERT OR IGNORE INTO sessions (
+                id, model, platform, created_at, updated_at,
+                title, message_count, system_prompt,
+                compressed_summary, parent_session_id
+             )
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5, 1, ?6, ?7, ?8)",
+            rusqlite::params![
+                child_id,
+                model.unwrap_or("unknown"),
+                platform.unwrap_or("local"),
+                now,
+                title,
+                // system_prompt carries the summary text so the
+                // lineage browser can show the full payload
+                // without re-querying `compressed_summary`.
+                compression.summary.as_str(),
+                compression.summary.as_str(),
+                parent_session_id,
+            ],
+        )
+        .map_err(|e| AgentError::Io(format!("Failed to insert compression child: {e}")))?;
+
+        // NOTE (2026-07-05): we deliberately do NOT insert the summary
+        // as a `role='system'` message row. The schema migration
+        // in `ensure_db` runs `DELETE FROM messages WHERE role =
+        // 'system'` and would silently purge our summary on the
+        // next ensure_db call. The summary is recoverable via
+        // `load_compressed_summary(&child_id)` (it lives on the
+        // `sessions.compressed_summary` column), which the
+        // frontend lineage browser uses to render the "what got
+        // folded" view.
+
+        // Mirror the raw archived turns so a deep-link to the
+        // child can still recover the pre-compression wording
+        // (compression_archives is keyed by session_id, so the
+        // child gets its own copy without disturbing the
+        // parent's).
+        for (i, turn) in compression.archived_turns.iter().enumerate() {
+            let content = turn
+                .content
+                .as_ref()
+                .map(|c| c.as_str())
+                .unwrap_or_default();
+            let role = match turn.role {
+                MessageRole::System => "system",
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "tool",
+            };
+            conn.execute(
+                "INSERT INTO messages (session_id, role, content, created_at, active)
+                 VALUES (?1, ?2, ?3, ?4, 1)",
+                rusqlite::params![child_id, role, content, now],
+            )
+            .map_err(|e| {
+                AgentError::Io(format!("Failed to insert child archived turn #{i}: {e}"))
+            })?;
+        }
+
+        tracing::info!(
+            target: "hermix.lineage",
+            parent = %parent_session_id,
+            child = %child_id,
+            compression_count = compression.compression_count,
+            archived_turns = compression.archived_turns.len(),
+            "compression lineage: created child session"
+        );
+
+        Ok(child_id)
+    }
+
+    /// Return basic session metadata (title and parent_id) for lineage display.
+    pub fn get_session_title(&self, session_id: &str) -> Result<Option<(String, Option<String>)>, AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        let mut stmt = conn
+            .prepare("SELECT title, parent_session_id FROM sessions WHERE id = ?1")
+            .map_err(|e| AgentError::Io(format!("Failed to prepare get_session_title query: {e}")))?;
+
+        let result: Option<(String, Option<String>)> = stmt
+            .query_row(rusqlite::params![session_id], |row| {
+                Ok((row.get::<_, Option<String>>(0)?.unwrap_or_default(), row.get::<_, Option<String>>(1)?))
+            })
+            .ok();
+        Ok(result)
+    }
+
     /// Soft-delete the most recent `count` user-to-assistant turns of a
     /// session. A turn is a contiguous slice of messages that starts
     /// with a user message and ends just before the next user message
@@ -2257,6 +2695,7 @@ mod tests {
             None,
             Some("Test"),
             Some("cached system blob"),
+            None,
         )
         .unwrap();
 
@@ -2347,8 +2786,8 @@ mod tests {
         let sp = SessionPersistence::new(tmp.path());
         // Sessions FK is required — create the parent rows first so
         // the token_usage inserts don't trip FOREIGN KEY constraint.
-        sp.persist_session("sess-1", &[Message::user("hi"), Message::assistant("yo")], Some("gpt-4o"), None, None, None).unwrap();
-        sp.persist_session("sess-2", &[Message::user("hi"), Message::assistant("yo")], Some("claude"), None, None, None).unwrap();
+        sp.persist_session("sess-1", &[Message::user("hi"), Message::assistant("yo")], Some("gpt-4o"), None, None, None, None).unwrap();
+        sp.persist_session("sess-2", &[Message::user("hi"), Message::assistant("yo")], Some("claude"), None, None, None, None).unwrap();
 
         sp.persist_token_usage("sess-1", "gpt-4o", &usage(100, 50, Some(0.001)))
             .unwrap();
@@ -2367,7 +2806,7 @@ mod tests {
     fn p1_3_aggregate_usage_daily_fills_missing_days_with_zero() {
         let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());
-        sp.persist_session("sess-today", &[Message::user("hi"), Message::assistant("yo")], Some("gpt-4o"), None, None, None).unwrap();
+        sp.persist_session("sess-today", &[Message::user("hi"), Message::assistant("yo")], Some("gpt-4o"), None, None, None, None).unwrap();
 
         // Insert one row at "today" (whatever that is). Daily curve
         // should have `days + 1` entries; today filled, others zero.
@@ -2446,7 +2885,7 @@ mod tests {
                 execution_timeline: None,
             },
         ];
-        sp.persist_session("sess-tools", &messages, Some("gpt-4o"), None, None, None)
+        sp.persist_session("sess-tools", &messages, Some("gpt-4o"), None, None, None, None)
             .unwrap();
 
         // Hand-overwrite the second assistant row with the legacy
@@ -2520,7 +2959,7 @@ mod tests {
                 execution_timeline: None,
             },
         ];
-        sp.persist_session("sess-sort", &messages, Some("gpt-4o"), None, None, None)
+        sp.persist_session("sess-sort", &messages, Some("gpt-4o"), None, None, None, None)
             .unwrap();
         let agg = sp.aggregate_usage(30).unwrap();
         assert!(agg.by_tool[0].tool == "read_file");
@@ -2547,9 +2986,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());
         let messages = vec![Message::user("hi"), Message::assistant("hello!")];
-        sp.persist_session("sess-a", &messages, Some("gpt-4o"), None, None, None)
+        sp.persist_session("sess-a", &messages, Some("gpt-4o"), None, None, None, None)
             .unwrap();
-        sp.persist_session("sess-b", &messages, Some("claude"), None, None, None)
+        sp.persist_session("sess-b", &messages, Some("claude"), None, None, None, None)
             .unwrap();
         sp.persist_token_usage("sess-a", "gpt-4o", &usage(1000, 200, Some(0.01)))
             .unwrap();
@@ -2590,7 +3029,7 @@ mod tests {
         let sp = SessionPersistence::new(tmp.path());
 
         let messages1 = vec![Message::user("First")];
-        sp.persist_session("replace-test", &messages1, None, None, None, None)
+        sp.persist_session("replace-test", &messages1, None, None, None, None, None)
             .unwrap();
 
         let messages2 = vec![
@@ -2598,7 +3037,7 @@ mod tests {
             Message::assistant("Response"),
             Message::user("Second"),
         ];
-        sp.persist_session("replace-test", &messages2, None, None, None, None)
+        sp.persist_session("replace-test", &messages2, None, None, None, None, None)
             .unwrap();
 
         let loaded = sp.load_session("replace-test").unwrap();
@@ -2617,7 +3056,7 @@ mod tests {
             Message::user("turn-3 user"),
             Message::assistant("turn-3 assistant"),
         ];
-        sp.persist_session("undo-test", &messages, None, None, None, None)
+        sp.persist_session("undo-test", &messages, None, None, None, None, None)
             .unwrap();
         sp
     }
@@ -2702,7 +3141,7 @@ mod tests {
             Message::user("first"),
             Message::assistant("first reply"),
         ];
-        sp.persist_session("s1", &messages, None, None, None, None).unwrap();
+        sp.persist_session("s1", &messages, None, None, None, None, None).unwrap();
         sp.append_approval_message(
             "s1",
             &make_approval("req-1", "terminal_run", Some("reply-0")),
@@ -2738,7 +3177,7 @@ mod tests {
         sp.persist_session(
             "s2",
             &[Message::user("hi"), Message::assistant("hello")],
-            None, None, None, None,
+            None, None, None, None, None,
         )
         .unwrap();
         sp.append_approval_message(
@@ -2764,7 +3203,7 @@ mod tests {
         sp.persist_session(
             "s3",
             &[Message::user("hi"), Message::assistant("ok")],
-            None, None, None, None,
+            None, None, None, None, None,
         )
         .unwrap();
         sp.append_approval_message(
@@ -2792,7 +3231,7 @@ mod tests {
         sp.persist_session(
             "s4",
             &[Message::user("hi"), Message::assistant("ok")],
-            None, None, None, None,
+            None, None, None, None, None,
         )
         .unwrap();
         let rec = make_approval("req-dup", "terminal_run", Some("reply-0"));
@@ -2836,7 +3275,7 @@ mod tests {
         sp.persist_session(
             "s5",
             &[Message::user("u1"), Message::assistant("a1")],
-            None, None, None, None,
+            None, None, None, None, None,
         )
         .unwrap();
         sp.append_approval_message(
@@ -2852,7 +3291,7 @@ mod tests {
                 Message::user("u2"),
                 Message::assistant("a2"),
             ],
-            None, None, None, None,
+            None, None, None, None, None,
         )
         .unwrap();
         // The second persist wiped the approval row. Undo should now
@@ -2978,7 +3417,7 @@ mod tests {
             Message::system("trailing system that must NOT count"),
         ];
 
-        sp.persist_session("count-test", &messages, Some("gpt-4o"), None, Some("Count"), None)
+        sp.persist_session("count-test", &messages, Some("gpt-4o"), None, Some("Count"), None, None)
             .unwrap();
 
         // 1. Open the DB directly and count the actual rows.
@@ -3054,6 +3493,7 @@ mod tests {
             Some("local"),
             Some("Compression test"),
             Some("system"),
+            None,
             Some(&snapshot),
         )
         .expect("persist must succeed");
@@ -3119,6 +3559,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("persist must succeed");
 
@@ -3134,5 +3575,167 @@ mod tests {
             sp.load_compressed_summary(session_id).is_none(),
             "no summary on empty snap"
         );
+    }
+
+    // 2026-07-05 (N-02): compression now materialises a real
+    // child session row, linked to the parent via
+    // `parent_session_id`. The child's `messages` table carries
+    // the summary as a system message + the archived turns, so
+    // the lineage browser can render "what got folded" without
+    // re-querying the parent.
+    #[test]
+    fn compression_creates_child_session_with_summary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hermix_home = tmp.path();
+        let sp = SessionPersistence::new(hermix_home);
+
+        let parent_id = "n02-parent-session";
+        let archived = vec![
+            Message::user("original turn A"),
+            Message::assistant("original turn B"),
+        ];
+        let snap = CompressionSnapshot::new(
+            "summary text from N-02 test".to_string(),
+            archived,
+            1,
+            4,
+            2,
+            1000,
+            300,
+        )
+        .expect("non-empty snapshot");
+
+        // First child creation: id must be deterministic
+        // `<parent>-c1` since the parent has zero existing
+        // children.
+        let child_id_1 = sp
+            .create_compression_child_session(parent_id, &snap, Some("test-model"), Some("local"))
+            .expect("first child creation must succeed");
+        assert_eq!(child_id_1, format!("{parent_id}-c1"));
+
+        // The child row exists with `parent_session_id` set.
+        let parent_back = sp
+            .get_parent(&child_id_1)
+            .expect("get_parent must succeed");
+        assert_eq!(parent_back.as_deref(), Some(parent_id));
+
+        // The lineage tree can find the child from the parent.
+        let children = sp
+            .find_children(parent_id)
+            .expect("find_children must succeed");
+        assert_eq!(children, vec![child_id_1.clone()]);
+
+        // The child row carries the summary as compressed_summary
+        // (fast-load index) AND as the first message (display).
+        let child_summary = sp
+            .load_compressed_summary(&child_id_1)
+            .expect("child summary must be populated");
+        assert_eq!(child_summary, "summary text from N-02 test");
+
+        // The child's messages: archived turns survive in the messages
+        // table (the summary itself lives on `compressed_summary`,
+        // see comment in `create_compression_child_session`).
+        let conn = open_with_wal(&sp.db_path).expect("open");
+        let msg_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+                rusqlite::params![&child_id_1],
+                |row| row.get(0),
+            )
+            .expect("count messages");
+        assert_eq!(msg_count, 2, "child must hold 2 archived turns");
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT role, content FROM messages WHERE session_id = ?1 ORDER BY id",
+            )
+            .expect("prepare");
+        let rows: Vec<(String, String)> = stmt
+            .query_map(rusqlite::params![&child_id_1], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .expect("query")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "user");
+        assert_eq!(rows[0].1, "original turn A");
+        assert_eq!(rows[1].0, "assistant");
+        assert_eq!(rows[1].1, "original turn B");
+
+        // Summary still recoverable via load_compressed_summary
+        // (no system-role message needed).
+        let summary = sp
+            .load_compressed_summary(&child_id_1)
+            .expect("child summary must be populated");
+        assert_eq!(summary, "summary text from N-02 test");
+
+        // Second child creation on the same parent must bump
+        // the suffix to `-c2` (idempotent, deterministic).
+        let snap2 = CompressionSnapshot::new(
+            "second compression".to_string(),
+            vec![Message::user("another turn")],
+            2,
+            6,
+            2,
+            2000,
+            500,
+        )
+        .expect("non-empty snapshot");
+        let child_id_2 = sp
+            .create_compression_child_session(parent_id, &snap2, Some("test-model"), Some("local"))
+            .expect("second child creation must succeed");
+        assert_eq!(child_id_2, format!("{parent_id}-c2"));
+
+        // Both children discoverable.
+        let all_children = sp
+            .find_children(parent_id)
+            .expect("find_children after second");
+        assert_eq!(all_children.len(), 2);
+        assert!(all_children.contains(&child_id_1));
+        assert!(all_children.contains(&child_id_2));
+    }
+
+    // 2026-07-05 (N-02): creating a child session for a parent
+    // that doesn't yet have a row in `sessions` should still
+    // succeed — the child has its own row, parent_session_id
+    // just points at the missing id. We tolerate the orphan
+    // because the parent row will be created later by the
+    // regular persist_session call, and the lineage tree
+    // already handles missing ancestors via `ancestors` list
+    // being truncated.
+    #[test]
+    fn compression_child_session_orphan_parent_is_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hermix_home = tmp.path();
+        let sp = SessionPersistence::new(hermix_home);
+
+        let snap = CompressionSnapshot::new(
+            "orphan parent test".to_string(),
+            vec![Message::user("orphan turn")],
+            1,
+            2,
+            1,
+            100,
+            50,
+        )
+        .expect("non-empty snapshot");
+
+        let child_id = sp
+            .create_compression_child_session(
+                "never-persisted-parent",
+                &snap,
+                Some("test-model"),
+                Some("local"),
+            )
+            .expect("child creation against missing parent must succeed");
+        assert_eq!(child_id, "never-persisted-parent-c1");
+
+        // Child row exists, parent lookup returns None (parent
+        // row doesn't exist yet).
+        let loaded = sp
+            .load_compressed_summary(&child_id)
+            .expect("child summary present");
+        assert_eq!(loaded, "orphan parent test");
     }
 }

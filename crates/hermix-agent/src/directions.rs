@@ -281,6 +281,31 @@ const GOOGLE_MODEL_OPERATIONAL_GUIDANCE: &str = "# Operational guidance (Google)
 
 const TOOL_FAILURE_GUIDANCE: &str = "Tool failure rule: if a tool fails twice, switch approach or ask the user. Do NOT retry the same call.";
 
+const TASK_FOCUS_GUIDANCE: &str = "\
+# Task focus discipline (mandatory for multi-step tasks)
+
+Before each tool call, mentally check:
+1. **Original goal** — What did the user ask me to do?
+2. **Current progress** — What have I completed so far?
+3. **Next step** — What is the immediate next action toward the goal?
+4. **Blockers** — Am I stuck? If so, what specifically?
+
+## Rules
+- **Never repeat completed work.** If you already read a file, don't read it again.
+- **Stay on task.** Every tool call must advance the stated goal.
+- **If you lose focus**, output a brief status check before continuing:
+  ```
+  [STATUS] Goal: <original goal>
+  [STATUS] Done: <completed items>
+  [STATUS] Next: <next action>
+  ```
+- **If you're stuck**, explain what you've tried and ask for guidance — don't loop.
+- **If the task is complex**, break it into phases and track completion.";
+
+const TASK_FOCUS_SHORT: &str = "\
+## Task focus
+Before each tool call, check: (1) original goal, (2) current progress, (3) next step. Don't repeat completed work. If stuck, explain what you've tried.";
+
 // ---------------------------------------------------------------------------
 // collect_directions
 // ---------------------------------------------------------------------------
@@ -394,6 +419,20 @@ pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
             "context_budget.guide",
             DirRoute::HasBatchKeyword,
             CONTEXT_BUDGET_GUIDANCE,
+        ));
+    }
+    // Task focus guidance for multi-step tasks (5+ tool calls).
+    if route_ctx.tool_call_count >= 5 {
+        dirs.push(SystemDir::new(
+            "task_focus.guide",
+            DirRoute::MultiStepTask,
+            TASK_FOCUS_GUIDANCE,
+        ));
+    } else if route_ctx.tool_call_count >= 2 {
+        dirs.push(SystemDir::new(
+            "task_focus.short",
+            DirRoute::MultiStepTask,
+            TASK_FOCUS_SHORT,
         ));
     }
     // P2-6: USER_STYLE_GUIDANCE is always-on.

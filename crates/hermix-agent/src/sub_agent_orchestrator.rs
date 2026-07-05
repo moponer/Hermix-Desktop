@@ -93,6 +93,9 @@ pub enum SubAgentStatus {
     Timeout,
 }
 
+/// Default max iterations for sub-agent delegation (Hermes Agent parity).
+pub const DEFAULT_DELEGATION_MAX_ITERATIONS: u32 = 50;
+
 /// Parameters forwarded by the `delegate_task` tool invocation.
 #[derive(Debug, Clone, Default)]
 pub struct SubAgentRequest {
@@ -106,6 +109,10 @@ pub struct SubAgentRequest {
     pub max_depth: u32,
     /// Parent budget remaining (USD) — exposed to the child for cost awareness.
     pub parent_budget_remaining_usd: Option<f64>,
+    /// Independent iteration budget for this sub-agent (Hermes Agent parity).
+    /// When set, overrides the derived max_turns from parent budget.
+    /// Default: `DEFAULT_DELEGATION_MAX_ITERATIONS` (50).
+    pub max_iterations: Option<u32>,
 }
 
 /// Configuration for [`SubAgentOrchestrator`].
@@ -340,11 +347,18 @@ impl SubAgentOrchestrator {
     fn build_child_config(&self, req: &SubAgentRequest, sub_agent_id: &str) -> AgentConfig {
         let parent = &self.cfg.parent_config;
 
-        let remaining_parent_turns = parent
-            .max_turns
-            .saturating_sub(req.child_depth.saturating_mul(2));
-        let child_turns = remaining_parent_turns
-            .saturating_div(2)
+        // Use independent iteration budget when explicitly set (Hermes Agent parity);
+        // otherwise fall back to the parent-derived calculation.
+        let child_turns = req
+            .max_iterations
+            .unwrap_or_else(|| {
+                let remaining_parent_turns = parent
+                    .max_turns
+                    .saturating_sub(req.child_depth.saturating_mul(2));
+                remaining_parent_turns
+                    .saturating_div(2)
+                    .clamp(SUB_AGENT_MIN_TURNS, SUB_AGENT_MAX_TURNS_CAP)
+            })
             .clamp(SUB_AGENT_MIN_TURNS, SUB_AGENT_MAX_TURNS_CAP);
 
         let child_session_id = match parent.session_id.as_deref() {

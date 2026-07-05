@@ -21,7 +21,10 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use hermix_core::{AgentError, LlmProvider, Message, MessageRole};
+use hermix_core::{
+    AgentError, CompressionEngine, CompressionEngineMetrics, CompressionEngineSnapshot,
+    CompressionEngineState, LlmProvider, Message, MessageRole,
+};
 use hermix_core::traits::CoreContextEngine;
 use hermix_intelligence::auxiliary::{
     AuxiliaryClient, AuxiliaryError, AuxiliaryRequest, AuxiliaryTask,
@@ -40,6 +43,12 @@ pub const SUMMARY_PREFIX: &str =
      that work (for example, files may already be changed). Use the summary \
      and the current state to continue from where things left off, and \
      avoid repeating work.\n\n\
+     **TASK RECOVERY INSTRUCTIONS:**\n\
+     • Read the summary carefully — it contains your task context.\n\
+     • Check 'In Progress' and 'Blocked' sections — resume from that point.\n\
+     • Check 'Next Steps' — execute those unless the user provides new instructions.\n\
+     • Do NOT restart completed work listed in 'Done' section.\n\
+     • If the summary mentions specific files, verify their current state before acting.\n\n\
      IMPORTANT — read before responding:\n\
      • Do NOT echo, quote or re-issue any inline placeholders you see in \
      the recent messages below (e.g. @image#1, @file#2, image#1: ...). \
@@ -454,6 +463,12 @@ static MEDIA_DIRECTIVE_RE: once_cell::sync::Lazy<regex::Regex> =
 // ---------------------------------------------------------------------------
 
 /// Statistics for a single compression operation.
+///
+/// `#[must_use]` because `last_metrics` is what the persistence path
+/// reads to populate `compression_summary_history`. Dropping it loses
+/// the compaction trail that the dashboard / next-session recall
+/// rely on.
+#[must_use = "CompressionMetrics feeds compression_summary_history; dropping it loses the compaction trail and per-pass metrics"]
 #[derive(Debug, Clone, Default)]
 pub struct CompressionMetrics {
     /// Original token count before compression.
@@ -604,8 +619,7 @@ pub struct CompressorConfig {
     /// Distinct from `threshold_percent`: that one drives the *compressor*
     /// itself (LLM-powered summary); this one drives the user-visible
     /// `Context pressure` warning ladder (`>= 0.95` high, `>= 0.85` medium).
-    /// Defaults to `0.80`, matching the legacy constant previously hard-coded
-    /// in `context::CONTEXT_PRESSURE_TRIGGER_RATIO`.
+    /// Defaults to `0.50`, aligned with Hermes Agent Python reference.
     ///
     /// Day 3 lift: `ContextManager::for_model_with` accepts an
     /// `output_reserve_tokens` argument, and `ContextManager::pressure_threshold_tokens`
@@ -641,7 +655,7 @@ impl Default for CompressorConfig {
         Self {
             context_length: 200_000,
             threshold_percent: 0.50,
-            pressure_threshold_percent: 0.80,
+            pressure_threshold_percent: 0.50,
             output_reserve_tokens: 4096,
             protect_first_n: 3,
             protect_last_n: 20,
@@ -1194,20 +1208,29 @@ impl ContextCompressor {
     /// deduplicates identical tool results and truncates large tool_call
     /// arguments while preserving JSON validity.
     ///
-    /// Returns `(messages, pruned_count)`.
+    /// Returns `(messages, dedup_count, pruned_count)` where:
+    /// - `dedup_count` — number of messages replaced with the
+    ///   `[Duplicate tool output]` marker (Pass 1, MD5 content-hash
+    ///   dedup). Previously hard-coded to 0 in `CompressionMetrics`,
+    ///   this is what the dashboard now actually shows.
+    /// - `pruned_count` — total of all pruning passes (dedup +
+    ///   summary replacement + screenshot stripping + argument
+    ///   truncation). This is the historical "pruned" counter the
+    ///   breaker and logs already consumed.
     pub fn prune_old_tool_results(
         &self,
         messages: &[Message],
         protect_tail_count: usize,
         protect_tail_tokens: Option<u64>,
-    ) -> (Vec<Message>, usize) {
+    ) -> (Vec<Message>, usize, usize) {
         if messages.is_empty() {
-            return (Vec::new(), 0);
+            return (Vec::new(), 0, 0);
         }
 
         let n = messages.len();
         let mut result: Vec<Message> = messages.to_vec();
         let mut pruned = 0;
+        let mut deduped = 0;
 
         let prune_boundary = if let Some(budget) = protect_tail_tokens.filter(|b| *b > 0) {
             let mut accumulated: u64 = 0;
@@ -1242,6 +1265,7 @@ impl ContextCompressor {
                     "[Duplicate tool output — same content as a more recent call]".into(),
                 );
                 pruned += 1;
+                deduped += 1;
             } else {
                 content_hashes.insert(h, i);
             }
@@ -1333,7 +1357,7 @@ impl ContextCompressor {
             }
         }
 
-        (result, pruned)
+        (result, deduped, pruned)
     }
 
     // ------------------------------------------------------------------
@@ -1711,15 +1735,16 @@ Write only the summary body. Do not include any preamble or prefix."
             .unwrap_or_else(|| estimate_messages_tokens(&messages));
 
         // Phase 1: prune old tool results.
-        let (messages, pruned_count) = self.prune_old_tool_results(
+        let (messages, dedup_count, pruned_count) = self.prune_old_tool_results(
             &messages,
             self.config.protect_last_n,
             Some(self.tail_token_budget),
         );
         if pruned_count > 0 && !self.config.quiet_mode {
             tracing::info!(
-                "Pre-compression: pruned {} old tool result(s)",
-                pruned_count
+                "Pre-compression: pruned {} old tool result(s) ({} deduped)",
+                pruned_count,
+                dedup_count,
             );
         }
 
@@ -1909,7 +1934,11 @@ Write only the summary body. Do not include any preamble or prefix."
             compressed_turns: compressed.len(),
             turns_removed: compress_end.saturating_sub(compress_start),
             tool_results_pruned: pruned_count,
-            deduplication_count: 0, // TODO: track from prune_old_tool_results
+            // 2026-07-05: previously hard-coded to 0 with a TODO.
+            // `prune_old_tool_results` now returns the count of
+            // messages that were replaced with the
+            // `[Duplicate tool output]` marker (MD5 dedup pass).
+            deduplication_count: dedup_count,
             summary_api_calls: 1,
             summary_errors: if summary_generated { 0 } else { 1 },
             anti_thrashing_triggered: anti_thrashing,
@@ -1963,6 +1992,56 @@ impl CoreContextEngine for ContextCompressor {
         // a background/cron session's summary from leaking into
         // the next live session via the generate_summary path.
         self.previous_summary = None;
+    }
+}
+
+// 2026-07-05 (N-03): adapter so the built-in LLM-powered
+// compressor plugs into the new `CompressionEngine` trait
+// without forcing plugin authors to implement the
+// breaker/metrics surface from scratch. Each method is a thin
+// forwarder onto the existing `ContextCompressor` API.
+impl CompressionEngine for ContextCompressor {
+    fn previous_summary(&self) -> Option<&str> {
+        self.previous_summary.as_deref()
+    }
+
+    fn last_archived_turns(&self) -> &[Message] {
+        &self.last_archived_turns
+    }
+
+    fn last_metrics(&self) -> CompressionEngineMetrics {
+        CompressionEngineMetrics {
+            tokens_saved: self.last_metrics.tokens_saved,
+            summary_errors: self.last_metrics.summary_errors as u64,
+            compression_count: self.compression_count,
+        }
+    }
+
+    fn breaker_snapshot(
+        &mut self,
+        current_tokens: u64,
+        threshold_tokens: u64,
+        failure_reason: Option<String>,
+    ) -> CompressionEngineSnapshot {
+        let snap = self.breaker_snapshot(current_tokens, threshold_tokens, failure_reason);
+        CompressionEngineSnapshot {
+            state: match snap.state {
+                BreakerState::Closed => CompressionEngineState::Closed,
+                BreakerState::HalfOpen => CompressionEngineState::HalfOpen,
+                BreakerState::Open => CompressionEngineState::Open,
+            },
+            current_tokens: snap.used_tokens,
+            threshold_tokens: snap.threshold_tokens,
+            failure_reason: snap.last_failure_reason,
+        }
+    }
+
+    fn record_outcome(&mut self, success: bool) -> CompressionEngineState {
+        match self.record_compression_outcome(success) {
+            BreakerState::Closed => CompressionEngineState::Closed,
+            BreakerState::HalfOpen => CompressionEngineState::HalfOpen,
+            BreakerState::Open => CompressionEngineState::Open,
+        }
     }
 }
 
@@ -2422,7 +2501,7 @@ mod tests {
             messages.push(msg(MessageRole::User, &format!("t{i}")));
         }
 
-        let (out, pruned) = compressor.prune_old_tool_results(&messages, 20, None);
+        let (out, _dedup, pruned) = compressor.prune_old_tool_results(&messages, 20, None);
         assert!(pruned >= 1);
         // Smart summary replaces oversized output (e.g. "[shell]  (500 chars)")
         let first_tool_content = out[3].content.as_deref().unwrap_or("");
@@ -3161,6 +3240,43 @@ mod tests {
     #[test]
     fn breaker_state_default_is_closed() {
         assert_eq!(BreakerState::default(), BreakerState::Closed);
+    }
+
+    /// 2026-07-05: `prune_old_tool_results` returns the dedup count
+    /// separately so `CompressionMetrics::deduplication_count` is no
+    /// longer hard-coded to 0. The dedup pass replaces identical
+    /// `Tool` role messages (≥ 200 chars, same MD5 hash) with the
+    /// `[Duplicate tool output]` marker.
+    #[test]
+    fn prune_old_tool_results_reports_dedup_count() {
+        let cfg = quiet_config();
+        let compressor = ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
+        let big = "X".repeat(500);
+        // Two identical large tool results at the front (out of the
+        // protected tail) — the second one should be deduped.
+        let messages = vec![
+            assistant_with_tool_call("c1", "fs_read", r#"{"path":"a"}"#),
+            tool_msg("c1", &big),
+            tool_msg("c1", &big), // identical content → dedup target
+            assistant_with_tool_call("c2", "fs_read", r#"{"path":"b"}"#),
+            tool_msg("c2", "small"),
+        ];
+        // Fill tail so the dedup candidates fall outside the protected zone.
+        let mut messages = messages;
+        for i in 0..25 {
+            messages.push(msg(MessageRole::User, &format!("tail {i}")));
+        }
+
+        let (out, dedup, pruned) = compressor.prune_old_tool_results(&messages, 20, None);
+        assert!(dedup >= 1, "expected at least one dedup, got {dedup}");
+        assert!(pruned >= dedup, "pruned includes dedup, got pruned={pruned}");
+        // At least one message should now carry the duplicate marker.
+        assert!(
+            out.iter()
+                .any(|m| m.content.as_deref().unwrap_or("").starts_with("[Duplicate tool output")),
+            "dedup marker must replace at least one tool result, got: {:#?}",
+            out.iter().map(|m| m.content.clone()).collect::<Vec<_>>()
+        );
     }
 
     #[test]
