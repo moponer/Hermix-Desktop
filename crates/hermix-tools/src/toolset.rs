@@ -7,7 +7,7 @@
 //! - Integration with ToolRegistry for plugin-registered toolsets
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::registry::ToolRegistry;
 
@@ -63,6 +63,27 @@ pub const TOOLSET_HOMEASSISTANT: &[&str] = &[
     "ha_list_services",
     "ha_call_service",
 ];
+
+/// Legacy toolset name mappings for backwards compatibility.
+/// Maps old `_tools` suffix names to modern toolset names.
+pub static LEGACY_TOOLSET_MAP: LazyLock<HashMap<&'static str, &'static str>> =
+    LazyLock::new(|| {
+        let mut m = HashMap::new();
+        m.insert("web_tools", "web");
+        m.insert("terminal_tools", "terminal");
+        m.insert("file_tools", "file");
+        m.insert("browser_tools", "browser");
+        m.insert("vision_tools", "vision");
+        m.insert("skills_tools", "skills");
+        m.insert("memory_tools", "memory");
+        m.insert("code_execution_tools", "code_execution");
+        m
+    });
+
+/// Resolve a toolset name, handling legacy names via mapping.
+pub fn resolve_toolset_name(name: &str) -> &str {
+    LEGACY_TOOLSET_MAP.get(name).copied().unwrap_or(name)
+}
 
 // ---------------------------------------------------------------------------
 // Toolset
@@ -265,8 +286,9 @@ impl ToolsetManager {
     /// - "all" or "*" resolves to the union of all registered toolsets
     /// - Filters to only tools available in the registry (check_fn passes)
     pub fn resolve_toolset(&self, name: &str) -> Result<Vec<String>, ToolsetError> {
+        let resolved_name = resolve_toolset_name(name);
         let mut visited = HashSet::new();
-        self.resolve_inner(name, &mut visited)
+        self.resolve_inner(resolved_name, &mut visited)
     }
 
     fn resolve_inner(
@@ -328,8 +350,9 @@ impl ToolsetManager {
 
     /// Resolve a toolset without availability filtering (includes all tools regardless of check_fn).
     pub fn resolve_toolset_unfiltered(&self, name: &str) -> Result<Vec<String>, ToolsetError> {
+        let resolved_name = resolve_toolset_name(name);
         let mut visited = HashSet::new();
-        self.resolve_inner_unfiltered(name, &mut visited)
+        self.resolve_inner_unfiltered(resolved_name, &mut visited)
     }
 
     fn resolve_inner_unfiltered(
@@ -375,6 +398,51 @@ impl ToolsetManager {
         let mut sorted: Vec<String> = resolved.into_iter().collect();
         sorted.sort();
         Ok(sorted)
+    }
+
+    /// Resolve toolsets with explicit enable/disable filtering.
+    ///
+    /// - If `enabled_toolsets` is provided, only include tools from those toolsets.
+    /// - If `disabled_toolsets` is provided, exclude tools from those toolsets.
+    /// - If both are provided, enabled takes precedence (intersect).
+    /// - If neither is provided, returns all available tools.
+    pub fn resolve_filtered(
+        &self,
+        enabled_toolsets: Option<&[String]>,
+        disabled_toolsets: Option<&[String]>,
+    ) -> Vec<String> {
+        let mut result: HashSet<String> = HashSet::new();
+
+        if let Some(enabled) = enabled_toolsets {
+            // Only include tools from enabled toolsets
+            for toolset_name in enabled {
+                if let Ok(tools) = self.resolve_toolset(toolset_name) {
+                    result.extend(tools);
+                }
+            }
+        } else {
+            // Include all tools from all toolsets
+            for toolset_name in self.toolsets.keys() {
+                if let Ok(tools) = self.resolve_toolset(toolset_name) {
+                    result.extend(tools);
+                }
+            }
+        }
+
+        // Remove disabled toolsets
+        if let Some(disabled) = disabled_toolsets {
+            for toolset_name in disabled {
+                if let Ok(tools) = self.resolve_toolset_unfiltered(toolset_name) {
+                    for tool in tools {
+                        result.remove(&tool);
+                    }
+                }
+            }
+        }
+
+        let mut sorted: Vec<String> = result.into_iter().collect();
+        sorted.sort();
+        sorted
     }
 
     /// Create a custom toolset at runtime.

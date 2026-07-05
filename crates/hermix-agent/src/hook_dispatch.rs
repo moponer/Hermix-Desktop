@@ -40,7 +40,21 @@ pub fn invoke_hook(
 pub fn inject_hook_context(results: &[HookResult], ctx: &mut ContextManager) {
     for r in results {
         if let HookResult::InjectContext(text) = r {
-            ctx.add_message(hermix_core::Message::system(text));
+            // Append to the last user message instead of creating a new system message.
+            // This matches Hermes Agent behavior: plugin context goes into the user
+            // message, not the cached system prompt.
+            let messages = ctx.get_messages_mut();
+            if let Some(last_user) = messages.iter_mut().rev().find(|m| m.role == hermix_core::MessageRole::User) {
+                if let Some(ref mut content) = last_user.content {
+                    content.push_str("\n\n");
+                    content.push_str(text);
+                } else {
+                    last_user.content = Some(text.clone());
+                }
+            } else {
+                // Fallback: no user message yet, add as system message
+                ctx.add_message(hermix_core::Message::system(text));
+            }
         }
     }
 }
