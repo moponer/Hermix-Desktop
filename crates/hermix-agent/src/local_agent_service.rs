@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use tracing::instrument;
 
 use hermix_config::GatewayConfig;
 use hermix_core::traits::{AgentOverrides, AgentReply, AgentService, PermissionLevel, RiskLevel};
@@ -519,6 +520,45 @@ impl LocalAgentService {
         });
     }
 
+    /// O3.2: Gateway pre-compression safety net — early diagnostic.
+    /// Estimates the token count of a loaded session and emits a warning
+    /// when it exceeds 85% of the nominal context window (200K tokens).
+    /// The actual compression is handled by the agent loop at the 50%
+    /// threshold; this is a canary that alerts the operator BEFORE the
+    /// session reaches the point where every turn triggers compaction
+    /// retries.
+    fn gateway_token_warn(&self, session_id: &str, messages: &mut Vec<Message>) {
+        // Rough estimate: 1 token ≈ 4 UTF-8 bytes for English text.
+        let est_tokens: u64 = messages
+            .iter()
+            .map(|m| m.content.as_deref().unwrap_or("").len() as u64 / 4)
+            .sum();
+        let threshold_tokens: u64 = (200_000_f64 * 0.85) as u64; // 170K
+        if est_tokens > threshold_tokens && messages.len() > 13 {
+            tracing::warn!(
+                target: "hermix.gateway",
+                session_id,
+                est_tokens,
+                threshold_tokens,
+                msg_count = messages.len(),
+                "Gateway safety net: session above 85% context window, compressing."
+            );
+            // Simple truncation: keep first 3 messages + last 10 messages
+            let head: Vec<Message> = messages[..3].to_vec();
+            let tail: Vec<Message> = messages[messages.len()-10..].to_vec();
+            let dropped = messages.len() - 13;
+            let marker = Message::system(format!(
+                "[GATEWAY COMPACTION] {} earlier messages were removed to prevent context overflow. \
+                 Continue from the recent messages below.",
+                dropped
+            ));
+            *messages = Vec::new();
+            messages.extend(head);
+            messages.push(marker);
+            messages.extend(tail);
+        }
+    }
+
     fn spawn_agent_loop(
         &self,
         session_id: &str,
@@ -563,6 +603,12 @@ impl LocalAgentService {
         let hh_owned: String = hermix_home.clone().unwrap_or_else(|| {
             hermix_config::paths::hermix_home().to_string_lossy().into_owned()
         });
+        // `block_in_place` is safe here: `spawn_agent_loop` only runs
+        // inside `tokio::spawn`, which pins to a multi-thread worker.
+        // `CurrentThread` panics cannot happen. (2026-07-05: same
+        // rationale as `build_shared_memory_router`'s runtime_flavor
+        // detection — but that one is a public fn, this is a private
+        // call site under a known guard.)
         let router = tokio::task::block_in_place(|| {
             crate::memory_layer_adapter::all_plugins_as_router(session_id, &hh_owned)
         });
@@ -623,7 +669,7 @@ impl LocalAgentService {
                 // (`DEFAULT_BREAKER_THRESHOLD = 3`,
                 // `DEFAULT_BREAKER_COOLDOWN_SECS = 600`) when the user
                 // hasn't customised the field — backward compatible.
-                let (breaker_threshold, breaker_cooldown_secs) = {
+                let (breaker_threshold, breaker_cooldown_secs, summary_model) = {
                     let cfg = self
                         .config
                         .lock()
@@ -635,11 +681,15 @@ impl LocalAgentService {
                         cfg.compaction.circuit_breaker_cooldown_secs.unwrap_or(
                             crate::compression::DEFAULT_BREAKER_COOLDOWN_SECS,
                         ),
+                        cfg.compaction.summary_model.clone(),
                     )
                 };
                 let compressor = crate::compression::ContextCompressor::new(
-                    crate::compression::CompressorConfig::default(),
-                    aux,
+                    crate::compression::CompressorConfig {
+                        summary_model_override: summary_model,
+                        ..crate::compression::CompressorConfig::default()
+                    },
+                    aux.clone(),
                 )
                 .with_breaker_config(breaker_threshold, breaker_cooldown_secs);
                 // 2026-07-04: validate that the LLM-powered summariser
@@ -654,6 +704,16 @@ impl LocalAgentService {
                          Falling back to character-based compressor."
                     );
                 } else {
+                    // N-08: extract the summary model BEFORE moving the
+                    // compressor into the agent loop (with_compressor
+                    // consumes it). Fall back to "default" when no
+                    // override is set — the aux client picks its own
+                    // model, and this label is just for log clarity.
+                    let check_model = compressor
+                        .config()
+                        .summary_model_override
+                        .clone()
+                        .unwrap_or_else(|| "default".into());
                     agent = agent.with_compressor(compressor);
                     tracing::info!(
                         "Advanced context compressor wired (aux providers: {:?}, breaker threshold={}, cooldown={}s)",
@@ -661,6 +721,34 @@ impl LocalAgentService {
                         breaker_threshold,
                         breaker_cooldown_secs,
                     );
+                    // Fire-and-forget health check — verify the
+                    // compression model actually responds. Runs in the
+                    // background so it never blocks construction. A
+                    // failed check only logs a warning; the compressor
+                    // is already wired and the first real compression
+                    // will surface the error again at WARN level.
+                    let check_aux = aux.clone();
+                    tokio::spawn(async move {
+                        match crate::compression_health::startup_compression_llm_health_check(
+                            &*check_aux,
+                            &check_model,
+                            30_000,
+                        )
+                        .await
+                        {
+                            Ok(report) => tracing::info!(
+                                provider = %report.provider,
+                                model    = %report.model,
+                                latency  = report.latency_ms,
+                                "compression LLM health check passed"
+                            ),
+                            Err(e) => tracing::warn!(
+                                error = %e,
+                                "compression LLM health check failed; \
+                                 first real compression will surface the same error"
+                            ),
+                        }
+                    });
                 }
             }
             _ => {
@@ -907,6 +995,17 @@ impl LocalAgentService {
 
 #[async_trait]
 impl AgentService for LocalAgentService {
+    #[instrument(
+        name = "send_message",
+        level = "info",
+        skip_all,
+        fields(
+            session_id = %session_id,
+            text_len = text.len(),
+            has_override_model = overrides.model.is_some(),
+            has_override_personality = overrides.personality.is_some(),
+        )
+    )]
     async fn send_message(
         &self,
         session_id: &str,
@@ -918,6 +1017,13 @@ impl AgentService for LocalAgentService {
             .session_persistence
             .load_session(session_id)
             .unwrap_or_default();
+
+        // O3.2: Gateway pre-compression safety net. Detect sessions that
+        // have grown beyond 85% of a typical context window (200K tokens)
+        // between agent runs. Compress by truncating old messages to prevent
+        // context overflow. Actual LLM-powered compression is handled by
+        // the agent loop at the 50% threshold — this is early detection.
+        self.gateway_token_warn(session_id, &mut messages);
 
         // Intercept slash commands: /command args → load skill and inject content
         if text.starts_with('/') {
@@ -1019,6 +1125,7 @@ impl AgentService for LocalAgentService {
             None,
             None,
             None,
+            None,
         ) {
             tracing::warn!(
                 session_id = %session_id,
@@ -1057,6 +1164,7 @@ impl AgentService for LocalAgentService {
             Some("local"),
             None,
             None,
+            snapshot.as_ref().map(|_| session_id),
             snapshot.as_ref(),
         ) {
             tracing::warn!(
@@ -1066,6 +1174,41 @@ impl AgentService for LocalAgentService {
                  messages are still correct for this turn but the DB row may be stale \
                  on next reload. Check disk space / file lock on sessions.db."
             );
+        }
+
+        // 2026-07-05 (N-02): when compression actually happened
+        // (snapshot is non-None), materialise the summary as a
+        // child session so the lineage tree can show "what got
+        // folded". The parent's messages stay untouched (UI
+        // routing keeps working); the child is a sibling
+        // browseable via the lineage API.
+        if let Some(snap) = snapshot.as_ref() {
+            if !snap.summary.is_empty() {
+                match self.session_persistence.create_compression_child_session(
+                    session_id,
+                    snap,
+                    Some(&effective_model),
+                    Some("local"),
+                ) {
+                    Ok(child_id) => {
+                        tracing::info!(
+                            target: "hermix.lineage",
+                            parent = %session_id,
+                            child = %child_id,
+                            "compression child session created"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "hermix.lineage",
+                            parent = %session_id,
+                            error = %e,
+                            "failed to create compression child session; lineage \
+                             tree will show the parent without children"
+                        );
+                    }
+                }
+            }
         }
 
         // Extract the last assistant reply
@@ -1084,6 +1227,17 @@ impl AgentService for LocalAgentService {
         })
     }
 
+    #[instrument(
+        name = "send_message_stream",
+        level = "info",
+        skip_all,
+        fields(
+            session_id = %session_id,
+            text_len = text.len(),
+            has_override_model = overrides.model.is_some(),
+            has_override_personality = overrides.personality.is_some(),
+        )
+    )]
     async fn send_message_stream(
         &self,
         session_id: &str,
@@ -1096,6 +1250,9 @@ impl AgentService for LocalAgentService {
             .session_persistence
             .load_session(session_id)
             .unwrap_or_default();
+
+        // O3.2: Gateway pre-compression safety net (stream path).
+        self.gateway_token_warn(session_id, &mut messages);
 
         // Append the new user message
         // 2026-06-25: 多图支持 — 优先用新数组，回退到旧字段保持兼容
@@ -1782,6 +1939,7 @@ impl AgentService for LocalAgentService {
             Some("local"),
             None,
             None,
+            snapshot.as_ref().map(|_| session_id),
             snapshot.as_ref(),
         ) {
             tracing::warn!(
@@ -1791,6 +1949,26 @@ impl AgentService for LocalAgentService {
                  in-memory messages are still correct for this turn but the DB row may \
                  be stale on next reload."
             );
+        }
+
+        // 2026-07-05 (N-02): see sync-path comment. Same
+        // child-session materialisation for the stream path.
+        if let Some(snap) = snapshot.as_ref() {
+            if !snap.summary.is_empty() {
+                if let Err(e) = self.session_persistence.create_compression_child_session(
+                    session_id,
+                    snap,
+                    Some(&effective_model),
+                    Some("local"),
+                ) {
+                    tracing::warn!(
+                        target: "hermix.lineage",
+                        parent = %session_id,
+                        error = %e,
+                        "failed to create compression child session (stream path)"
+                    );
+                }
+            }
         }
 
         Ok(AgentReply {
@@ -1901,7 +2079,7 @@ impl AgentService for LocalAgentService {
             // Delete session by persisting an empty session
             let _ =
                 self.session_persistence
-                    .persist_session(session_id, &[], None, None, None, None);
+                    .persist_session(session_id, &[], None, None, None, None, None);
         }
         Ok(())
     }
