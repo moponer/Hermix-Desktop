@@ -58,6 +58,27 @@ impl AgentLoop {
         parent_budget_remaining_usd: Option<f64>,
         tool_errors: &mut Vec<ToolErrorRecord>,
     ) -> Vec<ToolResult> {
+        // Enforce max_tool_calls_per_turn limit
+        if self.config.max_tool_calls_per_turn > 0 && tool_calls.len() > self.config.max_tool_calls_per_turn as usize {
+            let excess = tool_calls.len() - self.config.max_tool_calls_per_turn as usize;
+            tracing::warn!(
+                "Tool call limit exceeded: {} calls > {} limit. {} tools will be skipped.",
+                tool_calls.len(),
+                self.config.max_tool_calls_per_turn,
+                excess
+            );
+            // Return error results for excess tool calls
+            let mut results: Vec<ToolResult> = Vec::new();
+            for tc in tool_calls.iter().skip(self.config.max_tool_calls_per_turn as usize) {
+                results.push(ToolResult::err(
+                    &tc.id,
+                    format!("Tool call limit reached ({}/{}). This tool call was skipped.",
+                        self.config.max_tool_calls_per_turn, tool_calls.len())
+                ));
+            }
+            return results;
+        }
+
         let span = tracing::Span::current();
         span.record(
             "tool_names",

@@ -167,6 +167,11 @@ pub struct AgentConfig {
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
 
+    /// Maximum number of tool calls per turn. Prevents infinite tool loops.
+    /// 0 means no limit.
+    #[serde(default = "default_max_tool_calls_per_turn")]
+    pub max_tool_calls_per_turn: u32,
+
     /// When `true`, the agent loop injects the autonomous-execution guidance
     /// into the system prompt and re-drives the LLM whenever it outputs plain
     /// text without tool calls (up to `default_max_autonomous_nudges` times).
@@ -504,6 +509,10 @@ fn default_max_turns() -> u32 {
     30
 }
 
+fn default_max_tool_calls_per_turn() -> u32 {
+    20
+}
+
 fn default_autonomous_mode() -> bool {
     true
 }
@@ -628,6 +637,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             max_turns: default_max_turns(),
+            max_tool_calls_per_turn: default_max_tool_calls_per_turn(),
             budget: BudgetConfig::default(),
             model: default_model(),
             api_mode: ApiMode::default(),
