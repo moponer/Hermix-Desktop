@@ -126,17 +126,33 @@ pub fn skills_system_prompt(
         "## Skills (mandatory)\nBefore replying, check whether an existing skill applies. If yes, inspect it with `skill_view` and follow it.\n<available_skills>\n",
     );
     if commands.is_empty() {
-        body.push_str("(no installed skills discovered via skill_manage — only ephemeral skills below are active)\n");
+        body.push_str("(no installed skills discovered via skill_manage -- only ephemeral skills below are active)\n");
     } else {
         let mut rows: Vec<_> = commands.iter().collect();
         rows.sort_by(|a, b| a.0.cmp(b.0));
+
+        // Group skills by category for the index
+        let mut categories: std::collections::BTreeMap<String, Vec<_>> = std::collections::BTreeMap::new();
         for (cmd, info) in rows.into_iter().take(80) {
-            body.push_str(&format!(
-                "- {}: {} ({})\n",
-                cmd,
-                info.name,
-                info.description.trim()
-            ));
+            let cat = if info.category.is_empty() { "other" } else { &info.category };
+            categories.entry(cat.to_string()).or_default().push((cmd, info));
+        }
+
+        for (cat, skills) in &categories {
+            body.push_str(&format!("### {}\n", cat));
+            for (cmd, info) in skills {
+                let tags_str = if info.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", info.tags.join(", "))
+                };
+                body.push_str(&format!(
+                    "- {}: {}{}\n",
+                    cmd,
+                    info.description.trim(),
+                    tags_str,
+                ));
+            }
         }
     }
     body.push_str("</available_skills>");
@@ -494,7 +510,7 @@ fn build_stable_layer(
     tool_schemas: &[ToolSchema],
     tool_names_set: &HashSet<&str>,
     model_for_prompt: &str,
-    tool_call_count: usize,
+    _tool_call_count: usize,
 ) -> String {
     let cache_key = crate::agent_helpers::compute_prompt_cache_key(
         model_for_prompt,

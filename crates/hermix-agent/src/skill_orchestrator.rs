@@ -26,6 +26,10 @@ pub struct SkillCommandInfo {
     pub skill_md_path: PathBuf,
     /// Directory containing the skill.
     pub skill_dir: PathBuf,
+    /// Category from frontmatter.
+    pub category: String,
+    /// Tags from frontmatter.
+    pub tags: Vec<String>,
 }
 
 /// Parsed SKILL.md frontmatter.
@@ -387,6 +391,9 @@ impl SkillOrchestrator {
             .unwrap_or(skill_md_path)
             .to_path_buf();
 
+        let category = frontmatter.category.unwrap_or_default();
+        let tags = frontmatter.tags.unwrap_or_default();
+
         self.commands.insert(
             format!("/{cmd_name}"),
             SkillCommandInfo {
@@ -394,6 +401,8 @@ impl SkillOrchestrator {
                 description,
                 skill_md_path: skill_md_path.to_path_buf(),
                 skill_dir,
+                category,
+                tags,
             },
         );
     }
@@ -655,6 +664,8 @@ allowed-tools:
                 description: "test".to_string(),
                 skill_md_path: PathBuf::from("/tmp/skill/SKILL.md"),
                 skill_dir: PathBuf::from("/tmp/skill"),
+                category: "test".to_string(),
+                tags: vec![],
             },
         );
 

@@ -12,20 +12,17 @@ tags: ["software-development", "builtin"]
 
 # Git 工作流 Skill
 
-## 概述
-使用 Git 进行高效的版本控制和团队协作。
+## 触发条件
+当用户要求以下操作时使用此 Skill:
+- "git" / "提交" / "commit"
+- "分支" / "branch"
+- "合并" / "merge" / "rebase"
+- "版本控制" / "version control"
 
-## 分支策略
-### Git Flow
-- main: 生产环境
-- develop: 开发环境
-- feature/*: 功能开发
-- release/*: 发布准备
-- hotfix/*: 紧急修复
-
-### Trunk-Based
-- main: 主干
-- feature/*: 短期功能分支
+## 执行步骤
+1. 检查当前 Git 状态（分支、暂存、未提交）
+2. 根据任务选择操作（提交/分支/合并）
+3. 执行操作并验证结果
 
 ## 提交规范
 ### Conventional Commits
@@ -36,12 +33,11 @@ tags: ["software-development", "builtin"]
 
 [optional footer]
 ```
-
-类型：feat, fix, docs, style, refactor, test, chore
+类型: feat, fix, docs, style, refactor, test, chore
 
 ## 最佳实践
 1. **频繁提交** — 小步提交，保持历史清晰
-2. **有意义的提交信息** — 描述做了什么，而非怎么做的
+2. **有意义的提交信息** — 描述做了什么
 3. **原子提交** — 每个提交只做一件事
 4. **提交前审查** — 检查 diff，确保无误
 
@@ -52,4 +48,15 @@ git commit -m "..."  # 提交
 git rebase -i       # 交互式变基
 git bisect          # 二分查找 bug
 git stash           # 暂存更改
+```
+
+## 输出格式
+```
+## Git 操作结果
+### 状态
+- 分支: [branch]
+- 变更: [文件列表]
+
+### 操作
+- [执行的 git 命令]
 ```
