@@ -180,12 +180,34 @@ impl SweBenchEnv {
         }
 
         // Try running tests (Python projects typically use pytest)
+        // SWE-Bench 主路径在 Unix 上跑 `pytest`，Win 上 `python3` 不在
+        // PATH（默认 `python`/`py`）；benchmarks 是 dev tool，整段 cfg 守
+        // 并让 Win 上 timeout future 返回 `Unsupported` —— 不 panic，
+        // 调用方 `match` 走 `_ => Ok(false)` 兜底分支。
         let test_output = tokio::time::timeout(
             Duration::from_secs(120),
-            tokio::process::Command::new("python3")
-                .args(["-m", "pytest", "--tb=short", "-q"])
-                .current_dir(repo_dir)
-                .output(),
+            async {
+                #[cfg(unix)]
+                {
+                    tokio::process::Command::new("python3")
+                        .args(["-m", "pytest", "--tb=short", "-q"])
+                        .current_dir(repo_dir)
+                        .output()
+                        .await
+                }
+                #[cfg(not(unix))]
+                {
+                    // 显式指定 `T = std::process::Output`，让 async 闭包
+                    // return type 与 cfg(unix) arm 对齐 — Rust 单 cfg 分支
+                    // 推断不出 succeeded 类型（下游 match 形如
+                    // `Ok(Ok(output))`），必须 given。
+                    Err::<std::process::Output, _>(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "SWE-Bench pytest execution is Unix-only \
+                         (Windows lacks `python3` on PATH); skipping on this platform",
+                    ))
+                }
+            },
         )
         .await;
 

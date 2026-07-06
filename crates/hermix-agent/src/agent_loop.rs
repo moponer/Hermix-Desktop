@@ -8,47 +8,45 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use hermix_focus::{FocusStack, SessionFrame, SessionFrameStatus};
 #[cfg(test)]
 use hermix_focus::MemoryLayer;
 // `chrono` (DateTime/Utc) dropped on 2026-07-04 when `OAuthStoreCredential`
 // moved to `crate::oauth_refresh`.
-use futures::StreamExt;
 // serde::Serialize / serde::Deserialize were dropped on 2026-07-04 when
 // `OAuthStoreCredential` moved to `crate::oauth_refresh`; this file no
 // longer holds any #[derive(Serialize, Deserialize)] structs.
-use serde_json::{json, Value};
-use tokio::task::JoinSet;
-use tokio::time::sleep;
+#[cfg(test)]
+use futures::StreamExt;
+use serde_json::Value;
+#[cfg(test)]
+use std::time::{Duration, Instant};
 
 use hermix_core::{
-    format_token_count, AcuiDirective, AgentError, AgentResult, CompressionEngine, LlmProvider, LlmResponse, Message,
-    MessageRole, StreamChunk, ToolCall, ToolCallSanitizer, ToolResult, ToolSchema,
-    UsageStats,
+    AcuiDirective, AgentError, AgentResult, CompressionEngine, LlmProvider, Message,
+    MessageRole, StreamChunk, ToolCall, ToolResult, ToolSchema, UsageStats,
 };
 use hermix_intelligence::{
     prefetch::Prefetcher,
-    AlwaysInclude, KeywordRouter, ToolSchemaRouter, TurnContext,
+    ToolSchemaRouter, TurnContext,
 };
 
-use crate::archive::{archive_context_section, render_archive_summary, ArchiveRef};
-use crate::budget;
+use crate::archive::ArchiveRef;
 use crate::context::ContextManager;
 use crate::credential_pool::CredentialPool;
 use crate::interrupt::InterruptController;
 use crate::plugins::{HookResult, HookType, PluginManager};
+#[cfg(test)]
+use crate::python_alignment::budget_pressure_text;
 use crate::python_alignment::{
-    budget_pressure_text, inject_budget_pressure_into_last_tool_result,
     sanitize_surrogates, strip_budget_warnings_from_messages,
-    strip_think_blocks_for_ack, ThinkBlockParser,
 };
 use crate::smart_model_routing::TurnRouteSignature;
 pub use crate::smart_model_routing::{ApiMode, CheapModelRouteConfig, SmartModelRoutingConfig};
-use tracing::{info, instrument};
+#[cfg(test)]
+pub(crate) use crate::cost_guard::WarnKind;
 
 // ---------------------------------------------------------------------------
 // Backwards-compat re-exports (P2.2.4, 2026-06-30)
@@ -256,6 +254,13 @@ pub struct AgentLoop {
     prompt_cache: std::sync::Mutex<crate::agent_helpers::PromptCache>,
     /// Monotonic epoch bumped when memory/skills/context-files stores
     /// mutate; forms the key for the context cache layer.
+    ///
+    /// Currently dead — Phase 18 cache invalidation wires the read
+    /// path but nothing increments the counter yet, so the field is
+    /// only initialized and never read. Once the cache-key wiring is
+    /// completed the read-side here will be plumbed through
+    /// `prompt_cache` lookups, and this allow disappears with it.
+    #[allow(dead_code)]
     context_epoch: std::sync::atomic::AtomicU64,
     /// Optional embedding provider for vector recall in memory prefetch.
     /// When set, `memory_prefetch` generates embeddings and passes them
@@ -343,7 +348,6 @@ pub use crate::context_pressure::ContextPressureMonitor;
 /// runtime publish path (`state.cost_guard.accumulated_usage`) keeps
 /// working without accessor-method churn.
 pub use crate::cost_guard::{CostGuard, CostGuardAction};
-pub(crate) use crate::cost_guard::WarnKind;
 pub(crate) use crate::cost_routing::RouteState;
 
 /// Phase 5 (2026-07-03): per-loop retry counters consolidated into one
@@ -498,19 +502,6 @@ impl AgentLoop {
         crate::session_lifecycle::hydrate_stored_system_prompt_from_hermes_home(config, hermix_home)
     }
 
-    /// Build [`AgentResult`] messages for return / persistence (applies `persist_user_message` override).
-    pub(crate) fn messages_for_persisted_result(
-        &self,
-        ctx: &ContextManager,
-        persist_user_idx: Option<usize>,
-    ) -> Vec<Message> {
-        crate::session_lifecycle::messages_for_persisted_result(
-            &self.config,
-            ctx,
-            persist_user_idx,
-        )
-    }
-
     pub(crate) fn graceful_interrupt_result(
         &self,
         ctx: &ContextManager,
@@ -535,9 +526,6 @@ impl AgentLoop {
         )
     }
 
-    pub(crate) fn should_emit_session_reset_hook(messages: &[Message]) -> bool {
-        crate::session_lifecycle::should_emit_session_reset_hook(messages)
-    }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn finalize_agent_result(
         &self,
@@ -1116,14 +1104,6 @@ impl AgentLoop {
         )
     }
 
-    pub(crate) fn drain_pending_steer(&self) -> Option<String> {
-        crate::steer::drain_pending_steer(&self.pending_steer)
-    }
-
-    pub(crate) fn restash_pending_steer(&self, text: String) {
-        crate::steer::restash_pending_steer(&self.pending_steer, text)
-    }
-
     /// Pre-LLM-call drain: inject steer into the last tool result if possible; otherwise restash.
     pub(crate) fn pre_api_apply_pending_steer(&self, ctx: &mut ContextManager) {
         crate::steer::pre_api_apply_pending_steer(&self.pending_steer, ctx)
@@ -1238,63 +1218,11 @@ impl AgentLoop {
         )
     }
 
-    pub(crate) fn memory_on_session_end(&self, messages: &[Message]) {
-        crate::memory_prefetch::memory_on_session_end(
-            &self.config,
-            self.memory_router.as_ref(),
-            &self.focus_stack,
-            messages,
-        );
-    }
-
-    /// M1: collect the typed, route-gated directions that will be
-    /// evaluated against the active route context and rendered into the
-    /// system prompt. Each direction is one inline `if/else` branch
-    /// extracted from the previous monolith of `build_system_prompt` —
-    /// see `context::DirRoute` for the gate logic.
-    pub(crate) fn extract_provider_and_model<'a>(&self, model: &'a str) -> (String, &'a str) {
-        crate::prompt_assembly::extract_provider_and_model(&self.config, model)
-    }
-
     pub(crate) fn auth_tokens_path(&self) -> PathBuf {
         crate::runtime_provider::auth_tokens_path(&self.config)
     }
 
-    pub(crate) fn build_runtime_provider(
-        &self,
-        provider: &str,
-        model_name: &str,
-        route_base_url: Option<&str>,
-        api_key_env_override: Option<&str>,
-        explicit_api_key: Option<&str>,
-        api_mode: Option<&ApiMode>,
-        credential_pool: Option<&Arc<CredentialPool>>,
-    ) -> Result<Arc<dyn LlmProvider>, AgentError> {
-        crate::runtime_provider::build_runtime_provider(
-            &self.config,
-            &self.oauth_refresh,
-            provider,
-            model_name,
-            route_base_url,
-            api_key_env_override,
-            explicit_api_key,
-            api_mode,
-            credential_pool,
-        )
-    }
-
-    pub(crate) fn credential_pool_for_route<'a>(
-        &'a self,
-        rt: &'a TurnRuntimeRoute,
-    ) -> Option<&'a Arc<CredentialPool>> {
-        crate::runtime_provider::credential_pool_for_route(self.primary_credential_pool.as_ref(), rt)
-    }
-
-    pub(crate) fn messages_for_api_call(&self, ctx: &ContextManager) -> Vec<Message> {
-        crate::prompt_assembly::messages_for_api_call(&self.config, ctx)
-    }
-
-/// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
+    /// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
     pub(crate) fn resolve_initial_system_prompt(
         &self,
         user_message: &str,
@@ -1350,39 +1278,12 @@ impl AgentLoop {
         crate::message_helpers::emit_status(&self.config, &self.callbacks, event_type, message)
     }
 
-    /// 2026-06-29: forward a `BreakerSnapshot` to whoever wired
-    /// `AgentCallbacks::on_compaction_status`. The snapshot already
-    /// carries every field the front-end `CompactionStatusBanner`
-    /// needs (state, pressure, failure reason, change timestamp)
-    /// so the upstream layer just JSON-serialises it and emits the
-    /// `compaction_status` WS event.
-    ///
-    /// `quiet_mode` does NOT short-circuit this path: the banner is
-    /// a UI affordance, and suppressing it would hide legitimate
-    /// "context is overflowing" / "compression has been disabled"
-    /// signals from the user.
-    pub(crate) fn emit_compaction_status(&self, snapshot: &hermix_core::CompressionEngineSnapshot) {
-        crate::message_helpers::emit_compaction_status(&self.callbacks, snapshot)
-    }
-
-    pub(crate) fn assistant_visible_text(m: &Message) -> bool {
-        crate::message_helpers::assistant_visible_text(m)
-    }
-
     pub(crate) fn assistant_visible_text_after_think_blocks(m: &Message) -> bool {
         crate::message_helpers::assistant_visible_text_after_think_blocks(m)
     }
 
-    pub(crate) fn assistant_has_reasoning(m: &Message) -> bool {
-        crate::message_helpers::assistant_has_reasoning(m)
-    }
-
     pub(crate) fn normalize_tool_call_arguments(tc: &mut ToolCall) -> Result<(), String> {
         crate::message_helpers::normalize_tool_call_arguments(tc)
-    }
-
-    pub(crate) fn extra_body_for_api_mode(&self, api_mode: &ApiMode) -> Option<Value> {
-        crate::message_helpers::extra_body_for_api_mode(&self.config, api_mode)
     }
 
     // -- Retry-aware LLM call ---------------------------------------------
@@ -1423,14 +1324,6 @@ impl AgentLoop {
         .await
     }
 
-    pub(crate) fn assemble_stream_assistant_message(
-        content: &str,
-        reasoning_content: &str,
-        tool_calls: &[ToolCall],
-    ) -> Message {
-        crate::stream_collect::assemble_stream_assistant_message(content, reasoning_content, tool_calls)
-    }
-
     /// Apply one streaming [`StreamChunk`] during [`Self::collect_stream_llm_response`].
     ///
     /// `think_parser` is a stateful splitter that pulls `<think>...</think>` text
@@ -1446,34 +1339,6 @@ impl AgentLoop {
     /// `delta.content` (MiniMax, older Hermes fine-tunes) would leak the
     /// whole XML envelope to the user. See
     /// `hermix_core::tool_call_sanitizer` for the full state machine.
-    pub(crate) fn apply_stream_collect_chunk(
-        &self,
-        chunk: StreamChunk,
-        content: &mut String,
-        raw_content: &mut String,
-        reasoning_content: &mut String,
-        think_parser: &mut ThinkBlockParser,
-        tool_call_sanitizer: &mut ToolCallSanitizer,
-        tool_calls: &mut Vec<ToolCall>,
-        last_usage: &mut Option<UsageStats>,
-        finish_reason: &mut Option<String>,
-        on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
-    ) {
-        crate::stream_collect::apply_stream_collect_chunk(
-            &self.callbacks,
-            chunk,
-            content,
-            raw_content,
-            reasoning_content,
-            think_parser,
-            tool_call_sanitizer,
-            tool_calls,
-            last_usage,
-            finish_reason,
-            on_chunk,
-        );
-    }
-
     /// Collect one streaming completion into [`LlmResponse`] (first attempt in `run_stream` D-step).
     pub(crate) async fn collect_stream_llm_response(
         &self,
@@ -2086,6 +1951,11 @@ fn summarize_background_review_result(messages: &[Message]) -> Option<String> {
 }
 
 // Physically moved to `cost_guard.rs` (2026-07-04) alongside the
+// rest of `cost_guard::*`. Kept behind `#[cfg(test)]` because the only
+// callers (test_merge_usage / test_merge_usage_none) live in the
+// `mod tests` block below — without this gate Rust lints the import
+// as unused in the lib build while the tests still need it.
+#[cfg(test)]
 use crate::cost_guard::merge_usage;
 
 #[cfg(test)]

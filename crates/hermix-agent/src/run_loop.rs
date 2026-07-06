@@ -32,21 +32,11 @@ enum PreTurnAction {
     },
 }
 
-/// O1.1: return type for `do_post_llm_iteration` — tells the caller
-/// whether to continue the loop or stop.
-enum PostIterationAction {
-    /// Agent should continue to the next iteration.
-    Continue,
-    /// Agent should stop with this result.
-    Stop(AgentResult),
-}
-
 impl AgentLoop {
     #[allow(clippy::too_many_arguments)]
     async fn do_pre_turn_setup(
         &self,
         ctx: &mut ContextManager,
-        total_turns: &mut u32,
         state: &mut LoopState,
         session_id: &str,
         tool_errors: &[ToolErrorRecord],
@@ -58,7 +48,7 @@ impl AgentLoop {
         if self.interrupt.take_interrupt_graceful().is_some() {
             return Ok(PreTurnAction::Stop(self.graceful_interrupt_result(
                 ctx,
-                *total_turns,
+                state.total_turns,
                 tool_errors,
                 state.cost_guard.accumulated_usage.clone(),
                 state.cost_guard.session_cost_usd,
@@ -71,7 +61,7 @@ impl AgentLoop {
         self.pre_api_apply_pending_steer(ctx);
 
         // --- Max turns guard ---
-        if *total_turns >= self.config.max_turns {
+        if state.total_turns >= self.config.max_turns {
             tracing::warn!(
                 "Max turns ({}) exceeded, requesting final summary",
                 self.config.max_turns
@@ -82,7 +72,7 @@ impl AgentLoop {
             }
             return Ok(PreTurnAction::Stop(self.finalize_agent_result(
                 ctx,
-                *total_turns,
+                state.total_turns,
                 tool_errors,
                 state.cost_guard.accumulated_usage.clone(),
                 state.cost_guard.session_cost_usd,
@@ -95,8 +85,8 @@ impl AgentLoop {
         }
 
         // --- Turn counter ---
-        *total_turns += 1;
-        tracing::debug!("Agent turn {}", total_turns);
+        state.total_turns += 1;
+        tracing::debug!("Agent turn {}", state.total_turns);
 
         // --- OAuth refresh ---
         self.oauth_refresh
@@ -118,31 +108,31 @@ impl AgentLoop {
 
         // --- Checkpoint ---
         if self.config.checkpoint_interval_turns > 0
-            && (*total_turns - 1).is_multiple_of(self.config.checkpoint_interval_turns)
+            && (state.total_turns - 1).is_multiple_of(self.config.checkpoint_interval_turns)
         {
             state.message_cache.store_checkpoint(ctx.get_messages().to_vec());
         }
 
         // --- Memory turn-start notification ---
-        self.memory_on_turn_start(*total_turns, "");
+        self.memory_on_turn_start(state.total_turns, "");
 
         // --- Memory review hint (every 20 turns) ---
-        if *total_turns > 0 && total_turns.is_multiple_of(20) {
+        if state.total_turns > 0 && state.total_turns.is_multiple_of(20) {
             let review_hint = "Hint: Review and consolidate your recent memory entries. \
                 Remove redundant or outdated information using the memory tool.";
             ctx.add_message(Message::system(review_hint));
         }
 
         // --- Memory sync at flush interval ---
-        if total_turns.is_multiple_of(self.config.memory_flush_interval) && *total_turns > 0 {
+        if state.total_turns.is_multiple_of(self.config.memory_flush_interval) && state.total_turns > 0 {
             let msgs = ctx.get_messages();
             let (u, a) = extract_last_user_assistant(msgs);
             self.memory_sync(&u, &a, session_id);
         }
 
         // --- Background snapshot + frame cap ---
-        self.maybe_freeze_snapshot(session_id, *total_turns);
-        self.maybe_enforce_frame_cap(*total_turns);
+        self.maybe_freeze_snapshot(session_id, state.total_turns);
+        self.maybe_enforce_frame_cap(state.total_turns);
 
         // --- Pre-LLM hook + route resolution ---
         let turn_runtime_route = state
@@ -155,7 +145,7 @@ impl AgentLoop {
             .map(|r| r.model.as_str())
             .unwrap_or(self.config.model.as_str())
             .to_string();
-        let hook_ctx = serde_json::json!({"turn": total_turns, "model": active_model});
+        let hook_ctx = serde_json::json!({"turn": state.total_turns, "model": active_model});
         let pre_results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
         self.inject_hook_context(&pre_results, ctx);
 
@@ -319,7 +309,7 @@ impl AgentLoop {
 
         if !results.is_empty() {
             let w = budget_pressure_text(
-                *total_turns,
+                state.total_turns,
                 self.config.max_turns,
                 self.config.budget_caution_threshold,
                 self.config.budget_warning_threshold,
@@ -340,7 +330,7 @@ impl AgentLoop {
                 .iter()
                 .all(|tc| tc.function.name == "execute_code")
         {
-            *total_turns = total_turns.saturating_sub(1);
+            state.total_turns = state.total_turns.saturating_sub(1);
         }
 
         // Stream break control (stream-only)
@@ -357,7 +347,7 @@ impl AgentLoop {
             });
         }
 
-        self.emit_background_review_metrics(*total_turns, ctx);
+        self.emit_background_review_metrics(state.total_turns, ctx);
 
         // Context pressure check
         let total_tokens = ctx.total_tokens();
@@ -384,7 +374,8 @@ impl AgentLoop {
         }
 
         self.auto_compress_if_over_threshold(ctx).await;
-        state.total_turns = *total_turns;
+        // `total_turns` lives on `state` now (the previous `&mut u32`
+        // parameter was hoisted into `LoopState`); no copy-back needed.
     }
 
     #[instrument(
@@ -438,12 +429,7 @@ impl AgentLoop {
         // dropped or replaced with `record_*` / `bump_*` / `store_*`
         // methods on the inner structs.
         let mut state = LoopState::default();
-        // `total_turns` keeps the local-alias pattern because the rest
-        // of the loop body reads it as a scalar (the hot path is
-        // `if total_turns >= self.config.max_turns` etc.). The struct
-        // field `state.total_turns` is still written at the end of
-        // each iteration so the future shared loop body can read it
-        // without taking 11 more arguments.
+        // LoopState owns total_turns; aliased here for hot-path readability.
         let mut total_turns: u32 = state.total_turns;
 
         loop {
@@ -451,7 +437,6 @@ impl AgentLoop {
             // between run() and run_stream()). Extracted to do_pre_turn_setup.
             let (turn_runtime_route, _active_model) = match self.do_pre_turn_setup(
                 &mut ctx,
-                &mut total_turns,
                 &mut state,
                 session_id,
                 &tool_errors,
@@ -971,7 +956,6 @@ impl AgentLoop {
             // between run() and run_stream()). Extracted to do_pre_turn_setup.
             let (turn_runtime_route, active_model) = match self.do_pre_turn_setup(
                 &mut ctx,
-                &mut total_turns,
                 &mut state,
                 session_id,
                 &tool_errors,

@@ -319,7 +319,13 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
             tokio::fs::write(&tmp, code).await.map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to write temp file: {}", e))
             })?;
-            cmd = TokioCommand::new("npx");
+            // Win 上 `npx` 真名是 `npx.cmd`（npm 把 shim 写成 .cmd），
+            // `Command::new` 不自动加扩展名 → 直接报 "program not found"。
+            // `hermix_core::runtime::resolve_binary` 是项目级别的 npm
+            // shim helper（白名单 npx/npm/pnpm/yarn/bun/...），把
+            // "Win 上要不要加 .cmd" 这个判断集中在一处，避免每个调用点
+            // 都重复 cfg 双分支。
+            cmd = TokioCommand::new(hermix_core::runtime::resolve_binary("npx"));
             cmd.arg("ts-node").arg(tmp.to_str().unwrap_or(""));
         } else {
             cmd.arg(flag).arg(code);

@@ -244,9 +244,10 @@ pub fn extract_provider_and_model<'a>(
 
 /// Assemble the messages vector sent to the provider.
 /// 1. Inject `ephemeral_system_prompt` (per-turn override) if non-empty.
-/// 2. Strip `reasoning_content` from all but the most recent assistant
+/// 2. Normalize messages (merge consecutive same-role, strip stale errors, etc.)
+/// 3. Strip `reasoning_content` from all but the most recent assistant
 ///    message — old thinking blocks are noise once the LLM has moved on.
-/// 3. Apply Anthropic prompt-cache markers.
+/// 4. Apply Anthropic prompt-cache markers.
 pub fn messages_for_api_call(config: &AgentConfig, ctx: &ContextManager) -> Vec<Message> {
     let mut messages = ctx.get_messages().to_vec();
     if let Some(ephemeral) = config
@@ -257,6 +258,55 @@ pub fn messages_for_api_call(config: &AgentConfig, ctx: &ContextManager) -> Vec<
     {
         messages.push(Message::system(ephemeral));
     }
+
+    // --- Phase 0: Normalization pipeline (Claude Code-inspired) ---
+
+    // 0a. Merge consecutive user messages (Bedrock rejects them).
+    // 显式写 `Vec<Message>` 而非靠推断：上游 `messages = merged;` 之后
+    // 这两个变量都不再被读，没有 use site 可作为 infer anchor。
+    let mut merged: Vec<Message> = Vec::with_capacity(messages.len());
+    for msg in messages {
+        let role = msg.role;
+        if role == hermix_core::MessageRole::User {
+            if let Some(last) = merged.last_mut() {
+                if last.role == role {
+                    // Append content
+                    if let Some(ref c) = msg.content {
+                        if let Some(ref mut lc) = last.content {
+                            lc.push('\n');
+                            lc.push_str(c);
+                        } else {
+                            last.content = Some(c.clone());
+                        }
+                    }
+                    // Merge tool_call_id if both carry one
+                    if last.tool_call_id.is_none() {
+                        last.tool_call_id.clone_from(&msg.tool_call_id);
+                    }
+                    continue;
+                }
+            }
+        }
+        // 0b. Filter virtual/internal messages (no content, no tool calls)
+        if role == hermix_core::MessageRole::Assistant {
+            let has_content = msg.content.as_deref().map(|c| !c.is_empty()).unwrap_or(false);
+            let has_tool_calls = msg.tool_calls.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
+            if !has_content && !has_tool_calls {
+                // Skip empty assistant messages
+                continue;
+            }
+        }
+        // 0c. Filter tool messages with empty content (stale error recovery)
+        if role == hermix_core::MessageRole::Tool {
+            let has_content = msg.content.as_deref().map(|c| !c.is_empty()).unwrap_or(false);
+            if !has_content {
+                continue;
+            }
+        }
+        merged.push(msg);
+    }
+    messages = merged;
+
     // Strip reasoning_content from all but the last assistant message.
     // Old thinking blocks are noise once the LLM has moved on — it doesn't
     // need to re-read its own previous reasoning every turn.

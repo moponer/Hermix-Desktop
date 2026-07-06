@@ -4,6 +4,7 @@ pub mod commands_cua;
 pub mod officecli;
 pub mod portable_env;
 pub mod sidecar;
+pub mod webview2_probe;
 
 use sidecar::{HermixSidecar, WatchdogConfig};
 use std::sync::{Arc, Mutex};
@@ -62,6 +63,25 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // 0. WebView2 runtime probe (Windows only). Tauri 2's
+            //    own WebView creation step fails with a cryptic
+            //    HRESULT when the Evergreen runtime is missing —
+            //    run a registry probe here so we can emit a
+            //    friendly hint to stderr before Tauri shows its
+            //    own dialog. Non-Windows targets and the
+            //    `Unknown` path are silent so dev builds on
+            //    macOS / Linux don't see noisy stderr.
+            match webview2_probe::probe() {
+                webview2_probe::WebView2Status::Missing => {
+                    eprintln!("{}", webview2_probe::explain_missing_runtime());
+                }
+                webview2_probe::WebView2Status::Available
+                | webview2_probe::WebView2Status::Unknown => {
+                    // No-op: Tauri will report its own error if
+                    // the runtime really is broken.
+                }
+            }
+
             // 1. Install portable-mode env vars FIRST. This resolves
             //    the install root and ensures data/cache/logs/webview
             //    subdirs exist before any child process is spawned.

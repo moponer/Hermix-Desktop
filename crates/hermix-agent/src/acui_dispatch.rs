@@ -136,6 +136,10 @@ mod tests {
 
     use super::*;
     use hermix_core::tool_schema::{JsonSchema, ToolSchema};
+    // `ToolSchemaRouter` is referenced only via `Arc<dyn ToolSchemaRouter>` in the
+    // module-level doc comment; trait import is needed for the `dyn` pointer type
+    // the comment references. Suppress the unused-import lint locally.
+    #[allow(unused_imports)]
     use hermix_intelligence::{RoutedSchema, ToolSchemaRouter, TurnContext};
 
     fn tool(name: &str, desc: &str) -> ToolSchema {

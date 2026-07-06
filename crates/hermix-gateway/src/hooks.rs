@@ -50,6 +50,9 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+#[cfg(target_os = "windows")]
+use hermix_core::runtime::resolve_binary;
+
 use tokio::sync::Semaphore;
 
 use async_trait::async_trait;
@@ -449,7 +452,33 @@ impl HookHandler for CommandHookHandler {
         })
         .to_string();
 
-        let mut cmd = tokio::process::Command::new(&self.argv[0]);
+        // Resolve `argv[0]` to the platform-appropriate command name
+// for `Command::new`. On Windows we append `.cmd` to the
+// npm-family shims that `HOOK.yaml` users often leave in their
+// bare POSIX form (e.g. `command: npx ...`). On non-Windows the
+// path passes through unchanged.
+let argv0 = {
+    #[cfg(target_os = "windows")]
+    {
+        let raw = &self.argv[0];
+        if raw.ends_with(".cmd")
+            || raw.ends_with(".bat")
+            || raw.ends_with(".exe")
+            || raw.contains('/')
+            || raw.contains('\\')
+        {
+            raw.clone()
+        } else {
+            resolve_binary(raw)
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        self.argv[0].clone()
+    }
+};
+
+let mut cmd = tokio::process::Command::new(&argv0);
         cmd.args(&self.argv[1..])
             .current_dir(&self.cwd)
             .env("HERMIX_HOOK_EVENT", &event.event_type)
@@ -459,7 +488,23 @@ impl HookHandler for CommandHookHandler {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("Failed to spawn hook `{}`: {}", self.name, e))?;
+            .map_err(|e| {
+                // Surface the same Windows hint the MCP transport
+                // uses, so `system cannot find the file specified`
+                // gets turned into actionable guidance. (For
+                // hooks, the underlying argv[0] may also be a
+                // user typo'd script path — the error message
+                // keeps the original OS message verbatim in
+                // addition to the hint.)
+                let hint = if e.raw_os_error() == Some(2) {
+                    " (hint: on Windows the hook command may need the \
+                     `.cmd` / `.bat` / `.exe` extension; e.g. use \
+                     `npx.cmd` instead of `npx` for npm scripts)"
+                } else {
+                    ""
+                };
+                format!("Failed to spawn hook `{}`: {}{}", self.name, e, hint)
+            })?;
 
         // Pipe payload to stdin so handlers can `read` it.
         if let Some(mut stdin) = child.stdin.take() {

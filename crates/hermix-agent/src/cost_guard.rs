@@ -151,7 +151,7 @@ impl CostGuard {
     /// downgrade state itself is owned by `RouteState`, not by this
     /// struct — passing `&RouteState` keeps `CostGuard` focused on
     /// spend accounting.
-    pub fn evaluate_thresholds(
+    pub(crate) fn evaluate_thresholds(
         &mut self,
         route_state: &RouteState,
         max_cost_usd: Option<f64>,

@@ -82,6 +82,9 @@ pub fn register_builtin_tools(
         browser_backend,
     );
     crate::tools::clarify::register(registry, clarify_backend);
+    // Mark interactive tools that must not run in parallel with others.
+    registry.mark_interactive("clarify");
+    registry.mark_interactive("delegate_task");
 
     tracing::info!("Registered {} built-in tools", registry.list_tools().len());
 

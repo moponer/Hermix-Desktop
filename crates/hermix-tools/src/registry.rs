@@ -49,6 +49,11 @@ pub struct ToolEntry {
     /// Permission level for this tool (inspired by claw-code design).
     /// Determines what operations the tool is allowed to perform.
     pub permission_mode: PermissionMode,
+    /// Whether this tool requires sequential execution (interactive tools
+    /// like `clarify`, `delegate_task` must not run in parallel with others).
+    /// Set via `ToolRegistry::register_with_risk` and consumed by
+    /// `dispatch_tools` to partition calls into parallel vs sequential groups.
+    pub is_interactive: bool,
     /// Runtime enable/disable flag, mutated by
     /// [`ToolRegistry::set_toolset_enabled`]. Distinct from
     /// [`Self::check_fn`]: `check_fn` reflects *capability* (env vars
@@ -244,6 +249,8 @@ impl ToolRegistry {
     /// needed: (a) the test suite re-creating a registry per case and
     /// (b) an admin-level hot-swap that intentionally wants to replace
     /// a built-in with a newer / patched handler.
+    /// Default `is_interactive` to false; use `mark_interactive()` to override.
+    /// Permission mode defaults to `PermissionMode::Default`.
     pub fn register_with_risk(
         &self,
         name: impl Into<String>,
@@ -333,9 +340,23 @@ impl ToolRegistry {
                 max_result_size_chars,
                 risk_level,
                 permission_mode,
+                is_interactive: false,
                 is_enabled,
             },
         );
+    }
+
+    /// Mark a registered tool as interactive (sequential execution required).
+    /// Interactive tools like `clarify` and `delegate_task` must not run
+    /// in parallel with other tools. Returns true if the tool was found.
+    pub fn mark_interactive(&self, name: &str) -> bool {
+        let mut inner = self.inner.write().unwrap();
+        if let Some(entry) = inner.tools.get_mut(name) {
+            entry.is_interactive = true;
+            true
+        } else {
+            false
+        }
     }
 
     /// Replace the schema of an already-registered tool.

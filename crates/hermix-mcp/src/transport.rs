@@ -22,6 +22,9 @@ use tracing::{error, info, trace};
 
 use crate::McpError;
 
+#[cfg(target_os = "windows")]
+use hermix_core::runtime::resolve_binary;
+
 fn classify_http_status_error(status: reqwest::StatusCode, body: &str) -> McpError {
     let msg = format!("HTTP error {}: {}", status, body);
     match status.as_u16() {
@@ -109,7 +112,17 @@ impl McpTransport for StdioTransport {
             self.command, self.args
         );
 
-        let mut cmd = Command::new(&self.command);
+        // On Windows, npm-family toolchain entries ship only as `.cmd`
+        // / `.bat` shims and `Command::new` cannot resolve a bare
+        // name. `resolve_binary` only touches the npm whitelist
+        // (npx/npm/pnpm/yarn/…), so explicit user-configured
+        // commands like `uv` or `python` still pass through.
+        #[cfg(target_os = "windows")]
+        let resolved_command = resolve_binary(&self.command);
+        #[cfg(not(target_os = "windows"))]
+        let resolved_command = self.command.clone();
+
+        let mut cmd = Command::new(&resolved_command);
         cmd.args(&self.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -121,7 +134,37 @@ impl McpTransport for StdioTransport {
         }
 
         let child = cmd.spawn().map_err(|e| {
-            McpError::ConnectionError(format!("Failed to spawn process '{}': {}", self.command, e))
+            // The underlying OS error from Windows for "missing .cmd"
+            // is `The system cannot find the file specified.` (os
+            // error 2). That message is opaque — turn it into
+            // actionable guidance for the user.
+            let hint = if e.raw_os_error() == Some(2) {
+                let mut h = String::from(
+                    " (hint: on Windows the command must include the \
+                     extension, e.g. `npx.cmd` for the npm toolchain; \
+                     MCP server configs with bare `npx`/`npm` need the \
+                     `.cmd` suffix unless you use the bundled helper)"
+                );
+                #[cfg(target_os = "windows")]
+                {
+                    if !self.command.ends_with(".cmd")
+                        && !self.command.ends_with(".bat")
+                        && !self.command.ends_with(".exe")
+                    {
+                        h.push_str(&format!(
+                            " — tried '{}' but CreateProcess requires the extension",
+                            resolved_command
+                        ));
+                    }
+                }
+                h
+            } else {
+                String::new()
+            };
+            McpError::ConnectionError(format!(
+                "Failed to spawn process '{}': {}{}",
+                self.command, e, hint
+            ))
         })?;
 
         self.child = Some(child);

@@ -152,14 +152,24 @@ impl HermesBaseEnv for YcBenchEnv {
         if let Some(gt) = &task.ground_truth {
             let yc_task: YcBenchTask = serde_json::from_value(gt.clone())?;
             if !yc_task.setup_script.is_empty() {
-                let output = tokio::process::Command::new("sh")
-                    .args(["-c", &yc_task.setup_script])
-                    .current_dir(&task_dir)
-                    .output()
-                    .await?;
-                if !output.status.success() {
-                    tracing::warn!(task_id = %task.task_id, "Setup script failed");
+                // Unix 跑 `/bin/sh -c <script>`；Win 用 cmd.exe 语义不通，
+                // benchmarks 是 dev tool 直接 cfg 守 + warn-skip。
+                #[cfg(unix)]
+                {
+                    let output = tokio::process::Command::new("sh")
+                        .args(["-c", &yc_task.setup_script])
+                        .current_dir(&task_dir)
+                        .output()
+                        .await?;
+                    if !output.status.success() {
+                        tracing::warn!(task_id = %task.task_id, "Setup script failed");
+                    }
                 }
+                #[cfg(not(unix))]
+                tracing::warn!(
+                    task_id = %task.task_id,
+                    "YC-Bench setup scripts are Unix-only (require `/bin/sh -c`); skipping on this platform"
+                );
             }
         }
         Ok(())
@@ -185,27 +195,44 @@ impl HermesBaseEnv for YcBenchEnv {
         task: &EnvTask,
         _trajectory: &Trajectory,
     ) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
-        let task_dir = self.config.work_dir.join(&task.task_id);
-
-        if let Some(gt) = &task.ground_truth {
-            let yc_task: YcBenchTask = serde_json::from_value(gt.clone())?;
-            if !yc_task.verify_script.is_empty() {
-                let output = tokio::time::timeout(
-                    Duration::from_secs(60),
-                    tokio::process::Command::new("sh")
-                        .args(["-c", &yc_task.verify_script])
-                        .current_dir(&task_dir)
-                        .output(),
-                )
-                .await;
-
-                return match output {
-                    Ok(Ok(o)) if o.status.success() => Ok(1.0),
-                    _ => Ok(0.0),
-                };
-            }
+        // YC-Bench verify 用 `/bin/sh -c <script>`，Win 上落不到任何
+        // 等价路径；benchmarks 是 dev tool，整体 cfg 守 + Win 早返
+        // Ok(0.0)（不破坏 trait contract）。cfg(not(unix)) 块显式
+        // `let _ = (self, task, _trajectory);` consume fn 参数，让
+        // cargo check 在 Windows host 上不报 unused。
+        #[cfg(not(unix))]
+        {
+            let _ = (self, task, _trajectory);
+            return Ok(0.0);
         }
-        Ok(0.0)
+
+        #[cfg(unix)]
+        {
+            let task_dir = self.config.work_dir.join(&task.task_id);
+
+            if let Some(gt) = &task.ground_truth {
+                let yc_task: YcBenchTask = serde_json::from_value(gt.clone())?;
+                if !yc_task.verify_script.is_empty() {
+                    let output = tokio::time::timeout(
+                        Duration::from_secs(60),
+                        async {
+                            tokio::process::Command::new("sh")
+                                .args(["-c", &yc_task.verify_script])
+                                .current_dir(&task_dir)
+                                .output()
+                                .await
+                        },
+                    )
+                    .await;
+
+                    return match output {
+                        Ok(Ok(o)) if o.status.success() => Ok(1.0),
+                        _ => Ok(0.0),
+                    };
+                }
+            }
+            Ok(0.0)
+        }
     }
 }
 

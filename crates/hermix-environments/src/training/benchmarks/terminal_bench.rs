@@ -167,14 +167,24 @@ impl HermesBaseEnv for TerminalBenchEnv {
         if let Some(gt) = &task.ground_truth {
             let tb_task: TerminalBenchTask = serde_json::from_value(gt.clone())?;
             for cmd in &tb_task.setup_commands {
-                let output = tokio::process::Command::new("sh")
-                    .args(["-c", cmd])
-                    .current_dir(&task_dir)
-                    .output()
-                    .await?;
-                if !output.status.success() {
-                    tracing::warn!(cmd = cmd, "Setup command failed");
+                // Unix 跑 `sh -c <cmd>`；Win 上 cfg 守 + warn-skip 让
+                // 循环继续（其它 setup_command 仍是 no-op 走 warn）。
+                #[cfg(unix)]
+                {
+                    let output = tokio::process::Command::new("sh")
+                        .args(["-c", cmd])
+                        .current_dir(&task_dir)
+                        .output()
+                        .await?;
+                    if !output.status.success() {
+                        tracing::warn!(cmd = cmd, "Setup command failed");
+                    }
                 }
+                #[cfg(not(unix))]
+                tracing::warn!(
+                    cmd = cmd,
+                    "Terminal-Bench setup commands are Unix-only (require `/bin/sh -c`); skipping on this platform"
+                );
             }
         }
         Ok(())
@@ -200,33 +210,43 @@ impl HermesBaseEnv for TerminalBenchEnv {
         task: &EnvTask,
         _trajectory: &Trajectory,
     ) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
-        let task_dir = self.config.work_dir.join(&task.task_id);
-
-        if let Some(gt) = &task.ground_truth {
-            let tb_task: TerminalBenchTask = serde_json::from_value(gt.clone())?;
-
-            // Run verification commands
-            if !tb_task.verify_commands.is_empty() {
-                for cmd in &tb_task.verify_commands {
-                    let output = tokio::time::timeout(
-                        Duration::from_secs(30),
-                        tokio::process::Command::new("sh")
-                            .args(["-c", cmd])
-                            .current_dir(&task_dir)
-                            .output(),
-                    )
-                    .await;
-
-                    match output {
-                        Ok(Ok(o)) if o.status.success() => continue,
-                        _ => return Ok(0.0),
-                    }
-                }
-                return Ok(1.0);
-            }
+        // Terminal-Bench verify 跑 `sh -c <cmd>` 序列，Win 上无等价
+        // 路径；benchmarks 是 dev tool，整体 cfg 守 + Win 早返 Ok(0.0)。
+        // cfg(not(unix)) 块显式 consume fn 参数避免 unused 警告。
+        #[cfg(not(unix))]
+        {
+            let _ = (self, task, _trajectory);
+            return Ok(0.0);
         }
 
-        Ok(0.0)
+        #[cfg(unix)]
+        {
+            let task_dir = self.config.work_dir.join(&task.task_id);
+
+            if let Some(gt) = &task.ground_truth {
+                let tb_task: TerminalBenchTask = serde_json::from_value(gt.clone())?;
+
+                if !tb_task.verify_commands.is_empty() {
+                    for cmd in &tb_task.verify_commands {
+                        let output = tokio::time::timeout(
+                            Duration::from_secs(30),
+                            tokio::process::Command::new("sh")
+                                .args(["-c", cmd])
+                                .current_dir(&task_dir)
+                                .output(),
+                        )
+                        .await;
+
+                        match output {
+                            Ok(Ok(o)) if o.status.success() => continue,
+                            _ => return Ok(0.0),
+                        }
+                    }
+                    return Ok(1.0);
+                }
+            }
+            Ok(0.0)
+        }
     }
 }
 

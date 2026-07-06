@@ -257,7 +257,7 @@ mod tests {
 
         // Turn 4: triggers MaxTurns(4) termination
         match manager.next_round_robin() {
-            GroupChatTurnResult::Message(msg) => {
+            GroupChatTurnResult::Message(_) => {
                 manager.record_message("bot2", "Last msg".into());
             }
             _ => panic!("expected message"),
@@ -320,7 +320,7 @@ mod tests {
         let participants = vec![
             GroupChatParticipant::new("bot1", "Helper", false),
         ];
-        let mut manager = GroupChatManager::new(
+        let manager = GroupChatManager::new(
             participants.clone(),
             "test".into(),
             SpeakerSelection::RoundRobin(RoundRobinGroupChat::new()),

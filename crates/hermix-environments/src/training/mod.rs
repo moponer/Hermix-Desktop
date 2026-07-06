@@ -206,7 +206,14 @@ pub async fn load_hf_dataset_via_python(
     split: &str,
     max_samples: Option<usize>,
 ) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error + Send + Sync>> {
+    // Win 上没有 `python3` 别名（用户更常用 `python` 或 `py.exe` launcher）；
+    // benchmarks 是 dev/research 工具，主路径在 hermix-tools 的
+    // `find_python_bin()` 已经 Win-aware。整段 shell+parse 都 cfg(unix) 守，
+    // cfg(not(unix)) 早返 Err，并 `let _ = (...);` 把 fn 参数 consume
+    // 掉，避免 cargo check 在 Windows host 上报 unused 警告。
+    #[cfg(unix)]
     let limit = max_samples.unwrap_or(usize::MAX);
+    #[cfg(unix)]
     let script = format!(
         r#"
 import json, sys
@@ -223,25 +230,40 @@ except Exception as e:
 "#,
     );
 
-    let output = tokio::process::Command::new("python3")
-        .args(["-c", &script])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run python3: {e}. Is Python installed?"))?;
+    #[cfg(unix)]
+    {
+        let output = tokio::process::Command::new("python3")
+            .args(["-c", &script])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run python3: {e}. Is Python installed?"))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Python dataset load failed: {stderr}").into());
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Python dataset load failed: {stderr}").into());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let items: Vec<serde_json::Value> = stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+
+        return Ok(items);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let items: Vec<serde_json::Value> = stdout
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect();
-
-    Ok(items)
+    #[cfg(not(unix))]
+    {
+        // 把全部 fn 参数显式 consume —— 这些宏字符串只在 cfg(unix)
+        // 路径下用到，避免 Rust 把它们报成"未使用变量"。
+        let _ = (&dataset_id, &split, &max_samples);
+        Err(
+            "loading HuggingFace datasets via Python is only supported on Unix; \
+             this crate's Python training helpers are Unix-only by design"
+                .into(),
+        )
+    }
 }
 
 #[cfg(test)]

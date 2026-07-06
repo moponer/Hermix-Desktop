@@ -558,11 +558,23 @@ fn spawn_run(state: HttpServerState, task: AutomationTask) {
                 _ => Some(hermix_core::traits::PermissionLevel::Default),
             };
         }
-        if expert_id.is_some() {
-            tracing::warn!(
-                task_id = %task_id,
-                "automation task has expert_id set but AgentOverrides does not yet carry it"
-            );
+        if let Some(ref eid) = expert_id {
+            // Resolve expert definition from the registry and apply its
+            // system prompt and toolset to the agent overrides.
+            let expert_entry = state.expert_registry.get(eid);
+            if let Some(expert) = expert_entry {
+                overrides.system_prompt = Some(expert.system_prompt.clone());
+                tracing::info!(
+                    expert_id = %eid,
+                    expert_name = %expert.name,
+                    "automation task: resolved expert definition"
+                );
+            } else {
+                tracing::warn!(
+                    expert_id = %eid,
+                    "automation task: expert_id not found in registry"
+                );
+            }
         }
 
         let result = agent_service

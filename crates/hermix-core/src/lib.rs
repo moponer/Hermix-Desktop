@@ -18,6 +18,7 @@ pub mod path_security;
 pub mod console_decode;
 pub mod text_utils;
 pub mod plugin_abi;
+pub mod runtime;
 
 #[cfg(test)]
 pub mod test_generators;

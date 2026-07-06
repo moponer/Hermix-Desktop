@@ -399,10 +399,36 @@ fn is_under_allowed_root_with(canonical: &Path, workspace_root: Option<&str>) ->
     roots.iter().any(|r| canonical.starts_with(r))
 }
 
+/// Strip the `\\?\` Win32 long-path prefix (and the `\\?\UNC\`
+/// variant) from a path before handing it back to the user.
+///
+/// Windows' `canonicalize` returns `\\?\C:\foo\bar` and most
+/// user-facing programs (cmd.exe, Office preview, the in-app file
+/// tree) refuse that namespace form. Two variants we have to
+/// handle:
+///
+/// - `\\?\C:\foo\bar` → `C:\foo\bar`
+/// - `\\?\UNC\server\share\foo` → `\\server\share\foo`
+///
+/// The second case is easy to miss: dropping `\\?\UNC` entirely
+/// would leave an orphaned `server\share` literal that no shell
+/// recognises as a UNC path. We re-prefix `\\` to preserve the
+/// `\\server\share` shape that the Win32 file dialog and
+/// `os.path.exists` both expect.
+///
+/// Mirrors `hermix_core::path_security::strip_win32_long_path` —
+/// kept duplicated here to avoid pulling `hermix_core` (with its
+/// `tokio`, `reqwest`, etc. transitive deps) into the Tauri
+/// command surface where this is the only function we need from
+/// that module. If the helper grows further, fold them together.
 fn strip_unc_prefix(s: &std::ffi::OsStr) -> String {
     let lossy = s.to_string_lossy();
-    if lossy.starts_with(r"\\?\") {
-        lossy[4..].to_string()
+    if let Some(rest) = lossy.strip_prefix(r"\\?\UNC\") {
+        // \\?\UNC\server\share → \\server\share
+        format!(r"\\{}", rest)
+    } else if let Some(rest) = lossy.strip_prefix(r"\\?\") {
+        // \\?\C:\foo → C:\foo
+        rest.to_string()
     } else {
         lossy.to_string()
     }

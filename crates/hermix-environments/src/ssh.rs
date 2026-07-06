@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use tokio::process::Command as TokioCommand;
 
+use hermix_core::runtime::resolve_binary;
 use hermix_core::{AgentError, CommandOutput, TerminalBackend};
 
 /// A [`TerminalBackend`] that runs commands on a remote machine via SSH.
@@ -117,7 +118,7 @@ impl TerminalBackend for SshBackend {
         }
 
         let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
-            let output = TokioCommand::new("ssh")
+            let output = TokioCommand::new(resolve_binary("ssh"))
                 .args(&ssh_args)
                 .output()
                 .await
@@ -174,7 +175,7 @@ impl TerminalBackend for SshBackend {
 
         let timeout_secs = self.default_timeout;
         let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
-            let output = TokioCommand::new("ssh")
+            let output = TokioCommand::new(resolve_binary("ssh"))
                 .args(&ssh_args)
                 .output()
                 .await
@@ -214,7 +215,7 @@ impl TerminalBackend for SshBackend {
             let mut ssh_args = self.build_ssh_args();
             ssh_args.push(mkdir_cmd);
 
-            let mkdir_output = TokioCommand::new("ssh")
+            let mkdir_output = TokioCommand::new(resolve_binary("ssh"))
                 .args(&ssh_args)
                 .output()
                 .await
@@ -242,7 +243,7 @@ impl TerminalBackend for SshBackend {
         let mut ssh_args = self.build_ssh_args();
         ssh_args.push(write_cmd);
 
-        let output = TokioCommand::new("ssh")
+        let output = TokioCommand::new(resolve_binary("ssh"))
             .args(&ssh_args)
             .output()
             .await
@@ -264,7 +265,7 @@ impl TerminalBackend for SshBackend {
         let mut ssh_args = self.build_ssh_args();
         ssh_args.push(test_cmd);
 
-        let output = TokioCommand::new("ssh")
+        let output = TokioCommand::new(resolve_binary("ssh"))
             .args(&ssh_args)
             .output()
             .await

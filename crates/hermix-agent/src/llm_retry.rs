@@ -112,7 +112,7 @@ async fn execute_llm_call(
         elapsed_ms = tracing::field::Empty,
     )
 )]
-pub async fn call_llm_with_retry(
+pub(crate) async fn call_llm_with_retry(
     config: &AgentConfig,
     oauth: &OAuthRefresh,
     callbacks: &AgentCallbacks,

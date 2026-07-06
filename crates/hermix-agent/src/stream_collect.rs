@@ -211,7 +211,7 @@ pub fn apply_stream_collect_chunk(
         outcome = tracing::field::Empty,
     )
 )]
-pub async fn collect_stream_llm_response(
+pub(crate) async fn collect_stream_llm_response(
     config: &AgentConfig,
     oauth: &OAuthRefresh,
     callbacks: &AgentCallbacks,

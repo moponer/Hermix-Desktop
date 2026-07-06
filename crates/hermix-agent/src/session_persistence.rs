@@ -534,7 +534,7 @@ impl SessionPersistence {
         // Stamp legacy DBs with the migrations they're known to have
         // (added before the tracking table existed). The list mirrors
         // every ALTER TABLE / CREATE INDEX that ran in this function
-        // before 2026-07-05; bumping `CURRENT_SCHEMA_VERSION` requires
+        // before 2026-07-05; adding a new migration requires
         // adding a new entry here AND writing the corresponding
         // migration code above.
         stamp_migration(&conn, 1, "initial_schema_sessions_messages_fts", None)?;
@@ -587,9 +587,6 @@ impl SessionPersistence {
         .map_err(|e| AgentError::Io(format!("schema_migrations insert v{version}: {e}")))?;
         Ok(())
     }
-
-    /// Current schema version (bump when adding a new migration).
-    pub const CURRENT_SCHEMA_VERSION: i64 = 5;
 
     // Migration: purge pre-fix leaked system rows.
         // Versions of the app prior to the prompt-leak fix wrote

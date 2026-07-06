@@ -471,6 +471,16 @@ fn spawn_browser(candidate: &BrowserCandidate, port: u16) -> Result<u32, String>
 /// when the PID file refers to a process that's already gone (the
 /// `taskkill` exit code is non-zero in that case but we don't propagate
 /// it — the goal is "try once, log if it fails, move on").
+///
+/// **Windows-only**: shelled-out `taskkill` has no portable
+/// equivalent (POSIX would be `kill -9 <pid>` against the recorded
+/// PID, but the parent `hermix-tools` crate is consumed by
+/// non-Windows targets like the eval harness and CI smoke tests).
+/// The duplicate `kill_spawned_chrome` in `apps/desktop-tauri/src-tauri`
+/// is the active caller on Windows; this crate-internal copy stays
+/// available for any future cross-platform backend that needs the
+/// same behavior.
+#[cfg(target_os = "windows")]
 pub fn kill_spawned_chrome() {
     let pid_path = hermix_config::paths::hermix_home()
         .join("runtime")

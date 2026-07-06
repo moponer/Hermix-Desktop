@@ -261,7 +261,7 @@ pub fn apply_fallback_outcome(
 /// `turn_route_cost_guard` closures that capture `&AgentLoop`,
 /// since those helpers still live on the type.
 #[allow(clippy::too_many_arguments)]
-pub fn process_post_response<F, G>(
+pub(crate) fn process_post_response<F, G>(
     config: &AgentConfig,
     plugin_manager: Option<&Arc<Mutex<PluginManager>>>,
     ctx: &mut ContextManager,
@@ -505,7 +505,7 @@ pub fn finalize_agent_result(
 /// Per-attempt classification inside the retry loop (shared by
 /// `run()` and `run_stream()`). Decides whether the LLM response
 /// warrants a retry (empty content, reasoning-only) or breaks out.
-pub fn classify_post_llm_response(
+pub(crate) fn classify_post_llm_response(
     config: &AgentConfig,
     callbacks: &AgentCallbacks,
     r: LlmResponse,
