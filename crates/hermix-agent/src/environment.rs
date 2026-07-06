@@ -89,6 +89,13 @@ pub struct RuntimeEnvironment {
     /// Path of the running hermix binary. `None` if `current_exe`
     /// failed (extremely rare).
     pub hermix_binary: Option<PathBuf>,
+
+    /// Whether the current directory is inside a Git repository.
+    pub is_git_repo: bool,
+    /// Current Git branch name (if in a repo).
+    pub git_branch: Option<String>,
+    /// Detected project type based on file indicators.
+    pub project_type: Option<String>,
 }
 
 impl RuntimeEnvironment {
@@ -99,6 +106,13 @@ impl RuntimeEnvironment {
         let skills = skills_dir();
         let skills_count = count_subdirs(&skills);
         let hermix_binary = std::env::current_exe().ok();
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+        // Detect Git status
+        let (is_git_repo, git_branch) = detect_git_status(&current_dir);
+
+        // Detect project type
+        let project_type = detect_project_type(&current_dir);
 
         Self {
             os: std::env::consts::OS.to_string(),
@@ -115,8 +129,11 @@ impl RuntimeEnvironment {
             sessions_dir: sessions_dir(),
             cron_dir: cron_dir(),
             skills_count,
-            current_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            current_dir,
             hermix_binary,
+            is_git_repo,
+            git_branch,
+            project_type,
         }
     }
 }
@@ -141,6 +158,61 @@ fn count_subdirs(dir: &Path) -> Option<usize> {
     }
     let entries = std::fs::read_dir(dir).ok()?;
     Some(entries.flatten().filter(|e| e.path().is_dir()).count())
+}
+
+/// Detect if the current directory is inside a Git repository
+/// and return the current branch name.
+fn detect_git_status(dir: &Path) -> (bool, Option<String>) {
+    // Walk up to find .git directory
+    let mut current = dir.to_path_buf();
+    loop {
+        if current.join(".git").exists() {
+            // Found .git directory, try to read branch
+            let head_file = current.join(".git/HEAD");
+            if let Ok(head) = std::fs::read_to_string(&head_file) {
+                let branch = head
+                    .trim()
+                    .strip_prefix("ref: refs/heads/")
+                    .map(|s| s.to_string());
+                return (true, branch);
+            }
+            return (true, None);
+        }
+        if !current.pop() {
+            break;
+        }
+    }
+    (false, None)
+}
+
+/// Detect project type based on file indicators in the current directory.
+fn detect_project_type(dir: &Path) -> Option<String> {
+    let indicators = [
+        ("Cargo.toml", "rust"),
+        ("package.json", "node"),
+        ("pyproject.toml", "python"),
+        ("go.mod", "go"),
+        ("pom.xml", "java"),
+        ("build.gradle", "java"),
+        ("*.sln", "dotnet"),
+        ("Gemfile", "ruby"),
+        ("composer.json", "php"),
+    ];
+
+    for (indicator, project_type) in &indicators {
+        if indicator.starts_with('*') {
+            // Glob pattern - check if any file matches
+            let pattern = indicator.trim_start_matches('*');
+            if dir.read_dir().ok().map_or(false, |entries| {
+                entries.flatten().any(|e| e.path().to_string_lossy().ends_with(pattern))
+            }) {
+                return Some(project_type.to_string());
+            }
+        } else if dir.join(indicator).exists() {
+            return Some(project_type.to_string());
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -223,6 +295,19 @@ pub fn build_environment_block(env: &RuntimeEnvironment) -> String {
 
     lines.push(format!("- Working dir: `{}`", env.current_dir.display()));
 
+    // Git status
+    if env.is_git_repo {
+        let branch_info = env.git_branch.as_deref().unwrap_or("unknown");
+        lines.push(format!("- Git: repo detected, branch: {}", branch_info));
+    } else {
+        lines.push("- Git: not a repository".to_string());
+    }
+
+    // Project type
+    if let Some(pt) = &env.project_type {
+        lines.push(format!("- Project type: {}", pt));
+    }
+
     lines.join("\n")
 }
 
@@ -266,6 +351,9 @@ mod tests {
             skills_count: Some(3),
             current_dir: PathBuf::from("/tmp"),
             hermix_binary: Some(PathBuf::from("/usr/bin/hermix")),
+            is_git_repo: true,
+            git_branch: Some("main".into()),
+            project_type: Some("rust".into()),
         };
 
         let block = build_environment_block(&env);
@@ -299,6 +387,9 @@ mod tests {
             skills_count: None,
             current_dir: PathBuf::from("C:/"),
             hermix_binary: None,
+            is_git_repo: false,
+            git_branch: None,
+            project_type: None,
         };
 
         let block = build_environment_block(&env);
@@ -333,6 +424,9 @@ mod tests {
             skills_count: n,
             current_dir: PathBuf::from("/"),
             hermix_binary: None,
+            is_git_repo: false,
+            git_branch: None,
+            project_type: None,
         };
 
         assert!(build_environment_block(&make(Some(1))).contains("1 skill)"));
