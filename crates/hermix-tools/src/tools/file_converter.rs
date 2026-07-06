@@ -439,3 +439,56 @@ async fn convert_image_format(input: &str, output: &str, format: &str) -> Result
 
     Ok(format!("已将 {} 转换为 {}: {}", input, format, output))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_list_conversions() {
+        let handler = FileConverterHandler::new();
+        let result = handler.execute(json!({"action": "list"})).await.unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        let conversions = parsed["conversions"].as_array().unwrap();
+        assert!(conversions.len() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_convert_missing_input() {
+        let handler = FileConverterHandler::new();
+        let result = handler.execute(json!({"action": "convert", "output": "test.pdf"})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_convert_unsupported_format() {
+        let handler = FileConverterHandler::new();
+        let result = handler.execute(json!({
+            "action": "convert",
+            "input": "test.xyz",
+            "output": "test.pdf"
+        })).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("不支持"));
+    }
+
+    #[test]
+    fn test_supported_conversions() {
+        let conversions = supported_conversions();
+        assert!(conversions.len() >= 7);
+        
+        // Check image to PDF is supported
+        let img_to_pdf = conversions.iter().any(|c| {
+            c.from.contains(&"png".to_string()) && c.to.contains(&"pdf".to_string())
+        });
+        assert!(img_to_pdf);
+    }
+
+    #[test]
+    fn test_schema() {
+        let handler = FileConverterHandler::new();
+        let schema = handler.schema();
+        assert_eq!(schema.name, "file_converter");
+    }
+}
