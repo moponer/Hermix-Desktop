@@ -39,17 +39,21 @@ export interface ChatComposerInputProps {
   onSend: (text: string) => void;
   /** 选填：点击停止按钮 */
   onStop?: () => void;
+  /** 选填：文件拖放 / 粘贴上传回调 */
+  onFilesAttach?: (files: File[]) => void;
 }
 
 export const ChatComposerInput = memo(
   forwardRef<ChatComposerInputHandle, ChatComposerInputProps>(function ChatComposerInput(
-    { placeholder = "输入消息...", disabled, isStreaming = false, onSend, onStop },
+    { placeholder = "输入消息...", disabled, isStreaming = false, onSend, onStop, onFilesAttach },
     ref,
   ) {
     // ── 状态下沉：父组件零重渲染 ──
     const [value, setValue] = useState("");
     const [focused, setFocused] = useState(false);
     const taRef = useRef<HTMLTextAreaElement>(null);
+    const [draggingFiles, setDraggingFiles] = useState(false);
+    const dragCounter = useRef(0);
 
     // 暴露给父组件
     useImperativeHandle(
@@ -123,12 +127,58 @@ export const ChatComposerInput = memo(
             : "0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)",
           overflow: "visible",
         }}
+        onDragEnter={(e) => {
+          if (!e.dataTransfer?.types?.includes("Files")) return;
+          dragCounter.current += 1;
+          setDraggingFiles(true);
+        }}
+        onDragOver={(e) => {
+          if (e.dataTransfer?.types?.includes("Files")) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+          }
+        }}
+        onDragLeave={() => {
+          dragCounter.current = Math.max(0, dragCounter.current - 1);
+          if (dragCounter.current === 0) setDraggingFiles(false);
+        }}
+        onDrop={(e) => {
+          dragCounter.current = 0;
+          setDraggingFiles(false);
+          const files = Array.from(e.dataTransfer?.files ?? []);
+          if (files.length === 0) return;
+          e.preventDefault();
+          onFilesAttach?.(files);
+        }}
       >
+        {/* 拖放附件时的视觉提示遮罩 */}
+        {draggingFiles && (
+          <div
+            className="absolute inset-0 z-10 rounded-2xl flex items-center justify-center pointer-events-none"
+            style={{
+              background: "rgba(15, 110, 86, 0.08)",
+              border: "2px dashed rgba(15, 110, 86, 0.5)",
+            }}
+          >
+            <div className="text-[13px] text-[#0F6E56] font-medium bg-bg-elevated/90 px-3 py-1.5 rounded-lg">
+              松开以添加文件
+            </div>
+          </div>
+        )}
         <textarea
           ref={taRef}
           value={value}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onPaste={(e) => {
+            // 粘贴上传：从剪贴板提取图片文件
+            const files = Array.from(e.clipboardData?.files ?? []);
+            const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+            if (imageFiles.length > 0) {
+              e.preventDefault();
+              onFilesAttach?.(imageFiles);
+            }
+          }}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           placeholder={isStreaming ? "输入消息加入队列..." : placeholder}
@@ -152,7 +202,7 @@ export const ChatComposerInput = memo(
             <button
               type="button"
               onClick={handleStopClick}
-              className="flex items-center justify-center w-8 h-8 rounded-lg transition-all hover:opacity-90"
+              className="flex items-center justify-center w-8 h-8 rounded-lg transition-all active:scale-95 hover:opacity-90"
               style={{
                 background: "var(--color-error)",
                 color: "white",
@@ -166,7 +216,7 @@ export const ChatComposerInput = memo(
               type="button"
               onClick={handleSendClick}
               disabled={!canSend}
-              className="flex items-center justify-center w-8 h-8 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+              className="flex items-center justify-center w-8 h-8 rounded-lg transition-all active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
               style={{
                 background: canSend ? "var(--color-accent)" : "var(--color-bg-tertiary)",
                 color: canSend ? "var(--color-accent-on-text)" : "var(--color-text-faint)",

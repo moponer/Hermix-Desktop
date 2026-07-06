@@ -32,6 +32,7 @@ export type StreamPhase =
   | "connecting"
   | "streaming"
   | "slow"
+  | "reconnecting"
   | "completed"
   | "error"
   | "timeout"
@@ -336,7 +337,16 @@ export function useStreamChat() {
           chunkRaf = requestAnimationFrame(flushChunks);
         };
 
-        // ── Per-send phase tracking ──────────────────────────────
+        // ── Per-send retry state ─────────────────────────────────
+        // 2026-07-06: auto-retry when the WS fails before any content
+        // has arrived. After the first chunk, we settle immediately
+        // (no retry — the agent loop is already running and duplicating
+        // it would produce duplicate tool results).
+        const MAX_RETRIES = 3;
+        let retryCount = 0;
+        const RETRY_DELAYS_MS = [500, 1000, 2000];
+
+        // ── Phase tracking ───────────────────────────────────────
         // 30s first-chunk timeout → `slow` (UI hint, stream still alive)
         // 120s total timeout → `timeout` (genuine abandonment)
         // `done`/`error`/WS-close → terminal phase (`completed` / `error` / `partial`)
@@ -424,6 +434,10 @@ export function useStreamChat() {
         };
         settleRef.current = settle;
 
+        // 2026-07-06: extracted WS creation into a callable so the
+        // auto-retry path (before any content arrives) can create a
+        // fresh WS without duplicating the ~200 lines of handler setup.
+        const doConnect = () => {
         try {
           const ws = new WebSocket(resolveWebSocketUrl(sessionId));
           wsRef.current = ws;
@@ -898,13 +912,33 @@ export function useStreamChat() {
           };
 
           ws.onerror = () => {
-            if (!done) settle("", "WebSocket error", undefined, "error");
+            if (!done) {
+              // 2026-07-06: auto-retry before any content arrives
+              if (!hasContent && retryCount < MAX_RETRIES) {
+                retryCount++;
+                const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
+                updatePhase("reconnecting");
+                wsRef.current = null;
+                setTimeout(doConnect, delay);
+                return;
+              }
+              settle("", "WebSocket error", undefined, "error");
+            }
           };
           ws.onclose = () => {
             if (!done) {
               if (hasContent && fullText.length > 0) {
                 settle(fullText, undefined, undefined, "partial");
               } else {
+                // 2026-07-06: auto-retry before any content arrives
+                if (retryCount < MAX_RETRIES) {
+                  retryCount++;
+                  const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
+                  updatePhase("reconnecting");
+                  wsRef.current = null;
+                  setTimeout(doConnect, delay);
+                  return;
+                }
                 settle("", "Connection closed", undefined, "error");
               }
             }
@@ -916,8 +950,22 @@ export function useStreamChat() {
             // doesn't own those resolvers, App.tsx does.
           };
         } catch (e) {
+          // WS constructor threw (unlikely — URL parsing error, etc.)
+          // Try once more before settling.
+          if (!hasContent && retryCount < MAX_RETRIES) {
+            retryCount++;
+            const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
+            updatePhase("reconnecting");
+            wsRef.current = null;
+            setTimeout(doConnect, delay);
+            return;
+          }
           settle("", e instanceof Error ? e.message : String(e));
         }
+        }; // end doConnect
+
+        // Start the first connection attempt.
+        doConnect();
       });
     },
     []

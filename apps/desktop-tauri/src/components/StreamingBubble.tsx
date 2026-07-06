@@ -55,6 +55,7 @@ function formatRelativeTimeText(phase: StreamPhase): string {
     case "streaming":
     case "connecting":
     case "slow":
+    case "reconnecting":
       return "正在生成…";
     default:
       return "";
@@ -100,6 +101,7 @@ const STATUS_MAP: Record<StreamPhase, { icon: React.ReactNode; label: string; cl
   streaming:    { icon: null,                                                                       label: "正在思考…", className: "text-text-faint italic" },
   connecting:   { icon: null,                                                                       label: "正在连接…", className: "text-text-faint italic" },
   slow:         { icon: <AlertTriangle size={11} className="text-text-warning" />,                  label: "响应较慢",  className: "text-text-warning" },
+  reconnecting: { icon: <AlertTriangle size={11} className="text-text-warning" />,                  label: "正在重连…", className: "text-text-warning italic" },
   completed:    { icon: null,                                                                       label: "",          className: "" },
   error:        { icon: <XCircle size={11} className="text-text-secondary" />,                     label: "出错了",     className: "text-text-secondary italic" },
   timeout:      { icon: <Clock size={11} className="text-text-warning" />,                         label: "超时",      className: "text-text-warning italic" },
@@ -111,6 +113,7 @@ const STREAMING_PHASES: ReadonlySet<StreamPhase> = new Set<StreamPhase>([
   "streaming",
   "connecting",
   "slow",
+  "reconnecting",
 ]);
 
 /**

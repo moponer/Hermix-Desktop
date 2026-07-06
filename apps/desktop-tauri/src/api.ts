@@ -4,6 +4,7 @@ import { storage, STORAGE_KEYS } from "./utils/storageCompat";
 // v5: reuse detectToolError from messageParser for errorReason extraction
 // on reloaded tool messages — same helper as the live-streaming path.
 import { detectToolError } from "./components/messageParser";
+import { wireArrayToChatMessages, type WireMessage } from "./protocolAdapter";
 
 const API_BASE = "http://127.0.0.1:3000";
 
@@ -42,74 +43,6 @@ export interface SessionSummary {
   workspace?: string | null;
   /** The expert ID selected for this session. */
   expert_id?: string | null;
-}
-
-export interface ProtocolMessage {
-  id?: string;
-  role: "user" | "assistant" | "system" | "tool" | "approval";
-  content: string;
-  timestamp?: string;
-  model?: string;
-  /** Mirrors the server's `finish_reason` from the model.
-   *  `stop` = normal completion, `length` = truncated,
-   *  `interrupted` = user cancelled, `tool_calls` = tools pending. */
-  stopReason?: string;
-  /** Execution backend — which sandbox the tool actually ran in. */
-  execution_backend?: "local" | "sandbox";
-  /** Original tool calls (assistant rows) — `name` here comes
-   *  from the persisted `Message::tool_calls` and lets us
-   *  rebuild a fully-typed `ToolMessageMeta` on session reload
-   *  (without this we lose the tool name on reload and fall
-   *  back to a generic "tool" label).
-   *
-   *  We accept the legacy chat `ToolCall` shape (name + status
-   *  + optional output) — the server's richer OpenAI-style
-   *  `function: { name, arguments }` form is projected down to
-   *  this when the wire payload arrives so the reload path
-   *  matches the runtime `ChatMessage` shape one-to-one. */
-  tool_calls?: Array<{
-    name: string;
-    status: "running" | "done" | "error";
-    output?: string;
-  }>;
-  /** Tool name on `role: "tool"` rows — mirrors the persisted
-   *  `Message::name` field. Used by the tool-message rebuild path
-   *  in `getSessionMessages`. */
-  tool_name?: string;
-  /** Tool arguments (JSON string) on `role: "tool"` rows —
-   *  reconstructed from the linked assistant message's
-   *  `tool_calls[].function.arguments` at serve time. Without
-   *  this the reloaded tool message has no `args` and the
-   *  ToolMessageCard falls back to "调用工具". */
-  tool_arguments?: string;
-  /** Granular tool timeline (tool_start / tool_stdout / tool_complete / status). */
-  execution_timeline?: Array<{
-    type: "tool_start" | "tool_stdout" | "tool_complete" | "status";
-    tool?: string;
-    content?: string;
-    arguments?: string;
-    chunk_index?: number;
-    chunk_total?: number;
-    created_at: string;
-  }>;
-  /** Approval metadata for `role === "approval"` messages — mirrors
-   *  the server-side `ApprovalRecord` 1:1 (snake_case, matching
-   *  the Rust `serde` defaults). */
-  extra?: {
-    request_id?: string;
-    tool?: string;
-    arguments?: unknown;
-    risk?: string;
-    decision?: "approved" | "denied" | null;
-    decided_at?: string | null;
-    /** Wall-clock deadline (Unix ms) when the server will
-     *  auto-deny this request. Persisted in the `ApprovalRecord`
-     *  and forwarded as `StreamEvent::RequestApproval::expires_at`
-     *  on the wire. Mirrors the front-end
-     *  `ApprovalMessageMeta::expiresAt` field 1:1. */
-    expires_at?: number | null;
-    linked_assistant_id?: string | null;
-  };
 }
 
 export interface DashboardSession {
@@ -350,141 +283,15 @@ export const renameSession = async (id: string, title: string): Promise<boolean>
 };
 
 export const getSessionMessages = async (id: string): Promise<ChatMessage[]> => {
-  const res = await fetchJSON<{ messages: ProtocolMessage[] }>(
+  const res = await fetchJSON<{ messages: WireMessage[] }>(
     `/v1/sessions/${encodeURIComponent(id)}/messages`
   );
-  return res.messages
-    // Approval + tool rows are part of the timeline — keep them. The
-    // server has already filtered out system rows from both the LLM
-    // payload and the wire response; this filter is the last line of
-    // defense before the UI sees a role. Forwarding `system` here
-    // would leak the full reconstructed prompt (AGENTS.md + skills,
-    // ~23k chars) into MessageBubble.SystemMessage.
-    //
-    // Tool rows (role: "tool") come back as independent `Message`
-    // rows persisted during streaming — `Message::tool_result` adds
-    // them between the assistant call and the next user turn. We
-    // rebuild a `ToolMessageMeta` so `MessageBubble` routes them
-    // through `ToolMessageCard` (compact, status=done), restoring
-    // the in-line "tool was here" rows on reload.
-    .filter(
-      (m) =>
-        m.role === "user" ||
-        m.role === "assistant" ||
-        m.role === "approval" ||
-        m.role === "tool",
-    )
-    .map((m, i) => {
-      if (m.role === "approval") {
-        // Server emits `extra` as snake_case (mirrors `ApprovalRecord`).
-        const ex = m.extra ?? {};
-        return {
-          id: m.id ?? `${id}-approval-${i}`,
-          role: "approval" as const,
-          content: "",
-          timestamp: m.timestamp ?? new Date().toISOString(),
-          approval: {
-            requestId: ex.request_id ?? "",
-            tool: ex.tool ?? "tool",
-            args: ex.arguments,
-            riskLevel: ex.risk,
-            decision: ex.decision ?? null,
-            decidedAt: ex.decided_at ?? null,
-            // Persist the original server-side deadline so a session
-            // reload re-renders the countdown against the same wall
-            // clock the server is going to auto-deny on. Without
-            // this, the front-end would re-derive a fresh deadline
-            // on reload and the user would briefly see "剩余 4m 32s"
-            // while the server-side 5min timeout has *already*
-            // fired (the back-end auto-denied while the page was
-            // reloading). See the comment on
-            // `ApprovalMessageMeta::expiresAt` in `types.ts`.
-            expiresAt:
-              typeof ex.expires_at === "number" ? ex.expires_at : null,
-            linkedAssistantId: ex.linked_assistant_id ?? null,
-          },
-        };
-      }
-      // tool rows: rebuild a ToolMessageMeta from the server
-      // payload. The server persists `content` (the tool
-      // output) and `tool_name` (the original `Message::name`)
-      // for `MessageRole::Tool` rows. v5 (2026-06-22): the
-      // server now also reconstructs `tool_arguments` from the
-      // linked assistant message's `tool_calls[].function.arguments`
-      // at serve time, so reloaded tool messages get their
-      // `args` and the ToolMessageCard renders the proper verb
-      // and primary-arg preview instead of the generic "调用工具".
-      if (m.role === "tool") {
-        return {
-          id: m.id ?? `${id}-tool-${i}`,
-          role: "tool" as const,
-          content: m.content,
-          timestamp: m.timestamp ?? new Date().toISOString(),
-          tool: {
-            tool: m.tool_name ?? "tool",
-            args: m.tool_arguments,          // ← v5: wire reconstructed args
-            status: "done" as const,
-            output: m.content,
-            errorReason: detectToolError(m.content) ?? undefined, // ← v5: extract error reason from output
-            startedAt: m.timestamp ?? new Date().toISOString(),
-            completedAt: m.timestamp ?? new Date().toISOString(),
-          },
-        };
-      }
-      // assistant / user: forward every field the server
-      // persists, so reloading a session shows tool timelines,
-      // interrupted chips, and execution backend badges that were
-      // visible mid-stream.
-      //
-      // Project the wire-format `tool_calls` (OpenAI-style:
-      // `{id, name, arguments}` — `FunctionCall` is `#[serde(flatten)]`
-      // onto `ToolCall`, so name lives at the top level on the wire)
-      // into the chat's legacy shape (`{name, status, output?}`).
-      // The wire `ToolCall` struct has no `status` field — it's
-      // only meaningful during a live stream. After reload, every
-      // persisted tool call is by definition already finished, so
-      // we always default to `"done"`. Without this projection, the
-      // legacy `StatusPill` (called from `ToolCallsFallback`) sees
-      // `status === undefined` and renders "运行中" — the very bug
-      // we are fixing here.
-      const projectedToolCalls = (m.tool_calls ?? []).map((tc) => ({
-        name: (tc as { name?: string }).name ?? (tc as { function?: { name?: string } }).function?.name ?? "tool",
-        status: "done" as const,
-        output: (tc as { arguments?: string }).arguments ?? (tc as { function?: { arguments?: string } }).function?.arguments,
-      }));
-      return {
-        id: m.id ?? `${id}-${i}`,
-        role: m.role as "user" | "assistant" | "system",
-        content: m.content,
-        timestamp: m.timestamp ?? new Date().toISOString(),
-        model: m.model,
-        stopReason: m.stopReason,
-        execution_backend: m.execution_backend,
-        tool_calls: projectedToolCalls.length > 0 ? projectedToolCalls : undefined,
-        execution_timeline: m.execution_timeline,
-        /** Preserve the server-side reasoning block so a session reload
-         *  shows the same thinking monologue the user saw mid-stream.
-         *  Without this field, `onDone`-time reasoning is lost on reload
-         *  and the collapsed/expanded toggle in MessageBubble does nothing. */
-        reasoningContent: (m as unknown as Record<string, unknown>).reasoningContent as string | undefined,
-      };
-    })
-    // v5 (2026-06-22): Strip internal system directives that
-    // leak into the chat timeline. These tags are NEVER meant
-    // for the user's eyes — they carry WorkBuddy agent planning
-    // instructions and memory-routing commands. Without this
-    // filter, the user sees raw <system-reminder>/<plan> blocks
-    // polluting the conversation flow.
-    //
-    // Using non-greedy `/s*?` so nested or multi-tag blocks
-    // are each removed independently.
-    .map((msg) => ({
-      ...msg,
-      content: msg.content
-        .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
-        .replace(/<plan>[\s\S]*?<\/plan>/gi, "")
-        .trim(),
-    }));
+  // N-09 (2026-07-05): the projection + directive-strip was
+  // open-coded in this function. Routing it through
+  // `protocolAdapter.wireArrayToChatMessages` means adding a new
+  // approval/clarify/tool field is a one-file change in the
+  // adapter, not a five-Edit pull-request against `getSessionMessages`.
+  return wireArrayToChatMessages(res.messages, id, detectToolError);
 };
 
 export const sendMessage = async (id: string, content: string): Promise<ChatMessage> => {
@@ -860,12 +667,11 @@ export const addMcpServer = async (entry: Omit<McpServerEntry, "id" | "createdAt
       { method: "POST", body: JSON.stringify(toBackend(entry)) },
     );
     const created = fromBackend(res);
-    // Update local cache so the next read returns the new entry.
-    const list = loadMcpServersCache();
-    if (!list.some((s) => s.id === created.id)) {
-      list.push(created);
-      saveMcpServersCache(list);
-    }
+    // Success: backend already persisted; do NOT also write to localStorage
+    // here — the cache will be refreshed on the next listMcpServers call.
+    // Writing both would create a second source of truth (the localStorage
+    // format may drift from the server's canonical state). The catch path
+    // below IS the legitimate fallback for offline mode.
     return created;
   } catch {
     // Backend offline — local-only entry, will sync on next successful list.
@@ -887,12 +693,8 @@ export const updateMcpServer = async (id: string, patch: Partial<McpServerEntry>
       { method: "PUT", body: JSON.stringify(patch) },
     );
     const updated = fromBackend(res);
-    const list = loadMcpServersCache();
-    const idx = list.findIndex((s) => s.id === id);
-    if (idx >= 0) {
-      list[idx] = updated;
-      saveMcpServersCache(list);
-    }
+    // Success: backend already persisted. The cache will be refreshed
+    // on the next listMcpServers call — avoid a second source of truth.
     return updated;
   } catch {
     const list = loadMcpServersCache();
@@ -939,6 +741,22 @@ export const getLogs = async (file = "agent", lines = 100): Promise<{ lines: str
 
 export const searchSessions = async (q: string): Promise<{ results: Array<{ session_id: string; snippet: string }> }> =>
   fetchJSON(`/v1/sessions/search?q=${encodeURIComponent(q)}`);
+
+/** 2026-07-05: session lineage tree for compressed session ancestry tracking. */
+export const getSessionLineage = async (sessionId: string): Promise<{
+  ancestors: Array<{ id: string; title: string; has_compression: boolean }>;
+  children: Array<{ id: string; title: string; has_compression: boolean }>;
+  current: { id: string; title: string; has_compression: boolean };
+}> => fetchJSON(`/v1/sessions/${encodeURIComponent(sessionId)}/lineage`);
+
+/** 2026-07-05: list skills from the dashboard for cron-job skill assignment. */
+export const getSkillsList = async (): Promise<Array<{ name: string; description: string; category: string }>> => {
+  try {
+    return await fetchJSON<Array<{ name: string; description: string; category: string }>>("/api/skills");
+  } catch {
+    return [];
+  }
+};
 
 export const getAutomationTasks = async (): Promise<AutomationTask[]> => {
   try {

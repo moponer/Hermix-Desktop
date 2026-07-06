@@ -132,6 +132,19 @@ export interface ToolMessageMeta {
   errorReason?: string;
 }
 
+// ---------------------------------------------------------------------------
+// ChatMessage — canonical in-memory chat-row type.
+//
+// Before N-09 the front-end had three near-identical types describing the
+// same entity: a wire shape (snake_case `extra`, no UI state), `ChatMessage`
+// (in-memory typed projection, UI-only fields), and ad-hoc inline literals
+// at call sites. Every wire → UI projection had to be kept in sync manually.
+//
+// N-09 collapses them: `ChatMessage` is the single source of truth, wire
+// fields live alongside UI fields. The wire → UI projection is centralised
+// in `protocolAdapter.ts` (`wireToChatMessage`) so adding a new
+// approval/clarify/tool field is a one-file change.
+// ---------------------------------------------------------------------------
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system" | "approval" | "clarify" | "tool";
@@ -178,6 +191,25 @@ export interface ChatMessage {
    * scroll position isn't pushed by long thinking text.
    */
   reasoningExpanded?: boolean;
+  // ── N-09 wire-only carry-over fields ─────────────────────────────────
+  //
+  // Carried verbatim from the JSON response so a session reload shows
+  // the same content the user saw mid-stream. The typed-`tool` /
+  // typed-`approval` props above are derived from these by
+  // `protocolAdapter.wireToChatMessage`; we keep the raw form here
+  // for any future field that hasn't been typed yet.
+  tool_name?: string;
+  tool_arguments?: string;
+  extra?: {
+    request_id?: string;
+    tool?: string;
+    arguments?: unknown;
+    risk?: string;
+    decision?: "approved" | "denied" | null;
+    decided_at?: string | null;
+    expires_at?: number | null;
+    linked_assistant_id?: string | null;
+  };
 }
 
 export interface ToolCall {
@@ -291,6 +323,8 @@ export interface AutomationTask {
   history: RunRecord[];
   created_at: string;
   updated_at: string;
+  /** 2026-07-05: skills attached to this cron job — maps to CronJob.skills. */
+  skills?: string[];
 }
 
 export interface AppConfig {
@@ -313,4 +347,4 @@ export type NavPage = "chat" | "search" | "plugins" | "automation" | "settings" 
 //     with initialTab="builtin". Sidebar no longer exposes it directly.
 
 // Re-export from api
-export type { SessionSummary, ProtocolMessage, SystemStatus, HermesConfig, SkillInfo } from "./api";
+export type { SessionSummary, SystemStatus, HermesConfig, SkillInfo } from "./api";

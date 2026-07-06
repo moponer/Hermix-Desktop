@@ -217,11 +217,32 @@ function groupEvents(events: ExecutionTimelineEvent[]): ToolGroup[] {
 }
 
 function durationOf(group: ToolGroup): string {
-  if (!group.startedAt || !group.endedAt) return "";
+  if (!group.startedAt) return "";
   const t0 = new Date(group.startedAt).getTime();
-  const t1 = new Date(group.endedAt).getTime();
-  if (Number.isNaN(t0) || Number.isNaN(t1)) return "";
+  if (Number.isNaN(t0)) return "";
+  // Live elapsed when running: use Date.now() so the chip ticks
+  // up once per second (driven by the `setNow` interval in
+  // ToolRow). When the tool has ended, freeze at endedAt - startedAt.
+  const t1 = group.endedAt
+    ? new Date(group.endedAt).getTime()
+    : Date.now();
+  if (Number.isNaN(t1)) return "";
   return formatDuration(Math.max(0, t1 - t0));
+}
+
+/// 2026-07-05 (N-04): for a tool that's still running, return
+/// the elapsed time as a fraction of a 30-second "soft target".
+/// Clamped to [0, 1] so the progress bar doesn't overflow past
+/// 100% for genuinely long-running tools. Once the tool ends,
+/// `progressFraction` returns `None` and the caller hides the
+/// bar entirely.
+function progressFraction(group: ToolGroup): number | null {
+  if (!group.startedAt || group.endedAt) return null;
+  const t0 = new Date(group.startedAt).getTime();
+  if (Number.isNaN(t0)) return null;
+  const elapsedMs = Math.max(0, Date.now() - t0);
+  const SOFT_TARGET_MS = 30_000;
+  return Math.min(1, elapsedMs / SOFT_TARGET_MS);
 }
 
 function iconFor(tool: string) {
@@ -444,6 +465,19 @@ function ToolRow({ group }: { group: ToolGroup }) {
   const [open, setOpen] = useState(false);
   const label = group.tool && group.tool.trim() ? group.tool : toolVerb(group.tool);
 
+  // 2026-07-05 (N-04, Hermes 对标): when a tool is still
+  // running, the duration chip previously stayed frozen at
+  // "0ms" until the `complete` event arrived. We now tick a
+  // `now` state once per second so the user sees the elapsed
+  // grow live — a poor man's progress bar that works for
+  // any tool whose total runtime is unknown up front.
+  const [, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [isRunning]);
+
   // Concatenate all stdout/stderr chunks into one terminal block.
   // Declared BEFORE `primary` so the stdout-aware fallback in
   // `primaryArg` (e.g. python-pptx wrappers that stash the real
@@ -458,6 +492,10 @@ function ToolRow({ group }: { group: ToolGroup }) {
   );
   const primary = primaryArg(group.tool, group.args, stdout);
   const dur = durationOf(group);
+  // 2026-07-05 (N-04): live progress fraction for currently
+  // running tools. `None` once the tool ends, so the bar
+  // disappears instead of staying at 100%.
+  const progress = progressFraction(group);
   // The `complete` event sometimes carries a final summary in
   // `content` even when no stdout was streamed — surface it inside
   // the expanded body so the user can see what the tool reported.
@@ -562,6 +600,27 @@ function ToolRow({ group }: { group: ToolGroup }) {
           )}
         </span>
       </button>
+
+      {/* 2026-07-05 (N-04): thin progress strip that fills left-to-right
+          while the tool is running. `progressFraction` returns null
+          once the tool ends, so the strip disappears rather than
+          lingering at 100%. Width is set via inline style because
+          the value is computed at runtime from `Date.now()` and
+          CSS variables can't reach it cleanly. */}
+      {progress !== null && (
+        <div
+          className="tw-msg-progress"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress * 100)}
+        >
+          <div
+            className="tw-msg-progress-fill"
+            style={{ width: `${Math.round(progress * 100)}%` }}
+          />
+        </div>
+      )}
 
       {/* Expandable output body — suppressed for error tools:
           same rationale as the chevron above. The error is

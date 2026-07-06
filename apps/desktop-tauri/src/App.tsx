@@ -93,6 +93,13 @@ function localizeStreamError(err: string): string {
       ? `模型「${modelName}」不可用，请在输入框左侧切换模型后重试。`
       : "模型不可用或参数错误，请检查模型配置后重试。";
   }
+  // WebSocket / connection lost
+  if (/WebSocket\s*error/i.test(extracted)) {
+    return "连接异常（WebSocket 错误），请检查网络后重新发送消息。";
+  }
+  if (/Connection\s*closed/i.test(extracted)) {
+    return "连接已断开，请重新发送消息。";
+  }
   // Fallback: return the extracted message (already normalized)
   return extracted || err;
 }
@@ -569,7 +576,7 @@ export default function App() {
   }, [rightOpen, left.setWidth, right.setWidth, leftMin, mainMinWidth]);
 
   // Load sessions
-  useEffect(() => { api.getSessions().then(setSessions).catch(() => {}); }, []);
+  useEffect(() => { api.getSessions().then(setSessions).catch((e) => console.error("getSessions failed", e)); }, []);
 
   // Register built-in experts to backend ExpertRegistry on app start.
   // Best-effort: the UI fetches the catalog on first mount and falls back

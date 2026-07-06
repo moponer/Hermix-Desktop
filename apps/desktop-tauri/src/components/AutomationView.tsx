@@ -325,8 +325,29 @@ function TaskEditor({
   onSave: (t: AutomationTask) => void;
 }) {
   const [draft, setDraft] = useState<AutomationTask>(initial);
+  const [availableSkills, setAvailableSkills] = useState<
+    Array<{ name: string; description: string; category: string }>
+  >([]);
   const update = <K extends keyof AutomationTask>(k: K, v: AutomationTask[K]) =>
     setDraft((p) => ({ ...p, [k]: v }));
+
+  // 2026-07-05: fetch skill list for cron-job assignment.
+  useEffect(() => {
+    let cancelled = false;
+    api.getSkillsList().then((skills) => {
+      if (!cancelled) setAvailableSkills(skills);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const toggleSkill = (name: string) => {
+    const current = draft.skills ?? [];
+    if (current.includes(name)) {
+      update("skills", current.filter((s) => s !== name));
+    } else {
+      update("skills", [...current, name]);
+    }
+  };
 
   const submit = () => {
     if (!draft.name.trim() || !draft.prompt.trim() || !draft.schedule.trim()) {
@@ -474,6 +495,32 @@ function TaskEditor({
               </select>
             </Field>
           </div>
+          {/* 2026-07-05: skills multi-select for cron-job execution */}
+          {availableSkills.length > 0 && (
+            <Field label="技能（可选）" hint="勾选的技能会在任务执行时自动加载">
+              <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                {availableSkills.map((sk) => {
+                  const selected = (draft.skills ?? []).includes(sk.name);
+                  return (
+                    <button
+                      key={sk.name}
+                      type="button"
+                      onClick={() => toggleSkill(sk.name)}
+                      title={sk.description}
+                      className={`px-2 py-1 text-[10.5px] rounded border transition-colors ${
+                        selected
+                          ? "bg-accent text-bg-primary border-accent"
+                          : "bg-bg-secondary text-text-secondary border-border-primary hover:bg-bg-hover"
+                      }`}
+                    >
+                      {sk.name}
+                      {sk.category ? <span className="ml-1 text-[9px] opacity-60">({sk.category})</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+          )}
           <label className="flex items-center gap-2 text-[12px] text-text-secondary cursor-pointer select-none">
             <input
               type="checkbox"

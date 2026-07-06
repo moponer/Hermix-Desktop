@@ -220,6 +220,7 @@ import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
 import { getSessionArchiveRefs, getAvailableTools, updateSessionMetadata, type ArchiveRef, type ToolDescriptor } from "../api";
 import { ArchiveRefsGraph } from "./ArchiveRefsGraph";
+import { SessionTree } from "./SessionTree";
 import { TracePanel } from "./TracePanel";
 import type { Session } from "../types";
 import type { ChatOverrides } from "../hooks/useStreamChat";
@@ -908,6 +909,17 @@ export function ChatView({
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // 2026-07-06: ref to the scrollable message container for
+  // user-scroll detection. Only auto-scroll if the user is near
+  // the bottom, so browsing history doesn't get interrupted by
+  // new streaming chunks.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isNearBottom = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return true; // container not mounted → scroll anyway
+    const threshold = 150; // px from bottom
+    return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+  }, []);
 
   /**
    * Post-stream activity heuristic. The agent loop runs many turns
@@ -1010,6 +1022,8 @@ export function ChatView({
   // produced at least one event (TracePanel collapses to null when
   // the response is `missing: true` AND empty).
   const [traceOpen, setTraceOpen] = useState(false);
+  // 2026-07-05: session lineage tree for compressed session ancestry tracking.
+  const [lineageOpen, setLineageOpen] = useState(false);
   useEffect(() => {
     if (!sessionId) {
       setArchiveRefs([]);
@@ -1300,6 +1314,13 @@ const clearPendingImages = useCallback(() => {
     };
     if (!node) return cleanup;
     const tick = () => {
+      // 2026-07-06: only auto-scroll when the user is near the
+      // bottom (within 150px). Browsing history mid-stream no
+      // longer forces the viewport to jump.
+      if (!isNearBottom()) {
+        raf = 0;
+        return;
+      }
       // Use 'auto' (instant) — under heavy streaming the smooth
       // animation never has a chance to finish anyway, and instant
       // scroll is cheaper to layout/paint.
@@ -1749,7 +1770,45 @@ const clearPendingImages = useCallback(() => {
           )}
         </div>
       )}
-      <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
+      {sessionId && (
+        // 2026-07-05: session lineage tree — parent/child chain browser.
+        <div className="mx-3 sm:mx-4 mb-2">
+          <button
+            type="button"
+            onClick={() => setLineageOpen((v) => !v)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-left rounded-lg border"
+            style={{
+              borderColor: "var(--color-border)",
+              background: "var(--color-bg-secondary)",
+              color: "var(--color-text-primary)",
+              fontSize: 12,
+            }}
+            aria-expanded={lineageOpen}
+          >
+            <span
+              aria-hidden
+              style={{
+                fontSize: 11,
+                transform: lineageOpen ? "rotate(90deg)" : "rotate(0deg)",
+                transition: "transform 120ms ease",
+                color: "var(--color-text-secondary)",
+              }}
+            >
+              ▶
+            </span>
+            <span style={{ fontWeight: 600 }}>会话谱系</span>
+            <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
+              · 父级/子级会话链 & 压缩历史
+            </span>
+          </button>
+          {lineageOpen && (
+            <div className="mt-1.5 p-3 rounded-lg border" style={{ borderColor: "var(--color-border)", background: "var(--color-bg-primary)" }}>
+              <SessionTree sessionId={sessionId} />
+            </div>
+          )}
+        </div>
+      )}
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
         <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-6">
           {messagesWithStream.map((msg, idx) => {
             if (streamingAssistantId && msg.id === streamingAssistantId && streamingMsg) {
@@ -2286,6 +2345,15 @@ function Composer(p: ComposerProps) {
         value={p.input}
         onChange={(e) => p.setInput(e.target.value)}
         onKeyDown={p.handleKeyDown}
+        onPaste={(e) => {
+          // 粘贴上传：从剪贴板提取图片文件
+          const files = Array.from(e.clipboardData?.files ?? []);
+          const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+          if (imageFiles.length > 0) {
+            e.preventDefault();
+            p.onFilesAttach?.(imageFiles);
+          }
+        }}
         placeholder={p.isStreaming ? "输入消息加入队列..." : p.placeholder}
         data-no-border
         className="w-full bg-transparent text-text-primary placeholder-text-muted resize-none outline-none px-4 pt-3.5 pb-1.5 min-h-[72px]"
