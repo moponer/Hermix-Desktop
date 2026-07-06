@@ -45,15 +45,15 @@ When the user message contains:
 
 The user already told you where the file is. `terminal` is for *navigation* and *shell operations*, not for replacing purpose-built I/O tools.
 
-## Anti-pattern — the "探索式盲目搜索" trap (必须避免!)
-当用户消息中包含明确文件路径或文件名时，**绝不允许**使用 `terminal` 命令来"找文件"或"验证路径"。如果用户提供了路径，直接使用 `read_file`/`read_pdf` 等对应工具调用即可。
+## Anti-pattern — the "blind search" trap (must avoid)
+When the user provides an explicit file path, **never** use `terminal` to locate or verify it — call the matching tool (`read_file`/`read_pdf`/`write_file`) directly with the given path.
 
-以下行为属于典型反模式：
-- 用户发了 `G:\xxx\file.pdf` → agent 用 `cd G:` + `dir` 找路径 → ❌ 直接使用 `read_pdf path="G:\xxx\file.pdf"`
-- 用户发了文件名 → agent 用 `search_files` 或 `ls` 猜测路径 → ❌ 直接用文件路径调用对应工具
-- 连续 4+ 次用 `terminal` 尝试不同路径变体 → ❌ 放弃猜测，声明无法找到该文件或联系用户确认
+Typical anti-patterns:
+- User provides `G:\xxx\file.pdf` → agent runs `cd G:` + `dir` instead of `read_pdf`
+- User provides a filename → agent uses `search_files` or `ls` to guess the path
+- 4+ consecutive `terminal` calls trying different path variants → admit the file was not found
 
-**当同类工具连续失败 2 次后必须切换策略**。如果直接调用工具失败，不要反复用 terminal 尝试猜测路径，应该直接回复用户说明文件问题。
+**After 2 consecutive failures of the same tool family, switch strategies.** Stop retrying the same tool and either try a different approach or inform the user.
 
 ## Visual / browser / GUI automation requests
 When the user says "看下 X 下有什么" / "帮我打开浏览器" / "帮我操作网页" / "截图" / any browser or GUI interaction phrasing, **use the browser tools** (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_scroll`) or `computer_use` as appropriate.
@@ -126,42 +126,20 @@ const TOOL_USE_ENFORCEMENT_GUIDANCE: &str = "# Tool-use enforcement\nYou MUST us
 const BROWSER_TOOL_SELECTION_GUIDANCE: &str = "\
 # Browser tool selection (mandatory)
 
-When the user's task involves a website that needs interaction (login, captcha, \
-form submit, click, scroll, type, screenshot-read), you MUST use the `browser_*` \
-tool family — NOT `web_fetch` / `获取网页`. The two are not interchangeable:
-
-- `web_fetch` / `获取网页` — stateless HTTP scrape. Gets raw HTML / markdown. \
-  Cannot execute JS, cannot interact, cannot read captcha images, cannot wait \
-  for dynamic content, does NOT share cookies / storage with the browser.
-- `browser_navigate` — opens a real browser (CDP) at the URL and waits for \
-  `Page.loadEventFired`. Returns `{load_observed: true|false, hint}`.
-- `browser_snapshot` — returns the accessibility tree as a compact YAML tree \
-  with `[ref=eN]` handles you can pass straight to `browser_click` / `browser_type`.
-- `browser_wait_for` — polls for a CSS selector (e.g. `form`, `input[name=captcha]`) \
-  up to a timeout. Use this whenever the page is still loading, when you see \
-  a captcha, or when `browser_snapshot` returns an empty / stale tree.
-- `browser_vision` — last resort, sends the current page as a PNG to a vision \
-  model. Use only for image-only information (captcha glyphs, captioned images, \
-  Canvas-rendered charts) that the accessibility tree cannot describe.
-- `browser_click` / `browser_type` — accept either a CSS selector or `[ref=eN]`.
-
-## Hard rules
-1. **Never call `web_fetch` after a `browser_*` call.** Once a task has touched \
-   the browser, stay in the browser. `web_fetch` will give you a different \
-   document (no JS, no cookies, no localStorage) and the loop will diverge.
-2. **If `browser_navigate` returns `load_observed: false`, call \
-   `browser_wait_for`** with a selector that proves the page is interactive \
-   (e.g. `form`, `#username`, `input[name=captcha]`), THEN \
-   `browser_snapshot`. Do NOT loop `browser_snapshot` blindly.
-3. **For captchas: `browser_wait_for` for the captcha image, then \
-   `browser_vision` to read it.** The vision model sees the actual pixels \
-   and gives a precise OCR.
-4. **For form fills: `browser_snapshot` once → use the `[ref=eN]` handles \
-   with `browser_type` / `browser_click`.** Do not write CSS selectors \
-   from memory.
-5. **If a tool returns the same string twice in a row, you have the wrong \
-   tool.** Stop and switch (e.g. snapshot → wait_for → snapshot).
-";
+When the task involves a website needing interaction (login, form, click, scroll, captcha), \
+use `browser_*` tools — NOT `web_fetch`. The two are not interchangeable:\n\
+- `web_fetch` — stateless HTTP scrape. No JS, no cookies, no interaction.\n\
+- `browser_navigate` — opens a real browser at the URL.\n\
+- `browser_snapshot` — returns accessibility tree with `[ref=eN]` handles.\n\
+- `browser_wait_for` — polls for a CSS selector up to timeout.\n\
+- `browser_vision` — sends page as PNG to vision model. Last resort.\n\
+- `browser_click` / `browser_type` — accepts CSS selector or `[ref=eN]`.\n\n\
+## Hard rules\n\
+1. Never call `web_fetch` after a `browser_*` call. Stay in the browser.\n\
+2. If `navigate` returns `load_observed: false`, call `wait_for` first.\n\
+3. For captchas: `wait_for` the image, then `vision` to read it.\n\
+4. For form fills: `snapshot` once → use `[ref=eN]` handles.\n\
+5. Same tool returning identical output 2x in a row = stuck.";
 
 /// Injected when `AgentConfig::autonomous_mode = true`.
 ///
@@ -275,6 +253,26 @@ You MUST structure every reply as exactly two parts, in this order:\n\n\
 ## Wrong example (do not do this)\n\
 `<think>The user said \"你好\". Let me respond. 你好!有什么可以帮到你的?</think>` — the reply started inside the think block, which is forbidden.";
 
+/// Safety instruction: do not generate or guess URLs.
+const URL_SAFETY_GUIDANCE: &str = "\
+# URL safety (mandatory)\n\
+You must NEVER generate or guess URLs, links, or web addresses. \
+If the user explicitly provided a URL in their message or a local file path, use it as-is. \
+Do not construct URLs from memory, do not guess domain names, and do not \
+suggest links to external resources unless the user directly provided them.\n\n\
+The exception: file paths and URLs returned by tools (web_search, web_fetch, \
+browser_navigate) are verified and safe to use.";
+
+/// Inform the model that context compression may occur.
+const COMPRESSION_AWARENESS_GUIDANCE: &str = "\
+# Context compression\n\
+The system may automatically compress earlier parts of the conversation \
+when the context approaches capacity limits. This is normal and does not \
+mean anything was lost permanently. If you notice a summary section \
+titled \"[CONTEXT COMPACTION]\" in the conversation history, that is the \
+system's compressed version of earlier turns. Read it to stay aware of \
+what was discussed and decided, but do not repeat work already marked as complete.";
+
 const OPENAI_MODEL_EXECUTION_GUIDANCE: &str = "# Execution discipline (OpenAI)\nUse tools whenever they improve correctness, completeness, or grounding. Do not stop early when another tool call would materially improve the result. Verify outcomes before declaring completion.";
 
 const GOOGLE_MODEL_OPERATIONAL_GUIDANCE: &str = "# Operational guidance (Google)\nBe concise and execution-first. Prefer absolute paths, parallel tool calls when safe, and verify each substantive change.";
@@ -305,6 +303,45 @@ Before each tool call, mentally check:
 const TASK_FOCUS_SHORT: &str = "\
 ## Task focus
 Before each tool call, check: (1) original goal, (2) current progress, (3) next step. Don't repeat completed work. If stuck, explain what you've tried.";
+
+const TOOL_EXECUTION_SUMMARY_GUIDANCE: &str = "\
+# Tool execution summary (mandatory)
+
+After EVERY tool call completes, briefly summarize:
+1. **What was executed** — the action taken (e.g. 'Read src/main.rs', 'Ran npm test')
+2. **Result** — what happened (e.g. 'File contains 50 lines of Rust code', '42 tests passed')
+3. **Next step** — what you plan to do next (e.g. 'Will now edit the function', 'Done, ready for review')
+
+Keep each summary under 25 words. This keeps the user informed of progress without interrupting your flow.
+
+Example:
+- Tool: read_file(path='src/main.rs')
+- Summary: 'Read 50-line Rust file. Contains main function with TODO. Will add error handling next.'
+
+Example:
+- Tool: terminal(command='cargo test')
+- Summary: 'Ran tests: 42 passed, 0 failed. All green, task complete.'";
+
+const STOPPING_SUMMARY_GUIDANCE: &str = "\
+# Stopping behavior (mandatory)
+
+When you decide to stop (no more tool calls needed), you MUST provide a final summary to the user before ending. Never terminate abruptly.
+
+## Required stopping protocol
+1. **Summarize what was accomplished** — list the key changes made
+2. **Mention any remaining issues** — if something couldn't be fixed, say so
+3. **Suggest next steps** — what the user should do next (if applicable)
+
+## What NOT to do
+- Do NOT stop mid-task without explanation
+- Do NOT return an empty or minimal response after completing work
+- Do NOT assume the user knows what happened — they need a clear summary
+
+## Example stopping responses
+Good: 'Done! I've fixed the bug in src/auth.rs by adding input validation. Tests pass. You may want to review the change and deploy.'
+
+Bad: (no response after tool calls)
+Bad: 'Fixed.' (too brief, no context)";
 
 // ---------------------------------------------------------------------------
 // collect_directions
@@ -435,6 +472,20 @@ pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
             TASK_FOCUS_SHORT,
         ));
     }
+    // Tool execution summary guidance — always active when tools are available.
+    if !tool_names.is_empty() {
+        dirs.push(SystemDir::new(
+            "tool_summary.always",
+            DirRoute::Always,
+            TOOL_EXECUTION_SUMMARY_GUIDANCE,
+        ));
+    }
+    // Stopping summary guidance — always active.
+    dirs.push(SystemDir::new(
+        "stopping_summary.always",
+        DirRoute::Always,
+        STOPPING_SUMMARY_GUIDANCE,
+    ));
     // P2-6: USER_STYLE_GUIDANCE is always-on.
     dirs.push(SystemDir::new(
         "user_style.always",
@@ -447,6 +498,20 @@ pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
         DirRoute::Always,
         TOOL_FAILURE_GUIDANCE,
     ));
+    // URL safety: prevent LLM from fabricating links.
+    dirs.push(SystemDir::new(
+        "url_safety.always",
+        DirRoute::Always,
+        URL_SAFETY_GUIDANCE,
+    ));
+    // Context compression awareness: explain auto-compaction to the model.
+    if user_message.is_empty() {
+        dirs.push(SystemDir::new(
+            "compression_awareness.first",
+            DirRoute::FirstTurn,
+            COMPRESSION_AWARENESS_GUIDANCE,
+        ));
+    }
 
     // Tool enforcement + model-family extras.
     if !tool_names.is_empty() && should_inject_tool_enforcement(model_for_prompt) {
