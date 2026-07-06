@@ -66,5 +66,8 @@ pub use acui::{AcuiDirective, AcuiHide, AcuiPosition, AcuiShow, AcuiState, AcuiU
 // Re-export ParseMode from traits
 pub use traits::ParseMode;
 
+// Re-export PermissionMode and RiskLevel from traits
+pub use traits::{PermissionMode, RiskLevel};
+
 // Re-export text utilities
 pub use text_utils::{format_token_count, is_error_json, truncate_chars};

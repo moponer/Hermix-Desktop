@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
-use hermix_core::{traits::RiskLevel, truncate_chars, ToolHandler, ToolSchema};
+use hermix_core::{traits::{RiskLevel, PermissionMode}, truncate_chars, ToolHandler, ToolSchema};
 use indexmap::IndexMap;
 use serde_json::Value;
 use tracing::{instrument, warn};
@@ -46,6 +46,9 @@ pub struct ToolEntry {
     /// unknown / newly-added tools get a confirmation prompt rather than
     /// being silently allowed.
     pub risk_level: RiskLevel,
+    /// Permission level for this tool (inspired by claw-code design).
+    /// Determines what operations the tool is allowed to perform.
+    pub permission_mode: PermissionMode,
     /// Runtime enable/disable flag, mutated by
     /// [`ToolRegistry::set_toolset_enabled`]. Distinct from
     /// [`Self::check_fn`]: `check_fn` reflects *capability* (env vars
@@ -208,7 +211,7 @@ impl ToolRegistry {
         emoji: impl Into<String>,
         max_result_size_chars: Option<usize>,
     ) {
-        self.register_with_risk(
+        self.register_with_permission(
             name,
             toolset,
             schema,
@@ -220,6 +223,7 @@ impl ToolRegistry {
             emoji,
             max_result_size_chars,
             RiskLevel::default(),
+            PermissionMode::default(),
             /* override_existing = */ false,
         );
     }
@@ -253,6 +257,41 @@ impl ToolRegistry {
         emoji: impl Into<String>,
         max_result_size_chars: Option<usize>,
         risk_level: RiskLevel,
+        override_existing: bool,
+    ) {
+        self.register_with_permission(
+            name,
+            toolset,
+            schema,
+            handler,
+            check_fn,
+            env_deps,
+            is_async,
+            description,
+            emoji,
+            max_result_size_chars,
+            risk_level,
+            PermissionMode::default(),
+            override_existing,
+        );
+    }
+
+    /// Same as [`Self::register_with_risk`] but also accepts a [`PermissionMode`]
+    /// for fine-grained access control (inspired by claw-code design).
+    pub fn register_with_permission(
+        &self,
+        name: impl Into<String>,
+        toolset: impl Into<String>,
+        schema: ToolSchema,
+        handler: Arc<dyn ToolHandler>,
+        check_fn: Arc<dyn Fn() -> bool + Send + Sync>,
+        env_deps: Vec<String>,
+        is_async: bool,
+        description: impl Into<String>,
+        emoji: impl Into<String>,
+        max_result_size_chars: Option<usize>,
+        risk_level: RiskLevel,
+        permission_mode: PermissionMode,
         override_existing: bool,
     ) {
         let name = name.into();
@@ -293,6 +332,7 @@ impl ToolRegistry {
                 emoji: emoji.into(),
                 max_result_size_chars,
                 risk_level,
+                permission_mode,
                 is_enabled,
             },
         );

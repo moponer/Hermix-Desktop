@@ -264,6 +264,47 @@ impl RiskLevel {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PermissionMode
+// ---------------------------------------------------------------------------
+
+/// Permission level for tool execution (inspired by claw-code design).
+///
+/// Determines what operations a tool is allowed to perform:
+/// - `ReadOnly`: Only read operations (file read, search, web fetch)
+/// - `WorkspaceWrite`: Read + write within workspace boundaries
+/// - `DangerFullAccess`: Full access including shell commands, network, etc.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum PermissionMode {
+    /// Read-only operations (file read, search, web fetch).
+    ReadOnly,
+    /// Read + write within workspace boundaries.
+    #[default]
+    WorkspaceWrite,
+    /// Full access including shell commands, network, etc.
+    DangerFullAccess,
+}
+
+impl PermissionMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PermissionMode::ReadOnly => "read-only",
+            PermissionMode::WorkspaceWrite => "workspace-write",
+            PermissionMode::DangerFullAccess => "danger-full-access",
+        }
+    }
+
+    /// Check if this mode allows the given operation.
+    pub fn allows(&self, required: &PermissionMode) -> bool {
+        match self {
+            PermissionMode::DangerFullAccess => true,
+            PermissionMode::WorkspaceWrite => matches!(required, PermissionMode::ReadOnly | PermissionMode::WorkspaceWrite),
+            PermissionMode::ReadOnly => matches!(required, PermissionMode::ReadOnly),
+        }
+    }
+}
+
 /// A single image for vision-enabled LLM calls (2026-06-25).
 /// `base64` is the raw base64 string (no data URI prefix); the agent
 /// wraps it as `data:<mime>;base64,<...>` when building the message.
