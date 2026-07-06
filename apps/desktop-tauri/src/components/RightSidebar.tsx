@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
   X, Search, FileText, FileCode, FileJson,
   FileImage, FileType2, FolderOpen,
-  Loader2, AlertTriangle,
+  Loader2, AlertTriangle, Monitor, Globe,
+  ChevronRight, ChevronDown, File,
+  Terminal, Copy, Eye,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -19,6 +21,9 @@ import {
   tryRenderOfficePreview,
 } from "../utils/artifactReader";
 import { parseByExtension, type PreviewModel } from "../lib/fileParser";
+
+// ── Tab types ──────────────────────────────────────────
+type RightTab = "computer" | "products" | "browser";
 
 interface RightSidebarProps {
   open: boolean;
@@ -776,6 +781,7 @@ export function PreviewPanel({
 }
 
 export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArtifact, workspaceRoot, rawCount }: RightSidebarProps) {
+  const [activeTab, setActiveTab] = useState<RightTab>("products");
   const [filter, setFilter] = useState<"all" | ArtifactKind>("all");
   const [query, setQuery] = useState("");
 
@@ -812,105 +818,400 @@ export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArt
       className="flex h-full flex-col flex-1 overflow-hidden"
       style={{ background: "var(--color-bg-primary)" }}
     >
-      {/* 主人原话 2026-06-22 (最近一条):
-          "阅读界面直接弹出界面显示吧,遮罩主界面。
-           不要对产物栏有任何关联,包括返回按钮什么的,
-           直接显示一个窗口。"
-          → 这里只保留 master(标题 + 搜索 + tabs + 列表),
-            不再画 PreviewPanel。点列表项只调 onSelectArtifact;
-            modal 由 App 层根据 selectedArtifact !== null 渲染。 */}
-      {/* Header */}
-      <div className="px-4 pt-4 pb-3 flex items-center gap-2">
-        <FolderOpen size={15} className="text-accent" />
-        <h2 className="h-h2">产物</h2>
-        <span className="h-tiny text-text-faint font-mono ml-1">{artifacts.length}</span>
+      {/* Tab bar */}
+      <div className="flex border-b border-border-primary">
+        <TabButton
+          active={activeTab === "computer"}
+          onClick={() => setActiveTab("computer")}
+          icon={<Monitor size={13} />}
+          label="电脑"
+        />
+        <TabButton
+          active={activeTab === "products"}
+          onClick={() => setActiveTab("products")}
+          icon={<FolderOpen size={13} />}
+          label="产物"
+          badge={artifacts.length > 0 ? artifacts.length : undefined}
+        />
+        <TabButton
+          active={activeTab === "browser"}
+          onClick={() => setActiveTab("browser")}
+          icon={<Globe size={13} />}
+          label="浏览器"
+        />
         <button
           onClick={onClose}
           title="关闭右侧栏"
-          className="ml-auto p-1.5 rounded-md hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
+          className="ml-auto p-1.5 m-1 rounded-md hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
         >
           <X size={13} />
         </button>
       </div>
 
-      {/* Search + filter */}
-      <div className="px-3 pb-3 space-y-2">
-        <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-bg-tertiary focus-within:ring-1 focus-within:ring-accent/30 transition">
-          <Search size={12} className="text-text-muted shrink-0" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索文件名或路径…"
-            className="flex-1 bg-transparent text-[12.5px] text-text-primary placeholder:text-text-faint outline-none min-w-0"
-          />
-        </div>
-        <div className="flex items-center gap-1 flex-wrap">
-          {FILTERS.map((f) => {
-            const Icon = f.icon;
-            const active = filter === f.key;
-            return (
-              <button
-                key={f.key}
-                onClick={() => setFilter(f.key)}
-                className={clsx(
-                  "flex items-center gap-1 text-[11.5px] px-2 py-1 rounded-md transition-colors",
-                  active
-                    ? "bg-accent-soft text-accent font-semibold"
-                    : "text-text-muted hover:bg-bg-hover hover:text-text-secondary",
+      {/* Tab content */}
+      {activeTab === "computer" && (
+        <ComputerTab workspaceRoot={workspaceRoot} />
+      )}
+
+      {activeTab === "products" && (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Search + filter */}
+          <div className="px-3 pb-3 space-y-2">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-bg-tertiary focus-within:ring-1 focus-within:ring-accent/30 transition">
+              <Search size={12} className="text-text-muted shrink-0" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="搜索文件名或路径…"
+                className="flex-1 bg-transparent text-[12.5px] text-text-primary placeholder:text-text-faint outline-none min-w-0"
+              />
+            </div>
+            <div className="flex items-center gap-1 flex-wrap">
+              {FILTERS.map((f) => {
+                const Icon = f.icon;
+                const active = filter === f.key;
+                return (
+                  <button
+                    key={f.key}
+                    onClick={() => setFilter(f.key)}
+                    className={clsx(
+                      "flex items-center gap-1 text-[11.5px] px-2 py-1 rounded-md transition-colors",
+                      active
+                        ? "bg-accent-soft text-accent font-semibold"
+                        : "text-text-muted hover:bg-bg-hover hover:text-text-secondary",
+                    )}
+                  >
+                    <Icon size={10} />
+                    {f.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* File list */}
+          <div className="flex-1 overflow-y-auto border-t border-border-subtle px-3 py-2">
+            {filtered.length === 0 ? (
+              <div className="px-1 py-8 text-center">
+                <p className="h-meta text-text-faint leading-relaxed whitespace-pre-line">
+                  {artifacts.length === 0
+                    ? "尚无产物\n对话中工具调用、文件路径会自动出现"
+                    : "无匹配结果"}
+                </p>
+                {artifacts.length === 0 && typeof window !== "undefined"
+                  && window.localStorage?.getItem("hermixDebugArtifacts") === "1" && (
+                  <p className="mt-3 text-[10.5px] text-text-faint font-mono leading-relaxed">
+                    raw={rawCount ?? artifacts.length} · verified={artifacts.length}
+                    <br />
+                    workspaceRoot={workspaceRoot ?? "(null)"}
+                  </p>
                 )}
-              >
-                <Icon size={10} />
-                {f.label}
-              </button>
-            );
-          })}
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {filtered.map((a) => {
+                  const isSelected = selectedId === a.id;
+                  return (
+                  <button
+                    key={a.id}
+                    onClick={() => onSelectArtifact(a.id)}
+                    title={a.path || a.name}
+                    className={clsx(
+                        "artifact-card w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors min-w-0",
+                        isSelected ? "is-active" : "",
+                      )}
+                  >
+                    <span className="shrink-0" style={{ display: "inline-flex" }}>
+                      <FileTypeIcon name={a.name} size={14} />
+                    </span>
+                    <span className="text-[12.5px] text-text-primary truncate leading-tight flex-1 min-w-0">
+                      {a.name}
+                    </span>
+                  </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "browser" && <BrowserTab />}
+    </aside>
+  );
+}
+
+// ── Tab Button Component ──────────────────────────────────
+
+function TabButton({
+  active,
+  onClick,
+  icon,
+  label,
+  badge,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  badge?: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={clsx(
+        "flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors",
+        active
+          ? "border-accent text-accent"
+          : "border-transparent text-text-muted hover:text-text-primary hover:border-border-secondary"
+      )}
+    >
+      {icon}
+      {label}
+      {badge !== undefined && (
+        <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded-full bg-accent/20 text-accent">
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ── Computer Tab (File Explorer) ──────────────────────────
+
+interface FileNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children?: FileNode[];
+}
+
+function ComputerTab({ workspaceRoot }: { workspaceRoot?: string | null }) {
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
+  const [files, setFiles] = useState<FileNode[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const rootPath = workspaceRoot || "~";
+
+  // Load directory contents
+  const loadDirectory = useCallback(async (path: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      // TODO: Use Tauri FS API to read directory
+      // For now, show placeholder
+      setFiles([
+        { name: "src", path: `${path}/src`, isDir: true },
+        { name: "package.json", path: `${path}/package.json`, isDir: false },
+        { name: "README.md", path: `${path}/README.md`, isDir: false },
+      ]);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Toggle directory expansion
+  const toggleDir = useCallback((path: string) => {
+    setExpandedDirs((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+        loadDirectory(path);
+      }
+      return next;
+    });
+  }, [loadDirectory]);
+
+  return (
+    <div className="flex-1 overflow-y-auto">
+      {/* Workspace root indicator */}
+      <div className="px-3 py-2 border-b border-border-primary">
+        <div className="flex items-center gap-1.5 text-xs text-text-muted">
+          <FolderOpen size={12} />
+          <span className="truncate">{rootPath}</span>
         </div>
       </div>
 
-      {/* File list — v5: 浅灰底 + 文件名 + 摘要表格（无边框）。 */}
-      <div className="flex-1 overflow-y-auto border-t border-border-subtle px-3 py-2">
-        {filtered.length === 0 ? (
-          <div className="px-1 py-8 text-center">
-            <p className="h-meta text-text-faint leading-relaxed whitespace-pre-line">
-              {artifacts.length === 0
-                ? "尚无产物\n对话中工具调用、文件路径会自动出现"
-                : "无匹配结果"}
-            </p>
-            {artifacts.length === 0 && typeof window !== "undefined"
-              && window.localStorage?.getItem("hermixDebugArtifacts") === "1" && (
-              <p className="mt-3 text-[10.5px] text-text-faint font-mono leading-relaxed">
-                raw={rawCount ?? artifacts.length} · verified={artifacts.length}
-                <br />
-                workspaceRoot={workspaceRoot ?? "(null)"}
-              </p>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            {filtered.map((a) => {
-              const isSelected = selectedId === a.id;
-              return (
-              <button
-                key={a.id}
-                onClick={() => onSelectArtifact(a.id)}
-                title={a.path || a.name}
-                className={clsx(
-                    "artifact-card w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors min-w-0",
-                    isSelected ? "is-active" : "",
-                  )}
-              >
-                <span className="shrink-0" style={{ display: "inline-flex" }}>
-                  <FileTypeIcon name={a.name} size={14} />
-                </span>
-                <span className="text-[12.5px] text-text-primary truncate leading-tight flex-1 min-w-0">
-                  {a.name}
-                </span>
-              </button>
-              );
-            })}
+      {/* File tree */}
+      <div className="px-2 py-2">
+        {loading && (
+          <div className="flex items-center gap-2 px-2 py-4 text-xs text-text-muted">
+            <Loader2 size={12} className="animate-spin" />
+            加载中...
           </div>
         )}
+        {error && (
+          <div className="flex items-center gap-2 px-2 py-4 text-xs text-red-400">
+            <AlertTriangle size={12} />
+            {error}
+          </div>
+        )}
+        {!loading && !error && files.length === 0 && (
+          <div className="px-2 py-4 text-xs text-text-muted text-center">
+            空目录
+          </div>
+        )}
+        {files.map((file) => (
+          <FileTreeItem
+            key={file.path}
+            file={file}
+            expanded={expandedDirs.has(file.path)}
+            onToggle={toggleDir}
+          />
+        ))}
       </div>
-    </aside>
+    </div>
+  );
+}
+
+// ── File Tree Item Component ──────────────────────────────
+
+function FileTreeItem({
+  file,
+  expanded,
+  onToggle,
+}: {
+  file: FileNode;
+  expanded: boolean;
+  onToggle: (path: string) => void;
+}) {
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  const handleClick = () => {
+    if (file.isDir) {
+      onToggle(file.path);
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleAction = (action: string) => {
+    setContextMenu(null);
+    switch (action) {
+      case "add_to_chat":
+        // TODO: Add file to chat input as attachment
+        console.log("Add to chat:", file.path);
+        break;
+      case "copy_path":
+        navigator.clipboard.writeText(file.path);
+        break;
+      case "open_in_terminal":
+        // TODO: Open terminal at file location
+        console.log("Open in terminal:", file.path);
+        break;
+      case "preview":
+        // TODO: Open file preview
+        console.log("Preview:", file.path);
+        break;
+    }
+  };
+
+  return (
+    <>
+      <div
+        onClick={handleClick}
+        onContextMenu={handleContextMenu}
+        className={clsx(
+          "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs cursor-pointer transition-colors",
+          "hover:bg-bg-hover text-text-primary",
+          file.isDir && "font-medium"
+        )}
+      >
+        {file.isDir ? (
+          expanded ? (
+            <ChevronDown size={12} className="text-text-muted shrink-0" />
+          ) : (
+            <ChevronRight size={12} className="text-text-muted shrink-0" />
+          )
+        ) : (
+          <File size={12} className="text-text-muted shrink-0" />
+        )}
+        <span className="truncate">{file.name}</span>
+      </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          onAction={handleAction}
+          isDir={file.isDir}
+        />
+      )}
+    </>
+  );
+}
+
+// ── Context Menu Component ──────────────────────────────
+
+function ContextMenu({
+  x,
+  y,
+  onClose,
+  onAction,
+  isDir,
+}: {
+  x: number;
+  y: number;
+  onClose: () => void;
+  onAction: (action: string) => void;
+  isDir: boolean;
+}) {
+  useEffect(() => {
+    const handleClick = () => onClose();
+    document.addEventListener("click", handleClick);
+    return () => document.removeEventListener("click", handleClick);
+  }, [onClose]);
+
+  const items = isDir
+    ? [
+        { action: "open_in_terminal", label: "在终端中打开", icon: Terminal },
+        { action: "copy_path", label: "复制路径", icon: Copy },
+      ]
+    : [
+        { action: "add_to_chat", label: "加入对话", icon: FileText },
+        { action: "preview", label: "预览", icon: Eye },
+        { action: "copy_path", label: "复制路径", icon: Copy },
+      ];
+
+  return (
+    <div
+      className="fixed z-50 bg-bg-card border border-border-primary rounded-lg shadow-lg py-1 min-w-[160px]"
+      style={{ left: x, top: y }}
+    >
+      {items.map((item) => (
+        <button
+          key={item.action}
+          onClick={() => onAction(item.action)}
+          className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover transition-colors"
+        >
+          <item.icon size={12} />
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Browser Tab (Placeholder) ──────────────────────────────
+
+function BrowserTab() {
+  return (
+    <div className="flex-1 flex items-center justify-center p-6">
+      <div className="text-center text-text-muted">
+        <Globe size={32} className="mx-auto mb-3 opacity-50" />
+        <p className="text-sm">浏览器功能开发中</p>
+        <p className="text-xs mt-1 opacity-70">将支持页面控制、截图、元素检查</p>
+      </div>
+    </div>
   );
 }
