@@ -46,6 +46,7 @@ pub mod terminal;
 pub mod todo;
 pub mod task_manager;
 pub mod approval_tokens;
+pub mod file_converter;
 pub mod tool_search;
 pub mod tool_chain;
 pub mod tts;
@@ -95,6 +96,7 @@ pub fn register_all(
     todo::register(registry);
     task_manager::register(registry);
     approval_tokens::register(registry);
+    file_converter::register(registry);
     tts::register(registry);
     messaging::register(registry);
     image_gen::register(registry);
