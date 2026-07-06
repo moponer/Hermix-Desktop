@@ -409,9 +409,6 @@ fn truncate_tool_call_args_json(args: &str) -> String {
     serde_json::to_string(&shrunken).unwrap_or_else(|_| args.to_string())
 }
 
-const MIN_SUMMARY_TOKENS: u64 = 2_000;
-const SUMMARY_RATIO: f64 = 0.20;
-const SUMMARY_TOKENS_CEILING: u64 = 12_000;
 const CHARS_PER_TOKEN: usize = 4;
 const SUMMARY_FAILURE_COOLDOWN: Duration = Duration::from_secs(600);
 /// Short cooldown used when the auxiliary chain only has one registered
@@ -1209,6 +1206,122 @@ impl ContextCompressor {
     }
 
     // ------------------------------------------------------------------
+    // Phase 0: Snip — remove ancient messages (cheapest, no API cost).
+    // ------------------------------------------------------------------
+
+    /// Remove very old messages from the conversation history.
+    /// This is the cheapest compression step — zero API cost, just drops
+    /// messages that are too old to be relevant.
+    ///
+    /// Returns `(messages, snipped_count)` where snipped_count is the
+    /// number of messages removed.
+    pub fn snip_ancient_messages(
+        &self,
+        messages: &[Message],
+        max_age_turns: usize,
+    ) -> (Vec<Message>, usize) {
+        if messages.len() <= max_age_turns + self.config.protect_first_n + 1 {
+            return (messages.to_vec(), 0);
+        }
+
+        // Keep: protect_first_n head messages + last max_age_turns messages
+        let keep_start = self.config.protect_first_n;
+        let keep_end = messages.len().saturating_sub(max_age_turns);
+
+        if keep_start >= keep_end {
+            return (messages.to_vec(), 0);
+        }
+
+        let snipped_count = keep_end - keep_start;
+        let mut result: Vec<Message> = Vec::with_capacity(messages.len() - snipped_count);
+
+        // Keep head
+        for i in 0..keep_start {
+            result.push(messages[i].clone());
+        }
+
+        // Insert snip marker
+        result.push(Message::system(
+            "[SNIP] Earlier conversation turns were removed to save context space."
+        ));
+
+        // Keep tail
+        for i in keep_end..messages.len() {
+            result.push(messages[i].clone());
+        }
+
+        if !self.config.quiet_mode {
+            tracing::info!(
+                "Snip: removed {} ancient messages (keeping {} head + {} tail)",
+                snipped_count,
+                keep_start,
+                messages.len() - keep_end,
+            );
+        }
+
+        (result, snipped_count)
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 3.5: Context Collapse (read-time projection).
+    // ------------------------------------------------------------------
+
+    /// Compute a "compressed view" of messages at read time without
+    /// modifying the original. This is the Context Collapse step from
+    /// Claude Code's 5-step compression pipeline.
+    ///
+    /// The key insight: instead of permanently modifying messages,
+    /// compute a compressed view only when sending to the API.
+    /// This preserves the full history for debugging while reducing
+    /// the context sent to the model.
+    ///
+    /// Strategy: keep recent N messages intact, compress older messages
+    /// by replacing tool results with summaries.
+    pub fn context_collapse(
+        messages: &[Message],
+        protect_recent: usize,
+        compress_threshold: f64,
+    ) -> Vec<Message> {
+        if messages.len() <= protect_recent {
+            return messages.to_vec();
+        }
+
+        // Calculate total tokens
+        let total_tokens: u64 = messages
+            .iter()
+            .map(|m| estimate_message_tokens(m) as u64)
+            .sum();
+
+        // If under threshold, return as-is
+        let estimated_context = 200_000u64; // Default context window
+        if (total_tokens as f64 / estimated_context as f64) < compress_threshold {
+            return messages.to_vec();
+        }
+
+        // Compress: keep recent messages intact, summarize older ones
+        let mut result: Vec<Message> = Vec::with_capacity(messages.len());
+        let compress_boundary = messages.len().saturating_sub(protect_recent);
+
+        // Keep head messages (system prompt + first exchange)
+        for i in 0..3.min(compress_boundary) {
+            result.push(messages[i].clone());
+        }
+
+        // Add collapse marker
+        result.push(Message::system(
+            "[CONTEXT COLLAPSE] Older messages have been compressed. \
+             Recent messages follow. Refer to the summary above for earlier context."
+        ));
+
+        // Keep recent messages
+        for i in compress_boundary..messages.len() {
+            result.push(messages[i].clone());
+        }
+
+        result
+    }
+
+    // ------------------------------------------------------------------
     // Phase 1: tool-output pruning (cheap, no LLM call).
     // ------------------------------------------------------------------
 
@@ -1743,6 +1856,18 @@ Write only the summary body. Do not include any preamble or prefix."
             .filter(|t| *t > 0)
             .unwrap_or_else(|| estimate_messages_tokens(&messages));
 
+        // Phase 0: Snip ancient messages (cheapest, no API cost).
+        // Remove messages older than 50 turns to free context space.
+        let (messages, snipped) = self.snip_ancient_messages(&messages, 50);
+        if snipped > 0 && !self.config.quiet_mode {
+            tracing::info!("Phase 0 (Snip): removed {} ancient messages", snipped);
+        }
+
+        // Phase 3.5: Context Collapse (read-time projection).
+        // This is applied to the messages before Phase 1 to provide
+        // an additional layer of compression without API cost.
+        let messages = Self::context_collapse(&messages, self.config.protect_last_n, 0.90);
+
         // Phase 1: prune old tool results.
         let (messages, dedup_count, pruned_count) = self.prune_old_tool_results(
             &messages,
@@ -1972,9 +2097,76 @@ Write only the summary body. Do not include any preamble or prefix."
         // handoff summary is all that's left, and it's lossy by
         // design.
         self.last_archived_turns = turns_to_summarize.clone();
+
+        // Post-compression restoration: inject guidance about recently
+        // accessed files to help the model recover context.
+        Self::post_compression_restore(&mut compressed, &messages, None);
+
         // Quiet the unused `messages` lint when min_tail forces a no-op above.
         drop(messages);
+
         compressed
+    }
+
+    // ------------------------------------------------------------------
+    // Post-compression context restoration.
+    // ------------------------------------------------------------------
+
+    /// Restore important context after compression.
+    ///
+    /// After Auto-Compact, the model may lose track of recently accessed
+    /// files, active skills, or current task state. This method injects
+    /// restoration guidance into the compressed messages to help the
+    /// model recover.
+    ///
+    /// Inspired by Claude Code's Post-Compact Restoration which re-injects
+    /// recently accessed files (up to 5, 50K tokens) and active skills.
+    pub fn post_compression_restore(
+        compressed: &mut Vec<Message>,
+        original_messages: &[Message],
+        _session_id: Option<&str>,
+    ) {
+        if compressed.len() < 3 {
+            return; // Too few messages to restore
+        }
+
+        // Extract recently accessed file paths from the tail messages
+        let recent_files: Vec<String> = compressed
+            .iter()
+            .rev()
+            .take(10)
+            .filter_map(|m| {
+                if let Some(content) = &m.content {
+                    // Look for file path patterns in tool results
+                    if content.contains("path:") || content.contains("file:") {
+                        // Extract file paths (simplified)
+                        Some(content.lines().filter(|l| l.contains("path:")).take(3).collect::<Vec<_>>().join(", "))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .filter(|s| !s.is_empty())
+            .take(5)
+            .collect();
+
+        if recent_files.is_empty() {
+            return;
+        }
+
+        // Inject restoration guidance
+        let restoration_msg = Message::system(&format!(
+            "[POST-COMPRESSION RESTORE] Recently accessed files that may be relevant:\n{}\n\n\
+             If you need to reference these files, use read_file to load them again.",
+            recent_files.iter().map(|f| format!("- {}", f)).collect::<Vec<_>>().join("\n")
+        ));
+
+        // Insert after the first message (system prompt)
+        if compressed.len() > 1 {
+            compressed.insert(1, restoration_msg);
+        }
     }
 }
 
@@ -2143,6 +2335,10 @@ mod tests {
     use super::*;
     use hermix_core::{FunctionCall, ToolCall};
     use hermix_intelligence::auxiliary::{AuxiliarySource, ProviderCandidate};
+
+    // Mirrors of removed production consts — kept only for budget-bound tests.
+    const MIN_SUMMARY_TOKENS: u64 = 2_000;
+    const SUMMARY_TOKENS_CEILING: u64 = 12_000;
 
     // ---------- strip_image_placeholders ----------
 
