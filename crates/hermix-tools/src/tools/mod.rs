@@ -44,6 +44,7 @@ pub mod skills;
 // pub mod slack; // Untracked, broken - removed until fixed
 pub mod terminal;
 pub mod todo;
+pub mod task_manager;
 pub mod tool_search;
 pub mod tool_chain;
 pub mod tts;
@@ -91,6 +92,7 @@ pub fn register_all(
     platforms::register(registry);
     cronjob::register(registry);
     todo::register(registry);
+    task_manager::register(registry);
     tts::register(registry);
     messaging::register(registry);
     image_gen::register(registry);
