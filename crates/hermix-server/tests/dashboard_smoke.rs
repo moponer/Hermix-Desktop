@@ -851,7 +851,7 @@ async fn session_undo_default_count_soft_deletes_last_turn() {
         Message::user("turn-3 user"),
         Message::assistant("turn-3 assistant"),
     ];
-    sp.persist_session("undo-http", &messages, None, None, None, None)
+    sp.persist_session("undo-http", &messages, None, None, None, None, None)
         .unwrap();
 
     // /undo (no count param) → default 1 turn.
@@ -892,6 +892,7 @@ async fn session_undo_with_count_query_string() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -925,6 +926,7 @@ async fn session_restore_brings_back_most_recent_block() {
             Message::user("c"),
             Message::assistant("d"),
         ],
+        None,
         None,
         None,
         None,

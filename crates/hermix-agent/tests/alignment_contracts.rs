@@ -17,6 +17,7 @@ fn hydrate_stored_system_prompt_roundtrip() {
         None,
         None,
         Some("STORED_SYSTEM_PROMPT_XYZ"),
+        None,
     )
     .unwrap();
 

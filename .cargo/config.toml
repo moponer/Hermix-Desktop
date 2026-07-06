@@ -31,3 +31,14 @@ target-dir = "release/target"
 # 吞掉, 看不到具体缺什么 .lib。rust-lld 是链接 Rust 标准产物经过验证的,
 # build script 一般不挑。
 linker = "rust-lld.exe"
+
+# 2026-07-05: rust-lld 不读 `LIB` 环境变量, 需要显式传 LIBPATH.
+#   Cargo 调用 rustc 时把以下 rustflags 注入到链接命令, 让 lld 知道
+#   去哪里找 MSVC SDK 提供的 .lib (kernel32, oldnames, msvcrt, ...).
+#   注意: test profile 会加更多 proc-macro dylib, 仍然走同一条链接路径,
+#   所以这条配置对 `cargo test` 也生效.
+rustflags = [
+    "-C", "link-arg=/LIBPATH:C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x64",
+    "-C", "link-arg=/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64",
+    "-C", "link-arg=/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\ucrt\\x64",
+]

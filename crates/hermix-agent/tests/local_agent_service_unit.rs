@@ -143,6 +143,7 @@ async fn get_session_messages_and_reset_session_round_trip() {
             Some("test"),
             None,
             None,
+            None,
         )
         .expect("persist");
 

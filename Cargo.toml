@@ -127,6 +127,9 @@ proptest = "1"
 # a 1,400-line manual `register_builtins.rs`).
 inventory = "0.3"
 
+# Native plugin loading (runtime .dll on Windows, .so on Linux)
+libloading = "0.8"
+
 # Cache
 moka = { version = "0.12", features = ["future"] }
 
