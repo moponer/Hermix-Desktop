@@ -648,6 +648,12 @@ pub struct CompressorConfig {
     pub summary_model_override: Option<String>,
     /// Suppress `tracing::info!` chatter — useful for batch / test runs.
     pub quiet_mode: bool,
+    /// Minimum tokens for a summary to be considered valid.
+    pub min_summary_tokens: u64,
+    /// Maximum tokens for summary output.
+    pub summary_tokens_ceiling: u64,
+    /// Characters per token approximation ratio.
+    pub chars_per_token: usize,
 }
 
 impl Default for CompressorConfig {
@@ -662,6 +668,9 @@ impl Default for CompressorConfig {
             summary_target_ratio: 0.20,
             summary_model_override: None,
             quiet_mode: false,
+            min_summary_tokens: 2_000,
+            summary_tokens_ceiling: 12_000,
+            chars_per_token: 4,
         }
     }
 }
@@ -900,7 +909,7 @@ impl ContextCompressor {
         let threshold_tokens = (config.context_length as f64 * config.threshold_percent) as u64;
         let target_tokens = (threshold_tokens as f64 * summary_ratio) as u64;
         let max_summary_tokens =
-            ((config.context_length as f64 * 0.05) as u64).min(SUMMARY_TOKENS_CEILING);
+            ((config.context_length as f64 * 0.05) as u64).min(config.summary_tokens_ceiling);
 
         if !config.quiet_mode {
             tracing::info!(
@@ -1366,10 +1375,10 @@ impl ContextCompressor {
 
     fn compute_summary_budget(&self, turns: &[Message]) -> u64 {
         let content_tokens = estimate_messages_tokens(turns);
-        let budget = (content_tokens as f64 * SUMMARY_RATIO) as u64;
+        let budget = (content_tokens as f64 * self.config.summary_target_ratio) as u64;
         budget.clamp(
-            MIN_SUMMARY_TOKENS,
-            self.max_summary_tokens.max(MIN_SUMMARY_TOKENS),
+            self.config.min_summary_tokens,
+            self.max_summary_tokens.max(self.config.min_summary_tokens),
         )
     }
 

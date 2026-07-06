@@ -64,6 +64,75 @@ impl Default for RetryConfig {
 }
 
 // ---------------------------------------------------------------------------
+// WriteRetryConfig
+// ---------------------------------------------------------------------------
+
+/// Configuration for SQLite write retry with jitter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WriteRetryConfig {
+    /// Maximum number of retries before giving up.
+    #[serde(default = "default_write_max_retries")]
+    pub max_retries: u32,
+    /// Minimum retry delay in milliseconds.
+    #[serde(default = "default_write_retry_min_ms")]
+    pub min_ms: u64,
+    /// Maximum retry delay in milliseconds.
+    #[serde(default = "default_write_retry_max_ms")]
+    pub max_ms: u64,
+}
+
+fn default_write_max_retries() -> u32 { 15 }
+fn default_write_retry_min_ms() -> u64 { 20 }
+fn default_write_retry_max_ms() -> u64 { 150 }
+
+impl Default for WriteRetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: default_write_max_retries(),
+            min_ms: default_write_retry_min_ms(),
+            max_ms: default_write_retry_max_ms(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SubAgentConfig
+// ---------------------------------------------------------------------------
+
+/// Configuration for sub-agent delegation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubAgentConfig {
+    /// Timeout in seconds for a single sub-agent execution.
+    #[serde(default = "default_sub_agent_timeout_secs")]
+    pub timeout_secs: u64,
+    /// Minimum turns for a sub-agent (floor).
+    #[serde(default = "default_sub_agent_min_turns")]
+    pub min_turns: u32,
+    /// Maximum turns cap for a sub-agent (ceiling).
+    #[serde(default = "default_sub_agent_max_turns_cap")]
+    pub max_turns_cap: u32,
+    /// Default max iterations for delegation.
+    #[serde(default = "default_delegation_max_iterations")]
+    pub delegation_max_iterations: u32,
+}
+
+fn default_sub_agent_timeout_secs() -> u64 { 300 }
+fn default_sub_agent_min_turns() -> u32 { 2 }
+fn default_sub_agent_max_turns_cap() -> u32 { 12 }
+fn default_delegation_max_iterations() -> u32 { 50 }
+
+impl Default for SubAgentConfig {
+    fn default() -> Self {
+        Self {
+            timeout_secs: default_sub_agent_timeout_secs(),
+            min_turns: default_sub_agent_min_turns(),
+            max_turns_cap: default_sub_agent_max_turns_cap(),
+            delegation_max_iterations: default_delegation_max_iterations(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // RuntimeProviderConfig
 // ---------------------------------------------------------------------------
 
@@ -122,6 +191,10 @@ pub struct AgentConfig {
     #[serde(default)]
     pub retry: RetryConfig,
 
+    /// Write retry configuration for SQLite contention.
+    #[serde(default)]
+    pub write_retry: WriteRetryConfig,
+
     /// Optional system prompt prepended to every conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
@@ -154,6 +227,10 @@ pub struct AgentConfig {
     /// Maximum number of concurrent delegate_task tool calls.
     #[serde(default = "default_max_concurrent_delegates")]
     pub max_concurrent_delegates: u32,
+
+    /// Sub-agent configuration.
+    #[serde(default)]
+    pub sub_agent: SubAgentConfig,
 
     /// Flush memories every N turns.
     #[serde(default = "default_memory_flush_interval")]
@@ -555,6 +632,8 @@ impl Default for AgentConfig {
             model: default_model(),
             api_mode: ApiMode::default(),
             retry: RetryConfig::default(),
+            write_retry: WriteRetryConfig::default(),
+            sub_agent: SubAgentConfig::default(),
             system_prompt: None,
             personality: None,
             extra_body: None,
