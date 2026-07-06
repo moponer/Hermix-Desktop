@@ -45,6 +45,7 @@ pub mod skills;
 pub mod terminal;
 pub mod todo;
 pub mod task_manager;
+pub mod approval_tokens;
 pub mod tool_search;
 pub mod tool_chain;
 pub mod tts;
@@ -93,6 +94,7 @@ pub fn register_all(
     cronjob::register(registry);
     todo::register(registry);
     task_manager::register(registry);
+    approval_tokens::register(registry);
     tts::register(registry);
     messaging::register(registry);
     image_gen::register(registry);
