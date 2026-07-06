@@ -2036,7 +2036,7 @@ Write only the summary body. Do not include any preamble or prefix."
         }
 
         self.compression_count += 1;
-        let compressed = self.sanitize_tool_pairs(compressed);
+        let mut compressed = self.sanitize_tool_pairs(compressed);
 
         // Anti-thrashing: track whether compression was effective.
         let old_estimate = display_tokens;
@@ -2123,7 +2123,7 @@ Write only the summary body. Do not include any preamble or prefix."
     /// recently accessed files (up to 5, 50K tokens) and active skills.
     pub fn post_compression_restore(
         compressed: &mut Vec<Message>,
-        original_messages: &[Message],
+        _original_messages: &[Message],
         _session_id: Option<&str>,
     ) {
         if compressed.len() < 3 {
