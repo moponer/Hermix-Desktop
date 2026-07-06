@@ -1223,13 +1223,138 @@ function ContextMenu({
 // ── Browser Tab (Placeholder) ──────────────────────────────
 
 function BrowserTab() {
+  const [url, setUrl] = useState("");
+  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [pageTitle, setPageTitle] = useState<string | null>(null);
+  const [history, setHistory] = useState<string[]>([]);
+
+  const handleNavigate = async () => {
+    if (!url.trim()) return;
+    setStatus("loading");
+    try {
+      // TODO: Call browser_navigate tool via Tauri
+      setPageTitle(`页面: ${url}`);
+      setHistory((prev) => [url, ...prev].slice(0, 20));
+      setStatus("ready");
+    } catch (e) {
+      setStatus("error");
+    }
+  };
+
+  const handleScreenshot = async () => {
+    // TODO: Call browser_snapshot tool
+    console.log("Take screenshot");
+  };
+
   return (
-    <div className="flex-1 flex items-center justify-center p-6">
-      <div className="text-center text-text-muted">
-        <Globe size={32} className="mx-auto mb-3 opacity-50" />
-        <p className="text-sm">浏览器功能开发中</p>
-        <p className="text-xs mt-1 opacity-70">将支持页面控制、截图、元素检查</p>
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* URL Input */}
+      <div className="px-3 py-3 border-b border-border-primary">
+        <div className="flex items-center gap-2">
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleNavigate()}
+            placeholder="输入网址..."
+            className="flex-1 px-3 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary placeholder:text-text-faint outline-none focus:ring-1 focus:ring-accent/30"
+          />
+          <button
+            onClick={handleNavigate}
+            className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:opacity-90 transition-opacity"
+          >
+            前往
+          </button>
+        </div>
       </div>
+
+      {/* Status Bar */}
+      <div className="px-3 py-2 border-b border-border-primary flex items-center gap-2">
+        <div className={`w-2 h-2 rounded-full ${
+          status === "ready" ? "bg-green-400" :
+          status === "loading" ? "bg-yellow-400 animate-pulse" :
+          status === "error" ? "bg-red-400" : "bg-gray-400"
+        }`} />
+        <span className="text-[11px] text-text-muted">
+          {status === "ready" ? pageTitle || "就绪" :
+           status === "loading" ? "加载中..." :
+           status === "error" ? "错误" : "未连接"}
+        </span>
+        {status === "ready" && (
+          <button
+            onClick={handleScreenshot}
+            className="ml-auto px-2 py-0.5 rounded text-[10px] text-text-muted hover:bg-bg-hover transition-colors"
+          >
+            📸 截图
+          </button>
+        )}
+      </div>
+
+      {/* Quick Actions */}
+      <div className="px-3 py-3 space-y-3">
+        <div className="text-xs font-medium text-text-primary">快捷操作</div>
+        <div className="grid grid-cols-2 gap-2">
+          <QuickAction
+            icon={<Search size={14} />}
+            label="搜索页面"
+            onClick={() => console.log("Search")}
+          />
+          <QuickAction
+            icon={<Eye size={14} />}
+            label="元素检查"
+            onClick={() => console.log("Inspect")}
+          />
+          <QuickAction
+            icon={<Copy size={14} />}
+            label="复制内容"
+            onClick={() => console.log("Copy")}
+          />
+          <QuickAction
+            icon={<FileText size={14} />}
+            label="提取文本"
+            onClick={() => console.log("Extract")}
+          />
+        </div>
+      </div>
+
+      {/* History */}
+      {history.length > 0 && (
+        <div className="px-3 py-3 border-t border-border-primary">
+          <div className="text-xs font-medium text-text-primary mb-2">访问历史</div>
+          <div className="space-y-1">
+            {history.map((h, i) => (
+              <button
+                key={i}
+                onClick={() => setUrl(h)}
+                className="block w-full text-left px-2 py-1 rounded text-[11px] text-text-muted hover:bg-bg-hover truncate transition-colors"
+              >
+                {h}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+// ── Quick Action Component ──────────────────────────────
+
+function QuickAction({
+  icon,
+  label,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-tertiary hover:bg-bg-hover text-xs text-text-primary transition-colors"
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
