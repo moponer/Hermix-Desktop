@@ -300,6 +300,23 @@ When working with Git, follow these rules strictly:
 ## Why this matters
 Using --amend after a failed commit can modify an unrelated previous commit, causing code loss. Always create new commits to preserve history.";
 
+const SKILL_USAGE_GUIDANCE: &str = "\
+# When to use Skills
+
+Use a Skill when:
+- The task matches a Skill description in <available_skills>
+- You need a structured workflow (not just a single tool call)
+- The task involves multiple steps with specific best practices
+
+Do NOT use a Skill when:
+- The task is simple and can be done with a single tool call
+- No Skill matches the task description
+
+## How to use a Skill
+1. Check <available_skills> for a matching Skill
+2. Load the Skill with skill_view(name='skill-name')
+3. Follow the Skill instructions step by step";
+
 const TASK_FOCUS_GUIDANCE: &str = "\
 # Task focus discipline (mandatory for multi-step tasks)
 
@@ -525,6 +542,14 @@ pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
         DirRoute::Always,
         GIT_SAFETY_GUIDANCE,
     ));
+    // Skill usage guidance: when and how to use Skills.
+    if !tool_names.is_empty() {
+        dirs.push(SystemDir::new(
+            "skill_usage.always",
+            DirRoute::Always,
+            SKILL_USAGE_GUIDANCE,
+        ));
+    }
     // URL safety: prevent LLM from fabricating links.
     dirs.push(SystemDir::new(
         "url_safety.always",
