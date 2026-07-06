@@ -57,7 +57,7 @@ const CONTEXT_WINDOW_OPTIONS = [
 
 // ── Tabs ───────────────────────────────────────────
 
-type Tab = "model" | "persona" | "backend";
+type Tab = "model" | "persona" | "backend" | "advanced";
 
 export function SettingsView() {
   const [tab, setTab] = useState<Tab>("model");
@@ -68,11 +68,13 @@ export function SettingsView() {
         <TabBtn active={tab === "model"} onClick={() => setTab("model")} icon={<Cpu size={14} />}>模型配置</TabBtn>
         <TabBtn active={tab === "persona"} onClick={() => setTab("persona")} icon={<UserCog size={14} />}>画像</TabBtn>
         <TabBtn active={tab === "backend"} onClick={() => setTab("backend")} icon={<Settings size={14} />}>后端设置</TabBtn>
+        <TabBtn active={tab === "advanced"} onClick={() => setTab("advanced")} icon={<Settings size={14} />}>高级设置</TabBtn>
       </div>
       <div className="flex-1 overflow-y-auto">
         {tab === "model" && <ModelTab />}
         {tab === "persona" && <PersonaView />}
         {tab === "backend" && <BackendTab />}
+        {tab === "advanced" && <AdvancedTab />}
       </div>
     </div>
   );
@@ -1148,6 +1150,136 @@ function BackendTab() {
         </div>
       </div>
       <PythonRuntimePanel />
+    </div>
+  );
+}
+
+// ── Advanced Tab ──────────────────────────────────────
+
+interface AdvancedConfig {
+  // Compression
+  min_summary_tokens: number;
+  summary_tokens_ceiling: number;
+  // Sub-agent
+  sub_agent_timeout_secs: number;
+  sub_agent_min_turns: number;
+  sub_agent_max_turns_cap: number;
+  delegation_max_iterations: number;
+}
+
+const DEFAULT_ADVANCED_CONFIG: AdvancedConfig = {
+  min_summary_tokens: 2000,
+  summary_tokens_ceiling: 12000,
+  sub_agent_timeout_secs: 300,
+  sub_agent_min_turns: 2,
+  sub_agent_max_turns_cap: 12,
+  delegation_max_iterations: 50,
+};
+
+function AdvancedTab() {
+  const [config, setConfig] = useState<AdvancedConfig>(DEFAULT_ADVANCED_CONFIG);
+  const [saved, setSaved] = useState(false);
+
+  const handleChange = (key: keyof AdvancedConfig, value: number) => {
+    setConfig((prev) => ({ ...prev, [key]: value }));
+    setSaved(false);
+  };
+
+  const handleSave = () => {
+    // TODO: Save to backend config
+    console.log("Advanced config saved:", config);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  return (
+    <div className="p-6 space-y-6 max-w-2xl">
+      <div>
+        <h2 className="text-lg font-semibold text-text-primary">高级设置</h2>
+        <p className="text-xs text-text-muted mt-1">调整压缩、子 Agent 等内部参数。修改后需要重启生效。</p>
+      </div>
+
+      {/* Compression Settings */}
+      <div className="rounded-xl border border-border-primary bg-bg-card p-4">
+        <div className="text-sm font-medium text-text-primary mb-3">压缩设置</div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-text-muted">最小摘要 Token 数</label>
+            <input
+              type="number"
+              value={config.min_summary_tokens}
+              onChange={(e) => handleChange("min_summary_tokens", Number(e.target.value))}
+              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+            />
+            <p className="text-[10px] text-text-muted mt-0.5">摘要生成的最小 token 预算</p>
+          </div>
+          <div>
+            <label className="text-xs text-text-muted">最大摘要 Token 数</label>
+            <input
+              type="number"
+              value={config.summary_tokens_ceiling}
+              onChange={(e) => handleChange("summary_tokens_ceiling", Number(e.target.value))}
+              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+            />
+            <p className="text-[10px] text-text-muted mt-0.5">摘要输出的 token 上限</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Sub-agent Settings */}
+      <div className="rounded-xl border border-border-primary bg-bg-card p-4">
+        <div className="text-sm font-medium text-text-primary mb-3">子 Agent 设置</div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-text-muted">超时时间（秒）</label>
+            <input
+              type="number"
+              value={config.sub_agent_timeout_secs}
+              onChange={(e) => handleChange("sub_agent_timeout_secs", Number(e.target.value))}
+              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+            />
+            <p className="text-[10px] text-text-muted mt-0.5">单个子 Agent 执行的超时时间</p>
+          </div>
+          <div>
+            <label className="text-xs text-text-muted">最小轮次</label>
+            <input
+              type="number"
+              value={config.sub_agent_min_turns}
+              onChange={(e) => handleChange("sub_agent_min_turns", Number(e.target.value))}
+              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+            />
+            <p className="text-[10px] text-text-muted mt-0.5">子 Agent 最少执行轮次</p>
+          </div>
+          <div>
+            <label className="text-xs text-text-muted">最大轮次上限</label>
+            <input
+              type="number"
+              value={config.sub_agent_max_turns_cap}
+              onChange={(e) => handleChange("sub_agent_max_turns_cap", Number(e.target.value))}
+              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+            />
+            <p className="text-[10px] text-text-muted mt-0.5">子 Agent 最多执行轮次</p>
+          </div>
+          <div>
+            <label className="text-xs text-text-muted">委托最大迭代</label>
+            <input
+              type="number"
+              value={config.delegation_max_iterations}
+              onChange={(e) => handleChange("delegation_max_iterations", Number(e.target.value))}
+              className="mt-1 w-full px-3 py-1.5 rounded-lg border border-border-secondary bg-bg-primary text-text-primary text-sm"
+            />
+            <p className="text-[10px] text-text-muted mt-0.5">委托任务的最大迭代次数</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Save Button */}
+      <button
+        onClick={handleSave}
+        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:opacity-90 transition-opacity"
+      >
+        {saved ? <><Check size={14} /> 已保存</> : <><Save size={14} /> 保存设置</>}
+      </button>
     </div>
   );
 }
