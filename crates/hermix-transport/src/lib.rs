@@ -276,6 +276,7 @@ pub struct SendMessageResponse {
 /// the client. Server-side decoding is a no-op since `Vec<u8>` is
 /// directly usable as the data URL body for vision APIs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ImageAttachment {
     pub bytes: Vec<u8>,
     pub mime_type: String,

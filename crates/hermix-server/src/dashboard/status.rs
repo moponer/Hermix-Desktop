@@ -90,5 +90,7 @@ pub async fn get_status(State(state): State<HttpServerState>) -> Json<StatusResp
         gateway_exit_reason: None,
         gateway_updated_at: None,
         gateway_platforms,
+        rtk_saved_chars: hermix_agent::tool_result_processor::rtk_savings().0,
+        rtk_saved_calls: hermix_agent::tool_result_processor::rtk_savings().1,
     })
 }

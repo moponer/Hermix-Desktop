@@ -508,3 +508,91 @@ pub trait CoreContextEngine: Send + Sync {
     /// survive across sessions.
     fn on_session_end(&mut self, _session_id: &str) {}
 }
+
+/// 2026-07-05 (N-03, Hermes 对标): a richer trait layered on top
+/// of [`CoreContextEngine`] that exposes the *post-compression*
+/// bookkeeping the agent loop needs to drive the
+/// `CompactionStatusBanner`, persist the snapshot, and feed the
+/// breaker state machine. Built-in [`ContextCompressor`]
+/// implements this; a plugin can replace compression by
+/// supplying its own `CompressionEngine` implementation and
+/// handing it to the agent loop via
+/// `AgentLoop::set_compression_engine`.
+///
+/// Anything that *only* needs the basic compress-loop semantics
+/// can stay with [`CoreContextEngine`]; the agent loop reaches
+/// for [`CompressionEngine`] only at the
+/// `auto_compress_if_over_threshold` boundary where the
+/// bookkeeping methods matter.
+#[async_trait]
+pub trait CompressionEngine: CoreContextEngine {
+    /// Return the summary text produced by the most recent
+    /// `compress()` call (so `local_agent_service` can persist
+    /// it on `sessions.compressed_summary`). `None` when no
+    /// compression has happened yet, or when the engine has no
+    /// notion of a summary.
+    fn previous_summary(&self) -> Option<&str>;
+
+    /// Return the raw turns the most recent compression folded
+    /// into the summary. The agent loop ships these to
+    /// `compression_archives` so the original wording survives
+    /// after `flush_messages` has wiped it from `messages`.
+    fn last_archived_turns(&self) -> &[Message];
+
+    /// Return the metrics from the most recent compression
+    /// attempt (tokens_saved, summary_errors, breaker stats).
+    fn last_metrics(&self) -> CompressionEngineMetrics;
+
+    /// Take a pre-attempt snapshot of the breaker / budget
+    /// state. `current_tokens` and `threshold_tokens` describe
+    /// the live budget pressure; `failure_reason` is `Some`
+    /// when this snapshot represents a failed attempt.
+    ///
+    /// Takes `&mut self` because the built-in `ContextCompressor`
+    /// derives cooldown timing from `Instant::now()` relative to
+    /// a stored deadline; a purely shared-receiver would force
+    /// an `unsafe` shim. Plugins are free to ignore the
+    /// mutability (they don't have internal cooldown clocks).
+    fn breaker_snapshot(
+        &mut self,
+        current_tokens: u64,
+        threshold_tokens: u64,
+        failure_reason: Option<String>,
+    ) -> CompressionEngineSnapshot;
+
+    /// Record the outcome of a compression attempt and return
+    /// the resulting breaker state. `success == false` rolls
+    /// the breaker toward Open (circuit-break); `success ==
+    /// true` rolls it back toward Closed.
+    fn record_outcome(&mut self, success: bool) -> CompressionEngineState;
+}
+
+/// Snapshot of a single compression-attempt's breaker state.
+/// Mirrors `compression::BreakerSnapshot` so the agent loop can
+/// emit it via `emit_compaction_status` without coupling to the
+/// built-in `ContextCompressor` type.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CompressionEngineSnapshot {
+    pub state: CompressionEngineState,
+    pub current_tokens: u64,
+    pub threshold_tokens: u64,
+    pub failure_reason: Option<String>,
+}
+
+/// Coarse breaker state. Mirrors `compression::BreakerState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum CompressionEngineState {
+    Closed,
+    HalfOpen,
+    Open,
+}
+
+/// Metrics emitted by the most recent compression attempt.
+/// Mirrors the subset of `compression::CompressionMetrics` the
+/// agent loop actually reads.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct CompressionEngineMetrics {
+    pub tokens_saved: u64,
+    pub summary_errors: u64,
+    pub compression_count: u64,
+}

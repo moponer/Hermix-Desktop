@@ -560,7 +560,71 @@ impl ToolHandler for SkillManageHandler {
                 }
                 Ok(format!("Installed {} built-in skills", created))
             }
-            other => Err(ToolError::InvalidParams(format!("Unknown action: '{}'. Use create/update/delete/auto_create/self_improve/sync/install_builtins.", other))),
+            // ── 2026-07-05: offline .hermes-skill file format ──
+            "export_to_file" => {
+                let name = params.get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidParams("Missing 'name' parameter".into()))?;
+                let file_path = params.get("file_path")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidParams("Missing 'file_path' parameter".into()))?;
+
+                let meta = self.provider.get_skill(name)
+                    .await
+                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
+                    .ok_or_else(|| ToolError::ExecutionFailed(format!(
+                        "Skill '{}' not found", name
+                    )))?;
+
+                // .hermes-skill v1 bundle format: JSON with frontmatter fields.
+                let bundle = json!({
+                    "hermix_skill": "1",
+                    "name": meta.name,
+                    "description": meta.description,
+                    "category": meta.category,
+                    "content": meta.content,
+                });
+                let bundle_str = serde_json::to_string_pretty(&bundle)
+                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+                std::fs::write(file_path, &bundle_str)
+                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write .hermes-skill file: {}", e)))?;
+                Ok(format!("Exported skill '{}' to {}", name, file_path))
+            }
+            "import_from_file" => {
+                let file_path = params.get("file_path")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::InvalidParams("Missing 'file_path' parameter".into()))?;
+
+                let raw = std::fs::read_to_string(file_path)
+                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read .hermes-skill file: {}", e)))?;
+                let bundle: Value = serde_json::from_str(&raw)
+                    .map_err(|e| ToolError::ExecutionFailed(format!("Invalid .hermes-skill JSON: {}", e)))?;
+
+                let version = bundle.get("hermix_skill")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::ExecutionFailed(
+                        "Missing 'hermix_skill' version field — not a valid .hermes-skill file".into()
+                    ))?;
+                if version != "1" {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "Unsupported .hermes-skill version '{}' — expected '1'", version
+                    )));
+                }
+
+                let name = bundle.get("name")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::ExecutionFailed("Missing 'name' in bundle".into()))?;
+                let content = bundle.get("content")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ToolError::ExecutionFailed("Missing 'content' in bundle".into()))?;
+                let category = bundle.get("category").and_then(|v| v.as_str());
+
+                self.provider.create_skill(name, content, category)
+                    .await
+                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+                Ok(format!("Imported skill '{}' from {}", name, file_path))
+            }
+            other => Err(ToolError::InvalidParams(format!("Unknown action: '{}'. Use create/update/delete/auto_create/self_improve/sync/install_builtins/export_to_file/import_from_file.", other))),
         }
     }
 
@@ -577,7 +641,9 @@ impl ToolHandler for SkillManageHandler {
                 "auto_extract_from_conversation",
                 "self_improve",
                 "sync",
-                "install_builtins"
+                "install_builtins",
+                "export_to_file",
+                "import_from_file"
             ]
         }));
         props.insert(
@@ -630,10 +696,25 @@ impl ToolHandler for SkillManageHandler {
                 "description": "Optional 'why this works' paragraph for auto_extract_from_conversation"
             }),
         );
+        // 2026-07-05: .hermes-skill offline file share format.
+        props.insert(
+            "file_path".into(),
+            json!({
+                "type": "string",
+                "description": "File path for export_to_file / import_from_file actions (must end with .hermes-skill)"
+            }),
+        );
+        props.insert(
+            "source_url".into(),
+            json!({
+                "type": "string",
+                "description": "URL for import_from_url action (agentskills.io or raw.githubusercontent.com)"
+            }),
+        );
 
         tool_schema(
             "skill_manage",
-            "Create, update, delete, auto-extract, or self-improve skills. auto_create / auto_extract_from_conversation enforce name (3–80 chars), summary (>10 chars, non-placeholder), and steps (≥1) — sub-quality calls return an error instead of writing noise. Both auto actions write SKILL.md frontmatter so the orchestrator picks them up cleanly, and dedup against an existing skill of the same name (update instead of duplicate-create).",
+            "Create, update, delete, auto-extract, self-improve, sync, install builtins, or export/import .hermes-skill files. auto_create / auto_extract_from_conversation enforce name (3–80 chars), summary (>10 chars, non-placeholder), and steps (≥1) — sub-quality calls return an error instead of writing noise. Both auto actions write SKILL.md frontmatter so the orchestrator picks them up cleanly, and dedup against an existing skill of the same name (update instead of duplicate-create). export_to_file writes a .hermes-skill v1 JSON bundle; import_from_file reads it.",
             JsonSchema::object(props, vec!["action".into(), "name".into()]),
         )
     }

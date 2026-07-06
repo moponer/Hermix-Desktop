@@ -7,6 +7,21 @@
 //!
 //! Corresponds to Python `run_agent.py`'s `interrupt()` / `clear_interrupt()`
 //! / `_interrupt_requested` system.
+//!
+//! # Cancellation primitive (O1.2)
+//!
+//! Beyond the polling-style `check_interrupt()`, the controller exposes a
+//! `wait_for_interrupt()` future. Callers that are inside a long-running
+//! async operation (e.g. a 30 s+ LLM API call) can `tokio::select!` between
+//! their work and `wait_for_interrupt()` so the agent reacts to Ctrl+C
+//! immediately instead of waiting for the HTTP timeout.
+//!
+//! ```rust,ignore
+//! tokio::select! {
+//!     result = long_running_call(…) => result,
+//!     _ = interrupt.wait_for_interrupt() => Err(AgentError::Interrupted { message: None }),
+//! }
+//! ```
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -27,6 +42,12 @@ use hermix_core::AgentError;
 ///
 /// // In the agent loop, before each LLM call / tool execution:
 /// ctrl.check_interrupt()?;
+///
+/// // During a long-running async op:
+/// tokio::select! {
+///     res = llm_call(…) => res,
+///     _ = ctrl.wait_for_interrupt() => Err(AgentError::Interrupted { message: None }),
+/// }
 /// ```
 #[derive(Debug, Clone)]
 pub struct InterruptController {
@@ -34,6 +55,10 @@ pub struct InterruptController {
     flag: Arc<AtomicBool>,
     /// Optional redirect message that triggered the interrupt.
     redirect_message: Arc<Mutex<Option<String>>>,
+    /// Tokio notification primitive for async cancellation (O1.2).
+    /// `notify_one()` fires when `interrupt()` is called; `notified()`
+    /// resolves immediately if an interrupt was already requested.
+    notify: Arc<tokio::sync::Notify>,
 }
 
 impl InterruptController {
@@ -42,6 +67,7 @@ impl InterruptController {
         Self {
             flag: Arc::new(AtomicBool::new(false)),
             redirect_message: Arc::new(Mutex::new(None)),
+            notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -49,6 +75,9 @@ impl InterruptController {
     ///
     /// Optionally provide a redirect message (e.g. new user input that
     /// should be processed instead of continuing the current tool chain).
+    ///
+    /// Fires the async notification so any `tokio::select!` racing on
+    /// [`wait_for_interrupt`](Self::wait_for_interrupt) unblocks immediately.
     pub fn interrupt(&self, message: Option<String>) {
         if let Ok(mut guard) = self.redirect_message.lock() {
             *guard = message;
@@ -56,6 +85,8 @@ impl InterruptController {
         // Set the flag AFTER storing the message so readers always see
         // a consistent (flag=true, message=Some) pair.
         self.flag.store(true, Ordering::Release);
+        // Wake any async waiter (O1.2).
+        self.notify.notify_one();
     }
 
     /// Clear any pending interrupt request.
@@ -105,6 +136,30 @@ impl InterruptController {
         } else {
             Ok(())
         }
+    }
+
+    /// Async-friendly cancellation future (O1.2).
+    ///
+    /// Returns a future that resolves when `interrupt()` is called.
+    /// If an interrupt was already requested, the future resolves
+    /// immediately on the next poll. Callers use this in a
+    /// `tokio::select!` to cancel long-running async work (LLM API
+    /// calls, tool execution) without waiting for a polling window.
+    ///
+    /// ```rust,ignore
+    /// tokio::select! {
+    ///     res = llm_call(...) => res,
+    ///     _ = interrupt.wait_for_interrupt() => {
+    ///         interrupt.check_interrupt() // consume the flag, return error
+    ///     }
+    /// }
+    /// ```
+    pub async fn wait_for_interrupt(&self) {
+        // If already interrupted, resolve immediately.
+        if self.is_interrupted() {
+            return;
+        }
+        self.notify.notified().await;
     }
 }
 

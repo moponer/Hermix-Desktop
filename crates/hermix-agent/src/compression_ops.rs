@@ -15,13 +15,13 @@
 
 use std::sync::{Arc, Mutex};
 
-use hermix_core::Message;
+use hermix_core::{CompressionEngine, Message};
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::agent_config::AgentConfig;
 use crate::agent_helpers::AgentCallbacks;
 use crate::archive::{archive_context_section, render_archive_summary, ArchiveRef};
-use crate::compression::{CompressionMetrics, ContextCompressor};
+use crate::compression::CompressionMetrics;
 use crate::context::ContextManager;
 use crate::message_helpers::{emit_compaction_status, emit_status};
 
@@ -48,10 +48,23 @@ use crate::message_helpers::{emit_compaction_status, emit_status};
 /// got compressed — `flush_messages` would wipe those rows before
 /// the loop returns to the caller).
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    name = "auto_compress_if_over_threshold",
+    level = "info",
+    skip_all,
+    fields(
+        total_tokens = tracing::field::Empty,
+        threshold_tokens = tracing::field::Empty,
+        pressure_pct = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        archive_refs = tracing::field::Empty,
+        elapsed_ms = tracing::field::Empty,
+    )
+)]
 pub async fn auto_compress_if_over_threshold<F>(
     config: &AgentConfig,
     callbacks: &AgentCallbacks,
-    compressor: Option<&Arc<TokioMutex<ContextCompressor>>>,
+    compressor: Option<&Arc<TokioMutex<dyn CompressionEngine + Send>>>,
     last_archive_refs: &Mutex<Vec<ArchiveRef>>,
     latest_compressed_summary: &Mutex<Option<String>>,
     latest_compression_archived_turns: &Mutex<Option<Vec<Message>>>,
@@ -78,7 +91,8 @@ pub async fn auto_compress_if_over_threshold<F>(
     // attempt so the banner can show "即将触发自动压缩" the moment
     // we cross the threshold, not only after the LLM call lands.
     if let Some(ref compressor) = compressor {
-        let mut guard: tokio::sync::MutexGuard<'_, ContextCompressor> = compressor.lock().await;
+        let mut guard: tokio::sync::MutexGuard<'_, dyn CompressionEngine + Send> =
+            compressor.lock().await;
         let pre_snap = guard.breaker_snapshot(
             total_tokens as u64,
             threshold as u64,
@@ -128,8 +142,9 @@ pub async fn auto_compress_if_over_threshold<F>(
     // Prefer the advanced LLM-powered compressor when available.
     if let Some(ref compressor) = compressor {
         let messages = ctx.get_messages().to_vec();
-        let mut guard: tokio::sync::MutexGuard<'_, ContextCompressor> = compressor.lock().await;
-        let compressed = guard.compress(messages, None).await;
+        let mut guard: tokio::sync::MutexGuard<'_, dyn CompressionEngine + Send> =
+            compressor.lock().await;
+        let compressed = guard.compress(messages).await;
         // Store the compressed summary for cross-session persistence.
         if let Some(prev) = guard.previous_summary() {
             if let Ok(mut latest) = latest_compressed_summary.lock() {
@@ -152,7 +167,31 @@ pub async fn auto_compress_if_over_threshold<F>(
             }
         }
         if let Ok(mut slot) = latest_compression_metrics.lock() {
-            *slot = Some(guard.last_metrics().clone());
+            let engine_metrics = guard.last_metrics();
+            // 2026-07-05 (N-03): translate the engine-agnostic
+            // metric surface back into the
+            // built-in `CompressionMetrics` shape so the
+            // downstream `local_agent_service` persistence path
+            // doesn't need to change. We map the engine's
+            // `tokens_saved` / `summary_errors` /
+            // `compression_count` onto the corresponding fields
+            // and leave the rest at zero (they were only ever
+            // populated by the LLM compressor anyway, so
+            // plugins that don't track them get a zero row).
+            *slot = Some(crate::compression::CompressionMetrics {
+                original_tokens: 0,
+                compressed_tokens: 0,
+                tokens_saved: engine_metrics.tokens_saved,
+                compression_ratio: 0.0,
+                original_turns: 0,
+                compressed_turns: 0,
+                turns_removed: 0,
+                tool_results_pruned: 0,
+                deduplication_count: 0,
+                summary_api_calls: 0,
+                summary_errors: engine_metrics.summary_errors as u32,
+                anti_thrashing_triggered: false,
+            });
         }
         // 2026-06-29: post-attempt snapshot. We classify success
         // by `summary_errors == 0` (compress() records an error
@@ -175,7 +214,7 @@ pub async fn auto_compress_if_over_threshold<F>(
             let summary_errors = guard.last_metrics().summary_errors;
             let tokens_saved = guard.last_metrics().tokens_saved;
             let success = summary_errors == 0;
-            let post_state = guard.record_compression_outcome(success);
+            let post_state = guard.record_outcome(success);
             let used_after = if success && tokens_saved > 0 {
                 total_tokens.saturating_sub(tokens_saved as usize)
             } else {
@@ -199,8 +238,26 @@ pub async fn auto_compress_if_over_threshold<F>(
         };
         emit_compaction_status(callbacks, &post_snap);
         *ctx.get_messages_mut() = compressed;
+        // Bulk-replace invalidates the cached running token total; the
+        // agent loop's next pressure check calls `total_tokens()` and
+        // would otherwise read the pre-compression count.
+        ctx.recompute_total_tokens();
     } else {
-        // Fallback: simple character-based compression.
+        // Fallback: simple character-based compression. The method is
+        // deprecated as a no-op fallback only — when no LLM compressor
+        // is wired, we still call it for symmetry with the historical
+        // contract; it intentionally does nothing, so the agent loop
+        // continues with the un-truncated messages and the next
+        // pressure check will re-evaluate.
+        #[allow(deprecated)]
         ctx.compress();
     }
 }
+
+// 2026-07-05 (N-05): end-to-end tests for the
+// compression-pathway pipeline. These exercise the full
+// auto_compress → archive → LLM/NoOp → snapshot
+// flow without a real LLM, by using NoOpCompressionEngine to
+// confirm the trait-dispatch wiring works (N-03) and the
+// Integration tests for the compression pipeline entry point
+// live in `tests/compression_ops_integration.rs` (N-10).

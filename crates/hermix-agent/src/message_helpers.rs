@@ -47,10 +47,21 @@ pub fn emit_status(
 /// signals from the user.
 pub fn emit_compaction_status(
     callbacks: &AgentCallbacks,
-    snapshot: &crate::compression::BreakerSnapshot,
+    snapshot: &hermix_core::CompressionEngineSnapshot,
 ) {
     if let Some(cb) = callbacks.on_compaction_status.as_ref() {
-        cb(snapshot);
+        let crate_snapshot = crate::compression::BreakerSnapshot {
+            state: match snapshot.state {
+                hermix_core::CompressionEngineState::Closed => crate::compression::BreakerState::Closed,
+                hermix_core::CompressionEngineState::HalfOpen => crate::compression::BreakerState::HalfOpen,
+                hermix_core::CompressionEngineState::Open => crate::compression::BreakerState::Open,
+            },
+            used_tokens: snapshot.current_tokens,
+            threshold_tokens: snapshot.threshold_tokens,
+            last_failure_reason: snapshot.failure_reason.clone(),
+            ..Default::default()
+        };
+        cb(&crate_snapshot);
     }
 }
 

@@ -8,12 +8,12 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use hermix_core::{traits::RiskLevel, truncate_chars, ToolHandler, ToolSchema};
 use indexmap::IndexMap;
 use serde_json::Value;
-use tracing::warn;
+use tracing::{instrument, warn};
 
 // ---------------------------------------------------------------------------
 // ToolEntry
@@ -142,14 +142,14 @@ pub struct ToolRegistryInner {
 /// Thread-safe wrapper around `ToolRegistryInner`.
 #[derive(Clone)]
 pub struct ToolRegistry {
-    inner: Arc<Mutex<ToolRegistryInner>>,
+    inner: Arc<RwLock<ToolRegistryInner>>,
 }
 
 impl ToolRegistry {
     /// Create a new empty registry with default global max result size.
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ToolRegistryInner {
+            inner: Arc::new(RwLock::new(ToolRegistryInner {
                 tools: HashMap::new(),
                 global_max_result_size_chars: 50_000,
                 terminal_workspace: Arc::new(std::sync::RwLock::new(None)),
@@ -160,7 +160,7 @@ impl ToolRegistry {
     /// Create a new registry with a custom global max result size.
     pub fn with_max_result_size(max: usize) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ToolRegistryInner {
+            inner: Arc::new(RwLock::new(ToolRegistryInner {
                 tools: HashMap::new(),
                 global_max_result_size_chars: max,
                 terminal_workspace: Arc::new(std::sync::RwLock::new(None)),
@@ -172,7 +172,7 @@ impl ToolRegistry {
     /// uses this to wire the `TerminalHandler` to the same `RwLock` the agent
     /// service writes to.
     pub fn terminal_workspace_handle(&self) -> Arc<std::sync::RwLock<Option<std::path::PathBuf>>> {
-        self.inner.lock().unwrap().terminal_workspace.clone()
+        self.inner.read().unwrap().terminal_workspace.clone()
     }
 
     /// Set the per-turn default workspace for the terminal (and any other
@@ -180,7 +180,7 @@ impl ToolRegistry {
     /// `agent.run_*` from `AgentOverrides::workspace`. Cheap: single
     /// RwLock write.
     pub fn set_terminal_workspace(&self, workspace: Option<std::path::PathBuf>) {
-        if let Ok(mut guard) = self.inner.lock().unwrap().terminal_workspace.write() {
+        if let Ok(mut guard) = self.inner.read().unwrap().terminal_workspace.write() {
             *guard = workspace;
         } else {
             tracing::warn!("terminal_workspace lock poisoned; ignoring update");
@@ -256,7 +256,7 @@ impl ToolRegistry {
         override_existing: bool,
     ) {
         let name = name.into();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         if inner.tools.contains_key(&name) {
             if !override_existing {
                 tracing::error!(
@@ -314,7 +314,7 @@ impl ToolRegistry {
     /// the call is a silent no-op (the operator probably hasn't
     /// registered that toolset yet).
     pub fn update_schema(&self, name: &str, new_schema: ToolSchema) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         if let Some(entry) = inner.tools.get_mut(name) {
             entry.schema = new_schema;
         }
@@ -463,7 +463,7 @@ impl ToolRegistry {
     /// none-flip, no half-applied state). The actual atomic
     /// stores use `Release` ordering; readers use `Acquire`.
     pub fn set_toolset_enabled(&self, toolset: &str, enabled: bool) -> usize {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         let mut count = 0;
         for entry in inner.tools.values() {
             if entry.toolset == toolset {
@@ -478,7 +478,7 @@ impl ToolRegistry {
     /// tool exists. The pre-execution approval hook uses this to decide
     /// whether to prompt the user.
     pub fn risk_level(&self, name: &str) -> Option<RiskLevel> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         inner.tools.get(name).map(|e| e.risk_level)
     }
 
@@ -486,7 +486,7 @@ impl ToolRegistry {
     ///
     /// Returns `true` if the tool was present and removed.
     pub fn deregister(&self, name: &str) -> bool {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         inner.tools.remove(name).is_some()
     }
 
@@ -499,7 +499,7 @@ impl ToolRegistry {
     /// hidden even if user-enabled. This is used to build the tool
     /// list sent to the LLM.
     pub fn get_definitions(&self) -> Vec<ToolSchema> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         inner
             .tools
             .values()
@@ -513,7 +513,7 @@ impl ToolRegistry {
     /// Generate a markdown reference file listing all registered tools.
     /// The LLM can `read_file` it on demand instead of bloating the prompt.
     pub fn write_tools_reference(&self, path: &std::path::Path) -> Result<(), String> {
-        let inner = self.inner.lock().map_err(|e| format!("lock: {e}"))?;
+        let inner = self.inner.read().map_err(|e| format!("lock: {e}"))?;
         let mut md = String::from("# Tool Reference\n\n");
         md.push_str("Read this file when you need a tool's parameters.\n\n");
 
@@ -552,7 +552,7 @@ impl ToolRegistry {
     /// On success, returns the tool result string.
     /// On failure, returns a JSON error string: `{"error": "..."}`.
     pub fn dispatch(&self, name: &str, params: Value) -> String {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         let entry = match inner.tools.get(name) {
             Some(e) => e,
             None => return Self::tool_error(&format!("Tool not found: {}", name)),
@@ -617,9 +617,23 @@ impl ToolRegistry {
     }
 
     /// Dispatch a tool call asynchronously.
+    #[instrument(
+        name = "tool_dispatch",
+        level = "info",
+        skip_all,
+        fields(
+            tool = %name,
+            params_bytes = params.to_string().len(),
+            result_chars = tracing::field::Empty,
+            result_kind = tracing::field::Empty,
+            tool_ms = tracing::field::Empty,
+            error = tracing::field::Empty,
+        )
+    )]
     pub async fn dispatch_async(&self, name: &str, params: Value) -> String {
+        let started = std::time::Instant::now();
         let (handler, max_chars, schema) = {
-            let inner = self.inner.lock().unwrap();
+            let inner = self.inner.read().unwrap();
             match inner.tools.get(name) {
                 Some(e) => (
                     Arc::clone(&e.handler),
@@ -634,21 +648,34 @@ impl ToolRegistry {
         // P1.2.2: see `dispatch` for rationale.
         let params = Self::coerce_args(&schema, params);
 
-        match handler.execute(params).await {
+        let result = match handler.execute(params).await {
             Ok(output) => {
                 if output.chars().count() > max_chars {
                     let head = truncate_chars(&output, max_chars);
                     let removed = output.chars().count() - max_chars;
-                    Self::tool_result(&format!(
+                    let truncated = Self::tool_result(&format!(
                         "{}\n\n[... truncated {} characters ...]",
                         head, removed
-                    ))
+                    ));
+                    (truncated, "truncated", output.chars().count())
                 } else {
-                    Self::tool_result(&output)
+                    let len = output.chars().count();
+                    (Self::tool_result(&output), "ok", len)
                 }
             }
-            Err(e) => Self::tool_error(&e.to_string()),
-        }
+            Err(e) => {
+                // N-06: surface the error to the span so a `tracing`
+                // subscriber can correlate failures with the
+                // originating tool call.
+                tracing::Span::current().record("error", tracing::field::display(&e));
+                (Self::tool_error(&e.to_string()), "error", 0)
+            }
+        };
+        let elapsed = started.elapsed();
+        tracing::Span::current().record("result_chars", result.2);
+        tracing::Span::current().record("result_kind", result.1);
+        tracing::Span::current().record("tool_ms", elapsed.as_millis() as u64);
+        result.0
     }
 
     /// Get a reference to a tool entry by name.
@@ -656,7 +683,7 @@ impl ToolRegistry {
     /// Note: This returns a cloned `Arc<ToolEntry>` because we cannot return
     /// a reference to data behind a Mutex lock. Returns `None` if not found.
     pub fn get_tool(&self, name: &str) -> Option<ToolEntryInfo> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         inner.tools.get(name).map(|e| ToolEntryInfo {
             name: e.name.clone(),
             toolset: e.toolset.clone(),
@@ -671,7 +698,7 @@ impl ToolRegistry {
 
     /// List all registered tool entries.
     pub fn list_tools(&self) -> Vec<ToolEntryInfo> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         inner
             .tools
             .values()
@@ -690,7 +717,7 @@ impl ToolRegistry {
 
     /// List distinct toolset names.
     pub fn list_toolsets(&self) -> Vec<String> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         let mut sets: Vec<String> = inner.tools.values().map(|e| e.toolset.clone()).collect();
         sets.sort();
         sets.dedup();
@@ -700,7 +727,7 @@ impl ToolRegistry {
     /// Catalog — lightweight tool directory for agent startup.
     /// Returns only enabled+available tools, ~50 bytes per entry.
     pub fn catalog(&self) -> Vec<hermix_core::ToolCatalogEntry> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         inner.tools.values()
             .filter(|e| e.is_enabled.load(Ordering::Acquire) && (e.check_fn)())
             .map(|e| hermix_core::ToolCatalogEntry {
@@ -715,7 +742,7 @@ impl ToolRegistry {
     /// Look up the full schema for a single tool, so the agent can
     /// call `get_tool_details("name")` after browsing the catalog.
     pub fn get_tool_schema(&self, name: &str) -> Option<ToolSchema> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         inner.tools.get(name)
             .filter(|e| e.is_enabled.load(Ordering::Acquire) && (e.check_fn)())
             .map(|e| e.schema.clone())
@@ -725,7 +752,7 @@ impl ToolRegistry {
     /// **and** `is_enabled` is set). See [`Self::get_definitions`]
     /// for the rationale on the double gate.
     pub fn is_available(&self, name: &str) -> bool {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         match inner.tools.get(name) {
             Some(e) => (e.check_fn)() && e.is_enabled.load(Ordering::Acquire),
             None => false,

@@ -25,6 +25,8 @@ pub mod groupchat_dispatcher;
 pub mod groupchat_sqlite;
 pub mod types;
 
+// Re-export shared types used by multiple modules
+pub use types::*;
 use axum::routing::{delete, get, post, put, patch};
 use axum::Router;
 

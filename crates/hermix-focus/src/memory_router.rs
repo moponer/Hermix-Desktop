@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use tracing::{instrument, warn};
 
 use crate::memory_layer::{
     DynMemoryLayer, HealthStatus, MemoryError, MemoryHit, MemoryLayer, MemoryQuery, Result,
@@ -207,7 +208,22 @@ impl MemoryLayer for MemoryRouter {
         self.backends.iter().any(|b| b.is_available())
     }
 
+    #[instrument(
+        name = "memory_recognize",
+        level = "debug",
+        skip_all,
+        fields(
+            query_text = %query.text.chars().take(80).collect::<String>(),
+            backend_count = self.backends.len(),
+            requested_limit = query.limit,
+            auto_time_window = tracing::field::Empty,
+            raw_hit_count = tracing::field::Empty,
+            deduped_count = tracing::field::Empty,
+            elapsed_ms = tracing::field::Empty,
+        )
+    )]
     async fn recognize(&self, query: &MemoryQuery) -> Result<Vec<MemoryHit>> {
+        let _span_start = std::time::Instant::now();
         // 0. H4: if the caller didn't attach a time window, do it for
         //    them. This is the single chokepoint that makes "昨天" /
         //    "last week" queries filter by time across all 8 backends
@@ -215,14 +231,17 @@ impl MemoryLayer for MemoryRouter {
         //    their behaviour; backends that ignore it are at worst
         //    doing extra work that's then dedup'd by the router.
         let mut query = query.clone();
+        let mut auto_window = false;
         if query.time_window.is_none() {
             let recall = TimeAwareRecall::for_now();
             let hint = recall.analyze(&query.text);
             if let Some(w) = hint.window {
                 query.time_window = Some(w);
                 query.intent = hint.intent;
+                auto_window = true;
             }
         }
+        tracing::Span::current().record("auto_time_window", auto_window);
         // 1. Fan out concurrently to all backends.
         let mut handles = Vec::with_capacity(self.backends.len());
         for backend in &self.backends {
@@ -242,13 +261,13 @@ impl MemoryLayer for MemoryRouter {
                     if !self.config.tolerate_errors {
                         return Err(e);
                     }
-                    tracing::warn!("memory backend error (tolerated): {e}");
+                    warn!("memory backend error (tolerated): {e}");
                 }
                 Err(e) => {
                     if !self.config.tolerate_errors {
                         return Err(crate::memory_layer::MemoryError::Other(format!("join: {e}")));
                     }
-                    tracing::warn!("backend task join error: {e}");
+                    warn!("backend task join error: {e}");
                 }
             }
         }
@@ -278,7 +297,17 @@ impl MemoryLayer for MemoryRouter {
                 .partial_cmp(&a.salience)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        let raw = deduped.len();
         deduped.truncate(query.limit);
+        // Late-record counters so span consumers see the actual
+        // fan-out result without re-deriving it from logs.
+        let span = tracing::Span::current();
+        span.record("raw_hit_count", raw as i64);
+        span.record("deduped_count", deduped.len() as i64);
+        span.record(
+            "elapsed_ms",
+            _span_start.elapsed().as_millis() as i64,
+        );
         Ok(deduped)
     }
 

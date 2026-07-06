@@ -98,6 +98,20 @@ async fn execute_llm_call(
 /// Returns the successful [`LlmResponse`] or an [`AgentError::LlmApi`]
 /// when all attempts (including fallback) are exhausted.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    name = "call_llm_with_retry",
+    level = "info",
+    skip_all,
+    fields(
+        request_model = tracing::field::Empty,
+        resolved_model = tracing::field::Empty,
+        route_label = tracing::field::Empty,
+        attempt_count = tracing::field::Empty,
+        fallback_used = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        elapsed_ms = tracing::field::Empty,
+    )
+)]
 pub async fn call_llm_with_retry(
     config: &AgentConfig,
     oauth: &OAuthRefresh,
@@ -154,8 +168,18 @@ pub async fn call_llm_with_retry(
         });
         let _ = invoke_hook(plugin_manager, HookType::PreApiRequest, &pre_api_ctx);
 
-        let result =
-            execute_llm_call(&provider, &api_messages, tool_schemas, config, &resolved_model, extra_body.as_ref()).await;
+        // O1.2: race the LLM call against the interrupt signal. When the
+        // user presses Ctrl+C (or the front-end sends a stop message),
+        // `wait_for_interrupt()` resolves immediately — no need to wait
+        // for the HTTP timeout or the next polling window.
+        let result = tokio::select! {
+            r = execute_llm_call(&provider, &api_messages, tool_schemas, config, &resolved_model, extra_body.as_ref()) => {
+                r
+            }
+            _ = interrupt.wait_for_interrupt() => {
+                Err(AgentError::Interrupted { message: interrupt.take_redirect_message() })
+            }
+        };
 
         let post_api_ctx = match &result {
             Ok(response) => serde_json::json!({

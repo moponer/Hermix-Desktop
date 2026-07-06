@@ -197,6 +197,20 @@ pub fn apply_stream_collect_chunk(
 /// response. Supports graceful interrupt and a silence-watchdog that emits
 /// activity-status events when the stream stalls.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    name = "collect_stream_llm_response",
+    level = "info",
+    skip_all,
+    fields(
+        active_model = %active_model,
+        tool_count = tool_schemas.len(),
+        route_label = route.and_then(|r| r.route_label.as_deref()).unwrap_or(""),
+        chunks_emitted = tracing::field::Empty,
+        elapsed_ms = tracing::field::Empty,
+        finish_reason = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+    )
+)]
 pub async fn collect_stream_llm_response(
     config: &AgentConfig,
     oauth: &OAuthRefresh,

@@ -273,6 +273,13 @@ pub struct CompactionConfig {
     /// Default: `600` seconds (10 minutes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub circuit_breaker_cooldown_secs: Option<u64>,
+    /// O5.1: Override the model used for LLM summarisation during context
+    /// compression. When set, the compressor routes through this model
+    /// instead of the default auxiliary chain. Useful for users who want
+    /// a cheap/fast model for summarisation (e.g. `gpt-4o-mini`) while
+    /// keeping a more capable model for chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_model: Option<String>,
 }
 
 impl Default for CompactionConfig {
@@ -287,6 +294,7 @@ impl Default for CompactionConfig {
             enabled: None,
             circuit_breaker_threshold: None,
             circuit_breaker_cooldown_secs: None,
+            summary_model: None,
         }
     }
 }

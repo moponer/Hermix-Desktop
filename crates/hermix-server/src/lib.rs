@@ -37,7 +37,7 @@ use futures::StreamExt;
 use hermix_config::GatewayConfig;
 use hermix_agent::python_alignment::{strip_think_blocks_for_ack, ThinkBlockParser};
 use hermix_agent::ArchiveRef;
-use hermix_core::{traits::PermissionLevel, AgentError, Message, MessageRole, StreamChunk, ToolCallSanitizer as CoreToolCallSanitizer};
+use hermix_core::{traits::{PermissionLevel, RiskLevel}, AgentError, Message, MessageRole, StreamChunk, ToolCallSanitizer as CoreToolCallSanitizer};
 use hermix_tools::approval::UserAllowlist;
 use hermix_tools::ToolRegistry;
 use regex::Regex;
@@ -999,6 +999,84 @@ impl HttpServerState {
             &hermix_home,
         );
 
+        // ★ P1-② (2026-07-05): load native plugins (.dll) from
+        //   $HERMIX_HOME/plugins/tools/ and /plugins/memory/.
+        //   Each directory must contain a `plugin.yaml` with a
+        //   `binary` field. Plugins export `hermix_plugin_init()`
+        //   via the C ABI. Each ToolInstance is wrapped as
+        //   `NativeToolAdapter`, registered into `tool_registry`.
+        {
+            let dll_paths =
+                hermix_agent::native_plugin::discover_native_plugins(&hermix_home);
+            for dll in &dll_paths {
+                match unsafe {
+                    hermix_agent::native_plugin::LoadedNativePlugin::load(dll)
+                } {
+                    Ok(plugin) => {
+                        let mut registered = 0usize;
+                        for idx in 0..plugin.tool_count {
+                            match unsafe { plugin.create_tool_handler(idx) } {
+                                Ok(handler) => {
+                                    let schema = handler.schema();
+                                    let name = schema.name.clone();
+                                    let risk = RiskLevel::Caution;
+                                    tool_registry.register_with_risk(
+                                        &name,
+                                        "native-plugin",
+                                        schema,
+                                        handler,
+                                        Arc::new(|| true),
+                                        vec![],
+                                        true,
+                                        &format!(
+                                            "Native plugin tool: {}",
+                                            plugin.name
+                                        ),
+                                        "🔌",
+                                        None,
+                                        risk,
+                                        false,
+                                    );
+                                    registered += 1;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        target: "hermix.plugins",
+                                        name = %plugin.name,
+                                        index = idx,
+                                        error = %e,
+                                        "Native plugin tool creation failed"
+                                    );
+                                }
+                            }
+                        }
+                        tracing::info!(
+                            target: "hermix.plugins",
+                            name = %plugin.name,
+                            tools = plugin.tool_count,
+                            registered,
+                            "Native plugin loaded"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "hermix.plugins",
+                            dll = %dll.display(),
+                            error = %e,
+                            "Failed to load native plugin"
+                        );
+                    }
+                }
+            }
+            if !dll_paths.is_empty() {
+                tracing::info!(
+                    target: "hermix.plugins",
+                    count = dll_paths.len(),
+                    "Scanned native plugins"
+                );
+            }
+        }
+
         // MCP integration (Phase 14 — wiring the previously-dead
         // McpManager). We construct the manager against the SAME
         // tool_registry that the agent service already sees, then
@@ -1496,6 +1574,7 @@ pub fn router(state: HttpServerState) -> Router {
             post(restore_session),
         )
         .route("/v1/sessions/search", get(search_sessions))
+        .route("/v1/sessions/{session_id}/lineage", get(get_session_lineage))
         .route("/v1/commands", post(exec_command))
         .route("/v1/ws/{session_id}", get(ws_upgrade))
         .route("/v1/ws-stream/{session_id}", get(ws_stream_upgrade))
@@ -1876,6 +1955,7 @@ async fn create_session(
             Some(HTTP_PLATFORM),
             Some(&title),
             None,
+            None,
         )
         .map_err(HttpError::from)?;
     Ok(Json(SessionSummary {
@@ -1907,6 +1987,7 @@ async fn rename_session(
             state.config.model.as_deref(),
             Some(HTTP_PLATFORM),
             Some(req.title.trim()),
+            None,
             None,
         )
         .map_err(HttpError::from)?;
@@ -2261,6 +2342,78 @@ async fn restore_session(
         "ok": true,
         "session_id": session_id,
         "restored": n,
+    })))
+}
+
+/// `GET /v1/sessions/{session_id}/lineage` — return the parent→ancestor
+/// chain (upward) and immediate children (downward) for session lineage
+/// browsing in the frontend tree view.
+///
+/// Response: `{ ancestors: [SessionNode], children: [SessionNode], current: SessionNode }`
+async fn get_session_lineage(
+    Path(session_id): Path<String>,
+    State(state): State<HttpServerState>,
+) -> Result<Json<serde_json::Value>, HttpError> {
+    #[derive(Serialize)]
+    struct SessionNode {
+        id: String,
+        title: String,
+        has_compression: bool,
+    }
+
+    let sp = &state.session_persistence;
+
+    // Walk up the parent chain.
+    let mut ancestors: Vec<SessionNode> = Vec::new();
+    let mut cursor = sp.get_parent(&session_id)?;
+    while let Some(ref pid) = cursor {
+        if pid.is_empty() {
+            break;
+        }
+        if let Some((title, _)) = sp.get_session_title(pid)? {
+            ancestors.push(SessionNode {
+                id: pid.clone(),
+                title: title.clone(),
+                has_compression: sp.load_compressed_summary(pid).is_some(),
+            });
+        } else {
+            ancestors.push(SessionNode {
+                id: pid.clone(),
+                title: String::new(),
+                has_compression: false,
+            });
+        }
+        cursor = sp.get_parent(pid)?;
+    }
+
+    // Immediate children.
+    let child_ids = sp.find_children(&session_id)?;
+    let mut children: Vec<SessionNode> = Vec::new();
+    for cid in &child_ids {
+        let (title, _) = sp.get_session_title(cid)
+            .unwrap_or_else(|_| None)
+            .unwrap_or((String::new(), None));
+        children.push(SessionNode {
+            id: cid.clone(),
+            title,
+            has_compression: sp.load_compressed_summary(cid).is_some(),
+        });
+    }
+
+    // Current node.
+    let (cur_title, _) = sp.get_session_title(&session_id)
+        .unwrap_or_else(|_| None)
+        .unwrap_or((String::new(), None));
+    let current = SessionNode {
+        id: session_id.clone(),
+        title: cur_title,
+        has_compression: sp.load_compressed_summary(&session_id).is_some(),
+    };
+
+    Ok(Json(serde_json::json!({
+        "ancestors": ancestors,
+        "children": children,
+        "current": current,
     })))
 }
 

@@ -46,6 +46,14 @@ pub fn build_agent_config(
     model: &str,
     platform: Option<&str>,
 ) -> AgentConfig {
+    // N-07 (startup guard): `BudgetConfig` is the most common target of
+    // user typos (off-by-thousand off-by-million). Validate it eagerly
+    // here so a broken `~/.hermix/config.yaml` is visible in the first
+    // log line of every command. The non-fatal variant keeps the
+    // function signature stable for existing call sites — strict
+    // callers should call `crate::agent_config::validate(&cfg)?`
+    // directly.
+    config.budget.validate_or_warn();
     let provider_from_model = model.split_once(':').map(|(p, _)| p.to_string());
     AgentConfig {
         max_turns: config.max_turns,

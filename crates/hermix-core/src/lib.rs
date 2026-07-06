@@ -17,6 +17,7 @@ pub mod types;
 pub mod path_security;
 pub mod console_decode;
 pub mod text_utils;
+pub mod plugin_abi;
 
 #[cfg(test)]
 pub mod test_generators;
@@ -26,10 +27,10 @@ pub use errors::{AgentError, ConfigError, GatewayError, ToolError};
 
 // Re-export all core types
 pub use types::{
-    AgentResult, BudgetConfig, CacheControl, CacheType, CommandOutput, FunctionCall,
-    FunctionCallDelta, LlmResponse, Message, MessageRole, ReasoningContent, ReasoningFormat, Skill,
-    SkillMeta, StreamChunk, StreamDelta, ToolCall, ToolCallDelta, ToolErrorRecord, ToolResult,
-    UsageStats,
+    AgentResult, BudgetConfig, BudgetConfigError, CacheControl, CacheType, CommandOutput,
+    FunctionCall, FunctionCallDelta, LlmResponse, Message, MessageRole, ReasoningContent,
+    ReasoningFormat, Skill, SkillMeta, StreamChunk, StreamDelta, ToolCall, ToolCallDelta,
+    ToolErrorRecord, ToolResult, UsageStats, BUDGET_CONFIG_MAX_CHARS,
 };
 
 // Re-export tool schema types
@@ -43,6 +44,12 @@ pub use traits::{
 
 // Re-export AgentService supporting types
 pub use traits::{AgentOverrides, AgentReply};
+
+// Re-export the pluggable context-compression surface (N-03)
+pub use traits::{
+    CompressionEngine, CompressionEngineMetrics, CompressionEngineSnapshot,
+    CompressionEngineState, CoreContextEngine,
+};
 
 // Re-export tool call parser public API
 pub use tool_call_parser::{

@@ -78,8 +78,8 @@ pub fn pre_api_apply_pending_steer(
     let Some(text) = drain_pending_steer(pending_steer) else {
         return;
     };
-    let msgs = ctx.get_messages_mut();
-    if apply_pending_steer_to_last_tool_message(msgs, &text) {
+    if apply_pending_steer_to_last_tool_message(ctx.get_messages_mut(), &text) {
+        ctx.recompute_total_tokens();
         return;
     }
     restash_pending_steer(pending_steer, text);
@@ -97,8 +97,8 @@ pub fn post_tool_apply_pending_steer(
     let Some(text) = drain_pending_steer(pending_steer) else {
         return;
     };
-    let msgs = ctx.get_messages_mut();
-    if apply_pending_steer_to_last_tool_message(msgs, &text) {
+    if apply_pending_steer_to_last_tool_message(ctx.get_messages_mut(), &text) {
+        ctx.recompute_total_tokens();
         return;
     }
     restash_pending_steer(pending_steer, text);

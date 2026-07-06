@@ -29,6 +29,8 @@ pub struct StatusResponse {
     pub gateway_pid: Option<u32>,
     pub gateway_state: Option<String>,
     pub gateway_health_url: Option<String>,
+    pub rtk_saved_chars: u64,
+    pub rtk_saved_calls: u64,
     pub gateway_exit_reason: Option<String>,
     pub gateway_updated_at: Option<String>,
     pub gateway_platforms: HashMap<String, PlatformStatus>,

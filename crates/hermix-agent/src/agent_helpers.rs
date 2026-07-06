@@ -193,11 +193,31 @@ pub fn compute_context_cache_key(epoch: u64) -> u64 {
 /// block (timestamp + session_id) is rebuilt every turn and is not
 /// cached.
 ///
-/// `None` means "miss — re-render the corresponding layer".
+/// Per-process cache slot for the two long-lived layers of the
+/// system prompt. Each layer carries its own `cached_*_prompt_key`
+/// so that:
+///  - the cache invalidates immediately when the upstream key
+///    changes (e.g. config edit, model swap, memory epoch tick),
+///  - external observers (telemetry, the dashboard cache-warming
+///    panel, CI smoke tests) can read the key back out via the
+///    `last_*_key()` getters without taking a lock.
+///
+/// `None` for the text slot means "miss — re-render the layer".
+/// `None` for the key is treated as a miss for the same reason,
+/// so the upstream key never diverges from what was actually
+/// stored.
 #[derive(Default)]
 pub struct PromptCache {
-    pub stable: Option<(u64, String)>,
-    pub context: Option<(u64, String)>,
+    /// Most recent stable-layer render key, or `None` if the
+    /// stable layer has never been rendered in this process.
+    pub cached_stable_prompt_key: Option<u64>,
+    /// Rendered text for the stable layer at `cached_stable_prompt_key`.
+    pub stable: Option<String>,
+    /// Most recent context-layer render key, or `None` if the
+    /// context layer has never been rendered.
+    pub cached_context_prompt_key: Option<u64>,
+    /// Rendered text for the context layer at `cached_context_prompt_key`.
+    pub context: Option<String>,
 }
 
 impl PromptCache {
@@ -209,27 +229,65 @@ impl PromptCache {
         expected_stable: u64,
         expected_context: u64,
     ) -> (Option<&str>, Option<&str>) {
-        let stable = self
-            .stable
-            .as_ref()
-            .filter(|(k, p)| *k == expected_stable && !p.is_empty())
-            .map(|(_, p)| p.as_str());
-        let context = self
-            .context
-            .as_ref()
-            .filter(|(k, p)| *k == expected_context && !p.is_empty())
-            .map(|(_, p)| p.as_str());
+        let stable = match (self.cached_stable_prompt_key, self.stable.as_ref()) {
+            (Some(k), Some(text)) if k == expected_stable && !text.is_empty() => {
+                Some(text.as_str())
+            }
+            _ => None,
+        };
+        let context = match (self.cached_context_prompt_key, self.context.as_ref()) {
+            (Some(k), Some(text)) if k == expected_context && !text.is_empty() => {
+                Some(text.as_str())
+            }
+            _ => None,
+        };
         (stable, context)
     }
 
-    /// Store the freshly-rendered stable layer text.
+    /// Store the freshly-rendered stable layer text + the key that
+    /// produced it. Both fields are written together; reading either
+    /// one without the other (theoretically possible from an
+    /// external observer taking a snapshot mid-update) is safe
+    /// because the lookup always cross-checks both.
     pub fn store_stable(&mut self, key: u64, text: String) {
-        self.stable = Some((key, text));
+        self.cached_stable_prompt_key = Some(key);
+        self.stable = Some(text);
     }
 
-    /// Store the freshly-rendered context layer text.
+    /// Store the freshly-rendered context layer text + key. See
+    /// `store_stable` for atomicity semantics.
     pub fn store_context(&mut self, key: u64, text: String) {
-        self.context = Some((key, text));
+        self.cached_context_prompt_key = Some(key);
+        self.context = Some(text);
+    }
+
+    /// Return the most-recent stable layer cache key, or `None`
+    /// if the stable layer has never been rendered in this process.
+    /// Read-only; takes no lock when called through `&self` from
+    /// inside a held `MutexGuard`.
+    pub fn last_stable_key(&self) -> Option<u64> {
+        self.cached_stable_prompt_key
+    }
+
+    /// Return the most-recent context layer cache key, or `None`.
+    /// See `last_stable_key` for notes.
+    pub fn last_context_key(&self) -> Option<u64> {
+        self.cached_context_prompt_key
+    }
+
+    /// Return the current cache state as a snapshot suitable for
+    /// telemetry: `(stable_key, stable_len, context_key, context_len)`.
+    /// Used by `build_system_prompt` to emit the
+    /// `prompt_cache_state` tracing event so external observers
+    /// can correlate cache hits with key changes without holding
+    /// the lock.
+    pub fn snapshot(&self) -> (Option<u64>, usize, Option<u64>, usize) {
+        (
+            self.cached_stable_prompt_key,
+            self.stable.as_ref().map(|s| s.len()).unwrap_or(0),
+            self.cached_context_prompt_key,
+            self.context.as_ref().map(|s| s.len()).unwrap_or(0),
+        )
     }
 }
 
@@ -349,6 +407,12 @@ pub struct AgentCallbacks {
     /// this into a `StreamEvent::Acui` over the WebSocket so the
     /// frontend's `AcuiRenderer` can pick it up.
     pub on_acui_directive: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    /// O7.2: Called when the `clarify` tool fires — the agent is
+    /// asking the user a question mid-turn. `question` is the text
+    /// the agent wants the user to answer, rendered verbatim from
+    /// the tool arguments. The frontend can use this to show an
+    /// inline input prompt instead of a generic tool card.
+    pub on_clarify: Option<Box<dyn Fn(&str) + Send + Sync>>,
     /// 2026-06-29: Called whenever the context-compression pipeline
     /// transitions state (pressure detected, breaker tripped, recovery
     /// probe succeeded, etc.). The payload is a

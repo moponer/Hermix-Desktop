@@ -572,6 +572,17 @@ impl PluginManager {
     }
 
     /// Discover plugins in the given hermes directory by scanning for `plugin.yaml` files.
+    ///
+    /// # Directory structure (2026-07-05)
+    ///
+    /// **Root-level** (backward-compat):
+    ///   `$HERMIX_HOME/plugins/<name>/plugin.yaml`
+    ///
+    /// **Native plugins** (recommended, P1-①):
+    ///   `$HERMIX_HOME/plugins/tools/<name>/plugin.yaml` + `<name>.dll`
+    ///   `$HERMIX_HOME/plugins/memory/<name>/plugin.yaml` + `<name>.dll`
+    ///
+    /// Scans both locations, merging results.
     pub fn discover_plugins(hermes_dir: &Path) -> Vec<(PluginManifest, std::path::PathBuf)> {
         let plugins_dir = hermes_dir.join("plugins");
         let mut discovered = Vec::new();
@@ -626,6 +637,64 @@ impl PluginManager {
                         manifest_path.display(),
                         e
                     );
+                }
+            }
+        }
+
+        // ★ P1-① (2026-07-05): also scan `plugins/tools/` and
+        //   `plugins/memory/` for native/compat plugins.
+        for subdir_name in &["tools", "memory"] {
+            let sub = plugins_dir.join(subdir_name);
+            if !sub.is_dir() {
+                continue;
+            }
+            let Ok(sub_entries) = std::fs::read_dir(&sub) else {
+                continue;
+            };
+            for entry in sub_entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let manifest_path = path.join("plugin.yaml");
+                if !manifest_path.exists() {
+                    continue;
+                }
+                if path.join(".disabled").exists() {
+                    tracing::debug!(
+                        "Skipping disabled plugin ({}): {}",
+                        subdir_name,
+                        path.display()
+                    );
+                    continue;
+                }
+                match std::fs::read_to_string(&manifest_path) {
+                    Ok(content) => match serde_yaml::from_str::<PluginManifest>(&content) {
+                        Ok(manifest) => {
+                            tracing::debug!(
+                                "Discovered plugin ({}): {} v{} at {}",
+                                subdir_name,
+                                manifest.name,
+                                manifest.version,
+                                path.display()
+                            );
+                            discovered.push((manifest, path));
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to parse plugin.yaml at {}: {}",
+                                manifest_path.display(),
+                                e
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to read plugin.yaml at {}: {}",
+                            manifest_path.display(),
+                            e
+                        );
+                    }
                 }
             }
         }

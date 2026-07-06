@@ -150,6 +150,20 @@ const TRIGGERS: &[Trigger] = &[
 ];
 
 /// Pre-compiled regexes — one per trigger, cached process-wide.
+///
+/// ### Why this still panics on a bad pattern (and why it's safe)
+///
+/// `TRIGGER_REGEXES` is built from a static, hand-curated `TRIGGERS`
+/// table — never from user data. Each entry's pattern is reviewed
+/// by hand; a typo in the source table is a programming bug that
+/// must fail loudly at first use rather than silently drop the
+/// trigger. In practice this means a future patch that introduces
+/// a bad pattern will crash the agent on startup instead of
+/// corrupting memory — both are bugs, but the loud failure is
+/// debuggable.
+///
+/// For **runtime** (user-supplied) patterns, see
+/// `CompiledRuleSet::try_compile` which returns a `Result`.
 static TRIGGER_REGEXES: Lazy<Vec<(Regex, &Trigger)>> = Lazy::new(|| {
     TRIGGERS
         .iter()
@@ -162,6 +176,9 @@ static TRIGGER_REGEXES: Lazy<Vec<(Regex, &Trigger)>> = Lazy::new(|| {
                 Lang::En => t.pattern.to_string(),
                 Lang::Zh => regex::escape(t.pattern),
             };
+            // See the module-level note above: the table is static and
+            // reviewed by hand, so a panic here is the right behaviour
+            // (loud failure beats silently dropping a trigger).
             let re = Regex::new(&pat)
                 .unwrap_or_else(|e| panic!("trigger regex compile failed for {:?}: {e}", t.pattern));
             (re, t)

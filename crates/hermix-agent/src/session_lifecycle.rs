@@ -223,6 +223,9 @@ pub fn apply_fallback_outcome(
                     last.content = Some(content);
                 }
             }
+            // Last assistant's content changed; refresh the running
+            // token cache so the next pressure check sees the new size.
+            ctx.recompute_total_tokens();
             false
         }
         EmptyResponseAction::Finalize => false,

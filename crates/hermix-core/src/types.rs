@@ -358,6 +358,11 @@ impl Message {
 // ---------------------------------------------------------------------------
 
 /// Result from executing a tool call.
+///
+/// `#[must_use]` because silently discarding a tool result loses the
+/// entire response — the dispatch loop is required to surface it to
+/// the LLM via `tool` role messages or the conversation breaks.
+#[must_use = "ToolResult is the LLM-facing response and must be returned to the agent loop, not silently dropped"]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolResult {
     pub tool_call_id: String,
@@ -413,6 +418,12 @@ fn is_false(v: &bool) -> bool {
 }
 
 /// Final result of an agent run.
+///
+/// `#[must_use]` because dropping the return value of a run means
+/// losing the entire conversation arc, usage stats, compression
+/// handoff, and any tool error records — callers always want to
+/// persist or surface at least some of these fields.
+#[must_use = "AgentResult is the agent loop's final output; dropping it loses usage stats, compression handoff, and tool errors"]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct AgentResult {
     pub messages: Vec<Message>,
@@ -470,6 +481,12 @@ pub struct AgentResult {
 /// `hermix-core` so `AgentResult` can carry compression metrics
 /// without creating a circular `hermix-core` → `hermix-agent`
 /// dependency.
+///
+/// `#[must_use]` because the snapshot is what the persistence path
+/// writes to `compression_summary_history`; dropping it silently
+/// loses the compaction trail that the dashboard / next-session
+/// recall rely on.
+#[must_use = "CompressionMetricsSnapshot feeds compression_summary_history persistence; dropping it loses the compaction trail"]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct CompressionMetricsSnapshot {
     pub original_tokens: u64,
@@ -495,6 +512,93 @@ pub struct CompressionMetricsSnapshot {
 pub struct BudgetConfig {
     pub max_result_size_chars: usize,
     pub max_aggregate_chars: usize,
+}
+
+/// Hard upper bound for any single budget value (per-result or aggregate).
+///
+/// `100 MiB` of UTF-8 characters ≈ ~25M GPT tokens — that's the practical
+/// maximum anyone should ever need. A budget above this is almost certainly
+/// a configuration typo (off-by-thousand, off-by-million) and would push
+/// the loop into a memory-inefficient zone even when not actively used.
+pub const BUDGET_CONFIG_MAX_CHARS: usize = 100 * 1024 * 1024;
+
+/// Errors emitted by [`BudgetConfig::validate`]. Intentionally small:
+/// both fields are `usize`, so the only sane validation is "must be
+/// non-zero" and "must be below the hard ceiling".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BudgetConfigError {
+    /// `max_result_size_chars == 0` — every tool result would be
+    /// silently truncated to empty.
+    ZeroMaxResultSize,
+    /// `max_aggregate_chars == 0` — the proportional aggregate
+    /// truncation in `enforce_budget` would divide by zero.
+    ZeroMaxAggregate,
+    /// Either field exceeds [`BUDGET_CONFIG_MAX_CHARS`]. Almost always
+    /// a unit-typo in user config.
+    ExceedsCeiling { field: &'static str, value: usize },
+}
+
+impl std::fmt::Display for BudgetConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BudgetConfigError::ZeroMaxResultSize => f.write_str(
+                "BudgetConfig::max_result_size_chars must be > 0 \
+                 (every tool result would be silently truncated to empty)",
+            ),
+            BudgetConfigError::ZeroMaxAggregate => f.write_str(
+                "BudgetConfig::max_aggregate_chars must be > 0 \
+                 (enforce_budget divides by this and would panic)",
+            ),
+            BudgetConfigError::ExceedsCeiling { field, value } => write!(
+                f,
+                "BudgetConfig::{field} = {value} exceeds the {BUDGET_CONFIG_MAX_CHARS}-char ceiling; \
+                 this is almost certainly a unit typo (B/KiB/MB) in the user config"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BudgetConfigError {}
+
+impl BudgetConfig {
+    /// Validate that the budget is usable. Run this once at startup —
+    /// the agent loop assumes both fields are positive and bounded,
+    /// and silently producing empty tool outputs / NaN ratios would
+    /// be much harder to debug than a clear failure.
+    pub fn validate(&self) -> Result<(), BudgetConfigError> {
+        if self.max_result_size_chars == 0 {
+            return Err(BudgetConfigError::ZeroMaxResultSize);
+        }
+        if self.max_aggregate_chars == 0 {
+            return Err(BudgetConfigError::ZeroMaxAggregate);
+        }
+        if self.max_result_size_chars > BUDGET_CONFIG_MAX_CHARS {
+            return Err(BudgetConfigError::ExceedsCeiling {
+                field: "max_result_size_chars",
+                value: self.max_result_size_chars,
+            });
+        }
+        if self.max_aggregate_chars > BUDGET_CONFIG_MAX_CHARS {
+            return Err(BudgetConfigError::ExceedsCeiling {
+                field: "max_aggregate_chars",
+                value: self.max_aggregate_chars,
+            });
+        }
+        Ok(())
+    }
+
+    /// Same as [`Self::validate`] but logs `warn` instead of returning
+    /// Err. Useful for telemetry callbacks that prefer not to block
+    /// startup on a soft misconfiguration.
+    pub fn validate_or_warn(&self) {
+        if let Err(e) = self.validate() {
+            tracing::warn!(
+                target: "hermix.core",
+                error = %e,
+                "BudgetConfig failed validation — using as-is (caller did not propagate error)"
+            );
+        }
+    }
 }
 
 impl Default for BudgetConfig {
@@ -654,5 +758,75 @@ mod tests {
         let bc = BudgetConfig::default();
         assert_eq!(bc.max_result_size_chars, 100_000);
         assert_eq!(bc.max_aggregate_chars, 1_000_000);
+    }
+
+    #[test]
+    fn test_budget_config_validate_ok_on_default() {
+        BudgetConfig::default().validate().expect("default must validate");
+    }
+
+    #[test]
+    fn test_budget_config_validate_zero_max_result() {
+        let bc = BudgetConfig {
+            max_result_size_chars: 0,
+            max_aggregate_chars: 1_000_000,
+        };
+        assert_eq!(bc.validate(), Err(BudgetConfigError::ZeroMaxResultSize));
+    }
+
+    #[test]
+    fn test_budget_config_validate_zero_max_aggregate() {
+        let bc = BudgetConfig {
+            max_result_size_chars: 100_000,
+            max_aggregate_chars: 0,
+        };
+        assert_eq!(bc.validate(), Err(BudgetConfigError::ZeroMaxAggregate));
+    }
+
+    #[test]
+    fn test_budget_config_validate_exceeds_ceiling_max_result() {
+        let bc = BudgetConfig {
+            max_result_size_chars: BUDGET_CONFIG_MAX_CHARS + 1,
+            max_aggregate_chars: 1_000_000,
+        };
+        assert_eq!(
+            bc.validate(),
+            Err(BudgetConfigError::ExceedsCeiling {
+                field: "max_result_size_chars",
+                value: BUDGET_CONFIG_MAX_CHARS + 1,
+            })
+        );
+    }
+
+    #[test]
+    fn test_budget_config_validate_exceeds_ceiling_max_aggregate() {
+        let bc = BudgetConfig {
+            max_result_size_chars: 100_000,
+            max_aggregate_chars: BUDGET_CONFIG_MAX_CHARS + 1,
+        };
+        assert_eq!(
+            bc.validate(),
+            Err(BudgetConfigError::ExceedsCeiling {
+                field: "max_aggregate_chars",
+                value: BUDGET_CONFIG_MAX_CHARS + 1,
+            })
+        );
+    }
+
+    /// Aggregate *less than* per-result is allowed (the proportional
+    /// truncation in `enforce_budget` divides by total and re-applies
+    /// the ratio to each). Validation must NOT reject this asymmetry.
+    #[test]
+    fn test_budget_config_validate_allows_aggregate_smaller_than_per_result() {
+        let bc = BudgetConfig {
+            max_result_size_chars: 100_000,
+            max_aggregate_chars: 200,
+        };
+        bc.validate().expect("aggregate < per_result is a valid config");
+    }
+
+    #[test]
+    fn test_budget_config_validate_or_warn_does_not_panic_on_default() {
+        BudgetConfig::default().validate_or_warn();
     }
 }
