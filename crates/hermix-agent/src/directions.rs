@@ -15,7 +15,7 @@
 // Guidance blocks (route-gated system-prompt injections).
 // ---------------------------------------------------------------------------
 
-const MEMORY_GUIDANCE: &str = "You have persistent memory across sessions. Save durable facts using the memory tool: user preferences, environment details, tool quirks, and stable conventions. Memory is injected into every turn, so keep it compact and focused on facts that will still matter later. Prioritize what reduces future user steering. Do NOT save task progress, session outcomes, completed-work logs, or temporary TODO state to memory.";
+const MEMORY_GUIDANCE: &str = "You have persistent memory across sessions. Save durable facts using the memory tool: user preferences, environment details, tool quirks, and stable conventions. Memory is injected into every turn, so keep it compact and focused on facts that will still matter later. Prioritize what reduces future user steering.\n\n## What TO remember\n- User preferences and work style\n- Environment details (OS, tools, paths)\n- Tool quirks and stable conventions\n- Project-specific rules that reduce future steering\n\n## What NOT to remember (exclusion list)\n- Code patterns, project architecture, file structure (grep/git/AGENTS.md can retrieve these)\n- Git history and recent changes (git log/blame is the authority)\n- Debugging solutions and fixes (already in the code)\n- Content already in AGENTS.md or project context files\n- Temporary task state and current conversation context\n- One-off commands or session-specific actions\n\nCore principle: information derivable from current code should NEVER be stored. Code is 'live', memory is 'static' — storing it freezes it and may become 'authoritatively wrong'.";
 
 const SESSION_SEARCH_GUIDANCE: &str = "When the user references something from a past conversation or you suspect relevant cross-session context exists, use session_search to recall it before asking them to repeat themselves.";
 
@@ -279,6 +279,27 @@ const GOOGLE_MODEL_OPERATIONAL_GUIDANCE: &str = "# Operational guidance (Google)
 
 const TOOL_FAILURE_GUIDANCE: &str = "Tool failure rule: if a tool fails twice, switch approach or ask the user. Do NOT retry the same call.";
 
+const GIT_SAFETY_GUIDANCE: &str = "\
+# Git safety protocol (mandatory)
+
+When working with Git, follow these rules strictly:
+
+## Never do
+- Never modify git config
+- Never execute destructive commands: push --force, reset --hard, checkout ., clean -f
+- Never skip hooks (--no-verify)
+- Never force push to main/master
+- Never amend commits that were already pushed
+
+## Always do
+- Always create NEW commits rather than amending existing ones
+- If a commit fails (e.g. pre-commit hook rejected), fix the issue and create a NEW commit — do NOT use --amend
+- Verify the commit message before pushing
+- Check git status before committing to ensure only intended files are included
+
+## Why this matters
+Using --amend after a failed commit can modify an unrelated previous commit, causing code loss. Always create new commits to preserve history.";
+
 const TASK_FOCUS_GUIDANCE: &str = "\
 # Task focus discipline (mandatory for multi-step tasks)
 
@@ -497,6 +518,12 @@ pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
         "tool_failure.always",
         DirRoute::Always,
         TOOL_FAILURE_GUIDANCE,
+    ));
+    // Git safety protocol: prevent destructive git operations.
+    dirs.push(SystemDir::new(
+        "git_safety.always",
+        DirRoute::Always,
+        GIT_SAFETY_GUIDANCE,
     ));
     // URL safety: prevent LLM from fabricating links.
     dirs.push(SystemDir::new(
