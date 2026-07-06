@@ -36,6 +36,8 @@ interface RightSidebarProps {
    * pre-triage raw count so the empty state can hint at "scanned X
    * but filtered all out" vs "didn't find any". */
   rawCount?: number;
+  /** Callback when a file is added to chat from the file explorer. */
+  onAddFileToChat?: (path: string) => void;
 }
 
 const FILTERS: Array<{ key: "all" | ArtifactKind; label: string; icon: React.ElementType }> = [
@@ -780,7 +782,7 @@ export function PreviewPanel({
   );
 }
 
-export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArtifact, workspaceRoot, rawCount }: RightSidebarProps) {
+export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArtifact, workspaceRoot, rawCount, onAddFileToChat }: RightSidebarProps) {
   const [activeTab, setActiveTab] = useState<RightTab>("products");
   const [filter, setFilter] = useState<"all" | ArtifactKind>("all");
   const [query, setQuery] = useState("");
@@ -850,7 +852,7 @@ export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArt
 
       {/* Tab content */}
       {activeTab === "computer" && (
-        <ComputerTab workspaceRoot={workspaceRoot} />
+        <ComputerTab workspaceRoot={workspaceRoot} onAddToChat={onAddFileToChat} />
       )}
 
       {activeTab === "products" && (
@@ -986,7 +988,7 @@ interface FileNode {
   children?: FileNode[];
 }
 
-function ComputerTab({ workspaceRoot }: { workspaceRoot?: string | null }) {
+function ComputerTab({ workspaceRoot, onAddToChat }: { workspaceRoot?: string | null; onAddToChat?: (path: string) => void }) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [files, setFiles] = useState<FileNode[]>([]);
   const [loading, setLoading] = useState(false);
@@ -994,18 +996,27 @@ function ComputerTab({ workspaceRoot }: { workspaceRoot?: string | null }) {
 
   const rootPath = workspaceRoot || "~";
 
-  // Load directory contents
+  // Load directory contents using Tauri FS API
   const loadDirectory = useCallback(async (path: string) => {
     setLoading(true);
     setError(null);
     try {
-      // TODO: Use Tauri FS API to read directory
-      // For now, show placeholder
-      setFiles([
-        { name: "src", path: `${path}/src`, isDir: true },
-        { name: "package.json", path: `${path}/package.json`, isDir: false },
-        { name: "README.md", path: `${path}/README.md`, isDir: false },
-      ]);
+      const { readDir } = await import("@tauri-apps/plugin-fs");
+      const entries = await readDir(path);
+      const fileNodes: FileNode[] = entries
+        .filter((e) => !e.name.startsWith(".")) // Skip hidden files
+        .map((e) => ({
+          name: e.name,
+          path: `${path}/${e.name}`,
+          isDir: e.isDirectory,
+        }))
+        .sort((a, b) => {
+          // Directories first, then files
+          if (a.isDir && !b.isDir) return -1;
+          if (!a.isDir && b.isDir) return 1;
+          return a.name.localeCompare(b.name);
+        });
+      setFiles(fileNodes);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1026,6 +1037,11 @@ function ComputerTab({ workspaceRoot }: { workspaceRoot?: string | null }) {
       return next;
     });
   }, [loadDirectory]);
+
+  // Load root directory on mount
+  useEffect(() => {
+    loadDirectory(rootPath);
+  }, [rootPath, loadDirectory]);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -1062,6 +1078,7 @@ function ComputerTab({ workspaceRoot }: { workspaceRoot?: string | null }) {
             file={file}
             expanded={expandedDirs.has(file.path)}
             onToggle={toggleDir}
+            onAddToChat={onAddToChat}
           />
         ))}
       </div>
@@ -1075,10 +1092,12 @@ function FileTreeItem({
   file,
   expanded,
   onToggle,
+  onAddToChat,
 }: {
   file: FileNode;
   expanded: boolean;
   onToggle: (path: string) => void;
+  onAddToChat?: (path: string) => void;
 }) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -1097,8 +1116,7 @@ function FileTreeItem({
     setContextMenu(null);
     switch (action) {
       case "add_to_chat":
-        // TODO: Add file to chat input as attachment
-        console.log("Add to chat:", file.path);
+        onAddToChat?.(file.path);
         break;
       case "copy_path":
         navigator.clipboard.writeText(file.path);
