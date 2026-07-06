@@ -544,7 +544,7 @@ fn build_stable_layer(
         tool_names: tool_names_set,
         model_name: model_for_prompt,
         autonomous_mode: config.autonomous_mode,
-        tool_call_count,
+        tool_call_count: 0,
     };
     let directions = crate::directions::collect_directions(&route_ctx);
     builder = builder.with_directions(directions);
