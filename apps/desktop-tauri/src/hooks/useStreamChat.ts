@@ -3,6 +3,34 @@ import { resolveWebSocketUrl } from "../api";
 import type { AcuiDirective } from "../acui/types";
 
 /**
+ * Single row in the live task list. Mirrors
+ * `hermix_transport::TodoSnapshotItem` (which mirrors
+ * `hermix_tools::backends::todo::TodoItem` — keep all three in
+ * sync when adding fields).
+ *
+ * Field-level semantics:
+ * - `id`: stable across the session, generated server-side (UUIDv4).
+ * - `status`: "pending" | "in_progress" | "completed" | "failed".
+ * - `priority`: "low" | "medium" | "high" (default "medium").
+ * - `dependsOn`: array of task ids. Empty for tasks with no deps.
+ *   Frontend renders these as small "blocked by X" chips.
+ * - `executionCount`: how many times the agent tried this task.
+ * - `lastResult`: free-form text from the most recent
+ *   `record_execution` call. Useful for "why did this fail?" hover.
+ */
+export interface TodoSnapshotItem {
+  id: string;
+  title: string;
+  description?: string | null;
+  status: string;
+  priority: string;
+  created_at: string;
+  depends_on: string[];
+  last_result?: string | null;
+  execution_count: number;
+}
+
+/**
  * Lifecycle phase of a single chat send. Returned by `useStreamChat`
  * so the caller can drive the UI through every stage without
  * collapsing them all into a boolean "isStreaming" — the old
@@ -124,6 +152,20 @@ interface StreamCallbacks {
     changeType: "created" | "modified" | "deleted" | "renamed";
     fileSummary?: string;
   }) => void;
+  /**
+   * A todo list mutation fired by the server (always a TodoItemUpserted
+   * or TodoItemRemoved — TodoSnapshot is sent only on (re)connect in
+   * the future). The TodoPanel hooks into this to render the live
+   * task list.
+   *
+   * Mirrors `StreamEvent::TodoItemUpserted` / `StreamEvent::TodoItemRemoved`
+   * in hermix-transport. `sessionId` is stamped by the server based
+   * on which WS connection produced the change.
+   */
+  onTodoChange?: (change:
+    | { kind: "upsert"; sessionId: string; item: TodoSnapshotItem }
+    | { kind: "remove"; sessionId: string; id: string }
+  ) => void;
   /**
    * Server may request explicit user approval before running a high-risk tool.
    * Resolves with `{ decision: "approved" | "denied" }` — these values match
@@ -267,6 +309,11 @@ export function useStreamChat() {
   // Client-side dedup: track last sent (hash, timestamp) to prevent
   // the same content from being sent multiple times within the window.
   const lastSendRef = useRef<{ hash: string; ts: number } | null>(null);
+  // 2026-07-07: shared per-send state via refs so that WS reconnection
+  // (doConnect retry) shares the same `done` / `sentToServer` flags
+  // instead of creating fresh local variables each time.
+  const doneRef = useRef(false);
+  const sentToServerRef = useRef(false);
   // Holds the per-send `callbacks.onPrefetch` closure so the WS
   // message handler (line 407) can fire it without prop-drilling the
   // whole `callbacks` object through closures. Ref (not state) because
@@ -308,7 +355,8 @@ export function useStreamChat() {
         sendSettledRef.current = false;
         setStreamingSessionId(sessionId);
         let fullText = "";
-        let done = false;
+        doneRef.current = false;
+        sentToServerRef.current = false;
         let stopReason: string | undefined;
         // ── Per-send chunk batching ─────────────────────────────
         // LLM streaming emits 30-50 small text frames per second.
@@ -388,7 +436,7 @@ export function useStreamChat() {
         // sends the same content again, creating a second agent loop
         // and two assistant replies in the DB — visible to the user
         // as "重复回复".
-        let sentToServer = false;
+        sentToServerRef.current = false;
         let totalTimeout: ReturnType<typeof setTimeout> | null = null;
         // 30s first-chunk slow-hint timer handle (see ws.onmessage "connected"
         // branch). Tracked so settle()/disarmTimeouts() can cancel it — without
@@ -401,7 +449,7 @@ export function useStreamChat() {
         const armTimeouts = () => {
           if (totalTimeout !== null) clearTimeout(totalTimeout);
           totalTimeout = setTimeout(() => {
-            if (!done) {
+            if (!doneRef.current) {
               updatePhase("timeout");
               // Force-settle so the promise doesn't hang forever.
               // Without this the UI stays stuck in "timeout" phase
@@ -423,7 +471,7 @@ export function useStreamChat() {
         disarmTimeoutsRef.current = disarmTimeouts;
 
         const settle = (text: string, err?: string, reason?: string, phaseHint?: StreamPhase) => {
-          if (done) return;
+          if (doneRef.current) return;
           disarmTimeouts();
           // Drain any chunks that arrived after the last rAF tick
           // (typical: the "done" event follows a final burst of
@@ -438,7 +486,7 @@ export function useStreamChat() {
           chunkBuffer = "";
           if (pending) callbacks.onChunk?.(pending);
 
-          done = true;
+          doneRef.current = true;
           setStreamingSessionId(null);
           setStreamingStatus(null);
           wsRef.current?.close();
@@ -520,7 +568,7 @@ export function useStreamChat() {
                   payload.images = overrides.images;
                 }
                 ws.send(JSON.stringify(payload));
-                sentToServer = true;
+                sentToServerRef.current = true;
                 updatePhase("streaming");
                 armTimeouts();
 
@@ -528,7 +576,7 @@ export function useStreamChat() {
                 // the stream is still alive (WS open, no done/error yet).
                 // Handle is tracked so settle()/disarmTimeouts() can cancel it.
                 slowHintTimer = setTimeout(() => {
-                  if (!firstChunkReceived && !done) updatePhase("slow");
+                  if (!firstChunkReceived && !doneRef.current) updatePhase("slow");
                 }, 30_000);
                 return;
               }
@@ -634,6 +682,34 @@ export function useStreamChat() {
                   changeType,
                   fileSummary,
                 });
+                return;
+              }
+
+              // Todo (task list) mutations. Wire format:
+              //   { type: "todo_item_upserted", event: { session_id, item: {...} } }
+              //   { type: "todo_item_removed",  event: { session_id, id: "..." } }
+              // Routing is straight to onTodoChange; no message-bubble
+              // side effects (the TodoPanel subscribes directly).
+              if (evtType === "todo_item_upserted") {
+                const ev = data?.event ?? data ?? {};
+                const item = ev?.item;
+                const sessionId = ev?.session_id ?? ev?.sessionId ?? "";
+                if (item && item.id) {
+                  callbacks.onTodoChange?.({
+                    kind: "upsert",
+                    sessionId,
+                    item: item as TodoSnapshotItem,
+                  });
+                }
+                return;
+              }
+              if (evtType === "todo_item_removed") {
+                const ev = data?.event ?? data ?? {};
+                const id = ev?.id ?? "";
+                const sessionId = ev?.session_id ?? ev?.sessionId ?? "";
+                if (id) {
+                  callbacks.onTodoChange?.({ kind: "remove", sessionId, id });
+                }
                 return;
               }
 
@@ -948,7 +1024,7 @@ export function useStreamChat() {
           };
 
           ws.onerror = () => {
-            if (!done) {
+            if (!doneRef.current) {
               // 2026-07-06 (rev): if we've ever received any content
               // (text or status), we MUST NOT retry — the agent
               // loop is already running server-side and a fresh WS
@@ -966,7 +1042,7 @@ export function useStreamChat() {
               // already processing it. A new WS would re-send the
               // same text, creating a second agent loop that
               // produces duplicate assistant messages in the DB.
-              if (sentToServer) {
+              if (sentToServerRef.current) {
                 settle("", "Connection lost while server was processing the message", undefined, "error");
                 return;
               }
@@ -982,7 +1058,7 @@ export function useStreamChat() {
             }
           };
           ws.onclose = () => {
-            if (!done) {
+            if (!doneRef.current) {
               if (hasContent && fullText.length > 0) {
                 settle(fullText, undefined, undefined, "partial");
               } else {
@@ -995,7 +1071,7 @@ export function useStreamChat() {
                 }
                 // 2026-07-07: same hardening as onerror — if the
                 // message was already sent, don't retry.
-                if (sentToServer) {
+                if (sentToServerRef.current) {
                   settle("", "Connection closed while server was processing the message", undefined, "error");
                   return;
                 }
