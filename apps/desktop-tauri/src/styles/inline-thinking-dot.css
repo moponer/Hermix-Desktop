@@ -1,10 +1,10 @@
 /* ── InlineThinkingDot ────────────────────────────────────────────
-   极简 "模型思考中" 指示器。
-   2026-07-06  redesign: 单颗呼吸光点 + 可选文字，移除心电图扫描线。
+   "模型思考中" 指示器 — 三脉冲点 + 可选文字。
+   2026-07-07 redesign: 从呼吸光点改为三脉冲点，更克制、更通用。
    两种渲染模式：
      • cursor (default)：inline，挂在段末游标位
      • gap             ：block，独占一行，段下方行首
-   动画：1.8s 呼吸 (scale + opacity + 光晕)，无 JS 计时。 */
+   动画：1.4s 三脉冲 (opacity stagger)，纯 CSS。 */
 
 /* ── Host ─────────────────────────────────────────────────────── */
 .inline-thinking-dot {
@@ -29,7 +29,7 @@
 }
 
 .inline-thinking-dot--quiet {
-  opacity: 0.55;
+  opacity: 0.45;
 }
 
 .inline-thinking-dot--warning {
@@ -41,86 +41,45 @@
   font-size: 0.78em;
 }
 
-/* ── Orb (呼吸光点) ─────────────────────────────────────────── */
-.inline-thinking-dot__orb {
-  position: relative;
+/* ── Three-dot pulse ──────────────────────────────────────────── */
+.inline-thinking-dot__dots {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 10px;
-  height: 10px;
-  flex-shrink: 0;
+  gap: 3px;
 }
 
-.inline-thinking-dot--sm .inline-thinking-dot__orb {
-  width: 6px;
-  height: 6px;
-}
-
-.inline-thinking-dot__orb-core {
-  position: absolute;
-  inset: 0;
+.inline-thinking-dot__dot {
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, #fff 0%, var(--color-accent, #3b82f6) 55%, var(--color-accent, #3b82f6) 100%);
-  animation: h-think-breathe 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  z-index: 1;
+  background: currentColor;
+  animation: h-dot-pulse 1.4s ease-in-out infinite;
 }
 
-.inline-thinking-dot__orb-glow {
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--color-accent, #3b82f6) 35%, transparent) 0%, transparent 70%);
-  animation: h-think-glow 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  z-index: 0;
+.inline-thinking-dot--sm .inline-thinking-dot__dot {
+  width: 4px;
+  height: 4px;
+}
+
+/* Stagger each dot by 0.2s */
+.inline-thinking-dot__dot:nth-child(1) { animation-delay: 0s; }
+.inline-thinking-dot__dot:nth-child(2) { animation-delay: 0.2s; }
+.inline-thinking-dot__dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* Warning variant: slower pulse */
+.inline-thinking-dot--warning .inline-thinking-dot__dot {
+  animation-duration: 1.8s;
+}
+
+/* Quiet variant: even slower, lower opacity */
+.inline-thinking-dot--quiet .inline-thinking-dot__dot {
+  animation-duration: 2.2s;
   opacity: 0.6;
 }
 
-.inline-thinking-dot--sm .inline-thinking-dot__orb-glow {
-  inset: -3px;
-  opacity: 0.45;
-}
-
-.inline-thinking-dot--warning .inline-thinking-dot__orb-core {
-  background: radial-gradient(circle at 30% 30%, #fff 0%, var(--color-text-warning, #eab308) 55%, var(--color-text-warning, #eab308) 100%);
-  animation-duration: 2.4s;
-}
-
-.inline-thinking-dot--warning .inline-thinking-dot__orb-glow {
-  background: radial-gradient(circle, color-mix(in srgb, var(--color-text-warning, #eab308) 30%, transparent) 0%, transparent 70%);
-  animation-duration: 2.4s;
-}
-
-.inline-thinking-dot--quiet .inline-thinking-dot__orb-core {
-  animation-duration: 2.8s;
-  opacity: 0.6;
-}
-
-.inline-thinking-dot--quiet .inline-thinking-dot__orb-glow {
-  animation-duration: 2.8s;
-  opacity: 0.25;
-}
-
-@keyframes h-think-breathe {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 0.75;
-  }
-  50% {
-    transform: scale(1.18);
-    opacity: 1;
-  }
-}
-
-@keyframes h-think-glow {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 0.35;
-  }
-  50% {
-    transform: scale(1.55);
-    opacity: 0.7;
-  }
+@keyframes h-dot-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1); }
 }
 
 /* ── Hint text ────────────────────────────────────────────────── */
@@ -129,7 +88,7 @@
   letter-spacing: 0.02em;
   white-space: nowrap;
   color: currentColor;
-  opacity: 0.9;
+  opacity: 0.85;
 }
 
 .inline-thinking-dot--gap .inline-thinking-dot__hint {
@@ -142,14 +101,8 @@
 
 /* ── Reduced motion ───────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
-  .inline-thinking-dot__orb-core,
-  .inline-thinking-dot__orb-glow {
+  .inline-thinking-dot__dot {
     animation: none;
-  }
-  .inline-thinking-dot__orb-core {
-    opacity: 0.7;
-  }
-  .inline-thinking-dot__orb-glow {
-    opacity: 0;
+    opacity: 0.6;
   }
 }
