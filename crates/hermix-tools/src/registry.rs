@@ -15,6 +15,8 @@ use indexmap::IndexMap;
 use serde_json::Value;
 use tracing::{instrument, warn};
 
+use crate::SessionStamper;
+
 // ---------------------------------------------------------------------------
 // ToolEntry
 // ---------------------------------------------------------------------------
@@ -29,6 +31,11 @@ pub struct ToolEntry {
     pub schema: ToolSchema,
     /// Handler that executes the tool logic.
     pub handler: Arc<dyn ToolHandler>,
+    /// Optional session stamper for tools that need to broadcast
+    /// per-session events (currently only `todo`). When `None`,
+    /// the tool is session-agnostic. See
+    /// `tools::session_stamper::SessionStamper`.
+    pub session_stamper: Option<Arc<dyn SessionStamper>>,
     /// Availability check — returns true if the tool can be used right now.
     pub check_fn: Arc<dyn Fn() -> bool + Send + Sync>,
     /// Environment dependencies required for this tool (e.g. "EXA_API_KEY").
@@ -342,8 +349,34 @@ impl ToolRegistry {
                 permission_mode,
                 is_interactive: false,
                 is_enabled,
+                session_stamper: None,
             },
         );
+    }
+
+    /// Attach a [`SessionStamper`] to an already-registered tool.
+    ///
+    /// Registration flows through `register_with_risk` which has no
+    /// `session_stamper` parameter (keeping the blast radius tiny — only
+    /// the `todo` tool needs one). After registering, the tool's
+    /// `register` helper calls this with the same `Arc<TodoHandler>` it
+    /// handed to `register_with_risk`, so the registry keeps a second
+    /// typed handle (`Arc<dyn SessionStamper>`) alongside the
+    /// `Arc<dyn ToolHandler>`. The two point at the same concrete object.
+    pub fn set_session_stamper(
+        &self,
+        name: &str,
+        stamper: Arc<dyn SessionStamper>,
+    ) {
+        let mut inner = self.inner.write().unwrap();
+        if let Some(entry) = inner.tools.get_mut(name) {
+            entry.session_stamper = Some(stamper);
+        } else {
+            tracing::warn!(
+                tool = %name,
+                "set_session_stamper called for unregistered tool; ignored"
+            );
+        }
     }
 
     /// Mark a registered tool as interactive (sequential execution required).
@@ -818,6 +851,44 @@ impl ToolRegistry {
             Some(e) => (e.check_fn)() && e.is_enabled.load(Ordering::Acquire),
             None => false,
         }
+    }
+
+    /// Stamp the active session onto a tool whose handler impls
+    /// `SessionStamper`. Returns `true` if the tool exists AND
+    /// implements the trait; `false` otherwise. The trait lookup is
+    /// an `Arc::clone` + `Any` downcast on the registered handler.
+    ///
+    /// Used by `agent_loop.execute_tool_calls` at the top of every
+    /// tool-call batch to give the `todo` tool the originating
+    /// session id, so the WS layer can route its todo events back
+    /// only to the originating pane.
+    ///
+    /// Why not a default trait method on `ToolHandler` itself?
+    /// `ToolHandler` is in `hermix-core` — adding a method there
+    /// ripples through 18+ tool implementations for a feature only
+    /// one tool needs. The opt-in `SessionStamper` marker keeps the
+    /// blast radius tiny.
+    pub fn set_active_session_for_tool(
+        &self,
+        name: &str,
+        session_id: Option<String>,
+    ) -> bool {
+        // Grab a clone of the registered stamper handle (released
+        // before the mutable downcall below, which is itself lock-free
+        // — `set_active_session` only touches a `std::sync::Mutex` on
+        // the concrete handler, never the registry's `RwLock`).
+        let stamper = {
+            let inner = self.inner.read().unwrap();
+            match inner.tools.get(name) {
+                Some(e) => match e.session_stamper.as_ref() {
+                    Some(s) => Arc::clone(s),
+                    None => return false,
+                },
+                None => return false,
+            }
+        };
+        stamper.set_active_session(session_id);
+        true
     }
 
     /// Format an error as JSON: `{"error": "msg"}`.
