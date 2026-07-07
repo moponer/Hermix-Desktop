@@ -759,6 +759,8 @@ pub enum DirRoute {
     /// Active tool list contains `skill_manage` AND user message mentions
     /// a skill-related keyword.
     HasSkillKeyword,
+    /// Active tool list contains `todo` — task-orchestration guidance.
+    HasTodo,
     /// Active tool list contains `compact_tool_chain` AND user message
     /// mentions batch-related keyword.
     HasBatchKeyword,
@@ -889,6 +891,10 @@ impl DirRoute {
             DirRoute::MiniMaxFamily => {
                 if is_g("minimax") || is_g("m2") { (true, None) }
                 else { (false, Some("not a MiniMax-family fine-tune".into())) }
+            }
+            DirRoute::HasTodo => {
+                if has("todo") { (true, None) }
+                else { (false, Some("todo tool not active".into())) }
             }
             DirRoute::MultiStepTask => {
                 if ctx.tool_call_count >= 5 { (true, None) }
