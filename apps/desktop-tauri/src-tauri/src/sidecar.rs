@@ -1,12 +1,20 @@
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::time::Duration;
+use tauri::Emitter;
 
 pub struct HermixSidecar {
     child: Option<Child>,
     stdout: Option<ChildStdout>,
     stderr: Option<ChildStderr>,
     port: u16,
+    /// Windows Job Object handle — binds the child process lifetime
+    /// to the parent. When the parent exits (or Drop runs), all
+    /// processes in the job are terminated automatically, preventing
+    /// orphan hermix.exe processes from squatting on the port.
+    #[cfg(windows)]
+    job_handle: Option<usize>,
 }
 
 impl HermixSidecar {
@@ -16,6 +24,8 @@ impl HermixSidecar {
             stdout: None,
             stderr: None,
             port: 3000,
+            #[cfg(windows)]
+            job_handle: None,
         }
     }
 
@@ -269,6 +279,22 @@ impl HermixSidecar {
         }
         if let Some(err) = stderr {
             Self::spawn_drain("stderr", err);
+        }
+
+        // Windows Job Object: bind child lifetime to parent.
+        // When our Drop runs (or the parent crashes), the Job Object
+        // automatically terminates all processes in the job — no orphans.
+        #[cfg(windows)]
+        {
+            let pid = child.id();
+            unsafe {
+                if let Some(handle) = windows_job_object::create_and_assign(pid) {
+                    self.job_handle = Some(handle);
+                    eprintln!("[Hermix] Sidecar bound to Job Object (pid={pid})");
+                } else {
+                    eprintln!("[Hermix] Warning: failed to create Job Object for pid={pid}");
+                }
+            }
         }
 
         self.child = Some(child);
@@ -561,23 +587,72 @@ impl HermixSidecar {
 
     pub fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-            println!("[Hermix] Sidecar stopped");
+            // Try graceful shutdown first: send HTTP /shutdown to let
+            // the server flush SQLite WAL, stop TickLoop, and clean up.
+            let _ = Self::try_graceful_shutdown(self.port);
+
+            // Wait up to 3 seconds for graceful exit.
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        eprintln!("[Hermix] Sidecar stopped gracefully");
+                        break;
+                    }
+                    Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                    Err(_) => break,
+                }
+            }
+
+            // If still running after timeout, hard kill.
+            if child.try_wait().ok().flatten().is_none() {
+                eprintln!("[Hermix] Graceful shutdown timed out, force killing sidecar");
+                let _ = child.kill();
+                let _ = child.wait();
+                eprintln!("[Hermix] Sidecar stopped (force killed)");
+            } else {
+                eprintln!("[Hermix] Sidecar stopped");
+            }
         }
-        // stdout/stderr were moved into drain threads at start();
-        // killing the child above closes the OS pipes, which makes
-        // those threads exit on their own.
+        // Release Job Object handle (triggers KILL_ON_JOB_CLOSE if
+        // any child processes remain, but we already killed above).
+        #[cfg(windows)]
+        if let Some(handle) = self.job_handle.take() {
+            unsafe { windows_job_object::close(handle); }
+        }
         self.stdout.take();
         self.stderr.take();
+    }
+
+    /// Send HTTP GET /shutdown to the sidecar for graceful exit.
+    /// Uses raw TCP to avoid needing the `blocking` feature on reqwest.
+    fn try_graceful_shutdown(port: u16) {
+        use std::io::Write;
+        if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            let _ = stream.write_all(b"GET /shutdown HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+            // Read response (best-effort, don't block).
+            stream.set_read_timeout(Some(Duration::from_secs(1))).ok();
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            eprintln!("[Hermix] Sent /shutdown request to sidecar");
+        }
     }
 
     /// Stop (if running) and start a fresh instance. Used by the
     /// desktop UI's "restart" button when the backend goes offline.
     pub fn restart(&mut self) -> Result<(), String> {
         self.stop();
-        // Give the kernel a moment to release the port
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Cooldown: wait for port to be released, then verify.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(500));
+            if std::net::TcpListener::bind(("127.0.0.1", self.port)).is_ok() {
+                eprintln!("[Hermix] Port {} confirmed free, starting sidecar", self.port);
+                return self.start();
+            }
+        }
+        // Port still not free — try anyway, start() will surface the error.
+        eprintln!("[Hermix] Port {} still occupied after 5s cooldown, attempting start anyway", self.port);
         self.start()
     }
 
@@ -646,15 +721,28 @@ impl HermixSidecar {
     pub fn start_watchdog(
         sb: &std::sync::Arc<std::sync::Mutex<Self>>,
         config: WatchdogConfig,
+        app_handle: Option<tauri::AppHandle>,
     ) -> tauri::async_runtime::JoinHandle<()> {
         let arc = sb.clone();
         tauri::async_runtime::spawn(async move {
             let interval = config.check_interval;
             let max_failures = config.max_consecutive_failures;
+            let max_restarts = config.max_restarts_before_give_up;
             let mut consecutive_failures: u32 = 0;
+            let mut total_restarts: u32 = 0;
 
             loop {
-                tokio::time::sleep(interval).await;
+                // Exponential backoff: 2s, 5s, 15s after consecutive restarts.
+                let backoff_secs = match total_restarts {
+                    0 => 2,
+                    1 => 5,
+                    _ => 15,
+                };
+                if consecutive_failures == 0 {
+                    tokio::time::sleep(interval).await;
+                } else {
+                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                }
 
                 // Probe health. Always release the mutex before awaiting HTTP
                 // so a hung server cannot block restart().
@@ -673,6 +761,7 @@ impl HermixSidecar {
 
                 if healthy {
                     consecutive_failures = 0;
+                    total_restarts = 0;
                     continue;
                 }
 
@@ -682,13 +771,32 @@ impl HermixSidecar {
                 );
 
                 if consecutive_failures >= max_failures {
-                    eprintln!("[Hermix] Watchdog: restarting sidecar after {consecutive_failures} failures");
+                    if total_restarts >= max_restarts {
+                        eprintln!(
+                            "[Hermix] Watchdog: giving up after {} restarts. Manual restart required.",
+                            total_restarts
+                        );
+                        if let Some(ref handle) = app_handle {
+                            let _ = handle.emit("hermix:server-gave-up", ());
+                        }
+                        continue;
+                    }
+
+                    eprintln!(
+                        "[Hermix] Watchdog: restarting sidecar (attempt {}/{}, backoff {}s)",
+                        total_restarts + 1,
+                        max_restarts,
+                        backoff_secs
+                    );
+                    if let Some(ref handle) = app_handle {
+                        let _ = handle.emit("hermix:server-restarting", total_restarts + 1);
+                    }
                     let mut guard = arc.lock().expect("sidecar mutex poisoned");
                     if let Err(e) = guard.restart() {
                         eprintln!("[Hermix] Watchdog: restart() failed: {e}");
                     } else {
-                        // Reset counter so we don't restart again immediately.
                         consecutive_failures = 0;
+                        total_restarts += 1;
                     }
                 }
             }
@@ -703,6 +811,8 @@ pub struct WatchdogConfig {
     pub check_interval: Duration,
     /// Restart after this many consecutive failures.
     pub max_consecutive_failures: u32,
+    /// Maximum number of auto-restarts before giving up (requires manual restart).
+    pub max_restarts_before_give_up: u32,
 }
 
 impl Default for WatchdogConfig {
@@ -710,6 +820,7 @@ impl Default for WatchdogConfig {
         Self {
             check_interval: Duration::from_secs(5),
             max_consecutive_failures: 3,
+            max_restarts_before_give_up: 5,
         }
     }
 }
@@ -733,5 +844,147 @@ async fn guard_health_check(
 impl Drop for HermixSidecar {
     fn drop(&mut self) {
         self.stop();
+        // Close Job Object handle — this triggers KILL_ON_JOB_CLOSE,
+        // terminating any remaining child processes in the job.
+        #[cfg(windows)]
+        if let Some(handle) = self.job_handle.take() {
+            unsafe {
+                windows_job_object_close(handle);
+            }
+        }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Windows Job Object FFI (prevents orphan child processes)
+// ---------------------------------------------------------------------------
+
+/// Raw Windows API declarations for Job Object lifecycle.
+/// We use raw FFI to avoid adding the `windows` crate dependency.
+#[cfg(windows)]
+mod windows_job_object {
+    use std::ffi::c_void;
+
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
+
+    #[repr(C)]
+    struct JobObjectExtendedLimitInformation {
+        basic_limit_information: JobObjectBasicLimitInformation,
+        _io_info: IoCounter,
+        _process_memory_limit: usize,
+        _job_memory_limit: usize,
+        _peak_process_memory_used: usize,
+        _peak_job_memory_used: usize,
+    }
+
+    #[repr(C)]
+    struct JobObjectBasicLimitInformation {
+        _process_user_mode_time: i64,
+        _process_kernel_mode_time: i64,
+        _min_working_set_size: usize,
+        _max_working_set_size: usize,
+        _active_process_limit: u32,
+        _affinity: usize,
+        _priority_class: u32,
+        _scheduling_class: u32,
+    }
+
+    #[repr(C)]
+    struct IoCounter {
+        _read_operation_count: u64,
+        _write_operation_count: u64,
+        _other_operation_count: u64,
+        _read_transfer_count: u64,
+        _write_transfer_count: u64,
+        _other_transfer_count: u64,
+    }
+
+    extern "system" {
+        fn CreateJobObjectW(lpjobattributes: *const c_void, lpname: *const c_void) -> *mut c_void;
+        fn SetInformationJobObject(
+            hjob: *mut c_void,
+            jobobjectinfoclass: u32,
+            lpjobobjectinfo: *const c_void,
+            cbjobobjectinfolength: u32,
+        ) -> i32;
+        fn AssignProcessToJobObject(hjob: *mut c_void, hprocess: *mut c_void) -> i32;
+        fn CloseHandle(hobject: *mut c_void) -> i32;
+    }
+
+    /// Create a Job Object with KILL_ON_JOB_CLOSE and assign the given
+    /// process handle to it. Returns the Job Object handle (must be
+    /// closed with `CloseHandle` on drop).
+    pub unsafe fn create_and_assign(pid: u32) -> Option<usize> {
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+
+            // Set KILL_ON_JOB_CLOSE: when the last handle to this job
+            // object is closed (i.e. our Drop), all processes in the
+            // job are terminated.
+            let mut info = JobObjectExtendedLimitInformation {
+                basic_limit_information: JobObjectBasicLimitInformation {
+                    _process_user_mode_time: 0,
+                    _process_kernel_mode_time: 0,
+                    _min_working_set_size: 0,
+                    _max_working_set_size: 0,
+                    _active_process_limit: 0,
+                    _affinity: 0,
+                    _priority_class: 0,
+                    _scheduling_class: 0,
+                },
+                _io_info: IoCounter {
+                    _read_operation_count: 0,
+                    _write_operation_count: 0,
+                    _other_operation_count: 0,
+                    _read_transfer_count: 0,
+                    _write_transfer_count: 0,
+                    _other_transfer_count: 0,
+                },
+                _process_memory_limit: 0,
+                _job_memory_limit: 0,
+                _peak_process_memory_used: 0,
+                _peak_job_memory_used: 0,
+            };
+            info.basic_limit_information._priority_class = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+            let class = 9; // JobObjectExtendedLimitInformation
+            SetInformationJobObject(job, class, &info as *const _ as *const c_void, std::mem::size_of_val(&info) as u32);
+
+            // Open the child process by PID and assign it to the job.
+            const PROCESS_SET_QUOTA: u32 = 0x0100;
+            const PROCESS_TERMINATE: u32 = 0x0001;
+            extern "system" {
+                fn OpenProcess(dwdesiredaccess: u32, binherithandle: i32, dwprocessid: u32) -> *mut c_void;
+            }
+            let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+            if process.is_null() {
+                CloseHandle(job);
+                return None;
+            }
+
+            let ok = AssignProcessToJobObject(job, process);
+            CloseHandle(process);
+
+            if ok == 0 {
+                CloseHandle(job);
+                return None;
+            }
+
+            Some(job as usize)
+        }
+    }
+
+    pub unsafe fn close(handle: usize) {
+        unsafe {
+            CloseHandle(handle as *mut c_void);
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe fn windows_job_object_close(handle: usize) {
+    unsafe { windows_job_object::close(handle) }
 }

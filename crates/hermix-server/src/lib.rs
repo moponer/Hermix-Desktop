@@ -1725,6 +1725,7 @@ pub fn router(state: HttpServerState) -> Router {
 
     let mut app = Router::new()
         .route("/health", get(health))
+        .route("/shutdown", get(shutdown_server))
         .route("/v1/protocol/schema", get(protocol_schema))
         .route("/v1/telemetry/client-event", post(client_telemetry_event))
         .route("/metrics", get(metrics_prometheus))
@@ -1860,7 +1861,10 @@ pub async fn run_server_with_state(
     let tickloop_mgr = state.tickloop_manager.clone();
     let tracker = Arc::new(state.consciousness_tracker.clone());
 
-    let app = router(state);
+    // Shutdown signal: /shutdown endpoint sends `true`, graceful shutdown waits for it.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    let app = router(state).layer(axum::Extension(shutdown_tx));
     // Phase 18 fix: bind via TcpSocket so we can set SO_REUSEADDR
     // before bind. Default TcpListener::bind does NOT set it on
     // Windows, which means a crashed/exited child leaving a LISTEN
@@ -1898,9 +1902,16 @@ pub async fn run_server_with_state(
     // Start TickLoop by default (powers conscious ECG, watchdog).
     tickloop_mgr.start(Some(tracker)).await;
 
+    let mut shutdown_rx = shutdown_rx;
     let shutdown = async move {
-        let _ = tokio::signal::ctrl_c().await;
-        tracing::info!("hermes-server graceful shutdown");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("hermes-server graceful shutdown (ctrl_c)");
+            }
+            _ = shutdown_rx.changed() => {
+                tracing::info!("hermes-server graceful shutdown (HTTP /shutdown)");
+            }
+        }
         tickloop_mgr.stop().await;
     };
     axum::serve(
@@ -1917,6 +1928,13 @@ async fn health() -> impl IntoResponse {
         status: "ok",
         timestamp: Utc::now().to_rfc3339(),
     })
+}
+
+async fn shutdown_server(
+    axum::extract::Extension(tx): axum::extract::Extension<tokio::sync::watch::Sender<bool>>,
+) -> impl IntoResponse {
+    let _ = tx.send(true);
+    "shutting down"
 }
 
 // ---------------------------------------------------------------------------
@@ -2227,19 +2245,39 @@ async fn delete_session(
     State(state): State<HttpServerState>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
     let db_path = hermix_config::paths::data_dir_in(&state.hermix_home).join("sessions.db");
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| HttpError {
+    let conn = rusqlite::Connection::open(&db_path).map_err(|e| HttpError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: e.to_string(),
     })?;
-    conn.execute(
-        "DELETE FROM messages WHERE session_id = ?1",
-        rusqlite::params![session_id],
-    )
-    .map_err(|e| HttpError {
+    conn.busy_timeout(std::time::Duration::from_millis(5000))
+        .map_err(|e| HttpError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: e.to_string(),
+        })?;
+
+    let tx = conn.unchecked_transaction().map_err(|e| HttpError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: e.to_string(),
     })?;
-    conn.execute(
+
+    // Cascade-delete all child tables that reference sessions(id)
+    let tables = [
+        "messages",
+        "compression_archives",
+        "compression_summary_history",
+        "token_usage",
+    ];
+    for table in &tables {
+        tx.execute(
+            &format!("DELETE FROM {table} WHERE session_id = ?1"),
+            rusqlite::params![session_id],
+        )
+        .map_err(|e| HttpError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: e.to_string(),
+        })?;
+    }
+    tx.execute(
         "DELETE FROM sessions WHERE id = ?1",
         rusqlite::params![session_id],
     )
@@ -2247,6 +2285,12 @@ async fn delete_session(
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: e.to_string(),
     })?;
+
+    tx.commit().map_err(|e| HttpError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: e.to_string(),
+    })?;
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
