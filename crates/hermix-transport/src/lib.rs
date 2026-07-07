@@ -112,6 +112,17 @@ pub struct ProtocolMessage {
     /// persisted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_timeline: Option<Vec<ExecutionTimelineEvent>>,
+    /// v33 (2026-07-06): wall-clock ISO-8601 timestamp read from
+    /// `messages.created_at`. The desktop client uses this to
+    /// render the per-message relative time ("3 天前") instead of
+    /// falling back to `new Date()` in the wire adapter, which
+    /// produced "刚刚 / 1 分钟前" on every reload. Populated only
+    /// by `load_session_with_approvals_and_timestamps` (the HTTP
+    /// `GET /v1/sessions/{id}/messages` handler); other writers
+    /// (WS bridge, internal channels) leave it `None`, in which
+    /// case the client falls back to `wire.timestamp ?? now`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 /// User's choice on a `RequestApproval` card.

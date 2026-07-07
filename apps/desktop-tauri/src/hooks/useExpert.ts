@@ -92,65 +92,59 @@ export function useSessionExpert(sessionId: string | null | undefined): {
   setExpert: (id: string | null) => void;
   clear: () => void;
 } {
+  // 统一使用 draft key 作为唯一数据源，session key 仅用于向后兼容。
+  // 修复：设置了 session key 但读的是 draft key，导致选择不生效（主人 23:26 反馈）
   const [expertId, setExpertId] = useState<string | null>(() => {
+    // 优先读取 draft key（主数据源）
+    try {
+      const draft = storage.getItem(DRAFT_EXPERT_KEY);
+      if (draft) return draft;
+    } catch {}
+    // 回退：从 session key 迁移（仅一次）
     if (sessionId) {
       try {
         return storage.getItem(SESSION_EXPERT_KEY(sessionId));
-      } catch {
-        return null;
-      }
+      } catch {}
     }
-    // No active session: fall back to the draft slot so the chip
-    // shows whatever the user last picked in the welcome UI.
-    try {
-      return storage.getItem(DRAFT_EXPERT_KEY);
-    } catch {
-      return null;
-    }
+    return null;
   });
 
   useEffect(() => {
+    // sessionId 变化时，无需重新读取——draft key 不变
+    // 但迁移逻辑：首次进入新 session 时，用 session key 补 draft
     if (sessionId) {
       try {
-        const stored = storage.getItem(SESSION_EXPERT_KEY(sessionId));
-        setExpertId(stored);
-      } catch {
-        setExpertId(null);
-      }
-    } else {
-      // Switched to welcome state (or stayed there): sync from draft.
-      try {
-        setExpertId(storage.getItem(DRAFT_EXPERT_KEY));
-      } catch {
-        setExpertId(null);
-      }
+        const draft = storage.getItem(DRAFT_EXPERT_KEY);
+        if (!draft) {
+          const session = storage.getItem(SESSION_EXPERT_KEY(sessionId));
+          if (session) {
+            storage.setItem(DRAFT_EXPERT_KEY, session);
+            setExpertId(session);
+          }
+        }
+      } catch {}
     }
   }, [sessionId]);
 
   const setExpert = useCallback(
     (id: string | null) => {
-      if (sessionId) {
-        // Session-bound: write to the per-session key.
-        try {
-          if (id) {
-            storage.setItem(SESSION_EXPERT_KEY(sessionId), id);
-          } else {
-            storage.removeLegacy(SESSION_EXPERT_KEY(sessionId));
-          }
-        } catch {}
-      } else {
-        // No session yet: write to the draft slot so the chip text
-        // updates immediately and the selection carries forward when
-        // the user finally sends their first message (see
-        // App.tsx :: handleSendMessage).
-        try {
-          if (id) {
-            storage.setItem(DRAFT_EXPERT_KEY, id);
-          } else {
-            storage.removeLegacy(DRAFT_EXPERT_KEY);
-          }
-        } catch {}
-      }
+      // 始终同时写入 draft key（主）和 session key（兼容）
+      try {
+        if (id) {
+          storage.setItem(DRAFT_EXPERT_KEY, id);
+          if (sessionId) storage.setItem(SESSION_EXPERT_KEY(sessionId), id);
+          // 同步更新最近使用列表
+          const raw = storage.getItem(RECENT_EXPERTS_KEY);
+          let ids: string[] = [];
+          try { const p = JSON.parse(raw || '[]'); if (Array.isArray(p)) ids = p; } catch {}
+          const without = ids.filter((x) => x !== id);
+          ids = [id, ...without].slice(0, RECENT_EXPERTS_MAX);
+          storage.setItem(RECENT_EXPERTS_KEY, JSON.stringify(ids));
+        } else {
+          storage.removeLegacy(DRAFT_EXPERT_KEY);
+          if (sessionId) storage.removeLegacy(SESSION_EXPERT_KEY(sessionId));
+        }
+      } catch {}
       setExpertId(id);
     },
     [sessionId],

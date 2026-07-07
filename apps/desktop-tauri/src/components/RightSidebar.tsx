@@ -858,7 +858,7 @@ export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArt
       {activeTab === "products" && (
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Search + filter */}
-          <div className="px-3 pb-3 space-y-2">
+          <div className="px-3 pb-3 space-y-2 mt-1">
             <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-bg-tertiary focus-within:ring-1 focus-within:ring-accent/30 transition">
               <Search size={12} className="text-text-muted shrink-0" />
               <input

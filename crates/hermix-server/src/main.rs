@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use std::net::SocketAddr;
 use hermix_config::env_compat;
 

@@ -1,0 +1,147 @@
+// ---------------------------------------------------------------------------
+// Data structures for the AgentLoop (extracted from agent_loop.rs
+// 2026-07-06, God Object refactor Phase 1)
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+
+use hermix_core::ToolSchema;
+
+use crate::context::ContextManager;
+use crate::context_pressure::ContextPressureMonitor;
+use crate::cost_guard::CostGuard;
+use crate::cost_routing::RouteState;
+use crate::credential_pool::CredentialPool;
+use crate::message_cache::MessageCache;
+use crate::retry_counters::RetryCounters;
+use crate::smart_model_routing::{ApiMode, TurnRouteSignature};
+use crate::turn_timings::TurnTimings;
+
+// ---------------------------------------------------------------------------
+// Runtime route (model + provider selection per turn)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub(crate) struct TurnRuntimeRoute {
+    pub(crate) model: String,
+    pub(crate) provider: Option<String>,
+    pub(crate) base_url: Option<String>,
+    pub(crate) api_key_env: Option<String>,
+    pub(crate) api_mode: Option<ApiMode>,
+    pub(crate) command: Option<String>,
+    pub(crate) args: Vec<String>,
+    pub(crate) credential_pool: Option<Arc<CredentialPool>>,
+    /// When true (default), merge with [`AgentLoop::primary_credential_pool`] if route pool is unset.
+    pub(crate) credential_pool_fallback: bool,
+    pub(crate) route_label: Option<String>,
+    pub(crate) routing_reason: Option<String>,
+    pub(crate) signature: TurnRouteSignature,
+}
+
+// ---------------------------------------------------------------------------
+// Prepared run context (output of prepare_run_context)
+// ---------------------------------------------------------------------------
+
+/// Output of [`AgentLoop::prepare_run_context`]: everything needed to enter
+/// the model turn loop without re-running the setup phase.
+pub(crate) struct PreparedRun {
+    pub ctx: ContextManager,
+    /// Tools the turn loop will pass to the model on each call.
+    pub tool_schemas: Vec<ToolSchema>,
+    /// Whether OnSessionStart hooks already fired during setup. If true, the
+    /// turn loop must NOT re-fire them (otherwise: double-fire).
+    pub session_started_hooks_fired: bool,
+    /// Index of the last user message in `ctx`, if `persist_user_message` is
+    /// configured. Used at the end to write it back to the session store.
+    pub persist_user_idx: Option<usize>,
+    /// Counter for Codex-style "ack then continue" handling across turns.
+    pub codex_ack_continuations: u32,
+    /// Counter for autonomous mode nudges (non-streaming path).
+    pub autonomous_nudge_count: u32,
+    /// Whether the agent should review memory at the end of this run (set if
+    /// `memory_nudge_interval` reached its threshold during setup).
+    pub review_memory_at_end: bool,
+    /// Text of the most-recent user message (the original task). Used by
+    /// Codex-style "looks_like_codex_intermediate_ack" and memory review.
+    pub task_hint: String,
+}
+
+// ---------------------------------------------------------------------------
+// All mutable loop-local state
+// ---------------------------------------------------------------------------
+
+/// All mutable loop-local state shared between `run()` and `run_stream()`.
+/// Centralized to avoid declaring 17+ individual locals in both methods
+/// (reduces duplication and eliminates the "forget to sync" bug).
+///
+/// Phase 1 (2026-07-03) introduces the struct. Phase 1.1 wires the
+/// 14 run() + 17 run_stream() locals through it via `publish_from`.
+/// Phase 5 (2026-07-03 + 2026-07-04) folds 9 inline fields into 4
+/// manager structs ([`TurnTimings`], [`CostGuard`], [`MessageCache`],
+/// [`RetryCounters`], [`ContextPressureMonitor`]). After Phase 5
+/// (commits a37bba3, d31f7e8) the `publish_from` bridge is gone —
+/// `run()` / `run_stream()` write `state.total_turns = total_turns;`
+/// directly; the inner manager structs are mutated in place via their
+/// own `record_*` / `bump_*` / `store_*` methods.
+#[derive(Default)]
+pub(crate) struct LoopState {
+    /// Total turns completed so far in this run.
+    pub(crate) total_turns: u32,
+    /// Per-run API + tool wall-clock accumulators. Phase 5 (2026-07-04):
+    /// extracted from 2 inline `u64` fields to a [`TurnTimings`] struct
+    /// so `publish_from` shrinks by 2 args and the `record_api` /
+    /// `record_tool` methods are the single mutation path.
+    pub(crate) timings: TurnTimings,
+    /// Cost-guard bookkeeping: cumulative usage, USD spend, warn flag.
+    /// Phase 5 (2026-07-03): 4 inline fields that used to sit directly
+    /// on `LoopState` moved into [`CostGuard`] which is mutated in
+    /// place via `record_usage` / `evaluate_thresholds`.
+    /// `publish_from` no longer takes 4 sibling arguments for these.
+    /// Phase 5b (2026-07-04): the `forced_runtime_route` field moved
+    /// out of `CostGuard` (it's a routing decision, not spend
+    /// tracking) into the sibling [`RouteState`] below.
+    pub(crate) cost_guard: CostGuard,
+    /// Per-run route decision state. Currently only holds the
+    /// `forced_runtime_route` the cost guard installs when it
+    /// downgrades to a cheaper model. Phase 5b (2026-07-04): extracted
+    /// from `CostGuard::forced_runtime_route` — `CostGuard` is now
+    /// strictly spend accounting.
+    pub(crate) route_state: RouteState,
+    /// Per-run message caches (last checkpoint snapshot + last
+    /// assistant content with tool calls). Phase 5 (2026-07-04): the 2
+    /// sibling `Option` fields that used to live here moved into
+    /// [`MessageCache`] which is mutated in place via `store_*` /
+    /// `take_*` / `*()` accessors. `publish_from` no longer takes 2
+    /// sibling arguments for these.
+    pub(crate) message_cache: MessageCache,
+    /// Retries against invalid tool names / invalid tool JSON / truncated
+    /// tool calls. Phase 5 (2026-07-03): the 3 sibling `u32` fields that
+    /// used to live here moved into [`RetryCounters`] and are mutated
+    /// in place via `bump_*` / `reset_*` methods. `publish_from` no
+    /// longer takes 3 sibling arguments for these.
+    pub(crate) retry_counters: RetryCounters,
+    /// Context-pressure warning state (tier + cooldown timestamp + last %).
+    /// Phase 5 (2026-07-03): extracted from 3 inline fields to consolidate
+    /// the throttle/cooldown rules in [`ContextPressureMonitor::should_emit_warning`].
+    pub(crate) context_pressure: ContextPressureMonitor,
+}
+
+// ---------------------------------------------------------------------------
+// Post-response action
+// ---------------------------------------------------------------------------
+
+/// Phase 1.3a (2026-07-03): outcome of [`AgentLoop::process_post_response`].
+/// The shared post-LLM helper decides between two paths:
+/// - `Finalize`: no tool calls → no work left, return the AgentResult.
+/// - `Continue`: tool calls present → fall through to tool dispatch.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PostResponseAction {
+    /// No tool calls: stop the loop. The caller should `return`
+    /// `Ok(self.finalize_agent_result(...))`.
+    Finalize,
+    /// Cost guard tripped (session spend exceeded `max_cost_usd`).
+    /// Caller should `return` with `finalize_agent_result(.., false, false, None)`.
+    CostGuardTripped,
+    /// Tool calls present: caller falls through to `execute_tool_calls`.
+    Continue,
+}

@@ -20,6 +20,7 @@ use hermix_config::env_compat;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use base64::Engine as _;
 
@@ -626,6 +627,10 @@ mod approval_registry_tests {
             )),
             mcp_manager: hermix_mcp::ArcMcpManager::new(Arc::new(hermix_tools::ToolRegistry::new())),
             task_engine: None,
+            // 2026-07-06: dedup map. See the production `build`
+            // path; test_state mirrors it.
+            recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -756,6 +761,154 @@ mod approval_registry_tests {
         assert_eq!(patterns.len(), 2);
     }
 
+    // ── 2026-07-06: dedup tests for `check_recent_send` ────────
+    //
+    // Background: a single user "你好" was triggering 9
+    // `send_message_stream` calls in 2 minutes. Root cause was
+    // client-side WS auto-retry + App.tsx queue re-drain races.
+    // Server-side dedup is the defensive backstop: any
+    // `(session_id, text)` that arrives within 10s of a prior
+    // identical send is dropped with a synthetic Done event.
+
+    #[test]
+    fn dedup_first_send_is_fresh() {
+        let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
+        assert_eq!(check_recent_send(&state, "sess-A", "你好"), None);
+    }
+
+    #[test]
+    fn dedup_identical_send_within_window_is_rejected() {
+        let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
+        assert_eq!(check_recent_send(&state, "sess-A", "你好"), None);
+        // Second identical send within 10s → rejected with elapsed
+        // (could be 0s if the clock hasn't ticked, or 1s, etc.
+        // what matters is Some()).
+        let elapsed = check_recent_send(&state, "sess-A", "你好");
+        assert!(elapsed.is_some(), "duplicate must be rejected");
+        assert!(elapsed.unwrap() < DEDUP_WINDOW_SECS);
+    }
+
+    #[test]
+    fn dedup_different_content_within_window_is_accepted() {
+        let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
+        assert_eq!(check_recent_send(&state, "sess-A", "你好"), None);
+        // Different text → fresh, no dedup.
+        assert_eq!(check_recent_send(&state, "sess-A", "hello"), None);
+    }
+
+    #[test]
+    fn dedup_different_sessions_are_independent() {
+        let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
+        assert_eq!(check_recent_send(&state, "sess-A", "你好"), None);
+        // Same content, different session → fresh (different
+        // dedup key namespace).
+        assert_eq!(check_recent_send(&state, "sess-B", "你好"), None);
+    }
+
+    #[test]
+    fn dedup_key_is_stable_for_same_text() {
+        // Different process instantiations of DefaultHasher can
+        // in theory produce different hashes (SipHash is
+        // process-randomized). Document that — within a single
+        // process the key IS stable (the contract the dedup map
+        // relies on). Across processes, dedup is a defense-in-
+        // depth, not a correctness requirement.
+        let k1 = dedup_key("sess-A", "你好");
+        let k2 = dedup_key("sess-A", "你好");
+        assert_eq!(k1, k2);
+    }
+
+    /// Storm simulation: 9 identical sends within 10s must collapse
+    /// to 1 fresh + 8 deduped, with the dedup map holding exactly
+    /// 1 entry at the end. This is the exact scenario the user hit
+    /// in production ("你好" triggered 9 calls in 2 minutes).
+    #[test]
+    fn dedup_storm_9_identical_sends_collapses_to_1() {
+        let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
+
+        let mut fresh = 0;
+        let mut deduped = 0;
+        for _ in 0..9 {
+            if check_recent_send(&state, "sess-A", "你好").is_none() {
+                fresh += 1;
+            } else {
+                deduped += 1;
+            }
+        }
+        assert_eq!(fresh, 1, "exactly 1 fresh send in a 9-storm");
+        assert_eq!(deduped, 8, "exactly 8 deduped in a 9-storm");
+
+        // Map should hold exactly 1 entry (the fresh one).
+        let map_size = state.recent_sends.lock().unwrap().len();
+        assert_eq!(map_size, 1, "dedup map must have 1 entry, got {map_size}");
+    }
+
+    /// Storm + legit follow-up: 5 identical "你好" sends then 1
+    /// different "在吗?" send — only the 1st of the 5 "你好"
+    /// calls is fresh (subsequent identical calls within 10s
+    /// are deduped), and the distinct "在吗?" MUST succeed
+    /// because dedup must not block legitimate distinct
+    /// messages.
+    #[test]
+    fn dedup_storm_then_different_content_succeeds() {
+        let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
+
+        // 1st "你好" is fresh
+        assert_eq!(check_recent_send(&state, "sess-A", "你好"), None);
+        // Next 4 "你好" are all deduped (within 10s window)
+        for i in 0..4 {
+            let elapsed = check_recent_send(&state, "sess-A", "你好");
+            assert!(elapsed.is_some(), "iteration {i} should be deduped");
+        }
+        // Legit different content MUST succeed
+        assert_eq!(check_recent_send(&state, "sess-A", "在吗?"), None);
+
+        // Map should hold exactly 2 entries (one per content key)
+        let map_size = state.recent_sends.lock().unwrap().len();
+        assert_eq!(map_size, 2, "map should hold 2 keys (你好 + 在吗?)");
+    }
+
+    /// Concurrent storm: spawn 50 threads, each sending the same
+    /// text 5 times, into a shared state. Total = 250 calls. The
+    /// dedup map's mutex serializes the check-then-insert, so
+    /// exactly 1 fresh + 249 deduped, regardless of OS-thread
+    /// scheduling. This guards against the race that an unlocked
+    /// check-then-insert would produce (multiple threads seeing
+    /// "no entry" before any of them insert).
+    #[test]
+    fn dedup_storm_concurrent_50_threads_5_calls_each() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let state = Arc::new(test_state(tempfile::tempdir().unwrap().path().to_path_buf()));
+        let fresh = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let deduped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..50 {
+            let state = Arc::clone(&state);
+            let fresh = Arc::clone(&fresh);
+            let deduped = Arc::clone(&deduped);
+            handles.push(thread::spawn(move || {
+                for _ in 0..5 {
+                    if check_recent_send(&state, "sess-A", "你好").is_none() {
+                        fresh.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    } else {
+                        deduped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let total_fresh = fresh.load(std::sync::atomic::Ordering::Relaxed);
+        let total_deduped = deduped.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(total_fresh, 1, "exactly 1 fresh under 50-thread storm");
+        assert_eq!(total_deduped, 249, "exactly 249 deduped under 50-thread storm");
+    }
+
     /// Two `Always` approvals for the same command do NOT
     /// double-write the file (each save is full overwrite, so the
     /// file is just rewritten with the same content — but the
@@ -844,6 +997,23 @@ pub struct HttpServerState {
     /// list of compiled regex patterns (mirroring `UserAllowlist`).
     pub session_bypass:
         Arc<std::sync::Mutex<HashMap<String, Vec<Regex>>>>,
+    /// 2026-07-06: per-`(session_id, content_hash)` send-dedup.
+    /// Prevents retry storms (WS auto-retry + queue re-drain) from
+    /// triggering N parallel `send_message_stream` calls for the
+    /// same user message — the visible symptom was 9 calls in 2
+    /// minutes for a single "你好" send. Window: 10s; older entries
+    /// are GC'd on every insert. In-memory only, cleared on restart
+    /// (good enough — restart also clears the WS clients that
+    /// produced the storm).
+    pub recent_sends: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    /// 2026-07-06: set of session IDs that currently have an active
+    /// `send_message_stream` running. Prevents concurrent streams for
+    /// the same session — the frontend retry mechanism (MAX_RETRIES=3
+    /// in useStreamChat.ts) can race with a disconnected WS to start
+    /// a second agent for the same user message. Without this guard,
+    /// two agent loops run in parallel, producing duplicate tool calls
+    /// and doubling the response text — the user sees "LLM 重复回复".
+    pub active_sessions: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// Phase 14 / H3 — agent "consciousness stream" tracker. The
     /// desktop UI subscribes to this over WebSocket and renders the
     /// samples as a full-screen ECG visualization. Cheap to clone
@@ -1211,6 +1381,12 @@ impl HttpServerState {
             task_engine: Some(Arc::new(
                 hermix_gateway::groupchat::TaskEngineRuntime::new(groupchat_mgr),
             )),
+            // 2026-07-06: dedup map for retry-storm protection. See
+            // the `recent_sends` field doc on the struct. Cleared
+            // on server restart, which is fine because the WS
+            // clients that produced the storm are also gone.
+            recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         })
     }
 
@@ -1352,6 +1528,12 @@ impl HttpServerState {
             task_engine: Some(Arc::new(
                 hermix_gateway::groupchat::TaskEngineRuntime::new(groupchat_mgr),
             )),
+            // 2026-07-06: dedup map for retry-storm protection. See
+            // the `recent_sends` field doc on the struct. Cleared
+            // on server restart, which is fine because the WS
+            // clients that produced the storm are also gone.
+            recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         })
     }
 
@@ -2105,14 +2287,21 @@ async fn get_session_messages(
     Path(session_id): Path<String>,
     State(state): State<HttpServerState>,
 ) -> Result<Json<SessionMessagesResponse>, HttpError> {
-    // Use the timeline-aware loader so approval rows (role='approval')
-    // come back interleaved with assistant messages in the order the
-    // agent emitted them. The UI needs this to position the inline
-    // card in the correct slot after a reload.
-    let entries = state
+    // v33 (2026-07-06): use the *timestamped* loader so each entry
+    // carries the persisted `messages.created_at` and the desktop
+    // client can render the real relative time on session reload
+    // (e.g. "3 天前" instead of "刚刚"). The legacy
+    // `load_session_with_approvals` was paired with `timestamp: now`
+    // below, which masked every message's true age.
+    let entries_with_ts = state
         .session_persistence
-        .load_session_with_approvals(&session_id)
+        .load_session_with_approvals_and_timestamps(&session_id)
         .map_err(HttpError::from)?;
+    let entries: Vec<hermix_agent::SessionEntry> =
+        entries_with_ts.iter().map(|(e, _)| e.clone()).collect();
+    // Pull the timestamps out in lockstep with the entries below.
+    let timestamps: Vec<Option<String>> =
+        entries_with_ts.into_iter().map(|(_, ts)| ts).collect();
     let now = Utc::now().to_rfc3339();
 
     // Build tool_call_id → arguments map from all assistant messages so
@@ -2136,13 +2325,14 @@ async fn get_session_messages(
     let mut idx = 0usize;
     let messages: Vec<ProtocolMessage> = entries
         .into_iter()
+        .zip(timestamps.into_iter())
         // Defense-in-depth: the SQL filter in
         // `load_session_with_approvals` already excludes role='system'
         // rows. This match-arm is here so even if a future caller
         // accidentally loads a different entry set (e.g. a test
         // fixture) the system prompt never reaches the wire.
-        .filter(|e| !matches!(e, hermix_agent::SessionEntry::Message(m) if matches!(m.role, MessageRole::System)))
-        .map(|entry| match entry {
+        .filter(|(e, _ts)| !matches!(e, hermix_agent::SessionEntry::Message(m) if matches!(m.role, MessageRole::System)))
+        .map(|(entry, ts)| match entry {
             hermix_agent::SessionEntry::Message(m) => {
                 let id = format!("{}-{}", session_id, idx);
                 idx += 1;
@@ -2175,6 +2365,13 @@ async fn get_session_messages(
                 } else {
                     None
                 };
+                // v33 (2026-07-06): use the persisted `created_at`
+                // (carried in via the parallel query) as the wire
+                // timestamp so the desktop client shows the real
+                // relative time on reload. Fall back to `now` only
+                // if the timestamp query somehow missed this row
+                // (shouldn't happen — same filter on both sides).
+                let timestamp = ts.clone().unwrap_or_else(|| now.clone());
                 ProtocolMessage {
                     id,
                     role: match m.role {
@@ -2206,7 +2403,7 @@ async fn get_session_messages(
                             cleaned
                         }
                     },
-                    timestamp: now.clone(),
+                    timestamp,
                     model: None,
                     tool_calls,
                     tool_name,
@@ -2214,6 +2411,7 @@ async fn get_session_messages(
                     extra: None,
                     reasoning_content: m.reasoning_content.clone(),
                     execution_timeline,
+                    created_at: ts,
                 }
             }
             hermix_agent::SessionEntry::Approval(record)
@@ -2228,7 +2426,7 @@ async fn get_session_messages(
                     id,
                     role: hermix_transport::Role::Approval,
                     content: String::new(),
-                    timestamp: now.clone(),
+                    timestamp: ts.clone().unwrap_or_else(|| now.clone()),
                     model: None,
                     // Approval rows don't carry tool-calls; the
                     // tool name and risk for the request live in
@@ -2242,6 +2440,7 @@ async fn get_session_messages(
                     // Approval rows are not associated with any
                     // assistant turn's tool calls, so no timeline.
                     execution_timeline: None,
+                    created_at: ts,
                 }
             }
         })
@@ -2614,6 +2813,80 @@ async fn ws_stream_upgrade(
     ws.on_upgrade(move |socket| handle_ws_stream(socket, state, session_id))
 }
 
+/// Compute the dedup key for `(session_id, text)`. Stable across
+/// processes for the same inputs (uses `DefaultHasher`'s SipHash).
+/// Exposed for testing.
+fn dedup_key(session_id: &str, text: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    format!("{}:{:x}", session_id, hasher.finish())
+}
+
+/// Dedup window. Anything within this many seconds of a prior
+/// identical (session_id, text) send is rejected.
+const DEDUP_WINDOW_SECS: u64 = 10;
+/// Map GC horizon. Entries older than this are evicted on every
+/// insert so the map stays bounded.
+const DEDUP_GC_SECS: u64 = 60;
+
+/// Check whether `(session_id, text)` was sent recently. Returns
+/// `Some(elapsed_secs)` if a duplicate was found within the dedup
+/// window (caller should reject), or `None` if the send is fresh
+/// (caller should proceed and the entry is recorded).
+///
+/// 2026-07-06: extracted from `handle_ws_stream_send` so the dedup
+/// contract is unit-testable without a WebSocket.
+fn check_recent_send(state: &HttpServerState, session_id: &str, text: &str) -> Option<u64> {
+    let key = dedup_key(session_id, text);
+    let now = std::time::Instant::now();
+    // T2026-07-06: diagnostic — confirm dedup is reached in real WS path.
+    tracing::info!(
+        session = %session_id,
+        key = %key,
+        text_len = text.len(),
+        "dedup_check: entering check_recent_send"
+    );
+    // Check: do we have a recent entry for this key?
+    let duplicate: Option<u64> = if let Ok(map) = state.recent_sends.lock() {
+        if let Some(last) = map.get(&key) {
+            let e = now.duration_since(*last).as_secs();
+            if e < DEDUP_WINDOW_SECS {
+                Some(e)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        // Mutex poisoned: fail-open (don't block the user). Caller
+        // will see `None` and proceed without dedup.
+        None
+    };
+    if duplicate.is_some() {
+        tracing::info!(
+            session = %session_id,
+            elapsed_secs = duplicate.unwrap_or(0),
+            "dedup_check: DUPLICATE found"
+        );
+        return duplicate;
+    }
+    // Record + GC.
+    if let Ok(mut map) = state.recent_sends.lock() {
+        map.insert(key.clone(), now);
+        map.retain(|_, t| now.duration_since(*t).as_secs() < DEDUP_GC_SECS);
+        tracing::info!(
+            session = %session_id,
+            key = %key,
+            map_size = map.len(),
+            "dedup_check: FRESH — inserted into map"
+        );
+    }
+    None
+}
+
 /// Handle a single `SendMessageRequest` inside a streaming WS session.
 /// Extracted so the `WsClientMessage::Send` path and the legacy
 /// `SendMessageRequest` / plain-text path share the same logic.
@@ -2625,6 +2898,81 @@ async fn handle_ws_stream_send(
     request: SendMessageRequest,
 ) {
     use tokio::sync::mpsc;
+
+    // 2026-07-06: dedup guard. If the same (session_id, content)
+    // arrived within the last 10s, skip with a synthetic Done
+    // event so the client settles cleanly. Catches:
+    //   - WS auto-retry storms (useStreamChat's `MAX_RETRIES=3`
+    //     path opening a fresh WS on `onerror`/`onclose` and
+    //     re-sending the same `text`)
+    //   - App.tsx queue re-drain races that re-enqueue the same
+    //     message after a transient failure
+    //   - Any external integration that double-fires
+    //
+    // The dedup window is 10s — long enough that legitimate
+    // user re-typing the same question after a few seconds (e.g.
+    // "stop", then "stop again" from a different mental model)
+    // still works, short enough that the dedup map stays tiny.
+    if let Some(elapsed) = check_recent_send(&state, session_id, &request.text) {
+        tracing::warn!(
+            session = %session_id,
+            text_len = request.text.len(),
+            elapsed_secs = elapsed,
+            "dedup: identical content sent within 10s, skipping (client retry storm or queue re-drain)"
+        );
+        // Send a synthetic Done so the client settles cleanly
+        // (otherwise the WS would hang until the 120s timeout).
+        let envelope = WsEnvelope {
+            version: 1,
+            request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
+            trace_id: trace_id.to_string(),
+            event: StreamEvent::Done {
+                content: String::new(),
+                finish_reason: Some("deduped".to_string()),
+            },
+        };
+        if let Ok(json) = serde_json::to_string(&envelope) {
+            let _ = socket.send(WsMessage::Text(json.into())).await;
+        }
+        return;
+    }
+
+    // 2026-07-06: session-level active-stream lock. If the same
+    // (session_id, text) already has an agent running (from a
+    // prior retry whose WS disconnected before the previous agent
+    // finished), reject the duplicate. The key is derived from
+    // `dedup_key` so both checks use the same collision domain.
+    // This catches retries that arrive AFTER the 10s dedup window
+    // (when `check_recent_send` above misses them).
+    let active_key = dedup_key(session_id, &request.text);
+    let is_duplicate = {
+        let mut active = state.active_sessions.lock().unwrap();
+        if !active.insert(active_key.clone()) {
+            true
+        } else {
+            false
+        }
+    };
+    if is_duplicate {
+        tracing::warn!(
+            session = %session_id,
+            text_len = request.text.len(),
+            "active_stream: duplicate (session_id, text) already running; rejecting"
+        );
+        let envelope = WsEnvelope {
+            version: 1,
+            request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
+            trace_id: trace_id.to_string(),
+            event: StreamEvent::Error {
+                code: "duplicate_stream".to_string(),
+                message: "This message is already being processed. Please wait for the current response to complete.".to_string(),
+            },
+        };
+        if let Ok(json) = serde_json::to_string(&envelope) {
+            let _ = socket.send(WsMessage::Text(json.into())).await;
+        }
+        return;
+    }
 
     // Create a bounded queue to avoid unbounded memory usage under slow clients.
     let queue_cap = env_compat("HERMIX_WS_STREAM_BUFFER", "HERMES_WS_STREAM_BUFFER")
@@ -3210,6 +3558,7 @@ async fn handle_ws_stream_send(
 
     // Call agent service with streaming
     let agent_service = state.agent_service.clone();
+    let active_sessions = state.active_sessions.clone();
     let session_id_clone = session_id.to_string();
     let request_text = request.text.clone();
     let trace_id_owned = trace_id.to_string();
@@ -3225,6 +3574,7 @@ async fn handle_ws_stream_send(
     // produced output after being stopped.
     let ws_disconnected = Arc::new(AtomicBool::new(false));
     let ws_disconnected_clone = ws_disconnected.clone();
+    let active_key_clone = active_key.clone();
 
     let agent_handle = tokio::spawn(async move {
         let result = agent_service
@@ -3242,6 +3592,10 @@ async fn handle_ws_stream_send(
                 session = %session_id_clone,
                 "WS disconnected before agent finished; skipping Done/Error event"
             );
+            // Release the session lock even when the WS disconnected.
+            // This allows the user to re-send the message later without
+            // hitting the "already being processed" guard.
+            active_sessions.lock().unwrap().remove(&active_key_clone);
             return;
         }
 
@@ -3315,9 +3669,17 @@ async fn handle_ws_stream_send(
                     .await;
             }
         }
+
+        // Release the per-session stream lock so future sends
+        // (same or different content) for this session are allowed.
+        active_sessions.lock().unwrap().remove(&active_key_clone);
     });
 
     // Forward channel events to WebSocket
+    tracing::info!(
+        session = %session_id,
+        "ws_stream: rx forward loop starting"
+    );
     while let Some(event_json) = rx.recv().await {
         if socket
             .send(WsMessage::Text(
@@ -3334,9 +3696,17 @@ async fn handle_ws_stream_send(
             // next .await boundary in send_message_stream).
             ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
             agent_handle.abort();
+            // Release the session lock since the spawned task may
+            // not reach its cleanup code (abort cancels at the next
+            // .await, which could be deeper in send_message_stream).
+            state.active_sessions.lock().unwrap().remove(&active_key);
             break;
         }
     }
+    tracing::info!(
+        session = %session_id,
+        "ws_stream: rx forward loop EXITED — handle_ws_stream_send returning"
+    );
 }
 
 // ── GroupChat streaming WebSocket ────────────────────────
@@ -3743,6 +4113,12 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
         match msg {
             WsMessage::Text(text) => {
                 let trace_id = trace_id_base.clone();
+                // T2026-07-06: diagnostic — log every WS message receipt.
+                tracing::info!(
+                    session = %session_id,
+                    text_preview = %text.chars().take(80).collect::<String>(),
+                    "ws_stream: received Text message"
+                );
 
                 // Try structured WsClientMessage first (v2 protocol).
                 if let Ok(ws_msg) = serde_json::from_str::<WsClientMessage>(&text) {

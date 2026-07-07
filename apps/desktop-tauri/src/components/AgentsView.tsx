@@ -1645,7 +1645,7 @@ function BuiltInExpertsTab({
 }) {
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<string>("全部");
-  const { expert, setExpert, clear } = useSessionExpert(activeSessionId);
+  const { expert, setExpert } = useSessionExpert(activeSessionId);
 
   const filtered = useMemo(() => {
     let list: ExpertDef[] = BUILTIN_EXPERTS;
@@ -1666,11 +1666,7 @@ function BuiltInExpertsTab({
   }, [activeCategory, search]);
 
   const handleHire = async (e: ExpertDef) => {
-    if (expert?.id === e.id) {
-      clear();
-      return;
-    }
-    // If no session, onAfterHire creates one so setExpert has a valid key
+    // 单击即可：选择专家并跳转回对话界面，不做取消/切换
     if (onAfterHire) await onAfterHire();
     setExpert(e.id);
   };
@@ -1788,7 +1784,7 @@ function ExpertCard({
                   : "bg-bg-primary text-text-secondary"
               )}
             >
-              {isHired ? "已使用" : "待邀"}
+              {isHired ? "使用中" : "待邀"}
             </span>
           </div>
 
@@ -1825,7 +1821,7 @@ function ExpertCard({
             : { background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }
           }
         >
-          {isHired ? <><Check size={11} /> 已使用,点击取消</> : canHire ? "使用此专家" : "请先打开对话"}
+          {isHired ? <><Check size={11} /> 使用此专家</> : canHire ? "使用此专家" : "请先打开对话"}
         </button>
       </div>
     </div>

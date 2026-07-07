@@ -129,6 +129,7 @@ export const ChatComposerInput = memo(
         }}
         onDragEnter={(e) => {
           if (!e.dataTransfer?.types?.includes("Files")) return;
+          e.preventDefault(); // 必须，否则浏览器拒绝 drop
           dragCounter.current += 1;
           setDraggingFiles(true);
         }}
@@ -138,7 +139,9 @@ export const ChatComposerInput = memo(
             e.dataTransfer.dropEffect = "copy";
           }
         }}
-        onDragLeave={() => {
+        onDragLeave={(e) => {
+          // 只有真正离开容器时才减少计数器
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
           dragCounter.current = Math.max(0, dragCounter.current - 1);
           if (dragCounter.current === 0) setDraggingFiles(false);
         }}
@@ -171,12 +174,30 @@ export const ChatComposerInput = memo(
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onPaste={(e) => {
-            // 粘贴上传：从剪贴板提取图片文件
-            const files = Array.from(e.clipboardData?.files ?? []);
-            const imageFiles = files.filter((f) => f.type.startsWith("image/"));
-            if (imageFiles.length > 0) {
+            // 粘贴上传：从剪贴板提取文件（图片 + 非图片）
+            // clipboardData.files 只包含资源管理器复制的文件；
+            // clipboardData.items 包含所有剪贴板项目（包括 Ctrl+C 复制的内容）
+            const files: File[] = [];
+            const items = e.clipboardData?.items;
+            if (items) {
+              for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item.kind === "file") {
+                  const file = item.getAsFile();
+                  if (file) files.push(file);
+                }
+              }
+            }
+            // fallback: clipboardData.files
+            if (files.length === 0) {
+              const cf = e.clipboardData?.files;
+              if (cf) {
+                for (let i = 0; i < cf.length; i++) files.push(cf[i]);
+              }
+            }
+            if (files.length > 0) {
               e.preventDefault();
-              onFilesAttach?.(imageFiles);
+              onFilesAttach?.(files);
             }
           }}
           onFocus={() => setFocused(true)}

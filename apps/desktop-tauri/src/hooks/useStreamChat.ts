@@ -74,6 +74,8 @@ export interface ChatOverrides {
   images?: { bytes: number[]; mimeType: string; name?: string }[];
   image?: string;  // legacy single-image base64 (backward compat)
   imageMimeType?: string;  // mime type for legacy single image
+  /** 非图片本地文件路径（拖放/粘贴时获取），后端直接用 read_file/read_pdf 读取 */
+  attachedFilePaths?: string[];
   [key: string]: unknown;
 }
 
@@ -354,6 +356,15 @@ export function useStreamChat() {
         const updatePhase = (next: StreamPhase) => { phase = next; callbacks.onPhaseChange?.(next); };
         let firstChunkReceived = false;
         let hasContent = false;
+        // 2026-07-07: true once `ws.send(payload)` succeeds in the
+        // `connected` handler. If the WS closes before any content
+        // arrives but AFTER the message was sent to the server, we
+        // MUST NOT retry — the server already received it and will
+        // eventually respond (or complete). Retrying with a fresh WS
+        // sends the same content again, creating a second agent loop
+        // and two assistant replies in the DB — visible to the user
+        // as "重复回复".
+        let sentToServer = false;
         let totalTimeout: ReturnType<typeof setTimeout> | null = null;
         // 30s first-chunk slow-hint timer handle (see ws.onmessage "connected"
         // branch). Tracked so settle()/disarmTimeouts() can cancel it — without
@@ -485,6 +496,7 @@ export function useStreamChat() {
                   payload.images = overrides.images;
                 }
                 ws.send(JSON.stringify(payload));
+                sentToServer = true;
                 updatePhase("streaming");
                 armTimeouts();
 
@@ -913,8 +925,28 @@ export function useStreamChat() {
 
           ws.onerror = () => {
             if (!done) {
-              // 2026-07-06: auto-retry before any content arrives
-              if (!hasContent && retryCount < MAX_RETRIES) {
+              // 2026-07-06 (rev): if we've ever received any content
+              // (text or status), we MUST NOT retry — the agent
+              // loop is already running server-side and a fresh WS
+              // would trigger a second `send_message_stream` call
+              // for the same content. We settle "partial" so the
+              // user keeps the text we've already received instead
+              // of discarding it via an error settle.
+              if (hasContent) {
+                settle(fullText, undefined, undefined, "partial");
+                return;
+              }
+              // 2026-07-07: if the message was already sent to the
+              // server (we received `connected` and called
+              // `ws.send(payload)`), DO NOT retry — the server is
+              // already processing it. A new WS would re-send the
+              // same text, creating a second agent loop that
+              // produces duplicate assistant messages in the DB.
+              if (sentToServer) {
+                settle("", "Connection lost while server was processing the message", undefined, "error");
+                return;
+              }
+              if (retryCount < MAX_RETRIES) {
                 retryCount++;
                 const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
                 updatePhase("reconnecting");
@@ -930,7 +962,19 @@ export function useStreamChat() {
               if (hasContent && fullText.length > 0) {
                 settle(fullText, undefined, undefined, "partial");
               } else {
-                // 2026-07-06: auto-retry before any content arrives
+                // 2026-07-06 (rev): same hardening as onerror above.
+                // If anything arrived (status, thinking, anything),
+                // never retry — the agent loop is already running.
+                if (hasContent) {
+                  settle(fullText, undefined, undefined, "partial");
+                  return;
+                }
+                // 2026-07-07: same hardening as onerror — if the
+                // message was already sent, don't retry.
+                if (sentToServer) {
+                  settle("", "Connection closed while server was processing the message", undefined, "error");
+                  return;
+                }
                 if (retryCount < MAX_RETRIES) {
                   retryCount++;
                   const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];

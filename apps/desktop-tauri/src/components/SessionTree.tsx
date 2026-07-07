@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowUp, ArrowDown, GitBranch, Loader2 } from "lucide-react";
+import { ArrowUp, ArrowDown, GitBranch, Loader2, Inbox, AlertCircle } from "lucide-react";
 import * as api from "../api";
 
 interface SessionNode {
@@ -32,7 +32,17 @@ export function SessionTree({ sessionId }: { sessionId: string }) {
       },
       (e) => {
         if (!cancelled) {
-          setError(String(e));
+          // Round 6, 2026-07-06: 404 不再硬塞到 UI, 改为标记为"无谱系"
+          // (empty state) 而不是 error state. 后端 404 表示该 session
+          // 还没建立 lineage 关系 — 不是真正的失败. 其他错误保留 error.
+          const msg = String(e);
+          const isNotFound = /404|not\s*found|doesn.?t exist/i.test(msg);
+          if (isNotFound) {
+            setData({ ancestors: [], children: [], current: { id: sessionId, title: "", has_compression: false } });
+            setError(null);
+          } else {
+            setError(msg);
+          }
           setLoading(false);
         }
       },
@@ -43,19 +53,10 @@ export function SessionTree({ sessionId }: { sessionId: string }) {
   }, [sessionId]);
 
   if (loading)
-    return (
-      <div className="py-4 text-center text-text-faint text-[11px]">
-        <Loader2 size={12} className="inline animate-spin mr-1" />
-        加载会话谱系…
-      </div>
-    );
+    return <PanelState kind="loading" title="加载会话谱系…" />;
 
   if (error)
-    return (
-      <div className="py-2 text-center text-error text-[11px]">
-        加载失败: {error}
-      </div>
-    );
+    return <PanelState kind="error" title="加载失败" body={error} />;
 
   if (!data) return null;
 
@@ -63,11 +64,7 @@ export function SessionTree({ sessionId }: { sessionId: string }) {
     data.ancestors.length > 0 || data.children.length > 0;
 
   if (!hasLineage)
-    return (
-      <div className="py-3 text-center text-text-faint text-[11px]">
-        暂无谱系信息
-      </div>
-    );
+    return <PanelState kind="empty" title="暂无谱系信息" body="该会话没有父级或子会话。" />;
 
   const nodeLabel = (n: SessionNode, highlight: boolean) => (
     <span
@@ -129,6 +126,45 @@ export function SessionTree({ sessionId }: { sessionId: string }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * PanelState — 三态统一组件 (loading / empty / error).
+ * Round 6, 2026-07-06: 提取出来取代裸 <Spin> / 红色文本, 让折叠面板
+ * 内部的 loading/empty/error 都有明确的视觉规范.
+ *
+ * - loading: Loader2 spinning + muted text
+ * - empty:   Inbox icon + 中性文字 + 副文案
+ * - error:   AlertCircle icon + 文字 + 副文案 (第一行截断 120 chars 防 stack dump)
+ */
+function PanelState({
+  kind,
+  title,
+  body,
+}: {
+  kind: "loading" | "empty" | "error";
+  title: string;
+  body?: string;
+}) {
+  const Icon = kind === "loading" ? Loader2 : kind === "empty" ? Inbox : AlertCircle;
+  const cls =
+    kind === "error"
+      ? "panel-state--error"
+      : kind === "loading"
+      ? "panel-state--loading"
+      : "panel-state--empty";
+  return (
+    <div className={`panel-state ${cls}`}>
+      <Icon
+        size={14}
+        className={`shrink-0 ${kind === "loading" ? "animate-spin" : ""}`}
+      />
+      <div className="min-w-0">
+        <div className="panel-state-title">{title}</div>
+        {body && <div className="panel-state-body">{body.slice(0, 120)}</div>}
+      </div>
     </div>
   );
 }

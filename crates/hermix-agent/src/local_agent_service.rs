@@ -1272,6 +1272,32 @@ impl AgentService for LocalAgentService {
             messages.push(Message::user(text));
         }
 
+        // 2026-07-06: early persist — save the user message BEFORE
+        // running the streaming agent. Without this, an abort (WS
+        // disconnect, server restart, timeout) before the post-agent
+        // persist at line ~1935 loses the user's message entirely.
+        // The non-streaming `send_message` already has this pattern
+        // (see line ~1120); this is its streaming analogue.
+        if let Err(e) = self
+            .session_persistence
+            .persist_session_with_compression(
+                session_id,
+                &messages,
+                None, // model — not yet resolved; skip for early persist
+                None, // platform — same rationale
+                None, // title — not available yet
+                None, // system_prompt — not available yet
+                None, // parent_session_id — not needed for early persist
+                None, // compression — haven't run the agent yet
+            ) {
+            tracing::warn!(
+                session_id = %session_id,
+                error = %e,
+                "early_persist: failed to persist user message before agent run; \
+                 session may show empty on reload if agent is aborted"
+            );
+        }
+
         // Determine effective model and personality.
         // 2026-06-26: extracted to `resolve_effective_model` for testability —
         // the previous inline `match` made the "user-selected model takes

@@ -6,10 +6,10 @@
   "scripts": {
     "dev:vite": "vite",
     "dev:backend": "cargo build -p hermix-server",
-    "dev": "copy /b ..\\..\\crates\\hermix-server\\src\\lib.rs +,, && cargo build -p hermix-server && copy /y ..\\..\\release\\target\\debug\\hermix.exe ..\\..\\apps\\desktop-tauri\\src-tauri\\binaries\\hermix-x86_64-pc-windows-msvc.exe && cargo tauri dev",
+    "dev": "cargo build -p hermix-server && cargo tauri dev",
     "build:vite": "vite build",
     "build:backend": "cargo build -p hermix-server --release",
-    "build": "cargo build -p hermix-server --release && copy /y ..\\..\\release\\target\\release\\hermix.exe ..\\..\\apps\\desktop-tauri\\src-tauri\\binaries\\hermix-x86_64-pc-windows-msvc.exe && copy /y ..\\..\\..\\release\\target\\release\\officecli.exe ..\\..\\apps\\desktop-tauri\\src-tauri\\binaries\\officecli-x86_64-pc-windows-msvc.exe && cargo tauri build"
+    "build": "npm run build:backend && cargo tauri build"
   },
   "dependencies": {
     "@lobehub/icons": "^5.10.0",

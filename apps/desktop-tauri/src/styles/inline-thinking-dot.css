@@ -1,15 +1,16 @@
 /* ── InlineThinkingDot ────────────────────────────────────────────
-   "打字机光标 + 段间隙指示器" 样式。
+   极简 "模型思考中" 指示器。
+   2026-07-06  redesign: 单颗呼吸光点 + 可选文字，移除心电图扫描线。
    两种渲染模式：
      • cursor (default)：inline，挂在段末游标位
      • gap             ：block，独占一行，段下方行首
-   动画：1.4s 心跳脉冲 + 2.4s 扫描线左→右。全部 CSS keyframes，无 JS 计时。 */
+   动画：1.8s 呼吸 (scale + opacity + 光晕)，无 JS 计时。 */
 
 /* ── Host ─────────────────────────────────────────────────────── */
 .inline-thinking-dot {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   margin-left: 0.15em;
   vertical-align: baseline;
   user-select: none;
@@ -22,7 +23,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 4px 0 2px 0;        /* 行首对齐：左边距 = 0 */
+  margin: 4px 0 2px 0;
   padding: 0;
   width: fit-content;
 }
@@ -31,60 +32,95 @@
   opacity: 0.55;
 }
 
-/* ── Pulse dot (心跳) ─────────────────────────────────────────── */
-.inline-thinking-dot__pulse {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
+.inline-thinking-dot--warning {
+  color: var(--color-text-warning, #ca8a04);
+}
+
+.inline-thinking-dot--sm {
+  gap: 6px;
+  font-size: 0.78em;
+}
+
+/* ── Orb (呼吸光点) ─────────────────────────────────────────── */
+.inline-thinking-dot__orb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
   flex-shrink: 0;
-  animation: h-think-pulse 1.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  box-shadow: 0 0 0 0 currentColor;
 }
 
-@keyframes h-think-pulse {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 0.85;
-    box-shadow: 0 0 0 0 currentColor;
-  }
-  50% {
-    transform: scale(1.35);
-    opacity: 1;
-    box-shadow: 0 0 0 3px transparent;
-  }
+.inline-thinking-dot--sm .inline-thinking-dot__orb {
+  width: 6px;
+  height: 6px;
 }
 
-.inline-thinking-dot--quiet .inline-thinking-dot__pulse {
-  animation-duration: 2.4s;   /* 安静时心跳变慢 */
+.inline-thinking-dot__orb-core {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #fff 0%, var(--color-accent, #3b82f6) 55%, var(--color-accent, #3b82f6) 100%);
+  animation: h-think-breathe 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  z-index: 1;
+}
+
+.inline-thinking-dot__orb-glow {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--color-accent, #3b82f6) 35%, transparent) 0%, transparent 70%);
+  animation: h-think-glow 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  z-index: 0;
+  opacity: 0.6;
+}
+
+.inline-thinking-dot--sm .inline-thinking-dot__orb-glow {
+  inset: -3px;
   opacity: 0.45;
 }
 
-/* ── Sweep trace (心电图扫描线) ───────────────────────────────── */
-.inline-thinking-dot__sweep {
-  width: 36px;
-  height: 10px;
-  flex-shrink: 0;
-  overflow: hidden;
-  color: currentColor;
+.inline-thinking-dot--warning .inline-thinking-dot__orb-core {
+  background: radial-gradient(circle at 30% 30%, #fff 0%, var(--color-text-warning, #eab308) 55%, var(--color-text-warning, #eab308) 100%);
+  animation-duration: 2.4s;
 }
 
-.inline-thinking-dot__sweep path {
-  stroke: currentColor;
-  opacity: 0.7;
-  animation: h-think-sweep 2.4s linear infinite;
+.inline-thinking-dot--warning .inline-thinking-dot__orb-glow {
+  background: radial-gradient(circle, color-mix(in srgb, var(--color-text-warning, #eab308) 30%, transparent) 0%, transparent 70%);
+  animation-duration: 2.4s;
 }
 
-@keyframes h-think-sweep {
-  0%   { transform: translateX(-30px); opacity: 0; }
-  20%  { opacity: 0.7; }
-  80%  { opacity: 0.7; }
-  100% { transform: translateX(30px);  opacity: 0; }
+.inline-thinking-dot--quiet .inline-thinking-dot__orb-core {
+  animation-duration: 2.8s;
+  opacity: 0.6;
 }
 
-.inline-thinking-dot--quiet .inline-thinking-dot__sweep {
-  opacity: 0.35;
+.inline-thinking-dot--quiet .inline-thinking-dot__orb-glow {
+  animation-duration: 2.8s;
+  opacity: 0.25;
+}
+
+@keyframes h-think-breathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}
+
+@keyframes h-think-glow {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(1.55);
+    opacity: 0.7;
+  }
 }
 
 /* ── Hint text ────────────────────────────────────────────────── */
@@ -92,21 +128,28 @@
   font-size: 0.92em;
   letter-spacing: 0.02em;
   white-space: nowrap;
-  color: var(--color-text-muted, #6b7280);
-  opacity: 0.85;
+  color: currentColor;
+  opacity: 0.9;
 }
 
 .inline-thinking-dot--gap .inline-thinking-dot__hint {
   font-size: 0.9em;
 }
 
+.inline-thinking-dot--sm .inline-thinking-dot__hint {
+  font-size: 0.86em;
+}
+
 /* ── Reduced motion ───────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
-  .inline-thinking-dot__pulse,
-  .inline-thinking-dot__sweep path {
+  .inline-thinking-dot__orb-core,
+  .inline-thinking-dot__orb-glow {
     animation: none;
   }
-  .inline-thinking-dot__pulse {
-    opacity: 0.65;
+  .inline-thinking-dot__orb-core {
+    opacity: 0.7;
+  }
+  .inline-thinking-dot__orb-glow {
+    opacity: 0;
   }
 }

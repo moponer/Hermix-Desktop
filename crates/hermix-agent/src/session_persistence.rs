@@ -1894,6 +1894,58 @@ impl SessionPersistence {
         Ok(entries)
     }
 
+    /// v33 (2026-07-06): same as `load_session_with_approvals` but
+    /// also returns the persisted `created_at` timestamp alongside
+    /// each entry. Used by the HTTP `GET /v1/sessions/{id}/messages`
+    /// handler to populate `ProtocolMessage.created_at` so the
+    /// desktop client shows the real relative time ("3 天前") on
+    /// session reload instead of falling back to `now` at serve
+    /// time (which produced "刚刚 / 1 分钟前" for every reloaded
+    /// message).
+    ///
+    /// Implementation: a second SELECT against the same `messages`
+    /// table, sharing the same WHERE / ORDER BY clause as
+    /// `load_session_with_approvals`. Both result sets are returned
+    /// in the same row order — we zip them positionally. No
+    /// second source-of-truth field on `Message` is added; this
+    /// stays scoped to the wire DTO path.
+    pub fn load_session_with_approvals_and_timestamps(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<(SessionEntry, Option<String>)>, AgentError> {
+        let entries = self.load_session_with_approvals(session_id)?;
+
+        // Re-query for `created_at` with the *exact* same SQL
+        // filter as `load_session_with_approvals` so the two row
+        // streams align 1:1 by position. Any drift would manifest
+        // as a misaligned timestamp, which the UI would render as
+        // "刚刚" — same bug we're trying to fix. The filter is
+        // intentionally duplicated rather than refactored into a
+        // shared constant because the SQL strings are also the
+        // SQL-level documentation of what counts as "a row".
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT created_at FROM messages
+                 WHERE session_id = ?1 AND active = 1 AND role != 'system'
+                 ORDER BY id ASC",
+            )
+            .map_err(|e| AgentError::Io(format!("Failed to prepare timestamp query: {e}")))?;
+        let ts_vec: Vec<String> = stmt
+            .query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))
+            .map_err(|e| AgentError::Io(format!("Failed to query timestamps: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AgentError::Io(format!("Failed to collect timestamps: {e}")))?;
+
+        let out: Vec<(SessionEntry, Option<String>)> = entries
+            .into_iter()
+            .zip(ts_vec.into_iter().map(Some).chain(std::iter::repeat(None)))
+            .map(|(e, ts)| (e, ts))
+            .collect();
+        Ok(out)
+    }
+
     /// Return all direct children of `session_id` ordered by creation
     /// time ascending (oldest first). A session is a child when its
     /// `parent_session_id` column matches the given id. Returns an

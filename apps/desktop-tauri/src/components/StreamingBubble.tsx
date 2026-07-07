@@ -42,26 +42,6 @@ import { MarkdownBody } from "./MarkdownBody";
 import { parseContent } from "./messageParser";
 import type { StreamPhase } from "../hooks/useStreamChat";
 
-/**
- * 头部时间戳规则 (2026-06-17 主人反馈 "已完成几个字的设计难看"):
- *  - 进行态 (streaming / connecting / slow) → "正在生成…"
- *  - 终结态 (completed / idle / error / timeout / partial) → ""
- *
- * 流式气泡里不显示绝对时间 (那是 MessageBubble 的事), 也再没有 "刚刚/已完成"
- * 这种重复标签.
- */
-function formatRelativeTimeText(phase: StreamPhase): string {
-  switch (phase) {
-    case "streaming":
-    case "connecting":
-    case "slow":
-    case "reconnecting":
-      return "正在生成…";
-    default:
-      return "";
-  }
-}
-
 interface StreamingBubbleProps {
   text: string;
   phase?: StreamPhase | null;
@@ -208,7 +188,13 @@ function StreamingBubbleImpl({
             出现. */}
         {showHeader && (
           <div className="flex items-center gap-1.5 mb-1 text-text-faint">
-            <span className="h-tiny">{formatRelativeTimeText(effectivePhase)}</span>
+            {STREAMING_PHASES.has(effectivePhase) && (
+              <InlineThinkingDot
+                size="sm"
+                variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "default"}
+                hideHint
+              />
+            )}
             {status?.icon}
             {status?.label && (
               <span className={`h-tiny ${status?.className ?? ""}`}>{status?.label}</span>
@@ -231,37 +217,24 @@ function StreamingBubbleImpl({
 
         {hasNoContent && isStreamingPhase ? (
           showHeader ? (
-            <InlineThinkingDot
-              hint={
-                effectivePhase === "slow"
-                  ? "⚠️ 响应较慢"
-                  : effectivePhase === "connecting"
-                  ? "正在连接"
-                  : "正在思考…"
-              }
-            />
-          ) : (
-            // No header → no "正在思考…" pill. Per v18, a
-            // continuation placeholder within the same loop just
-            // appears as empty space (the post-stream MessageBubble
-            // will materialise the body content here). Showing a
-            // floating "正在思考…" pill on continuation rounds was
-            // the source of the redundant-status feedback.
-            null
-          )
+            // 2026-07-06: meta 行已显示 "正在思考…"，占位区只保留光点呼吸动画，
+            // 避免同一句话在 header 和 body 各出现一次。
+            <div className="flex items-center gap-2 py-3 text-text-muted">
+              <InlineThinkingDot
+                variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "default"}
+                hideHint
+              />
+            </div>
+          ) : null
         ) : (
           <>
             {body}
             {showGapDot && (
+              // 段间隙只保留视觉光点，文字由 meta 行统一承载。
               <InlineThinkingDot
                 asGap
-                hint={
-                  effectivePhase === "slow"
-                    ? "⚠️ 响应较慢"
-                    : effectivePhase === "connecting"
-                    ? "正在连接"
-                    : "正在思考…"
-                }
+                variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "default"}
+                hideHint
               />
             )}
           </>

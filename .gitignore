@@ -32,9 +32,12 @@ apps/web-app/.env.local
 
 # Tauri auto-generated + build outputs
 apps/desktop-tauri/src-tauri/gen/
-# 2026-06-26: sidecar binaries (hermix + officecli) 由 build.rs / 手工放置,
-# 不再进 git. 详见 apps/desktop-tauri/src-tauri/build.rs.
-apps/desktop-tauri/src-tauri/binaries/
+# 2026-06-26 + 2026-07-06: sidecar binaries 处理策略 —
+# binaries/ 默认 ignore (cargo build 产物每次变), 但 officecli 是项目级扩展
+# 资源, 跟踪到 git 让 `cargo tauri build` 在干净 clone 上自包含.
+# 更新 officecli: cp new_exe → binaries/officecli-x86_64-pc-windows-msvc.exe → git add.
+apps/desktop-tauri/src-tauri/binaries/*
+!apps/desktop-tauri/src-tauri/binaries/officecli-x86_64-pc-windows-msvc.exe
 # Tauri sub-workspace 的 .cargo 目录 (2026-06-20 新建). 只有
 # config.toml 是**源码** (引导 Tauri target-dir 到 release/target),
 # 其它 cargo 自动生成的指纹文件全部 ignore.

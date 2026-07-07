@@ -21,7 +21,14 @@
     "dialog:allow-save",
     "dialog:allow-ask",
     "dialog:allow-message",
-    "fs:default",
+    {
+      "identifier": "fs:default",
+      "allow": [
+        { "path": "$HOME/**" },
+        { "path": "~/**" },
+        { "path": "$HOME/.hermix/**" }
+      ]
+    },
     "fs:allow-read",
     "fs:allow-write",
     "fs:allow-exists",

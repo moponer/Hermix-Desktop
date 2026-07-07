@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
-import { PanelRight, Pencil } from "lucide-react";
+import { Activity, GitBranch, PanelRight, Pencil } from "lucide-react";
 import type { ChatMessage } from "../types";
 import type { CompressMethod } from "../utils/imageCompressor";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
@@ -695,10 +695,18 @@ function ModelStatusBar({
   title,
   rightOpen,
   onToggleRight,
+  traceOpen,
+  lineageOpen,
+  onToggleTrace,
+  onToggleLineage,
 }: {
   title?: string;
   rightOpen?: boolean;
   onToggleRight?: () => void;
+  traceOpen?: boolean;
+  lineageOpen?: boolean;
+  onToggleTrace?: () => void;
+  onToggleLineage?: () => void;
 }) {
   if (!title) return null;
   // Truncate long titles to keep the bar compact.
@@ -707,11 +715,39 @@ function ModelStatusBar({
   // "对话界面默认就是有展开的按钮就行了，你管他有没有产物？"
   // 其他页面（agents/experts/settings）没传 onToggleRight，自然不显示。
   const showRightToggle = !!onToggleRight;
+  // 左侧两个折叠图标：会话谱系 + CUA 操作时间线。
+  // 通过 props 下推展开态，避免子组件重复维护 (Round 4, 2026-07-06)。
   return (
     <div
       className="px-4 sm:px-6 pt-3 pb-2 flex items-center gap-2 rounded-t-xl"
       style={{ color: "var(--color-text-primary)" }}
     >
+      {onToggleLineage && (
+        <button
+          onClick={onToggleLineage}
+          className={`panel-toggle-chip ${lineageOpen ? "panel-toggle-chip--active" : ""}`}
+          title={lineageOpen ? "关闭会话谱系" : "打开会话谱系"}
+          aria-label="切换会话谱系"
+          aria-expanded={lineageOpen ? "true" : "false"}
+          data-lineage-open={lineageOpen ? "true" : "false"}
+        >
+          <GitBranch size={12} className="shrink-0" />
+          <span>谱系</span>
+        </button>
+      )}
+      {onToggleTrace && (
+        <button
+          onClick={onToggleTrace}
+          className={`panel-toggle-chip ${traceOpen ? "panel-toggle-chip--active" : ""}`}
+          title={traceOpen ? "关闭 CUA 操作时间线" : "打开 CUA 操作时间线"}
+          aria-label="切换 CUA 操作时间线"
+          aria-expanded={traceOpen ? "true" : "false"}
+          data-trace-open={traceOpen ? "true" : "false"}
+        >
+          <Activity size={12} className="shrink-0" />
+          <span>操作链</span>
+        </button>
+      )}
       <span
         className="truncate flex-1 min-w-0"
         style={{
@@ -986,17 +1022,14 @@ export function ChatView({
   // PLAN_UI_ENHANCEMENT §1.1 — 专家切换分界。
   // 每次 setExpert 都触发 recordCutoff：之后的 AssistantMessage 拿这个时间戳做"新旧分界"。
   const { cutoffAt: expertCutoffAt, recordCutoff } = useExpertCutoff(sessionId);
-  const setExpertWithCutoff = useCallback(
-    (id: string | null) => {
-      setExpert(id);
-      recordCutoff(id);
-      // 2026-06-25 用户切换专家后，把选择持久化到后端 session。
-      if (sessionId) {
-        updateSessionMetadata(sessionId, { expert_id: id }).catch(() => {});
-      }
-    },
-    [setExpert, recordCutoff, sessionId],
-  );
+  const setExpertWithCutoff = (id: string | null) => {
+    setExpert(id);
+    if (id) markRecentUsed(id);
+    recordCutoff(id);
+    if (sessionId) {
+      updateSessionMetadata(sessionId, { expert_id: id }).catch(() => {});
+    }
+  };
 
   // ── Archived context banner (v2 short-term unload, 2026-06-21) ───
   //
@@ -1021,9 +1054,140 @@ export function ChatView({
   // CUA. The banner itself only appears once a session has actually
   // produced at least one event (TracePanel collapses to null when
   // the response is `missing: true` AND empty).
+  // 2026-07-06 Round 7: 两 chip 互斥 — 展开一个自动收起另一个, 避免双 panel 抢占视口.
+  // 通过 toggle handler 联动, 不在 useState setter 里用旧值读 (避免闭包陷阱).
   const [traceOpen, setTraceOpen] = useState(false);
   // 2026-07-05: session lineage tree for compressed session ancestry tracking.
   const [lineageOpen, setLineageOpen] = useState(false);
+  // 2026-07-06 Round 11: 浮层动画 — 关闭时设 closing=true 让 CSS 播 transform 退出动画,
+  // 250ms 后再真正卸载 (CSS 0.22s + 30ms buffer).
+  const [closingTrace, setClosingTrace] = useState(false);
+  const [closingLineage, setClosingLineage] = useState(false);
+  const closeTraceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeLineageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 关闭时先启动退出动画, 延迟后再真正关闭; 打开时立即.
+  function closeWithAnimation(
+    setOpen: (v: boolean) => void,
+    setClosing: (v: boolean) => void,
+    timerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
+    closeOther?: () => void,
+  ) {
+    // 如果对面是展开的, 先关对面 (立即, 不带动画)
+    closeOther?.();
+    setClosing(true);  // 播放退出动画
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      setOpen(false);
+      setClosing(false);
+      timerRef.current = null;
+    }, 250);
+  }
+
+  function openWithAnimation(
+    setOpen: (v: boolean) => void,
+    setClosing: (v: boolean) => void,
+    timerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
+  ) {
+    // 清可能驻留的关闭 timer
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    setClosing(false);
+    setOpen(true);
+  }
+
+  function handleToggleLineage() {
+    if (lineageOpen) {
+      closeWithAnimation(setLineageOpen, setClosingLineage, closeLineageTimer, () => {
+        // 关 trace (如果有的话)
+        if (traceOpen) {
+          setClosingTrace(true);
+          if (closeTraceTimer.current) clearTimeout(closeTraceTimer.current);
+          closeTraceTimer.current = setTimeout(() => {
+            setTraceOpen(false);
+            setClosingTrace(false);
+            closeTraceTimer.current = null;
+          }, 250);
+        }
+      });
+    } else {
+      // 关 trace 立即 (不带动画)
+      if (traceOpen) {
+        setClosingTrace(true);
+        if (closeTraceTimer.current) clearTimeout(closeTraceTimer.current);
+        closeTraceTimer.current = setTimeout(() => {
+          setTraceOpen(false);
+          setClosingTrace(false);
+          closeTraceTimer.current = null;
+        }, 250);
+      }
+      openWithAnimation(setLineageOpen, setClosingLineage, closeLineageTimer);
+    }
+  }
+
+  function handleToggleTrace() {
+    if (traceOpen) {
+      closeWithAnimation(setTraceOpen, setClosingTrace, closeTraceTimer, () => {
+        if (lineageOpen) {
+          setClosingLineage(true);
+          if (closeLineageTimer.current) clearTimeout(closeLineageTimer.current);
+          closeLineageTimer.current = setTimeout(() => {
+            setLineageOpen(false);
+            setClosingLineage(false);
+            closeLineageTimer.current = null;
+          }, 250);
+        }
+      });
+    } else {
+      if (lineageOpen) {
+        setClosingLineage(true);
+        if (closeLineageTimer.current) clearTimeout(closeLineageTimer.current);
+        closeLineageTimer.current = setTimeout(() => {
+          setLineageOpen(false);
+          setClosingLineage(false);
+          closeLineageTimer.current = null;
+        }, 250);
+      }
+      openWithAnimation(setTraceOpen, setClosingTrace, closeTraceTimer);
+    }
+  }
+
+  // 点击空白区域关闭所有展开的 panel (Round 8, 2026-07-06)
+  function handleBlankClick(e: React.MouseEvent) {
+    const target = e.target as HTMLElement;
+    // 点击以下元素时不关闭: panel 内部 / 消息气泡 / 按钮 / 输入框
+    if (
+      target.closest('.panel-card') ||
+      target.closest('.msg-card') ||
+      target.closest('.tw-msg') ||
+      target.closest('.panel-toggle-chip') ||
+      target.closest('button') ||
+      target.closest('input') ||
+      target.closest('textarea') ||
+      target.closest('select') ||
+      target.closest('a') ||
+      target.closest('[role="button"]')
+    ) return;
+
+    // 空白处 → 关闭所有展开的 panel (带退出动画)
+    if (traceOpen) {
+      setClosingTrace(true);
+      if (closeTraceTimer.current) clearTimeout(closeTraceTimer.current);
+      closeTraceTimer.current = setTimeout(() => {
+        setTraceOpen(false);
+        setClosingTrace(false);
+        closeTraceTimer.current = null;
+      }, 250);
+    }
+    if (lineageOpen) {
+      setClosingLineage(true);
+      if (closeLineageTimer.current) clearTimeout(closeLineageTimer.current);
+      closeLineageTimer.current = setTimeout(() => {
+        setLineageOpen(false);
+        setClosingLineage(false);
+        closeLineageTimer.current = null;
+      }, 250);
+    }
+  }
   useEffect(() => {
     if (!sessionId) {
       setArchiveRefs([]);
@@ -1193,6 +1357,7 @@ useEffect(() => {
 }, [session?.id, session?.workspace, session?.expert_id, session?.model, setWorkspaceRaw, setExpert, setSelectedModel]);
 
 const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+const [filePaths, setFilePaths] = useState<string[]>([]);
 
 /**
  * 防 WebView2 内存泄漏：组件卸载时清理所有 blob URL。
@@ -1219,19 +1384,45 @@ const [keepOriginalImage, setKeepOriginalImage] = useState(false);
  */
 const handleFilesAttach = useCallback(
   async (files: File[]) => {
-    const results: CompressResult[] = await Promise.all(
-      files.map((f) => (keepOriginalImage ? skipCompression(f) : compressImage(f))),
-    );
-    const newImages: PendingImage[] = results.map((r) => ({
-      file: r.file,
-      blobUrl: URL.createObjectURL(r.file),
-      sizeBytes: r.compressedSize,
-      mimeType: r.file.type,
-      isCompressed: r.isCompressed,
-      method: r.method,
-      name: r.file.name,
-    }));
-    setPendingImages((prev) => [...prev, ...newImages]);
+    // 分离图片和非图片文件
+    const images: File[] = [];
+    const nonImages: File[] = [];
+    for (const f of files) {
+      if (f.type.startsWith("image/")) images.push(f);
+      else nonImages.push(f);
+    }
+
+    // 图片走压缩 + blobUrl 预览（保持现有逻辑）
+    if (images.length > 0) {
+      const results: CompressResult[] = await Promise.all(
+        images.map((f) => (keepOriginalImage ? skipCompression(f) : compressImage(f))),
+      );
+      const newImages: PendingImage[] = results.map((r) => ({
+        file: r.file,
+        blobUrl: URL.createObjectURL(r.file),
+        sizeBytes: r.compressedSize,
+        mimeType: r.file.type,
+        isCompressed: r.isCompressed,
+        method: r.method,
+        name: r.file.name,
+      }));
+      setPendingImages((prev) => [...prev, ...newImages]);
+    }
+
+    // 非图片文件：通过 Tauri IPC 获取本地路径
+    if (nonImages.length > 0) {
+      const paths: string[] = [];
+      for (const f of nonImages) {
+        // Tauri WebView2 暴露 file.path 属性（非标准 Chromium API）
+        const filePath = (f as any).path;
+        if (filePath && typeof filePath === "string") {
+          paths.push(filePath);
+        }
+      }
+      if (paths.length > 0) {
+        setFilePaths((prev) => [...prev, ...paths]);
+      }
+    }
   },
   [keepOriginalImage],
 );
@@ -1437,10 +1628,14 @@ const clearPendingImages = useCallback(() => {
           })),
         );
       }
+      if (filePaths.length > 0) {
+        overrides.attachedFilePaths = [...filePaths];
+      }
       await onSendMessage(trimmed, undefined, overrides);
     } finally {
       setSending(false);
       clearPendingImages();
+      setFilePaths([]);
     }
   };
 
@@ -1714,11 +1909,15 @@ const clearPendingImages = useCallback(() => {
   })();
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ background: "var(--color-bg-primary)" }}>
+    <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ background: "var(--color-bg-primary)" }} onClick={handleBlankClick}>
       <ModelStatusBar
         title={session?.title}
         rightOpen={rightOpen}
         onToggleRight={onToggleRight}
+        traceOpen={traceOpen}
+        lineageOpen={lineageOpen}
+        onToggleTrace={handleToggleTrace}
+        onToggleLineage={handleToggleLineage}
       />
       {archiveRefs.length > 0 && (
         <ArchiveRefsBanner
@@ -1728,84 +1927,23 @@ const clearPendingImages = useCallback(() => {
           onToggle={() => setArchiveOpen((v) => !v)}
         />
       )}
-      {sessionId && (
-        // Stage 4.2 — Computer-use action timeline (opt-in panel).
-        // Default collapsed; the panel itself collapses to its
-        // empty-state copy when the JSONL has no rows for the
-        // session, so this banner doesn't burn screen real estate
-        // for users who never invoke CUA.
-        <div className="mx-3 sm:mx-4 mb-2">
-          <button
-            type="button"
-            onClick={() => setTraceOpen((v) => !v)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left rounded-lg border"
-            style={{
-              borderColor: "var(--color-border)",
-              background: "var(--color-bg-secondary)",
-              color: "var(--color-text-primary)",
-              fontSize: 12,
-            }}
-            aria-expanded={traceOpen}
-          >
-            <span
-              aria-hidden
-              style={{
-                fontSize: 11,
-                transform: traceOpen ? "rotate(90deg)" : "rotate(0deg)",
-                transition: "transform 120ms ease",
-                color: "var(--color-text-secondary)",
-              }}
-            >
-              ▶
-            </span>
-            <span style={{ fontWeight: 600 }}>CUA 操作时间线</span>
-            <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
-              · 计算机使用代理执行的截图 / 点击 / 输入 / 按键 记录
-            </span>
-          </button>
-          {traceOpen && (
-            <div className="mt-1.5">
-              <TracePanel sessionId={sessionId} />
+      {/* Round 11 (2026-07-06): 浮层面板 — 绝对定位，不挤压消息列表 */}
+      {(traceOpen || closingTrace) && (
+        <div className={`panel-overlay ${!closingTrace ? 'panel-overlay--open' : ''}`} onClick={(e) => e.stopPropagation()}>
+          <div className={`panel-overlay__drawer ${!closingTrace ? 'panel-overlay__drawer--open' : ''}`}>
+            <div className="panel-card">
+              <TracePanel sessionId={sessionId!} />
             </div>
-          )}
+          </div>
         </div>
       )}
-      {sessionId && (
-        // 2026-07-05: session lineage tree — parent/child chain browser.
-        <div className="mx-3 sm:mx-4 mb-2">
-          <button
-            type="button"
-            onClick={() => setLineageOpen((v) => !v)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left rounded-lg border"
-            style={{
-              borderColor: "var(--color-border)",
-              background: "var(--color-bg-secondary)",
-              color: "var(--color-text-primary)",
-              fontSize: 12,
-            }}
-            aria-expanded={lineageOpen}
-          >
-            <span
-              aria-hidden
-              style={{
-                fontSize: 11,
-                transform: lineageOpen ? "rotate(90deg)" : "rotate(0deg)",
-                transition: "transform 120ms ease",
-                color: "var(--color-text-secondary)",
-              }}
-            >
-              ▶
-            </span>
-            <span style={{ fontWeight: 600 }}>会话谱系</span>
-            <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
-              · 父级/子级会话链 & 压缩历史
-            </span>
-          </button>
-          {lineageOpen && (
-            <div className="mt-1.5 p-3 rounded-lg border" style={{ borderColor: "var(--color-border)", background: "var(--color-bg-primary)" }}>
-              <SessionTree sessionId={sessionId} />
+      {(lineageOpen || closingLineage) && (
+        <div className={`panel-overlay ${!closingLineage ? 'panel-overlay--open' : ''}`} onClick={(e) => e.stopPropagation()}>
+          <div className={`panel-overlay__drawer ${!closingLineage ? 'panel-overlay__drawer--open' : ''}`}>
+            <div className="panel-card">
+              <SessionTree sessionId={sessionId!} />
             </div>
-          )}
+          </div>
         </div>
       )}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
@@ -2171,28 +2309,19 @@ function Composer(p: ComposerProps) {
     setExpandedProviders((prev) => ({ ...prev, [provider]: !prev[provider] }));
   }, []);
 
-  // ── Toolbar layout (v22: 窄宽度→只图标) ───────────────────────────
+  // ── Toolbar layout (v23: 坚决不允许两行) ───────────────────────────
   //
-  // 主人 13:42 反馈：在右侧产物面板展开+主列较窄时，工具栏底部换行。
-  // 解决方案：当工具栏实际宽度 < COMPACT_THRESHOLD 时，把左侧 3 个 chip
-  // (专家/目录/权限) 的文字标签折叠成只图标，hover 看 title tooltip。
-  //
-  // 用 ResizeObserver 监听 toolbarRef 而非 window —— 因为:
-  //   · 右侧栏打开/关闭改变主列宽度 → 触发
-  //   · 窗口 resize 改变主列宽度 → 触发
-  //   · 拖拽分栏边界改变主列宽度 → 触发
-  //   · 主列内的 padding / chat 内容变化 → 也会触发
-  //
-  // v4 (主人反馈 "纯图标是反产品") 之前是硬阈值 + 全量切到纯图标；
-  // 现在只在视觉上折叠左侧 3 个，右侧 5 个核心动作永远有文字。
+  // v22 通过 ResizeObserver + toolbarCompact 折叠部分文字标签来防止换行，
+  // 但极端窄宽度下仍可能换行。v23: toolbar 强制 flex-nowrap + whitespace-nowrap，
+  // 配合更激进的折叠阈值，彻底杜绝第二行。
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [toolbarCompact, setToolbarCompact] = useState(false);
   useEffect(() => {
     const el = toolbarRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const calc = () => {
-      // 容器宽 < 580 → 文字塞不下，折叠
-      setToolbarCompact(el.clientWidth < 580);
+      // 容器宽 < 700 → 折叠左侧 chip 文字（更高的阈值，提前折叠）
+      setToolbarCompact(el.clientWidth < 700);
     };
     calc();
     const ro = new ResizeObserver(calc);
@@ -2418,7 +2547,6 @@ function Composer(p: ComposerProps) {
               {p.expert && (
                 <span
                   role="button"
-                  aria-label="解雇专家"
                   onClick={(e) => { e.stopPropagation(); p.setExpert(null); }}
                   className="ml-0.5 hover:opacity-70 shrink-0 text-text-muted"
                 >
@@ -2428,45 +2556,34 @@ function Composer(p: ComposerProps) {
             </button>
             {expertOpen && (
               <PopoverShell containerRef={expertContainerRef} triggerRef={expertTriggerRef} width="sm" align="left" side="top">
-                {p.recentExperts.length === 0 ? (
-                  <button
-                    onClick={() => { p.onOpenExperts?.(); setExpertOpen(false); }}
-                    className="flex items-center justify-center w-full px-2.5 py-2 text-[11px] text-accent hover:bg-bg-hover rounded-md transition-colors"
-                  >
-                    去雇佣专家
-                  </button>
-                ) : (
+                {p.recentExperts.length > 0 ? (
                   <>
+                    <PopoverBody maxHeight="max-h-52">
+                      {p.recentExperts.slice(0, 5).map((e) => (
+                        <button
+                          key={e.id}
+                          onClick={() => { p.setExpert(e.id); setExpertOpen(false); }}
+                          className={`flex items-center gap-2.5 w-full px-2.5 py-2.5 text-left rounded-lg hover:bg-bg-hover transition-colors ${
+                            p.expert?.id === e.id ? "bg-accent/10" : ""
+                          }`}
+                        >
+                          <div className="w-7 h-7 rounded-lg bg-accent/20 text-accent flex items-center justify-center text-[12px] font-medium shrink-0">
+                            {e.avatar || e.name.slice(0,2)}
+                          </div>
+                          <span className="text-[13px] text-text-primary truncate flex-1">{e.name}</span>
+                          {p.expert?.id === e.id && <Check size={14} className="text-accent shrink-0" />}
+                        </button>
+                      ))}
+                    </PopoverBody>
+                    <div className="mx-2.5 my-1 border-t border-border-primary" />
+                  </>
+                ) : null}
                 <button
                   onClick={() => { p.onOpenExperts?.(); setExpertOpen(false); }}
-                  className="flex items-center justify-center w-full px-2.5 py-2 text-[12px] text-[#185FA5] hover:bg-[#E6F1FB] rounded-lg transition-colors font-medium"
+                  className="flex items-center justify-center w-full px-2.5 py-2 text-[11px] text-accent hover:bg-bg-hover rounded-md transition-colors"
                 >
-                  雇佣专家
+                  召唤专家
                 </button>
-                <div className="my-1 border-t border-border-primary" />
-                <div className="px-2.5 py-1 text-[11.5px] text-text-secondary font-medium">最近使用</div>
-                <PopoverBody maxHeight="max-h-48">
-                  {p.recentExperts.map((e) => (
-                    <button
-                      key={e.id}
-                      onClick={() => { p.setExpert(e.id); p.onPickRecent?.(e.id); setExpertOpen(false); }}
-                      className={`flex items-center gap-2.5 w-full px-2.5 py-2.5 text-left rounded-lg hover:bg-bg-hover transition-colors ${
-                        p.expert?.id === e.id ? "bg-[#E6F1FB]/50" : ""
-                      }`}
-                    >
-                      <div className="w-7 h-7 rounded-lg bg-[#B5D4F4] text-[#185FA5] flex items-center justify-center text-[11px] font-medium shrink-0">
-                        {e.avatar || e.name.slice(0,2)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[12.5px] text-text-primary truncate">{e.name}</div>
-                        <div className="text-[10.5px] text-text-faint truncate">{e.description ?? ""}</div>
-                      </div>
-                      {p.expert?.id === e.id && <Check size={14} className="text-[#185FA5] shrink-0" />}
-                    </button>
-                  ))}
-                    </PopoverBody>
-                  </>
-                )}
               </PopoverShell>
             )}
           </div>

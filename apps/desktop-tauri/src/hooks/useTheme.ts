@@ -11,8 +11,16 @@ function getSystemPrefersDark(): boolean {
 function applyTheme(mode: ThemeMode) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
+  const body = document.body;
   const wantDark = mode === "dark" || (mode === "system" && getSystemPrefersDark());
+  // 2026-07-06 同时挂到 <html> 和 <body>：Tailwind 的 dark: 变体默认挂在
+  // <html> 上, 但我们 CSS 用了 .dark 选择器, 一旦某个 Tauri 顶层节点
+  // 把 .dark 拦下 (例如 OS-controlled root), <body> 这层能兜底.
   root.classList.toggle("dark", wantDark);
+  if (body) body.classList.toggle("dark", wantDark);
+  root.dataset.theme = wantDark ? "dark" : "light";
+  if (body) body.dataset.theme = wantDark ? "dark" : "light";
+  root.style.colorScheme = wantDark ? "dark" : "light";
 }
 
 function readStored(): ThemeMode {

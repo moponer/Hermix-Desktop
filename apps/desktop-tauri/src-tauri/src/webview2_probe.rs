@@ -106,7 +106,7 @@ fn probe_inner() -> WebView2Status {
     // is the canonical location per Microsoft docs. We accept
     // either as proof of install.
     for view in [r"HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients", r"HKLM\SOFTWARE\Microsoft\EdgeUpdate\Clients"] {
-        let key = format!(r"{}\{}\view", WEBVIEW2_RUNTIME_CLIENT_GUID);
+        let key = format!(r"{}\{}", view, WEBVIEW2_RUNTIME_CLIENT_GUID);
         // Use `Command::new("reg")` rather than the `winreg`
         // crate to avoid a new dependency. The child-process
         // startup cost (~5ms on Windows) is paid exactly once

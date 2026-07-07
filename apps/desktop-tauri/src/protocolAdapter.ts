@@ -22,6 +22,13 @@ export type WireMessage = {
   role: string;
   content: string;
   timestamp?: string;
+  // v33 (2026-07-06): `created_at` is what the backend actually
+  // persists (the SQLite `messages.created_at` column). The previous
+  // code only read `wire.timestamp`, which was always `undefined`,
+  // falling back to `new Date().toISOString()` — producing "刚刚" /
+  // "1 分钟前" on every reload regardless of how old the turn
+  // actually was. Read `created_at` first when present.
+  created_at?: string;
   model?: string;
   stopReason?: string;
   execution_backend?: "local" | "sandbox";
@@ -155,7 +162,13 @@ export function wireToChatMessage(
     return null;
   }
   const id = wire.id ?? `${sessionId}-${wire.role}-${rowIndex}`;
-  const timestamp = wire.timestamp ?? new Date().toISOString();
+  // v33 (2026-07-06): prefer `created_at` (the SQLite-persisted
+  // wall-clock) over the optional legacy `timestamp` field. Fall
+  // back to `new Date()` only as a last resort — pre-existing
+  // sessions written before the column was exposed would land
+  // here, but they should migrate on the next save.
+  const timestamp =
+    wire.created_at ?? wire.timestamp ?? new Date().toISOString();
   const role = wire.role as ChatMessage["role"];
   // tool rows: rebuild a `ToolMessageMeta` from the server payload.
   // `MessageRole::Tool` rows persist `content` (the tool output)

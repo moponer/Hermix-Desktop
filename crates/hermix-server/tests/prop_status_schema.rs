@@ -23,6 +23,8 @@ proptest! {
             active_sessions,
             gateway_running,
             gateway_pid: pid,
+            rtk_saved_calls: 0,
+            rtk_saved_chars: 0,
             gateway_state: if gateway_running { Some("running".to_string()) } else { None },
             gateway_health_url: None,
             gateway_exit_reason: None,

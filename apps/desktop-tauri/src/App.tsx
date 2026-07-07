@@ -1971,7 +1971,7 @@ export default function App() {
               acuiBus={acuiBus}
               acuiStats={acui.stats}
               messageQueue={messageQueue}
-              onAddToQueue={(msg) => setMessageQueue(prev => [...prev, msg])}
+              onAddToQueue={(msg) => setMessageQueue(prev => prev.includes(msg) ? prev : [...prev, msg])}
               onClearQueue={() => setMessageQueue([])}
               onRemoveFromQueue={removeFromQueue}
               onEditQueueItem={editQueueItem}
