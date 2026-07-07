@@ -24,6 +24,8 @@ import { AcuiPanel } from "../acui/AcuiPanel";
 import { MessageBubble } from "./MessageBubble";
 import { StreamingBubble } from "./StreamingBubble";
 import type { StreamPhase } from "../hooks/useStreamChat";
+import type { TodoSnapshotItem } from "../hooks/useStreamChat";
+import { TodoListCard } from "./TodoListCard";
 
 // Memoized wrapper around the full MessageBubble. Without this, every
 // parent re-render (e.g. every streaming chunk) re-mounts the whole
@@ -778,6 +780,24 @@ interface ChatViewProps {
   onSendMessage: (content: string, projectId?: string, overrides?: ChatOverrides) => Promise<void>;
   onNewChat?: () => void;
   /**
+   * v2 (2026-07-07): inline todo cards in the message stream. App.tsx
+   * owns the groups store; ChatView renders one card per plan right
+   * after the originating assistant message (or at the end of the
+   * stream when the server did not stamp a message_id).
+   */
+  todoGroups?: Array<{
+    groupId: string;
+    groupTitle: string | null;
+    anchorMessageId: string | null;
+    itemsById: Record<string, TodoSnapshotItem>;
+  }>;
+  /**
+   * Called when the user clicks a checkbox in a TodoListCard. App.tsx
+   * is responsible for routing through the backend HTTP layer so the
+   * WS forwarder fires and every connected client stays in sync.
+   */
+  onTodoPatch?: (id: string, patch: { status?: string; title?: string; priority?: string }) => Promise<unknown>;
+  /**
    * @deprecated The actively-streaming assistant message is routed to
    * `<StreamingBubble />` from inside the message loop (see the body
    * below). The parent no longer needs to thread the streamed text
@@ -920,6 +940,7 @@ export function ChatView({
   workspaceRoot,
   rightOpen,
   onToggleRight,
+  todoGroups, onTodoPatch,
   onApproveApproval,
   onDenyApproval,
   onPathClick,
@@ -1343,9 +1364,9 @@ useEffect(() => {
   if (session.workspace) {
     setWorkspaceRaw(session.workspace);
   }
-  if (session.expert_id) {
-    setExpert(session.expert_id);
-  }
+  // Always sync expert from backend — even when expert_id is null,
+  // we must clear the stale DRAFT_EXPERT_KEY from the previous session.
+  setExpert(session.expert_id ?? null);
   if (session.model) {
     setSelectedModel(session.model);
   }
@@ -1927,6 +1948,27 @@ const clearPendingImages = useCallback(() => {
           onToggle={() => setArchiveOpen((v) => !v)}
         />
       )}
+      {/* v2 (2026-07-07): inline todo cards. App.tsx owns the groups
+        store and threads it down via . Each group renders
+        as its own card. For v1 (before agent_loop stamps message_id),
+        every card anchors at the end of the message stream. A future
+        patch can map anchorMessageId -> message index and render
+        cards inline at the originating assistant message. */}
+      {todoGroups && todoGroups.length > 0 && (
+        <div className="todo-strip px-3 sm:px-4 pt-3 pb-2">
+          <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto flex flex-col gap-2">
+            {todoGroups.map((g) => (
+              <TodoListCard
+                key={g.groupId}
+                groupId={g.groupId}
+                groupTitle={g.groupTitle}
+                itemsById={g.itemsById}
+                onPatch={onTodoPatch}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       {/* Round 11 (2026-07-06): 浮层面板 — 绝对定位，不挤压消息列表 */}
       {(traceOpen || closingTrace) && (
         <div className={`panel-overlay ${!closingTrace ? 'panel-overlay--open' : ''}`} onClick={(e) => e.stopPropagation()}>
@@ -1973,6 +2015,7 @@ const clearPendingImages = useCallback(() => {
                   phase={streamingPhase}
                   statusText={streamingStatus}
                   showHeader={showStreamHeader}
+                  reasoningContent={streamingMsg.reasoningContent}
                 />
               );
             }
