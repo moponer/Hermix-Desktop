@@ -1,5 +1,11 @@
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
-import { Activity, GitBranch, PanelRight, Pencil } from "lucide-react";
+import {
+  Activity,
+  GitBranch,
+  PanelRight,
+  Pencil,
+  Lock,
+} from "lucide-react";
 import type { ChatMessage } from "../types";
 import type { CompressMethod } from "../utils/imageCompressor";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
@@ -824,6 +830,7 @@ interface ChatViewProps {
   onStop?: () => void;
   /** Absolute path used to anchor relative paths the LLM mentions */
   workspaceRoot?: string | null;
+  onWorkspaceChange?: (sessionId: string | null | undefined, path: string | null) => void;
   /** Whether the right (artifacts) sidebar is currently open. */
   rightOpen?: boolean;
   /** Toggle the right sidebar. Presence (not the artifact count)
@@ -938,6 +945,7 @@ export function ChatView({
   onRestore,
   onStop,
   workspaceRoot,
+  onWorkspaceChange,
   rightOpen,
   onToggleRight,
   todoGroups, onTodoPatch,
@@ -1284,19 +1292,20 @@ export function ChatView({
   //   - 取消锁后，popover 里"不绑定目录"和"切换到其他工作区"两个按钮都
   //     能正常工作（这两个按钮本来就是为 mid-session 切换准备的）。
   //
+  // 2026-07-07 workspaceLocked + onWorkspaceChange
+  const workspaceLocked =
+    (session?.messages?.length ?? 0) > 0 || sending || isStreaming;
+
   const setWorkspace = useCallback(
     (path: string | null) => {
-      // v2: 不再拒绝 mid-session 切换。setWorkspaceRaw 写 localStorage，
-      // 然后下方 updateSessionMetadata 同步到后端 session 表。
+      if (workspaceLocked) return;
       setWorkspaceRaw(path);
-      // 2026-06-25 用户切换工作目录后，把选择持久化到后端 session。
-      // 用 sessionId 而不是 session?.id 让 lint 闭嘴；fire-and-forget，
-      // 失败不阻塞 UI（localStorage 已经改了，下次 load 会恢复）。
       if (sessionId) {
         updateSessionMetadata(sessionId, { workspace: path }).catch(() => {});
       }
+      onWorkspaceChange?.(sessionId, path);
     },
-    [setWorkspaceRaw, sessionId],
+    [setWorkspaceRaw, sessionId, workspaceLocked, onWorkspaceChange],
   );
   // 欢迎态检测：会话刚切到空 → 通知父级关右栏。仅在 false→true 切换
   // 时触发，避免每次 ChatView 自身重渲染都重复关。用 useRef 持有上一
@@ -1728,15 +1737,14 @@ const clearPendingImages = useCallback(() => {
   // 空数组 → `session.messages.length === 0` → 下面那个 Empty State
   // 判断条件满足 → ChatView 渲染吉祥物欢迎页。视觉上像"被踢出去"。
   //
-  // 修法（双保险）：
-  //   1) App.tsx 那边 v31 已经在 re-fetch 返回空且内存有数据时跳过覆盖；
-  //   2) 这里再加一层：session 是 truthy 但 messages 暂时为 0 时，
-  //      不要渲染欢迎页，而是显示一个"消息加载中"的占位。等下一次
-  //      getSessionMessages 成功或 setSessions 写入真正的 messages 后，
-  //      才会渲染真正的对话视图。这样即使 server 异常返回空数组，
-  //      用户也看不到欢迎页（视觉撕裂），而是看到加载占位，
-  //      下次侧边栏切回来还能 reload 出完整对话。
-  if (session && session.messages.length === 0) {
+  // Loading guard: only show spinner when an EXISTING session (with
+  // message_count > 0 in the backend) has messages that haven't loaded
+  // into memory yet. New sessions (message_count === 0 or undefined)
+  // should show the welcome page, not the spinner.
+  const isLoadingExisting = session
+    && session.messages.length === 0
+    && ((session as any).message_count ?? 0) > 0;
+  if (isLoadingExisting) {
     return (
       <div
         className="flex-1 flex flex-col items-center justify-center px-8 min-h-0"
@@ -1778,7 +1786,7 @@ const clearPendingImages = useCallback(() => {
             <Composer
               input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit}
               textareaRef={textareaRef} sending={sending} isStreaming={false}
-              activeWorkspace={activeWorkspace} workspaces={workspaces}
+              activeWorkspace={activeWorkspace} workspaces={workspaces} workspaceLocked={workspaceLocked}
               onSelectWorkspace={(p) => setWorkspace(p)}
               onAddWorkspace={async () => {
                 const path = await pickDirectory();
@@ -2164,7 +2172,7 @@ const clearPendingImages = useCallback(() => {
           <Composer
             input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit}
             textareaRef={textareaRef} sending={sending} isStreaming={isStreaming}
-            activeWorkspace={activeWorkspace} workspaces={workspaces}
+            activeWorkspace={activeWorkspace} workspaces={workspaces} workspaceLocked={workspaceLocked}
             onSelectWorkspace={(p) => setWorkspace(p)}
             onAddWorkspace={async () => {
               const path = await pickDirectory();
@@ -2216,6 +2224,7 @@ interface ComposerProps {
   sending: boolean;
   isStreaming: boolean;
   activeWorkspace: import("../hooks/useWorkspaces").Workspace | null;
+  workspaceLocked?: boolean;
   workspaces: import("../hooks/useWorkspaces").Workspace[];
   onSelectWorkspace: (path: string | null) => void;
   onAddWorkspace: () => Promise<void>;
@@ -2631,28 +2640,43 @@ function Composer(p: ComposerProps) {
             )}
           </div>
 
-          {/* Workspace chip — v2 (2026-06-26)：永远可点击。
-              · 选中（activeWorkspace）：accent 色 + 名字
-              · 默认：占位符"目录"
-              任何状态都能点开 popover（"添加新工作区 / 工作目录 / 不绑定目录"）。 */}
+          {/* Workspace chip — v3 (2026-07-07)：对话开始后锁定。
+              · 未锁定（welcome / 新会话）：accent 色 + 名字，可点开 popover
+                （"添加新工作区 / 工作目录 / 不绑定目录"）。
+              · 锁定中（messages.length>0 || sending || isStreaming）：灰度
+                禁用样式 + cursor-not-allowed + onClick 短路 + title 提示
+                "对话已开始，工作区已锁定"。Lock 图标取代 FolderOpen，避免
+                用户误以为可点击。
+              · 锁定源是 ChatView 算的 workspaceLocked（详见 setWorkspace
+                useCallback 上方注释），不依赖 Boolean(workspace) 以避免
+                v1 的 stale localStorage 假锁问题。 */}
           <div className="relative">
             <button
               ref={projTriggerRef as React.RefObject<HTMLButtonElement>}
-              onClick={projToggle}
+              onClick={() => { if (!p.workspaceLocked) projToggle(); }}
+              disabled={p.workspaceLocked}
               className={`flex items-center shrink-0 text-[12.5px] transition-colors rounded-md ${
                 toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
               } ${
-                p.activeWorkspace
+                p.workspaceLocked
+                  ? "text-text-faint cursor-not-allowed opacity-60"
+                  : p.activeWorkspace
                   ? "text-[#0F6E56] hover:bg-[#E1F5EE] font-medium cursor-pointer"
                   : "text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer"
               }`}
               title={
-                p.activeWorkspace
+                p.workspaceLocked
+                  ? "对话已开始，工作区已锁定"
+                  : p.activeWorkspace
                   ? `已限制到：${p.activeWorkspace.path}（点击可切换 / 不绑定）`
                   : "限制当前对话的读写范围（推荐）"
               }
             >
-              <FolderOpen size={12} className={p.activeWorkspace ? "text-[#0F6E56]" : "text-text-faint"} />
+              {p.workspaceLocked ? (
+                <Lock size={12} className="text-text-faint" />
+              ) : (
+                <FolderOpen size={12} className={p.activeWorkspace ? "text-[#0F6E56]" : "text-text-faint"} />
+              )}
               <span
                 className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
               >
