@@ -366,9 +366,25 @@ export function extractFileChanges(events?: ExecutionTimelineEvent[]): FileChang
 
 export function expandTimelineToMessages(messages: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
+  // Track assistant IDs whose timeline was expanded into inline
+  // role:"tool" messages — any original role:"tool" that immediately
+  // follows such an assistant should be skipped to prevent duplicates.
+  const expandedAssistantIds = new Set<string>();
 
   for (const msg of messages) {
     if (msg.role !== "assistant" || !msg.execution_timeline || msg.execution_timeline.length === 0) {
+      // Skip original role:"tool" messages that were already expanded
+      // from a preceding assistant's execution_timeline.
+      if (msg.role === "tool" && expandedAssistantIds.size > 0) {
+        // Check if this tool message is between an expanded assistant
+        // and the next non-tool message. We use a simple heuristic:
+        // if the previous message in `out` was an assistant whose
+        // timeline we expanded, skip this tool message.
+        const lastOut = out[out.length - 1];
+        if (lastOut && lastOut.id && expandedAssistantIds.has(lastOut.id)) {
+          continue;
+        }
+      }
       out.push(msg);
       continue;
     }
@@ -380,6 +396,10 @@ export function expandTimelineToMessages(messages: ChatMessage[]): ChatMessage[]
       out.push(msg);
       continue;
     }
+
+    // Mark this assistant as expanded so subsequent role:"tool" messages
+    // from the DB (which duplicate the timeline data) are skipped.
+    expandedAssistantIds.add(msg.id);
 
     // Per-group tool messages. Strip `execution_timeline` from the
     // outgoing assistant message: the tool groups are now expanded
