@@ -631,6 +631,7 @@ mod approval_registry_tests {
             // path; test_state mirrors it.
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            todo_event_tx: None,
         }
     }
 
@@ -1042,6 +1043,12 @@ pub struct HttpServerState {
     /// S5 task engine runtime. Owns the per-room scheduler/bus/audit
     /// state and bridges WS events into scheduler actions.
     pub task_engine: Option<Arc<hermix_gateway::groupchat::TaskEngineRuntime>>,
+    /// Per-process broadcast sender for todo mutations. The `todo` tool
+    /// holds the same sender; the WS handler subscribes per-session
+    /// (filtering by `session_id` carried in `TodoChange.session_id`
+    /// — currently `None` and filtered on the WS side via the
+    /// conversation's session id, see `handle_ws_stream`).
+    pub todo_event_tx: Option<tokio::sync::broadcast::Sender<hermix_tools::tools::todo::TodoChange>>,
 }
 
 impl HttpServerState {
@@ -1149,6 +1156,11 @@ impl HttpServerState {
                 }
             }
         });
+        // Todo event bus (see build() for full rationale).
+        let (todo_event_tx, _) = tokio::sync::broadcast::channel::<
+            hermix_tools::tools::todo::TodoChange,
+        >(hermix_tools::tools::todo::TODO_EVENT_CHANNEL_CAPACITY);
+
         hermix_tools::register_builtin_tools(
             &tool_registry,
             terminal_backend,
@@ -1157,6 +1169,7 @@ impl HttpServerState {
                 hermix_tools::ChannelClarifyBackend::new(clarify_dispatcher.clone()),
             )),
             None,
+            Some(todo_event_tx.clone()),
         );
         // Reconcile the in-process registry's `is_enabled` flags
         // with whatever the user last persisted in
@@ -1387,6 +1400,10 @@ impl HttpServerState {
             // clients that produced the storm are also gone.
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            // Todo event bus — created lazily below in `build()` after
+            // we know the runtime config. Initialised to None here so
+            // the early struct literal doesn't need to await anything.
+            todo_event_tx: Some(todo_event_tx.clone()),
         })
     }
 
@@ -1421,6 +1438,11 @@ impl HttpServerState {
                 }
             }
         });
+        // Todo event bus (see build() for full rationale).
+        let (todo_event_tx, _) = tokio::sync::broadcast::channel::<
+            hermix_tools::tools::todo::TodoChange,
+        >(hermix_tools::tools::todo::TODO_EVENT_CHANNEL_CAPACITY);
+
         hermix_tools::register_builtin_tools(
             &tool_registry,
             terminal_backend,
@@ -1429,6 +1451,7 @@ impl HttpServerState {
                 hermix_tools::ChannelClarifyBackend::new(clarify_dispatcher.clone()),
             )),
             None,
+            Some(todo_event_tx.clone()),
         );
 
         // MCP wiring (mirrors `build_with_hermes_home`). Construct
@@ -1534,7 +1557,8 @@ impl HttpServerState {
             // clients that produced the storm are also gone.
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
-        })
+            todo_event_tx: Some(todo_event_tx.clone()), // injected after register_builtin_tools below
+        }) // close Ok(Self { ... })
     }
 
     pub fn with_runtime_gateway_running(
@@ -2870,7 +2894,7 @@ fn dedup_key(session_id: &str, text: &str) -> String {
 
 /// Dedup window. Anything within this many seconds of a prior
 /// identical (session_id, text) send is rejected.
-const DEDUP_WINDOW_SECS: u64 = 10;
+const DEDUP_WINDOW_SECS: u64 = 30;
 /// Map GC horizon. Entries older than this are evicted on every
 /// insert so the map stays bounded.
 const DEDUP_GC_SECS: u64 = 60;

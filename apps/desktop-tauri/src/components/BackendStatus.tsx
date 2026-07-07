@@ -30,7 +30,7 @@ export function BackendStatus() {
 
   // Listen for backend lifecycle events from the Tauri sidecar watchdog.
   useEffect(() => {
-    const unlistenRestarting = listen<number>("hermix:server-restarting", (e) => {
+    const unlistenRestarting = listen<number>("hermix:server-restarting", () => {
       setConnected(false);
       setRestarting(true);
       // After restart, poll health to detect recovery.

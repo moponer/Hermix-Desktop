@@ -264,6 +264,9 @@ export function useStreamChat() {
   // `cancel()` can invoke it directly (synchronously resolving the
   // promise) instead of waiting for the async WS `onclose` event.
   const settleRef = useRef<((text: string, err?: string, reason?: string, phaseHint?: StreamPhase) => void) | null>(null);
+  // Client-side dedup: track last sent (hash, timestamp) to prevent
+  // the same content from being sent multiple times within the window.
+  const lastSendRef = useRef<{ hash: string; ts: number } | null>(null);
   // Holds the per-send `callbacks.onPrefetch` closure so the WS
   // message handler (line 407) can fire it without prop-drilling the
   // whole `callbacks` object through closures. Ref (not state) because
@@ -338,6 +341,27 @@ export function useStreamChat() {
           if (chunkRaf !== null) return;
           chunkRaf = requestAnimationFrame(flushChunks);
         };
+
+        // ── Client-side message dedup ─────────────────────────────
+        // 2026-07-07: prevent the same content from being sent
+        // multiple times within DEDUP_WINDOW_MS. This catches:
+        //   - Multiple doConnect calls racing (React re-render)
+        //   - WS reconnect after agent already completed
+        //   - handleSubmit called twice rapidly
+        const DEDUP_WINDOW_MS = 15_000;
+        const contentHash = `${sessionId}:${content}`;
+        const now = Date.now();
+        if (
+          lastSendRef.current &&
+          lastSendRef.current.hash === contentHash &&
+          now - lastSendRef.current.ts < DEDUP_WINDOW_MS
+        ) {
+          console.warn(
+            `[useStreamChat] dedup: same content sent ${now - lastSendRef.current.ts}ms ago, skipping`
+          );
+          return;
+        }
+        lastSendRef.current = { hash: contentHash, ts: now };
 
         // ── Per-send retry state ─────────────────────────────────
         // 2026-07-06: auto-retry when the WS fails before any content
