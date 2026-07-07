@@ -12,6 +12,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use hermix_agent::session_persistence::SessionPersistence;
 use hermix_config::GatewayConfig;
@@ -85,12 +86,16 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         groupchat_mgr: Arc::new(hermix_gateway::groupchat::GroupChatManager::new(
             Arc::new(hermix_gateway::groupchat::in_memory::InMemoryRoomPersistence::new()),
         )),
+        active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         // Test-state helper: an MCP manager wired to its own empty
         // tool registry. Tests that need populated MCP state can
         // override via `Arc::get_mut` or by constructing a fresh
         // helper; the rest don't touch the manager.
         mcp_manager: hermix_mcp::ArcMcpManager::new(Arc::new(ToolRegistry::new())),
         task_engine: None,
+        // 2026-07-06: production build path added this; mirror
+        // here so the dashboard test fixtures stay in sync.
+        recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
     }
 }
 

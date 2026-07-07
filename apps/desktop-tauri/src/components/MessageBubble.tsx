@@ -170,7 +170,7 @@ export function PrefetchIntentChip({ intent, confidence }: PrefetchIntentChipPro
 // ── User message ─────────────────────────────────────────────────
 function UserMessage({ message }: { message: ChatMessage }) {
   return (
-    <div className="flex justify-end h-enter items-start">
+    <div className="flex justify-end h-enter items-start mt-4">
       <div className="msg-bubble-user whitespace-pre-wrap break-words">
         {message.content}
       </div>
@@ -286,8 +286,12 @@ function AssistantMessage({
           </div>
         )}
 
-        {/* The message card: channel stack */}
-        <div className="msg-card msg-stack">
+        {/* The message card: channel stack.
+            Round 6, 2026-07-06: 加 .chat-tool-call--assistant class,
+            与 .chat-tool-call--tool (ToolMessageCard 外层) 形成视觉区分.
+            浅色 mode 主回复 bg-white / 工具调用 bg-slate-50;
+            深色 mode 主回复 bg-slate-900 / 工具调用 bg-slate-800/60. */}
+        <div className="msg-card msg-stack chat-tool-call chat-tool-call--assistant">
           {/* Tasks */}
           {parsed.tasks.length > 0 && (
             <div className="msg-channel" data-channel="tasks">
@@ -1172,7 +1176,7 @@ function ToolMessageCard({
   const iconBg = cat.bg;
 
   return (
-    <div className="tw-msg h-enter">
+    <div className="tw-msg h-enter chat-tool-call chat-tool-call--tool">
       <button
         type="button"
         onClick={hasOutput ? () => setOpen((v) => !v) : undefined}
@@ -1212,8 +1216,11 @@ function ToolMessageCard({
           <span className="tw-msg-result-peek">{resultPeek}</span>
         )}
 
-        {/* Right side: line stats + status indicator. */}
-        <span className="tw-msg-right">
+        {/* Right side: line stats + status indicator.
+            Round 6, 2026-07-06: 加 .chat-status-inline — inline-flex +
+            vertical-align: middle + margin-left: 8px, 贴消息末尾不再
+            两端撑开 (主人反馈原状态被 justify-between 拉散). */}
+        <span className="tw-msg-right chat-status-inline">
           {(stats.added != null || stats.removed != null) && (
             <span className="tw-msg-stats">
               {stats.added != null && stats.added > 0 && (
