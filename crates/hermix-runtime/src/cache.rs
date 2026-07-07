@@ -252,7 +252,6 @@ impl CacheMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[tokio::test]
     async fn cache_manager_basic_operations() {

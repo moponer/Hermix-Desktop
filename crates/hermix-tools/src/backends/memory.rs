@@ -1200,7 +1200,7 @@ mod tests {
 
     #[tokio::test]
     async fn try_auto_archive_keeps_newest_when_over() {
-        let (tmp, backend) = make_backend();
+        let (_tmp, backend) = make_backend();
         // Hand-craft a MEMORY.md that exceeds the cap so
         // `try_auto_archive` sees the "over limit" condition
         // itself. Using `add()` here would be wrong because

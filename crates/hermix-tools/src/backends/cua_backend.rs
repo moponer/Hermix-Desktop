@@ -255,8 +255,6 @@ impl BrowserBackend for CuaBrowserBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Note: These tests require a running Chrome instance.
     // Run with `cargo test --features browser-tests` when Chrome is available.
 }

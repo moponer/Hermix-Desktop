@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn skipped_marker_temporary_re_shows_after_window() {
-        let (user_home, _legacy, target) = fixture(&[LegacyArtifact::Memory]);
+        let (_user_home, _legacy, target) = fixture(&[LegacyArtifact::Memory]);
         mark_skipped(&target, false, 30).unwrap();
         // Just-dismissed → still suppressed.
         assert!(is_skipped(&target, now_unix()));
@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn clear_skipped_removes_marker() {
-        let (user_home, _legacy, target) = fixture(&[LegacyArtifact::Memory]);
+        let (_user_home, _legacy, target) = fixture(&[LegacyArtifact::Memory]);
         mark_skipped(&target, true, 30).unwrap();
         assert!(is_skipped(&target, now_unix()));
         clear_skipped(&target).unwrap();

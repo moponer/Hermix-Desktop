@@ -212,7 +212,6 @@ impl ToolHandler for SecurityGuidanceHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     struct MockSecurityGuidanceBackend;
     #[async_trait]

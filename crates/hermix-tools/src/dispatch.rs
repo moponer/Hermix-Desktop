@@ -380,7 +380,7 @@ mod tests {
         let registry = Arc::new(ToolRegistry::new());
         // Build a content blob whose char count is well over the
         // limit but whose byte count is much larger than the limit.
-        let cjk = "你好世界".repeat(200); // 800 chars, 2400 bytes
+        let _cjk = "你好世界".repeat(200); // 800 chars, 2400 bytes
         let budget = BudgetConfig {
             max_result_size_chars: 50,
             max_aggregate_chars: 10_000,

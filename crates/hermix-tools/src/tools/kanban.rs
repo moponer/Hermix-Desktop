@@ -401,7 +401,6 @@ impl ToolHandler for KanbanHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     struct MockKanbanBackend;
     #[async_trait]

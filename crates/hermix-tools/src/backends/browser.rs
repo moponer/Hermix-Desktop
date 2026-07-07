@@ -2706,8 +2706,6 @@ mod phase1_tests {
 
 #[cfg(test)]
 mod phase2_tests {
-    use super::*;
-
     /// Phase 2: snapshot YAML must be wrapped in <page_content>...</page_content>
     /// so prompt-injection content (e.g. a hostile textarea containing
     /// "<system>...</system>") can be distinguished from interactive tree.

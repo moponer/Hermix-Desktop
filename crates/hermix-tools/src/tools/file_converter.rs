@@ -270,7 +270,7 @@ async fn convert_image_to_pdf(input: &str, output: &str) -> Result<String, ToolE
 }
 
 /// Create a simple PDF document (minimal implementation)
-fn create_simple_pdf(img: &image::RgbaImage, width: u32, height: u32) -> Result<Vec<u8>, ToolError> {
+fn create_simple_pdf(_img: &image::RgbaImage, width: u32, height: u32) -> Result<Vec<u8>, ToolError> {
     // For a real implementation, use lopdf to create a proper PDF
     // This is a placeholder that creates a minimal valid PDF
     let pdf = format!(
