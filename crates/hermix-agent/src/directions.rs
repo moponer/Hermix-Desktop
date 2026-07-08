@@ -342,6 +342,44 @@ const TASK_FOCUS_SHORT: &str = "\
 ## Task focus
 Before each tool call, check: (1) original goal, (2) current progress, (3) next step. Don't repeat completed work. If stuck, explain what you've tried.";
 
+const TODO_GUIDANCE: &str = "\
+# Task list (`todo` tool) — use it proactively
+
+The `todo` tool lets you track a multi-step plan and show the user live progress.
+
+## When to use it
+- The user's request has **2+ steps** (e.g. 'build X with tests and docs', 'investigate then fix then verify').
+- Any task where you'll call the same tool shape more than once.
+- Long-running work where the user benefits from seeing what's done / pending.
+
+## How to drive it
+1. At the **start**, `create` one task per step (give each a clear `title` and a `priority`).
+2. Use `depend` when a step needs another to finish first.
+3. `list` / `get_next` to see what's pending; pick the next task and do it.
+4. After finishing a step, `update` its status to `completed` (never leave it `pending`).
+5. If a step turns out wrong, `update` status to `failed` and `record_execution` with what you learned.
+6. **Delete** a task only when it's genuinely obsolete — prefer `update` to `failed`/`completed` otherwise.
+
+## Discipline
+- Keep tasks small and independently checkable.
+- Always reflect reality: a task in the list should match what you're actually doing.
+- Don't create a todo list for a single trivial action.
+
+## Plans (group_id / group_title)
+Multiple plans can coexist in the same conversation. Each plan has its own
+inline task card. Use group_title to label a plan when you start it:
+
+- **Starting a new plan** (user switched topic or you decided to break
+  the work into a named phase): pass  on the FIRST
+   of the new plan (e.g. 'rename all files', 'investigate
+  the login bug'). The backend will mint a  for you.
+- **Continuing an existing plan**: pass  from the earlier
+  create response. Do NOT pass  again (the title is
+  already set on the plan).
+- One plan per topic. If the user asks a fresh question while a
+  previous plan is still in flight, START A NEW PLAN with a new
+   rather than overloading the old card.";
+
 const TOOL_EXECUTION_SUMMARY_GUIDANCE: &str = "\
 # Tool execution summary (mandatory)
 
@@ -361,25 +399,78 @@ Example:
 - Summary: 'Ran tests: 42 passed, 0 failed. All green, task complete.'";
 
 const STOPPING_SUMMARY_GUIDANCE: &str = "\
-# Stopping behavior (mandatory)
+# Stopping behavior — only after real work
 
-When you decide to stop (no more tool calls needed), you MUST provide a final summary to the user before ending. Never terminate abruptly.
+This block only fires when you actually called 1+ tools this turn. \
+Trivial conversational turns do NOT receive it; reply to them directly without filler.
 
-## Required stopping protocol
-1. **Summarize what was accomplished** — list the key changes made
-2. **Mention any remaining issues** — if something couldn't be fixed, say so
-3. **Suggest next steps** — what the user should do next (if applicable)
+## What to do when you stop after a tool-using turn
+1. **State the outcome** — one short sentence on what changed or what you confirmed.
+2. **Mention residual issues** — if a tool failed and you couldn't recover, say so in one line.
+3. **No opener / closer filler** — do NOT prepend 'Done!', 'All done', 'Task complete' \
+   if your user already saw the tool output above. Do NOT append 'let me know if you \
+   need anything else', 'awaiting your next instruction', '(waiting)', '(standby)', \
+   '等你说话', '等你下一步指示', 'etc.' as a closing line.
+4. **Do NOT echo tool output in your text** — the user already sees the tool card with \
+   the full output (terminal stdout, file content, etc.). Your text reply should only \
+   state the result summary or next steps, NOT paste/quote the raw tool output again. \
+   For example: after 'dir' shows the file list, say 'Found 22 subdirectories' instead \
+   of re-printing the entire directory listing.
 
 ## What NOT to do
-- Do NOT stop mid-task without explanation
-- Do NOT return an empty or minimal response after completing work
-- Do NOT assume the user knows what happened — they need a clear summary
+- Do NOT repeat the same filler token across blank-line-separated paragraphs.
+- Do NOT keep emitting more paragraphs after the outcome line. Emit your EOS.
+- Do NOT pad a one-sentence answer with multi-paragraph summary scaffolding.
 
-## Example stopping responses
-Good: 'Done! I've fixed the bug in src/auth.rs by adding input validation. Tests pass. You may want to review the change and deploy.'
+## Examples
 
-Bad: (no response after tool calls)
-Bad: 'Fixed.' (too brief, no context)";
+Good (after a real edit):
+'Edited src/auth.rs: added input validation; tests pass.'
+
+Bad (after a real edit):
+'Done! I've made the change. You may want to review and deploy. \
+\n\nAwaiting your next instruction.\n\n等你说话。\n\n（等待中）\n\n（等待中）' \
+— opener / filler / repetition, all forbidden.
+
+Bad (after no real work):
+'Task complete.' (model is just complying with the rule rather than answering \
+the user's question — turn off this guide for turns that did no tool work)";
+
+/// Always-on discipline: how a reply ends.
+///
+/// Applies to EVERY turn, including trivial conversational turns that
+/// did no tool work. Counter-balances `STOPPING_SUMMARY_GUIDANCE` and
+/// `TOOL_EXECUTION_SUMMARY_GUIDANCE`, which can otherwise pressure
+/// MiniMax / M2.7 / Hermes fine-tunes into emitting multi-paragraph
+/// tail filler ('等你说话', '(等待中)' ×N, etc.) to comply with a
+/// 'do NOT return an empty response' rule on a turn where there is
+/// nothing to summarize.
+const REPLY_TERMINATION_GUIDANCE: &str = "\
+# Reply termination (always-on)
+
+When your reply is finished — whether you used tools this turn or just \
+answered a conversational question — emit your EOS token immediately. \
+Do NOT add closing filler.
+
+## Forbidden closing patterns
+Do NOT append any of these after the substance of your reply:
+- 'Done!', 'All done', 'Task complete', '已完成', '任务完成' (when \
+  used as a stand-alone opener or closer with no real summary attached)
+- 'Let me know if you need anything else', 'awaiting your instruction', \
+  '等你下一步指示', '等你说话', '等你回复'
+- '(waiting)', '(standby)', '（等待中）', '(待命中)'
+- 'etc.', '...', 'etc' as a stand-alone final token
+
+Do NOT repeat the same short filler token more than once across \
+blank-line-separated paragraphs. A second '（等待中）' after a first \
+'（等待中）' is a bug.
+
+## Right way to end
+- Trivial turn: end after the answer, full stop.
+- After-tool turn: end after the one-sentence outcome; do not pad.
+- When you actually want to invite the next turn, say it ONCE in the \
+  same paragraph as the last substantive sentence (e.g. 'Done. Ping me \
+  if you want me to also bump the version field.')";
 
 // ---------------------------------------------------------------------------
 // collect_directions
@@ -489,6 +580,13 @@ pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
             SKILLS_GUIDANCE,
         ));
     }
+    if tool_names.contains("todo") {
+        dirs.push(SystemDir::new(
+            "todo.guide",
+            DirRoute::HasTodo,
+            TODO_GUIDANCE,
+        ));
+    }
     if tool_names.contains("compact_tool_chain") {
         dirs.push(SystemDir::new(
             "context_budget.guide",
@@ -510,25 +608,44 @@ pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
             TASK_FOCUS_SHORT,
         ));
     }
-    // Tool execution summary guidance — always active when tools are available.
-    if !tool_names.is_empty() {
+    // Tool execution summary guidance — only when the agent actually
+    // called tools this turn. Trivial conversational turns (no tool use)
+    // do NOT get this prompt; otherwise the "summarize / next step"
+    // mandate forces the model to invent filler summaries for turns
+    // where there is nothing to summarize.
+    if !tool_names.is_empty() && route_ctx.tool_call_count >= 1 {
         dirs.push(SystemDir::new(
-            "tool_summary.always",
-            DirRoute::Always,
+            "tool_summary.after_tool_use",
+            DirRoute::HadAnyToolUse,
             TOOL_EXECUTION_SUMMARY_GUIDANCE,
         ));
     }
-    // Stopping summary guidance — always active.
-    dirs.push(SystemDir::new(
-        "stopping_summary.always",
-        DirRoute::Always,
-        STOPPING_SUMMARY_GUIDANCE,
-    ));
+    // Stopping summary guidance — only when the agent actually did
+    // work this turn (1+ tool call). Trivial conversational turns get
+    // the default formatting rules only.
+    if route_ctx.tool_call_count >= 1 {
+        dirs.push(SystemDir::new(
+            "stopping_summary.after_tool_use",
+            DirRoute::HadAnyToolUse,
+            STOPPING_SUMMARY_GUIDANCE,
+        ));
+    }
     // P2-6: USER_STYLE_GUIDANCE is always-on.
     dirs.push(SystemDir::new(
         "user_style.always",
         DirRoute::Always,
         USER_STYLE_GUIDANCE,
+    ));
+    // Reply termination discipline — always-on: tells the model that
+    // when its reply is complete (trivial turn or after-tool-use turn),
+    // it must emit EOS right away. No opener/closer filler, no repeated
+    // placeholder lines, no multi-paragraph padding. Counter-balances
+    // the per-tool summary / stopping-summary rules so M2.7-style
+    // models do not invent filler "等你说话 / (waiting) ×N" tails.
+    dirs.push(SystemDir::new(
+        "reply_termination.always",
+        DirRoute::Always,
+        REPLY_TERMINATION_GUIDANCE,
     ));
     // Tool failure discipline: prevent blind retry spam.
     dirs.push(SystemDir::new(
