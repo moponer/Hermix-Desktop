@@ -13,10 +13,11 @@ import { MarkdownBody } from "./MarkdownBody";
 import type {
   ChatMessage,
   ClarifyMessageMeta,
+  TimelineStep,
 } from "../types";
 import { formatRelativeTime } from "../utils/time";
 import {
-  parseContent, groupTimeline, extractFileChanges,
+  parseContent, groupTimeline, extractFileChanges, resolveSteps,
   type FileChangeEntry,
 } from "./messageParser";
 import { Avatar } from "./Avatar";
@@ -29,6 +30,10 @@ import { ThoughtStreamCard } from "./ThoughtStreamCard";
 // Re-export so `import { ThoughtStreamCard } from "./MessageBubble"` keeps
 // working — consistent with `PrefetchIntentChip`'s public surface below.
 export { ThoughtStreamCard };
+// 2026-07-10: Exported for reuse in StreamingBubble — both the live
+// streaming bubble and the settled MessageBubble render the tool
+// timeline from the same component so visuals stay identical.
+export { ToolTimelineSection };
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -170,11 +175,354 @@ export function PrefetchIntentChip({ intent, confidence }: PrefetchIntentChipPro
 // ── User message ─────────────────────────────────────────────────
 function UserMessage({ message }: { message: ChatMessage }) {
   return (
-    <div className="flex justify-end h-enter items-start mt-4">
+    <div className="flex justify-end h-enter items-start mt-5">
       <div className="msg-bubble-user whitespace-pre-wrap break-words">
         {message.content}
       </div>
     </div>
+  );
+}
+
+// ── Tool Timeline Section (2026-07-10) ───────────────────────
+// Renders tool calls from the assistant's `execution_timeline` as a
+// collapsible block inside the assistant bubble — same visual position
+// as the reasoning block, but for tools.
+//
+// This replaces the old approach of expanding timeline events into
+// separate `role: "tool"` messages (which caused tools to appear
+// above the avatar when the first assistant was empty).
+
+/**
+ * Render a single ToolGroup as a compact row, reusing the same
+ * visual language as ToolMessageCard but driven by ToolGroup data.
+ */
+function ToolGroupCard({
+  group,
+  onPathClick,
+}: {
+  group: import("./messageParser").ToolGroup;
+  onPathClick?: (path: string, e: React.MouseEvent) => void;
+}) {
+  const isRunning = group.status === "running";
+  const isError = group.status === "error";
+  const [open, setOpen] = useState(false);
+
+  const startEv = group.events.find((e) => e.type === "tool_start");
+  const completeEv = group.events.find((e) => e.type === "tool_complete");
+  const stdout = group.events
+    .filter((e) => e.type === "tool_stdout")
+    .map((e) => e.content ?? "")
+    .join("");
+  const output = completeEv?.content ?? stdout ?? "";
+  const hasOutput = output.length > 0;
+
+  const toolName = group.tool;
+  const args = startEv?.arguments;
+  const Icon = toolIcon(toolName);
+  const verb = toolVerb(toolName, args);
+  const primary = isError
+    ? (group.statusNote ?? summarizeError(output) ?? toolPrimaryArg(toolName, args, output))
+    : toolPrimaryArg(toolName, args, output);
+  const stats = extractLineStats(toolName, args);
+  const isPathLike = isPathArg(toolName, args, output);
+  const primaryPath = isPathLike ? (output || args) : null;
+  const cat = classifyTool(toolName);
+
+  const resultPeek = useMemo(() => {
+    if (isError) {
+      return group.statusNote
+        ?? summarizeError(output)
+        ?? (output ? toolResultPeek(output, args) : null)
+        ?? "执行出错";
+    }
+    if (!output || output.trim().length === 0) return null;
+    if (isRunning && !group.endedAt) return null;
+    return toolResultPeek(output, args);
+  }, [output, args, group.status, group.endedAt, group.statusNote, isError, isRunning]);
+
+  const handlePrimaryClick = (e: React.MouseEvent) => {
+    if (isPathLike && primaryPath && onPathClick) {
+      const path = extractFirstPath(primaryPath);
+      if (path) {
+        e.stopPropagation();
+        onPathClick(path, e);
+        return;
+      }
+    }
+    if (hasOutput) setOpen((v) => !v);
+  };
+
+  return (
+    <div className="tw-msg h-enter chat-tool-call chat-tool-call--tool">
+      <button
+        type="button"
+        onClick={hasOutput ? () => setOpen((v) => !v) : undefined}
+        className="tw-msg-row"
+        data-tool-kind={toolKind(toolName)}
+        data-state={isError ? "err" : isRunning ? "run" : "ok"}
+      >
+        <span className="tw-msg-icon-tile" style={{ background: cat.bg }}>
+          <Icon size={11} className="tw-msg-icon-svg" />
+        </span>
+        <span className="tw-msg-verb">{verb}</span>
+        {primary && (
+          <span
+            className={isPathLike ? "tw-msg-primary tw-msg-primary--link" : "tw-msg-primary"}
+            title={isPathLike ? `点击打开 ${primary}` : primary}
+            onClick={isPathLike ? handlePrimaryClick : undefined}
+          >
+            {primary}
+          </span>
+        )}
+        {resultPeek && !isError && (
+          <span className="tw-msg-result-peek">{resultPeek}</span>
+        )}
+        <span className="tw-msg-right chat-status-inline">
+          {(stats.added != null || stats.removed != null) && (
+            <span className="tw-msg-stats">
+              {stats.added != null && stats.added > 0 && (
+                <span className="tw-msg-stat tw-msg-stat--add">+{stats.added}</span>
+              )}
+              {stats.removed != null && stats.removed > 0 && (
+                <span className="tw-msg-stat tw-msg-stat--del">−{stats.removed}</span>
+              )}
+            </span>
+          )}
+          <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
+            {isRunning && !group.endedAt ? (
+              <><Loader2 size={11} className="animate-spin shrink-0" />运行中</>
+            ) : isError ? (
+              <><AlertCircle size={11} className="shrink-0" />失败</>
+            ) : isRunning ? (
+              <><AlertTriangle size={11} className="shrink-0" />已中断</>
+            ) : (
+              <><Check size={11} className="shrink-0" />已完成</>
+            )}
+          </span>
+          {hasOutput && (
+            <span className="tw-msg-chev">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
+          )}
+        </span>
+      </button>
+      {isError && resultPeek && primary !== resultPeek && (
+        <div className="tw-msg-err-hint" onClick={() => setOpen(true)} title="点击展开完整输出">
+          <AlertCircle size={10} className="shrink-0" />
+          <span className="truncate">{resultPeek}</span>
+          <ChevronRight size={11} className="shrink-0 tw-msg-chev-err" />
+        </div>
+      )}
+      {open && hasOutput && !isError && (
+        <div className="tw-msg-body">
+          <LiveTerminal content={output} running={isRunning && !group.endedAt} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Collapsible section that renders all tool groups from the
+ * assistant's execution_timeline. Collapsed by default (like
+ * ReasoningBlock), but auto-expands when there are running tools.
+ */
+function ToolTimelineSection({
+  groups,
+  isStreaming,
+  onPathClick,
+}: {
+  groups: import("./messageParser").ToolGroup[];
+  isStreaming?: boolean;
+  onPathClick?: (path: string, e: React.MouseEvent) => void;
+}) {
+  const hasRunning = groups.some((g) => g.status === "running");
+  const [expanded, setExpanded] = useState(isStreaming ?? false);
+
+  // Auto-expand when tools are running during streaming
+  useEffect(() => {
+    if (hasRunning) setExpanded(true);
+  }, [hasRunning]);
+
+  // Auto-collapse when streaming ends and all tools are done
+  useEffect(() => {
+    if (!isStreaming && !hasRunning && expanded) {
+      const t = setTimeout(() => setExpanded(false), 100);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [isStreaming, hasRunning]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const doneCount = groups.filter((g) => g.status === "done").length;
+  const errorCount = groups.filter((g) => g.status === "error").length;
+  const runningCount = groups.filter((g) => g.status === "running").length;
+
+  const summary = runningCount > 0
+    ? `执行中 ${runningCount}/${groups.length}`
+    : errorCount > 0
+      ? `完成 ${doneCount}/${groups.length}（${errorCount} 失败）`
+      : `已完成 ${groups.length}`;
+
+  return (
+    <div className="mb-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="reasoning-header"
+      >
+        {expanded ? (
+          <ChevronDown size={12} className="reasoning-chevron reasoning-chevron-open" />
+        ) : (
+          <ChevronRight size={12} className="reasoning-chevron" />
+        )}
+        <Wrench size={11} />
+        <span className="reasoning-label">工具调用</span>
+        <span className="reasoning-count">{summary}</span>
+      </button>
+      {expanded && (
+        <div className="mt-1.5 flex flex-col gap-1.5">
+          {groups.map((g) => (
+            <ToolGroupCard key={g.key} group={g} onPathClick={onPathClick} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Unified Timeline Renderer ─────────────────────────────────────
+// Renders the assistant's response as a chronological sequence of
+// reasoning / tools / text steps, replacing the old fixed 3-section
+// layout. Each step is rendered in order so the user can follow each
+// iteration of the agent loop as a cohesive unit:
+//
+//   [reasoning 1] → [tools 1] → [reasoning 2] → [tools 2] → [text]
+//
+// File changes, tasks, and thinking-dots are handled as special cases
+// after the main step list.
+
+function UnifiedTimelineRenderer({
+  steps,
+  isStreaming,
+  onPathClick,
+  fileChanges,
+  toolCalls,
+  hasRunningTool,
+  parsedTasks,
+}: {
+  steps: TimelineStep[];
+  isStreaming?: boolean;
+  onPathClick?: (path: string, e: React.MouseEvent) => void;
+  fileChanges: FileChangeEntry[];
+  toolCalls: NonNullable<ChatMessage["tool_calls"]>;
+  hasRunningTool: boolean;
+  parsedTasks: ReturnType<typeof parseContent>["tasks"];
+}) {
+  const hasTools = toolCalls.length > 0;
+  const hasAnyToolStep = steps.some((s) => s.kind === "tools");
+  const hasAnyTextStep = steps.some((s) => s.kind === "text");
+  const hasAnyReasoningStep = steps.some((s) => s.kind === "reasoning");
+
+  // Precompute the index of the first text step that has tasks,
+  // so we don't call findIndex (with parseContent inside) on every
+  // render of every step.
+  const firstTextWithTasksIdx = useMemo(() => {
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      if (step.kind === "text") {
+        const parsed = parseContent(step.content);
+        if (parsed.tasks.length > 0) return i;
+      }
+    }
+    return -1;
+  }, [steps]);
+
+  // If all steps are empty (no reasoning, no tools, no text), render
+  // the streaming placeholder (ThinkingDots) or nothing.
+  if (steps.length === 0) {
+    if (isStreaming && !hasTools) {
+      return (
+        <div className="msg-card msg-stack chat-tool-call chat-tool-call--assistant">
+          <ThinkingDots label="正在处理" />
+        </div>
+      );
+    }
+    return null;
+  }
+
+  return (
+    <>
+      {steps.map((step, i) => {
+        if (step.kind === "reasoning") {
+          return <ReasoningBlock key={`step-${i}`} content={step.content} />;
+        }
+        if (step.kind === "tools") {
+          const groups = groupTimeline(step.events);
+          if (groups.length === 0) return null;
+          return (
+            <ToolTimelineSection
+              key={`step-${i}`}
+              groups={groups}
+              isStreaming={isStreaming}
+              onPathClick={onPathClick}
+            />
+          );
+        }
+        // step.kind === "text"
+        const parsed = parseContent(step.content);
+        return (
+          <div
+            key={`step-${i}`}
+            className="msg-card msg-stack chat-tool-call chat-tool-call--assistant"
+          >
+            {/* Tasks (only on the first text step that has them) */}
+            {parsed.tasks.length > 0 && i === firstTextWithTasksIdx && (
+              <div className="msg-channel" data-channel="tasks">
+                <TaskListBlock tasks={parsed.tasks} />
+              </div>
+            )}
+            {parsed.body && (
+              <div className="msg-channel" data-channel="body">
+                <MarkdownBody
+                  content={parsed.body}
+                  onPathClick={onPathClick ?? (() => {})}
+                />
+              </div>
+            )}
+            {/* File changes (only on the last text step) */}
+            {i === steps.length - 1 && fileChanges.length > 0 && (
+              <div className="msg-channel" data-channel="file-changes">
+                <FileChangeBlock changes={fileChanges} onPathClick={onPathClick} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Legacy fallback: running tool calls without timeline events.
+          Only shown when there are tool_calls but no tool steps
+          (pre-migration data) and at least one is still running. */}
+      {!hasAnyToolStep && toolCalls.length > 0 && hasRunningTool && (
+        <div className="msg-card msg-stack chat-tool-call chat-tool-call--assistant">
+          <div className="msg-channel" data-channel="tools">
+            <ToolCallsFallback calls={toolCalls} />
+          </div>
+        </div>
+      )}
+
+      {/* Gap thinking animation: only shown when tools are running
+          but we have NOT yet rendered any tool cards. */}
+      {hasRunningTool && !hasTools && !hasAnyReasoningStep && (
+        <div className="msg-card msg-stack chat-tool-call chat-tool-call--assistant">
+          <ThinkingDots label="正在处理" />
+        </div>
+      )}
+
+      {/* All tools done, body still empty → waiting for final text.
+          Only fire for the LIVE streaming message. */}
+      {hasAnyToolStep && !hasRunningTool && !hasAnyTextStep && parsedTasks.length === 0 && isStreaming && (
+        <div className="msg-card msg-stack chat-tool-call chat-tool-call--assistant">
+          <ThinkingDots label="等待回复" />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -212,23 +560,15 @@ function AssistantMessage({
   expertCutoffAt?: number | null;
 }) {
   const parsed = useMemo(() => parseContent(message.content), [message.content]);
-  const timeline = useMemo(
-    () => (message.execution_timeline ? groupTimeline(message.execution_timeline) : []),
-    [message.execution_timeline],
-  );
   const fileChanges = useMemo(
     () => extractFileChanges(message.execution_timeline),
     [message.execution_timeline],
   );
+  const steps = useMemo(() => resolveSteps(message), [message]);
   const toolCalls = message.tool_calls ?? [];
   /** True when there's at least one tool still in "running" state */
   const hasRunningTool = useMemo(
     () => toolCalls.some((tc) => tc.status === "running" || !tc.status),
-    [toolCalls],
-  );
-  /** True when there are any tools at all (running or done) */
-  const hasTools = useMemo(
-    () => toolCalls.length > 0,
     [toolCalls],
   );
   const [copied, setCopied] = useState(false);
@@ -263,13 +603,14 @@ function AssistantMessage({
             is the model's identity. The meta line (time / model / stop
             chip) lives alongside, separated by ·  dots. */}
         {showHeader && (
-          <div className="flex items-center gap-1.5 mb-1 text-text-faint">
-            <span className="h-tiny">{formatRelativeTime(message.timestamp)}</span>
-            {message.model && <span className="h-tiny">· {message.model}</span>}
+          <div className="flex items-center gap-2 mb-1.5 text-text-faint">
+            <span className="h-tiny tabular-nums">{formatRelativeTime(message.timestamp)}</span>
+            {message.model && <span className="h-tiny opacity-60">·</span>}
+            {message.model && <span className="h-tiny">{message.model}</span>}
             {message.stopReason && <StopReasonChip reason={message.stopReason} meta={message.stopReasonMeta} />}
             <button
               onClick={copyMessage}
-              className="ml-auto p-0.5 rounded text-text-faint hover:text-text-primary transition-colors"
+              className="ml-auto p-0.5 rounded text-text-faint hover:text-text-primary hover:bg-bg-hover transition-colors"
               title="复制消息"
             >
               {copied ? <Check size={11} /> : <Copy size={11} />}
@@ -277,105 +618,24 @@ function AssistantMessage({
           </div>
         )}
 
-        {/* Reasoning content is merged inline as body text — no separate
-            collapsible block. Strip <think> tags so raw text flows naturally
-            with the visible reply. */}
-        {message.reasoningContent && message.reasoningContent.trim().length > 0 && (
-          <div className="reasoning-inline">
-            {message.reasoningContent.replace(/<\/?think>/gi, "").trim()}
-          </div>
-        )}
+        {/* Unified timeline steps — renders reasoning / tools / text
+            in chronological order so multi-iteration agent loops
+            display each step as a cohesive unit instead of a fixed
+            3-section layout (all reasoning → all tools → all text).
 
-        {/* The message card: channel stack.
-            Round 6, 2026-07-06: 加 .chat-tool-call--assistant class,
-            与 .chat-tool-call--tool (ToolMessageCard 外层) 形成视觉区分.
-            浅色 mode 主回复 bg-white / 工具调用 bg-slate-50;
-            深色 mode 主回复 bg-slate-900 / 工具调用 bg-slate-800/60. */}
-        <div className="msg-card msg-stack chat-tool-call chat-tool-call--assistant">
-          {/* Tasks */}
-          {parsed.tasks.length > 0 && (
-            <div className="msg-channel" data-channel="tasks">
-              <TaskListBlock tasks={parsed.tasks} />
-            </div>
-          )}
-
-          {/* Main body — file paths route to the right sidebar's
-              preview mode (the "阅读界面" in the same column the user
-              expects), NOT to an in-place dialog. Previously this
-              passed `openPath` which mounted an absolute-positioned
-              InlinePathPreview over the viewport. The popover used
-              to "fall below" the chat column because the parent
-              `<div className="h-enter">` carried a `transform` from
-              the h-fade-up animation, silently promoting itself to
-              the containing block for `position: fixed` children. */}
-          {parsed.body && (
-            <div className="msg-channel" data-channel="body">
-              <MarkdownBody
-                content={parsed.body}
-                onPathClick={onPathClick ?? (() => {})}
-              />
-            </div>
-          )}
-
-          {/* File changes summary (WorkBuddy-style compact row) */}
-          {fileChanges.length > 0 && (
-            <div className="msg-channel" data-channel="file-changes">
-              <FileChangeBlock
-                changes={fileChanges}
-                onPathClick={onPathClick}
-              />
-            </div>
-          )}
-
-          {/* Tool calls are rendered exclusively as inline
-              `role: "tool"` messages (created by `onToolStart` /
-              `expandTimelineToMessages`). The streaming assistant's
-              `execution_timeline` no longer carries tool_* events —
-              the rail was the source of the "一件事三行" duplicate
-              (tool card + status note + tool card). Fall through to
-              the legacy `tool_calls` fallback for any pre-existing
-              data that hasn't been migrated.
-
-              主人原话 (2026-06-22)："我看到状态改了，但是我的要求是
-              不显示这个！" — 在 reload 路径下，assistant 消息的
-              `content` 已经包含了工具结果，再渲染一遍 tool 名 +
-              "完成" 状态完全是冗余。所以**所有 tool call 都已经
-              完成时，整个 fallback 行直接隐藏**；只有还有
-              running 中的工具时才显示，让用户知道 agent 还在干活。 */}
-          {timeline.length === 0 && toolCalls.length > 0 && hasRunningTool && (
-            <div className="msg-channel" data-channel="tools">
-              <ToolCallsFallback calls={toolCalls} />
-            </div>
-          )}
-
-          {/* Gap thinking animation: only shown when tools are running
-              but we have NOT yet rendered any tool cards for this message.
-              Once tool cards appear (each with their own "运行中" / "成功"
-              status badge), this ThinkingDots becomes redundant visual noise
-              and must be suppressed to avoid the repetitive pattern:
-
-                🔧 terminal  运行中
-                正在处理 ...      ← BAD: duplicates the badge info
-
-              In practice `onToolStart` inserts a tool card immediately,
-              so this branch rarely fires during streaming — it exists as
-              a safety net for edge cases where the tool metadata arrives
-              before the card is mounted. */}
-          {hasRunningTool && !hasTools && (
-            <div className="msg-channel" data-channel="thinking">
-              <ThinkingDots label="正在处理" />
-            </div>
-          )}
-          {/* All tools done, body still empty → waiting for final text.
-              Only fire for the LIVE streaming message. Reloaded history
-              never shows this, even when tools are all done — the user
-              is not actually waiting on anything anymore. */}
-          {hasTools && !hasRunningTool && !parsed.body && parsed.tasks.length === 0 && isStreaming && (
-            <div className="msg-channel" data-channel="thinking">
-              <ThinkingDots label="等待回复" />
-            </div>
-          )}
-        </div>
+            2026-07-11: Replaces the previous layout where
+            ReasoningBlock, ToolTimelineSection, and the body card
+            were always rendered in that fixed order regardless of
+            the actual chronological flow. */}
+        <UnifiedTimelineRenderer
+          steps={steps}
+          isStreaming={isStreaming}
+          onPathClick={onPathClick}
+          fileChanges={fileChanges}
+          toolCalls={toolCalls}
+          hasRunningTool={hasRunningTool}
+          parsedTasks={parsed.tasks}
+        />
 
         {/* Backend badge (outside card so it reads as meta, not part of answer) */}
         {message.execution_backend && (
@@ -2568,6 +2828,47 @@ function ClarifyComposer({
           提交
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Collapsible reasoning/thinking block for MessageBubble (post-stream).
+ * Always mounts collapsed — the user can click to expand and inspect
+ * the LLM's  monologue.
+ *
+ * Mirrors StreamingBubble's fold block UI (.reasoning-header /
+ * .reasoning-chevron / .reasoning-bullets from components.css) but
+ * defaults to collapsed since the stream has already settled.
+ */
+function ReasoningBlock({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const clean = content.replace(/<\/?think>/gi, "").trim();
+  // Split on double-newlines to get bullet points; if no split, treat as one blob.
+  const bullets = clean.split(/\n\n+/).filter((b) => b.trim().length > 0);
+
+  return (
+    <div className="mb-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="reasoning-header"
+      >
+        {expanded ? (
+          <ChevronDown size={12} className="reasoning-chevron reasoning-chevron-open" />
+        ) : (
+          <ChevronRight size={12} className="reasoning-chevron" />
+        )}
+        <Brain size={11} />
+        <span className="reasoning-label">已深度思考</span>
+        {bullets.length > 1 && (
+          <span className="reasoning-count">{bullets.length} 条</span>
+        )}
+      </button>
+      {expanded && (
+        <div className="reasoning-body mt-1.5 px-3 py-2 rounded-r-lg rounded-l-sm text-[12.5px] text-text-secondary leading-relaxed whitespace-pre-wrap font-sans">
+          {clean}
+        </div>
+      )}
     </div>
   );
 }

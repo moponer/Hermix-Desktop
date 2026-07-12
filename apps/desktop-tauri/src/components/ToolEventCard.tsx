@@ -531,6 +531,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
         onClick={() => hasBody && setOpen((v) => !v)}
         className="tw-msg-row"
         data-tool-kind={toolKind(group.tool)}
+        data-open={open ? "true" : undefined}
         title={primary ?? label}
       >
         {/* Left cluster: icon + tool name + primary + peek */}

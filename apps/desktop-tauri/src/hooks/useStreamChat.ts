@@ -28,6 +28,10 @@ export interface TodoSnapshotItem {
   depends_on: string[];
   last_result?: string | null;
   execution_count: number;
+  /** Plan / group id (UUID per plan). Empty string for legacy items. */
+  group_id: string;
+  /** Human label for the plan (e.g. "rename all files"). Optional. */
+  group_title?: string | null;
 }
 
 /**
@@ -153,16 +157,21 @@ interface StreamCallbacks {
     fileSummary?: string;
   }) => void;
   /**
-   * A todo list mutation fired by the server (always a TodoItemUpserted
-   * or TodoItemRemoved — TodoSnapshot is sent only on (re)connect in
-   * the future). The TodoPanel hooks into this to render the live
-   * task list.
+   * A todo list mutation fired by the server. Three kinds:
    *
-   * Mirrors `StreamEvent::TodoItemUpserted` / `StreamEvent::TodoItemRemoved`
-   * in hermix-transport. `sessionId` is stamped by the server based
-   * on which WS connection produced the change.
+   *  - `group_started`: LLM declared a new plan (first `todo.create`
+   *    for a fresh group_id). Front-end creates a new inline card
+   *    anchored to the assistant message with `messageId` (or end of
+   *    stream when the server omitted it).
+   *  - `upsert`: create / update / depend / record_execution.
+   *  - `remove`: LLM (or HTTP DELETE) removed the item.
+   *
+   * Mirrors `StreamEvent::TodoGroupStarted` / `TodoItemUpserted` /
+   * `TodoItemRemoved` in hermix-transport. `sessionId` is stamped
+   * by the server based on which WS connection produced the change.
    */
   onTodoChange?: (change:
+    | { kind: "group_started"; sessionId: string; groupId: string; groupTitle: string | null; messageId: string | null }
     | { kind: "upsert"; sessionId: string; item: TodoSnapshotItem }
     | { kind: "remove"; sessionId: string; id: string }
   ) => void;
@@ -309,6 +318,21 @@ export function useStreamChat() {
   // Client-side dedup: track last sent (hash, timestamp) to prevent
   // the same content from being sent multiple times within the window.
   const lastSendRef = useRef<{ hash: string; ts: number } | null>(null);
+  // 2026-07-10: Per-send isolation via a monotonically increasing ID.
+  // Each `send()` call increments `activeSendIdRef.current` and captures
+  // its own `mySendId`. All WS event handlers (onmessage, onerror, onclose)
+  // and the `settle` function check `activeSendIdRef.current === mySendId`
+  // before proceeding. This prevents a stale WS's `onclose` (which fires
+  // asynchronously after `wsRef.current?.close()`) from interfering with
+  // a new `send()` that has already reset `doneRef` and swapped
+  // `wsRef.current` to a new WebSocket.
+  //
+  // The race condition this fixes:
+  //   1. send1's onDone → settle1() → close WS1 → resolve promise
+  //   2. Queue drain fires → send2 starts → doneRef=false, wsRef=WS2
+  //   3. WS1's onclose fires (async macro task) → settle1() runs again
+  //      → closes wsRef.current (WS2!) → send2 shows "disconnected"
+  const activeSendIdRef = useRef(0);
   // 2026-07-07: shared per-send state via refs so that WS reconnection
   // (doConnect retry) shares the same `done` / `sentToServer` flags
   // instead of creating fresh local variables each time.
@@ -346,13 +370,55 @@ export function useStreamChat() {
     ): Promise<string> => {
       // Register the per-send onPrefetch so the WS callback can read it.
       onPrefetchRef.current = callbacks.onPrefetch;
+
       return new Promise((resolve, reject) => {
-        // Expose resolvers + callbacks so cancel() can settle the
-        // promise immediately without waiting for the async WS onclose.
+        // Expose the raw resolvers so cancel() can settle the promise
+        // immediately without waiting for the async WS onclose event.
         pendingResolveRef.current = resolve;
         pendingRejectRef.current = reject;
         pendingCallbacksRef.current = callbacks;
         sendSettledRef.current = false;
+
+        // ── Client-side message dedup (runs BEFORE setStreamingSessionId) ──
+        // 2026-07-08 (HH) root-cause fix: the previous code did `return;`
+        // from inside this Promise executor on a duplicate. That left the
+        // Promise un-resolved, so `await sendStream(...)` hung forever and
+        // the caller's `setSending(false)` (in `finally`) never ran. While
+        // `streaming` stayed true, the next Enter was routed to the message
+        // queue, whose auto-drain effect (`!streaming` guard) could never
+        // fire — looping identical content into the backend.
+        //
+        // Direct fix: resolve cleanly (no error, no UI glitch) instead of
+        // `return;`, and run this check BEFORE `setStreamingSessionId` so a
+        // duplicate never flips `streaming` on. No mutex / reject needed —
+        // identical-content duplicates are simply coalesced. Different
+        // content sent while a stream is in flight is a legitimate separate
+        // message and is allowed through.
+        const DEDUP_WINDOW_MS = 15_000;
+        const contentHash = `${sessionId}:${content}`;
+        const now = Date.now();
+        const __sendDiagId = ((globalThis as any).__sendDiagId || 0);
+        console.log(`[diag #${__sendDiagId}] sendStream ENTER`, { sessionId, content, lastSend: lastSendRef.current, now });
+        if (
+          lastSendRef.current &&
+          lastSendRef.current.hash === contentHash &&
+          now - lastSendRef.current.ts < DEDUP_WINDOW_MS
+        ) {
+          console.warn(
+            `[useStreamChat #${__sendDiagId}] dedup: same content sent ${now - lastSendRef.current.ts}ms ago, skipping`,
+          );
+          resolve("");
+          return;
+        }
+        lastSendRef.current = { hash: contentHash, ts: now };
+
+        // 2026-07-10: Increment the active send ID so any stale WS
+        // event handlers from a previous `send()` call become no-ops.
+        // The previous send should have already settled (via the `await`
+        // and queue mechanism in App.tsx), but this is a safety net for
+        // edge cases where the old WS's `onclose` fires asynchronously.
+        const mySendId = ++activeSendIdRef.current;
+
         setStreamingSessionId(sessionId);
         let fullText = "";
         doneRef.current = false;
@@ -389,27 +455,6 @@ export function useStreamChat() {
           if (chunkRaf !== null) return;
           chunkRaf = requestAnimationFrame(flushChunks);
         };
-
-        // ── Client-side message dedup ─────────────────────────────
-        // 2026-07-07: prevent the same content from being sent
-        // multiple times within DEDUP_WINDOW_MS. This catches:
-        //   - Multiple doConnect calls racing (React re-render)
-        //   - WS reconnect after agent already completed
-        //   - handleSubmit called twice rapidly
-        const DEDUP_WINDOW_MS = 15_000;
-        const contentHash = `${sessionId}:${content}`;
-        const now = Date.now();
-        if (
-          lastSendRef.current &&
-          lastSendRef.current.hash === contentHash &&
-          now - lastSendRef.current.ts < DEDUP_WINDOW_MS
-        ) {
-          console.warn(
-            `[useStreamChat] dedup: same content sent ${now - lastSendRef.current.ts}ms ago, skipping`
-          );
-          return;
-        }
-        lastSendRef.current = { hash: contentHash, ts: now };
 
         // ── Per-send retry state ─────────────────────────────────
         // 2026-07-06: auto-retry when the WS fails before any content
@@ -472,6 +517,12 @@ export function useStreamChat() {
 
         const settle = (text: string, err?: string, reason?: string, phaseHint?: StreamPhase) => {
           if (doneRef.current) return;
+          // 2026-07-10: Guard against stale WS event handlers. If a new
+          // `send()` has started (incrementing `activeSendIdRef`), this
+          // `settle` belongs to an old send and must be a no-op —
+          // otherwise it would close the new WS and corrupt the new
+          // send's state.
+          if (activeSendIdRef.current !== mySendId) return;
           disarmTimeouts();
           // Drain any chunks that arrived after the last rAF tick
           // (typical: the "done" event follows a final burst of
@@ -502,10 +553,13 @@ export function useStreamChat() {
 
           if (err) {
             callbacks.onError?.(err);
-            reject(new Error(err));
+            // `pendingRejectRef` holds the raw `reject` (no mutex wrap).
+            // Fall back to the local `reject` if the ref has already
+            // been nulled (e.g. on a second settle call).
+            (pendingRejectRef.current ?? reject)(new Error(err));
           } else {
             callbacks.onDone?.(cleanText, stopReason);
-            resolve(cleanText);
+            (pendingResolveRef.current ?? resolve)(cleanText);
           }
           // Clean up per-send refs so a stale cancel() call
           // can't settle an already-settled promise.
@@ -521,6 +575,10 @@ export function useStreamChat() {
         // auto-retry path (before any content arrives) can create a
         // fresh WS without duplicating the ~200 lines of handler setup.
         const doConnect = () => {
+        // 2026-07-10: Stale retry guard — if a new `send()` has started
+        // during the retry delay, abort the reconnection attempt so we
+        // don't overwrite the new send's WS in `wsRef.current`.
+        if (activeSendIdRef.current !== mySendId) return;
         try {
           const ws = new WebSocket(resolveWebSocketUrl(sessionId));
           wsRef.current = ws;
@@ -537,6 +595,9 @@ export function useStreamChat() {
           // settles or the session changes).
 
           ws.onmessage = (evt) => {
+            // 2026-07-10: Stale WS guard — if a new send has started,
+            // ignore events from the old WS.
+            if (activeSendIdRef.current !== mySendId) return;
             try {
               const data = JSON.parse(String(evt.data));
 
@@ -569,6 +630,9 @@ export function useStreamChat() {
                 }
                 ws.send(JSON.stringify(payload));
                 sentToServerRef.current = true;
+                const __sendDiagId2 = ((globalThis as any).__sendDiagId = ((globalThis as any).__sendDiagId || 0) + 1);
+                const __sendDiagTs2 = performance.now().toFixed(1);
+                console.log(`[diag #${__sendDiagId2} @${__sendDiagTs2}ms] WS connected → ws.send(payload) FIRED, retryCount=${retryCount}, textLen=${content.length}, sessionId=${sessionId}`);
                 updatePhase("streaming");
                 armTimeouts();
 
@@ -686,10 +750,28 @@ export function useStreamChat() {
               }
 
               // Todo (task list) mutations. Wire format:
+              //   { type: "todo_group_started", event: { session_id, group_id, group_title, message_id } }
               //   { type: "todo_item_upserted", event: { session_id, item: {...} } }
               //   { type: "todo_item_removed",  event: { session_id, id: "..." } }
               // Routing is straight to onTodoChange; no message-bubble
-              // side effects (the TodoPanel subscribes directly).
+              // side effects (the TodoListCard subscribes directly).
+              if (evtType === "todo_group_started") {
+                const ev = data?.event ?? data ?? {};
+                const groupId = ev?.group_id ?? ev?.groupId ?? "";
+                const sessionId = ev?.session_id ?? ev?.sessionId ?? "";
+                const groupTitle = ev?.group_title ?? ev?.groupTitle ?? null;
+                const messageId = ev?.message_id ?? ev?.messageId ?? null;
+                if (groupId) {
+                  callbacks.onTodoChange?.({
+                    kind: "group_started",
+                    sessionId,
+                    groupId,
+                    groupTitle,
+                    messageId,
+                  });
+                }
+                return;
+              }
               if (evtType === "todo_item_upserted") {
                 const ev = data?.event ?? data ?? {};
                 const item = ev?.item;
@@ -1024,6 +1106,8 @@ export function useStreamChat() {
           };
 
           ws.onerror = () => {
+            // 2026-07-10: Stale WS guard.
+            if (activeSendIdRef.current !== mySendId) return;
             if (!doneRef.current) {
               // 2026-07-06 (rev): if we've ever received any content
               // (text or status), we MUST NOT retry — the agent
@@ -1049,6 +1133,8 @@ export function useStreamChat() {
               if (retryCount < MAX_RETRIES) {
                 retryCount++;
                 const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
+                const __sendDiagId3 = ((globalThis as any).__sendDiagId || 0);
+                console.log(`[diag #${__sendDiagId3}] onerror → retry ${retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
                 updatePhase("reconnecting");
                 wsRef.current = null;
                 setTimeout(doConnect, delay);
@@ -1058,6 +1144,15 @@ export function useStreamChat() {
             }
           };
           ws.onclose = () => {
+            // 2026-07-10: Stale WS guard — this is the critical fix.
+            // When settle() closes the WS, the `onclose` event is
+            // queued as a macro task. By the time it fires, a new
+            // `send()` may have already started (resetting doneRef
+            // and swapping wsRef). Without this guard, the stale
+            // `onclose` would call settle() again, closing the NEW
+            // WebSocket and causing the new message to show
+            // "disconnected".
+            if (activeSendIdRef.current !== mySendId) return;
             if (!doneRef.current) {
               if (hasContent && fullText.length > 0) {
                 settle(fullText, undefined, undefined, "partial");
@@ -1078,6 +1173,8 @@ export function useStreamChat() {
                 if (retryCount < MAX_RETRIES) {
                   retryCount++;
                   const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
+                  const __sendDiagId4 = ((globalThis as any).__sendDiagId || 0);
+                  console.log(`[diag #${__sendDiagId4}] onclose (no content) → retry ${retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
                   updatePhase("reconnecting");
                   wsRef.current = null;
                   setTimeout(doConnect, delay);

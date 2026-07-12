@@ -5,7 +5,7 @@ import {
   BarChart3,
 } from "lucide-react";
 import { clsx } from "clsx";
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { BackendStatus } from "./BackendStatus";
 import type { Session, NavPage } from "../types";
 import { useWorkspaces } from "../hooks/useWorkspaces";
@@ -149,20 +149,42 @@ export function Sidebar({
   const { workspaces, add: addWorkspace, remove: removeWorkspace } = useWorkspaces();
 
   // Group sessions by their bound workspace.
-  const { sessionsByWs, ungrouped } = useMemo(() => {
+  // Source of truth: session.workspace (backend DB), not localStorage.
+  // localStorage can be cleared or out of sync after app restart.
+  const { sessionsByWs, ungrouped, orphanPaths } = useMemo(() => {
     const byWs: Record<string, Session[]> = {};
     const rest: Session[] = [];
+    const orphans = new Set<string>();
     for (const s of sessions) {
-      let wsPath: string | null = null;
-      try { wsPath = storage.getItem(sessionKey(s.id, "workspace")); } catch {}
+      let wsPath: string | null = s.workspace ?? null;
+      if (!wsPath) {
+        try { wsPath = storage.getItem(sessionKey(s.id, "workspace")); } catch {}
+      }
       if (wsPath && workspaces.some((w) => w.path === wsPath)) {
+        (byWs[wsPath] ||= []).push(s);
+      } else if (wsPath) {
+        // Workspace path exists but not in workspaces list — mark as orphan
+        // so the effect below can auto-add it.
+        orphans.add(wsPath);
         (byWs[wsPath] ||= []).push(s);
       } else {
         rest.push(s);
       }
     }
-    return { sessionsByWs: byWs, ungrouped: rest };
+    return { sessionsByWs: byWs, ungrouped: rest, orphanPaths: orphans };
   }, [sessions, workspaces]);
+
+  // Auto-add orphan workspace paths that sessions reference but aren't in
+  // the workspaces list yet (e.g. backend has workspace, localStorage was
+  // cleared). Runs once per orphan path thanks to the Set dedup.
+  const addedOrphansRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const path of orphanPaths) {
+      if (addedOrphansRef.current.has(path)) continue;
+      addedOrphansRef.current.add(path);
+      addWorkspace("", path);
+    }
+  }, [orphanPaths, addWorkspace]);
 
   const [collapsedWs, setCollapsedWs] = useState<Set<string>>(new Set());
   const toggleWsCollapsed = (id: string) => {
@@ -231,7 +253,7 @@ export function Sidebar({
       {/* Brand 已移至顶部 TitleBar,这里直接开始 CTA,避免双层标题栏 */}
 
       {/* New chat — primary CTA */}
-      <div className="px-3 pt-3 pb-3">
+      <div className="px-3 pt-3 pb-3" style={{ flexShrink: 0 }}>
         <button
           onClick={onNewChat}
           className="btn btn-primary w-full"
@@ -244,7 +266,7 @@ export function Sidebar({
       </div>
 
       {/* Nav */}
-      <nav className="nav">
+      <nav className="nav" style={{ flexShrink: 0 }}>
         {NAV_ITEMS.map(({ icon: Icon, label, page: p }) => (
           <button
             key={p}
@@ -472,7 +494,7 @@ export function Sidebar({
       </div>
 
       {/* Bottom: status + user + settings */}
-      <div className="px-3 pb-3 pt-2 stack-v" style={{ gap: 8 }}>
+      <div className="px-3 pb-3 pt-2 stack-v" style={{ gap: 8, flexShrink: 0 }}>
         <BackendStatus />
         <div className="user-card">
           <div className="user-card-avatar">

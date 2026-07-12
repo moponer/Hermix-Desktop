@@ -12,21 +12,327 @@ function apiUrl(path: string): string {
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
-async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(apiUrl(path), init);
-  if (!response.ok) {
-    const text = await response.text().catch(() => response.statusText);
-    throw new Error(text || `HTTP ${response.status}`);
+/** Wait n milliseconds without blocking the event loop. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Retry wrapper: if fetch throws a network error (ECONNREFUSED / ECONNRESET
+ * — i.e., the sidecar hasn't bound port 3000 yet), retry up to 5 times with
+ * exponential backoff (200ms … 3.2s). This avoids the boot-time console
+ * spam of 15+ ERR_CONNECTION_REFUSED errors.
+ *
+ * If the request succeeds but returns non-2xx, throw immediately (don't retry
+ * HTTP errors — those are real problems, not startup races).
+ */
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  const MAX_RETRIES = 5;
+  const BASE_DELAY_MS = 200;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Only retry on network-level errors (TypeError from fetch when the
+      // server isn't listening yet). Don't retry on HTTP 4xx/5xx responses.
+      if (!msg.includes("Failed to fetch") && !msg.includes("NetworkError")) {
+        throw err;
+      }
+      if (attempt >= MAX_RETRIES) {
+        throw err;
+      }
+      const delayMs = BASE_DELAY_MS * (1 << attempt); // 200, 400, 800, 1600, 3200
+      await sleep(delayMs);
+    }
   }
-  return response.json();
+  throw new Error("retry exhausted"); // unreachable, just for TS
+}
+
+async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  return withRetry(async () => {
+    const response = await fetch(apiUrl(path), init);
+    if (!response.ok) {
+      const text = await response.text().catch(() => response.statusText);
+      throw new Error(text || `HTTP ${response.status}`);
+    }
+    return response.json() as T;
+  });
 }
 
 async function fetchVoid(path: string, init?: RequestInit): Promise<void> {
-  const response = await fetch(apiUrl(path), init);
-  if (!response.ok) {
-    const text = await response.text().catch(() => response.statusText);
-    throw new Error(text || `HTTP ${response.status}`);
-  }
+  return withRetry(async () => {
+    const response = await fetch(apiUrl(path), init);
+    if (!response.ok) {
+      const text = await response.text().catch(() => response.statusText);
+      throw new Error(text || `HTTP ${response.status}`);
+    }
+  });
+}
+
+// ── Orchestration Engine: Task CRUD (Phase 1 / P1-5) ────────
+//
+// Task is the top-level work unit in the orchestration engine.
+// POST /v1/tasks creates a task, GET /v1/tasks lists them,
+// GET /v1/tasks/:id fetches one, PATCH /v1/tasks/:id/status
+// transitions the status.
+
+export type TaskMode = "craft" | "plan" | "ask";
+export type TaskStatus =
+  | "pending"
+  | "planning"
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "archived";
+
+export interface TaskContextRef {
+  target: string;
+  kind: "file" | "directory" | "url" | "session" | "unknown";
+}
+
+export interface TaskContext {
+  references?: TaskContextRef[];
+  screenshots?: string[];
+  attachments?: string[];
+  notes?: string | null;
+}
+
+export interface TaskResultRef {
+  path: string;
+  artifact_type: "html" | "image" | "report" | "video" | "file";
+  summary?: string | null;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  workspace_path: string;
+  mode: TaskMode;
+  status: TaskStatus;
+  parent_task_id?: string | null;
+  context: TaskContext;
+  results: TaskResultRef[];
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateTaskRequest {
+  title: string;
+  workspace_path: string;
+  mode: TaskMode;
+  parent_task_id?: string | null;
+  context?: TaskContext;
+}
+
+export async function createTask(
+  req: CreateTaskRequest,
+): Promise<Task> {
+  return fetchJSON<Task>("/v1/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function getTask(taskId: string): Promise<Task> {
+  return fetchJSON<Task>(`/v1/tasks/${encodeURIComponent(taskId)}`);
+}
+
+export async function listTasks(
+  status?: TaskStatus,
+): Promise<Task[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  return fetchJSON<Task[]>(`/v1/tasks${query}`);
+}
+
+export async function updateTaskStatus(
+  taskId: string,
+  status: TaskStatus,
+): Promise<Task> {
+  return fetchJSON<Task>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/status`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    },
+  );
+}
+
+export async function listChildTasks(
+  parentTaskId: string,
+): Promise<Task[]> {
+  return fetchJSON<Task[]>(
+    `/v1/tasks/${encodeURIComponent(parentTaskId)}/children`,
+  );
+}
+
+// ── Product Delivery (Phase 7 / P7-1) ───────────────────────
+//
+// POST /v1/tasks/:id/results registers deliverable artifacts
+// for a Task, classifies them by type, and emits ResultDelivered
+// event via the orchestration bus.
+
+export async function deliverResults(
+  taskId: string,
+  files: string[],
+  summary?: string,
+): Promise<Task> {
+  return fetchJSON<Task>(
+    `/v1/tasks/${encodeURIComponent(taskId)}/results`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files, summary }),
+    },
+  );
+}
+
+// ── Automation Engine (Phase 5/6 — P5-5, P6-5) ───────────────
+//
+// The new three-table automation engine: /v1/automations endpoints
+// backed by hermix-automation crate. Triggers go through the unified
+// agent_service.send_message() dispatch path (铁律 DD).
+
+export type AutomationScheduleType = "recurring" | "once";
+export type AutomationStatus = "ACTIVE" | "PAUSED";
+
+export interface Automation {
+  id: string;
+  name: string;
+  prompt: string;
+  schedule_type: AutomationScheduleType;
+  rrule?: string | null;
+  scheduled_at?: string | null;
+  status: AutomationStatus;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  cwds?: string | null;
+  connector_ids_json?: string | null;
+  expert_id?: string | null;
+  model_id?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AutomationRun {
+  id: string;
+  automation_id: string;
+  started_at: number;
+  finished_at?: number | null;
+  status: string;
+  task_id?: string | null;
+  error_text?: string | null;
+}
+
+export interface CreateAutomationRequest {
+  name: string;
+  prompt: string;
+  schedule_type: AutomationScheduleType;
+  rrule?: string | null;
+  scheduled_at?: string | null;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  cwds?: string | null;
+  connector_ids_json?: string | null;
+  expert_id?: string | null;
+  model_id?: string | null;
+}
+
+export async function createAutomation(
+  req: CreateAutomationRequest,
+): Promise<Automation> {
+  return fetchJSON<Automation>("/v1/automations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function listAutomations(): Promise<Automation[]> {
+  return fetchJSON<Automation[]>("/v1/automations");
+}
+
+export async function getAutomation(id: string): Promise<Automation> {
+  return fetchJSON<Automation>(`/v1/automations/${encodeURIComponent(id)}`);
+}
+
+export async function deleteAutomation(id: string): Promise<void> {
+  await fetchVoid(`/v1/automations/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function pauseAutomation(id: string): Promise<Automation> {
+  return fetchJSON<Automation>(
+    `/v1/automations/${encodeURIComponent(id)}/pause`,
+    { method: "POST" },
+  );
+}
+
+export async function resumeAutomation(id: string): Promise<Automation> {
+  return fetchJSON<Automation>(
+    `/v1/automations/${encodeURIComponent(id)}/resume`,
+    { method: "POST" },
+  );
+}
+
+export async function listAutomationRuns(
+  id: string,
+): Promise<AutomationRun[]> {
+  return fetchJSON<AutomationRun[]>(
+    `/v1/automations/${encodeURIComponent(id)}/runs`,
+  );
+}
+
+export async function triggerAutomation(
+  id: string,
+): Promise<{ automation_id: string; status: string; message: string }> {
+  return fetchJSON(
+    `/v1/automations/${encodeURIComponent(id)}/trigger`,
+    { method: "POST" },
+  );
+}
+
+// ── Todo (task list) ─────────────────────────────────────────
+//
+// `listTodos` powers the TodoPanel's initial hydration. `patchTodo`
+// is what the user's manual checkbox click calls — server dispatches
+// the update through the same `todo` tool the LLM uses, so the WS
+// forwarder fires automatically and every connected client sees
+// the change.
+
+export interface TodoItem {
+  id: string;
+  title: string;
+  description?: string | null;
+  status: string;
+  priority: string;
+  created_at: string;
+  depends_on: string[];
+  last_result?: string | null;
+  execution_count: number;
+  /** Plan / group id (UUID per plan). Empty string for legacy items. */
+  group_id: string;
+  /** Human label for the plan (e.g. "rename all files"). Optional. */
+  group_title?: string | null;
+}
+
+export async function listTodos(): Promise<{ todos: TodoItem[]; total: number }> {
+  return fetchJSON(`/v1/todos`);
+}
+
+export async function patchTodo(
+  id: string,
+  patch: { status?: string; title?: string; priority?: string },
+): Promise<{ ok: boolean; raw?: string }> {
+  return fetchJSON(`/v1/todos/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  });
 }
 
 // ── Types ──────────────────────────────────────────
@@ -288,11 +594,6 @@ export const getSessionMessages = async (id: string): Promise<ChatMessage[]> => 
   const res = await fetchJSON<{ messages: WireMessage[] }>(
     `/v1/sessions/${encodeURIComponent(id)}/messages`
   );
-  // N-09 (2026-07-05): the projection + directive-strip was
-  // open-coded in this function. Routing it through
-  // `protocolAdapter.wireArrayToChatMessages` means adding a new
-  // approval/clarify/tool field is a one-file change in the
-  // adapter, not a five-Edit pull-request against `getSessionMessages`.
   return wireArrayToChatMessages(res.messages, id, detectToolError);
 };
 
@@ -743,13 +1044,6 @@ export const getLogs = async (file = "agent", lines = 100): Promise<{ lines: str
 
 export const searchSessions = async (q: string): Promise<{ results: Array<{ session_id: string; snippet: string }> }> =>
   fetchJSON(`/v1/sessions/search?q=${encodeURIComponent(q)}`);
-
-/** 2026-07-05: session lineage tree for compressed session ancestry tracking. */
-export const getSessionLineage = async (sessionId: string): Promise<{
-  ancestors: Array<{ id: string; title: string; has_compression: boolean }>;
-  children: Array<{ id: string; title: string; has_compression: boolean }>;
-  current: { id: string; title: string; has_compression: boolean };
-}> => fetchJSON(`/v1/sessions/${encodeURIComponent(sessionId)}/lineage`);
 
 /** 2026-07-05: list skills from the dashboard for cron-job skill assignment. */
 export const getSkillsList = async (): Promise<Array<{ name: string; description: string; category: string }>> => {

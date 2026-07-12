@@ -532,7 +532,7 @@ const RoomItem = memo(function RoomItem({ room, agents, active, onSelect, onDele
           <span
             role="button"
             tabIndex={0}
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            onClick={(e) => { e.stopPropagation(); if (window.confirm("确认解散该会话？这将清空全部聊天内容和产物，此操作不可撤销。")) onDelete(); }}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); onDelete(); } }}
             className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded-md flex items-center justify-center text-text-faint hover:text-error hover:bg-error-bg transition-all cursor-pointer"
             title="删除"
@@ -785,6 +785,7 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
   };
 
   const handleDeleteRoom = async (id: string) => {
+    if (!window.confirm("确认解散该会话？这将清空全部聊天内容和产物，此操作不可撤销。")) return;
     try {
       await api.deleteGroupChatRoom(id);
       setRooms((prev) => {

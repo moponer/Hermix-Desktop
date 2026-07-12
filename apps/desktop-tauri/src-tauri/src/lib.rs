@@ -112,10 +112,14 @@ pub fn run() {
             if started {
                 // Start the watchdog: if /health fails 3 times in a row
                 // (5s interval = 15s of total outage), automatically
-                // restart the sidecar. The handle is dropped immediately
-                // (detached), so the task runs for the lifetime of the
-                // process.
-                let _wd_handle = HermixSidecar::start_watchdog(&sidecar, WatchdogConfig::default());
+                // restart the sidecar with exponential backoff.
+                // After 5 consecutive restart failures, gives up and
+                // requires manual restart.
+                let _wd_handle = HermixSidecar::start_watchdog(
+                    &sidecar,
+                    WatchdogConfig::default(),
+                    Some(handle.clone()),
+                );
 
                 let handle2 = handle.clone();
                 tauri::async_runtime::spawn(async move {

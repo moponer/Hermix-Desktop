@@ -24,7 +24,9 @@
     {
       "identifier": "fs:default",
       "allow": [
+        { "path": "$HOME" },
         { "path": "$HOME/**" },
+        { "path": "~" },
         { "path": "~/**" },
         { "path": "$HOME/.hermix/**" }
       ]

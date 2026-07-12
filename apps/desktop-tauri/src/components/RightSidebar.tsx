@@ -23,7 +23,7 @@ import {
 import { parseByExtension, type PreviewModel } from "../lib/fileParser";
 
 // ── Tab types ──────────────────────────────────────────
-type RightTab = "computer" | "products" | "browser";
+export type RightTab = "computer" | "products" | "browser";
 
 interface RightSidebarProps {
   open: boolean;
@@ -38,6 +38,9 @@ interface RightSidebarProps {
   rawCount?: number;
   /** Callback when a file is added to chat from the file explorer. */
   onAddFileToChat?: (path: string) => void;
+  /** 2026-07-08 (user): 允许外部控制当前标签（如点目录 chip 直接切到「电脑」） */
+  activeTab?: RightTab;
+  onTabChange?: (tab: RightTab) => void;
 }
 
 const FILTERS: Array<{ key: "all" | ArtifactKind; label: string; icon: React.ElementType }> = [
@@ -782,8 +785,15 @@ export function PreviewPanel({
   );
 }
 
-export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArtifact, workspaceRoot, rawCount, onAddFileToChat }: RightSidebarProps) {
-  const [activeTab, setActiveTab] = useState<RightTab>("products");
+export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArtifact, workspaceRoot, rawCount, onAddFileToChat, activeTab: activeTabProp, onTabChange }: RightSidebarProps) {
+  // 2026-07-08 (user): activeTab 可被外部控制（点目录 chip → 切到「电脑」）。
+  // 传了 activeTab/onTabChange 走受控；否则用内部 state。
+  const [internalTab, setInternalTab] = useState<RightTab>("products");
+  const activeTab = activeTabProp ?? internalTab;
+  const setActiveTab = (t: RightTab) => {
+    setInternalTab(t);
+    onTabChange?.(t);
+  };
   const [filter, setFilter] = useState<"all" | ArtifactKind>("all");
   const [query, setQuery] = useState("");
 

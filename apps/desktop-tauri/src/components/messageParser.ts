@@ -1,4 +1,4 @@
-import type { ChatMessage, ExecutionTimelineEvent } from "../types";
+import type { ChatMessage, ExecutionTimelineEvent, TimelineStep } from "../types";
 
 export interface ParsedTask {
   done: boolean;
@@ -19,6 +19,7 @@ export interface ParsedContent {
 // special visual treatment.
 const THINKING_RE = /<think>[\s\S]*?<\/think>/gi;
 const ORPHAN_OPEN_RE = /<think>[\s\S]*$/i;
+
 // Server lifecycle / status logs that occasionally leak into the
 // assistant body.  These are framework-level diagnostics, not user
 // content, so we strip them silently.
@@ -364,24 +365,54 @@ export function extractFileChanges(events?: ExecutionTimelineEvent[]): FileChang
   return out;
 }
 
+/**
+ * Canonicalize a JSON args string the same way the backend's
+ * `tool_call_dedup_key` does (parse + re-serialize with sorted keys;
+ * fall back to the trimmed raw string if it isn't valid JSON). Used to
+ * match a standalone `role:"tool"` row against an inline tool card
+ * expanded from an execution_timeline so duplicate tool results are
+ * skipped on session reload.
+ */
+function serdeJsonNorm(args: string): string {
+  try {
+    const v = JSON.parse(args);
+    return JSON.stringify(v);
+  } catch {
+    return args.trim();
+  }
+}
+
 export function expandTimelineToMessages(messages: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   // Track assistant IDs whose timeline was expanded into inline
   // role:"tool" messages — any original role:"tool" that immediately
   // follows such an assistant should be skipped to prevent duplicates.
   const expandedAssistantIds = new Set<string>();
+  // Signatures (tool name + normalized args) of the inline tool cards we
+  // expanded out of an assistant's execution_timeline. A standalone
+  // role:"tool" row that the server persisted *in addition to* the
+  // timeline carries the identical (tool, args) and would otherwise
+  // render as a SECOND card — the "工具结果出现两次" the user saw. We
+  // skip any standalone tool whose signature collides with an already
+  // expanded inline tool.
+  const expandedToolSigs = new Set<string>();
+
+  const toolSig = (tool: string | undefined, args: string | undefined): string => {
+    const name = (tool ?? "").toLowerCase();
+    let norm = "";
+    if (args && args.trim()) {
+      norm = serdeJsonNorm(args);
+    }
+    return `${name}:${norm}`;
+  };
 
   for (const msg of messages) {
     if (msg.role !== "assistant" || !msg.execution_timeline || msg.execution_timeline.length === 0) {
-      // Skip original role:"tool" messages that were already expanded
-      // from a preceding assistant's execution_timeline.
-      if (msg.role === "tool" && expandedAssistantIds.size > 0) {
-        // Check if this tool message is between an expanded assistant
-        // and the next non-tool message. We use a simple heuristic:
-        // if the previous message in `out` was an assistant whose
-        // timeline we expanded, skip this tool message.
-        const lastOut = out[out.length - 1];
-        if (lastOut && lastOut.id && expandedAssistantIds.has(lastOut.id)) {
+      // Skip original role:"tool" messages that duplicate a tool we
+      // already expanded from a preceding assistant's execution_timeline.
+      if (msg.role === "tool") {
+        const sig = toolSig(msg.tool?.tool, msg.tool?.args);
+        if (expandedToolSigs.has(sig)) {
           continue;
         }
       }
@@ -427,6 +458,11 @@ export function expandTimelineToMessages(messages: ChatMessage[]): ChatMessage[]
         .filter((e) => e.type === "tool_stdout")
         .map((e) => e.content ?? "")
         .join("");
+
+      // Record this inline tool's signature so the server's standalone
+      // role:"tool" row (persisted in addition to the timeline) is skipped
+      // as a duplicate below.
+      expandedToolSigs.add(toolSig(g.tool, startEv?.arguments));
 
       out.push({
         id: `${msg.id}-tool-${g.key}`,
@@ -474,4 +510,155 @@ export interface ResolvedMessage {
   toolCalls: NonNullable<ChatMessage["tool_calls"]>;
   backend: ChatMessage["execution_backend"];
   model: string | undefined;
+}
+
+/**
+ * Build a unified timeline step list from the legacy
+ * `reasoningContent` / `execution_timeline` / `content` fields.
+ *
+ * Used as a fallback when `message.unified_steps` is not available
+ * (e.g. old persisted messages that pre-date the unified timeline
+ * feature). Produces a simple 3-step list:
+ *
+ *   [reasoning?] → [tools?] → [text?]
+ *
+ * For messages that already have `unified_steps` (set by
+ * `mergeConsecutiveAssistantMessages` or the streaming handlers),
+ * the caller should use those directly instead of calling this.
+ */
+export function buildFallbackSteps(message: ChatMessage): TimelineStep[] {
+  const steps: TimelineStep[] = [];
+  const reasoning = (message.reasoningContent ?? "").replace(/<\/?think>/gi, "").trim();
+  // Filter out non-tool events (status, file_change, section_gate) —
+  // those are handled separately by the renderer (file changes summary,
+  // etc.). Only tool_* events belong in the tools step.
+  const toolEvents = (message.execution_timeline ?? []).filter(
+    (e) => e.type === "tool_start" || e.type === "tool_stdout" || e.type === "tool_complete",
+  );
+  const parsed = parseContent(message.content);
+  const hasBody = !!(parsed.body && parsed.body.trim());
+
+  // 2026-07-11: When the LLM doesn't close its <think> tag, the
+  // ThinkBlockParser routes ALL text (including body) to
+  // reasoning_content, leaving content empty. On reload, we need
+  // to show that text as body — NOT as a reasoning block — to
+  // match what the user saw during streaming (the onDone handler
+  // uses reply_text which falls back to reasoning_content).
+  //
+  // Rule: if content has body text, show reasoning as a reasoning
+  // block + body as text (normal case). If content is empty but
+  // reasoning has text, show reasoning AS the body text (fallback
+  // case) — don't also show it as a reasoning block to avoid
+  // duplication.
+  if (hasBody) {
+    if (reasoning) {
+      steps.push({ kind: "reasoning", content: reasoning });
+    }
+    if (toolEvents.length > 0) {
+      steps.push({ kind: "tools", events: toolEvents });
+    }
+    steps.push({ kind: "text", content: parsed.body });
+  } else if (reasoning) {
+    // Fallback: content is empty, reasoning has the text.
+    // Show it as body text, not as a reasoning block.
+    if (toolEvents.length > 0) {
+      steps.push({ kind: "tools", events: toolEvents });
+    }
+    steps.push({ kind: "text", content: reasoning });
+  } else {
+    if (toolEvents.length > 0) {
+      steps.push({ kind: "tools", events: toolEvents });
+    }
+  }
+  return steps;
+}
+
+/**
+ * Resolve the effective unified steps for a message: use
+ * `message.unified_steps` when available, otherwise fall back to
+ * `buildFallbackSteps`.
+ *
+ * 2026-07-11: Adjacent `kind: "reasoning"` steps are merged into
+ * a single block. The LLM often emits several `<think>…</think>`
+ * segments back-to-back (one per sub-topic, separated by `**小标题**`
+ * + blank lines). Server emits one `StreamEvent::Thinking` per
+ * segment, which previously rendered as N collapsible blocks in the
+ * chat UI ("思考被切成两段"). Merging adjacent reasoning preserves
+ * each segment's text (joined by `\n\n`) but shows them as one
+ * collapsed reasoning block, matching the user's intuition that a
+ * continuous monologue is one thought process.
+ */
+export function resolveSteps(message: ChatMessage): TimelineStep[] {
+  const raw =
+    message.unified_steps && message.unified_steps.length > 0
+      ? message.unified_steps
+      : buildFallbackSteps(message);
+  return mergeAdjacentReasoning(raw);
+}
+
+/**
+ * Fold runs of consecutive `{kind: "reasoning"}` steps into one,
+ * joined with `\n\n`. Stops at any non-reasoning step (tools, real
+ * text). A "think-block residue" text step — short markdown headings
+ * or stray think tags that the LLM emits *between* adjacent think
+ * blocks (e.g. `**Clarifying directory paths**` between two <think>
+ * spans) — is also absorbed so the chat UI shows one continuous
+ * reasoning block instead of N tiny ones.
+ *
+ * Stops at any tool step. Reasoning segments actually separated by a
+ * tool call stay separate — those represent distinct turns of thought.
+ */
+export function mergeAdjacentReasoning(steps: TimelineStep[]): TimelineStep[] {
+  if (steps.length < 2) return steps;
+  const out: TimelineStep[] = [];
+  let buf: string | null = null;
+  for (const step of steps) {
+    if (step.kind === "reasoning") {
+      buf = buf === null ? step.content : buf + "\n\n" + step.content;
+      continue;
+    }
+    if (step.kind === "text" && isThinkBlockResidue(step.content)) {
+      // Drop the residue silently — it gets folded into the surrounding
+      // reasoning buffer at flush time. This is the key fix for
+      // "思考被切成多段" when the LLM outputs multiple adjacent think
+      // blocks with short markdown headings between them.
+      continue;
+    }
+    if (buf !== null) {
+      out.push({ kind: "reasoning", content: buf });
+      buf = null;
+    }
+    out.push(step);
+  }
+  if (buf !== null) {
+    out.push({ kind: "reasoning", content: buf });
+  }
+  return out;
+}
+
+/**
+ * Detect the "LLM-emitted headings between adjacent think blocks"
+ * pattern. Examples that should return true:
+ *   - `**Clarifying directory paths**`
+ *   - `### Identifying file structure`
+ *   - `<think>` or `</think>` (stray tags, in case any leak through)
+ *   - whitespace only
+ * Examples that should return false (real user-visible text):
+ *   - `这里是回答正文`
+ *   - `The file contains 42 lines.`
+ *
+ * Heuristic but tight: short content (< 200 chars trimmed) AND
+ * either only bold-markdown spans, only ATX headings, or only
+ * stray think-tag fragments.
+ */
+function isThinkBlockResidue(s: string): boolean {
+  const t = s.trim();
+  if (t.length === 0) return true;
+  if (t.length > 200) return false;
+  if (/^<\/?think>?$/i.test(t)) return true;
+  // One or more `**word(s)**` spans separated by whitespace/newlines
+  if (/^(\*\*[^*\n]{1,80}\*\*\s*)+$/.test(t)) return true;
+  // ATX-style heading(s): `# ...`, `## ...`, etc.
+  if (/^(#{1,6}\s+\S.{0,160})+$/.test(t)) return true;
+  return false;
 }

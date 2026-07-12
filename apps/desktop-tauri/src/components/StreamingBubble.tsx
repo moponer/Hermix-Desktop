@@ -4,8 +4,8 @@
  *
  * Visual contract: this component is *layout-equivalent* to a
  * MessageBubble with `showHeader=true`. The same Avatar + meta
- * line (time + status + copy button) is rendered on top of
- * the markdown body, so when the stream settles and the
+ * line (time + status + copy button) is rendered on top of the
+ * markdown body, so when the stream settles and the
  * StreamingBubble is swapped for a MessageBubble the user does
  * not see a "header pops in" jump. Body rendering is also shared
  * (MarkdownBody) so a fenced code block in a streaming reply
@@ -32,15 +32,25 @@
  *   · 文本以换行结尾 → 刚结束一段、下一段还没来 → 显示 dot
  *   · 文本不以换行结尾 → 当前段还在写 → 不显示 dot（避免段内重叠）
  *   · 流结束（phase !== streaming/connecting/slow） → 自动消失
+ *
+ * 2026-07-11: Unified timeline rendering — reasoning / tools / text
+ * are now rendered in chronological order using `unifiedSteps`,
+ * matching the settled MessageBubble's layout. This ensures that
+ * multi-iteration agent loops (think → tool → think → tool → text)
+ * display each step as a cohesive unit instead of a fixed 3-section
+ * layout.
  */
 
-import { memo, useDeferredValue, useMemo, useState } from "react";
-import { Check, Copy, AlertTriangle, XCircle, Clock } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock } from "lucide-react";
+import { memo, useDeferredValue, useMemo, useState, useEffect } from "react";
+import { Check, Copy, AlertTriangle, XCircle } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { InlineThinkingDot } from "./InlineThinkingDot";
 import { MarkdownBody } from "./MarkdownBody";
-import { parseContent } from "./messageParser";
+import { parseContent, groupTimeline } from "./messageParser";
+import { ToolTimelineSection } from "./MessageBubble";
 import type { StreamPhase } from "../hooks/useStreamChat";
+import type { ExecutionTimelineEvent, TimelineStep } from "../types";
 
 interface StreamingBubbleProps {
   text: string;
@@ -68,6 +78,21 @@ interface StreamingBubbleProps {
    * placeholder was created).
    */
   showHeader?: boolean;
+  /** Live reasoning text from the LLM (<think>...</think> block).
+   *  Retained for backward compat — when `unifiedSteps` is provided,
+   *  this is not used. */
+  reasoningContent?: string;
+  /** 2026-07-10: Live tool execution timeline from the assistant's
+   *  execution_timeline. Rendered as a collapsible block inside the
+   *  streaming bubble, same as in the settled MessageBubble.
+   *  Retained for backward compat — when `unifiedSteps` is provided,
+   *  this is not used. */
+  executionTimeline?: ExecutionTimelineEvent[];
+  /** 2026-07-11: Unified timeline steps — chronological sequence of
+   *  reasoning / tools / text. When provided, takes priority over
+   *  the legacy `reasoningContent` + `executionTimeline` + `text`
+   *  trio. */
+  unifiedSteps?: TimelineStep[];
 }
 
 /**
@@ -109,12 +134,51 @@ function endsAtParagraphBoundary(text: string): boolean {
 
 const NOOP = () => {};
 
+/**
+ * Streaming reasoning block — expanded during streaming, auto-collapses
+ * when the stream ends. Each instance manages its own expand/collapse
+ * state so multiple reasoning steps (one per iteration) can coexist.
+ */
+function StreamingReasoningBlock({ content, isStreaming }: { content: string; isStreaming: boolean }) {
+  const [expanded, setExpanded] = useState(true);
+  useEffect(() => {
+    if (!isStreaming && expanded) {
+      const t = setTimeout(() => setExpanded(false), 100);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const clean = content.replace(/<\/?think>/gi, "").trim();
+  if (!clean) return null;
+
+  return (
+    <div className="mb-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1 text-[11px] text-text-faint hover:text-text-secondary transition-colors"
+      >
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span>已深度思考 {isStreaming ? "中…" : ""}</span>
+      </button>
+      {expanded && (
+        <div className="reasoning-body mt-1.5 px-3 py-2 rounded-r-lg rounded-l-sm text-[12.5px] text-text-secondary leading-relaxed whitespace-pre-wrap font-sans">
+          {clean}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StreamingBubbleImpl({
   text,
   phase = "streaming",
   onPathClick,
   statusText,
   showHeader = true,
+  reasoningContent,
+  executionTimeline,
+  unifiedSteps,
 }: StreamingBubbleProps) {
   const deferred = useDeferredValue(text);
   const effectivePhase = phase ?? "streaming";
@@ -124,6 +188,8 @@ function StreamingBubbleImpl({
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
+
+  const isStreaming = effectivePhase === "streaming" || effectivePhase === "connecting" || effectivePhase === "slow";
 
   const status = STATUS_MAP[effectivePhase];
 
@@ -137,22 +203,22 @@ function StreamingBubbleImpl({
   // banner mid-stream (verified 2026-06-27: banner echo leaked 1.2KB
   // English text into the chat despite MessageBubble's strip working
   // post-stream).
-  //
-  // Performance: parseContent is O(text-length) and we only feed the
-  // already-`useDeferredValue`-coalesced `deferred` to it, so we don't
-  // pay more than one parse per animation frame regardless of how many
-  // WebSocket chunks arrived.
   const parsedStream = useMemo(() => parseContent(deferred), [deferred]);
 
-  const body = useMemo(
-    () => (
-      <MarkdownBody
-        content={parsedStream.body}
-        onPathClick={onPathClick ?? NOOP}
-      />
-    ),
-    [parsedStream.body, onPathClick],
-  );
+  // Build effective steps: use unifiedSteps when available, otherwise
+  // fall back to the legacy 3-field approach.
+  const effectiveSteps: TimelineStep[] = useMemo(() => {
+    if (unifiedSteps && unifiedSteps.length > 0) return unifiedSteps;
+    const steps: TimelineStep[] = [];
+    const reasoning = (reasoningContent ?? "").replace(/<\/?think>/gi, "").trim();
+    if (reasoning) steps.push({ kind: "reasoning", content: reasoning });
+    const toolEvents = (executionTimeline ?? []).filter(
+      (e) => e.type === "tool_start" || e.type === "tool_stdout" || e.type === "tool_complete",
+    );
+    if (toolEvents.length > 0) steps.push({ kind: "tools", events: toolEvents });
+    if (parsedStream.body && parsedStream.body.trim()) steps.push({ kind: "text", content: parsedStream.body });
+    return steps;
+  }, [unifiedSteps, reasoningContent, executionTimeline, parsedStream.body]);
 
   const showGapDot =
     STREAMING_PHASES.has(effectivePhase) && endsAtParagraphBoundary(deferred);
@@ -161,7 +227,8 @@ function StreamingBubbleImpl({
   // about to call a tool), show a "thinking…" placeholder so the
   // avatar + animation is always visible during a turn.
   const isStreamingPhase = STREAMING_PHASES.has(effectivePhase);
-  const hasNoContent = !parsedStream.body || parsedStream.body.trim().length === 0;
+  const hasTextStep = effectiveSteps.some((s) => s.kind === "text");
+  const hasNoContent = !hasTextStep;
 
   return (
     // Same outer layout as MessageBubble(showHeader=true) so the
@@ -187,7 +254,7 @@ function StreamingBubbleImpl({
             第一个 assistant 的 header, 避免"刚刚 + 头像 + 名称"重复
             出现. */}
         {showHeader && (
-          <div className="flex items-center gap-1.5 mb-1 text-text-faint">
+          <div className="flex items-center gap-2 mb-1.5 text-text-faint">
             {STREAMING_PHASES.has(effectivePhase) && (
               <InlineThinkingDot
                 size="sm"
@@ -207,7 +274,7 @@ function StreamingBubbleImpl({
             <button
               onClick={copyMessage}
               disabled={!text}
-              className="ml-auto p-0.5 rounded text-text-faint hover:text-text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="ml-auto p-0.5 rounded text-text-faint hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="复制消息"
             >
               {copied ? <Check size={11} /> : <Copy size={11} />}
@@ -215,10 +282,61 @@ function StreamingBubbleImpl({
           </div>
         )}
 
-        {hasNoContent && isStreamingPhase ? (
+        {/* Unified timeline steps — renders reasoning / tools / text
+            in chronological order, matching the settled MessageBubble. */}
+        {effectiveSteps.map((step, i) => {
+          if (step.kind === "reasoning") {
+            return (
+              <StreamingReasoningBlock
+                key={`step-${i}`}
+                content={step.content}
+                isStreaming={isStreaming}
+              />
+            );
+          }
+          if (step.kind === "tools") {
+            const groups = groupTimeline(step.events);
+            if (groups.length === 0) return null;
+            return (
+              <ToolTimelineSection
+                key={`step-${i}`}
+                groups={groups}
+                isStreaming={isStreaming}
+                onPathClick={onPathClick}
+              />
+            );
+          }
+          // step.kind === "text"
+          const parsed = parseContent(step.content);
+          return (
+            <div
+              key={`step-${i}`}
+              className="msg-card msg-stack chat-tool-call chat-tool-call--assistant"
+            >
+              {parsed.body && (
+                <div className="msg-channel" data-channel="body">
+                  <MarkdownBody
+                    content={parsed.body}
+                    onPathClick={onPathClick ?? NOOP}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Gap dot at the end of the last text step */}
+        {showGapDot && (
+          <InlineThinkingDot
+            asGap
+            variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "default"}
+            hideHint
+          />
+        )}
+
+        {/* Thinking placeholder when no content yet */}
+        {hasNoContent && isStreamingPhase && (
           showHeader ? (
-            // 2026-07-06: meta 行已显示 "正在思考…"，占位区只保留光点呼吸动画，
-            // 避免同一句话在 header 和 body 各出现一次。
             <div className="flex items-center gap-2 py-3 text-text-muted">
               <InlineThinkingDot
                 variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "default"}
@@ -226,18 +344,23 @@ function StreamingBubbleImpl({
               />
             </div>
           ) : null
-        ) : (
-          <>
-            {body}
-            {showGapDot && (
-              // 段间隙只保留视觉光点，文字由 meta 行统一承载。
-              <InlineThinkingDot
-                asGap
-                variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "default"}
-                hideHint
-              />
-            )}
-          </>
+        )}
+
+        {/* 2026-07-11: "正在回复" 流光指示器 — 仅当 body 已有内容但流仍活跃时显示，
+             让用户知道 agent 在持续思考/调工具而没有结束。
+             严格边界：此组件只挂在 StreamingBubble（isStreaming=true）内，
+             历史消息重载时根本不渲染 — 满足主人"恢复历史不显示"的要求。
+             至少要有一段 reasoning 才挂，避免和上面"无内容 placeholder"重复。 */}
+        {!hasNoContent && isStreamingPhase &&
+         ((unifiedSteps && unifiedSteps.length > 0)
+            ? unifiedSteps.some((s) => s.kind === "reasoning")
+            : (reasoningContent ?? "").trim().length > 0) && (
+          <div className="flex items-center py-1.5 text-text-muted" data-testid="live-shimmer-indicator">
+            <InlineThinkingDot
+              variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "shimmer"}
+              hint={effectivePhase === "slow" ? "响应较慢" : effectivePhase === "reconnecting" ? "正在重连" : "正在回复"}
+            />
+          </div>
         )}
       </div>
     </div>
@@ -249,5 +372,8 @@ export const StreamingBubble = memo(StreamingBubbleImpl, (prev, next) =>
   prev.phase === next.phase &&
   prev.onPathClick === next.onPathClick &&
   prev.statusText === next.statusText &&
-  prev.showHeader === next.showHeader,
+  prev.showHeader === next.showHeader &&
+  prev.reasoningContent === next.reasoningContent &&
+  prev.executionTimeline === next.executionTimeline &&
+  prev.unifiedSteps === next.unifiedSteps,
 );

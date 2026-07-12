@@ -191,6 +191,15 @@ export interface ChatMessage {
    * scroll position isn't pushed by long thinking text.
    */
   reasoningExpanded?: boolean;
+  /**
+   * Unified timeline steps — chronological sequence of reasoning /
+   * tools / text chunks. When present, the renderer uses this instead
+   * of the fixed 3-section layout so multi-iteration agent loops
+   * display each step as a cohesive unit. When absent, the renderer
+   * falls back to `buildFallbackSteps()` which synthesises a simple
+   * 3-step list from the legacy fields.
+   */
+  unified_steps?: TimelineStep[];
   // ── N-09 wire-only carry-over fields ─────────────────────────────────
   //
   // Carried verbatim from the JSON response so a session reload shows
@@ -219,7 +228,7 @@ export interface ToolCall {
 }
 
 export interface ExecutionTimelineEvent {
-  type: "tool_start" | "tool_stdout" | "tool_complete" | "status" | "file_change" | "section_gate";
+  type: "tool_start" | "tool_stdout" | "tool_complete" | "status" | "file_change" | "section_gate" | "reasoning" | "text";
   tool?: string;
   content?: string;
   arguments?: string;
@@ -243,6 +252,26 @@ export interface ExecutionTimelineEvent {
    *  never has to maintain a hard-coded label table. */
   section_gate_report?: SectionGateReport;
 }
+
+/**
+ * Unified timeline step — one "chunk" of the assistant's response in
+ * chronological order. Replaces the fixed 3-section layout
+ * (reasoning → tools → text) with an interleaved sequence so the user
+ * can follow each iteration of the agent loop as a cohesive unit:
+ *
+ *   [reasoning 1] → [tools 1] → [reasoning 2] → [tools 2] → [text]
+ *
+ * Built from per-iteration assistant rows in
+ * `mergeConsecutiveAssistantMessages` (reload path) or from real-time
+ * phase tracking in streaming handlers (streaming path). When absent,
+ * `buildFallbackSteps` in `messageParser.ts` synthesises a simple
+ * 3-step list from the legacy `reasoningContent` / `execution_timeline`
+ * / `content` fields.
+ */
+export type TimelineStep =
+  | { kind: "reasoning"; content: string }
+  | { kind: "tools"; events: ExecutionTimelineEvent[] }
+  | { kind: "text"; content: string };
 
 /** 2026-06-29 (C3 marker protocol): wire-mirror of the backend's
  *  `SectionGateReport`. Field names match the `serde(rename=...)`

@@ -106,3 +106,38 @@
     opacity: 0.6;
   }
 }
+
+/* ── Shimmer variant (2026-07-11) ───────────────────────────────
+   "正在回复" 流光扫过动效。
+   - 文字本身用 --color-text-muted 作 baseline
+   - 在文字前景叠加一层 linear-gradient mask, 从 -150% 扫到 +150%
+   - 循环 1.8s, ease-in-out, 无蓝紫, 纯灰/锌系
+   - 严格只在 StreamingBubble 内部渲染（isStreaming=true）,
+     历史消息重载时 isStreaming=false → 根本不渲染此组件,
+     自然满足主人"恢复历史不显示"的边界. */
+.inline-thinking-dot--shimmer .inline-thinking-dot__hint {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-text-muted, #6b7280) 0%,
+    var(--color-text-muted, #6b7280) 35%,
+    var(--color-text-primary, #e5e7eb) 50%,
+    var(--color-text-muted, #6b7280) 65%,
+    var(--color-text-muted, #6b7280) 100%
+  );
+  background-size: 250% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: h-text-shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes h-text-shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -50% 0; }
+}
+
+.inline-thinking-dot--shimmer {
+  margin-left: 0; /* shimmer 变体不带点, 收紧与前文的距离 */
+}

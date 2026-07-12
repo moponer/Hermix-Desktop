@@ -19,8 +19,8 @@ interface InlineThinkingDotProps {
   hint?: string;
   /** 安静模式：脉冲减慢、透明度降低 */
   quiet?: boolean;
-  /** 视觉变体：default 正常脉冲，warning 慢速琥珀脉冲 */
-  variant?: "default" | "warning";
+  /** 视觉变体：default 正常脉冲，warning 慢速琥珀脉冲，shimmer 流光扫过（文字上有一道光从左到右划过，最适合"正在回复"） */
+  variant?: "default" | "warning" | "shimmer";
   /** 尺寸：sm 用于 meta 行，md 用于占位区 */
   size?: "sm" | "md";
   /** 包裹元素的自定义 className */
@@ -46,6 +46,7 @@ function InlineThinkingDotImpl({
     asGap ? "inline-thinking-dot--gap" : "inline-thinking-dot--cursor",
     quiet ? "inline-thinking-dot--quiet" : "",
     variant === "warning" ? "inline-thinking-dot--warning" : "",
+    variant === "shimmer" ? "inline-thinking-dot--shimmer" : "",
     size === "sm" ? "inline-thinking-dot--sm" : "",
     className ?? "",
   ]
@@ -59,12 +60,15 @@ function InlineThinkingDotImpl({
       aria-live="polite"
       aria-label={ariaLabel ?? hint ?? "思考中"}
       data-thinking-mode={asGap ? "gap" : "cursor"}
+      data-variant={variant}
     >
-      <span className="inline-thinking-dot__dots" aria-hidden="true">
-        <span className="inline-thinking-dot__dot" />
-        <span className="inline-thinking-dot__dot" />
-        <span className="inline-thinking-dot__dot" />
-      </span>
+      {variant !== "shimmer" && (
+        <span className="inline-thinking-dot__dots" aria-hidden="true">
+          <span className="inline-thinking-dot__dot" />
+          <span className="inline-thinking-dot__dot" />
+          <span className="inline-thinking-dot__dot" />
+        </span>
+      )}
       {hint && !hideHint && (
         <span className="inline-thinking-dot__hint">{hint}</span>
       )}

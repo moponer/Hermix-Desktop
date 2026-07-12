@@ -1,12 +1,10 @@
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
 import {
-  Activity,
-  GitBranch,
   PanelRight,
   Pencil,
   Lock,
 } from "lucide-react";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, TimelineStep } from "../types";
 import type { CompressMethod } from "../utils/imageCompressor";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
 import type { CompactionStatus } from "./CompactionStatusBanner";
@@ -100,12 +98,18 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
       j += 1;
     }
     // Filter out empty placeholders.
+    // 2026-07-11: Added `reasoningContent` check — rows that only
+    // have reasoning (no content, no tools, no timeline) were being
+    // silently dropped, causing thinking blocks and body text (when
+    // the LLM didn't close its <think> tag, the server stores
+    // everything in reasoning_content with empty content) to
+    // disappear on reload.
     const nonEmpty = run.filter(
       (r) =>
         (r.content && r.content.trim().length > 0) ||
         (r.tool_calls && r.tool_calls.length > 0) ||
-        // Anything else with non-empty metadata that downstream renders.
-        (r.execution_timeline && r.execution_timeline.length > 0)
+        (r.execution_timeline && r.execution_timeline.length > 0) ||
+        (r.reasoningContent && r.reasoningContent.trim().length > 0)
     );
     if (nonEmpty.length === 0) {
       // Whole run is empty placeholders → drop entirely.
@@ -113,7 +117,42 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
       continue;
     }
     if (nonEmpty.length === 1) {
-      out.push(nonEmpty[0]);
+      // 2026-07-11: Build unified_steps even for single-row cases
+      // so the rendering path is identical between single-row and
+      // multi-row merges. Without this, resolveSteps falls back to
+      // buildFallbackSteps which may produce a different step order.
+      const single = nonEmpty[0];
+      const singleSteps: TimelineStep[] = [];
+      const reasoning = (single.reasoningContent || "").replace(/<\/?think>/gi, "").trim();
+      const toolEvents = (single.execution_timeline || []).filter(
+        (e) => e.type === "tool_start" || e.type === "tool_stdout" || e.type === "tool_complete",
+      );
+      const hasBody = !!(single.content && single.content.trim());
+      // When content has body text: show reasoning as reasoning block + body as text.
+      // When content is empty but reasoning has text: the LLM didn't close its
+      // <think> tag, so ALL text (including body) is in reasoningContent.
+      // Show it as body text (not reasoning block) to match the streaming
+      // onDone fallback behavior.
+      if (hasBody) {
+        if (reasoning) {
+          singleSteps.push({ kind: "reasoning", content: reasoning });
+        }
+        if (toolEvents.length > 0) {
+          singleSteps.push({ kind: "tools", events: toolEvents });
+        }
+        singleSteps.push({ kind: "text", content: single.content });
+      } else if (reasoning) {
+        if (toolEvents.length > 0) {
+          singleSteps.push({ kind: "tools", events: toolEvents });
+        }
+        singleSteps.push({ kind: "text", content: reasoning });
+      } else if (toolEvents.length > 0) {
+        singleSteps.push({ kind: "tools", events: toolEvents });
+      }
+      out.push({
+        ...single,
+        unified_steps: singleSteps.length > 0 ? singleSteps : single.unified_steps,
+      });
       i = j;
       continue;
     }
@@ -132,6 +171,56 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
       .map((r) => r.reasoningContent || "")
       .filter((c) => c.length > 0)
       .join("\n\n");
+    // Build unified timeline steps from per-iteration data.
+    // Each assistant row represents one LLM iteration with its own
+    // reasoning / tools / text. By iterating in order and pushing
+    // steps per-row, we preserve the chronological flow:
+    //   [reasoning 1] → [tools 1] → [reasoning 2] → [tools 2] → [text]
+    //
+    // CRITICAL: For intermediate rows, reasoning → reasoning block and
+    // content → text block are INDEPENDENT. Do NOT show intermediate
+    // rows' reasoning as body text — that would display thinking
+    // fragments as body text (the "思考过程的片段" bug).
+    //
+    // Only for the LAST row: if content is empty but reasoning has text,
+    // the LLM didn't close its <think> tag so all text (including body)
+    // is in reasoningContent. Show it as body text (matching the
+    // streaming onDone fallback).
+    const unifiedSteps: TimelineStep[] = [];
+    for (let ri = 0; ri < nonEmpty.length; ri++) {
+      const r = nonEmpty[ri];
+      const isLastRow = ri === nonEmpty.length - 1;
+      const reasoning = (r.reasoningContent || "").replace(/<\/?think>/gi, "").trim();
+      const toolEvents = (r.execution_timeline || []).filter(
+        (e) => e.type === "tool_start" || e.type === "tool_stdout" || e.type === "tool_complete",
+      );
+      const hasBody = !!(r.content && r.content.trim());
+      if (hasBody) {
+        if (reasoning) {
+          unifiedSteps.push({ kind: "reasoning", content: reasoning });
+        }
+        if (toolEvents.length > 0) {
+          unifiedSteps.push({ kind: "tools", events: toolEvents });
+        }
+        unifiedSteps.push({ kind: "text", content: r.content });
+      } else if (isLastRow && reasoning) {
+        // Fallback: last row has no content but has reasoning —
+        // unclosed <think> tag, show reasoning as body text.
+        if (toolEvents.length > 0) {
+          unifiedSteps.push({ kind: "tools", events: toolEvents });
+        }
+        unifiedSteps.push({ kind: "text", content: reasoning });
+      } else {
+        // Intermediate row with no content: reasoning is genuine
+        // thinking, show as reasoning block (not body text).
+        if (reasoning) {
+          unifiedSteps.push({ kind: "reasoning", content: reasoning });
+        }
+        if (toolEvents.length > 0) {
+          unifiedSteps.push({ kind: "tools", events: toolEvents });
+        }
+      }
+    }
     // Find the last non-empty stopReason in the run (prefer the final
     // message's reason since the server sets it on the last persisted row).
     const mergedStopReason = nonEmpty
@@ -154,6 +243,7 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
         mergedReasoning.length > 0
           ? mergedReasoning
           : last.reasoningContent,
+      unified_steps: unifiedSteps.length > 0 ? unifiedSteps : undefined,
       stopReason: mergedStopReason ?? last.stopReason,
     });
     i = j;
@@ -168,6 +258,17 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
  *   "所有的消息应该是在模型名称下面的，也就是说每次 agentloop
  *    都应该只在一个模型头像名称下显示，中间不会再出现，除非下一次
  *    的对话或下一次用户发送消息后，才会转入在一个 agentloop"
+ *
+ * v18 + Round 24 (2026-07-08) — 头像缺失修复：
+ *   agent loop 内的**第一条** assistant（紧跟 user）已经显示了头像，
+ *   后面的 assistant 不再显示。但 streaming / merge 流程会让第一
+ *   条 assistant 被 `mergeConsecutiveAssistantMessages` 当成空
+ *   placeholder 过滤掉，剩下唯一的"merged assistant"在 `messagesWithStream`
+ *   里渲染 —— 此时 `findIndex` 找到的是合并组**最后**一条的 idx，
+ *   它的前一个非 tool 消息就是合并组**第一**条 assistant（也是
+ *   assistant），旧规则会误判为"loop 内非起点"。修复：向前跳过
+ *   **连续的 assistant 消息**（不只是 tool），只到第一个
+ *   非 {tool, assistant} 的消息，再判断是不是 user。
  *
  * 规则：
  *   · agent loop 的边界 = 用户消息 (`role: "user"`)
@@ -190,10 +291,26 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
 function shouldShowAssistantHeader(idx: number, messages: ChatMessage[]): boolean {
   const msg = messages[idx];
   if (!msg || msg.role !== "assistant") return false;
-  // 向前跳过 tool 消息（同一 loop 内的 tool 不算边界）
+  // Skip backward over ALL messages that belong to the same agent-loop
+  // turn: assistant (empty or not), tool, approval, clarify.
+  //
+  // The server persists one assistant row per LLM iteration. A single
+  // user turn can produce: [user, assistant1(tool_calls), tool,
+  // assistant2(final text)]. After wireArrayToChatMessages merges the
+  // tool row into assistant1's timeline, the array becomes [user,
+  // assistant1, assistant2]. mergeConsecutiveAssistantMessages then
+  // merges them into one message (using assistant2's id). When we look
+  // up assistant2 in session.messages, its prev is assistant1 — not a
+  // user — so the header would be suppressed. Skipping ALL assistant
+  // messages (not just empty ones) ensures we find the turn boundary.
   let prevIdx = idx - 1;
-  while (prevIdx >= 0 && messages[prevIdx]?.role === "tool") {
-    prevIdx--;
+  while (prevIdx >= 0) {
+    const r = messages[prevIdx]?.role;
+    if (r === "assistant" || r === "tool" || r === "approval" || r === "clarify") {
+      prevIdx--;
+    } else {
+      break;
+    }
   }
   const effectivePrev = prevIdx >= 0 ? messages[prevIdx] : null;
   // agent loop 起点 = 紧跟 user 消息的 assistant
@@ -228,8 +345,6 @@ import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
 import { getSessionArchiveRefs, getAvailableTools, updateSessionMetadata, type ArchiveRef, type ToolDescriptor } from "../api";
 import { ArchiveRefsGraph } from "./ArchiveRefsGraph";
-import { SessionTree } from "./SessionTree";
-import { TracePanel } from "./TracePanel";
 import type { Session } from "../types";
 import type { ChatOverrides } from "../hooks/useStreamChat";
 const mascotUrl = "/mascot-256.png";
@@ -703,18 +818,10 @@ function ModelStatusBar({
   title,
   rightOpen,
   onToggleRight,
-  traceOpen,
-  lineageOpen,
-  onToggleTrace,
-  onToggleLineage,
 }: {
   title?: string;
   rightOpen?: boolean;
   onToggleRight?: () => void;
-  traceOpen?: boolean;
-  lineageOpen?: boolean;
-  onToggleTrace?: () => void;
-  onToggleLineage?: () => void;
 }) {
   if (!title) return null;
   // Truncate long titles to keep the bar compact.
@@ -723,39 +830,11 @@ function ModelStatusBar({
   // "对话界面默认就是有展开的按钮就行了，你管他有没有产物？"
   // 其他页面（agents/experts/settings）没传 onToggleRight，自然不显示。
   const showRightToggle = !!onToggleRight;
-  // 左侧两个折叠图标：会话谱系 + CUA 操作时间线。
-  // 通过 props 下推展开态，避免子组件重复维护 (Round 4, 2026-07-06)。
   return (
     <div
       className="px-4 sm:px-6 pt-3 pb-2 flex items-center gap-2 rounded-t-xl"
       style={{ color: "var(--color-text-primary)" }}
     >
-      {onToggleLineage && (
-        <button
-          onClick={onToggleLineage}
-          className={`panel-toggle-chip ${lineageOpen ? "panel-toggle-chip--active" : ""}`}
-          title={lineageOpen ? "关闭会话谱系" : "打开会话谱系"}
-          aria-label="切换会话谱系"
-          aria-expanded={lineageOpen ? "true" : "false"}
-          data-lineage-open={lineageOpen ? "true" : "false"}
-        >
-          <GitBranch size={12} className="shrink-0" />
-          <span>谱系</span>
-        </button>
-      )}
-      {onToggleTrace && (
-        <button
-          onClick={onToggleTrace}
-          className={`panel-toggle-chip ${traceOpen ? "panel-toggle-chip--active" : ""}`}
-          title={traceOpen ? "关闭 CUA 操作时间线" : "打开 CUA 操作时间线"}
-          aria-label="切换 CUA 操作时间线"
-          aria-expanded={traceOpen ? "true" : "false"}
-          data-trace-open={traceOpen ? "true" : "false"}
-        >
-          <Activity size={12} className="shrink-0" />
-          <span>操作链</span>
-        </button>
-      )}
       <span
         className="truncate flex-1 min-w-0"
         style={{
@@ -804,6 +883,12 @@ interface ChatViewProps {
    */
   onTodoPatch?: (id: string, patch: { status?: string; title?: string; priority?: string }) => Promise<unknown>;
   /**
+   * Shared ref for optimistic todo toggles (2026-07-08).
+   * Passed through to TodoListCard; checked in App.tsx's onTodoChange
+   * handler to skip stale WS echoes during rapid-toggle races.
+   */
+  justPatchedTodoRef?: React.MutableRefObject<Set<string>>;
+  /**
    * @deprecated The actively-streaming assistant message is routed to
    * `<StreamingBubble />` from inside the message loop (see the body
    * below). The parent no longer needs to thread the streamed text
@@ -824,6 +909,8 @@ interface ChatViewProps {
   onOpenExperts?: () => void;
   /** 跳转到「设置」页（模型未配置时点击 chip 用） */
   onOpenSettings?: () => void;
+  /** 2026-07-08 (user): 已选工作区时点目录 → 打开右栏文件浏览器切到该目录 */
+  onOpenComputer?: () => void;
   onUndo?: () => void;
   onRestore?: () => void;
   /** 停止当前流式生成 */
@@ -941,6 +1028,7 @@ export function ChatView({
   isStreaming,
   onOpenExperts,
   onOpenSettings,
+  onOpenComputer,
   onUndo,
   onRestore,
   onStop,
@@ -948,7 +1036,7 @@ export function ChatView({
   onWorkspaceChange,
   rightOpen,
   onToggleRight,
-  todoGroups, onTodoPatch,
+  todoGroups, onTodoPatch, justPatchedTodoRef,
   onApproveApproval,
   onDenyApproval,
   onPathClick,
@@ -1078,145 +1166,6 @@ export function ChatView({
   // cleans some rows up on disk.
   const [archiveRefs, setArchiveRefs] = useState<ArchiveRef[]>([]);
   const [archiveOpen, setArchiveOpen] = useState(false);
-  // Stage 4.2 — Computer-use action timeline. Default collapsed so
-  // the main chat area stays uncluttered for users who never invoke
-  // CUA. The banner itself only appears once a session has actually
-  // produced at least one event (TracePanel collapses to null when
-  // the response is `missing: true` AND empty).
-  // 2026-07-06 Round 7: 两 chip 互斥 — 展开一个自动收起另一个, 避免双 panel 抢占视口.
-  // 通过 toggle handler 联动, 不在 useState setter 里用旧值读 (避免闭包陷阱).
-  const [traceOpen, setTraceOpen] = useState(false);
-  // 2026-07-05: session lineage tree for compressed session ancestry tracking.
-  const [lineageOpen, setLineageOpen] = useState(false);
-  // 2026-07-06 Round 11: 浮层动画 — 关闭时设 closing=true 让 CSS 播 transform 退出动画,
-  // 250ms 后再真正卸载 (CSS 0.22s + 30ms buffer).
-  const [closingTrace, setClosingTrace] = useState(false);
-  const [closingLineage, setClosingLineage] = useState(false);
-  const closeTraceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const closeLineageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // 关闭时先启动退出动画, 延迟后再真正关闭; 打开时立即.
-  function closeWithAnimation(
-    setOpen: (v: boolean) => void,
-    setClosing: (v: boolean) => void,
-    timerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
-    closeOther?: () => void,
-  ) {
-    // 如果对面是展开的, 先关对面 (立即, 不带动画)
-    closeOther?.();
-    setClosing(true);  // 播放退出动画
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      setOpen(false);
-      setClosing(false);
-      timerRef.current = null;
-    }, 250);
-  }
-
-  function openWithAnimation(
-    setOpen: (v: boolean) => void,
-    setClosing: (v: boolean) => void,
-    timerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
-  ) {
-    // 清可能驻留的关闭 timer
-    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
-    setClosing(false);
-    setOpen(true);
-  }
-
-  function handleToggleLineage() {
-    if (lineageOpen) {
-      closeWithAnimation(setLineageOpen, setClosingLineage, closeLineageTimer, () => {
-        // 关 trace (如果有的话)
-        if (traceOpen) {
-          setClosingTrace(true);
-          if (closeTraceTimer.current) clearTimeout(closeTraceTimer.current);
-          closeTraceTimer.current = setTimeout(() => {
-            setTraceOpen(false);
-            setClosingTrace(false);
-            closeTraceTimer.current = null;
-          }, 250);
-        }
-      });
-    } else {
-      // 关 trace 立即 (不带动画)
-      if (traceOpen) {
-        setClosingTrace(true);
-        if (closeTraceTimer.current) clearTimeout(closeTraceTimer.current);
-        closeTraceTimer.current = setTimeout(() => {
-          setTraceOpen(false);
-          setClosingTrace(false);
-          closeTraceTimer.current = null;
-        }, 250);
-      }
-      openWithAnimation(setLineageOpen, setClosingLineage, closeLineageTimer);
-    }
-  }
-
-  function handleToggleTrace() {
-    if (traceOpen) {
-      closeWithAnimation(setTraceOpen, setClosingTrace, closeTraceTimer, () => {
-        if (lineageOpen) {
-          setClosingLineage(true);
-          if (closeLineageTimer.current) clearTimeout(closeLineageTimer.current);
-          closeLineageTimer.current = setTimeout(() => {
-            setLineageOpen(false);
-            setClosingLineage(false);
-            closeLineageTimer.current = null;
-          }, 250);
-        }
-      });
-    } else {
-      if (lineageOpen) {
-        setClosingLineage(true);
-        if (closeLineageTimer.current) clearTimeout(closeLineageTimer.current);
-        closeLineageTimer.current = setTimeout(() => {
-          setLineageOpen(false);
-          setClosingLineage(false);
-          closeLineageTimer.current = null;
-        }, 250);
-      }
-      openWithAnimation(setTraceOpen, setClosingTrace, closeTraceTimer);
-    }
-  }
-
-  // 点击空白区域关闭所有展开的 panel (Round 8, 2026-07-06)
-  function handleBlankClick(e: React.MouseEvent) {
-    const target = e.target as HTMLElement;
-    // 点击以下元素时不关闭: panel 内部 / 消息气泡 / 按钮 / 输入框
-    if (
-      target.closest('.panel-card') ||
-      target.closest('.msg-card') ||
-      target.closest('.tw-msg') ||
-      target.closest('.panel-toggle-chip') ||
-      target.closest('button') ||
-      target.closest('input') ||
-      target.closest('textarea') ||
-      target.closest('select') ||
-      target.closest('a') ||
-      target.closest('[role="button"]')
-    ) return;
-
-    // 空白处 → 关闭所有展开的 panel (带退出动画)
-    if (traceOpen) {
-      setClosingTrace(true);
-      if (closeTraceTimer.current) clearTimeout(closeTraceTimer.current);
-      closeTraceTimer.current = setTimeout(() => {
-        setTraceOpen(false);
-        setClosingTrace(false);
-        closeTraceTimer.current = null;
-      }, 250);
-    }
-    if (lineageOpen) {
-      setClosingLineage(true);
-      if (closeLineageTimer.current) clearTimeout(closeLineageTimer.current);
-      closeLineageTimer.current = setTimeout(() => {
-        setLineageOpen(false);
-        setClosingLineage(false);
-        closeLineageTimer.current = null;
-      }, 250);
-    }
-  }
   useEffect(() => {
     if (!sessionId) {
       setArchiveRefs([]);
@@ -1285,12 +1234,11 @@ export function ChatView({
   //   而且就算去掉 button 的 disabled，v1 的 setWorkspace 包装器也会
   //   `if (workspaceLocked) return;` 静默拒绝 ——popover 里点"不绑定目录"无效。
   //
-  // v2 修法：取消"按 session 锁死"的设计。理由：
-  //   - 后端 send_message 每次都读 `overrides.workspace` 当 tool 的
-  //     `workspace_root`，不是 session start 的快照。Mid-session 切换
-  //     不会破坏后端边界。
-  //   - 取消锁后，popover 里"不绑定目录"和"切换到其他工作区"两个按钮都
-  //     能正常工作（这两个按钮本来就是为 mid-session 切换准备的）。
+  // v3 修法（2026-07-08 最终版）: 取消"按 session 锁死"和"按已选锁死"。
+  //   欢迎界面无论是否选过工作区，按钮都可点 → 弹 popover 列表
+  //   （可重新选择/不绑定）。只有「对话已有消息 / 发送中 / 流式」时
+  //   才锁定——即 Msg1+ 之后不可再改工作区。
+  //   "添加新工作区"选完后 popover 自动关闭（setProjOpen(false)）。
   //
   // 2026-07-07 workspaceLocked + onWorkspaceChange
   const workspaceLocked =
@@ -1506,7 +1454,14 @@ const clearPendingImages = useCallback(() => {
       Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
     const hasTimeline =
       Array.isArray(m.execution_timeline) && m.execution_timeline.length > 0;
-    return hasContent || hasToolCalls || hasTimeline;
+    // 2026-07-11: Also check reasoningContent — when the LLM doesn't
+    // close its <think> tag, the body text is routed to
+    // reasoning_content and content is empty. Without this check,
+    // such messages are silently dropped on reload, causing the
+    // "重启后正文消失" bug.
+    const hasReasoning =
+      typeof m.reasoningContent === "string" && m.reasoningContent.trim().length > 0;
+    return hasContent || hasToolCalls || hasTimeline || hasReasoning;
   }
 
   // Stream-error banner (rendered above the input) auto-clears when
@@ -1514,43 +1469,96 @@ const clearPendingImages = useCallback(() => {
   // or clicks the dismiss (X) button.  The parent also resets
   // streamError on session change.
 
+  // P0-3: Ref-based auto-scroll. Previously the effect depended on
+  // [session?.messages] which fires 30+ times per second during
+  // streaming. Each firing creates a new closure, schedules rAF,
+  // and tears down the previous effect. The rAF coalescing handled
+  // the scroll frequency, but the closure churn was wasteful.
+  //
+  // New approach: a ref tracks "scroll pending", and a single rAF
+  // loop runs for the lifetime of the streaming session. Non-streaming
+  // message additions use a separate lightweight effect.
+  const scrollPendingRef = useRef(false);
+
   useEffect(() => {
-    // rAF-throttled auto-scroll: avoid the "scroll storm" that
-    // happens when streamingText changes 30+ times per second and we
-    // naively call scrollIntoView({behavior:"smooth"}) on every chunk
-    // — each call schedules a fresh ~300ms animation that gets reset
-    // by the next chunk, so the compositor never idles. Coalesce to
-    // one scroll per animation frame.
+    scrollPendingRef.current = true;
+  }, [session?.messages]);
+
+  useEffect(() => {
+    if (!isStreaming) return;
     let raf = 0;
-    const node = messagesEndRef.current;
-    // Always return a cleanup function so React's effect book-keeping
-    // stays symmetric across renders (the previous early `return;`
-    // broke the invariant and made a subsequent "node present" render
-    // try to cancel a rAF the previous effect never registered).
-    const cleanup = () => {
-      if (raf) {
-        cancelAnimationFrame(raf);
-        raf = 0;
-      }
-    };
-    if (!node) return cleanup;
     const tick = () => {
-      // 2026-07-06: only auto-scroll when the user is near the
-      // bottom (within 150px). Browsing history mid-stream no
-      // longer forces the viewport to jump.
-      if (!isNearBottom()) {
-        raf = 0;
-        return;
+      if (scrollPendingRef.current) {
+        scrollPendingRef.current = false;
+        const node = messagesEndRef.current;
+        if (node && isNearBottom()) {
+          node.scrollIntoView({ block: "end" });
+        }
       }
-      // Use 'auto' (instant) — under heavy streaming the smooth
-      // animation never has a chance to finish anyway, and instant
-      // scroll is cheaper to layout/paint.
-      node.scrollIntoView({ block: "end" });
-      raf = 0;
+      raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    return cleanup;
-  }, [session?.messages]);
+    return () => {
+      cancelAnimationFrame(raf);
+    };
+  }, [isStreaming, isNearBottom]);
+
+  // 2026-07-12: Restore-conversation auto-scroll.
+  // On initial mount / F5 reload / session switch, the recovered
+  // history must land with the viewport scrolled to the last message.
+  // The pre-existing effect relied on `isNearBottom()`, but a freshly
+  // mounted container has `scrollTop = 0` and `messagesEndRef.current`
+  // is null until React commits — so the call fired before the DOM
+  // existed and the scroll never happened. Two changes:
+  //   (a) `justRestoredRef` latches true on every session id change
+  //       and forces a single unconditional scroll on the next message
+  //       count change.
+  //   (b) `hasUserScrolledUpRef` (driven by `onScroll` below) blocks
+  //       the force-scroll once the user has navigated into history,
+  //       so we don't yank them back to the bottom on every new chunk.
+  const prevSessionIdRef = useRef<string | undefined>(undefined);
+  const justRestoredRef = useRef(false);
+  const hasUserScrolledUpRef = useRef(false);
+
+  useEffect(() => {
+    const currentId = session?.id;
+    if (prevSessionIdRef.current === currentId) return;
+    prevSessionIdRef.current = currentId;
+    hasUserScrolledUpRef.current = false;
+    justRestoredRef.current = true;
+  }, [session?.id]);
+
+  const handleContainerScroll = useCallback(() => {
+    // After a programmatic scrollIntoView, isNearBottom() is true and
+    // this flag is cleared naturally on the same onScroll tick — no
+    // need to suppress the event.
+    hasUserScrolledUpRef.current = !isNearBottom();
+  }, [isNearBottom]);
+
+  // Non-streaming: scroll on message count change (new message, session switch).
+  // Three branches:
+  //   1. `justRestoredRef` true (initial mount / reload / session switch):
+  //      unconditional force-scroll, ignore user's prior scroll position
+  //      because there is no prior session in this container.
+  //   2. User has scrolled up to browse history: stay put, do not disturb.
+  //   3. Otherwise (user is still near bottom): follow the new content.
+  useEffect(() => {
+    if (isStreaming) return;
+    const node = messagesEndRef.current;
+    if (!node) return;
+    if (!justRestoredRef.current && hasUserScrolledUpRef.current) return;
+
+    // Double rAF: first frame lets React commit the message DOM, second
+    // frame lets images / web fonts settle so `scrollHeight` is final.
+    // Without this, restoring a long history lands at the wrong offset
+    // because the container is still growing as child rows mount.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        node.scrollIntoView({ block: "end" });
+        justRestoredRef.current = false;
+      });
+    });
+  }, [session?.messages?.length, isStreaming, isNearBottom]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -1558,6 +1566,49 @@ const clearPendingImages = useCallback(() => {
       textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + "px";
     }
   }, [input]);
+
+  // ── Streaming row detection & message pipeline ──────────────
+  // MUST be above all early returns to comply with React Hooks rules.
+  // When session is null or messages is empty, the memo safely
+  // returns [] — the value is simply unused by the early-return paths.
+  const streamingEntry =
+    isStreaming && session
+      ? (() => {
+          for (let i = session.messages.length - 1; i >= 0; i--) {
+            const m = session.messages[i];
+            if (m.role === "assistant") {
+              return { id: m.id, msg: m };
+            }
+          }
+          return null;
+        })()
+      : null;
+  const streamingAssistantId = streamingEntry?.id ?? null;
+  const streamingMsg = streamingEntry?.msg ?? null;
+  // P0-2: Wrap the entire message-processing pipeline in useMemo so
+  // it only recomputes when the messages array or streaming state
+  // actually changes. Previously this ran on every render — including
+  // every streaming chunk — even though the intermediate values
+  // (filter, merge, splice) are O(n) and produce the same result
+  // when only unrelated state (e.g. input text) changed.
+  const messagesWithStream = useMemo<ChatMessage[]>(() => {
+    const nonStreamingRaw = streamingAssistantId
+      ? session?.messages.filter((m) => m.id !== streamingAssistantId) ?? []
+      : session?.messages ?? [];
+    const visibleNonStreaming = nonStreamingRaw.filter(isRowRenderable);
+    const restMsgs = mergeConsecutiveAssistantMessages(visibleNonStreaming);
+    if (!streamingAssistantId || !streamingMsg) return restMsgs;
+    const rawIdx = session?.messages.findIndex((m) => m.id === streamingAssistantId) ?? -1;
+    if (rawIdx < 0) return [...restMsgs, streamingMsg];
+    const restIds = new Set(restMsgs.map((m) => m.id));
+    let insertIdx = 0;
+    for (let i = 0; i < rawIdx; i++) {
+      if (restIds.has(session!.messages[i].id)) insertIdx++;
+    }
+    const result = [...restMsgs];
+    result.splice(insertIdx, 0, streamingMsg);
+    return result;
+  }, [session?.messages, streamingAssistantId, streamingMsg]);
 
   const handleSubmit = async () => {
     const trimmed = input.trim();
@@ -1805,6 +1856,7 @@ const clearPendingImages = useCallback(() => {
               permissionLevel={permissionLevel} setPermissionLevel={setPermissionLevel}
               onOpenExperts={onOpenExperts}
               onOpenSettings={onOpenSettings}
+              onOpenComputer={onOpenComputer}
               onUndo={onUndo}
               onRestore={onRestore}
               onStop={onStop}
@@ -1844,109 +1896,12 @@ const clearPendingImages = useCallback(() => {
     );
   }
 
-  // Route the actively-streaming assistant row to `<StreamingBubble />`
-  // (cheap path: no Prism, no execution_timeline) instead of letting it
-  // hit the full `<MemoMessageBubble />` on every chunk. The other rows
-  // (user / frozen-assistant / approval / clarify / historical) keep
-  // going through MemoMessageBubble unchanged. When the stream ends
-  // (`isStreaming` flips to false in `useStreamChat::settle`) the same
-  // message re-renders via MemoMessageBubble and Prism/syntax-
-  // highlighting kicks in.
-  //
-  // ── Bug fix (2026-06-10) ──────────────────────────────────────
-  // The previous version of this block looked up the streaming
-  // message *id* from the raw `session.messages` array (correct —
-  // preserves the `m.content === ""` placeholder from the moment the
-  // user hits send) but then tried to find the corresponding object
-  // inside `mergedMessages`, which is built from `visibleMessagesWithError`
-  // — and that pipeline drops any assistant message with empty
-  // content + no tool_calls + no execution_timeline. The streaming
-  // placeholder is *exactly* that shape, so `findIndex` always
-  // returned -1, `streamingMsg` stayed null, and the user saw the
-  // `ThoughtStreamCard "正在思考…"` forever (StreamingBubble never
-  // mounted). Worse: the only way out of the loop was a chunk making
-  // `m.content` non-empty, but if the server hit a slow / stuck
-  // first-token latency, the user got a frozen UI with no signal.
-  //
-  // The fix is to look up the *message object* directly from the raw
-  // `session.messages` (alongside its id) and exclude it from the
-  // `restMsgs` we hand to `<MemoMessageBubble>` — bypassing the
-  // empty-row filter that the visibleMessages pipeline needs for
-  // post-stream cleanup. The empty placeholder now correctly drives
-  // `<StreamingBubble text="" />` (which renders the "正在生成…"
-  // header with no body) from t=0, and switches to
-  // `<StreamingBubble text="你" />` on the first chunk without any
-  // visible remount.
-  const streamingEntry =
-    isStreaming && session
-      ? (() => {
-          for (let i = session.messages.length - 1; i >= 0; i--) {
-            const m = session.messages[i];
-            if (m.role === "assistant") {
-              return { id: m.id, msg: m };
-            }
-          }
-          return null;
-        })()
-      : null;
-  const streamingAssistantId = streamingEntry?.id ?? null;
-  // Exclude the streaming row from the merge pipeline so the empty
-  // placeholder is NOT dropped (see bug note above). The exclusion is
-  // identity-based (id match) so an approval/clarify-switch creating
-  // a fresh assistant placeholder mid-stream will be picked up by
-  // the raw-message scan on the next render.
-  const nonStreamingRaw = streamingAssistantId
-    ? session?.messages.filter((m) => m.id !== streamingAssistantId) ?? []
-    : session?.messages ?? [];
-  // Run the same empty-row filter on the non-streaming slice so
-  // post-stream stale placeholders from a prior interrupted run
-  // don't show as empty gray bubbles. The streaming row itself is
-  // intentionally exempt — see above.
-  const visibleNonStreaming = nonStreamingRaw.filter(isRowRenderable);
-  const restMsgs = mergeConsecutiveAssistantMessages(visibleNonStreaming);
-  const streamingMsg = streamingEntry?.msg ?? null;
-  // We render the streaming assistant message *inline* in the message
-  // loop rather than at the bottom of the scroll. Reason: the agent
-  // can call a tool before it has streamed any visible reply text, in
-  // which case the user wants the visual order
-  //   [user message] → [tool card: 已写入] → [assistant text "…"]
-  // not
-  //   [user message] → [tool card] → [empty]  ← re-mounts once text arrives
-  // Inline rendering keeps the position stable and the tool card sits
-  // *above* any assistant text that streams in afterward. The streaming
-  // message is already excluded from `restMsgs` (line 741-743) and from
-  // the empty-row filter; we splice it back in at its original position.
-  const messagesWithStream: ChatMessage[] = (() => {
-    if (!streamingAssistantId || !streamingMsg) return restMsgs;
-    // Find the streaming assistant's position in the *raw* session
-    // messages (which still contain it). Tool messages are spliced in
-    // AFTER the assistant placeholder by `onToolStart` (App.tsx), so
-    // the streaming assistant must appear *before* its linked tools —
-    // not at the end. We count how many `restMsgs` entries were
-    // originally positioned before the streaming assistant in the raw
-    // array and insert at that index.
-    const rawIdx = session?.messages.findIndex((m) => m.id === streamingAssistantId) ?? -1;
-    if (rawIdx < 0) return [...restMsgs, streamingMsg];
-    const restIds = new Set(restMsgs.map((m) => m.id));
-    let insertIdx = 0;
-    for (let i = 0; i < rawIdx; i++) {
-      if (restIds.has(session!.messages[i].id)) insertIdx++;
-    }
-    const result = [...restMsgs];
-    result.splice(insertIdx, 0, streamingMsg);
-    return result;
-  })();
-
   return (
-    <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ background: "var(--color-bg-primary)" }} onClick={handleBlankClick}>
+    <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ background: "var(--color-bg-primary)" }}>
       <ModelStatusBar
         title={session?.title}
         rightOpen={rightOpen}
         onToggleRight={onToggleRight}
-        traceOpen={traceOpen}
-        lineageOpen={lineageOpen}
-        onToggleTrace={handleToggleTrace}
-        onToggleLineage={handleToggleLineage}
       />
       {archiveRefs.length > 0 && (
         <ArchiveRefsBanner
@@ -1972,32 +1927,14 @@ const clearPendingImages = useCallback(() => {
                 groupTitle={g.groupTitle}
                 itemsById={g.itemsById}
                 onPatch={onTodoPatch}
+                justPatchedRef={justPatchedTodoRef}
               />
             ))}
           </div>
         </div>
       )}
-      {/* Round 11 (2026-07-06): 浮层面板 — 绝对定位，不挤压消息列表 */}
-      {(traceOpen || closingTrace) && (
-        <div className={`panel-overlay ${!closingTrace ? 'panel-overlay--open' : ''}`} onClick={(e) => e.stopPropagation()}>
-          <div className={`panel-overlay__drawer ${!closingTrace ? 'panel-overlay__drawer--open' : ''}`}>
-            <div className="panel-card">
-              <TracePanel sessionId={sessionId!} />
-            </div>
-          </div>
-        </div>
-      )}
-      {(lineageOpen || closingLineage) && (
-        <div className={`panel-overlay ${!closingLineage ? 'panel-overlay--open' : ''}`} onClick={(e) => e.stopPropagation()}>
-          <div className={`panel-overlay__drawer ${!closingLineage ? 'panel-overlay__drawer--open' : ''}`}>
-            <div className="panel-card">
-              <SessionTree sessionId={sessionId!} />
-            </div>
-          </div>
-        </div>
-      )}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
-        <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-6">
+      <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
+        <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-5">
           {messagesWithStream.map((msg, idx) => {
             if (streamingAssistantId && msg.id === streamingAssistantId && streamingMsg) {
               // Streaming placeholder shares the same header rule as
@@ -2024,25 +1961,26 @@ const clearPendingImages = useCallback(() => {
                   statusText={streamingStatus}
                   showHeader={showStreamHeader}
                   reasoningContent={streamingMsg.reasoningContent}
+                  executionTimeline={streamingMsg.execution_timeline}
+                  unifiedSteps={streamingMsg.unified_steps}
                 />
               );
             }
-            // showHeader rule (v18): render the avatar/name/stop-chip
-            // on the FIRST assistant message after a `user` message
-            // (i.e. the start of an agent loop). Subsequent assistant
-            // messages within the same loop — including ones that
-            // come after a tool, an approval card, or a clarify card
-            // — share the same header and the body text just
-            // continues below the first bubble's avatar column.
+            // showHeader rule: render the avatar/name/stop-chip on the
+            // FIRST assistant message after a `user` message (i.e. the
+            // start of an agent loop). Subsequent assistant messages
+            // within the same loop — including ones that come after a
+            // tool, an approval card, or a clarify card — share the
+            // same header and the body text just continues below the
+            // first bubble's avatar column.
             //
-            // Note: we compute `shouldShowAssistantHeader` from the
-            // RAW `session.messages` (not `messagesWithStream`) so the
-            // streaming placeholder being spliced in/out of the loop
-            // doesn't shift indices and change the answer.
-            const rawIdx = session?.messages.findIndex((m) => m.id === msg.id) ?? -1;
-            const headerFromSession = rawIdx >= 0
-              ? shouldShowAssistantHeader(rawIdx, session!.messages)
-              : (msg.role !== "assistant" || shouldShowAssistantHeader(idx, messagesWithStream));
+            // We compute shouldShowAssistantHeader from messagesWithStream
+            // (the merged array). Since shouldShowAssistantHeader now
+            // skips ALL same-turn roles (assistant/tool/approval/clarify),
+            // it correctly finds the turn boundary (user message) even
+            // when mergeConsecutiveAssistantMessages has collapsed
+            // multiple server-persisted assistant rows into one.
+            const showHeader = msg.role !== "assistant" || shouldShowAssistantHeader(idx, messagesWithStream);
             return (
               <MemoMessageBubble
                 key={msg.id}
@@ -2051,7 +1989,7 @@ const clearPendingImages = useCallback(() => {
                 onApproveApproval={onApproveApproval}
                 onDenyApproval={onDenyApproval}
                 onAnswerClarify={onAnswerClarify}
-                showHeader={headerFromSession}
+                showHeader={showHeader}
                 isStreaming={!!streamingAssistantId && msg.id === streamingAssistantId}
                 onPathClick={onPathClick ? (p) => onPathClick(p) : undefined}
                 expertCutoffAt={expertCutoffAt}
@@ -2132,7 +2070,7 @@ const clearPendingImages = useCallback(() => {
         </div>
       </div>
 
-      <div className="px-3 sm:px-4 pb-4">
+      <div className="px-3 sm:px-4 pb-4 shrink-0">
         <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto">
           {/* M5: ACUI panel — sits directly above the composer so it
               tracks with the input bar visually and never scrolls
@@ -2191,6 +2129,7 @@ const clearPendingImages = useCallback(() => {
             permissionLevel={permissionLevel} setPermissionLevel={setPermissionLevel}
             onOpenExperts={onOpenExperts}
             onOpenSettings={onOpenSettings}
+            onOpenComputer={onOpenComputer}
             onUndo={onUndo}
             onRestore={onRestore}
             onStop={onStop}
@@ -2243,6 +2182,8 @@ interface ComposerProps {
   onOpenExperts?: () => void;
   /** 跳转到「设置」页（模型未配置时点击 chip 用） */
   onOpenSettings?: () => void;
+  /** 2026-07-08 (user): 已选工作区时点目录 → 打开右栏文件浏览器切到该目录 */
+  onOpenComputer?: () => void;
   onPickRecent?: (id: string) => void;
   onUndo?: () => void;
   onRestore?: () => void;
@@ -2640,20 +2581,24 @@ function Composer(p: ComposerProps) {
             )}
           </div>
 
-          {/* Workspace chip — v3 (2026-07-07)：对话开始后锁定。
-              · 未锁定（welcome / 新会话）：accent 色 + 名字，可点开 popover
-                （"添加新工作区 / 工作目录 / 不绑定目录"）。
+          {/* Workspace chip — v4 (2026-07-08)：
+              · 未锁定（welcome / 新会话，无论是否已选工作区）：accent 色 +
+                名字，可点开 popover（"添加新工作区 / 工作目录列表 / 不绑定目录"）。
+                选完工作区后再次点击仍弹此列表，可重新选择或不绑定。
               · 锁定中（messages.length>0 || sending || isStreaming）：灰度
                 禁用样式 + cursor-not-allowed + onClick 短路 + title 提示
-                "对话已开始，工作区已锁定"。Lock 图标取代 FolderOpen，避免
-                用户误以为可点击。
-              · 锁定源是 ChatView 算的 workspaceLocked（详见 setWorkspace
-                useCallback 上方注释），不依赖 Boolean(workspace) 以避免
-                v1 的 stale localStorage 假锁问题。 */}
+                "对话进行中，工作区已锁定"。Lock 图标取代 FolderOpen。
+              · 选择工作区后 popover 自动收起。 */}
           <div className="relative">
             <button
               ref={projTriggerRef as React.RefObject<HTMLButtonElement>}
-              onClick={() => { if (!p.workspaceLocked) projToggle(); }}
+              onClick={() => {
+                if (p.workspaceLocked) return;
+                // 2026-07-08 (user, 修订 v3): 无论是否已选工作区，点目录都弹
+                // chooser 列表（可重新选/不绑定）。只在「对话已开始」时
+                // workspaceLocked=true 禁用。
+                projToggle();
+              }}
               disabled={p.workspaceLocked}
               className={`flex items-center shrink-0 text-[12.5px] transition-colors rounded-md ${
                 toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
@@ -2666,9 +2611,9 @@ function Composer(p: ComposerProps) {
               }`}
               title={
                 p.workspaceLocked
-                  ? "对话已开始，工作区已锁定"
+                  ? "对话进行中，工作区已锁定"
                   : p.activeWorkspace
-                  ? `已限制到：${p.activeWorkspace.path}（点击可切换 / 不绑定）`
+                  ? `已限制到：${p.activeWorkspace.path}（点击可重新选择）`
                   : "限制当前对话的读写范围（推荐）"
               }
             >
@@ -2686,7 +2631,7 @@ function Composer(p: ComposerProps) {
             {projOpen && (
               <PopoverShell containerRef={projContainerRef} triggerRef={projTriggerRef} width="sm" side="top">
                 <button
-                  onClick={() => { p.onAddWorkspace(); }}
+                  onClick={async () => { await p.onAddWorkspace(); setProjOpen(false); }}
                   className="flex items-center justify-center gap-1.5 w-full px-2.5 py-2 text-[12px] text-[#0F6E56] hover:bg-[#E1F5EE] rounded-lg transition-colors font-medium"
                   title="选择本地目录添加为工作区"
                 >

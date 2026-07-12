@@ -76,6 +76,10 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;     /* critical: without this, flex/grid children with
+                        overflowing content expand the parent beyond its
+                        allocated height, pushing bottom components (sidebar
+                        status bar, chat input) off-screen. */
   overflow: hidden;
   flex-shrink: 0;
   width: 100%;       /* fill parent wrapper (the wrapper controls the actual width) */
@@ -172,13 +176,6 @@
 .titlebar-btn:hover { background: var(--color-bg-hover); color: var(--color-text-secondary); }
 .titlebar-btn-active { color: var(--color-accent); background: var(--color-accent-soft); }
 .titlebar-btn-danger:hover { background: var(--color-error); color: #ffffff; }
-/* Round 4, 2026-07-06: 左侧 panel 折叠按钮的展开态高亮。
-   ModelStatusBar 用 data-trace-open / data-lineage-open 标记 active。 */
-.titlebar-btn[data-trace-open="true"],
-.titlebar-btn[data-lineage-open="true"] {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
-}
 
 /* (品牌已上移至 TitleBar,Sidebar 不再单独显示 — 避免双层标题栏) */
 
@@ -215,29 +212,33 @@
 
 /* ════════════════════════════════════════════════════════════════════
    § 5.  SECTION HEADER (collapsible group label)
-   ════════════════════════════════════════════════════════════════════ */
+   ════════════════════════════════════════════════════════════════════
+
+   Hierarchy level 1 — the faintest, smallest "label" tier.
+   Visually separates major sections (Workspaces / Ungrouped / Chat Rooms). */
 
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 4px 6px;
+  padding: 14px 4px 6px;
 }
 .section-header-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 0 4px;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
   background: transparent;
   border: 0;
   cursor: pointer;
   text-align: left;
   transition: color var(--duration-fast) ease;
 }
-.section-header-toggle:hover { color: var(--color-text-primary); }
+.section-header-toggle:hover { color: var(--color-text-muted); }
 .section-header-icon { color: var(--color-text-faint); flex-shrink: 0; }
 .section-header-count {
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
@@ -369,18 +370,22 @@
 .list-item-action:hover { color: var(--color-error); }
 
 /* ── List group (嵌套 children, e.g. workspace 下的 session) ──
- * v3 主人反馈：工作区下的会话列表不应该有左侧的细分隔线。
- * 视觉上靠左边距 + 缩进就够区分层级了，再加一条线是冗余的。
- * 改成只用缩进（margin-left）表达嵌套关系，去掉 border-left。 */
+ *
+ * Hierarchy level 3 — children indented under their parent row.
+ * 16px left margin + 2px faint accent-left border = clear depth cue.
+ * v3 主人反馈：工作区下的会话列表不应该有左侧的粗分隔线。
+ */
 .list-group {
-  margin-left: 8px;
-  padding-left: 0;
-  border-left: 0;
+  margin-left: 16px;
+  padding-left: 10px;
+  border-left: 1.5px solid var(--color-border-subtle);
   display: flex;
   flex-direction: column;
   gap: 2px;
   margin-top: 2px;
   margin-bottom: 4px;
+  max-height: 240px;
+  overflow-y: auto;
 }
 .list-group-empty {
   font-size: 11px;
@@ -389,11 +394,15 @@
   padding: 4px 8px;
 }
 
-/* ── List row (workspace / chat room header with chevron) ── */
+/* ── List row (workspace / chat room header with chevron) ──
+ *
+ * Hierarchy level 2 — parent folder / category row.
+ * Slightly compact, semi-bold name with accent icon = "this is a container". */
 .list-row {
   display: flex;
   align-items: center;
   border-radius: var(--radius-md);
+  padding: 3px 6px;
   transition: background var(--duration-fast) ease;
 }
 .list-row:hover { background: var(--color-bg-hover); }
@@ -724,6 +733,8 @@
   outline: 0;
   resize: none;
   font-family: inherit;
+  max-height: 192px;
+  overflow-y: auto;
 }
 .composer-textarea::placeholder { color: var(--color-text-faint); }
 .composer-toolbar {
@@ -1104,7 +1115,11 @@
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
 }
 
-/* ── Message flow ── */
+/* ── Message flow (v6 refined 2026-07-10) ──
+   Design principles:
+   • User: right-aligned bubble with accent-soft tint, rounded asymmetric
+   • Assistant: borderless text flow, no card chrome
+   • Vertical rhythm: 20px between turns, 4px within a turn */
 .msg-card {
   background: transparent;
   border: 0;
@@ -1114,14 +1129,18 @@
 }
 .msg-card + .msg-card { margin-top: 20px; }
 .msg-bubble-user {
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  padding: 10px 16px;
+  background: var(--color-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 14%, transparent);
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-2xl);
+  padding: 10px 14px;
   font-size: var(--font-size-body);
-  line-height: 1.72;
+  line-height: 1.68;
   color: var(--color-text-primary);
   max-width: 80%;
+  transition: background var(--duration-fast) ease;
+}
+.msg-bubble-user:hover {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
 /* ── Assistant streaming bubble ──
@@ -1150,7 +1169,7 @@
 
 /* ── Vertical rhythm ── */
 .msg-stack { display: flex; flex-direction: column; }
-.msg-channel { margin-top: 12px; }
+.msg-channel { margin-top: 10px; }
 .msg-channel:first-child { margin-top: 0; }
 
 /* ── Agent activity indicator (post-stream gap) ──
@@ -1333,20 +1352,25 @@
    a link-styled span (blue, hover underline) so the user can
    click it to open the file in the preview popover. ───────────── */
 .file-change-block {
-  padding: 2px 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
 }
 .file-change-header {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12.5px;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--color-text-secondary);
   margin-bottom: 4px;
 }
 .file-change-count {
   color: var(--color-text-faint);
-  font-size: 12.5px;
+  font-size: 11px;
   margin-left: 1px;
+  font-weight: 400;
 }
 .file-change-list {
   list-style: none;
@@ -1364,7 +1388,7 @@
   background: none;
   border: 0;
   padding: 1px 0;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--color-link-soft);
   cursor: pointer;
   text-decoration: none;
@@ -1518,12 +1542,16 @@
 /* ── Task block (compact inline style) ── */
 .tasks-block {
   overflow: visible;
-  padding: 4px 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
 }
 .tasks-progress {
   height: 2px;
   background: var(--color-bg-tertiary);
   overflow: hidden;
+  border-radius: var(--radius-full);
 }
 .tasks-progress-bar {
   height: 100%;
@@ -1941,12 +1969,13 @@
      └────────────────────────────────────────────────────────┘
    ─────────────────────────────────────────────────────────── */
 .tw-msg {
-  margin: 3px 0;
-  border-radius: 0;
+  margin: 2px 0;
+  border-radius: var(--radius-md);
   border: 0;
   background: transparent;
   transition: none;
   overflow: visible;
+  padding-left: 30px;
 }
 .tw-msg:hover { border: 0; box-shadow: none; }
 .tw-msg--run, .tw-msg--err, .tw-msg--ok { border: 0; background: transparent; position: static; }
@@ -1968,17 +1997,26 @@
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 3px 4px;
+  padding: 4px 6px;
   border: 0;
   background: transparent;
   text-align: left;
   line-height: 1.4;
   cursor: pointer;
   min-height: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   transition: background var(--duration-fast) ease;
 }
 .tw-msg-row:hover { background: var(--color-bg-hover); }
+.tw-msg-row[data-open="true"] {
+  background: var(--color-bg-tertiary);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.tw-msg-row[data-open="true"] + .tw-msg-body {
+  background: var(--color-bg-tertiary);
+  border-top: none;
+}
 
 /* ── Colored icon tile — matches FileTypeIcon style
    Small rounded square with a brand-colored background, white icon.
@@ -1991,10 +2029,10 @@
   justify-content: center;
   width: 20px;
   height: 20px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
   margin-right: 6px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.2);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.10);
 }
 .tw-msg-icon-svg {
   color: #ffffff !important;
@@ -2835,50 +2873,67 @@
 
 /* v5: 不渲染分隔线 — 视觉与正文完全无差别 */
 
+/* v6 (2026-07-10): refined reasoning block — left accent rail +
+   soft tint background, feels like a "margin note" rather than a
+   raw collapsible dump. */
 .reasoning-header {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 0;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
   background: transparent;
   border: 0;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   color: inherit;
   font: inherit;
   user-select: none;
+  transition: background var(--duration-fast) ease;
+}
+.reasoning-header:hover {
+  background: var(--color-bg-hover);
 }
 .reasoning-header:focus-visible {
-  outline: 2px solid var(--color-accent, #6366f1);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .reasoning-chevron {
   transition: transform 0.2s ease;
-  color: var(--color-text-faint, #8b949e);
+  color: var(--color-text-faint);
 }
 .reasoning-chevron-open {
   transform: rotate(90deg);
 }
 
 .reasoning-label {
+  font-size: 11px;
   font-weight: 500;
-  color: var(--color-text-faint, #8b949e);
-  font-style: italic;
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.02em;
 }
 
 .reasoning-count {
   font-size: 10.5px;
-  color: var(--color-text-faint, #8b949e);
-  padding: 0 5px;
-  opacity: 0.85;
+  color: var(--color-text-faint);
+  padding: 1px 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-tertiary);
+  opacity: 0.9;
+}
+
+/* v6: reasoning body — left accent rail + soft tint, like a margin note */
+.reasoning-body {
+  background: var(--color-bg-secondary);
+  border-left: 2px solid var(--color-border-secondary);
 }
 
 .reasoning-bullets {
   list-style: decimal;
   margin: 6px 0 0 0;
   padding: 0 0 0 20px;
-  color: var(--color-text-faint, #8b949e);
+  color: var(--color-text-faint);
   font-style: italic;
 }
 .reasoning-bullets > .reasoning-bullet {
@@ -2886,161 +2941,9 @@
   padding-left: 2px;
 }
 .reasoning-bullets > .reasoning-bullet::marker {
-  color: var(--color-text-faint, #8b949e);
+  color: var(--color-text-faint);
   font-size: 10.5px;
   font-style: normal;
-}
-
-/* ════════════════════════════════════════════════════════════════════
-   Round 6, 2026-07-06: UX 视觉层次重构
-   主人反馈 5 项问题 (1~5) 的 CSS 落地.
-   ════════════════════════════════════════════════════════════════════ */
-
-/* ── 1. 图标抽象 → chip「谱系」/「操作链」 ──
-   取代原 .titlebar-btn 单图标, 高度 32px, 12px medium 文字,
-   active 态用 accent 软色区分. */
-.panel-toggle-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 32px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  cursor: pointer;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-.panel-toggle-chip:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-.panel-toggle-chip--active,
-.panel-toggle-chip[aria-expanded="true"] {
-  background: var(--color-accent-soft, rgba(59, 130, 246, 0.12));
-  color: var(--color-accent, #3b82f6);
-}
-
-/* ── 2. 折叠下拉 .panel-card wrapper ──
-   灰色背景 + 无边框 + 12px 圆角 + 16px 内距.
-   与外层 chat 气泡 (白底) 区分层次. */
-.panel-card {
-  background: var(--color-surface-muted, var(--color-bg-secondary));
-  border: 0;
-  border-radius: 12px;
-  padding: 16px;
-  transition: background var(--duration-fast) ease;
-}
-/* Round 14: dark fallback 改成不透明 gray (避 Vite 合并 fallback 仍是 0.6 透明 slate-800),
-   light 模式下 .panel-card 命中 .panel-card 段 (无前缀), dark 模式下命中 dark 段.
-   三种 dark 选择器并联以覆盖 toggle 只设 data-theme 而漏加 .dark class 的双轨场景. */
-[data-theme="dark"] .panel-card,
-.dark .panel-card,
-:root[data-theme="dark"] .panel-card {
-  background: var(--color-surface-muted, #25252a);
-}
-
-/* ── 抽屉浮层 (Round 8 → Round 10 → Round 11 重构) ──
-   主人反馈：panel 应该"遮挡下面对话内容的，而不是挤压内容"。
-   改为 absolute 浮层 + transform 动画：
-   - 不占位 → 不推动消息列表
-   - transform 全由 compositor 处理 → 0 layout thrash
-   - 过渡干净：-10px translateY + opacity */
-
-.panel-overlay {
-  height: 0;
-  overflow: visible;
-  z-index: 20;
-  position: relative;
-  pointer-events: none;
-}
-
-.panel-overlay--open {
-  pointer-events: auto;
-}
-
-.panel-overlay__drawer {
-  position: absolute;
-  top: 0;
-  left: 12px;
-  right: 12px;
-  transform: translateY(-10px);
-  opacity: 0;
-  transition:
-    transform 0.22s cubic-bezier(0.16, 1, 0.3, 1),
-    opacity 0.18s ease-out;
-  pointer-events: none;
-  will-change: transform, opacity;
-}
-
-@media (min-width: 640px) {
-  .panel-overlay__drawer {
-    left: 16px;
-    right: 16px;
-  }
-}
-
-.panel-overlay__drawer--open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* ── 3. 三态组件 (Loading/Empty/Error) ──
-   折叠面板内部的 loading/empty/error 统一规范.
-   loading → Loader2 spinning + muted 文字
-   empty   → Inbox icon + 中性文字
-   error   → AlertCircle icon + 警告文字 (body 截断 120 chars 防 stack dump) */
-.panel-state {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px;
-  font-size: var(--font-size-body, 12px);
-  line-height: 1.5;
-  color: var(--color-text-muted);
-}
-.panel-state-title {
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-}
-.panel-state-body {
-  font-size: 11px;
-  color: var(--color-text-faint);
-  margin-top: 2px;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-.panel-state--loading {
-  color: var(--color-text-faint);
-}
-.panel-state--empty {
-  color: var(--color-text-faint);
-}
-.panel-state--loading > svg {
-  color: var(--color-text-muted);
-  margin-top: 1px;
-}
-.panel-state--empty > svg {
-  color: var(--color-text-faint);
-  margin-top: 1px;
-}
-.panel-state--error {
-  color: var(--color-text-error, #ef4444);
-}
-.panel-state--error > svg {
-  color: var(--color-text-error, #ef4444);
-  margin-top: 1px;
-}
-.panel-state--error .panel-state-title {
-  color: var(--color-text-error, #ef4444);
 }
 
 /* ── 5a. 主回复 vs 工具调用 视觉区分 ──
@@ -3051,16 +2954,16 @@
            tool       bg = --color-chat-tool-bg (rgba(30,41,59,0.6))
    兄弟间隔由父 .msg-stack flex-column 维持. */
 .chat-tool-call {
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   transition: background var(--duration-fast) ease;
 }
 .chat-tool-call--assistant {
   background: var(--color-chat-assistant-bg, #ffffff);
 }
 .chat-tool-call--tool {
-  /* Round 14: fallback 跟 tokens.css 灰阶对齐 (#fafafa = bg-secondary 灰, 非 slate-50 微蓝).
-     即使 var() 解析失败也能保持 gray 家族, 不退化到 Tailwind slate. */
   background: var(--color-chat-tool-bg, #fafafa);
+  margin-left: 32px;
+  padding-left: 0;
 }
 
 /* ── 5b. 工具状态徽章贴末尾 (inline-flex, vertical-align, ml-8px) ──
@@ -3086,10 +2989,13 @@
   color-scheme: dark;
 }
 
-/* 用户气泡 — dark mode 用更深的 bg */
+/* 用户气泡 — dark mode 用 accent-soft 保持与浅色一致的设计语言 */
 .dark .msg-bubble-user {
-  background: var(--color-bg-secondary);
-  border-color: var(--color-border-primary);
+  background: var(--color-accent-soft);
+  border-color: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+.dark .msg-bubble-user:hover {
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
 }
 
 /* 用户消息附属 (file-pill 等已有独立 dark 规则) */
@@ -3146,20 +3052,6 @@
 /* ── ToolEventCard (tool-event-card.css 或这里的 .tool-event-*) ── */
 /* tool-terminal-dot 是 macOS 红绿灯语义色, 不需要改 */
 
-/* ── 顶部折叠 chip ── */
-.dark .panel-toggle-chip {
-  color: var(--color-text-secondary);
-}
-.dark .panel-toggle-chip:hover {
-  background: var(--color-bg-hover);
-  color: var(--color-text-primary);
-}
-.dark .panel-toggle-chip--active,
-.dark .panel-toggle-chip[aria-expanded="true"] {
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-}
-
 /* ── InlineThinkingDot ── 用 CSS 变量 + fallback, 不需要额外 dark 规则 */
 /* 但 orb 内的 #fff 高光在暗色太亮, 调暗 */
 .dark .inline-thinking-dot__orb-core {
@@ -3209,14 +3101,13 @@
    § 7.  DARK THEME — 对话流兜底 (Round 13, 2026-07-06 14:25)
    ════════════════════════════════════════════════════════════════════
    主人反馈 "深色主题下完全看不到内容"。
-   § 6 已覆盖 panel / tw-msg / agent-activity 等
+   § 6 已覆盖 tw-msg / agent-activity 等
    这里补齐容易漏掉的:
      · prose 容器与子元素 (blockquote border / inline code / pre)
      · msg-bubble-body 默认色 (传递 var 让 markdown 文字自然深浅)
      · approval-card light/dark 双模
      · prefetch-chip / prefetch-label
      · cmd-meta / h-tiny / 等小元素
-     · panel-overlay 内部滚动条
    全部用 token vars — 不写 hardcoded 色, 保证一致性. */
 
 /* ── Markdown prose container ── */
@@ -3306,29 +3197,6 @@
   background: var(--color-text-faint);
 }
 
-/* ── panel overlay drawer ── */
-.dark .panel-overlay__drawer {
-  background: transparent;     /* drawer 自身透明, panel-card 决定底色 */
-}
-.dark .panel-card {
-  background: var(--color-surface-muted, var(--color-bg-elevated));
-  color: var(--color-text-primary);
-  border-color: var(--color-border-primary);
-}
-.dark .panel-state {
-  color: var(--color-text-muted);
-}
-.dark .panel-state-title {
-  color: var(--color-text-secondary);
-}
-.dark .panel-state-body {
-  color: var(--color-text-faint);
-}
-.dark .panel-state--loading,
-.dark .panel-state--empty {
-  color: var(--color-text-faint);
-}
-
 /* ── chat-tool-call 兜底 (Round 13)
    tokens.css 已切 light/dark 变量, 但有些 cascade 顺序问题, 显式覆盖 */
 .dark .chat-tool-call--assistant {
@@ -3400,4 +3268,154 @@
 }
 [data-theme="dark"] .msg-bubble-body {
   color: var(--color-text-primary);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § X.  TODO CARD (live task list — TodoItemUpserted / Removed)
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Root panel container. Sits in the right rail of ChatView or
+ * floats above the message list (mount decision lives in ChatView). */
+.todo-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  overflow: hidden;
+}
+.todo-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background var(--duration-fast) ease;
+}
+.todo-card-header:hover { background: var(--color-bg-hover); }
+.todo-card-chevron { color: var(--color-text-faint); flex-shrink: 0; }
+.todo-card-icon    { color: var(--color-text-secondary); flex-shrink: 0; }
+.todo-card-title   {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-primary);
+  flex: 1;
+}
+.todo-card-count {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 11px;
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+}
+.todo-card-spin {
+  color: var(--color-text-faint);
+  animation: li-pulse 1.2s ease-in-out infinite;
+}
+.todo-card-body {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px 8px;
+  gap: 2px;
+}
+.todo-card-empty {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  font-style: italic;
+  padding: 8px 8px 4px;
+  text-align: center;
+}
+
+/* Single row. */
+.todo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--color-border-subtle);
+  transition: background var(--duration-fast) ease;
+  background: transparent;
+}
+.todo-row:hover { background: var(--color-bg-hover); }
+.todo-row-done .todo-row-title {
+  text-decoration: line-through;
+  color: var(--color-text-faint);
+}
+.todo-row-busy { opacity: 0.6; }
+
+.todo-row-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  margin-top: 1px;
+  transition: all var(--duration-fast) ease;
+  color: var(--color-text-secondary);
+}
+.todo-row-check:hover {
+  border-color: var(--color-text-secondary);
+  color: var(--color-text-primary);
+}
+.todo-row-check:disabled { cursor: progress; }
+.todo-row-done .todo-row-check {
+  border-color: var(--color-text-primary);
+  background: var(--color-text-primary);
+  color: var(--color-bg-app);
+}
+.todo-row-glyph {
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+}
+.todo-row-spin {
+  animation: li-pulse 1.2s ease-in-out infinite;
+}
+
+.todo-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.todo-row-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.4;
+  word-break: break-word;
+}
+.todo-row-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10.5px;
+  color: var(--color-text-faint);
+  line-height: 1.3;
+}
+.todo-row-desc { word-break: break-word; }
+.todo-row-deps { font-style: italic; }
+.todo-row-priority {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tertiary);
+  margin-top: 2px;
 }

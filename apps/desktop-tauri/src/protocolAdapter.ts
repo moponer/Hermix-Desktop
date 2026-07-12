@@ -202,7 +202,26 @@ export function wireToChatMessage(
   const projectedToolCalls = projectToolCalls(wire.tool_calls);
   // `reasoningContent` was originally a non-typed sneaking-through
   // read; type it properly now.
-  const reasoningRaw = (wire as Record<string, unknown>).reasoningContent;
+  //
+  // 2026-07-08 (user, 思考折叠在输出结束后消失):
+  // the server's `ProtocolMessage` field is `reasoning_content`
+  // (snake_case; no `rename_all = "camelCase"` on the struct), so the
+  // wire payload's key is `reasoning_content`. The previous code
+  // read `wire.reasoningContent` (camelCase) which is always
+  // `undefined` on this path. `onDone` then re-fetches the messages
+  // 500ms later (App.tsx::onDone) and replaces the in-memory message
+  // — which DOES have `reasoningContent` from `onReasoningChunk` —
+  // with this `undefined` projection. Net effect: the folding block
+  // is visible during the stream (read from local in-memory state)
+  // and disappears once the post-stream re-fetch lands.
+  //
+  // Read both casings for forward-compat: if we ever add
+  // `#[serde(rename_all = "camelCase")]` to `ProtocolMessage`,
+  // the camelCase branch will start returning truthy values and
+  // we'd drop into the snake_case branch via `??`.
+  const wireRecord = wire as Record<string, unknown>;
+  const reasoningRaw =
+    wireRecord.reasoning_content ?? wireRecord.reasoningContent;
   const reasoningContent =
     typeof reasoningRaw === "string" ? reasoningRaw : undefined;
   return {
@@ -229,6 +248,15 @@ export function wireToChatMessage(
  * Whole-array adapter: project an entire wire response into a UI
  * array in one call. Returns rows the renderer cares about with
  * the directive strip already applied.
+ *
+ * 2026-07-10: Tool rows are now MERGED into the preceding assistant
+ * message's `execution_timeline` instead of being emitted as separate
+ * `role: "tool"` messages. During live streaming, tool events
+ * (tool_start / tool_stdout / tool_complete) are appended to the
+ * assistant's execution_timeline and rendered as a collapsible block
+ * inside the assistant bubble. Without this merge, a session reload
+ * would produce a different visual layout (tool as separate top-level
+ * cards above the avatar vs. inline below the avatar).
  */
 export function wireArrayToChatMessages(
   wires: ReadonlyArray<WireMessage>,
@@ -237,6 +265,78 @@ export function wireArrayToChatMessages(
 ): ChatMessage[] {
   const out: ChatMessage[] = [];
   wires.forEach((wire, i) => {
+    // Tool rows: merge into the preceding assistant message's
+    // execution_timeline instead of creating a standalone message.
+    if (wire.role === "tool") {
+      const ts = wire.created_at ?? wire.timestamp ?? new Date().toISOString();
+      // Find the last assistant message in the output array.
+      // The server preserves insertion order, so the tool row
+      // always comes right after the assistant that called it.
+      const lastAssistantIdx = (() => {
+        for (let j = out.length - 1; j >= 0; j--) {
+          if (out[j].role === "assistant") return j;
+        }
+        return -1;
+      })();
+
+      if (lastAssistantIdx >= 0) {
+        const assistant = out[lastAssistantIdx];
+        const existingTimeline = assistant.execution_timeline ?? [];
+        // De-duplicate: the backend persists BOTH the assistant's
+        // `execution_timeline` (from streaming tool_start/tool_stdout/
+        // tool_complete events) AND separate `role: "tool"` rows.
+        // If the assistant already has timeline events for this
+        // tool_call_id, the streaming data is more detailed — skip
+        // synthesizing duplicate events from the tool row.
+        const toolCallId = wire.id ?? `${sessionId}-tool-${i}`;
+        const alreadyHasTimeline = existingTimeline.some(
+          (e) => e.tool_call_id === toolCallId,
+        );
+        if (!alreadyHasTimeline) {
+          // Also check by tool name + args signature for older
+          // sessions where tool_call_id wasn't persisted on the
+          // tool row but was on the timeline events.
+          const toolName = wire.tool_name ?? "tool";
+          const toolArgs = wire.tool_arguments;
+          const hasBySig = existingTimeline.some(
+            (e) => e.type === "tool_start" && e.tool === toolName,
+          );
+          if (!hasBySig) {
+            const timeline = [...existingTimeline];
+            timeline.push({
+              type: "tool_start",
+              tool: toolName,
+              arguments: toolArgs,
+              tool_call_id: toolCallId,
+              created_at: ts,
+            });
+            if (wire.content) {
+              timeline.push({
+                type: "tool_stdout",
+                tool_call_id: toolCallId,
+                content: wire.content,
+                created_at: ts,
+              });
+            }
+            timeline.push({
+              type: "tool_complete",
+              tool_call_id: toolCallId,
+              content: wire.content ?? "",
+              created_at: ts,
+            });
+            out[lastAssistantIdx] = {
+              ...assistant,
+              execution_timeline: timeline,
+            };
+          }
+        }
+      }
+      // If there's no preceding assistant (orphan tool row), drop it.
+      // This shouldn't happen in normal operation but guards against
+      // corrupted session data producing a stray tool card.
+      return;
+    }
+
     const projected = wireToChatMessage(wire, i, sessionId, detectToolError);
     if (projected) {
       out.push({
