@@ -9,13 +9,12 @@ use tracing::{info, instrument};
 use hermix_core::{AgentError,AgentResult,format_token_count,Message,MessageRole,StreamChunk,ToolCall,ToolErrorRecord,ToolSchema,UsageStats};
 use crate::agent_helpers::default_max_autonomous_nudges;
 use crate::agent_loop::{
-    AgentLoop, LoopState, PostLlmAction, PostResponseAction, PreparedRun, TurnRuntimeRoute,
+    AgentLoop, LoopPhase, LoopState, PostLlmAction, PostResponseAction, PreparedRun, TurnRuntimeRoute,
     extract_last_user_assistant, extract_file_change,
 };
 use crate::context::ContextManager;
 use crate::cost_guard::merge_usage;
 use crate::plugins::HookType;
-use crate::python_alignment::{budget_pressure_text, inject_budget_pressure_into_last_tool_result};
 use crate::stream_collect::StreamCollectOutcome;
 use crate::tool_result_processor::push_tool_result;
 
@@ -116,12 +115,10 @@ impl AgentLoop {
         // --- Memory turn-start notification ---
         self.memory_on_turn_start(state.total_turns, "");
 
-        // --- Memory review hint (every 20 turns) ---
-        if state.total_turns > 0 && state.total_turns.is_multiple_of(20) {
-            let review_hint = "Hint: Review and consolidate your recent memory entries. \
-                Remove redundant or outdated information using the memory tool.";
-            ctx.add_message(Message::system(review_hint));
-        }
+        // 2026-07-09: Removed Memory review hint (every 20 turns).
+        // The system prompt already contains memory management guidance.
+        // Injecting "review and consolidate" hints pollutes the context
+        // and distracts the LLM from the user's actual task.
 
         // --- Memory sync at flush interval ---
         if state.total_turns.is_multiple_of(self.config.memory_flush_interval) && state.total_turns > 0 {
@@ -307,38 +304,21 @@ impl AgentLoop {
         let mut results = results;
         budget::enforce_budget(&mut results, &self.config.budget);
 
-        // Verify tool execution results (Claude Code's "verify work" step)
-        // Must be done before results are consumed by push_tool_result
-        let verification_notes = self.verify_tool_results(tool_calls, &results);
-        if !verification_notes.is_empty() {
-            Self::inject_verification_notes(ctx, &verification_notes);
-        }
-
-        if !results.is_empty() {
-            let w = budget_pressure_text(
-                state.total_turns,
-                self.config.max_turns,
-                self.config.budget_caution_threshold,
-                self.config.budget_warning_threshold,
-                self.config.budget_pressure_enabled,
-            );
-            if let Some(ref text) = w {
-                tracing::info!("{}", text);
-            }
-            inject_budget_pressure_into_last_tool_result(&mut results, w.as_deref());
-        }
+        // 2026-07-09: Removed verification notes injection and budget
+        // pressure injection into tool results. These were polluting the
+        // context with system-level messages that interfered with the
+        // LLM's natural reasoning. The tool results themselves already
+        // contain execution status. Cost guard warnings go to the UI,
+        // not into the LLM's context.
 
         for result in results {
             push_tool_result(ctx, tool_calls, &result.tool_call_id, &result.content);
         }
         self.post_tool_apply_pending_steer(ctx);
-        if !tool_calls.is_empty()
-            && tool_calls
-                .iter()
-                .all(|tc| tc.function.name == "execute_code")
-        {
-            state.total_turns = state.total_turns.saturating_sub(1);
-        }
+        // 2026-07-09: Removed execute_code turn-counter deduction hack.
+        // It was compensating for execute_code not counting as a "real"
+        // turn, but this conflated turn accounting with tool semantics.
+        // Trust the turn counter — every loop iteration is a turn.
 
         // Stream break control (stream-only)
         if let (Some(snb), Some(on_c)) = (stream_needs_break, on_chunk) {
@@ -419,6 +399,9 @@ impl AgentLoop {
             review_memory_at_end,
             task_hint,
         } = self.prepare_run_context(messages, tools.as_ref()).await;
+tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run)");
+self.notify_phase(&LoopPhase::Init, 0);
+let mut post_tool_nudge_count: u32 = 0;
 
         let session_id = self.config.session_id.as_deref().unwrap_or("");
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
@@ -440,6 +423,8 @@ impl AgentLoop {
         let mut total_turns: u32 = state.total_turns;
 
         loop {
+            tracing::debug!(phase = %LoopPhase::PreTurnSetup, turn = total_turns, "run: pre-turn setup");
+self.notify_phase(&LoopPhase::PreTurnSetup, total_turns);
             // O1.1: shared pre-turn setup (was ~100 lines of duplication
             // between run() and run_stream()). Extracted to do_pre_turn_setup.
             let (turn_runtime_route, _active_model) = match self.do_pre_turn_setup(
@@ -455,11 +440,20 @@ impl AgentLoop {
                     (turn_runtime_route, active_model),
                 PreTurnAction::Stop(result) => return Ok(result),
             };
+            // Sync: do_pre_turn_setup increments state.total_turns;
+            // the local alias must be refreshed so downstream code
+            // (logging, process_post_response, decide_empty_response,
+            // finalize_agent_result) sees the correct turn number.
+            total_turns = state.total_turns;
 
             // --- Prefetch: identify user intent, run safe tools, inject results as system prompt ---
+            tracing::debug!(phase = %LoopPhase::Prefetch, turn = total_turns, "run: prefetch");
+self.notify_phase(&LoopPhase::Prefetch, total_turns);
             self.do_prefetch(&mut ctx, &tool_schemas, total_turns).await;
 
             // --- LLM API call with transport retry + semantic empty/thinking recovery (Python parity) ---
+            tracing::debug!(phase = %LoopPhase::LlmCall, turn = total_turns, "run: LLM API call");
+self.notify_phase(&LoopPhase::LlmCall, total_turns);
             let api_start = Instant::now();
             let mut inner_empty = 0u32;
             let mut inner_thinking = 0u32;
@@ -524,35 +518,85 @@ impl AgentLoop {
             // Phase 1.3b (2026-07-03): post-LLM hook + usage accumulate +
             // cost guard extracted into `process_post_response`. ~60 lines
             // of duplication with `run_stream()` collapsed into one helper
-            // call. Only the `CostGuardTripped` variant short-circuits the
-            // loop here; `Finalize` (no tool calls) falls through to the
-            // existing `decide_empty_response` block below.
-            if matches!(
-                self.process_post_response(
-                    &mut ctx,
-                    &response,
-                    turn_usage_acc.as_ref(),
-                    total_turns,
-                    api_elapsed,
-                    &mut state.cost_guard,
-                    &mut state.route_state,
-                    &mut state.message_cache,
-                    false, // stream_mode
-                )?,
-                PostResponseAction::CostGuardTripped
-            ) {
-                return Ok(self.finalize_agent_result(
-                    &ctx,
-                    total_turns,
-                    &tool_errors,
-                    state.cost_guard.accumulated_usage.clone(),
-                    state.cost_guard.session_cost_usd,
-                    session_started_hooks_fired,
-                    persist_user_idx,
-                    false,
-                    false,
-                    None,
-                ));
+            // call.
+            tracing::debug!(phase = %LoopPhase::PostLlmCall, turn = total_turns, "run: post-LLM response processing");
+self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
+            //
+            // Round 28 follow-up: both `CostGuardTripped` and `Finalize`
+            // must short-circuit here. The previous version only matched
+            // `CostGuardTripped` and silently fell through to the
+            // `decide_empty_response` block below, which in autonomous_mode
+            // with history_includes_tool=true issues an autonomous nudge
+            // ("Continue working...") and causes the LLM to re-issue the
+            // same tool (e.g. two `dir /b` rows).
+            match self.process_post_response(
+                &mut ctx,
+                &response,
+                turn_usage_acc.as_ref(),
+                total_turns,
+                api_elapsed,
+                &mut state.cost_guard,
+                &mut state.route_state,
+                &mut state.message_cache,
+                false, // stream_mode
+            )? {
+                PostResponseAction::CostGuardTripped => {
+                    return Ok(self.finalize_agent_result(
+                        &ctx,
+                        total_turns,
+                        &tool_errors,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
+                        session_started_hooks_fired,
+                        persist_user_idx,
+                        false,
+                        false,
+                        None,
+                    ));
+                }
+                PostResponseAction::Finalize => {
+                    // Normal flow: LLM produced visible text → finalize.
+                    // The thinking went to reasoning_content (collapsible
+                    // block in UI), the visible text is rendered for the user.
+                    if Self::assistant_visible_text_after_think_blocks(
+                        &response.message
+                    ) {
+                        // 2026-07-12 WW: persist the final assistant
+                        // message into ctx BEFORE terminal persist. The
+                        // Continue branch falls through to
+                        // `prepare_assistant_turn` below, but the
+                        // visible-text Finalize branch used to skip it —
+                        // causing `persist_session_terminal(&ctx, …)` and
+                        // `finalize_agent_result(&ctx, …)` to see a ctx
+                        // missing the final assistant message, so DB /
+                        // disk `.md` only stored up to the tool result
+                        // and the reload view came back truncated.
+                        let _ = self.prepare_assistant_turn(
+                            &mut ctx,
+                            &response,
+                            &mut state.message_cache,
+                        );
+                        return Ok(self.finalize_agent_result(
+                            &ctx,
+                            total_turns,
+                            &tool_errors,
+                            state.cost_guard.accumulated_usage.clone(),
+                            state.cost_guard.session_cost_usd,
+                            session_started_hooks_fired,
+                            persist_user_idx,
+                            false,
+                            false,
+                            None,
+                        ));
+                    }
+                    // No visible text (thinking-only or empty) — fall
+                    // through to decide_empty_response for edge-case
+                    // handling (Codex ack / autonomous nudge / patch).
+                    // No multi-round nudges — trust the LLM + system prompt.
+                }
+                PostResponseAction::Continue => {
+                    // Tool calls present — fall through to execute_tool_calls.
+                }
             }
 
             let (history_includes_tool, assistant_msg, tool_calls) = self.prepare_assistant_turn(
@@ -572,38 +616,69 @@ impl AgentLoop {
             // and duplicated in `run()`. C2 consolidated that logic
             // into `crate::empty_response_handler::decide_empty_response`
             // so both call sites use the same single authority.
-            let tool_calls = match tool_calls {
-                Some(calls) if !calls.is_empty() => calls,
-                _ => {
-                    let outcome = crate::empty_response_handler::decide_empty_response(
-                        crate::empty_response_handler::EmptyResponseInput {
-                            assistant_msg: &assistant_msg,
-                            api_mode: self.config.api_mode.clone(),
-                            has_tool_schemas: !tool_schemas.is_empty(),
-                            history_includes_tool,
-                            task_hint: &task_hint,
-                            codex_ack_continuations,
-                            autonomous_mode: self.config.autonomous_mode,
-                            autonomous_nudge_count,
-                            total_turns,
-                            max_turns: self.config.max_turns,
-                            max_autonomous_nudges: default_max_autonomous_nudges(),
-                            last_content_with_tools: state.message_cache.take_content_with_tools(),
-                            assistant_has_visible_text:
-                                Self::assistant_visible_text_after_think_blocks,
-                        },
+            // 2026-07-08: filter out empty-named tool calls (same fix as
+            // run_stream). MiniMax streaming can create placeholder entries.
+            let tool_calls_filtered: Vec<ToolCall> = tool_calls
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|tc| !tc.function.name.is_empty())
+                .collect();
+            let tool_calls = if tool_calls_filtered.is_empty() {
+                // If all tool calls had empty names but the LLM produced
+                // visible text, finalize — it gave a real answer.
+                // If only thinking (no visible text), fall through to
+                // decide_empty_response for edge-case handling.
+                let has_visible =
+                    Self::assistant_visible_text_after_think_blocks(&assistant_msg);
+                if has_visible {
+                    tracing::info!(
+                        "All tool calls had empty names after filtering (run); LLM produced visible text — finalizing"
                     );
-                    codex_ack_continuations = outcome.new_codex_ack_continuations;
-                    autonomous_nudge_count = outcome.new_autonomous_nudge_count;
-                    if self.apply_fallback_outcome(
-                        &mut ctx,
-                        outcome.action,
-                        false, // stream_mode
+                    self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
+                    return Ok(self.finalize_agent_result(
+                        &ctx,
                         total_turns,
+                        &tool_errors,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
+                        session_started_hooks_fired,
+                        persist_user_idx,
+                        true,
+                        false,
+                        None,
+                    ));
+                }
+                // No visible text — fall through to decide_empty_response
+                let outcome = crate::empty_response_handler::decide_empty_response(
+                    crate::empty_response_handler::EmptyResponseInput {
+                        assistant_msg: &assistant_msg,
+                        api_mode: self.config.api_mode.clone(),
+                        has_tool_schemas: !tool_schemas.is_empty(),
+                        history_includes_tool,
+                        task_hint: &task_hint,
+                        codex_ack_continuations,
+                        autonomous_mode: self.config.autonomous_mode,
                         autonomous_nudge_count,
-                    ) {
-                        continue;
-                    }
+                        post_tool_nudge_count,
+                        total_turns,
+                        max_turns: self.config.max_turns,
+                        max_autonomous_nudges: default_max_autonomous_nudges(),
+                        assistant_has_visible_text:
+                            Self::assistant_visible_text_after_think_blocks,
+                    },
+                );
+                codex_ack_continuations = outcome.new_codex_ack_continuations;
+                autonomous_nudge_count = outcome.new_autonomous_nudge_count;
+                post_tool_nudge_count = outcome.new_post_tool_nudge_count;
+                if self.apply_fallback_outcome(
+                    &mut ctx,
+                    outcome.action,
+                    false, // stream_mode
+                    total_turns,
+                    autonomous_nudge_count,
+                ) {
+                    continue;
+                }
                     tracing::debug!("No tool calls in response, finishing naturally");
                     // Phase 2.4: terminal-persistence shared with run_stream
                     self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
@@ -619,44 +694,62 @@ impl AgentLoop {
                         false,
                         None,
                     ));
-                }
+            } else {
+                tool_calls_filtered
             };
 
             codex_ack_continuations = 0;
 
             // Deduplicate tool calls
+            tracing::debug!(phase = %LoopPhase::ToolValidation, turn = total_turns, "run: tool validation");
+self.notify_phase(&LoopPhase::ToolValidation, total_turns);
             let mut tool_calls = Self::deduplicate_tool_calls(&tool_calls);
             for tc in &mut tool_calls {
                 self.repair_tool_call(tc);
                 self.hydrate_session_search_args(tc);
             }
-            let invalid_tool_calls: Vec<String> = tool_calls
-                .iter()
-                .filter(|tc| self.tool_registry.get(&tc.function.name).is_none())
-                .map(|tc| tc.function.name.clone())
-                .collect();
-            if !invalid_tool_calls.is_empty() {
-                let count = state.retry_counters.bump_invalid_tool();
-                self.emit_status(
-                    "lifecycle",
-                    &format!(
-                        "Invalid tool call detected — retrying ({}/{})",
-                        count, self.config.invalid_tool_call_max_retries
-                    ),
-                );
-                let available = self.tool_registry.names().join(", ");
-                if count >= self.config.invalid_tool_call_max_retries {
-                    self.emit_status(
-                        "lifecycle",
-                        &format!(
-                            "Max invalid tool retries reached ({})",
-                            self.config.invalid_tool_call_max_retries
-                        ),
-                    );
-                    ctx.add_message(Message::system(format!(
-                        "Max invalid tool retries reached ({}). Last invalid tool: {}",
-                        self.config.invalid_tool_call_max_retries, invalid_tool_calls[0]
-                    )));
+
+            // AL-7 (2026-07-09): Unified tool-call validation.
+            let available = self.tool_registry.names().join(", ");
+            let outcome = crate::tool_call_validator::validate(
+                &mut tool_calls,
+                |name| self.tool_registry.get(name).is_some(),
+                |tc| Self::normalize_tool_call_arguments(tc),
+                &mut state.retry_counters,
+                &crate::tool_call_validator::ValidatorConfig {
+                    max_invalid_tool_retries: self.config.invalid_tool_call_max_retries,
+                    max_invalid_json_retries: self.config.invalid_tool_json_max_retries,
+                    available_tools: &available,
+                },
+            );
+            match &outcome {
+                crate::tool_call_validator::ValidationOutcome::RetryInvalidTool { .. } => {
+                    self.emit_status("lifecycle", "Invalid tool call detected — retrying");
+                }
+                crate::tool_call_validator::ValidationOutcome::FatalInvalidTool { invalid_names } => {
+                    self.emit_status("lifecycle", &format!(
+                        "Max invalid tool retries reached ({})", self.config.invalid_tool_call_max_retries
+                    ));
+                    let _ = invalid_names; // already in system message via apply_outcome
+                }
+                crate::tool_call_validator::ValidationOutcome::RetryInvalidJson => {
+                    self.emit_status("lifecycle", "Invalid tool JSON arguments — retrying");
+                }
+                crate::tool_call_validator::ValidationOutcome::FatalInvalidJson { .. } => {
+                    self.emit_status("lifecycle", &format!(
+                        "Max invalid JSON retries reached ({}); returning tool errors",
+                        self.config.invalid_tool_json_max_retries
+                    ));
+                }
+                crate::tool_call_validator::ValidationOutcome::Valid => {}
+            }
+            let apply_result = crate::tool_call_validator::apply_outcome(
+                &mut ctx, &tool_calls, outcome,
+            );
+            match apply_result {
+                crate::tool_call_validator::ApplyResult::Proceed => {}
+                crate::tool_call_validator::ApplyResult::Continue => continue,
+                crate::tool_call_validator::ApplyResult::ReturnFatal => {
                     return Ok(self.finalize_agent_result(
                         &ctx,
                         total_turns,
@@ -667,69 +760,10 @@ impl AgentLoop {
                         persist_user_idx,
                         false,
                         false,
-                    None,
+                        None,
                     ));
                 }
-                for tc in &tool_calls {
-                    let content = if self.tool_registry.get(&tc.function.name).is_none() {
-                        format!(
-                            "Tool '{}' does not exist. Available tools: {}",
-                            tc.function.name, available
-                        )
-                    } else {
-                        "Skipped: another tool call in this turn used an invalid name. Please retry this tool call.".to_string()
-                    };
-                    push_tool_result(&mut ctx, &tool_calls, &tc.id, &content);
-                }
-                continue;
             }
-            state.retry_counters.reset_invalid_tool();
-
-            let mut invalid_json_args: Vec<(String, String)> = Vec::new();
-            for tc in &mut tool_calls {
-                if let Err(e) = Self::normalize_tool_call_arguments(tc) {
-                    invalid_json_args.push((tc.function.name.clone(), e));
-                }
-            }
-            if !invalid_json_args.is_empty() {
-                let count = state.retry_counters.bump_invalid_json();
-                if count < self.config.invalid_tool_json_max_retries {
-                    self.emit_status(
-                        "lifecycle",
-                        &format!(
-                            "Invalid tool JSON arguments — retrying ({}/{})",
-                            count, self.config.invalid_tool_json_max_retries
-                        ),
-                    );
-                    let _ = ctx.get_messages_mut().pop();
-                    ctx.recompute_total_tokens();
-                    continue;
-                }
-                self.emit_status(
-                    "lifecycle",
-                    &format!(
-                        "Max invalid JSON retries reached ({}); returning tool errors",
-                        self.config.invalid_tool_json_max_retries
-                    ),
-                );
-                state.retry_counters.reset_invalid_json();
-                for tc in &tool_calls {
-                    let content = if let Some((_, err)) = invalid_json_args
-                        .iter()
-                        .find(|(name, _)| name == &tc.function.name)
-                    {
-                        format!(
-                                "Error: Invalid JSON arguments. {}. For tools with no required parameters, use an empty object: {{}}. Please retry with valid JSON.",
-                                err
-                            )
-                    } else {
-                        "Skipped: other tool call in this response had invalid JSON.".to_string()
-                    };
-                    push_tool_result(&mut ctx, &tool_calls, &tc.id, &content);
-                }
-                continue;
-            }
-            state.retry_counters.reset_invalid_json();
 
             for tc in &tool_calls {
                 if let Ok(mut c) = self.evolution_counters.lock() {
@@ -744,17 +778,13 @@ impl AgentLoop {
             // Cap concurrent delegate_task calls
             self.cap_delegates(&mut tool_calls);
 
-            // --- Pre-tool hook ---
-            //
-            // Generate a per-invocation uuid up-front and stash it on
-            // a side-table keyed by the LLM-assigned `tc.id`. We need
-            // the same id back in the post-tool loop below so callers
-            // (e.g. `LocalAgentService`'s `on_tool_complete` closure)
-            // can pair start and complete events for the same tool
-            // call. The `tc.id` is the only thing that survives both
-            // the pre-loop (which sees `tool_calls`) and the
-            // post-loop (which sees `results` — keyed by
-            // `result.tool_call_id`, identical to `tc.id`).
+            // 2026-07-09: Removed cross-turn tool-call deduplication.
+            // It was caching tool results and skipping re-execution, which
+            // prevented legitimate re-checks (e.g. re-reading a file after
+            // modifying it). The LLM has full context and can decide for
+            // itself whether to re-call a tool. Trust the LLM.
+
+            // --- Pre-tool hooks + callbacks ---
             let mut tool_call_ids: HashMap<String, String> = HashMap::new();
             for tc in &tool_calls {
                 let tc_ctx = serde_json::json!({
@@ -766,7 +796,7 @@ impl AgentLoop {
                 if let Some(ref cb) = self.callbacks.on_tool_start {
                     let args: Value =
                         serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
-                    let tool_call_id = uuid::Uuid::new_v4().to_string();
+                    let tool_call_id = format!("{}-{}", tc.function.name, tc.id);
                     tool_call_ids.insert(tc.id.clone(), tool_call_id.clone());
                     cb(&tool_call_id, &tc.function.name, &args);
                 }
@@ -792,6 +822,8 @@ impl AgentLoop {
                 ));
             }
             let tool_start = Instant::now();
+            tracing::debug!(phase = %LoopPhase::ToolExecution, turn = total_turns, tools = tool_calls.len(), "run: executing tool calls");
+self.notify_phase(&LoopPhase::ToolExecution, total_turns);
             let results = self
                 .execute_tool_calls(
                     &tool_calls,
@@ -803,7 +835,6 @@ impl AgentLoop {
                 )
                 .await;
             let tool_elapsed = tool_start.elapsed().as_millis() as u64;
-            // Phase 5 (2026-07-04): see `record_api` above.
             state.timings.record_tool(tool_elapsed);
 
             let turn_tool_error_count = results.iter().filter(|r| r.is_error).count() as u32;
@@ -816,16 +847,15 @@ impl AgentLoop {
                         "Auto-rollback: {} tool call(s) failed in one turn. Restored latest checkpoint and continuing.",
                         turn_tool_error_count
                     )));
-                    // `add_message` updates the token cache for the
-                    // injected system message; the bulk-replace above
-                    // still needs an explicit refresh to match the
-                    // snapshot.
                     ctx.recompute_total_tokens();
                     continue;
                 }
             }
 
             // --- Post-tool iteration (shared with run_stream) ---
+            tracing::debug!(phase = %LoopPhase::PostToolExec, turn = total_turns, "run: post-tool iteration");
+self.notify_phase(&LoopPhase::PostToolExec, total_turns);
+            let run_turn_error_count = results.iter().filter(|r| r.is_error).count() as u32;
             self.do_post_tool_iteration(
                 &mut ctx,
                 &tool_calls,
@@ -841,6 +871,72 @@ impl AgentLoop {
                 None, // no stream_needs_break in non-stream mode
                 None, // no on_chunk in non-stream mode
             ).await;
+
+            // 2026-07-08 (HH), revised 2026-07-09: replay convergence guard.
+            // If this turn consisted ENTIRELY of replayed tool calls, the
+            // 2026-07-09: Removed replay advisory injection.
+            // The LLM has full context — no need for system-level
+            // notes about cached results.
+
+            // 2026-07-09 (AL-8, simplified): Convergence detection —
+            // ONLY ErrorLoop hard stop. Removed NoProgressWithTools and
+            // SimilarContent advisory warnings: they injected system
+            // messages that polluted the LLM's context and interfered
+            // with legitimate long tool chains. Trust the LLM to decide
+            // when to stop.
+            let visible_text_this_turn = response.message.content.as_deref().unwrap_or("");
+            let has_visible = Self::assistant_visible_text_after_think_blocks(&response.message);
+            let convergence_signal = state.convergence_detector.check(
+                has_visible,
+                tool_calls.len(),
+                run_turn_error_count as usize,
+                visible_text_this_turn,
+            );
+            match convergence_signal {
+                crate::convergence_detector::ConvergenceSignal::Converge { reason, consecutive_count } => {
+                    // Hard stop: only ErrorLoop reaches here.
+                    tracing::info!(
+                        reason = ?reason,
+                        consecutive = consecutive_count,
+                        "convergence detected (hard stop) — concluding run"
+                    );
+                    self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
+                    return Ok(self.finalize_agent_result(
+                        &ctx,
+                        total_turns,
+                        &tool_errors,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
+                        session_started_hooks_fired,
+                        persist_user_idx,
+                        false,
+                        false,
+                        None,
+                    ));
+                }
+                // Advisory warnings are silently ignored — no system
+                // message injection. The LLM has full context.
+                _ => {}
+            }
+
+            // P1-1: Emit structured TurnReport for observability.
+            crate::turn_report::TurnReport {
+                turn: total_turns,
+                end_phase: LoopPhase::PostToolExec,
+                stage: LoopPhase::PostToolExec.as_orchestration_stage(),
+                api_ms: state.timings.total_api_time_ms,
+                tool_ms: state.timings.total_tool_time_ms,
+                tool_calls: vec![],
+                replay_count: 0,
+                has_visible_text: has_visible,
+                has_thinking: response.message.reasoning_content.as_deref().is_some_and(|s| !s.trim().is_empty()),
+                prompt_tokens: response.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
+                completion_tokens: response.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0),
+                context_tokens: ctx.total_tokens() as u64,
+                outcome: crate::turn_report::TurnOutcome::Continue,
+                mode: None,
+                task_id: None,
+            }.emit();
         }
     }
 
@@ -949,6 +1045,9 @@ impl AgentLoop {
             review_memory_at_end,
             task_hint,
         } = self.prepare_run_context(messages, tools.as_ref()).await;
+        tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run_stream)");
+self.notify_phase(&LoopPhase::Init, 0);
+        let mut post_tool_nudge_count: u32 = 0;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
 
         let mut state = LoopState::default();
@@ -959,6 +1058,8 @@ impl AgentLoop {
         let mut total_turns: u32 = state.total_turns;
 
         loop {
+            tracing::debug!(phase = %LoopPhase::PreTurnSetup, turn = total_turns, "run_stream: pre-turn setup");
+self.notify_phase(&LoopPhase::PreTurnSetup, total_turns);
             // O1.1: shared pre-turn setup (was ~90 lines of duplication
             // between run() and run_stream()). Extracted to do_pre_turn_setup.
             let (turn_runtime_route, active_model) = match self.do_pre_turn_setup(
@@ -974,8 +1075,15 @@ impl AgentLoop {
                     (turn_runtime_route, active_model),
                 PreTurnAction::Stop(result) => return Ok(result),
             };
+            // Sync: do_pre_turn_setup increments state.total_turns;
+            // the local alias must be refreshed so downstream code
+            // (logging, process_post_response, decide_empty_response,
+            // finalize_agent_result) sees the correct turn number.
+            total_turns = state.total_turns;
 
             // --- Streaming first attempt + same D-step semantic recovery as `run()` (retries use non-stream) ---
+            tracing::debug!(phase = %LoopPhase::LlmCall, turn = total_turns, "run_stream: LLM API call (streaming)");
+self.notify_phase(&LoopPhase::LlmCall, total_turns);
             let api_start = Instant::now();
             let mut inner_empty = 0u32;
             let mut inner_thinking = 0u32;
@@ -1112,37 +1220,113 @@ impl AgentLoop {
             // Phase 1.3c (2026-07-03): mirrors 1.3b on the run_stream()
             // side. Post-LLM hook + usage accumulate + cost guard move
             // into `process_post_response`. The stream-specific
+            tracing::debug!(phase = %LoopPhase::PostLlmCall, turn = total_turns, "run_stream: post-LLM response processing");
+self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
             // `llm_response_received` info! line is now emitted inside
             // the helper when `stream_mode = true`. The
             // `last_finish_reason` was already updated inside the
             // stream retry loop (line ~5640) to the final response's
             // finish_reason — no need to refresh it here.
-            if matches!(
-                self.process_post_response(
-                    &mut ctx,
-                    &response,
-                    turn_usage_acc.as_ref(),
-                    total_turns,
-                    api_elapsed_ms,
-                    &mut state.cost_guard,
-                    &mut state.route_state,
-                    &mut state.message_cache,
-                    true, // stream_mode
-                )?,
-                PostResponseAction::CostGuardTripped
-            ) {
-                return Ok(self.finalize_agent_result(
-                    &ctx,
-                    total_turns,
-                    &tool_errors,
-                    state.cost_guard.accumulated_usage.clone(),
-                    state.cost_guard.session_cost_usd,
-                    session_started_hooks_fired,
-                    persist_user_idx,
-                    false,
-                    false,
-                    last_finish_reason.clone(),
-                ));
+            // Round 28 follow-up (2026-07-08): `process_post_response` returns
+            // `Finalize` when there are no tool calls in the response — its
+            // doc-comment (agent_loop/types.rs:156-165) explicitly says
+            // "the caller should `return` Ok(self.finalize_agent_result(...))".
+            //
+            // The previous version of this site only matched on
+            // `CostGuardTripped`, silently falling through into the empty-
+            // tool-calls block at line ~1247 below. That block then runs
+            // `decide_empty_response`, which (in autonomous_mode with
+            // history_includes_tool=true and counter==0) issues a
+            // `ContinueWithSystemNudge("...continue working...")` and the
+            // loop calls the LLM again. For MiniMax-M2.7 the second LLM
+            // call often re-issues the same tool the first turn used
+            // (e.g. `dir /b` twice, two assistant bubbles, two summaries)
+            // because the nudge tells the model "you have not yet
+            // completed the user's task". Observed live in the
+            // 沪EB5805/沪EB5885 \"看下目录\" session.
+            //
+            // Fix: honor the `Finalize` return — drop straight into the
+            // terminal finalize path with `from_post_response=true` so
+            // the persistence hook still runs.
+            match self.process_post_response(
+                &mut ctx,
+                &response,
+                turn_usage_acc.as_ref(),
+                total_turns,
+                api_elapsed_ms,
+                &mut state.cost_guard,
+                &mut state.route_state,
+                &mut state.message_cache,
+                true, // stream_mode
+            )? {
+                PostResponseAction::CostGuardTripped => {
+                    return Ok(self.finalize_agent_result(
+                        &ctx,
+                        total_turns,
+                        &tool_errors,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
+                        session_started_hooks_fired,
+                        persist_user_idx,
+                        false,
+                        false,
+                        last_finish_reason.clone(),
+                    ));
+                }
+                PostResponseAction::Finalize => {
+                    // Normal flow: LLM produced visible text → finalize.
+                    // The thinking went to reasoning_content (collapsible
+                    // block in UI), the visible text is rendered for the user.
+                    if Self::assistant_visible_text_after_think_blocks(
+                        &response.message
+                    ) {
+                        // 2026-07-12 WW: persist the final assistant
+                        // message into ctx BEFORE terminal persist. The
+                        // Continue branch falls through to
+                        // `prepare_assistant_turn` below, but the
+                        // visible-text Finalize branch used to skip it —
+                        // causing `persist_session_terminal(&ctx, …)` and
+                        // `finalize_agent_result(&ctx, …)` to see a ctx
+                        // missing the final assistant message, so DB /
+                        // disk `.md` only stored up to the tool result
+                        // and the reload view came back truncated. Owner
+                        // saw this live on the 沪EB5805 "看下目录" session:
+                        // streaming showed the full "老大，目录共 198 条..."
+                        // text but reload was truncated to assistant1+tool.
+                        let _ = self.prepare_assistant_turn(
+                            &mut ctx,
+                            &response,
+                            &mut state.message_cache,
+                        );
+                        self.persist_session_terminal(
+                            &ctx,
+                            session_id,
+                            total_turns,
+                            review_memory_at_end,
+                        );
+                        Self::emit_mute_transition(&on_chunk, &stream_mute, false);
+                        return Ok(self.finalize_agent_result(
+                            &ctx,
+                            total_turns,
+                            &tool_errors,
+                            state.cost_guard.accumulated_usage.clone(),
+                            state.cost_guard.session_cost_usd,
+                            session_started_hooks_fired,
+                            persist_user_idx,
+                            true,
+                            false,
+                            last_finish_reason.clone(),
+                        ));
+                    }
+                    // No visible text (thinking-only or empty) — fall
+                    // through to decide_empty_response for edge-case
+                    // handling (Codex ack / autonomous nudge / patch).
+                    // No multi-round nudges — trust the LLM + system prompt.
+                }
+                PostResponseAction::Continue => {
+                    // Tool calls present — fall through to the
+                    // execute_tool_calls path below.
+                }
             }
 
             let (history_includes_tool, assistant_msg, tool_calls) = self.prepare_assistant_turn(
@@ -1183,6 +1367,36 @@ impl AgentLoop {
                 .collect();
 
             if tool_calls.is_empty() {
+                // If all tool calls had empty names after filtering but
+                // the LLM produced visible text, respect the stop signal
+                // and finalize. If only thinking, fall through to
+                // decide_empty_response for edge-case handling.
+                let has_visible =
+                    Self::assistant_visible_text_after_think_blocks(&assistant_msg);
+                if has_visible {
+                    tracing::info!(
+                        "All tool calls had empty names after filtering; LLM produced visible text — finalizing"
+                    );
+                    self.persist_session_terminal(
+                        &ctx,
+                        session_id,
+                        total_turns,
+                        review_memory_at_end,
+                    );
+                    Self::emit_mute_transition(&on_chunk, &stream_mute, false);
+                    return Ok(self.finalize_agent_result(
+                        &ctx,
+                        total_turns,
+                        &tool_errors,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
+                        session_started_hooks_fired,
+                        persist_user_idx,
+                        true,
+                        false,
+                        last_finish_reason.clone(),
+                    ));
+                }
                 // C2 refactor: protocol fallback single point. The
                 // Codex-ack / autonomous-nudge / patch-last-assistant /
                 // finalize decisions used to be open-coded here and
@@ -1198,16 +1412,17 @@ impl AgentLoop {
                         codex_ack_continuations,
                         autonomous_mode: self.config.autonomous_mode,
                         autonomous_nudge_count,
+                        post_tool_nudge_count,
                         total_turns,
                         max_turns: self.config.max_turns,
                         max_autonomous_nudges: default_max_autonomous_nudges(),
-                        last_content_with_tools: state.message_cache.take_content_with_tools(),
                         assistant_has_visible_text:
                             Self::assistant_visible_text_after_think_blocks,
                     },
                 );
                 codex_ack_continuations = outcome.new_codex_ack_continuations;
                 autonomous_nudge_count = outcome.new_autonomous_nudge_count;
+                post_tool_nudge_count = outcome.new_post_tool_nudge_count;
                 if self.apply_fallback_outcome(
                     &mut ctx,
                     outcome.action,
@@ -1236,6 +1451,8 @@ impl AgentLoop {
 
             codex_ack_continuations = 0;
 
+            tracing::debug!(phase = %LoopPhase::ToolValidation, turn = total_turns, "run_stream: tool validation");
+self.notify_phase(&LoopPhase::ToolValidation, total_turns);
             let mut tool_calls = Self::deduplicate_tool_calls(&tool_calls);
             for tc in &mut tool_calls {
                 self.repair_tool_call(tc);
@@ -1251,33 +1468,47 @@ impl AgentLoop {
                 all_housekeeping && Self::assistant_visible_text_after_think_blocks(&assistant_msg);
             Self::emit_mute_transition(&on_chunk, &stream_mute, should_mute_post);
 
-            let invalid_tool_calls: Vec<String> = tool_calls
-                .iter()
-                .filter(|tc| self.tool_registry.get(&tc.function.name).is_none())
-                .map(|tc| tc.function.name.clone())
-                .collect();
-            if !invalid_tool_calls.is_empty() {
-                let count = state.retry_counters.bump_invalid_tool();
-                self.emit_status(
-                    "lifecycle",
-                    &format!(
-                        "Invalid tool call detected — retrying ({}/{})",
-                        count, self.config.invalid_tool_call_max_retries
-                    ),
-                );
-                let available = self.tool_registry.names().join(", ");
-                if count >= self.config.invalid_tool_call_max_retries {
-                    self.emit_status(
-                        "lifecycle",
-                        &format!(
-                            "Max invalid tool retries reached ({})",
-                            self.config.invalid_tool_call_max_retries
-                        ),
-                    );
-                    ctx.add_message(Message::system(format!(
-                        "Max invalid tool retries reached ({}). Last invalid tool: {}",
-                        self.config.invalid_tool_call_max_retries, invalid_tool_calls[0]
-                    )));
+            // AL-7 (2026-07-09): Unified tool-call validation.
+            let available = self.tool_registry.names().join(", ");
+            let outcome = crate::tool_call_validator::validate(
+                &mut tool_calls,
+                |name| self.tool_registry.get(name).is_some(),
+                |tc| Self::normalize_tool_call_arguments(tc),
+                &mut state.retry_counters,
+                &crate::tool_call_validator::ValidatorConfig {
+                    max_invalid_tool_retries: self.config.invalid_tool_call_max_retries,
+                    max_invalid_json_retries: self.config.invalid_tool_json_max_retries,
+                    available_tools: &available,
+                },
+            );
+            match &outcome {
+                crate::tool_call_validator::ValidationOutcome::RetryInvalidTool { .. } => {
+                    self.emit_status("lifecycle", "Invalid tool call detected — retrying");
+                }
+                crate::tool_call_validator::ValidationOutcome::FatalInvalidTool { invalid_names } => {
+                    self.emit_status("lifecycle", &format!(
+                        "Max invalid tool retries reached ({})", self.config.invalid_tool_call_max_retries
+                    ));
+                    let _ = invalid_names;
+                }
+                crate::tool_call_validator::ValidationOutcome::RetryInvalidJson => {
+                    self.emit_status("lifecycle", "Invalid tool JSON arguments — retrying");
+                }
+                crate::tool_call_validator::ValidationOutcome::FatalInvalidJson { .. } => {
+                    self.emit_status("lifecycle", &format!(
+                        "Max invalid JSON retries reached ({}); returning tool errors",
+                        self.config.invalid_tool_json_max_retries
+                    ));
+                }
+                crate::tool_call_validator::ValidationOutcome::Valid => {}
+            }
+            let apply_result = crate::tool_call_validator::apply_outcome(
+                &mut ctx, &tool_calls, outcome,
+            );
+            match apply_result {
+                crate::tool_call_validator::ApplyResult::Proceed => {}
+                crate::tool_call_validator::ApplyResult::Continue => continue,
+                crate::tool_call_validator::ApplyResult::ReturnFatal => {
                     return Ok(self.finalize_agent_result(
                         &ctx,
                         total_turns,
@@ -1288,69 +1519,10 @@ impl AgentLoop {
                         persist_user_idx,
                         false,
                         false,
-                    last_finish_reason.clone(),
+                        last_finish_reason.clone(),
                     ));
                 }
-                for tc in &tool_calls {
-                    let content = if self.tool_registry.get(&tc.function.name).is_none() {
-                        format!(
-                            "Tool '{}' does not exist. Available tools: {}",
-                            tc.function.name, available
-                        )
-                    } else {
-                        "Skipped: another tool call in this turn used an invalid name. Please retry this tool call.".to_string()
-                    };
-                    push_tool_result(&mut ctx, &tool_calls, &tc.id, &content);
-                }
-                continue;
             }
-            state.retry_counters.reset_invalid_tool();
-
-            let mut invalid_json_args: Vec<(String, String)> = Vec::new();
-            for tc in &mut tool_calls {
-                if let Err(e) = Self::normalize_tool_call_arguments(tc) {
-                    invalid_json_args.push((tc.function.name.clone(), e));
-                }
-            }
-            if !invalid_json_args.is_empty() {
-                let count = state.retry_counters.bump_invalid_json();
-                if count < self.config.invalid_tool_json_max_retries {
-                    self.emit_status(
-                        "lifecycle",
-                        &format!(
-                            "Invalid tool JSON arguments — retrying ({}/{})",
-                            count, self.config.invalid_tool_json_max_retries
-                        ),
-                    );
-                    let _ = ctx.get_messages_mut().pop();
-                    ctx.recompute_total_tokens();
-                    continue;
-                }
-                self.emit_status(
-                    "lifecycle",
-                    &format!(
-                        "Max invalid JSON retries reached ({}); returning tool errors",
-                        self.config.invalid_tool_json_max_retries
-                    ),
-                );
-                state.retry_counters.reset_invalid_json();
-                for tc in &tool_calls {
-                    let content = if let Some((_, err)) = invalid_json_args
-                        .iter()
-                        .find(|(name, _)| name == &tc.function.name)
-                    {
-                        format!(
-                                "Error: Invalid JSON arguments. {}. For tools with no required parameters, use an empty object: {{}}. Please retry with valid JSON.",
-                                err
-                            )
-                    } else {
-                        "Skipped: other tool call in this response had invalid JSON.".to_string()
-                    };
-                    push_tool_result(&mut ctx, &tool_calls, &tc.id, &content);
-                }
-                continue;
-            }
-            state.retry_counters.reset_invalid_json();
             for tc in &tool_calls {
                 if let Ok(mut c) = self.evolution_counters.lock() {
                     match tc.function.name.as_str() {
@@ -1362,13 +1534,11 @@ impl AgentLoop {
             }
             self.cap_delegates(&mut tool_calls);
 
-            // Pre-tool hooks + callbacks. Same `tc.id → uuid` map
-            // pattern as the primary dispatch path (line ~3460) so
-            // callers can pair start/complete events. The two
-            // dispatch paths produce different `results` types
-            // (synchronous gather here vs. parallel `execute_tool_calls`
-            // in the primary path) but both end up keyed by
-            // `result.tool_call_id == tc.id`.
+            // 2026-07-09: Removed cross-turn tool-call deduplication.
+            // The LLM has full context and can decide for itself whether
+            // to re-call a tool. Caching prevented legitimate re-checks.
+
+            // Pre-tool hooks + callbacks
             let mut tool_call_ids: HashMap<String, String> = HashMap::new();
             for tc in &tool_calls {
                 let tc_ctx = serde_json::json!({"tool": &tc.function.name, "turn": total_turns});
@@ -1376,11 +1546,10 @@ impl AgentLoop {
                 if let Some(ref cb) = self.callbacks.on_tool_start {
                     let args: Value =
                         serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
-                    let tool_call_id = uuid::Uuid::new_v4().to_string();
+                    let tool_call_id = format!("{}-{}", tc.function.name, tc.id);
                     tool_call_ids.insert(tc.id.clone(), tool_call_id.clone());
                     cb(&tool_call_id, &tc.function.name, &args);
                 }
-                // O7.2: fire clarify callback when the agent asks the user a question
                 if tc.function.name == "clarify" {
                     if let Some(ref cb) = self.callbacks.on_clarify {
                         let question = tc.function.arguments.clone();
@@ -1401,10 +1570,9 @@ impl AgentLoop {
                 ));
             }
 
-            // O1.1 fix: tool timing was measured in run() but missing
-            // from run_stream(). Without this, the TurnTimings
-            // panel shows zero tool time for all stream-path sessions.
             let tool_start = std::time::Instant::now();
+            tracing::debug!(phase = %LoopPhase::ToolExecution, turn = total_turns, tools = tool_calls.len(), "run_stream: executing tool calls");
+self.notify_phase(&LoopPhase::ToolExecution, total_turns);
             let results = self
                 .execute_tool_calls(
                     &tool_calls,
@@ -1429,16 +1597,15 @@ impl AgentLoop {
                         "Auto-rollback: {} tool call(s) failed in one turn. Restored latest checkpoint and continuing.",
                         turn_tool_error_count
                     )));
-                    // `add_message` updates the token cache for the
-                    // injected system message; the bulk-replace above
-                    // still needs an explicit refresh to match the
-                    // snapshot.
                     ctx.recompute_total_tokens();
                     continue;
                 }
             }
 
             // --- Post-tool iteration (shared with run) ---
+            tracing::debug!(phase = %LoopPhase::PostToolExec, turn = total_turns, "run_stream: post-tool iteration");
+self.notify_phase(&LoopPhase::PostToolExec, total_turns);
+            let stream_turn_error_count = results.iter().filter(|r| r.is_error).count() as u32;
             self.do_post_tool_iteration(
                 &mut ctx,
                 &tool_calls,
@@ -1454,6 +1621,67 @@ impl AgentLoop {
                 Some(&stream_needs_break), // stream-specific
                 Some(on_chunk.as_ref()),   // stream-specific
             ).await;
+
+            // 2026-07-09: Removed replay advisory injection.
+            // The LLM has full context — no need for system-level
+            // notes about cached results.
+
+            // 2026-07-09 (AL-8, simplified): Convergence detection —
+            // ONLY ErrorLoop hard stop. Removed advisory warnings that
+            // polluted the LLM's context.
+            let visible_text_this_turn = response.message.content.as_deref().unwrap_or("");
+            let has_visible = Self::assistant_visible_text_after_think_blocks(&response.message);
+            let convergence_signal = state.convergence_detector.check(
+                has_visible,
+                tool_calls.len(),
+                stream_turn_error_count as usize,
+                visible_text_this_turn,
+            );
+            match convergence_signal {
+                crate::convergence_detector::ConvergenceSignal::Converge { reason, consecutive_count } => {
+                    // Hard stop: only ErrorLoop reaches here.
+                    tracing::info!(
+                        reason = ?reason,
+                        consecutive = consecutive_count,
+                        "convergence detected (hard stop) — concluding run"
+                    );
+                    self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
+                    return Ok(self.finalize_agent_result(
+                        &ctx,
+                        total_turns,
+                        &tool_errors,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
+                        session_started_hooks_fired,
+                        persist_user_idx,
+                        true,
+                        false,
+                        last_finish_reason.clone(),
+                    ));
+                }
+                // Advisory warnings are silently ignored — no system
+                // message injection. The LLM has full context.
+                _ => {}
+            }
+
+            // P1-1: Emit structured TurnReport for observability.
+            crate::turn_report::TurnReport {
+                turn: total_turns,
+                end_phase: LoopPhase::PostToolExec,
+                stage: LoopPhase::PostToolExec.as_orchestration_stage(),
+                api_ms: state.timings.total_api_time_ms,
+                tool_ms: state.timings.total_tool_time_ms,
+                tool_calls: vec![],
+                replay_count: 0,
+                has_visible_text: has_visible,
+                has_thinking: response.message.reasoning_content.as_deref().is_some_and(|s| !s.trim().is_empty()),
+                prompt_tokens: response.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
+                completion_tokens: response.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0),
+                context_tokens: ctx.total_tokens() as u64,
+                outcome: crate::turn_report::TurnOutcome::Continue,
+                mode: None,
+                task_id: None,
+            }.emit();
         }
     }
 

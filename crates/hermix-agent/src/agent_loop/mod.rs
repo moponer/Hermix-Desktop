@@ -377,6 +377,40 @@ impl AgentLoop {
         )
     }
 
+    /// P3-2: Notify upstream listeners that the loop entered a new phase.
+    ///
+    /// Calls the `on_loop_phase_changed` callback if set. The callback
+    /// receives `(phase_name, stage_name, turn)` as `&str, &str, u32`.
+    /// The upstream layer (e.g. `LocalAgentService`) bridges this into
+    /// a `LoopPhaseChanged` WS event via the orchestration bus.
+    pub(crate) fn notify_phase(&self, phase: &LoopPhase, turn: u32) {
+        let stage = phase.as_orchestration_stage();
+        let phase_str = phase.as_str();
+        let stage_str = stage.as_str();
+        tracing::debug!(
+            phase = phase_str,
+            stage = stage_str,
+            turn = turn,
+            "loop phase boundary"
+        );
+        if let Some(cb) = &self.callbacks.on_loop_phase_changed {
+            cb(phase_str, stage_str, turn);
+        }
+    }
+
+    /// P3-5: Notify upstream listeners that the agent loop is finalizing.
+    ///
+    /// Calls the `on_task_complete` callback if set. The callback
+    /// receives `(success, task_id)` where `success` is true for
+    /// natural completion and false for errors/interrupts.
+    /// The upstream layer uses this to transition the Task status
+    /// and trigger result delivery.
+    pub(crate) fn notify_task_complete(&self, success: bool, task_id: Option<&str>) {
+        if let Some(cb) = &self.callbacks.on_task_complete {
+            cb(success, task_id);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn finalize_agent_result(
         &self,
@@ -391,6 +425,12 @@ impl AgentLoop {
         interrupted: bool,
         finish_reason: Option<String>,
     ) -> AgentResult {
+        // P3-2: emit Finalize phase boundary
+        self.notify_phase(&LoopPhase::Finalize, total_turns);
+        // P3-5: notify upstream that the task is complete.
+        // success = finished naturally without interruption.
+        let success = finished_naturally && !interrupted;
+        self.notify_task_complete(success, None);
         crate::session_lifecycle::finalize_agent_result(
             &self.config,
             &self.focus_stack,
@@ -525,8 +565,7 @@ impl AgentLoop {
     /// `ContinueWithSystemNudge` variant injected a message into the
     /// context — the caller should `continue;` to restart the loop
     /// with the injected message. Returns `false` when the variant
-    /// was `PatchLastAssistant` (which mutated the last assistant
-    /// message in place) or `Finalize` (a no-op) — the caller should
+    /// was `Finalize` (a no-op) — the caller should
     /// fall through to its terminal finalize path.
     pub(crate) fn apply_fallback_outcome(
         &self,
@@ -1658,6 +1697,11 @@ pub(crate) enum PostLlmAction {
     Break(hermix_core::LlmResponse),
     /// Reasoning-only response; the message has been pushed onto
     /// `ctx` and the caller should re-enter the retry loop.
+    ///
+    /// 2026-07-09: No longer constructed — reasoning-only responses
+    /// now Break immediately. Kept for pattern-match exhaustiveness
+    /// and future use.
+    #[allow(dead_code)]
     RetryReasoning,
     /// Empty response (no reasoning, no content, no tools); the
     /// caller should re-enter the retry loop without touching
@@ -2917,7 +2961,8 @@ mod tests {
         );
         let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.prompt_cache, agent.memory_router.as_deref(), "", &[], "gpt-4o", 0);
         assert!(prompt.contains("## Active Personality (coder)"));
-        assert!(prompt.contains("`coder` persona"));
+        // 2026-07-12: Localized to Chinese — verify the role label is present.
+        assert!(prompt.contains("工程师"));
     }
 
     #[test]
@@ -5216,6 +5261,193 @@ mod tests {
         assert_eq!(v["op"], "hide");
         assert_eq!(v["id"], "c1");
     }
+
+    /// 2026-07-12 WW regression: `PostResponseAction::Finalize` (the
+    /// visible-text branch) used to call `persist_session_terminal(&ctx, …)`
+    /// and `finalize_agent_result(&ctx, …)` **without** first appending the
+    /// final assistant message into `ctx`. The `Continue` branch had a
+    /// `prepare_assistant_turn` fallback path; `Finalize` did not. The
+    /// symptom in production: owner reloaded the
+    /// "看下目录下的文件" session and the post-tool final reply
+    /// ("老大，目录共 198 条...") was gone — only user + assistant1(tool_call)
+    /// + tool landed in the DB. Streaming had shown the text live via WS
+    /// chunks but the server-side ctx / persist call had skipped it.
+    ///
+    /// The fix in `run_loop.rs`: call `prepare_assistant_turn` inside the
+    /// `Finalize → has_visible_text` branch **before** the terminal
+    /// persist / finalize. This regression test simulates exactly that
+    /// two-turn shape and asserts the final assistant message survives
+    /// in the returned `AgentResult.messages`.
+    #[tokio::test]
+    pub(crate) async fn ww_run_persists_final_assistant_message_into_ctx_after_tool() {
+        use async_trait::async_trait;
+        use futures::stream::BoxStream;
+        use hermix_core::{
+            tool_schema, AgentError, FunctionCall, JsonSchema, LlmProvider, LlmResponse, Message,
+            ToolCall, ToolError, ToolSchema,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct TwoTurnProvider {
+            calls: AtomicUsize,
+        }
+        #[async_trait]
+        impl LlmProvider for TwoTurnProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<LlmResponse, AgentError> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+                let message = if n == 1 {
+                    // Turn 1: empty visible content + a tool_call to a
+                    // registered "list_files" tool. Mirrors how
+                    // MiniMax emits a thinking-only turn followed by a
+                    // tool call.
+                    let mut msg = Message::assistant("");
+                    msg.tool_calls = Some(vec![ToolCall {
+                        id: "call-1".into(),
+                        function: FunctionCall {
+                            name: "list_files".into(),
+                            arguments: "{}".into(),
+                        },
+                    }]);
+                    msg
+                } else {
+                    // Turn 2: full visible final response (the text that
+                    // the owner saw live in the chat but that *used to*
+                    // not be persisted into ctx on the Finalize branch).
+                    Message::assistant(
+                        "老大，目录共 198 条(含 3 个 .py 脚本 + 17 个主车文件夹)。",
+                    )
+                };
+                Ok(LlmResponse {
+                    message,
+                    usage: None,
+                    model: "dummy".into(),
+                    finish_reason: Some("stop".into()),
+                })
+            }
+
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+                futures::stream::empty().boxed()
+            }
+        }
+
+        // `agent_helpers::ToolRegistry::register` takes a sync
+        // `Fn(Value) -> Result<String, ToolError>` — so the mock tool is
+        // a plain closure rather than a `ToolHandler` impl.
+        let mut registry = ToolRegistry::new();
+        registry.register(
+            "list_files",
+            tool_schema("list_files", "List files", JsonSchema::new("object")),
+            Arc::new(|_params: serde_json::Value| -> Result<String, ToolError> {
+                Ok("mock directory listing (198 entries)".into())
+            }),
+        );
+
+        let provider = Arc::new(TwoTurnProvider {
+            calls: AtomicUsize::new(0),
+        });
+
+        let cfg = AgentConfig {
+            max_turns: 4,
+            ..AgentConfig::default()
+        };
+        let agent = AgentLoop::new(cfg, Arc::new(registry), provider);
+
+        let result = agent
+            .run(vec![Message::user("看下目录下的文件")], None)
+            .await
+            .expect("agent run should succeed");
+
+        // The core WW invariant: after the post-tool LLM turn
+        // produces a visible final reply, that reply MUST be in
+        // `result.messages` (and therefore in the persisted DB /
+        // disk `.md`). Before the fix the ctx used to terminate
+        // *before* `prepare_assistant_turn`, so the final assistant
+        // bubble was lost on persist and reload came back truncated.
+        //
+        // We don't pin the total message count — the system prompt
+        // injection and cost-guard may insert extra System rows —
+        // but we assert the shape that survives:
+        //   * at least one Tool role (the list_files result)
+        //   * the LAST Assistant row is the post-tool final reply
+        //     (i.e. it was appended AFTER the tool result, in the
+        //     Finalize→has_visible_text branch we just fixed)
+        //   * an earlier Assistant row carried the tool_call so
+        //     the chat view renders the tool pill correctly
+        use hermix_core::MessageRole;
+        let roles: Vec<_> = result.messages.iter().map(|m| m.role).collect();
+        assert!(
+            roles.iter().any(|r| *r == MessageRole::Tool),
+            "expected at least one Tool message; got roles={:?}",
+            roles
+        );
+
+        let last_assistant = result
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::Assistant)
+            .expect("expected a final Assistant message — the regression");
+        let final_content = last_assistant.content.as_deref().unwrap_or("");
+        assert!(
+            final_content.contains("老大，目录共 198 条"),
+            "final assistant message must contain the post-tool reply; got: {:?}",
+            final_content
+        );
+
+        // The FINAL assistant must come AFTER the tool result in the
+        // message list — otherwise the assistant message would have
+        // been added before the tool result (the Continue-branch
+        // fallback path), which doesn't actually exercise the
+        // Finalize→has_visible_text fix.
+        let last_tool_idx = result
+            .messages
+            .iter()
+            .rposition(|m| m.role == MessageRole::Tool)
+            .expect("at least one Tool message");
+        let last_assistant_idx = result
+            .messages
+            .iter()
+            .rposition(|m| m.role == MessageRole::Assistant)
+            .expect("at least one Assistant message");
+        assert!(
+            last_assistant_idx > last_tool_idx,
+            "final assistant (idx={}) must come after the last tool result (idx={}); roles={:?}",
+            last_assistant_idx,
+            last_tool_idx,
+            roles
+        );
+
+        // Sanity: an earlier Assistant row must carry the tool_call so
+        // the merged `tool_calls` field of the chat view is correct.
+        let pre_tool_assistant = result
+            .messages
+            .iter()
+            .take(last_tool_idx)
+            .find(|m| m.role == MessageRole::Assistant)
+            .expect("expected an assistant message before the tool result");
+        let tcs = pre_tool_assistant
+            .tool_calls
+            .as_ref()
+            .expect("pre-tool assistant must carry tool_calls");
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].function.name, "list_files");
+    }
 }
 
 /// Lightweight stub provider for `resolve_pre_dispatch` tests. Implements the
@@ -5354,11 +5586,10 @@ mod stub_provider {
     }
 
     #[test]
-    pub(crate) fn p4_1_classify_retries_reasoning_within_budget() {
-        // Reasoning-only response with the budget set to 2 → first
-        // call increments to 1/2 and returns RetryReasoning; the
-        // message is pushed onto ctx so the next LLM call sees it as
-        // prior context.
+    pub(crate) fn p4_1_classify_reasoning_only_breaks_immediately() {
+        // 2026-07-09: Reasoning-only responses (no visible text, no tools)
+        // now Break immediately instead of retrying. The outer loop's
+        // `decide_empty_response` handles the post-tool nudge.
         let (mut loop_, mut ctx) = make_loop_for_classify();
         loop_.config.thinking_prefill_max_retries = 2;
         let mut inner_thinking = 0;
@@ -5369,10 +5600,10 @@ mod stub_provider {
             &mut inner_empty,
             &mut ctx,
         );
-        assert!(matches!(action, PostLlmAction::RetryReasoning));
-        assert_eq!(inner_thinking, 1);
+        assert!(matches!(action, PostLlmAction::Break(_)));
+        assert_eq!(inner_thinking, 0);
         assert_eq!(inner_empty, 0);
-        assert_eq!(ctx.get_messages().len(), 1);
+        assert_eq!(ctx.get_messages().len(), 0);
     }
 
     #[test]
