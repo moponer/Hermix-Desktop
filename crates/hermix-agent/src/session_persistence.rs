@@ -57,10 +57,12 @@ const WRITE_RETRY_MIN_MS: u64 = 20;
 const WRITE_RETRY_MAX_MS: u64 = 150;
 
 fn is_busy_error(e: &AgentError) -> bool {
-    match e {
-        AgentError::Io(msg) => msg.contains("SQLITE_BUSY") || msg.contains("database is locked"),
-        _ => false,
-    }
+    // Check all variants — SQLite errors can be wrapped in any AgentError
+    // variant (Io, Config, Gateway, ToolExecution, etc.) depending on the
+    // call site. Using the Display impl (via thiserror) ensures we catch
+    // the underlying SQLite message regardless of how it was wrapped.
+    let msg = e.to_string();
+    msg.contains("SQLITE_BUSY") || msg.contains("database is locked")
 }
 
 /// Pseudo-random jitter for SQLITE_BUSY retry delays.
@@ -547,6 +549,8 @@ impl SessionPersistence {
             "messages_fts_trigram",
             Some("CREATE_VIRTUAL_TABLE messages_fts_trigram"),
         )?;
+        // P0-3: Orchestration Engine tables (tasks + automation_*)
+        stamp_migration(&conn, 6, "orchestration_engine_tables", None)?;
 
     /// Record a migration as applied (idempotent). When `marker_sql` is
     /// `Some`, the marker SQL is also executed so future upgrades can
@@ -626,7 +630,9 @@ impl SessionPersistence {
                 message_count INTEGER DEFAULT 0,
                 system_prompt TEXT,
                 compressed_summary TEXT,
-                parent_session_id TEXT
+                parent_session_id TEXT,
+                workspace TEXT,
+                expert_id TEXT
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -791,7 +797,76 @@ impl SessionPersistence {
             CREATE INDEX IF NOT EXISTS idx_token_usage_model
                 ON token_usage(model);
             CREATE INDEX IF NOT EXISTS idx_token_usage_session
-                ON token_usage(session_id, created_at);"#,
+                ON token_usage(session_id, created_at);
+
+            -- ── Phase 0 / P0-3: Orchestration Engine tables ──────
+            -- All three tables live in sessions.db to share the same
+            -- WAL + busy_timeout (铁律 D/W). No cross-file journal
+            -- contention because there is only one file.
+
+            -- Task table: top-level work unit carrying workspace,
+            -- conversation context, mode (Craft/Plan/Ask), and
+            -- deliverable result references.
+            CREATE TABLE IF NOT EXISTS tasks (
+                id              TEXT PRIMARY KEY,
+                title           TEXT NOT NULL,
+                workspace_path  TEXT NOT NULL,
+                mode            TEXT NOT NULL DEFAULT 'craft',
+                status          TEXT NOT NULL DEFAULT 'pending',
+                parent_task_id  TEXT,
+                context_json    TEXT NOT NULL DEFAULT '{}',
+                result_refs_json TEXT NOT NULL DEFAULT '[]',
+                created_at      INTEGER NOT NULL,
+                updated_at      INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+            CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);
+
+            -- Automation definition table: user-defined scheduled tasks
+            -- (recurring via RRULE or one-shot). Decoupled from the
+            -- execution engine by the runtime_state + runs tables.
+            CREATE TABLE IF NOT EXISTS automations (
+                id            TEXT PRIMARY KEY,
+                name          TEXT NOT NULL,
+                prompt        TEXT NOT NULL,
+                schedule_type TEXT NOT NULL,
+                rrule         TEXT,
+                scheduled_at  TEXT,
+                status        TEXT NOT NULL DEFAULT 'ACTIVE',
+                valid_from    TEXT,
+                valid_until   TEXT,
+                cwds          TEXT,
+                connector_ids_json TEXT,
+                expert_id     TEXT,
+                model_id      TEXT,
+                created_at    INTEGER NOT NULL,
+                updated_at    INTEGER NOT NULL
+            );
+
+            -- Automation runtime state: last/next run timestamps and
+            -- run count. One row per automation (PK = automation_id).
+            CREATE TABLE IF NOT EXISTS automation_runtime_state (
+                automation_id TEXT PRIMARY KEY,
+                last_run_at   INTEGER,
+                next_run_at   INTEGER,
+                run_count     INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY(automation_id) REFERENCES automations(id) ON DELETE CASCADE
+            );
+
+            -- Automation run history: one row per execution of an
+            -- automation. Links to the generated Task via task_id.
+            CREATE TABLE IF NOT EXISTS automation_runs (
+                id            TEXT PRIMARY KEY,
+                automation_id TEXT NOT NULL,
+                started_at    INTEGER NOT NULL,
+                finished_at   INTEGER,
+                status        TEXT NOT NULL,
+                task_id       TEXT,
+                error_text    TEXT,
+                FOREIGN KEY(automation_id) REFERENCES automations(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_automation_runs_automation
+                ON automation_runs(automation_id, started_at);"#,
         )
         .map_err(|e| AgentError::Io(format!("Failed to create tables: {e}")))?;
 
@@ -845,6 +920,14 @@ impl SessionPersistence {
     /// Persist a session's messages to SQLite.
     /// Delegates to the unified [`save_session_atomic`] which wraps
     /// DB + markdown + trajectory writes in a single transaction.
+    ///
+    /// `workspace` / `expert_id` are persisted to the `sessions` row
+    /// in the same transaction so a session reload (e.g. after the
+    /// desktop app restarts) restores the same workspace category
+    /// the user picked in the welcome UI. Without this, the
+    /// sidebar bucketed every restarted session under "未分组".
+    /// Pass `None` to leave the column unchanged (the `COALESCE`
+    /// inside `save_session_atomic_inner` makes the no-op explicit).
     pub fn persist_session(
         &self,
         session_id: &str,
@@ -854,8 +937,10 @@ impl SessionPersistence {
         title: Option<&str>,
         system_prompt: Option<&str>,
         parent_session_id: Option<&str>,
+        workspace: Option<&str>,
+        expert_id: Option<&str>,
     ) -> Result<(), AgentError> {
-        self.save_session_atomic(session_id, messages, model, platform, title, system_prompt, parent_session_id, None, None, false)
+        self.save_session_atomic(session_id, messages, model, platform, title, system_prompt, parent_session_id, workspace, expert_id, None, None, false)
     }
 
     /// Persist a session's messages to SQLite, optionally including a
@@ -879,6 +964,8 @@ impl SessionPersistence {
         system_prompt: Option<&str>,
         parent_session_id: Option<&str>,
         compressed_summary: Option<&str>,
+        workspace: Option<&str>,
+        expert_id: Option<&str>,
     ) -> Result<(), AgentError> {
         let snapshot = compressed_summary
             .filter(|s| !s.is_empty())
@@ -895,6 +982,8 @@ impl SessionPersistence {
             title,
             system_prompt,
             parent_session_id,
+            workspace,
+            expert_id,
             snapshot_ref,
             None,
             false,
@@ -912,6 +1001,8 @@ impl SessionPersistence {
     /// When the snapshot is empty (no compression this turn), this
     /// is functionally identical to the legacy
     /// `persist_session` call.
+    ///
+    /// `workspace` / `expert_id` (2026-07-12): see [`persist_session`].
     pub fn persist_session_with_compression(
         &self,
         session_id: &str,
@@ -921,6 +1012,8 @@ impl SessionPersistence {
         title: Option<&str>,
         system_prompt: Option<&str>,
         parent_session_id: Option<&str>,
+        workspace: Option<&str>,
+        expert_id: Option<&str>,
         compression: Option<&CompressionSnapshot>,
     ) -> Result<(), AgentError> {
         self.save_session_atomic(
@@ -931,6 +1024,8 @@ impl SessionPersistence {
             title,
             system_prompt,
             parent_session_id,
+            workspace,
+            expert_id,
             compression,
             None,
             false,
@@ -952,8 +1047,17 @@ impl SessionPersistence {
     /// metrics go to `compression_summary_history` (B — append-only
     /// history).
     ///
+    /// `workspace` / `expert_id` are written to the `sessions` row in
+    /// the same transaction (COALESCE — pass `None` to leave the
+    /// column unchanged). This is what makes session reloads restore
+    /// the right workspace category in the desktop sidebar; without
+    /// it the SQL `INSERT ... ON CONFLICT DO UPDATE SET` skipped
+    /// these columns entirely and only the legacy `PATCH /v1/sessions`
+    /// route could write them.
+    ///
     /// `user_query` and `completed` are only needed for the trajectory
     /// file; pass `(None, false)` to skip trajectory.
+    #[allow(clippy::too_many_arguments)]
     pub fn save_session_atomic(
         &self,
         session_id: &str,
@@ -963,6 +1067,8 @@ impl SessionPersistence {
         title: Option<&str>,
         system_prompt: Option<&str>,
         parent_session_id: Option<&str>,
+        workspace: Option<&str>,
+        expert_id: Option<&str>,
         compression: Option<&CompressionSnapshot>,
         user_query: Option<&str>,
         completed: bool,
@@ -974,7 +1080,8 @@ impl SessionPersistence {
         for attempt in 0..=WRITE_MAX_RETRIES {
             match self.save_session_atomic_inner(
                 session_id, messages, model, platform, title,
-                system_prompt, parent_session_id, compression,
+                system_prompt, parent_session_id, workspace, expert_id,
+                compression,
                 user_query, completed,
             ) {
                 Ok(()) => return Ok(()),
@@ -995,6 +1102,7 @@ impl SessionPersistence {
         Err(last_err.unwrap_or_else(|| AgentError::Io("save_session_atomic: exhausted retries".into())))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn save_session_atomic_inner(
         &self,
         session_id: &str,
@@ -1004,6 +1112,8 @@ impl SessionPersistence {
         title: Option<&str>,
         system_prompt: Option<&str>,
         parent_session_id: Option<&str>,
+        workspace: Option<&str>,
+        expert_id: Option<&str>,
         compression: Option<&CompressionSnapshot>,
         user_query: Option<&str>,
         completed: bool,
@@ -1027,14 +1137,16 @@ impl SessionPersistence {
             // 0 placeholder and patch it in step 3 with the real count
             // returned by `flush_messages`.
             conn.execute(
-                "INSERT INTO sessions (id, model, platform, created_at, updated_at, title, message_count, system_prompt, compressed_summary, parent_session_id)
-                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, 0, ?6, ?7, ?8)
+                "INSERT INTO sessions (id, model, platform, created_at, updated_at, title, message_count, system_prompt, compressed_summary, parent_session_id, workspace, expert_id)
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(id) DO UPDATE SET
                     updated_at = ?4,
                     title = COALESCE(?5, sessions.title),
                     system_prompt = COALESCE(?6, sessions.system_prompt),
                     compressed_summary = COALESCE(?7, sessions.compressed_summary),
-                    parent_session_id = COALESCE(?8, sessions.parent_session_id)",
+                    parent_session_id = COALESCE(?8, sessions.parent_session_id),
+                    workspace = COALESCE(?9, sessions.workspace),
+                    expert_id = COALESCE(?10, sessions.expert_id)",
                 rusqlite::params![
                     session_id,
                     model.unwrap_or("unknown"),
@@ -1044,6 +1156,8 @@ impl SessionPersistence {
                     system_prompt,
                     summary_str,
                     parent_session_id,
+                    workspace,
+                    expert_id,
                 ],
             )
             .map_err(|e| AgentError::Io(format!("Failed to upsert session: {e}")))?;
@@ -1192,6 +1306,12 @@ impl SessionPersistence {
 
         let mut inserted: usize = 0;
         for msg in messages {
+            // v34 (2026-07-09): ephemeral messages (e.g. replay-path
+            // tool_result) exist only in the in-memory context and
+            // must never be persisted to the DB.
+            if msg.ephemeral {
+                continue;
+            }
             if matches!(msg.role, MessageRole::System) {
                 continue;
             }
@@ -1386,6 +1506,34 @@ impl SessionPersistence {
         }
     }
 
+    /// 2026-07-12: read back the persisted workspace / expert_id
+    /// for the given session. Returns `(Option<String>, Option<String>)`
+    /// in `(workspace, expert_id)` order. Used by the
+    /// `test_persist_session_writes_workspace_and_survives_coalesce`
+    /// regression test and by the server's reload path if a future
+    /// caller wants a single-shot lookup instead of going through
+    /// `list_sessions`.
+    pub fn read_session_metadata(
+        &self,
+        session_id: &str,
+    ) -> Result<(Option<String>, Option<String>), AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        let mut stmt = conn
+            .prepare("SELECT workspace, expert_id FROM sessions WHERE id = ?1")
+            .map_err(|e| AgentError::Io(format!("Failed to prepare metadata query: {e}")))?;
+        match stmt.query_row(rusqlite::params![session_id], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<String>>(1)?,
+            ))
+        }) {
+            Ok(t) => Ok(t),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok((None, None)),
+            Err(e) => Err(AgentError::Io(format!("Failed to read session metadata: {e}"))),
+        }
+    }
+
     /// Load a previous session from SQLite.
     ///
     /// **Filters out approval rows** (`role='approval'`) — those live in
@@ -1447,6 +1595,7 @@ impl SessionPersistence {
                     reasoning_content,
                     cache_control: None,
                     execution_timeline,
+                    ephemeral: false,
                 })
             })
             .map_err(|e| AgentError::Io(format!("Failed to query messages: {e}")))?
@@ -1884,6 +2033,7 @@ impl SessionPersistence {
                         reasoning_content,
                         cache_control: None,
                         execution_timeline,
+                        ephemeral: false,
                     }))
                 }
             })
@@ -2745,6 +2895,9 @@ mod tests {
             Some("Test"),
             Some("cached system blob"),
             None,
+            // workspace / expert_id: not under test here.
+            None,
+            None,
         )
         .unwrap();
 
@@ -2762,6 +2915,121 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].content.as_deref(), Some("Hello"));
         assert_eq!(loaded[1].content.as_deref(), Some("Hi there!"));
+    }
+
+    // 2026-07-12 regression (Bug A): createSession must persist
+    // the welcome-state draft workspace to `sessions.workspace` so
+    // a desktop restart restores the right Sidebar bucket. Before
+    // the fix, the column was never written by `persist_session`
+    // (SQL omitted it), so `list_sessions` returned workspace=NULL
+    // and the row fell into "未分组". Pass None afterwards to
+    // confirm COALESCE preserves the original binding across the
+    // follow-up persists the agent loop fires on every chunk.
+    #[test]
+    fn test_persist_session_writes_workspace_and_survives_coalesce() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        let workspace_path = "C:\\Users\\demo\\projects\\foo";
+        let expert_id = "expert-coder";
+
+        sp.persist_session(
+            "ws-test",
+            &[Message::user("hi"), Message::assistant("hello")],
+            Some("openai:gpt-4o"),
+            Some("test"),
+            None,
+            None,
+            None,
+            Some(workspace_path),
+            Some(expert_id),
+        )
+        .unwrap();
+
+        // First persist must land both columns on the row.
+        let (got_ws, got_expert) = sp.read_session_metadata("ws-test").unwrap();
+        assert_eq!(got_ws.as_deref(), Some(workspace_path));
+        assert_eq!(got_expert.as_deref(), Some(expert_id));
+
+        // Subsequent persist with workspace=None / expert_id=None
+        // must COALESCE-keep the original binding — otherwise the
+        // per-turn persist in `local_agent_service` would silently
+        // wipe the user's selection on every streamed chunk.
+        sp.persist_session(
+            "ws-test",
+            &[Message::user("hi"), Message::assistant("hello"), Message::user("again")],
+            Some("openai:gpt-4o"),
+            Some("test"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let (got_ws, got_expert) = sp.read_session_metadata("ws-test").unwrap();
+        assert_eq!(got_ws.as_deref(), Some(workspace_path), "COALESCE must preserve workspace");
+        assert_eq!(got_expert.as_deref(), Some(expert_id), "COALESCE must preserve expert_id");
+    }
+
+    // 2026-07-12 regression (Bug B): the reload path must preserve
+    // both visible `content` and `reasoning_content` even when the
+    // persisted content contains a `<think>` block whose close tag
+    // never landed (e.g. the streaming run ended mid-think, or the
+    // model used a non-standard variant that `ThinkBlockParser`
+    // missed). Before the fix, the server's `get_session_messages`
+    // handler ran `ToolCallSanitizer::feed+flush` on the persisted
+    // `content`; the sanitizer is a *streaming state machine* and
+    // `flush()` discards any held bytes, so the assistant bubble
+    // rendered blank. The fix removed the read-path sanitizer
+    // (sanitization belongs on the write path), but this test pins
+    // the contract at the persistence layer: load_session returns
+    // exactly what was persisted.
+    #[test]
+    fn test_load_session_preserves_think_block_residue_in_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        // Imagine a write path where ThinkBlockParser only partially
+        // stripped the think block — the user sees the visible body
+        // but a fragment of `<think...` remains in the persisted
+        // content. The reload path must NOT silently eat that body.
+        let mut assistant = Message::assistant("这是答案正文。");
+        assistant.content = Some(
+            "这是答案正文。<think>model was mid-think when stream ended".to_string(),
+        );
+        assistant.reasoning_content = Some("fragment thought".to_string());
+
+        sp.persist_session(
+            "think-residue",
+            &[Message::user("hi"), assistant],
+            Some("openai:gpt-4o"),
+            Some("test"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let loaded = sp.load_session("think-residue").unwrap();
+        assert_eq!(loaded.len(), 2);
+        let body = loaded[1].content.as_deref().expect("content preserved");
+        assert!(
+            body.contains("这是答案正文"),
+            "visible body must survive reload: got {body:?}"
+        );
+        assert!(
+            body.contains("think"),
+            "the stray think token is allowed to round-trip — the server \
+             must not silently mutate persisted content on reload: got {body:?}"
+        );
+        assert_eq!(
+            loaded[1].reasoning_content.as_deref(),
+            Some("fragment thought"),
+            "reasoning_content must round-trip verbatim on reload"
+        );
     }
 
     #[test]
@@ -2835,8 +3103,8 @@ mod tests {
         let sp = SessionPersistence::new(tmp.path());
         // Sessions FK is required — create the parent rows first so
         // the token_usage inserts don't trip FOREIGN KEY constraint.
-        sp.persist_session("sess-1", &[Message::user("hi"), Message::assistant("yo")], Some("gpt-4o"), None, None, None, None).unwrap();
-        sp.persist_session("sess-2", &[Message::user("hi"), Message::assistant("yo")], Some("claude"), None, None, None, None).unwrap();
+        sp.persist_session("sess-1", &[Message::user("hi"), Message::assistant("yo")], Some("gpt-4o"), None, None, None, None, None, None).unwrap();
+        sp.persist_session("sess-2", &[Message::user("hi"), Message::assistant("yo")], Some("claude"), None, None, None, None, None, None).unwrap();
 
         sp.persist_token_usage("sess-1", "gpt-4o", &usage(100, 50, Some(0.001)))
             .unwrap();
@@ -2855,7 +3123,7 @@ mod tests {
     fn p1_3_aggregate_usage_daily_fills_missing_days_with_zero() {
         let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());
-        sp.persist_session("sess-today", &[Message::user("hi"), Message::assistant("yo")], Some("gpt-4o"), None, None, None, None).unwrap();
+        sp.persist_session("sess-today", &[Message::user("hi"), Message::assistant("yo")], Some("gpt-4o"), None, None, None, None, None, None).unwrap();
 
         // Insert one row at "today" (whatever that is). Daily curve
         // should have `days + 1` entries; today filled, others zero.
@@ -2921,6 +3189,7 @@ mod tests {
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                ephemeral: false,
             },
             Message {
                 role: hermix_core::MessageRole::Assistant,
@@ -2932,9 +3201,10 @@ mod tests {
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                ephemeral: false,
             },
         ];
-        sp.persist_session("sess-tools", &messages, Some("gpt-4o"), None, None, None, None)
+        sp.persist_session("sess-tools", &messages, Some("gpt-4o"), None, None, None, None, None, None)
             .unwrap();
 
         // Hand-overwrite the second assistant row with the legacy
@@ -3006,9 +3276,10 @@ mod tests {
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                ephemeral: false,
             },
         ];
-        sp.persist_session("sess-sort", &messages, Some("gpt-4o"), None, None, None, None)
+        sp.persist_session("sess-sort", &messages, Some("gpt-4o"), None, None, None, None, None, None)
             .unwrap();
         let agg = sp.aggregate_usage(30).unwrap();
         assert!(agg.by_tool[0].tool == "read_file");
@@ -3035,9 +3306,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());
         let messages = vec![Message::user("hi"), Message::assistant("hello!")];
-        sp.persist_session("sess-a", &messages, Some("gpt-4o"), None, None, None, None)
+        sp.persist_session("sess-a", &messages, Some("gpt-4o"), None, None, None, None, None, None)
             .unwrap();
-        sp.persist_session("sess-b", &messages, Some("claude"), None, None, None, None)
+        sp.persist_session("sess-b", &messages, Some("claude"), None, None, None, None, None, None)
             .unwrap();
         sp.persist_token_usage("sess-a", "gpt-4o", &usage(1000, 200, Some(0.01)))
             .unwrap();
@@ -3078,7 +3349,7 @@ mod tests {
         let sp = SessionPersistence::new(tmp.path());
 
         let messages1 = vec![Message::user("First")];
-        sp.persist_session("replace-test", &messages1, None, None, None, None, None)
+        sp.persist_session("replace-test", &messages1, None, None, None, None, None, None, None)
             .unwrap();
 
         let messages2 = vec![
@@ -3086,7 +3357,7 @@ mod tests {
             Message::assistant("Response"),
             Message::user("Second"),
         ];
-        sp.persist_session("replace-test", &messages2, None, None, None, None, None)
+        sp.persist_session("replace-test", &messages2, None, None, None, None, None, None, None)
             .unwrap();
 
         let loaded = sp.load_session("replace-test").unwrap();
@@ -3105,7 +3376,7 @@ mod tests {
             Message::user("turn-3 user"),
             Message::assistant("turn-3 assistant"),
         ];
-        sp.persist_session("undo-test", &messages, None, None, None, None, None)
+        sp.persist_session("undo-test", &messages, None, None, None, None, None, None, None)
             .unwrap();
         sp
     }
@@ -3190,7 +3461,7 @@ mod tests {
             Message::user("first"),
             Message::assistant("first reply"),
         ];
-        sp.persist_session("s1", &messages, None, None, None, None, None).unwrap();
+        sp.persist_session("s1", &messages, None, None, None, None, None, None, None).unwrap();
         sp.append_approval_message(
             "s1",
             &make_approval("req-1", "terminal_run", Some("reply-0")),
@@ -3226,7 +3497,7 @@ mod tests {
         sp.persist_session(
             "s2",
             &[Message::user("hi"), Message::assistant("hello")],
-            None, None, None, None, None,
+            None, None, None, None, None, None, None,
         )
         .unwrap();
         sp.append_approval_message(
@@ -3252,7 +3523,7 @@ mod tests {
         sp.persist_session(
             "s3",
             &[Message::user("hi"), Message::assistant("ok")],
-            None, None, None, None, None,
+            None, None, None, None, None, None, None,
         )
         .unwrap();
         sp.append_approval_message(
@@ -3280,7 +3551,7 @@ mod tests {
         sp.persist_session(
             "s4",
             &[Message::user("hi"), Message::assistant("ok")],
-            None, None, None, None, None,
+            None, None, None, None, None, None, None,
         )
         .unwrap();
         let rec = make_approval("req-dup", "terminal_run", Some("reply-0"));
@@ -3324,7 +3595,7 @@ mod tests {
         sp.persist_session(
             "s5",
             &[Message::user("u1"), Message::assistant("a1")],
-            None, None, None, None, None,
+            None, None, None, None, None, None, None,
         )
         .unwrap();
         sp.append_approval_message(
@@ -3340,7 +3611,7 @@ mod tests {
                 Message::user("u2"),
                 Message::assistant("a2"),
             ],
-            None, None, None, None, None,
+            None, None, None, None, None, None, None,
         )
         .unwrap();
         // The second persist wiped the approval row. Undo should now
@@ -3466,7 +3737,7 @@ mod tests {
             Message::system("trailing system that must NOT count"),
         ];
 
-        sp.persist_session("count-test", &messages, Some("gpt-4o"), None, Some("Count"), None, None)
+        sp.persist_session("count-test", &messages, Some("gpt-4o"), None, Some("Count"), None, None, None, None)
             .unwrap();
 
         // 1. Open the DB directly and count the actual rows.
@@ -3543,6 +3814,9 @@ mod tests {
             Some("Compression test"),
             Some("system"),
             None,
+            // workspace / expert_id: not under test here.
+            None,
+            None,
             Some(&snapshot),
         )
         .expect("persist must succeed");
@@ -3606,6 +3880,9 @@ mod tests {
             Some("test-model"),
             Some("local"),
             None,
+            None,
+            None,
+            // workspace / expert_id / compression: none under test here.
             None,
             None,
             None,

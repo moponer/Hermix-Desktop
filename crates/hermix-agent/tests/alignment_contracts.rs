@@ -18,6 +18,9 @@ fn hydrate_stored_system_prompt_roundtrip() {
         None,
         Some("STORED_SYSTEM_PROMPT_XYZ"),
         None,
+        // workspace / expert_id: no binding for this alignment fixture.
+        None,
+        None,
     )
     .unwrap();
 
@@ -58,6 +61,7 @@ fn strip_budget_tool_message_matches_python_fixture() {
         reasoning_content: None,
         cache_control: None,
         execution_timeline: None,
+        ephemeral: false,
     }];
     python_alignment::strip_budget_warnings_from_messages(&mut messages);
     let v: serde_json::Value = serde_json::from_str(messages[0].content.as_ref().unwrap()).unwrap();

@@ -20,7 +20,7 @@ proptest! {
         let sp = SessionPersistence::new(&home);
         let _ = sp.ensure_db();
 
-        sp.persist_session("prop-sid", &messages, Some("openai:gpt-4o"), Some("test"), None, None, None)
+        sp.persist_session("prop-sid", &messages, Some("openai:gpt-4o"), Some("test"), None, None, None, None, None)
             .expect("persist");
         let loaded = sp.load_session("prop-sid").expect("load");
 
@@ -61,8 +61,9 @@ proptest! {
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                ephemeral: false,
             }];
-            sp.persist_session(sid, &msg, Some("openai:gpt-4o"), Some("test"), None, None, None)
+            sp.persist_session(sid, &msg, Some("openai:gpt-4o"), Some("test"), None, None, None, None, None)
                 .expect("persist");
         }
 

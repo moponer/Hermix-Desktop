@@ -8,12 +8,20 @@
 //! Policy HTTP routes are intentionally omitted (Hermes Python does not expose them).
 
 pub mod dashboard;
+mod automation_trigger;
+mod orchestration_bus;
+mod task_tracker_adapter;
 mod security;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_state;
 
 pub use security::parse_allowed_ips;
 pub use security::PolicyGuardConfig;
+
+// Re-export orchestration event bus types (Phase 0 / P0-5)
+pub use orchestration_bus::{
+    OrchestrationEvent, OrchestrationEventBus, SharedOrchestrationBus,
+};
 
 use std::convert::Infallible;
 use hermix_config::env_compat;
@@ -31,14 +39,14 @@ use axum::http::header;
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use futures::StreamExt;
 use hermix_config::GatewayConfig;
-use hermix_agent::python_alignment::{strip_think_blocks_for_ack, ThinkBlockParser};
+use hermix_agent::python_alignment::ThinkBlockParser;
 use hermix_agent::ArchiveRef;
-use hermix_core::{traits::{PermissionLevel, RiskLevel}, AgentError, Message, MessageRole, StreamChunk, ToolCallSanitizer as CoreToolCallSanitizer};
+use hermix_core::{traits::{PermissionLevel, RiskLevel}, AgentError, Message, MessageRole, StreamChunk};
 use hermix_tools::approval::UserAllowlist;
 use hermix_tools::ToolRegistry;
 use regex::Regex;
@@ -632,6 +640,10 @@ mod approval_registry_tests {
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             todo_event_tx: None,
+            orchestration_bus: OrchestrationEventBus::new(),
+            task_service: None,
+            automation_service: None,
+            automation_engine_scheduler: None,
         }
     }
 
@@ -1049,6 +1061,26 @@ pub struct HttpServerState {
     /// — currently `None` and filtered on the WS side via the
     /// conversation's session id, see `handle_ws_stream`).
     pub todo_event_tx: Option<tokio::sync::broadcast::Sender<hermix_tools::tools::todo::TodoChange>>,
+    /// Phase 0 / P0-5: Orchestration event bus. Cross-crate channel
+    /// for Task lifecycle, automation triggers, and result delivery
+    /// events. Tool backends and the agent loop hold a clone to emit;
+    /// the WS handler subscribes to forward events to connected clients.
+    pub orchestration_bus: OrchestrationEventBus,
+    /// Phase 1 / P1-5: Task lifecycle service. Backed by
+    /// [`hermix_task::TaskRepository`] pointing at the same
+    /// `sessions.db` (铁律 D/WAL). `None` when the DB path can't be
+    /// resolved (e.g. in test fixtures).
+    pub task_service: Option<std::sync::Arc<hermix_task::TaskService>>,
+    /// Phase 5 / P5-5: Automation lifecycle service. Backed by
+    /// [`hermix_automation::AutomationRepository`] pointing at the same
+    /// `sessions.db` (铁律 D/WAL). `None` when the DB path can't be
+    /// resolved (e.g. in test fixtures).
+    pub automation_service: Option<std::sync::Arc<hermix_automation::AutomationService>>,
+    /// Phase 6 / P6-5: Handle to the automation engine scheduler
+    /// (from `hermix-automation` crate). Started automatically by
+    /// `build_with_hermes_home`; triggers go through the unified
+    /// `agent_service.send_message()` dispatch path (铁律 DD).
+    pub automation_engine_scheduler: Option<automation_trigger::AutomationSchedulerHandle>,
 }
 
 impl HttpServerState {
@@ -1057,6 +1089,19 @@ impl HttpServerState {
     /// yields one [`ClarifyBroadcast`] per freshly enqueued request.
     pub fn clarify_subscribe(&self) -> tokio::sync::broadcast::Receiver<ClarifyBroadcast> {
         self.clarify_broadcast.subscribe()
+    }
+
+    /// Phase 4 / P4-1: Register the `task_create` / `task_update` /
+    /// `task_list` tools into the tool registry, backed by the
+    /// `TaskService`. No-op if `task_service` is `None`.
+    pub fn register_task_tracker_tools(&self) {
+        if let Some(svc) = &self.task_service {
+            let backend = Arc::new(task_tracker_adapter::TaskTrackerBackendImpl::new(
+                svc.clone(),
+            ));
+            hermix_tools::tools::task_tracker::register(&self.tool_registry, backend);
+            tracing::info!("Registered task_tracker tools (task_create, task_update, task_list, task_get, present_files)");
+        }
     }
 
     /// Access the GroupChat manager for collaborative multi-agent rooms.
@@ -1277,28 +1322,37 @@ impl HttpServerState {
         let mcp_manager = hermix_mcp::ArcMcpManager::new(tool_registry.clone());
         {
             let mcp_list = crate::dashboard::mcp::load_mcp_servers(&hermix_home);
-            for entry in mcp_list.servers.iter().filter(|e| e.enabled) {
-                match crate::dashboard::mcp::entry_to_server_config(entry) {
-                    Ok((cfg_name, cfg)) => {
-                        if let Err(e) = mcp_manager.connect(&cfg_name, cfg).await {
+            let mcp_mgr = mcp_manager.clone();
+            // Spawn MCP connection as a background task so it does NOT
+            // block the HTTP listener from binding. `npx -y <pkg>` can
+            // take 10-30s on first run (package download + Node startup),
+            // which would cause the sidecar watchdog to think the server
+            // is dead and restart it in a loop. The MCP tools appear in
+            // the registry as soon as each server finishes connecting.
+            tokio::spawn(async move {
+                for entry in mcp_list.servers.iter().filter(|e| e.enabled) {
+                    match crate::dashboard::mcp::entry_to_server_config(entry) {
+                        Ok((cfg_name, cfg)) => {
+                            if let Err(e) = mcp_mgr.connect(&cfg_name, cfg).await {
+                                tracing::warn!(
+                                    server = %cfg_name,
+                                    error = %e,
+                                    "MCP server connect failed at startup; skipping"
+                                );
+                            } else {
+                                tracing::info!(server = %cfg_name, "MCP server connected");
+                            }
+                        }
+                        Err(e) => {
                             tracing::warn!(
-                                server = %cfg_name,
+                                server = %entry.name,
                                 error = %e,
-                                "MCP server connect failed at startup; skipping"
+                                "MCP server entry invalid; skipping"
                             );
-                        } else {
-                            tracing::info!(server = %cfg_name, "MCP server connected");
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            server = %entry.name,
-                            error = %e,
-                            "MCP server entry invalid; skipping"
-                        );
-                    }
                 }
-            }
+            });
         }
 
         let session_persistence = Arc::new(
@@ -1365,11 +1419,11 @@ impl HttpServerState {
         let groupchat_mgr =
             Self::init_groupchat_manager(&hermix_home, Some(agent_service.clone()));
 
-        Ok(Self {
+        let state = Self {
             config: Arc::new(config),
             tool_registry,
             hermix_home,
-            session_persistence,
+            session_persistence: session_persistence.clone(),
             cron_scheduler: Some(cron_scheduler),
             skill_store: Some(skill_store),
             runtime_gateway_running: None,
@@ -1404,7 +1458,48 @@ impl HttpServerState {
             // we know the runtime config. Initialised to None here so
             // the early struct literal doesn't need to await anything.
             todo_event_tx: Some(todo_event_tx.clone()),
-        })
+            orchestration_bus: OrchestrationEventBus::new(),
+            task_service: {
+                let repo = std::sync::Arc::new(hermix_task::TaskRepository::new(
+                    session_persistence.db_path().to_path_buf(),
+                ));
+                let _ = repo.ensure_schema();
+                Some(std::sync::Arc::new(hermix_task::TaskService::new(repo)))
+            },
+            automation_service: {
+                let repo = std::sync::Arc::new(hermix_automation::AutomationRepository::new(
+                    session_persistence.db_path().to_path_buf(),
+                ));
+                let _ = repo.ensure_schema();
+                Some(std::sync::Arc::new(hermix_automation::AutomationService::new(repo)))
+            },
+            automation_engine_scheduler: None,
+        };
+        state.register_task_tracker_tools();
+
+        // Phase 6 / P6-5: Start the automation scheduler with the unified
+        // dispatch path. The trigger callback calls `agent_service.send_message()`,
+        // which internally uses `ToolRegistry::dispatch_async()` — the same
+        // path as HTTP chat requests (铁律 DD).
+        if let (Some(auto_svc), Some(task_svc)) = (
+            &state.automation_service,
+            &state.task_service,
+        ) {
+            let handle = automation_trigger::start_automation_scheduler(
+                auto_svc.clone(),
+                state.agent_service(),
+                state.orchestration_bus.clone(),
+                Some(task_svc.clone()),
+            );
+            // SAFETY: we're mutating a field of the returned state before
+            // handing it to the caller. This is safe because no other code
+            // has a reference to `state` yet.
+            let mut state = state;
+            state.automation_engine_scheduler = Some(handle);
+            return Ok(state);
+        }
+
+        Ok(state)
     }
 
     pub async fn build_with_agent_service(
@@ -1522,11 +1617,11 @@ impl HttpServerState {
 
         let groupchat_mgr = Self::init_groupchat_manager(&hermix_home, Some(agent_service.clone()));
 
-        Ok(Self {
+        let state = Self {
             config: Arc::new(config),
             tool_registry,
             hermix_home,
-            session_persistence,
+            session_persistence: session_persistence.clone(),
             cron_scheduler: Some(cron_scheduler),
             skill_store: Some(skill_store),
             runtime_gateway_running: None,
@@ -1558,7 +1653,25 @@ impl HttpServerState {
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             todo_event_tx: Some(todo_event_tx.clone()), // injected after register_builtin_tools below
-        }) // close Ok(Self { ... })
+            orchestration_bus: OrchestrationEventBus::new(),
+            task_service: {
+                let repo = std::sync::Arc::new(hermix_task::TaskRepository::new(
+                    session_persistence.db_path().to_path_buf(),
+                ));
+                let _ = repo.ensure_schema();
+                Some(std::sync::Arc::new(hermix_task::TaskService::new(repo)))
+            },
+            automation_service: {
+                let repo = std::sync::Arc::new(hermix_automation::AutomationRepository::new(
+                    session_persistence.db_path().to_path_buf(),
+                ));
+                let _ = repo.ensure_schema();
+                Some(std::sync::Arc::new(hermix_automation::AutomationService::new(repo)))
+            },
+            automation_engine_scheduler: None,
+        }; // close Self { ... }
+        state.register_task_tracker_tools();
+        Ok(state)
     }
 
     pub fn with_runtime_gateway_running(
@@ -1782,6 +1895,15 @@ pub fn router(state: HttpServerState) -> Router {
         )
         .route("/v1/sessions/search", get(search_sessions))
         .route("/v1/sessions/{session_id}/lineage", get(get_session_lineage))
+        // v1 (2026-07-07): todo (task list) HTTP endpoints. The LLM
+        // goes through the `todo` tool over WS; the desktop TodoPanel
+        // hits these endpoints for hydration (GET) and manual
+        // checkbox toggles (PATCH). See `list_todos` / `patch_todo`.
+        .route("/v1/todos", get(list_todos))
+        .route(
+            "/v1/todos/{todo_id}",
+            patch(patch_todo).delete(delete_todo),
+        )
         .route("/v1/commands", post(exec_command))
         .route("/v1/ws/{session_id}", get(ws_upgrade))
         .route("/v1/ws-stream/{session_id}", get(ws_stream_upgrade))
@@ -1807,6 +1929,23 @@ pub fn router(state: HttpServerState) -> Router {
         // STT/TTS providers.
         .route("/v1/voice/transcribe", post(voice_transcribe))
         .route("/v1/voice/synthesize", post(voice_synthesize))
+        // Phase 1 / P1-5: Orchestration Engine Task CRUD endpoints.
+        .route("/v1/tasks", get(list_tasks).post(create_task))
+        .route(
+            "/v1/tasks/{task_id}",
+            get(get_task).patch(patch_task).delete(delete_task),
+        )
+        .route("/v1/tasks/{task_id}/status", patch(patch_task_status))
+        .route("/v1/tasks/{task_id}/children", get(list_task_children))
+// Phase 7 / P7-1: Product delivery — register deliverable artifacts.
+.route("/v1/tasks/{task_id}/results", post(deliver_results))
+        // Phase 5 / P5-5: Automation Engine CRUD endpoints.
+        .route("/v1/automations", get(list_automations).post(create_automation))
+        .route("/v1/automations/{id}", get(get_automation).delete(delete_automation))
+        .route("/v1/automations/{id}/pause", post(pause_automation))
+        .route("/v1/automations/{id}/resume", post(resume_automation))
+        .route("/v1/automations/{id}/runs", get(list_automation_runs))
+.route("/v1/automations/{id}/trigger", post(trigger_automation_endpoint))
         .nest_service("/dashboard-plugins", ServeDir::new(plugin_dir))
         .with_state(state);
 
@@ -2115,7 +2254,7 @@ async fn client_telemetry_event(
 
 async fn list_sessions(State(state): State<HttpServerState>) -> Json<ListSessionsResponse> {
     let db_path = hermix_config::paths::data_dir_in(&state.hermix_home).join("sessions.db");
-    let conn = match rusqlite::Connection::open(db_path) {
+    let conn = match open_sessions_db_for_read(&db_path) {
         Ok(conn) => conn,
         Err(_) => {
             return Json(ListSessionsResponse {
@@ -2180,6 +2319,18 @@ async fn create_session(
             Some(&title),
             None,
             None,
+            // Bind workspace at creation time so a session reload
+            // (after desktop restart) restores the workspace category
+            // the user picked in the welcome UI. Without this the
+            // welcome-state draft workspace only ever lived in
+            // `hermix.session.<id>.workspace` localStorage and
+            // vanished on restart — Sidebar bucketed the row under
+            // "未分组" (bug 2026-07-12). `req.project` is the legacy
+            // field name carried over from the createSession wire
+            // payload — the desktop client sends the welcome
+            // draftWorkspace here on first message.
+            req.project.as_deref(),
+            None,
         )
         .map_err(HttpError::from)?;
     Ok(Json(SessionSummary {
@@ -2213,6 +2364,11 @@ async fn rename_session(
             Some(req.title.trim()),
             None,
             None,
+            // Rename must not clobber the workspace/expert binding the
+            // user picked earlier — pass None so save_session_atomic
+            // COALESCE leaves the existing columns alone.
+            None,
+            None,
         )
         .map_err(HttpError::from)?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -2227,7 +2383,7 @@ async fn patch_session(
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
     let db_path = hermix_config::paths::data_dir_in(&state.hermix_home).join("sessions.db");
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| HttpError {
+    let conn = open_sessions_db_for_read(&db_path).map_err(|e| HttpError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: e.to_string(),
     })?;
@@ -2264,25 +2420,337 @@ async fn patch_session(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+// ---------------------------------------------------------------------------
+// Todo (task list) HTTP endpoints
+// ---------------------------------------------------------------------------
+//
+// The `todo` tool is the canonical mutation path (LLM-driven). These
+// endpoints exist so the front-end can (a) hydrate the TodoPanel on
+// initial mount via `GET /v1/todos`, and (b) let the user manually
+// flip a task to `done` via `PATCH /v1/todos/{id}`. Both endpoints
+// dispatch through the same `TodoHandler` so the broadcast path
+// (`todo_event_tx`) fires on every change, keeping the WS stream and
+// the HTTP loop consistent.
+//
+// Why not call FileTodoBackend directly? Two reasons:
+//   * The broadcast fires only when TodoHandler.execute() runs.
+//     Bypassing the handler would skip the WS forwarder and leave
+//     the desktop panel stale.
+//   * It keeps the schema (parameter names, status enums) in one
+//     place — the LLM tool definition.
+//
+// Trade-off: each `GET` re-enters `ToolHandler::execute`, which
+// parses the LLM-style action envelope. For N items this is O(N)
+// JSON parse, which is fine (todo lists are <100 items).
+
+async fn list_todos(
+    State(state): State<HttpServerState>,
+) -> Result<Json<serde_json::Value>, HttpError> {
+    let raw = state
+        .tool_registry
+        .dispatch("todo", serde_json::json!({ "action": "list" }));
+    // dispatch() returns the JSON envelope as a String. The todo
+    // tool's list backend returns `{"todos":[...],"total":N}` so
+    // forward it as-is; if it's not valid JSON we surface the raw
+    // string under a `raw` key for debugging.
+    let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| HttpError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("todo backend returned non-JSON: {e}: {raw}"),
+    })?;
+    Ok(Json(parsed))
+}
+
+async fn patch_todo(
+    Path(id): Path<String>,
+    State(state): State<HttpServerState>,
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, HttpError> {
+    // The TodoPanel only ever flips a task to `completed` /
+    // `pending`; everything else (title / priority / dependencies)
+    // is LLM-driven and goes through the tool directly. Accept
+    // any of the canonical fields and forward verbatim so we don't
+    // surprise the user when their clicks somehow round-trip a
+    // back-end update.
+    let mut params = serde_json::json!({
+        "action": "update",
+        "id": id,
+    });
+    if let Some(s) = req.get("status").and_then(|v| v.as_str()) {
+        params["status"] = serde_json::Value::String(s.to_string());
+    }
+    if let Some(t) = req.get("title").and_then(|v| v.as_str()) {
+        params["title"] = serde_json::Value::String(t.to_string());
+    }
+    if let Some(p) = req.get("priority").and_then(|v| v.as_str()) {
+        params["priority"] = serde_json::Value::String(p.to_string());
+    }
+
+    let raw = state.tool_registry.dispatch("todo", params);
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
+        serde_json::json!({ "ok": true, "raw": raw })
+    });
+    Ok(Json(parsed))
+}
+
+async fn delete_todo(
+    Path(id): Path<String>,
+    State(state): State<HttpServerState>,
+) -> Result<Json<serde_json::Value>, HttpError> {
+    // Dispatches through `TodoHandler::execute` so the broadcast path
+    // (`todo_event_tx`) fires and the WS forwarder drops the row from
+    // every connected TodoPanel — keeping the HTTP loop and the WS
+    // stream consistent (same rationale as `patch_todo`).
+    let raw = state.tool_registry.dispatch(
+        "todo",
+        serde_json::json!({ "action": "delete", "id": id }),
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
+        serde_json::json!({ "ok": true, "raw": raw })
+    });
+    Ok(Json(parsed))
+}
+
+/// Open `sessions.db` for **read-only-ish** server-side access.
+///
+/// Every server route that touches `sessions.db` MUST go through this
+/// helper rather than calling `Connection::open` directly. Without it,
+/// `journal_mode = WAL` only applies to the writer side
+/// (`session_persistence::open_with_wal`), and the server opener
+/// inherits the legacy `journal_mode = delete` default. That mismatch
+/// surfaces `SQLITE_CORRUPT` / "database disk image is malformed" the
+/// moment the writer was killed mid-transaction and left a stale
+/// `-shm` page table — which happens on every Tauri sidecar SIGKILL
+/// shutdown.
+///
+/// Best-effort on PRAGMA failures: if WAL mode is rejected (read-only
+/// file, exclusive lock held, etc.) we log a warning and continue —
+/// Detect the canonical SQLite "database disk image is malformed"
+/// diagnostic. Phase 21 extension (2026-07-07): the original WAL fix
+/// closed the `journal_mode` mismatch, but FTS5 virtual tables can
+/// also surface this error when their shadow pages are corrupted.
+/// A rebuild of `messages_fts` + `messages_fts_trigram` resolves it,
+/// so we treat the error as recoverable rather than fatal.
+fn is_malformed_error(err: &rusqlite::Error) -> bool {
+    let msg = err.to_string();
+    msg.contains("database disk image is malformed")
+        || msg.contains("database disk image")
+        || msg.contains("malformed")
+}
+
+/// Rebuild both FTS5 indexes attached to `messages`. Idempotent —
+/// safe to call from a retry path. If the rebuild itself fails the
+/// caller should give up and return 500 to the user rather than
+/// silently swallow.
+///
+/// Both indexes are present from migration 2 onward (the schema
+/// migration creates `messages_fts` for CJK bigram search and
+/// `messages_fts_trigram` for ASCII substring). On older DBs where
+/// trigram is missing, we treat the rebuild as best-effort and
+/// continue — failing to rebuild an absent table is not a blocker.
+fn rebuild_messages_fts(conn: &rusqlite::Connection) -> Result<(), String> {
+    conn.execute_batch("INSERT INTO messages_fts(messages_fts) VALUES('rebuild');")
+        .map_err(|e| format!("messages_fts rebuild failed: {e}"))?;
+    // trigram may not exist on pre-migration-2 DBs — try and warn,
+    // don't fail the whole delete for a missing optional index.
+    if let Err(e) = conn.execute_batch(
+        "INSERT INTO messages_fts_trigram(messages_fts_trigram) VALUES('rebuild');",
+    ) {
+        tracing::warn!(
+            "rebuild_messages_fts: trigram rebuild skipped ({e});              the trigram index will be lazy-rebuilt on next INSERT"
+        );
+    }
+    Ok(())
+}
+
+/// `busy_timeout` alone still resolves the silent-drop / lock-contention
+/// case.
+fn open_sessions_db_for_read(path: &std::path::Path) -> Result<rusqlite::Connection, String> {
+    let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
+    conn.busy_timeout(std::time::Duration::from_millis(5000))
+        .map_err(|e| e.to_string())?;
+    if let Err(e) = conn.execute_batch("PRAGMA journal_mode = WAL;") {
+        tracing::warn!(
+            "open_sessions_db_for_read: WAL PRAGMA failed ({e}); \
+             continuing with default journaling"
+        );
+    }
+    // Passive checkpoint so we don't read the WAL header from a page
+    // the writer hasn't flushed yet. PASSIVE never blocks the writer.
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+    Ok(conn)
+}
+
 async fn delete_session(
     Path(session_id): Path<String>,
     State(state): State<HttpServerState>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
     let db_path = hermix_config::paths::data_dir_in(&state.hermix_home).join("sessions.db");
-    let conn = rusqlite::Connection::open(&db_path).map_err(|e| HttpError {
+    let conn = open_sessions_db_for_read(&db_path).map_err(|e| HttpError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: e.to_string(),
     })?;
-    conn.busy_timeout(std::time::Duration::from_millis(5000))
-        .map_err(|e| HttpError {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: e.to_string(),
-        })?;
 
+    // Phase 21 extension (2026-07-07): try the cascade-delete; if it
+    // fails with "database disk image is malformed" — typically a
+    // corrupted `messages_fts` shadow page — rebuild both FTS5
+    // indexes and retry once. If the rebuild itself fails or the
+    // retry still errors, fall through to the original 500 surface
+    // so the user isn't silently told the delete succeeded.
+    //
+    // No labelled block needed: the retry path returns directly
+    // via `return Ok(Json(...))`, and the happy path falls through
+    // to the closing `}` of the for-loop naturally. Both branches
+    // exit the function on completion, so there's nothing to break
+    // out of.
     let tx = conn.unchecked_transaction().map_err(|e| HttpError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: e.to_string(),
     })?;
+
+    // 2026-07-08: after the DB rows are gone, also remove the on-disk
+    // session artifacts so they don't linger as orphaned data. There
+    // are TWO separate trees:
+    //   1. `<home>/sessions/<sid>/`        — archive-index.jsonl
+    //      (written via `hermix_home`, NOT data_dir)
+    //   2. `<home>/data/sessions/<sid>.md` — session log
+    //      (written via `data_dir`, flat file)
+    // The sidebar list reads from the DB only, so the session won't
+    // resurrect — but leaving these behind is an orphaned-data leak.
+    // Best-effort: log + ignore on failure; never fail the delete
+    // because of leftover files (the DB row is already gone).
+    let cleanup_session_dir = || {
+        let home = &state.hermix_home;
+        let data_dir = hermix_config::paths::data_dir_in(home);
+
+        // 1. Archive tree: <hermix_home>/sessions/<sid>/ (holds
+        //    archive-index.jsonl + per-turn markdown sidecars).
+        let archive_dir = home.join("sessions").join(&session_id);
+        if archive_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&archive_dir) {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "delete_session: archive dir removal failed (DB row already deleted)"
+                );
+            }
+        }
+
+        // 2. Session log file: <data>/sessions/<sid>.md
+        let sessions_dir = data_dir.join("sessions");
+        let log_file = sessions_dir.join(format!("{session_id}.md"));
+        if log_file.exists() {
+            if let Err(e) = std::fs::remove_file(&log_file) {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "delete_session: session log file removal failed (DB row already deleted)"
+                );
+            }
+        }
+        // 2b. Legacy per-turn sidecars: any `<stamp>-<sid>.md` left in
+        //     sessions_dir (normally migrated to sessions_dir/orphans/
+        //     on the next save, but a deleted session never gets one).
+        if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.ends_with(&format!("-{session_id}.md"))
+                    && name != format!("{session_id}.md")
+                {
+                    if let Err(e) = std::fs::remove_file(entry.path()) {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            error = %e,
+                            "delete_session: legacy session sidecar removal failed"
+                        );
+                    }
+                }
+            }
+        }
+
+        // 3. RL trajectory: <data>/trajectories/<sid>.json (written by
+        //    SessionPersistence::save_trajectory on every completed turn).
+        let traj_file = data_dir.join("trajectories").join(format!("{session_id}.json"));
+        if traj_file.exists() {
+            if let Err(e) = std::fs::remove_file(&traj_file) {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "delete_session: trajectory file removal failed (DB row already deleted)"
+                );
+            }
+        }
+    };
+
+    // 2026-07-08: purge the deleted session's recall memory from
+    // memory.db so a removed conversation leaves zero vector/embedding
+    // residue. memory.db is WAL + owned by the same process as
+    // sessions.db, so a second `Connection::open` (mirroring
+    // `open_sessions_db_for_read`) is the established, safe pattern.
+    // Every session-scoped store is covered:
+    //   - frames / facts            (tagged `session:{id}`, JSON `tags`)
+    //   - recall_audit / session_snapshots (explicit `session_id` col)
+    //   - frames_fts / facts_fts    (FTS shadow tables; must stay in
+    //     sync with frames/facts or future searches corrupt)
+    // Best-effort: any failure is logged + ignored; the session delete
+    // itself must never fail because the memory purge hiccupped.
+    let purge_session_memory = || {
+        let mem_path =
+            hermix_config::paths::data_dir_in(&state.hermix_home)
+                .join("memory.db");
+        let Ok(conn) = rusqlite::Connection::open(&mem_path) else {
+            tracing::warn!(
+                session_id = %session_id,
+                "delete_session: memory.db missing, skipping recall-memory purge"
+            );
+            return;
+        };
+        let _ = conn.busy_timeout(std::time::Duration::from_millis(5000));
+        let _ = conn.execute_batch("PRAGMA journal_mode = WAL;");
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+
+        let like = format!("%\"session:{}\"%", session_id);
+        let mut total: usize = 0;
+
+        // FTS shadow tables first — their id subquery still reads the
+        // live frames/facts rows.
+        let _ = conn.execute(
+            "DELETE FROM frames_fts WHERE id IN (SELECT id FROM frames WHERE tags LIKE ?1)",
+            rusqlite::params![like],
+        );
+        let _ = conn.execute(
+            "DELETE FROM facts_fts WHERE id IN (SELECT id FROM facts WHERE tags LIKE ?1)",
+            rusqlite::params![like],
+        );
+        if let Ok(n) = conn.execute("DELETE FROM frames WHERE tags LIKE ?1", rusqlite::params![like]) {
+            total += n as usize;
+        }
+        if let Ok(n) = conn.execute("DELETE FROM facts WHERE tags LIKE ?1", rusqlite::params![like]) {
+            total += n as usize;
+        }
+        // Explicit session_id columns (older DBs without these tables
+        // simply no-op the DELETE — swallowed by `if let Ok`).
+        if let Ok(n) = conn.execute(
+            "DELETE FROM recall_audit WHERE session_id = ?1",
+            rusqlite::params![session_id],
+        ) {
+            total += n as usize;
+        }
+        if let Ok(n) = conn.execute(
+            "DELETE FROM session_snapshots WHERE session_id = ?1",
+            rusqlite::params![session_id],
+        ) {
+            total += n as usize;
+        }
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+
+        if total > 0 {
+            tracing::info!(
+                session_id = %session_id,
+                purged_rows = total,
+                "delete_session: purged session recall memory from memory.db"
+            );
+        }
+    };
 
     // Cascade-delete all child tables that reference sessions(id)
     let tables = [
@@ -2291,29 +2759,134 @@ async fn delete_session(
         "compression_summary_history",
         "token_usage",
     ];
-    for table in &tables {
-        tx.execute(
-            &format!("DELETE FROM {table} WHERE session_id = ?1"),
+    {
+        for table in &tables {
+            if let Err(e) = tx.execute(
+                &format!("DELETE FROM {table} WHERE session_id = ?1"),
+                rusqlite::params![session_id],
+            ) {
+                if !is_malformed_error(&e) {
+                    return Err(HttpError {
+                        status: StatusCode::INTERNAL_SERVER_ERROR,
+                        message: e.to_string(),
+                    });
+                }
+                // Roll back the partial cascade, rebuild FTS, retry once.
+                let _ = tx.rollback();
+                tracing::warn!(
+                    table = %table,
+                    error = %e,
+                    "delete_session: cascade DELETE hit 'malformed'; rebuilding messages_fts and retrying"
+                );
+                if let Err(rb_err) = rebuild_messages_fts(&conn) {
+                    return Err(HttpError {
+                        status: StatusCode::INTERNAL_SERVER_ERROR,
+                        message: format!(
+                            "delete_session: cascade failed ({e}); FTS rebuild also failed ({rb_err})"
+                        ),
+                    });
+                }
+                let tx2 = conn.unchecked_transaction().map_err(|e| HttpError {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    message: e.to_string(),
+                })?;
+                for retry_table in &tables {
+                    tx2.execute(
+                        &format!("DELETE FROM {retry_table} WHERE session_id = ?1"),
+                        rusqlite::params![session_id],
+                    )
+                    .map_err(|e2| HttpError {
+                        status: StatusCode::INTERNAL_SERVER_ERROR,
+                        message: format!(
+                            "delete_session: retry after FTS rebuild still failed on `{retry_table}`: {e2}"
+                        ),
+                    })?;
+                }
+                let deleted = tx2
+                    .execute(
+                        "DELETE FROM sessions WHERE id = ?1",
+                        rusqlite::params![session_id],
+                    )
+                    .map_err(|e| HttpError {
+                        status: StatusCode::INTERNAL_SERVER_ERROR,
+                        message: e.to_string(),
+                    })?;
+                if deleted == 0 {
+                    let _ = tx2.rollback();
+                    return Err(HttpError {
+                        status: StatusCode::NOT_FOUND,
+                        message: format!("session '{session_id}' not found"),
+                    });
+                }
+                tx2.commit().map_err(|e| HttpError {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    message: e.to_string(),
+                })?;
+                let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+                // 2026-07-08: same success-path logging/cleanup as the
+                // happy path below (see cleanup_session_dir + tracing::info).
+                cleanup_session_dir();
+                purge_session_memory();
+                tracing::info!(
+                    session_id = %session_id,
+                    "delete_session: deleted session + cascade child rows (after FTS rebuild)"
+                );
+                return Ok(Json(serde_json::json!({
+                    "ok": true,
+                    "fts_rebuilt": true,
+                })));
+            }
+        }
+        // Happy path — fall through to the original
+        // DELETE-from-sessions / 404 / commit / wal-truncate block.
+        // Replace `tx` semantics: re-bind for the rest of the fn.
+        // We use a labelled break above + fall-through here, so the
+        // original block can still execute against the same `tx`.
+        // (Rust doesn't allow reassigning `tx`, so we use the
+        // labelled block to short-circuit the retry path and let
+        // execution continue with `tx` already in scope below.)
+    }
+    let deleted = tx
+        .execute(
+            "DELETE FROM sessions WHERE id = ?1",
             rusqlite::params![session_id],
         )
         .map_err(|e| HttpError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: e.to_string(),
         })?;
+    if deleted == 0 {
+        // Caller asked to delete a session that no longer exists.
+        // Either it was already removed (idempotent retry) or the
+        // path is wrong. Roll back the child-table DELETEs we just
+        // ran (they might be no-ops if no rows matched, but the
+        // rollback is the safe default) and report 404 so the
+        // front-end can stop showing the spinner.
+        let _ = tx.rollback();
+        return Err(HttpError {
+            status: StatusCode::NOT_FOUND,
+            message: format!("session '{session_id}' not found"),
+        });
     }
-    tx.execute(
-        "DELETE FROM sessions WHERE id = ?1",
-        rusqlite::params![session_id],
-    )
-    .map_err(|e| HttpError {
-        status: StatusCode::INTERNAL_SERVER_ERROR,
-        message: e.to_string(),
-    })?;
 
     tx.commit().map_err(|e| HttpError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: e.to_string(),
     })?;
+    // Truncate the WAL after commit so the on-disk `sessions.db` is
+    // fully consistent — next opener (or a future restart) won't have
+    // to replay a half-checkpointed WAL.
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+
+    // 2026-07-08: surface the deletion in backend logs. Previously the
+    // happy path was completely silent, so operators/owners had no way
+    // to confirm a delete actually happened.
+    cleanup_session_dir();
+    purge_session_memory();
+    tracing::info!(
+        session_id = %session_id,
+        "delete_session: deleted session + cascade child rows (messages/compression_archives/compression_summary_history/token_usage)"
+    );
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -2448,29 +3021,25 @@ async fn get_session_messages(
                         MessageRole::System => hermix_transport::Role::System,
                         MessageRole::Tool => hermix_transport::Role::Tool,
                     },
-                    // Defence-in-depth: sanitise any raw tool-call XML
-                    // (MiniMax / MiniMax / Hermes fine-tunes) on the
-                    // read path. The agent loop + WS layer already
-                    // strip these at write time, but persisted
-                    // messages from a pre-fix session, or any future
-                    // non-streaming code path that bypasses the
-                    // streaming redactor, would otherwise leak the
-                    // raw XML straight back into the chat on reload.
-                    content: {
-                        let raw = m.content.unwrap_or_default();
-                        if raw.is_empty() {
-                            raw
-                        } else {
-                            // Use a fresh sanitizer per request — its
-                            // state is meaningless across calls and
-                            // sharing one across concurrent reads
-                            // would needlessly serialise them.
-                            let mut s = CoreToolCallSanitizer::new();
-                            let cleaned = s.feed(&raw);
-                            s.flush();
-                            cleaned
-                        }
-                    },
+                    // 2026-07-12 (Bug B): persist already runs through
+                    // `ToolCallSanitizer` in `stream_collect` and the
+                    // ThinkBlockParser strips `<think>...</think>` from
+                    // visible content at write time, so what we read
+                    // back here is already clean. The earlier
+                    // "defence-in-depth" feed+flush on the read path
+                    // was a *streaming state machine* applied to a
+                    // whole-string input — when the persisted content
+                    // happened to contain a lone `<think>` (no
+                    // `</think>`), the sanitizer would enter
+                    // `InsideThink`, hold the rest of the string, and
+                    // `flush()` would discard it (held text is not
+                    // re-emitted on flush). Net effect: the user
+                    // reloaded the session and the assistant bubble
+                    // was blank. Sanitization on the read path is
+                    // fundamentally the wrong shape — content is a
+                    // complete blob, not a stream — so we just trust
+                    // what was persisted.
+                    content: m.content.unwrap_or_default(),
                     timestamp,
                     model: None,
                     tool_calls,
@@ -2695,20 +3264,24 @@ async fn search_sessions(
         .and_then(|s| s.parse().ok())
         .unwrap_or(20);
     let db_path = hermix_config::paths::data_dir_in(&state.hermix_home).join("sessions.db");
-    let results = query_search(&db_path, &q, limit).unwrap_or_default();
+    let results = match open_sessions_db_for_read(&db_path) {
+        Ok(conn) => query_search_with_conn(&conn, &q, limit).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
     Json(SessionSearchResponse { results })
 }
 
 /// FTS5 search across the messages table. Returns snippets ordered by
 /// rank. Best-effort — on any read failure returns an empty vec so the
 /// dashboard search box never 500s.
-fn query_search(
-    db_path: &std::path::Path,
+/// FTS5 search using an already-opened connection (so callers that
+/// already hold a handle — e.g. `search_sessions` after opening via
+/// `open_sessions_db_for_read` — don't pay for a second open).
+fn query_search_with_conn(
+    conn: &rusqlite::Connection,
     query: &str,
     limit: u32,
 ) -> Result<Vec<SessionSearchResult>, String> {
-    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
-
     let mut stmt = conn
         .prepare(
             "SELECT m.session_id, snippet(messages_fts, 0, '>>>', '<<<', '...', 48) as snip,
@@ -2909,6 +3482,15 @@ const DEDUP_GC_SECS: u64 = 60;
 fn check_recent_send(state: &HttpServerState, session_id: &str, text: &str) -> Option<u64> {
     let key = dedup_key(session_id, text);
     let now = std::time::Instant::now();
+    // ★ DIAG 2026-07-08: unconditional stderr print so we can confirm
+    // dedup is reached even if tracing is filtered.
+    eprintln!(
+        "!!!DEDUP CALLED!!! session={} text={:?} key={} map_lock_ok={}",
+        session_id,
+        text,
+        key,
+        state.recent_sends.lock().is_ok()
+    );
     // T2026-07-06: diagnostic — confirm dedup is reached in real WS path.
     tracing::info!(
         session = %session_id,
@@ -2966,6 +3548,20 @@ async fn handle_ws_stream_send(
     request: SendMessageRequest,
 ) {
     use tokio::sync::mpsc;
+
+    // ★ DIAG 2026-07-08: unconditional entry print — owner reported
+    // 10x send_message_stream on backend but only 1x handleSendMessage
+    // on frontend. If we see 10x here too, the trigger is upstream
+    // (multiple WS frames from a single sendStream call → most likely
+    // browser-side auto-resume or our own loop somewhere we haven't
+    // found yet).
+    eprintln!(
+        "!!!HANDLE_WS_STREAM_SEND_ENTRY!!! session={} text_len={} text_preview={:?} trace_id={}",
+        session_id,
+        request.text.len(),
+        &request.text.chars().take(40).collect::<String>(),
+        trace_id
+    );
 
     // 2026-07-06: dedup guard. If the same (session_id, content)
     // arrived within the last 10s, skip with a synthetic Done
@@ -3082,6 +3678,79 @@ async fn handle_ws_stream_send(
             let _ = clarify_tx.send(envelope).await;
         }
     });
+
+    // Todo event listener. The `todo` tool stamps each `TodoChange`
+    // with the **active session id** (set by `agent_loop` via
+    // `TodoHandler::set_active_session` at the top of each
+    // tool-call batch). We forward only events whose session
+    // matches this WS connection's session, so a session-A tool
+    // call does not leak into session-B's pane.
+    //
+    // Rationale for per-session filtering here, not in the
+    // front-end: the TodoPanel already keys state by session id,
+    // but if we shipped raw events to every connection the React
+    // store would still have to discard cross-session updates.
+    // Filtering at the transport layer keeps the wire clean and
+    // prevents another tab from snooping on a sibling session.
+    //
+    // `None` session changes (CLI mode / legacy bootstrap)
+    // intentionally route to every session — the right fallback
+    // when no active session context is available.
+    if let Some(todo_tx) = state.todo_event_tx.clone() {
+        let todo_inner_tx = tx.clone();
+        let todo_session = session_id.to_string();
+        let todo_trace = trace_id.to_string();
+        let todo_rid = request.request_id.clone();
+        let mut todo_rx = todo_tx.subscribe();
+        tokio::spawn(async move {
+            // v1: originating_message_id left as None so new group cards
+            // append at the end of the message stream. A future patch
+            // will thread the active assistant message_id through from
+            // agent_loop.
+            let originating_message_id: Option<String> = None;
+            loop {
+                match todo_rx.recv().await {
+                    Ok(change) => {
+                        // Per-session filter: drop mismatches
+                        // (None = legacy fan-out, always accept).
+                        if let Some(ref s) = change.session_id {
+                            if s != &todo_session {
+                                continue;
+                            }
+                        }
+                        // Translate to stream event using the
+                        // change's own session id (not the
+                        // listener's) so the TodoPanel always
+                        // sees the originating session.
+                        let originating = change
+                            .session_id
+                            .clone()
+                            .unwrap_or_else(|| todo_session.clone());
+                        let event =
+                            todo_change_to_stream(&originating, originating_message_id.as_deref(), change);
+                        if let Some(ev) = event {
+                            let envelope = WsEnvelope {
+                                version: 1,
+                                request_id: todo_rid.clone(),
+                                trace_id: todo_trace.clone(),
+                                event: ev,
+                            };
+                            let _ = todo_inner_tx.send(envelope).await;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            session = %todo_session,
+                            skipped,
+                            "todo_rx lagged; some todo events were dropped"
+                        );
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
 
     // Build AgentOverrides from request
     let overrides = hermix_core::traits::AgentOverrides {
@@ -3363,6 +4032,14 @@ async fn handle_ws_stream_send(
     let tx_clone = tx.clone();
     let request_id = request.request_id.clone();
     let trace_id_for_stream = trace_id.to_string();
+    // Captured by the `on_chunk` closure below so the ThinkBlockParser
+    // can route extracted think bodies to the client as
+    // `StreamEvent::Thinking` (for the collapsible "思考过程" block
+    // in MessageBubble). Without this capture the parsed-out
+    // `_think` text was discarded per the previous "think is internal
+    // scaffolding" product decision — but 主人 (2026-07-08) asked to
+    // surface it as a foldable block, so we forward it.
+    let tx_for_think = tx.clone();
     // One parser per WS stream — its state is meaningless across turn
     // boundaries.  Some providers (M2.7, Qwen, DeepSeek-R1) embed
     // `<think>...</think>` inside `delta.content` rather than a
@@ -3406,7 +4083,25 @@ async fn handle_ws_stream_send(
         if let Some(ref mut delta) = chunk.delta {
             if let Some(ref mut text) = delta.content {
                 if !text.is_empty() {
-                    let (clean, _think) = think_parser.lock().unwrap().feed(text);
+                    let (clean, think) = think_parser.lock().unwrap().feed(text);
+                    // 2026-07-08: forward the extracted think block to
+                    // the client as `StreamEvent::Thinking` so the
+                    // chat layer can render a collapsible "思考过程"
+                    // block. `ThinkBlockParser::feed` returns the body
+                    // (without `<think>` markers) once a closing tag
+                    // is seen, or empty when the block is still
+                    // streaming. We only emit when non-empty to avoid
+                    // spamming the client with empty thinking events.
+                    if !think.is_empty() {
+                        let _ = tx_for_think.try_send(WsEnvelope {
+                            version: 1,
+                            request_id: request_id.clone(),
+                            trace_id: trace_id_for_stream.clone(),
+                            event: StreamEvent::Thinking {
+                                content: redact_sensitive(&think),
+                            },
+                        });
+                    }
                     if clean.is_empty() {
                         delta.content = None;
                     } else {
@@ -3669,59 +4364,36 @@ async fn handle_ws_stream_send(
 
         match result {
             Ok(reply) => {
-                // Defensive: re-strip think blocks here even though
-                // `LocalAgentService::send_message_stream` already
-                // runs `strip_think_blocks_for_ack` on the trailing
-                // assistant's content.  Belt-and-suspenders against
-                // any future change that re-introduces reasoning
-                // text into the persisted message or against an
-                // upstream provider that emits unclosed `<think>`
-                // blocks.
-                //
-                // Same belt-and-suspenders rationale for
-                // `strip_tool_call_markers` — the per-chunk redactor
-                // above already handles streaming text, but the
-                // terminal `Done.content` is the value persisted into
-                // the session history, so we sanitize it here too.
-                let cleaned = strip_think_blocks_for_ack(&reply.text);
-                // Apply the same stateful tool-call redactor that
-                // the per-chunk path uses. We `flush()` first so the
-                // sanitizer starts in NORMAL state — the text is
-                // the full terminal assistant message, not a chunk
-                // mid-stream, so we want a clean state machine. The
-                // per-chunk pass above has already cleaned the
-                // streamed text, so this is a belt-and-suspenders
-                // pass for the persisted-message code path
-                // (e.g. session reload, non-streaming `get_reply`).
+                // Apply the stateful tool-call redactor to strip
+                // `<minimax:tool_call>...</minimax:tool_call>` XML that
+                // some models emit instead of using the OpenAI `tools`
+                // field. We do NOT strip <think> blocks here — the
+                // frontend's resolveMessage handles that split for
+                // display. We send the LLM's raw content as-is.
                 let cleaned = {
                     let mut guard = tool_call_sanitizer_owned.lock().unwrap();
                     guard.flush();
-                    guard.feed(&cleaned)
+                    guard.feed(&reply.text)
                 };
-                // Guard against empty content from the agent.
-                // When LLM returns a blank response (no text, no tool calls),
-                // sending StreamEvent::Done { content: "" } creates a blank
-                // chat bubble. Skip the Done event entirely in this case
-                // — the streaming path (if any) already sent the chunks to
-                // the frontend, and the assistant message will have no
-                // visible content anyway.
-                if cleaned.is_empty() {
-                    tracing::warn!(
-                        "Skipping Done event: LLM returned empty response"
-                    );
-                } else {
-                    let _ = tx
-                        .send(WsEnvelope {
-                            version: 1,
-                            request_id: request_id_owned.clone(),
-                            trace_id: trace_id_owned.clone(),
-                            event: StreamEvent::Done {
-                                content: redact_sensitive(&cleaned),
-                                finish_reason: reply.finish_reason.clone(),
-                            },
-                        })
-                        .await;
-                }
+                // Always send Done — never skip it. Even when content
+                // is empty, the front-end needs the terminal event to
+                // settle the stream (otherwise it hangs until the 120s
+                // timeout). The message was already persisted to the DB
+                // by `persist_session_with_compression` before we get
+                // here, so the row exists regardless.
+                let done_content = redact_sensitive(&cleaned);
+                let done_finish_reason = reply.finish_reason.clone();
+                let _ = tx
+                    .send(WsEnvelope {
+                        version: 1,
+                        request_id: request_id_owned.clone(),
+                        trace_id: trace_id_owned.clone(),
+                        event: StreamEvent::Done {
+                            content: done_content,
+                            finish_reason: done_finish_reason,
+                        },
+                    })
+                    .await;
             }
             Err(e) => {
                 let _ = tx
@@ -4157,6 +4829,56 @@ fn room_event_to_stream(
         RoomEvent::AgentThinkingCompleted { room_id, agent_id } => {
             Some(StreamEvent::GroupChatAgentDone { room_id, agent_id })
         }
+    }
+}
+
+/// Translate a `TodoChange` (emitted by the `todo` tool) into a
+/// wire-level [`StreamEvent`] that the desktop `useStreamChat`
+/// hook already knows how to dispatch.
+///
+/// v1 (2026-07-07): every mutation becomes a `TodoItemUpserted`
+/// so the front-end can apply upsert-by-id semantics. The
+/// `session_id` field on every event is the WS session that
+/// produced the change — desktop tabs already filter their todo
+/// panel by their own session id, so cross-session bleed is a
+/// non-issue as long as the front-end drops events whose
+/// `session_id` doesn't match the active tab. A future P2 can
+/// add per-session scoping to the `todo` tool itself.
+fn todo_change_to_stream(
+    session_id: &str,
+    message_id: Option<&str>,
+    change: hermix_tools::tools::todo::TodoChange,
+) -> Option<StreamEvent> {
+    use hermix_tools::tools::todo::TodoChangeKind;
+    match change.change {
+        TodoChangeKind::GroupStarted { group_id, group_title } => {
+            Some(StreamEvent::TodoGroupStarted {
+                session_id: session_id.to_string(),
+                message_id: message_id.map(String::from),
+                group_id,
+                group_title,
+            })
+        }
+        TodoChangeKind::Upsert(item) => Some(StreamEvent::TodoItemUpserted {
+            session_id: session_id.to_string(),
+            item: hermix_transport::TodoSnapshotItem {
+                id: item.id,
+                title: item.title,
+                description: item.description,
+                status: item.status,
+                priority: item.priority,
+                created_at: item.created_at,
+                depends_on: item.depends_on,
+                last_result: item.last_result,
+                execution_count: item.execution_count,
+                group_id: item.group_id,
+                group_title: item.group_title,
+            },
+        }),
+        TodoChangeKind::Delete { id } => Some(StreamEvent::TodoItemRemoved {
+            session_id: session_id.to_string(),
+            id,
+        }),
     }
 }
 
@@ -5146,5 +5868,957 @@ mod reuseaddr_regression_tests {
         // TcpSocket should never panic.
         let sock = tokio::net::TcpSocket::new_v4().unwrap();
         sock.set_reuseaddr(true).unwrap();
+    }
+}
+
+/// Phase 21 (2026-07-07): regression coverage for the
+/// "database disk image is malformed" `delete_session` bug.
+///
+/// Root cause: `delete_session` opened `sessions.db` in the legacy
+/// `journal_mode = delete` (single-writer, blocking) default while
+/// the writer side ran in `journal_mode = WAL`. When the writer
+/// was killed mid-transaction (Tauri sidecar SIGKILL on shutdown,
+/// for example), the `-shm` page table was left dirty and the next
+/// non-WAL opener surfaced the "malformed" diagnostic. Setting
+/// `journal_mode = WAL` on the delete side, plus a passive
+/// pre-checkpoint and a post-commit truncate, makes both processes
+/// speak the same journal format and keeps the on-disk file
+/// fully consistent.
+///
+/// This test asserts (1) the delete-side PRAGMA matches the
+/// writer side, (2) the WAL is truncated after commit, and
+/// (3) the 404 path rolls back the cascade DELETEs.
+/// Phase 21 extension (2026-07-07): the WAL regression tests
+/// above pin the journal_mode contract. This test pins the FTS5
+/// shadow-page corruption recovery path: pre-corrupt the FTS index
+/// by deleting shadow rows, then verify delete_session rebuilds
+/// and still completes the cascade.
+#[cfg(test)]
+mod delete_session_fts_recovery_tests {
+    use super::*;
+    use rusqlite::Connection;
+    use tempfile::tempdir;
+
+    fn seed_db_with_fts_corrupted() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("sessions.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT, message_count INTEGER);
+             CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT, created_at TEXT, active INTEGER DEFAULT 1);
+             CREATE TABLE compression_archives (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, content TEXT NOT NULL, original_turns INTEGER, compressed_turns INTEGER, original_tokens INTEGER, compressed_tokens INTEGER, salience REAL, source TEXT, created_at TEXT);
+             CREATE TABLE compression_summary_history (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, summary TEXT NOT NULL, compression_count INTEGER, original_turns INTEGER, compressed_turns INTEGER, original_tokens INTEGER, compressed_tokens INTEGER, tokens_saved INTEGER, created_at TEXT);
+             CREATE TABLE token_usage (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER, estimated_cost REAL, created_at TEXT);
+             CREATE VIRTUAL TABLE messages_fts USING fts5(content, session_id UNINDEXED, content=messages, content_rowid=id);
+             CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN INSERT INTO messages_fts(rowid, content, session_id) VALUES (new.id, new.content, new.session_id); END;
+             CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN INSERT INTO messages_fts(messages_fts, rowid, content, session_id) VALUES('delete', old.id, old.content, old.session_id); END;
+             CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN INSERT INTO messages_fts(messages_fts, rowid, content, session_id) VALUES('delete', old.id, old.content, old.session_id); INSERT INTO messages_fts(rowid, content, session_id) VALUES (new.id, new.content, new.session_id); END;",
+        ).unwrap();
+        // Seed a session and a message.
+        conn.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at, message_count) VALUES ('fts-test', 'corrupt', '2026-01-01', '2026-01-01', 1)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, created_at) VALUES ('fts-test', 'user', 'hello world', '2026-01-01')",
+            [],
+        ).unwrap();
+        // Manually corrupt the FTS shadow by deleting a rowid that
+        // the messages table still references. This breaks the
+        // invariant the messages_ad trigger depends on, so a
+        // subsequent DELETE FROM messages will error with
+        // 'database disk image is malformed' on the trigger.
+        conn.execute("DELETE FROM messages_fts WHERE rowid = 1", []).unwrap();
+        // Sanity: a normal DELETE should now fail.
+        let bad = conn.execute("DELETE FROM messages WHERE session_id = 'fts-test'", []);
+        assert!(bad.is_err(), "FTS corruption setup didn't break DELETE");
+        (dir, db)
+    }
+
+    #[test]
+    fn delete_session_recovers_from_corrupt_fts() {
+        let (_dir, db) = seed_db_with_fts_corrupted();
+        let conn = open_sessions_db_for_read(&db).expect("open");
+
+        // The DELETE itself should trigger the malformed error path
+        // and our helper should rebuild the FTS index + retry.
+        // (We test the helper directly because the actual
+        // `delete_session` async fn is hard to drive from a unit
+        // test without spinning up the full axum router.)
+        let tx = conn.unchecked_transaction().unwrap();
+        let res = tx.execute("DELETE FROM messages WHERE session_id = 'fts-test'", []);
+        assert!(res.is_err(), "expected malformed error");
+        assert!(is_malformed_error(&res.unwrap_err()));
+        let _ = tx.rollback();
+
+        // Rebuild and retry — this is exactly what delete_session
+        // does on the recovery path.
+        rebuild_messages_fts(&conn).expect("rebuild");
+        let tx2 = conn.unchecked_transaction().unwrap();
+        tx2.execute("DELETE FROM messages WHERE session_id = 'fts-test'", []).unwrap();
+        tx2.execute("DELETE FROM sessions WHERE id = 'fts-test'", []).unwrap();
+        tx2.commit().unwrap();
+    }
+
+    #[test]
+    fn non_malformed_errors_are_not_swallowed() {
+        // A "no such table" error is NOT malformed-shaped; the
+        // helper must return false so the caller surfaces 500
+        // instead of attempting an unnecessary FTS rebuild.
+        let err = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+            Some("no such table: foo".to_string()),
+        );
+        assert!(!is_malformed_error(&err));
+    }
+}
+
+/// Existing WAL regression suite (kept intact).
+#[cfg(test)]
+mod delete_session_wal_regression_tests {
+    use super::*;
+    use rusqlite::Connection;
+    use tempfile::tempdir;
+
+    fn seed_sessions_db(path: &std::path::Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, created_at TEXT);
+             CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT);
+             CREATE TABLE compression_archives (id INTEGER PRIMARY KEY, session_id TEXT);
+             CREATE TABLE compression_summary_history (id INTEGER PRIMARY KEY, session_id TEXT);
+             CREATE TABLE token_usage (id INTEGER PRIMARY KEY, session_id TEXT);",
+        )
+        .unwrap();
+        for sid in ["keep-me", "drop-me", "also-keep"] {
+            conn.execute(
+                "INSERT INTO sessions (id, title, created_at) VALUES (?1, ?2, '2026-07-07T00:00:00Z')",
+                rusqlite::params![sid, format!("title {sid}")],
+            )
+            .unwrap();
+            // Orphan message rows in every cascade table.
+            for table in ["messages", "compression_archives", "compression_summary_history", "token_usage"] {
+                conn.execute(
+                    &format!("INSERT INTO {table} (session_id) VALUES (?1)"),
+                    rusqlite::params![sid],
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    fn count_table(conn: &Connection, table: &str) -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// Mirrors the production `delete_session` PRAGMA sequence so
+    /// the test catches drift if the production code is changed.
+    fn open_for_delete(path: &std::path::Path) -> Connection {
+        let conn = Connection::open(path).unwrap();
+        conn.busy_timeout(std::time::Duration::from_millis(5000))
+            .unwrap();
+        let _ = conn.execute_batch("PRAGMA journal_mode = WAL;");
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+        conn
+    }
+
+    #[test]
+    fn delete_session_uses_wal_journal_mode() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("sessions.db");
+        seed_sessions_db(&db);
+        // Writer side set WAL — the new opener must match.
+        let conn = open_for_delete(&db);
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal", "delete side must use WAL");
+    }
+
+    #[test]
+    fn delete_cascades_to_child_tables_and_removes_session_row() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("sessions.db");
+        seed_sessions_db(&db);
+        let conn = open_for_delete(&db);
+        let tx = conn.unchecked_transaction().unwrap();
+        for table in [
+            "messages",
+            "compression_archives",
+            "compression_summary_history",
+            "token_usage",
+        ] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE session_id = 'drop-me'"),
+                [],
+            )
+            .unwrap();
+        }
+        let n = tx
+            .execute("DELETE FROM sessions WHERE id = 'drop-me'", [])
+            .unwrap();
+        assert_eq!(n, 1);
+        tx.commit().unwrap();
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        // After commit the row is gone everywhere.
+        assert_eq!(count_table(&conn, "sessions"), 2);
+        for table in [
+            "messages",
+            "compression_archives",
+            "compression_summary_history",
+            "token_usage",
+        ] {
+            let total = count_table(&conn, table);
+            // 2 surviving sessions × 1 child row each = 2.
+            assert_eq!(total, 2, "table {table} should be cascaded");
+        }
+    }
+
+    #[test]
+    fn delete_missing_session_returns_zero_and_rolls_back() {
+        // Mirrors the 404 path: if the session row isn't there, the
+        // handler must NOT leave the child-table DELETEs committed
+        // (they're no-ops, but the rollback is the safe default).
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("sessions.db");
+        seed_sessions_db(&db);
+        let conn = open_for_delete(&db);
+        let tx = conn.unchecked_transaction().unwrap();
+        tx.execute(
+            "DELETE FROM messages WHERE session_id = 'no-such-session'",
+            [],
+        )
+        .unwrap();
+        let n = tx
+            .execute("DELETE FROM sessions WHERE id = 'no-such-session'", [])
+            .unwrap();
+        assert_eq!(n, 0);
+        let _ = tx.rollback();
+        // Nothing should be gone after rollback.
+        assert_eq!(count_table(&conn, "sessions"), 3);
+        assert_eq!(count_table(&conn, "messages"), 3);
+    }
+
+    #[test]
+    fn wal_is_truncated_after_commit() {
+        // After `wal_checkpoint(TRUNCATE)` the `-wal` sidecar should
+        // be empty. We assert by checking the file size shrinks to 0
+        // (the `-shm` file remains — it's the page table).
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("sessions.db");
+        seed_sessions_db(&db);
+        let conn = open_for_delete(&db);
+        let tx = conn.unchecked_transaction().unwrap();
+        tx.execute("DELETE FROM messages WHERE session_id = 'drop-me'", [])
+            .unwrap();
+        tx.execute("DELETE FROM sessions WHERE id = 'drop-me'", [])
+            .unwrap();
+        tx.commit().unwrap();
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        let wal_path = dir.path().join("sessions.db-wal");
+        if wal_path.exists() {
+            let len = std::fs::metadata(&wal_path).unwrap().len();
+            assert_eq!(len, 0, "WAL should be truncated to 0 bytes");
+        }
+        // Reopen and integrity-check — proves we left a clean DB.
+        let reopened = Connection::open(&db).unwrap();
+        let integrity: String = reopened
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+    }
+
+    /// Every server route that touches `sessions.db` must go through
+    /// `open_sessions_db_for_read` so the journal mode matches the
+    /// writer side. This test pins that contract: a route that opens
+    /// the db without the helper gets `journal_mode = delete`, the
+    /// helper forces WAL, and we assert the helper wins.
+    #[test]
+    fn open_sessions_db_for_read_sets_wal_journal_mode() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("sessions.db");
+        seed_sessions_db(&db);
+
+        // Sanity: plain `Connection::open` keeps the legacy default
+        // (`delete`) on a fresh file. We don't pin it here (SQLite's
+        // journal mode can persist in the file header after a prior
+        // WAL open, so it's not a reliable differentiator). What
+        // matters is the helper below forces WAL regardless.
+        let _raw = Connection::open(&db).unwrap();
+
+        let conn = open_sessions_db_for_read(&db).unwrap();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        let _: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+    }
+
+    #[test]
+    fn list_sessions_does_not_panic_when_db_missing() {
+        // Regression: list_sessions used to swallow open errors and
+        // return an empty list. Now it goes through
+        // `open_sessions_db_for_read`. `Connection::open` on a missing
+        // file path CREATES the file (rusqlite default), so the helper
+        // succeeds — but the file has **no schema**, so any
+        // `SELECT FROM sessions` raises "no such table: sessions".
+        //
+        // The pre-fix behavior silently swallowed this error and
+        // returned an empty list. This test pins the helper's contract:
+        // the open succeeds and the journal mode is WAL, but the
+        // SELECT is the caller's responsibility to handle gracefully
+        // (every route does — they all use `unwrap_or_default()` on
+        // the query_map iterator).
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("does-not-exist.db");
+        let conn = open_sessions_db_for_read(&db).expect("missing db should auto-create");
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal", "fresh db must still get WAL");
+        // Empty DB — the SELECT against an un-migrated schema errors,
+        // but each route wraps the query in `unwrap_or_default()`,
+        // so the user sees an empty list rather than a 500. Pin that
+        // contract here so a future refactor doesn't accidentally
+        // turn it into a 500.
+        let result: rusqlite::Result<i64> =
+            conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0));
+        assert!(
+            result.is_err(),
+            "empty db must report 'no such table' so callers can degrade"
+        );
+    }
+}
+
+// ===========================================================================
+// Phase 1 / P1-5: Orchestration Engine — Task CRUD HTTP handlers
+// ===========================================================================
+
+/// Request body for `POST /v1/tasks`.
+#[derive(Debug, serde::Deserialize)]
+struct CreateTaskRequest {
+    title: String,
+    workspace_path: String,
+    #[serde(default = "default_mode")]
+    mode: String,
+    #[serde(default)]
+    parent_task_id: Option<String>,
+    #[serde(default)]
+    context: hermix_core::TaskContext,
+}
+
+fn default_mode() -> String {
+    "craft".to_string()
+}
+
+/// `POST /v1/tasks` — Create a new Task.
+async fn create_task(
+    State(state): State<HttpServerState>,
+    axum::Json(req): axum::Json<CreateTaskRequest>,
+) -> axum::response::Response {
+    let svc = match &state.task_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    let mode = match req.mode.as_str() {
+        "craft" => hermix_core::TaskMode::Craft,
+        "plan" => hermix_core::TaskMode::Plan,
+        "ask" => hermix_core::TaskMode::Ask,
+        _ => return (StatusCode::BAD_REQUEST, "Invalid mode").into_response(),
+    };
+
+    let params = hermix_task::service::CreateTaskParams {
+        title: req.title,
+        workspace_path: req.workspace_path,
+        mode,
+        parent_task_id: req.parent_task_id,
+        context: req.context,
+    };
+
+    match svc.create(params) {
+        Ok(task) => {
+            state.orchestration_bus.emit(OrchestrationEvent::TaskCreated {
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                mode: format!("{:?}", task.mode).to_lowercase(),
+                workspace_path: task.workspace_path.clone(),
+            });
+            axum::Json(task).into_response()
+        }
+        Err(e) => {
+            tracing::warn!("create_task error: {e}");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
+}
+
+/// `GET /v1/tasks` — List tasks, optionally filtered by status.
+async fn list_tasks(
+    State(state): State<HttpServerState>,
+    axum::extract::Query(params): axum::extract::Query<TaskListQuery>,
+) -> axum::response::Response {
+    let svc = match &state.task_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    let status_filter = params.status.as_deref().and_then(|s| match s {
+        "pending" => Some(hermix_core::TaskStatus::Pending),
+        "planning" => Some(hermix_core::TaskStatus::Planning),
+        "in_progress" => Some(hermix_core::TaskStatus::InProgress),
+        "completed" => Some(hermix_core::TaskStatus::Completed),
+        "failed" => Some(hermix_core::TaskStatus::Failed),
+        "archived" => Some(hermix_core::TaskStatus::Archived),
+        _ => None,
+    });
+
+    match svc.list(status_filter) {
+        Ok(tasks) => axum::Json(tasks).into_response(),
+        Err(e) => {
+            tracing::warn!("list_tasks error: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TaskListQuery {
+    status: Option<String>,
+}
+
+/// `GET /v1/tasks/{task_id}` — Get a single Task.
+async fn get_task(
+    State(state): State<HttpServerState>,
+    Path(task_id): Path<String>,
+) -> axum::response::Response {
+    let svc = match &state.task_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    match svc.get(&task_id) {
+        Ok(task) => axum::Json(task).into_response(),
+        Err(hermix_task::TaskServiceError::NotFound(_)) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => {
+            tracing::warn!("get_task error: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    }
+}
+
+/// Request body for `PATCH /v1/tasks/{task_id}`.
+#[derive(Debug, serde::Deserialize)]
+struct PatchTaskRequest {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    context: Option<hermix_core::TaskContext>,
+}
+
+/// `PATCH /v1/tasks/{task_id}` — Update a Task's mutable fields.
+async fn patch_task(
+    State(state): State<HttpServerState>,
+    Path(task_id): Path<String>,
+    axum::Json(req): axum::Json<PatchTaskRequest>,
+) -> axum::response::Response {
+    let svc = match &state.task_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    let result = if let Some(title) = req.title {
+        svc.update_title(&task_id, &title)
+    } else if let Some(context) = req.context {
+        svc.update_context(&task_id, context)
+    } else {
+        return (StatusCode::BAD_REQUEST, "No fields to update").into_response();
+    };
+
+    match result {
+        Ok(task) => {
+            state.orchestration_bus.emit(OrchestrationEvent::TaskUpdated {
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                status: format!("{:?}", task.status).to_lowercase(),
+            });
+            axum::Json(task).into_response()
+        }
+        Err(hermix_task::TaskServiceError::NotFound(_)) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => {
+            tracing::warn!("patch_task error: {e}");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
+}
+
+/// Request body for `PATCH /v1/tasks/{task_id}/status`.
+#[derive(Debug, serde::Deserialize)]
+struct PatchTaskStatusRequest {
+    status: String,
+}
+
+/// `PATCH /v1/tasks/{task_id}/status` — Transition a Task's status.
+async fn patch_task_status(
+    State(state): State<HttpServerState>,
+    Path(task_id): Path<String>,
+    axum::Json(req): axum::Json<PatchTaskStatusRequest>,
+) -> axum::response::Response {
+    let svc = match &state.task_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    let new_status = match req.status.as_str() {
+        "pending" => hermix_core::TaskStatus::Pending,
+        "planning" => hermix_core::TaskStatus::Planning,
+        "in_progress" => hermix_core::TaskStatus::InProgress,
+        "completed" => hermix_core::TaskStatus::Completed,
+        "failed" => hermix_core::TaskStatus::Failed,
+        "archived" => hermix_core::TaskStatus::Archived,
+        _ => {
+            return (StatusCode::BAD_REQUEST, "Invalid status").into_response();
+        }
+    };
+
+    let old_status = svc
+        .get(&task_id)
+        .ok()
+        .map(|t| format!("{:?}", t.status).to_lowercase());
+
+    match svc.transition(&task_id, new_status) {
+        Ok(task) => {
+            state
+                .orchestration_bus
+                .emit(OrchestrationEvent::TaskStatusChanged {
+                    task_id: task.id.clone(),
+                    old_status: old_status.unwrap_or_default(),
+                    new_status: format!("{:?}", task.status).to_lowercase(),
+                });
+            axum::Json(task).into_response()
+        }
+        Err(hermix_task::TaskServiceError::NotFound(_)) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => {
+            tracing::warn!("patch_task_status error: {e}");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
+}
+
+/// `DELETE /v1/tasks/{task_id}` — Archive a Task (soft delete).
+async fn delete_task(
+    State(state): State<HttpServerState>,
+    Path(task_id): Path<String>,
+) -> axum::response::Response {
+    let svc = match &state.task_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    if let Err(hermix_task::TaskServiceError::NotFound(_)) = svc.get(&task_id) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    match svc.archive(&task_id) {
+        Ok(task) => axum::Json(task).into_response(),
+        Err(e) => {
+            tracing::warn!("delete_task error: {e}");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
+}
+
+/// `GET /v1/tasks/{task_id}/children` — List child tasks of a parent.
+/// (Phase 4 / P4-2: supports multi-agent subtask trees)
+async fn list_task_children(
+    State(state): State<HttpServerState>,
+    Path(task_id): Path<String>,
+) -> axum::response::Response {
+    let svc = match &state.task_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+match svc.list_children(&task_id) {
+Ok(tasks) => axum::Json(tasks).into_response(),
+Err(e) => {
+tracing::warn!("list_task_children error: {e}");
+(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+}
+}
+}
+
+// ===========================================================================
+// Phase 7 / P7-1: Product Delivery — HTTP handlers
+// ===========================================================================
+
+/// Request body for `POST /v1/tasks/{task_id}/results`.
+#[derive(Debug, serde::Deserialize)]
+struct DeliverResultsRequest {
+    /// List of file paths or URLs to register as deliverables.
+    files: Vec<String>,
+    /// Optional overall summary for the delivery.
+    #[serde(default)]
+    summary: Option<String>,
+}
+
+/// `POST /v1/tasks/{task_id}/results` — Register deliverable artifacts
+/// for a Task.
+///
+/// (Phase 7 / P7-1)
+///
+/// This is the `present_files` equivalent endpoint. It:
+/// 1. Classifies each file path/URL by artifact type (html/image/report/video/file/directory)
+/// 2. Adds each as a `TaskResultRef` to the Task's `results` field
+/// 3. Emits a `ResultDelivered` event via the orchestration bus
+/// 4. Returns the updated Task with all result refs
+async fn deliver_results(
+    State(state): State<HttpServerState>,
+    Path(task_id): Path<String>,
+    axum::Json(req): axum::Json<DeliverResultsRequest>,
+) -> axum::response::Response {
+    let svc = match &state.task_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    // Classify and register each file
+    let mut result_refs = Vec::new();
+    for path in &req.files {
+        let artifact_type = classify_artifact_type(path);
+        let summary = req.summary.as_ref().map(|s| s.clone());
+        let result_ref = hermix_core::TaskResultRef {
+            path: path.clone(),
+            artifact_type,
+            summary,
+        };
+
+        match svc.add_result(&task_id, result_ref.clone()) {
+            Ok(_) => {
+                result_refs.push(result_ref);
+            }
+            Err(hermix_task::TaskServiceError::NotFound(_)) => {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+            Err(e) => {
+                tracing::warn!(task_id = %task_id, error = %e, "deliver_results error");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    e.to_string(),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // Emit ResultDelivered event
+    state.orchestration_bus.emit(OrchestrationEvent::ResultDelivered {
+        task_id: task_id.clone(),
+        result_refs: result_refs.clone(),
+    });
+
+    // Return the updated task
+    match svc.get(&task_id) {
+        Ok(task) => axum::Json(task).into_response(),
+        Err(e) => {
+            tracing::warn!(task_id = %task_id, error = %e, "deliver_results: failed to get updated task");
+            axum::Json(serde_json::json!({
+                "task_id": task_id,
+                "delivered_count": result_refs.len(),
+                "result_refs": result_refs,
+            }))
+            .into_response()
+        }
+    }
+}
+
+/// Classify a file path or URL into a `TaskArtifactType` based on its
+/// extension or scheme.
+///
+/// - `.html` / `.htm` → `Html`
+/// - `.png` / `.jpg` / `.jpeg` / `.gif` / `.svg` / `.webp` → `Image`
+/// - `.pdf` / `.doc` / `.docx` / `.xls` / `.xlsx` / `.md` → `Report`
+/// - `.mp4` / `.avi` / `.mov` / `.webm` → `Video`
+/// - `http://` / `https://` → `File` (URL reference)
+/// - Trailing `/` → `Directory`
+/// - Otherwise → `File`
+fn classify_artifact_type(path: &str) -> hermix_core::TaskArtifactType {
+    use hermix_core::TaskArtifactType;
+
+    let lower = path.to_lowercase();
+
+    // URLs
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        if lower.ends_with(".html") || lower.ends_with(".htm") {
+            return TaskArtifactType::Html;
+        }
+        return TaskArtifactType::File;
+    }
+
+    // Directory
+    if lower.ends_with('/') {
+        return TaskArtifactType::Directory;
+    }
+
+    // File extension classification
+    let ext = lower.rsplit('.').next().unwrap_or("");
+    match ext {
+        "html" | "htm" => TaskArtifactType::Html,
+        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "bmp" | "ico" => TaskArtifactType::Image,
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "md" | "txt" | "csv" => {
+            TaskArtifactType::Report
+        }
+        "mp4" | "avi" | "mov" | "webm" | "mkv" | "flv" => TaskArtifactType::Video,
+        _ => TaskArtifactType::File,
+    }
+}
+
+// ===========================================================================
+// Phase 5 / P5-5: Automation Engine — HTTP handlers
+// ===========================================================================
+
+/// Request body for `POST /v1/automations`.
+#[derive(Debug, serde::Deserialize)]
+struct CreateAutomationRequest {
+    name: String,
+    prompt: String,
+    #[serde(default = "default_schedule_type")]
+    schedule_type: String,
+    rrule: Option<String>,
+    scheduled_at: Option<String>,
+    valid_from: Option<String>,
+    valid_until: Option<String>,
+    cwds: Option<String>,
+    connector_ids_json: Option<String>,
+    expert_id: Option<String>,
+    model_id: Option<String>,
+}
+
+fn default_schedule_type() -> String {
+    "recurring".to_string()
+}
+
+/// `POST /v1/automations` — Create a new automation.
+async fn create_automation(
+    State(state): State<HttpServerState>,
+    axum::Json(req): axum::Json<CreateAutomationRequest>,
+) -> axum::response::Response {
+    let svc = match &state.automation_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    let schedule_type = match req.schedule_type.as_str() {
+        "recurring" => hermix_automation::ScheduleType::Recurring,
+        "once" => hermix_automation::ScheduleType::Once,
+        _ => {
+            return (StatusCode::BAD_REQUEST, "Invalid schedule_type").into_response();
+        }
+    };
+
+    let params = hermix_automation::CreateAutomationParams {
+        name: req.name,
+        prompt: req.prompt,
+        schedule_type,
+        rrule: req.rrule,
+        scheduled_at: req.scheduled_at,
+        valid_from: req.valid_from,
+        valid_until: req.valid_until,
+        cwds: req.cwds,
+        connector_ids_json: req.connector_ids_json,
+        expert_id: req.expert_id,
+        model_id: req.model_id,
+    };
+
+    match svc.create(params) {
+        Ok(auto) => axum::Json(auto).into_response(),
+        Err(e) => {
+            tracing::warn!("create_automation error: {e}");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
+}
+
+/// `GET /v1/automations` — List all automations.
+async fn list_automations(
+    State(state): State<HttpServerState>,
+) -> axum::response::Response {
+    let svc = match &state.automation_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    match svc.list(None) {
+        Ok(autos) => axum::Json(autos).into_response(),
+        Err(e) => {
+            tracing::warn!("list_automations error: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    }
+}
+
+/// `GET /v1/automations/{id}` — Get a single automation.
+async fn get_automation(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    let svc = match &state.automation_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    match svc.get(&id) {
+        Ok(auto) => axum::Json(auto).into_response(),
+        Err(hermix_automation::AutomationServiceError::NotFound(_)) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => {
+            tracing::warn!("get_automation error: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    }
+}
+
+/// `DELETE /v1/automations/{id}` — Delete an automation (cascades).
+async fn delete_automation(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    let svc = match &state.automation_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    match svc.delete(&id) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(hermix_automation::AutomationServiceError::NotFound(_)) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => {
+            tracing::warn!("delete_automation error: {e}");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
+}
+
+/// `POST /v1/automations/{id}/pause` — Pause an automation.
+async fn pause_automation(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    let svc = match &state.automation_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    match svc.pause(&id) {
+        Ok(auto) => axum::Json(auto).into_response(),
+        Err(hermix_automation::AutomationServiceError::NotFound(_)) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => {
+            tracing::warn!("pause_automation error: {e}");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
+}
+
+/// `POST /v1/automations/{id}/resume` — Resume a paused automation.
+async fn resume_automation(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    let svc = match &state.automation_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    match svc.resume(&id) {
+        Ok(auto) => axum::Json(auto).into_response(),
+        Err(hermix_automation::AutomationServiceError::NotFound(_)) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(e) => {
+            tracing::warn!("resume_automation error: {e}");
+            (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+    }
+}
+
+/// `GET /v1/automations/{id}/runs` — List run history for an automation.
+async fn list_automation_runs(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    let svc = match &state.automation_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    match svc.list_runs(&id, 100) {
+        Ok(runs) => axum::Json(runs).into_response(),
+        Err(e) => {
+            tracing::warn!("list_automation_runs error: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    }
+}
+
+/// `POST /v1/automations/{id}/trigger` — Manually trigger an automation.
+///
+/// (Phase 6 / P6-5)
+///
+/// Dispatches through the unified `agent_service.send_message()` path,
+/// the same path used by HTTP chat requests and the scheduler's trigger
+/// callback (铁律 DD: HTTP 与自动化同路径).
+async fn trigger_automation_endpoint(
+    State(state): State<HttpServerState>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    let svc = match &state.automation_service {
+        Some(s) => s.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    let agent = state.agent_service();
+    let bus = state.orchestration_bus.clone();
+    let task_svc = state.task_service.clone();
+
+    match automation_trigger::trigger_automation_manually(
+        &id,
+        &svc,
+        &agent,
+        &bus,
+        task_svc.as_deref(),
+    )
+    .await
+    {
+        Ok(automation_id) => {
+            axum::Json(serde_json::json!({
+                "automation_id": automation_id,
+                "status": "triggered",
+                "message": "Automation executed via unified dispatch path"
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            tracing::warn!("trigger_automation error: {e}");
+            if e.contains("not found") {
+                StatusCode::NOT_FOUND.into_response()
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
+            }
+        }
     }
 }

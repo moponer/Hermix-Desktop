@@ -144,6 +144,9 @@ async fn get_session_messages_and_reset_session_round_trip() {
             None,
             None,
             None,
+            // workspace / expert_id: no binding for this round-trip test.
+            None,
+            None,
         )
         .expect("persist");
 

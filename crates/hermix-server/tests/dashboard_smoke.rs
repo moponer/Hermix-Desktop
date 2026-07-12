@@ -851,7 +851,7 @@ async fn session_undo_default_count_soft_deletes_last_turn() {
         Message::user("turn-3 user"),
         Message::assistant("turn-3 assistant"),
     ];
-    sp.persist_session("undo-http", &messages, None, None, None, None, None)
+    sp.persist_session("undo-http", &messages, None, None, None, None, None, None, None)
         .unwrap();
 
     // /undo (no count param) → default 1 turn.
@@ -893,6 +893,9 @@ async fn session_undo_with_count_query_string() {
         None,
         None,
         None,
+        // workspace / expert_id: no binding for this undo smoke test.
+        None,
+        None,
     )
     .unwrap();
 
@@ -929,6 +932,9 @@ async fn session_restore_brings_back_most_recent_block() {
         None,
         None,
         None,
+        None,
+        None,
+        // workspace / expert_id: no binding for this restore smoke test.
         None,
         None,
     )
@@ -1041,12 +1047,16 @@ async fn list_skills_endpoint_returns_seeded_skills() {
 // is reused for delete requests.
 
 #[tokio::test]
-async fn persona_soul_get_returns_none_when_missing() {
+async fn persona_soul_get_returns_builtin_when_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let app = test_app_with_hermes_home(dir.path().to_path_buf()).await;
     let (status, body) = get_json(app, "/api/persona/soul").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["content"].is_null());
+    // 文件缺失时回退到内置中文身份,不再返回 null
+    assert_eq!(
+        body["content"].as_str(),
+        Some(hermix_agent::context::DEFAULT_AGENT_IDENTITY)
+    );
     assert!(body["path"].as_str().unwrap().ends_with("SOUL.md"));
 }
 

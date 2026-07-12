@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, startTransition } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
@@ -9,10 +9,10 @@ import { PluginsView } from "./components/PluginsView";
 import { AgentsView } from "./components/AgentsView";
 import { GroupChatView } from "./components/GroupChatView";
 import { AnalyticsView } from "./components/AnalyticsView";
-import { RightSidebar, PreviewPanel } from "./components/RightSidebar";
+import { RightSidebar, PreviewPanel, type RightTab } from "./components/RightSidebar";
 import { TitleBar } from "./components/TitleBar";
 import { useStreamChat } from "./hooks/useStreamChat";
-import type { StreamPhase } from "./hooks/useStreamChat";
+import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useAcuiState, type AcuiDecisionBus } from "./acui";
@@ -20,9 +20,26 @@ import { extractArtifacts, type Artifact, type ArtifactKind } from "./utils/arti
 import { tryArtifactPathExists } from "./utils/artifactReader";
 import * as api from "./api";
 import { registerBuiltinsToBackend } from "./data/builtinExperts";
-import type { NavPage, Session, ChatMessage, ApprovalDecision } from "./types";
-import { expandTimelineToMessages, detectToolError } from "./components/messageParser";
+import type { NavPage, Session, ChatMessage, ApprovalDecision, TimelineStep, ExecutionTimelineEvent } from "./types";
+// 2026-07-10: expandTimelineToMessages and detectToolError imports removed —
+// tools are now tracked in the assistant's execution_timeline, not expanded
+// into separate role:tool messages.
 import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
+
+// 2026-07-12: Welcome-state draft workspace. Read at App-level so
+// both `handleNewChat` (新建对话 button) and `handleSendMessage`
+// (first send in an empty session) can pass it to
+// `api.createSession(title, project)` — that way the server records
+// it on `sessions.workspace` from the start, and a desktop restart
+// restores the same Sidebar bucket instead of dumping the row into
+// "未分组" (bug 2026-07-12).
+function readDraftWorkspace(): string | null {
+  try {
+    return storage.getItem(STORAGE_KEYS.draftWorkspace);
+  } catch {
+    return null;
+  }
+}
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;/**
  * Map known English backend error strings to Chinese for a better
@@ -167,6 +184,82 @@ function computeLeftMin(vw: number): number {
 // eslint-disable-next-line prefer-const
 // (上面保留 computeMainMinWidth / computeLeftMin 供 typing 引用)
 
+// ── Unified timeline step helpers ─────────────────────────────────
+// These functions maintain the `unified_steps` array on the streaming
+// assistant message. They track phase transitions (reasoning → tools →
+// text) so that multi-iteration agent loops display each step in
+// chronological order instead of a fixed 3-section layout.
+
+/** Append reasoning text to the last reasoning step, or push a new one. */
+function appendReasoningStep(steps: TimelineStep[] | undefined, content: string): TimelineStep[] {
+  const arr = steps ? [...steps] : [];
+  const last = arr[arr.length - 1];
+  if (last && last.kind === "reasoning") {
+    arr[arr.length - 1] = { kind: "reasoning", content: last.content + content };
+  } else {
+    arr.push({ kind: "reasoning", content });
+  }
+  return arr;
+}
+
+/** Append text to the last text step, or push a new one. */
+function appendTextStep(steps: TimelineStep[] | undefined, content: string): TimelineStep[] {
+  const arr = steps ? [...steps] : [];
+  const last = arr[arr.length - 1];
+  if (last && last.kind === "text") {
+    arr[arr.length - 1] = { kind: "text", content: last.content + content };
+  } else {
+    arr.push({ kind: "text", content });
+  }
+  return arr;
+}
+
+/** Append a tool event to the last tools step, or push a new one. */
+function appendToolStep(steps: TimelineStep[] | undefined, event: ExecutionTimelineEvent): TimelineStep[] {
+  const arr = steps ? [...steps] : [];
+  const last = arr[arr.length - 1];
+  if (last && last.kind === "tools") {
+    arr[arr.length - 1] = { kind: "tools", events: [...last.events, event] };
+  } else {
+    arr.push({ kind: "tools", events: [event] });
+  }
+  return arr;
+}
+
+/**
+ * Update (or create) a `tool_stdout` event in the last tools step,
+ * mirroring the same logic that `onToolChunk` applies to
+ * `execution_timeline`. This keeps the unified_steps in sync so the
+ * rendered tool cards show live stdout.
+ */
+function updateToolStepStdout(
+  steps: TimelineStep[] | undefined,
+  toolCallId: string,
+  content: string,
+): TimelineStep[] {
+  const arr = steps ? [...steps] : [];
+  const lastIdx = arr.length - 1;
+  if (lastIdx < 0 || arr[lastIdx].kind !== "tools") return arr;
+  const events = [...arr[lastIdx].events];
+  let found = false;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === "tool_stdout" && events[i].tool_call_id === toolCallId) {
+      events[i] = { ...events[i], content: (events[i].content ?? "") + content };
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    events.push({
+      type: "tool_stdout",
+      tool_call_id: toolCallId,
+      content,
+      created_at: new Date().toISOString(),
+    });
+  }
+  arr[lastIdx] = { kind: "tools", events };
+  return arr;
+}
 
 export default function App() {
   const [page, setPageRaw] = useState<NavPage>("chat");
@@ -197,8 +290,9 @@ export default function App() {
   const editQueueItem = useCallback((idx: number, newText: string) => {
     setMessageQueue((prev) => prev.map((m, i) => (i === idx ? newText : m)));
   }, []);
-  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
-  const isCreatingSessionRef = useRef(false);
+const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+const isCreatingSessionRef = useRef(false);
+const [isCreatingSession, setIsCreatingSession] = useState(false);
 
   // v27: 视口自适应 — 窗口尺寸变化时重算面板最小宽度
   // 对应 computeMainMinWidth / computeLeftMin 的分档逻辑。
@@ -318,6 +412,14 @@ export default function App() {
   const sessionsRef = useRef<typeof sessions>([]);
   useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
 
+  // Mirror activeSessionId to a ref so callbacks like handleNewChat can read
+  // the current value without depending on it in their dep array. Without
+  // this, handleNewChat would be recreated on every activeSessionId change,
+  // which — combined with the sessions dep — caused the "flicker between
+  // sessions on new chat" bug.
+  const activeSessionIdRef = useRef(activeSessionId);
+  useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
+
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const [rightOpen, setRightOpen] = useState<boolean>(() => {
@@ -326,6 +428,9 @@ export default function App() {
   useEffect(() => {
     try { storage.setItem(RIGHT_OPEN_KEY, String(rightOpen)); } catch {}
   }, [rightOpen]);
+
+  // 2026-07-08 (user): 右栏当前标签，可被外部控制（点目录 chip 直接切到「电脑」）。
+  const [rightTab, setRightTab] = useState<RightTab>("products");
 
   // v23: 三列临界视口 + 默认窗口宽. 见上方注释块.
   const THREE_COL_MIN_VIEWPORT = 1140;
@@ -419,7 +524,8 @@ export default function App() {
   // currently streaming? Without this, switching to another session
   // mid-stream would leak the "正在思考…" indicator into the new
   // session's view (the new session isn't actually streaming).
-  const isStreamingActiveSession = streamingSessionId === activeSessionId;
+  const isStreamingActiveSession =
+    streamingSessionId !== null && streamingSessionId === activeSessionId;
 
   /**
    * Most recent stream error, scoped to the active session.  Set when
@@ -498,18 +604,42 @@ export default function App() {
    */
   const runningToolRef = useRef<Map<string, string>>(new Map());
   /**
-   * When true, the next text chunk should land on a FRESH assistant
-   * placeholder instead of the current one.  Set by `onToolComplete` so
-   * that after a tool finishes and the agent loop starts its next LLM
-   * turn, the new turn's text renders as a visually separate bubble
-   * interleaved WITH (not before) the completed tool cards.
-   *
-   * Without this split, every LLM turn in an agent loop appends to the
-   * same assistant message and all tool cards pile up at the bottom —
-   * forcing the user to scroll past a wall of tools to read the final
-   * reply text.
+   * Tracks the current streaming "phase" (reasoning / tools / text) so
+   * we can detect phase transitions and push new unified timeline steps
+   * at the right time. Reset to null at the start of each stream.
    */
-  const needsNewAssistantRef = useRef(false);
+  const streamPhaseRef = useRef<"reasoning" | "tools" | "text" | null>(null);
+  // v2 (2026-07-07): one TodoListCard per plan / group. State
+  // (not ref) so ChatView re-renders when a new plan arrives.
+  // Ordered: groups are stored in the order their group_started
+  // event arrived. Items are keyed by id so upsert is a single
+  // object property write.
+  interface TodoGroup {
+    groupId: string;
+    groupTitle: string | null;
+    anchorMessageId: string | null;
+    itemsById: Record<string, TodoSnapshotItem>;
+  }
+  const [todoGroups, setTodoGroups] = useState<TodoGroup[]>([]);
+  const todoGroupsByIdRef = useRef<Map<string, TodoGroup>>(new Map());
+  /**
+   * Shared mutable set between App.tsx and every TodoListCard. Card
+   * writes the item id before an optimistic toggle-patch and removes
+   * it when the patch settles (including on error — see
+   * TodoListCard.tsx catch block).  The onTodoChange handler below
+   * skips WS echo upserts for ids that are currently in this set,
+   * preventing rapid-toggle races (Bug #1 fix, 2026-07-08).
+   */
+  const justPatchedTodoRef = useRef<Set<string>>(new Set());
+// 2026-07-10: needsNewAssistantRef removed. All text chunks in an
+// agent loop now go to the SAME assistant message. Tool calls are
+// tracked in the assistant's `execution_timeline` (rendered as a
+// collapsible block inside the bubble) instead of separate
+// `role: "tool"` messages. This makes streaming and reload
+// paths produce identical visuals:
+//   [avatar] [text] [collapsible tools] [more text]
+// instead of the old split where tools appeared above the avatar
+// because empty assistant placeholders were filtered out.
   /**
    * Pending `clarify` callbacks — keyed by `request_id`. When the
    * server pushes a `ClarifyRequest` event we register a resolver
@@ -521,7 +651,33 @@ export default function App() {
   const clarifyResolversRef = useRef<
     Map<string, (answer: string) => void>
   >(new Map());
-  const { workspaceRoot } = useWorkspaceRoot();
+  const { workspaceRoot, setWorkspaceRoot } = useWorkspaceRoot();
+
+  // 2026-07-07 主人反馈："选了工作区 Computer 面板不显示文件夹 / 对话没归到对应工作区分组"。
+  //   根因：Composer chip 走 useSessionWorkspace（per-session localStorage + 后端 PATCH），
+  //   但 ComputerTab 读的是 useWorkspaceRoot（global），Sidebar 的 useMemo 只依赖
+  //   sessions/workspaces state —— 两边都不感知 chip 的修改。本回调把变更广播到两个
+  //   出口：(1) setWorkspaceRoot 推 global，(2) setSessions 改 session.workspace
+  //   让 Sidebar useMemo 重算。
+  //   当 path=null（用户点"不绑定目录"）时也清掉 global workspaceRoot，避免下次开
+  //   新 session 时还残留上次的根目录。
+  const onWorkspaceChange = useCallback((sessionId: string | null | undefined, path: string | null) => {
+    if (path) {
+      setWorkspaceRoot(path);
+    } else {
+      setWorkspaceRoot(null);
+    }
+    if (sessionId) {
+      setSessions((prev) => prev.map((s) => s.id === sessionId ? { ...s, workspace: path ?? undefined } : s));
+    }
+  }, [setWorkspaceRoot]);
+
+  // 2026-07-08 (user): 点目录 chip（已选工作区时）→ 打开右栏并切到「电脑」标签，
+  //   直接把文件浏览器切到所选工作区目录，不再弹 chooser 列表。
+  const openComputer = useCallback(() => {
+    setRightTab("computer");
+    setRightOpen(true);
+  }, []);
 
   // Auto-collapse sidebar on small screens
   useEffect(() => {
@@ -599,8 +755,28 @@ export default function App() {
   // a previous mount of this effect from clobbering fresher data.
   useEffect(() => {
     if (!activeSessionId) return;
-    const session = sessions.find((s) => s.id === activeSessionId);
-    if (!session) { if (sessions.length > 0) setActiveSessionId(null); return; }
+    // 2026-07-10: use sessionsRef to avoid re-running this effect on
+    // every sessions change (e.g. during streaming). The previous deps
+    // included `sessions`, which meant every streaming chunk re-triggered
+    // this effect. Although the `messages.length > 0` guard prevented
+    // re-fetching, the effect cleanup (`cancelled = true`) would fire
+    // on every chunk, potentially cancelling an in-flight fetch from
+    // a different session that had just been switched to.
+    //
+    // 2026-07-11: Added `sessions.length` to deps to fix a startup race
+    // condition. On app launch, `activeSessionId` is restored from
+    // localStorage BEFORE `getSessions()` completes. The effect fires
+    // immediately, but `sessionsRef.current` is empty, so it returns
+    // without loading messages. When `getSessions()` completes later,
+    // `sessions.length` changes from 0 to N, which re-triggers this
+    // effect and loads the messages for the active session.
+    //
+    // During streaming, `sessions.length` doesn't change (only the
+    // messages within existing sessions change), so this effect doesn't
+    // re-fire on every chunk — preserving the 2026-07-10 fix.
+    if (sessions.length === 0) return;
+    const session = sessionsRef.current.find((s) => s.id === activeSessionId);
+    if (!session) { if (sessionsRef.current.length > 0) setActiveSessionId(null); return; }
     if (session.messages.length > 0) return;
 
     let cancelled = false;
@@ -608,7 +784,7 @@ export default function App() {
       .then((rawMessages) => {
         if (cancelled) return;
         clearLoadError(activeSessionId);
-        const messages = expandTimelineToMessages(rawMessages);
+        const messages = rawMessages;
         setSessions((prev) => prev.map((s) =>
           s.id === activeSessionId ? { ...s, messages } : s
         ));
@@ -620,7 +796,7 @@ export default function App() {
         setLoadError(activeSessionId, msg);
       });
     return () => { cancelled = true; };
-  }, [activeSessionId, sessions, setActiveSessionId, setLoadError, clearLoadError]);
+  }, [activeSessionId, sessions.length, setActiveSessionId, setLoadError, clearLoadError]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
 
@@ -774,40 +950,76 @@ export default function App() {
     try { cancelStream(); } catch (_) { /* WS may already be closed — swallow */ }
     try { clearStreamError(); } catch (_) { /* swallow */ }
 
-    // Find an existing session with no messages (empty session).
-    //
-    // We CANNOT use `s.messages.length === 0` here: the frontend
-    // always seeds `messages: []` for every session returned by
-    // `GET /v1/sessions` (see api.ts::toSession). The real emptiness
-    // signal is `message_count === 0` — the backend-reported count
-    // from the same endpoint. Without this distinction, clicking
-    // "新建对话" was always reusing an existing *non-empty* session
-    // (the first one in the list), which the user perceived as
-    // "clicking 新建对话 but landing on an old chat".
-    const emptySession = sessions.find(
-      (s) => (s.message_count ?? s.messages.length) === 0,
+    // Read sessions from ref instead of closure — this callback must NOT
+    // depend on `sessions` in its dep array. If it does, every streaming
+    // chunk (which calls setSessions) recreates this callback, and the
+    // "find an existing empty session" logic below can pick a DIFFERENT
+    // empty session on each recreation, causing the UI to flicker between
+    // sessions instead of landing on the new one.
+    const currentSessions = sessionsRef.current;
+    const currentActiveId = activeSessionIdRef.current;
+
+    // Find an existing session with no messages (empty session),
+    // but skip the currently active session — the user clicked
+    // "新建对话" to get a *new* blank slate, not to re-select
+    // the one they're already looking at.
+    const emptySession = currentSessions.find(
+      (s) => s.id !== currentActiveId && (s.message_count ?? s.messages.length) === 0,
     );
 
+    // (2026-07-12) `readDraftWorkspace` is defined at module scope so
+    // `handleSendMessage` can also send the welcome draft to the
+    // server on creation — see the hook below.
+    // Helper: migrate the welcome-screen draft workspace into the session so
+    // the sidebar groups it under the correct workspace instead of "未分组".
+    const applyDraftWorkspace = (sessionId: string): string | null => {
+      try {
+        const draftWorkspace = storage.getItem(STORAGE_KEYS.draftWorkspace);
+        if (draftWorkspace) {
+          storage.setItem(sessionKey(sessionId, "workspace"), draftWorkspace);
+        }
+        return draftWorkspace;
+      } catch {
+        return null;
+      }
+    };
+
     if (emptySession) {
-      // Reuse the existing empty session
+      const ws = applyDraftWorkspace(emptySession.id);
+      if (ws) {
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === emptySession.id ? { ...s, workspace: ws } : s
+          )
+        );
+      }
       setActiveSessionId(emptySession.id);
       setPage("chat");
       return;
     }
 
     isCreatingSessionRef.current = true;
+    setIsCreatingSession(true);
     try {
-      const session = await api.createSession("新建对话");
-      setSessions((prev) => [session, ...prev]);
+      // 2026-07-12: send the welcome-state draft workspace to the
+      // server on creation so it lands in `sessions.workspace`
+      // (not just localStorage). Without this, the desktop sidebar
+      // bucketed every restarted session under "未分组" — the
+      // draft only ever lived in `hermix.session.<id>.workspace`
+      // localStorage, which the server doesn't see.
+      const draftWs = readDraftWorkspace();
+      const session = await api.createSession("新建对话", draftWs ?? undefined);
+      const ws = applyDraftWorkspace(session.id);
+      setSessions((prev) => [ws ? { ...session, workspace: ws } : session, ...prev]);
       setActiveSessionId(session.id);
       setPage("chat");
     } finally {
       isCreatingSessionRef.current = false;
+      setIsCreatingSession(false);
     }
-  }, [sessions]);
+  }, [cancelStream, clearStreamError, setActiveSessionId]);
 
   const handleSelectSession = useCallback(async (id: string) => {
-    console.log("[nav] handleSelectSession id=", id, "page-before=", page);
     try { cancelStream(); } catch (_) { /* WS may already be closed — swallow */ }
     try { clearStreamError(); } catch (_) { /* swallow */ }
     // Always advance to the chat view and select the session,
@@ -816,29 +1028,16 @@ export default function App() {
     setPage("chat");
     if (window.innerWidth < 768) setSidebarOpen(false);
 
-    // v29: 切换到已有 session 时，如果在内存中已经有 messages（比如刚结束的
-    // 流式对话），直接保留内存数据，不重新从服务器拉取。服务器可能还没完成
-    // 持久化（见 onDone 注释：为了消除闪烁，流结束后不再主动 re-fetch），
-    // 此时拉回来的数据会比内存状态短，导致消息丢失。
+    // The activeSessionId effect will fetch messages from the server
+    // if the session doesn't have them in memory yet. We no longer
+    // duplicate the fetch here — the effect is the single source of
+    // truth for loading session messages, which avoids race conditions
+    // between two concurrent fetches overwriting each other's results.
     //
-    // 只有 session.messages 为空时才去服务器拉（首次加载 / 加载失败的会话）。
-    const existing = sessions.find((s) => s.id === id);
-    if (existing && existing.messages.length > 0) {
-      console.log("[nav] session", id, "already has", existing.messages.length, "messages in memory, skipping server fetch");
-      return;
-    }
-
-    try {
-      const rawMessages = await api.getSessionMessages(id);
-      clearLoadError(id);
-      const messages = expandTimelineToMessages(rawMessages);
-      setSessions((prev) => prev.map((s) => s.id === id ? { ...s, messages } : s));
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error(`[chat] handleSelectSession(${id}) failed:`, msg);
-      setLoadError(id, msg);
-    }
-  }, [setLoadError, clearStreamError, cancelStream, setActiveSessionId, setPage, sessions]);
+    // v29 preserved: if the session already has in-memory messages
+    // (e.g. from a just-ended streaming conversation), the effect
+    // skips the fetch and uses the in-memory state directly.
+  }, [clearStreamError, cancelStream, setActiveSessionId, setPage]);
 
   const handleDeleteSession = useCallback(async (id: string) => {
     // 2026-06-26: the previous implementation called `api.deleteSession`
@@ -1023,6 +1222,15 @@ export default function App() {
   );
 
   const handleSendMessage = useCallback(async (content: string, _projectId?: string, overrides?: import("./hooks/useStreamChat").ChatOverrides) => {
+    // ★ DIAG: trace every send_message_stream call to find the trigger chain
+    // Global counter survives remounts/HMR; shows whether handleSendMessage
+    // itself was called 1x or 10x. Pair with the timestamp so we can
+    // distinguish "10 calls in 50ms" (retry storm) from "10 calls in 60s"
+    // (user actually pressed Enter 10x).
+    const __diagId = ((globalThis as any).__sendDiagId = ((globalThis as any).__sendDiagId || 0) + 1);
+    const __diagTs = performance.now().toFixed(1);
+    console.log(`[diag #${__diagId} @${__diagTs}ms] handleSendMessage ENTER`, { content, streamingSessionId, queueLen: messageQueue.length });
+    // Note: console.trace removed (was just stack; the 1-line call above is enough).
     // Clear any previous stream error — the user is starting a new turn,
     // so the old error is stale.  If this turn also fails the error
     // will be re-set by the onError callback.
@@ -1037,7 +1245,12 @@ export default function App() {
       const title = content.slice(0, 40) + (content.length > 40 ? "..." : "");
       let session;
       try {
-        session = await api.createSession(title);
+        // 2026-07-12: pass the welcome-state draft workspace so the
+        // server records it on the session row from creation
+        // (instead of relying on a localStorage-only fallback that
+        // vanishes on desktop restart).
+        const draftWs = readDraftWorkspace();
+        session = await api.createSession(title, draftWs ?? undefined);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setStreamError(
@@ -1070,6 +1283,10 @@ export default function App() {
         }
       } catch {}
     }
+
+// 2026-07-10: Reset per-turn state.
+runningToolRef.current.clear();
+streamPhaseRef.current = null;
 
     const userMsg: ChatMessage = { id: `temp-${Date.now()}`, role: "user", content, timestamp: new Date().toISOString() };
     const assistantId = `reply-${Date.now()}`;
@@ -1105,98 +1322,33 @@ export default function App() {
     }));
 
     // Real-time stream: append each chunk to the *currently active*
-    // assistant message. The ref indirection is what lets us switch
-    // over to a new message mid-stream when an approval card needs
-    // to be inserted, or when a tool completes and the next agent-loop
-    // turn should render as an interleaved bubble (see
-    // needsNewAssistantRef below).
+    // assistant message. 2026-07-10: removed needsNewAssistantRef
+    // turn-split logic — all text in an agent loop now goes to ONE
+    // assistant message. Tool calls are tracked in the assistant's
+    // `execution_timeline` (rendered as a collapsible block) instead
+    // of separate `role: "tool"` messages. This ensures streaming
+    // and reload produce identical visuals.
     const appendChunk = (chunk: string) => {
-      // ── Turn-split logic ──────────────────────────────────────
-      // If the previous event was a tool_complete, the agent loop is
-      // about to start its next LLM turn.  Instead of appending to the
-      // now-frozen previous assistant (which already contains that
-      // turn's text), we spin up a fresh empty placeholder so the new
-      // turn's text renders in its own bubble — interleaved after the
-      // completed tool cards.
-      if (needsNewAssistantRef.current) {
-        needsNewAssistantRef.current = false;
-        const nextAssistantId = `reply-${Date.now()}-turn-${Math.random().toString(36).slice(2, 8)}`;
-        currentAssistantIdRef.current = nextAssistantId;
-        setSessions((prev) => prev.map((s) => {
-          if (s.id !== sessionId) return s;
-          const newAsst: ChatMessage = {
-            id: nextAssistantId,
-            role: "assistant",
-            content: "",
-            timestamp: new Date().toISOString(),
-          };
-          return { ...s, messages: [...s.messages, newAsst], updated_at: new Date().toISOString() };
-        }));
-      }
       const target = currentAssistantIdRef.current;
       if (!target) return;
+      streamPhaseRef.current = "text";
       setSessions((prev) => prev.map((s) => {
         if (s.id !== sessionId) return s;
         return {
           ...s,
           messages: s.messages.map((m) =>
-            m.id === target ? { ...m, content: m.content + chunk } : m
+            m.id === target
+              ? { ...m, content: m.content + chunk, unified_steps: appendTextStep(m.unified_steps, chunk) }
+              : m
           ),
           updated_at: new Date().toISOString(),
         };
       }));
     };
 
-    /**
-     * Mark a `role: "tool"` message (created in `onToolStart`) as
-     * completed. Pulled out so both the "tool_complete arrived before
-     * tool_start" and "happy path" branches share the same state
-     * mutation — which is what was previously broken: when the
-     * `runningToolRef` lookup missed, the card stayed stuck on
-     * "执行中" forever.
-     */
-    const finalizeToolMessage = (
-      toolMsgId: string,
-      content: string,
-    ) => {
-      // Detect error output so the badge shows "失败" instead of
-      // "完成". Delegates to `detectToolError` (the same helper
-      // `messageParser.ts` uses for `expandTimelineToMessages` /
-      // `groupTimeline`) so the live-stream and reload paths stay
-      // in lockstep.
-      //
-      // The previous inline regex (`"stderr":` substring) was
-      // over-greedy: any JSON payload *with* a `stderr` field —
-      // even an empty `"stderr":""` like the one Python's
-      // `execute_code` tool emits on success — was mis-flagged as
-      // an error. `detectToolError` parses the JSON, checks both
-      // the `error` and `stderr` fields for non-empty strings, and
-      // honours `exit_code !== 0`.
-      const looksLikeError = detectToolError(content) !== null;
-
-      setSessions((prev) => prev.map((s) => {
-        if (s.id !== sessionId) return s;
-        return {
-          ...s,
-          messages: s.messages.map((m) => {
-            if (m.id !== toolMsgId || m.role !== "tool") return m;
-            return {
-              ...m,
-              content: content ?? m.content,
-              tool: m.tool
-                ? {
-                    ...m.tool,
-                    status: (looksLikeError ? "error" as const : "done" as const),
-                    output: content ?? m.tool.output,
-                    completedAt: new Date().toISOString(),
-                  }
-                : undefined,
-            };
-          }),
-          updated_at: new Date().toISOString(),
-        };
-      }));
-    };
+    // 2026-07-10: finalizeToolMessage removed. Tool completion is now
+    // tracked via `tool_complete` events in the assistant's
+    // `execution_timeline`, not via separate `role: "tool"` messages.
 
     /**
      * The server has emitted a `RequestApproval` event. Three steps:
@@ -1357,135 +1509,122 @@ export default function App() {
             }
           },
           onToolStart: ({ toolCallId, tool, content }) => {
-            const toolMsgId = `tool-${toolCallId}`;
-            runningToolRef.current.set(toolCallId, toolMsgId);
+            // 2026-07-10: Tool events are now appended to the
+            // assistant's `execution_timeline` instead of creating
+            // separate `role: "tool"` messages. This ensures:
+            //   1. Tools always render BELOW the avatar (inside the
+            //      assistant bubble, not as separate messages above it)
+            //   2. Streaming and reload produce identical visuals
+            //   3. Tools can be rendered as a collapsible block
+            if (runningToolRef.current.has(toolCallId)) {
+              return;
+            }
+            runningToolRef.current.set(toolCallId, toolCallId);
 
-            const toolMsg: ChatMessage = {
-              id: toolMsgId,
-              role: "tool",
-              content: "",
-              timestamp: new Date().toISOString(),
-              tool: {
-                tool,
-                args: content,
-                status: "running",
-                startedAt: new Date().toISOString(),
-                toolCallId,
-                linkedAssistantId: currentAssistantIdRef.current ?? undefined,
-              },
+            const target = currentAssistantIdRef.current;
+            if (!target) return;
+            streamPhaseRef.current = "tools";
+
+            const event: import("./types").ExecutionTimelineEvent = {
+              type: "tool_start",
+              tool,
+              arguments: content,
+              tool_call_id: toolCallId,
+              created_at: new Date().toISOString(),
             };
 
-            // Insert the tool message without creating a new assistant
-            // placeholder. The existing streaming assistant (pointed to
-            // by currentAssistantIdRef) continues to accumulate chunks,
-            // so tools appear *within* the assistant's response rather
-            // than before any reply text. The user sees:
-            //   [Hermix streaming "我来帮你写…"]
-            //   [已写入 tool card]
-            //   [Hermix streaming "这是代码内容…"]
-            // instead of:
-            //   [已写入 tool card]
-            //   [Hermix streaming "这是代码内容…"]
             setSessions((prev) => prev.map((s) => {
               if (s.id !== sessionId) return s;
-              // Insert after the current streaming assistant.
-              const idx = currentAssistantIdRef.current
-                ? s.messages.findIndex((m) => m.id === currentAssistantIdRef.current)
-                : -1;
-              if (idx >= 0) {
-                const msgs = [...s.messages];
-                msgs.splice(idx + 1, 0, toolMsg);
-                return { ...s, messages: msgs, updated_at: new Date().toISOString() };
-              }
-              // Fallback: append to end
               return {
                 ...s,
-                messages: [...s.messages, toolMsg],
+                messages: s.messages.map((m) =>
+                  m.id === target
+                    ? {
+                        ...m,
+                        execution_timeline: [...(m.execution_timeline ?? []), event],
+                        unified_steps: appendToolStep(m.unified_steps, event),
+                      }
+                    : m
+                ),
                 updated_at: new Date().toISOString(),
               };
             }));
-
-            // NOTE: we deliberately do NOT mirror tool_start into
-            // the streaming assistant's `execution_timeline` here.
-            // The inline `role: "tool"` message we just inserted is
-            // the single source of truth during the live stream.
-            // Mirroring caused AssistantMessage to render
-            // `ToolTimelineBlock` *in addition to* the inline card,
-            // i.e. two rows per tool call (the "一件事三行" bug).
-            // On reload, the server returns the persisted assistant
-            // message with its full `execution_timeline`, and
-            // `expandTimelineToMessages` converts that into the same
-            // inline cards — so the persisted path doesn't need
-            // streaming-side mirroring either.
           },
           onToolChunk: ({ toolCallId, content }) => {
+            // 2026-07-10: Append stdout to the assistant's
+            // execution_timeline. We accumulate into a single
+            // `tool_stdout` event per tool_call_id for efficiency.
             if (!content) return;
-            const targetId = runningToolRef.current.get(toolCallId);
-            // Even if we can't find the inline card (e.g. the chunk
-            // arrived before tool_start, or the ref was wiped), still
-            // record the chunk in the timeline so the tool rail sees
-            // the live stdout.
-            if (targetId) {
-              setSessions((prev) => prev.map((s) => {
-                if (s.id !== sessionId) return s;
-                return {
-                  ...s,
-                  messages: s.messages.map((m) => {
-                    if (m.id !== targetId || m.role !== "tool") return m;
-                    return {
-                      ...m,
-                      tool: m.tool
-                        ? { ...m.tool, output: (m.tool.output ?? "") + content }
-                        : undefined,
-                    };
-                  }),
-                  updated_at: new Date().toISOString(),
-                };
-              }));
-            }
-            // Stdout is NOT mirrored into the streaming assistant's
-            // `execution_timeline`. The inline `role: "tool"` card
-            // owns the live render path. Mirroring would re-create
-            // the "ToolTimelineBlock + inline card" duplicate that
-            // caused the user to see "一件事三行". The server
-            // already persists a complete `execution_timeline` per
-            // assistant message, which `expandTimelineToMessages`
-            // turns into inline cards on reload — so we don't need
-            // (and shouldn't add) streaming-side duplicates.
+            const target = currentAssistantIdRef.current;
+            if (!target) return;
+
+            setSessions((prev) => prev.map((s) => {
+              if (s.id !== sessionId) return s;
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== target || !m.execution_timeline) return m;
+                  const timeline = [...m.execution_timeline];
+                  // Find the existing tool_stdout event for this tool_call_id
+                  let found = false;
+                  for (let i = timeline.length - 1; i >= 0; i--) {
+                    if (timeline[i].type === "tool_stdout" && timeline[i].tool_call_id === toolCallId) {
+                      timeline[i] = { ...timeline[i], content: (timeline[i].content ?? "") + content };
+                      found = true;
+                      break;
+                    }
+                  }
+                  if (!found) {
+                    timeline.push({
+                      type: "tool_stdout",
+                      tool_call_id: toolCallId,
+                      content,
+                      created_at: new Date().toISOString(),
+                    });
+                  }
+                  return {
+                    ...m,
+                    execution_timeline: timeline,
+                    unified_steps: updateToolStepStdout(m.unified_steps, toolCallId, content),
+                  };
+                }),
+                updated_at: new Date().toISOString(),
+              };
+            }));
           },
           onToolComplete: ({ toolCallId, content }) => {
-            // `tool_complete` sometimes arrives without a matching
-            // `tool_start` (server retries, or a tool that was kicked
-            // off on a previous turn but the WS just re-delivered the
-            // close event). In that case the ref-based lookup misses
-            // and the card would stay stuck on "执行中" forever. Fall
-            // back to the conventional id and try to find the inline
-            // card directly; if it doesn't exist we still want to
-            // record the close event in the timeline so the rail
-            // doesn't get stranded.
-            let targetId = runningToolRef.current.get(toolCallId);
-            if (targetId) {
-              runningToolRef.current.delete(toolCallId);
-            } else {
-              targetId = `tool-${toolCallId}`;
-            }
-            if (targetId) {
-              finalizeToolMessage(targetId, content ?? "");
-            }
+            // 2026-07-10: Append a `tool_complete` event to the
+            // assistant's execution_timeline. No separate tool message,
+            // no needsNewAssistantRef — all text stays in the same
+            // assistant bubble.
+            runningToolRef.current.delete(toolCallId);
 
-            // Signal that the next LLM turn's text should start a fresh
-            // assistant bubble so tool cards and text interleave visually:
-            //   [asst_text_1] [tool_card] [asst_text_2] [tool_card] ...
-            // instead of:
-            //   [asst_ALL_TEXT] [tool_card] [tool_card] ...
-            needsNewAssistantRef.current = true;
+            const target = currentAssistantIdRef.current;
+            if (!target) return;
 
-            // tool_complete is NOT mirrored into the streaming
-            // assistant's `execution_timeline` for the same reason
-            // as onToolChunk above: it would cause the rail to
-            // render the same tool call twice (once as the inline
-            // card, once inside ToolTimelineBlock). The server's
-            // persisted timeline is the source of truth on reload.
+            const event: import("./types").ExecutionTimelineEvent = {
+              type: "tool_complete",
+              tool_call_id: toolCallId,
+              content: content ?? "",
+              created_at: new Date().toISOString(),
+            };
+
+            setSessions((prev) => prev.map((s) => {
+              if (s.id !== sessionId) return s;
+              return {
+                ...s,
+                messages: s.messages.map((m) =>
+                  m.id === target
+                    ? {
+                        ...m,
+                        execution_timeline: [...(m.execution_timeline ?? []), event],
+                        unified_steps: appendToolStep(m.unified_steps, event),
+                      }
+                    : m
+                ),
+                updated_at: new Date().toISOString(),
+              };
+            }));
           },
           onFileChange: ({ toolCallId, filePath, changeType, fileSummary }) => {
             // Append a `file_change` event to the currently-active
@@ -1570,13 +1709,18 @@ export default function App() {
             // MessageBubble can render it (collapsed by default).
             const target = currentAssistantIdRef.current;
             if (!target) return;
+            streamPhaseRef.current = "reasoning";
             setSessions((prev) => prev.map((s) => {
               if (s.id !== sessionId) return s;
               return {
                 ...s,
                 messages: s.messages.map((m) =>
                   m.id === target
-                    ? { ...m, reasoningContent: (m.reasoningContent ?? "") + piece }
+                    ? {
+                        ...m,
+                        reasoningContent: (m.reasoningContent ?? "") + piece,
+                        unified_steps: appendReasoningStep(m.unified_steps, piece),
+                      }
                     : m
                 ),
                 updated_at: new Date().toISOString(),
@@ -1586,50 +1730,130 @@ export default function App() {
           onApprovalRequest,
           onClarifyRequest,
           onAcuiDirective: (directive) => acui.apply(directive),
+          // Todo (task list) mutations. Forward to the App-level
+          // groups store so each plan renders as its own inline
+          // card anchored to the originating message. The store
+          // updates `todoGroupsByIdRef` synchronously and bumps
+          // `todoGroups` state once per logical mutation (group
+          // start / upsert / remove) so ChatView re-renders
+          // exactly the affected card.
+          onTodoChange: (change) => {
+            setTodoGroups((prev) => {
+              const next = prev.slice();
+              const bump = (i: number, mut: (g: TodoGroup) => TodoGroup) => {
+                const updated = { ...mut(next[i]) };
+                next[i] = updated;
+                todoGroupsByIdRef.current.set(updated.groupId, updated);
+              };
+              if (change.kind === "group_started") {
+                // Ignore duplicates for the same group_id.
+                if (todoGroupsByIdRef.current.has(change.groupId)) {
+                  const i = next.findIndex((g) => g.groupId === change.groupId);
+                  if (i >= 0 && (next[i].groupTitle !== change.groupTitle || next[i].anchorMessageId !== change.messageId)) {
+                    bump(i, (g) => ({ ...g, groupTitle: change.groupTitle, anchorMessageId: change.messageId }));
+                  }
+                  return next;
+                }
+                const g: TodoGroup = {
+                  groupId: change.groupId,
+                  groupTitle: change.groupTitle,
+                  anchorMessageId: change.messageId,
+                  itemsById: {},
+                };
+                todoGroupsByIdRef.current.set(change.groupId, g);
+                next.push(g);
+                return next;
+              }
+              if (change.kind === "upsert") {
+                // Bug #1 fix (2026-07-08): skip WS echoes for items
+                // that are currently in-flight from a user toggle.
+                // Without this, rapid double-toggles are silently
+                // reverted by a stale echo from the first click.
+                if (justPatchedTodoRef.current.has(change.item.id)) {
+                  return prev;
+                }
+                const i = next.findIndex((g) => g.groupId === (change.item.group_id || ""));
+                if (i < 0) {
+                  // No matching group — synthesize one with empty title
+                  // so the item still renders. LLM should normally
+                  // emit group_started first, but this is a safety net.
+                  const g: TodoGroup = {
+                    groupId: change.item.group_id || "_legacy",
+                    groupTitle: change.item.group_title ?? null,
+                    anchorMessageId: null,
+                    itemsById: { [change.item.id]: change.item },
+                  };
+                  todoGroupsByIdRef.current.set(g.groupId, g);
+                  next.push(g);
+                  return next;
+                }
+                bump(i, (g) => ({
+                  ...g,
+                  itemsById: { ...g.itemsById, [change.item.id]: change.item },
+                }));
+                return next;
+              }
+              if (change.kind === "remove") {
+                const i = next.findIndex((g) => change.id in g.itemsById);
+                if (i < 0) return prev;
+                bump(i, (g) => {
+                  const items = { ...g.itemsById };
+                  delete items[change.id];
+                  return { ...g, itemsById: items };
+                });
+                return next;
+              }
+              return prev;
+            });
+          },
           onPrefetch: (info) => {
             setPrefetchIntent(info);
           },
           onDone: (text, stopReason) => {
             setPrefetchIntent(null);
             setStreamPhase(null);
-            // CRITICAL: `run_stream` may push multiple assistant
-            // messages into the session across one turn (empty
-            // placeholder from a reasoning-only attempt + the real
-            // reply), and the in-flight `appendChunk` path accumulates
-            // raw content from stream chunks — including any
-            // `<think>...</think>` blocks the server didn't strip.
+            // 2026-07-09: Multi-turn agent loop fix.
             //
-            // The most reliable source of truth is what the server
-            // actually persisted to the session, so on `done` we:
-            //   1. Replace the optimistic assistant placeholder's
-            //      `content` with the server's terminal `text`
-            //      (which `parseContent` will clean up at render time).
-            //   2. Re-fetch the session messages and replace the
-            //      whole `messages` array. This collapses the
-            //      duplicate empty + real assistant rows that
-            //      `run_stream` produced into the server's view of
-            //      the conversation, which is the one we'll be
-            //      looking at on next reload anyway.
+            // `text` here is `fullText` from useStreamChat — the
+            // accumulated text from ALL `text` events across ALL LLM
+            // turns in this stream. But `appendChunk` has already
+            // routed text to the correct per-turn assistant
+            // placeholders (via needsNewAssistantRef). Using `text`
+            // to overwrite the last assistant's content would:
+            //   - Duplicate turn 1's text into the last assistant
+            //   - Or replace correctly-streamed text with a garbled
+            //     concatenation of all turns' text
             //
-            // If the re-fetch fails (transient network), we fall
-            // back to the in-memory update so the user still sees
-            // the terminal `text` rather than an empty "已完成"
-            // bubble.
+            // New approach: trust the in-memory state built by
+            // appendChunk. Only use `text` as a FALLBACK when the
+            // last assistant's content is empty (e.g. the LLM
+            // produced no visible text, or all text arrived in the
+            // done event instead of via streaming chunks).
             const assistantIdAtDone = currentAssistantIdRef.current;
             const replaced = (() => {
-              if (!text || !assistantIdAtDone) return false;
+              if (!assistantIdAtDone) return false;
               setSessions((prev) => prev.map((s) => {
                 if (s.id !== sessionId) return s;
-                // Find the target message in-memory
                 const target = s.messages.find((m) => m.id === assistantIdAtDone);
-                // Only update if content actually changed
-                // (avoids re-render flash when onDone text === streamed text)
-                if (target && target.content === text && target.stopReason === stopReason) return s;
+                if (!target) return s;
+                // Only use `text` as fallback if the assistant has
+                // no content from streaming (appendChunk never ran
+                // or produced empty). This covers the edge case
+                // where the LLM's entire response arrived in the
+                // done event instead of via text chunks.
+                const needsFallbackText =
+                  (!target.content || target.content.trim() === "") &&
+                  text && text.trim().length > 0;
+                if (target.stopReason === stopReason && !needsFallbackText) return s;
                 return {
                   ...s,
                   messages: s.messages.map((m) =>
                     m.id === assistantIdAtDone
-                      ? { ...m, content: text, stopReason }
+                      ? {
+                          ...m,
+                          content: needsFallbackText ? text : m.content,
+                          stopReason,
+                        }
                       : m
                   ),
                   updated_at: new Date().toISOString(),
@@ -1640,8 +1864,7 @@ export default function App() {
             if (!replaced) {
               // Fallback: stamp the trailing assistant row with
               // `stopReason` (preserves the old behavior when we
-              // somehow don't have a target id — e.g. the optimistic
-              // insert was overridden by a re-fetch).
+              // somehow don't have a target id).
               setSessions((prev) => prev.map((s) => {
                 if (s.id !== sessionId) return s;
                 const msgs = [...s.messages];
@@ -1654,82 +1877,22 @@ export default function App() {
                 return { ...s, messages: msgs };
               }));
             }
-            // INTENTIONALLY OMITTED: the previous re-fetch via
-            // api.getSessionMessages(sessionId) caused a visible
-            // flash on completion because:
-            //   1. persisted is a brand-new array of brand-new
-            //      message objects (the server re-serializes), so
-            //      React sees new references and remounts
-            //      MessageBubble / ReactMarkdown even when the
-            //      content is byte-for-byte identical.
-            //   2. If the server append_turn had not finished
-            //      persisting yet, persisted could be shorter than
-            //      in-memory; the previous length guard masked that
-            //      symptom but not the underlying re-mount cost.
-            // The in-memory state already has the full terminal
-            // content (via appendChunk + the target.content === text
-            // guard above) and the full reasoning monologue
-            // (via onReasoningChunk). It is the single source of
-            // truth for the active session; the server is the source
-            // of truth on next session reload, handled by the
-            // useEffect watching activeSessionId.
+            // 2026-07-09: Removed the 500ms re-fetch that replaced the
+            // entire messages array with server-persisted data.
             //
-            // v30: 流结束后延迟 500ms 从服务端重新拉取消息，替换为
-            // expandTimelineToMessages 产出的标准结构。两条路径从此
-            // 走同一个逻辑，渲染完全一致。
+            // Root cause of "工具结果突然消失" bug:
+            // During streaming, onToolStart/onToolChunk/onToolComplete
+            // build complete tool messages in memory. When onDone fires,
+            // the 500ms re-fetch replaced these with server data. If the
+            // server hadn't finished persisting tool results yet (race
+            // condition), or if the execution_timeline was incomplete,
+            // expandTimelineToMessages produced fewer tool messages than
+            // what was already in memory — making tool results vanish.
             //
-            // 之前为了避免闪烁（替换整个数组导致 React 重新挂载
-            // MessageBubble）去掉了 re-fetch，代价是内存中的流式消息
-            // 结构与服务端重载后的结构不同——tool 消息的字段、状态、
-            // errorReason 等推导方式不一致，导致"切回来渲染更好看"。
-            //
-            // 现在延迟 500ms 执行：此时用户已经看到流结束的状态，
-            // 替换数组触发的单次 re-render 在延迟后不会造成明显闪烁。
-            //
-            // 如果 re-fetch 失败（网络问题），保留当前内存状态不走进一步，
-            // 下次侧边栏切回来时依靠 getSessionMessages 重新加载。
-            // 用 startTransition 包裹 setSessions，避免 React 的紧急
-            // 更新路径（导致后续交互卡顿）。
-            const fetchSid = sessionId;
-            setTimeout(async () => {
-              try {
-                const rawMessages = await api.getSessionMessages(fetchSid);
-                // v31 (2026-06-29): 主人反馈「停止后切到欢迎页」。
-                // 根因：流结束后 re-fetch，server 偶尔返回空数组（cancel 来不及
-                // 持久化 user_msg / agent 写库还在路上），空数组覆盖内存 messages
-                // → session.messages.length === 0 → ChatView 跳 Empty State
-                // → 用户视觉上"切到了欢迎页"。同样的撕裂也会发生在 server
-                // 因为 schema migration 失败 / DB lock / 任何"返回 0 条"
-                // 的边角情况。
-                //
-                // 修复：内存中已经有消息，但 server 这次返回 0 条 → 不覆盖，
-                // 保留内存数据，下次切回 session 时再尝试 reload。
-                if (
-                  Array.isArray(rawMessages) &&
-                  rawMessages.length === 0
-                ) {
-                  const hasInMemory = sessionsRef.current.some(
-                    (s) => s.id === fetchSid && s.messages.length > 0,
-                  );
-                  if (hasInMemory) {
-                    console.warn(
-                      "[chat] onDone re-fetch returned 0 messages for",
-                      fetchSid,
-                      "but memory has data — preserving in-memory messages",
-                    );
-                    return;
-                  }
-                }
-                const messages = expandTimelineToMessages(rawMessages);
-                startTransition(() => {
-                  setSessions((prev) => prev.map((s) =>
-                    s.id === fetchSid ? { ...s, messages } : s
-                  ));
-                });
-              } catch {
-                // re-fetch failed → 保留内存状态, 下次切回来再拉
-              }
-            }, 500);
+            // The in-memory state from streaming callbacks IS the source
+            // of truth for the active session. The server's persisted
+            // data will be loaded on the next session switch
+            // (getSessionMessages in the activeSessionId effect).
 
             // Stream is done — drop the assistant id ref so a stale
             // value can't route chunks into the wrong message if
@@ -1851,8 +2014,10 @@ export default function App() {
   useEffect(() => {
     if (!streaming && messageQueue.length > 0) {
       const next = messageQueue[0];
+      console.log("[diag] queue drain: firing", { content: next, queueLen: messageQueue.length, streaming });
       setMessageQueue(prev => prev.slice(1));
-      handleSendMessage(next).catch(() => {
+      handleSendMessage(next).catch((_cause) => {
+        console.log("[diag] queue drain: handleSendMessage failed, re-enqueueing", { next, cause: _cause instanceof Error ? _cause.message : String(_cause) });
         // Limit retries: track per-message so a permanently failing
         // backend doesn't spin forever.
         const key = next.slice(0, 60); // first 60 chars as key
@@ -1878,7 +2043,7 @@ export default function App() {
     if (!res) return;
     try {
       const rawMessages = await api.getSessionMessages(activeSessionId);
-      const messages = expandTimelineToMessages(rawMessages);
+      const messages = rawMessages;
       setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, messages } : s));
     } catch {}
   }, [activeSessionId]);
@@ -1891,7 +2056,7 @@ export default function App() {
     if (!res) return;
     try {
       const rawMessages = await api.getSessionMessages(activeSessionId);
-      const messages = expandTimelineToMessages(rawMessages);
+      const messages = rawMessages;
       setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, messages } : s));
     } catch {}
   }, [activeSessionId]);
@@ -1916,7 +2081,7 @@ export default function App() {
 
         {/* Left sidebar — grid column 1 controls width; wrapper handles mobile slide */}
         <div
-          className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"} transition-transform duration-200 absolute md:relative z-20 h-full`}
+          className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"} transition-transform duration-200 absolute md:relative z-20 h-full min-h-0 overflow-hidden`}
         >
           <Sidebar
             page={page}
@@ -1927,7 +2092,7 @@ export default function App() {
             onNewChat={handleNewChat}
             onSelectSession={handleSelectSession}
             onDeleteSession={handleDeleteSession}
-            isCreatingSession={isCreatingSessionRef.current}
+            isCreatingSession={isCreatingSession}
             onRoomSelect={setSelectedRoomId}
           />
           <div
@@ -1950,8 +2115,22 @@ export default function App() {
               session={activeSession}
               onSendMessage={handleSendMessage}
               onNewChat={handleNewChat}
+              // v2 (2026-07-07): inline todo cards in the message stream.
+              // App owns the groups store; ChatView renders one card per
+              // group right after the originating assistant message.
+              todoGroups={todoGroups}
+              onTodoPatch={async (id, patch) => {
+                try {
+                  await api.patchTodo(id, patch);
+                } catch (e) {
+                  console.error('[App] patchTodo failed', e);
+                  throw e;
+                }
+              }}
+              justPatchedTodoRef={justPatchedTodoRef}
               onOpenExperts={() => setPage("experts")}
               onOpenSettings={() => setPage("settings")}
+              onOpenComputer={openComputer}
               onUndo={handleUndo}
               onRestore={handleRestore}
               onStop={cancelStream}
@@ -1964,6 +2143,7 @@ export default function App() {
               isSandbox={false}
               branch="main"
               workspaceRoot={workspaceRoot}
+              onWorkspaceChange={onWorkspaceChange}
               onApproveApproval={handleApproveApproval}
               onDenyApproval={handleDenyApproval}
               onAnswerClarify={handleAnswerClarify}
@@ -2046,7 +2226,7 @@ export default function App() {
             width when open. Grid ensures main content (column 2, 1fr) is
             never squeezed — it gets all remaining space after fixed columns. */}
         {rightOpen && (
-          <div className="h-full flex border-l border-border-subtle overflow-hidden min-w-0">
+          <div className="h-full flex border-l border-border-subtle overflow-hidden min-w-0 min-h-0">
             <div
               data-tauri-no-drag
               onMouseDown={right.onMouseDown}
@@ -2060,6 +2240,8 @@ export default function App() {
               selectedId={selectedArtifactId}
               onSelectArtifact={(id) => setSelectedArtifactId(id)}
               workspaceRoot={workspaceRoot}
+              activeTab={rightTab}
+              onTabChange={setRightTab}
             />
           </div>
         )}

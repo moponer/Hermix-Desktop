@@ -45,7 +45,6 @@ use crate::consciousness::{
     ConsciousnessState, ConsciousnessTracker, default_amplitude,
 };
 use crate::hardline;
-use crate::python_alignment::strip_think_blocks_for_ack;
 use crate::session_persistence::SessionPersistence;
 
 /// Collapse a run of consecutive assistant messages into one.
@@ -206,6 +205,13 @@ pub struct LocalAgentService {
     /// holds. `None` means recall is disabled (e.g. test
     /// harnesses with no `hermix_home`).
     memory_router: Option<Arc<hermix_focus::MemoryRouter>>,
+    /// 2026-07-10: one-shot gate for the compression LLM health check.
+    /// `spawn_agent_loop` is called on every `send_message_stream`,
+    /// and previously each call spawned a new fire-and-forget health
+    /// check task — producing a 401 error log on every single message
+    /// when the aux API key was invalid. The check only needs to run
+    /// once per process lifetime; subsequent calls are pure noise.
+    compression_health_checked: std::sync::atomic::AtomicBool,
 }
 
 pub type ProviderFactory = Arc<dyn Fn(&GatewayConfig, &str) -> Arc<dyn LlmProvider> + Send + Sync>;
@@ -305,6 +311,7 @@ impl LocalAgentService {
             tirith: Some(Arc::new(TirithSecurity::from_default_or_bundled())),
             consciousness_tracker: None,
             memory_router,
+            compression_health_checked: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -329,6 +336,7 @@ impl LocalAgentService {
             tirith: Some(Arc::new(TirithSecurity::from_default_or_bundled())),
             consciousness_tracker: None,
             memory_router,
+            compression_health_checked: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -625,8 +633,8 @@ impl LocalAgentService {
         );
         agent = agent.with_memory_router(Arc::new(router));
 
-        // ByteRover (if available) was already added to the
-        // MemoryRouter by `all_plugins_as_router`. No separate
+        // The MemoryRouter (built by `all_plugins_as_router`)
+        // already contains the embedded SQLite backend. No separate
         // PluginManager memory_providers registration needed.
 
         // Phase 15 H2: intent-aware prefetcher.  Wrap the full
@@ -652,13 +660,20 @@ impl LocalAgentService {
         }
 
         // Advanced context compressor: builds an AuxiliaryClient from
-        // env vars (OPENROUTER_API_KEY, OPENAI_API_KEY, etc.) and
-        // wires the LLM-powered compressor into the agent loop.
-        // Falls back gracefully if no API keys are available — the
-        // simple character-based compressor in context.rs handles
-        // that case.
-        match crate::auxiliary_builder::build_default_auxiliary_client(
+        // config.yaml + env vars and wires the LLM-powered compressor
+        // into the agent loop. Falls back gracefully if no API keys are
+        // available — the simple character-based compressor in context.rs
+        // handles that case.
+        //
+        // 2026-07-09: pass the GatewayConfig so the auxiliary client reads
+        // API keys from config.yaml's [llm_providers] section — same source
+        // as the main conversation provider. Without this, a user who
+        // configured their key only in config.yaml (not as an env var)
+        // would see 401 errors from the compression health check.
+        let gw_snapshot = self.config.lock().unwrap().clone();
+        match crate::auxiliary_builder::build_auxiliary_client_with_config(
             hermix_intelligence::auxiliary::AuxiliaryConfig::default(),
+            &gw_snapshot,
         ) {
             (aux_client, summary) if !summary.registered.is_empty() => {
                 let aux = Arc::new(aux_client);
@@ -727,28 +742,40 @@ impl LocalAgentService {
                     // failed check only logs a warning; the compressor
                     // is already wired and the first real compression
                     // will surface the error again at WARN level.
-                    let check_aux = aux.clone();
-                    tokio::spawn(async move {
-                        match crate::compression_health::startup_compression_llm_health_check(
-                            &*check_aux,
-                            &check_model,
-                            30_000,
-                        )
-                        .await
-                        {
-                            Ok(report) => tracing::info!(
-                                provider = %report.provider,
-                                model    = %report.model,
-                                latency  = report.latency_ms,
-                                "compression LLM health check passed"
-                            ),
-                            Err(e) => tracing::warn!(
-                                error = %e,
-                                "compression LLM health check failed; \
-                                 first real compression will surface the same error"
-                            ),
-                        }
-                    });
+                    //
+                    // 2026-07-10: one-shot gate — `spawn_agent_loop` is
+                    // called on every `send_message_stream`, so without
+                    // this guard the health check fires on every single
+                    // message. When the aux API key is invalid (401),
+                    // that means a WARN log per message — pure noise.
+                    // The check only needs to run once per process
+                    // lifetime; the `AtomicBool` ensures that.
+                    let already_checked = self.compression_health_checked
+                        .swap(true, std::sync::atomic::Ordering::SeqCst);
+                    if !already_checked {
+                        let check_aux = aux.clone();
+                        tokio::spawn(async move {
+                            match crate::compression_health::startup_compression_llm_health_check(
+                                &*check_aux,
+                                &check_model,
+                                30_000,
+                            )
+                            .await
+                            {
+                                Ok(report) => tracing::info!(
+                                    provider = %report.provider,
+                                    model    = %report.model,
+                                    latency  = report.latency_ms,
+                                    "compression LLM health check passed"
+                                ),
+                                Err(e) => tracing::warn!(
+                                    error = %e,
+                                    "compression LLM health check failed; \
+                                     first real compression will surface the same error"
+                                ),
+                            }
+                        });
+                    }
                 }
             }
             _ => {
@@ -1102,6 +1129,16 @@ impl AgentService for LocalAgentService {
             );
         }
 
+        // P2-S1: stamp the active session onto the `todo` tool so its
+        // WS todo events are filtered per-session by the server's WS
+        // forwarder. The `TodoHandler` is a process-wide singleton; this
+        // is set once per turn (a turn == one tool-call batch in
+        // practice) and overwritten on the next turn, so cross-session
+        // leakage is impossible as long as turns are sequential (they
+        // are — one message in flight per session).
+        self.tool_registry
+            .set_active_session_for_tool("todo", Some(session_id.to_string()));
+
         // Build provider
         let provider = self.resolve_provider(&effective_model)?;
 
@@ -1124,6 +1161,11 @@ impl AgentService for LocalAgentService {
             Some("local"),
             None,
             None,
+            None,
+            None,
+            // workspace / expert_id: leave unchanged on early persist;
+            // save_session_atomic's COALESCE will preserve whatever
+            // createSession / PATCH already wrote.
             None,
             None,
         ) {
@@ -1165,6 +1207,10 @@ impl AgentService for LocalAgentService {
             None,
             None,
             snapshot.as_ref().map(|_| session_id),
+            // workspace / expert_id: leave unchanged on post-run persist
+            // so the user's binding survives a session reload.
+            None,
+            None,
             snapshot.as_ref(),
         ) {
             tracing::warn!(
@@ -1211,13 +1257,24 @@ impl AgentService for LocalAgentService {
             }
         }
 
-        // Extract the last assistant reply
+        // Return the LLM's raw content as-is. If content is empty but
+        // reasoning_content exists (MiniMax puts its response in reasoning),
+        // use reasoning_content so the user sees the LLM's actual response.
         let reply_text = messages
             .iter()
             .rev()
             .find(|m| m.role == hermix_core::MessageRole::Assistant)
-            .and_then(|m| m.content.clone())
-            .map(|c| strip_think_blocks_for_ack(&c))
+            .and_then(|m| {
+                let c = m.content.as_deref().unwrap_or("").trim();
+                if !c.is_empty() {
+                    Some(c.to_string())
+                } else {
+                    m.reasoning_content
+                        .as_deref()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                }
+            })
             .unwrap_or_default();
 
         Ok(AgentReply {
@@ -1245,11 +1302,35 @@ impl AgentService for LocalAgentService {
         overrides: AgentOverrides,
         on_chunk: Arc<dyn Fn(StreamChunk) + Send + Sync>,
     ) -> Result<AgentReply, AgentError> {
+        // 2026-07-08 DIAG: every entry to send_message_stream — print directly to stderr
+        // so we can count even if tracing filter blocks info-level. Owner was right:
+        // 10 calls seen in log with no obvious frontend source. Pin down what's calling us.
+        let _diag_call_id = format!(
+            "{}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0),
+            std::process::id()
+        );
+        eprintln!(
+            "[!!!SEND_MSG_STREAM_ENTRY!!!] call_id={} session_id={} text_len={} text_preview={:?}",
+            _diag_call_id,
+            session_id,
+            text.len(),
+            &text.chars().take(40).collect::<String>()
+        );
         // Load existing session messages
         let mut messages = self
             .session_persistence
             .load_session(session_id)
             .unwrap_or_default();
+        eprintln!(
+            "[!!!SEND_MSG_STREAM_LOADED!!!] call_id={} session_id={} loaded_messages_len={}",
+            _diag_call_id,
+            session_id,
+            messages.len()
+        );
 
         // O3.2: Gateway pre-compression safety net (stream path).
         self.gateway_token_warn(session_id, &mut messages);
@@ -1288,6 +1369,10 @@ impl AgentService for LocalAgentService {
                 None, // title — not available yet
                 None, // system_prompt — not available yet
                 None, // parent_session_id — not needed for early persist
+                // workspace / expert_id: leave unchanged on early
+                // persist (COALESCE keeps any createSession binding).
+                None,
+                None,
                 None, // compression — haven't run the agent yet
             ) {
             tracing::warn!(
@@ -1334,6 +1419,16 @@ impl AgentService for LocalAgentService {
             );
         }
 
+        // P2-S1: stamp the active session onto the `todo` tool so its
+        // WS todo events are filtered per-session by the server's WS
+        // forwarder. The `TodoHandler` is a process-wide singleton; this
+        // is set once per turn (a turn == one tool-call batch in
+        // practice) and overwritten on the next turn, so cross-session
+        // leakage is impossible as long as turns are sequential (they
+        // are — one message in flight per session).
+        self.tool_registry
+            .set_active_session_for_tool("todo", Some(session_id.to_string()));
+
         // Build provider
         let provider = self.resolve_provider(&effective_model)?;
 
@@ -1365,10 +1460,6 @@ impl AgentService for LocalAgentService {
         // for ownership of `status_forwarder`. Each `Arc::clone` is
         // a refcount bump, so this is essentially free.
         let status_forwarder_for_section_gate = status_forwarder.clone();
-        // Pre-clone for the empty-response fallback path below. The
-        // `on_thinking` closure consumes `on_chunk`, so any later use
-        // (e.g. streaming the fallback text) needs its own Arc handle.
-        let fallback_forwarder = on_chunk.clone();
         let consciousness_tool_start = self.consciousness_tracker.clone();
         let consciousness_tool_complete = self.consciousness_tracker.clone();
         let consciousness_status = self.consciousness_tracker.clone();
@@ -1837,98 +1928,29 @@ impl AgentService for LocalAgentService {
         let snapshot = build_compression_snapshot(&result);
         messages = merge_consecutive_assistant_messages(result.messages);
 
-        // Resolve the user-visible reply text. If the LLM returned
-        // completely empty (no text, no tool calls), inject a minimal
-        // fallback response so the session doesn't show a blank bubble.
-        // This can happen when the model enters a "blank response" loop
-        // (common with some mini/fine-tuned models), or when the model
-        // emits only thinking text without producing a body (the user's
-        // observed symptom: thinking renders live, body never does).
-        //
-        // Two distinct cases:
-        //   (a) Model returned thinking but no body content → fallback
-        //       message acknowledges the model thought but couldn't
-        //       write a body, asks the user to retry / change model.
-        //   (b) Model returned literally nothing — no thinking either
-        //       → generic fallback asking to retry / change model.
-        //
-        // We mirror the fallback into both the live WS stream (so the
-        // user sees it appear in the chat instead of an empty body) and
-        // the persisted message (so a session reload shows the same
-        // text — otherwise the fallback "vanishes" on reload).
-        let reply_text = {
-            let raw = messages
-                .iter()
-                .rev()
-                .find(|m| m.role == hermix_core::MessageRole::Assistant)
-                .and_then(|m| m.content.clone())
-                .map(|c| strip_think_blocks_for_ack(&c))
-                .unwrap_or_default();
-            if raw.trim().is_empty() {
-                let last = messages
-                    .iter()
-                    .rev()
-                    .find(|m| m.role == hermix_core::MessageRole::Assistant);
-                let tool_calls_empty = last
-                    .and_then(|m| m.tool_calls.as_ref())
-                    .map(|tc| tc.is_empty())
-                    .unwrap_or(true);
-                let has_thinking = last
-                    .and_then(|m| m.reasoning_content.as_ref())
-                    .map(|c| !c.trim().is_empty())
-                    .unwrap_or(false);
-                // Inject a fallback whenever the last assistant message
-                // has no visible text — regardless of whether it has
-                // tool_calls. Without this, when the LLM emits only
-                // `<think>` blocks + tool_calls and no body text, the
-                // stripped `raw` is empty and the user sees a silent
-                // stop with no message.
-                {
-                    let fallback = if has_thinking {
-                        "（模型已完成思考但未生成正文。请尝试更换模型、补充上下文后重新提问。）"
-                            .to_string()
-                    } else {
-                        "抱歉，我无法生成回复。请尝试更换模型或重新提问。".to_string()
-                    };
-                    tracing::warn!(
-                        has_thinking,
-                        tool_calls_empty,
-                        "LLM returned empty visible text — injecting fallback text"
-                    );
-                    let fwd = fallback_forwarder.clone();
-                    fwd(StreamChunk {
-                        delta: Some(StreamDelta {
-                            content: Some(fallback.clone()),
-                            tool_calls: None,
-                            extra: None,
-                        }),
-                        finish_reason: None,
-                        usage: None,
-                    });
-                    for m in messages.iter_mut().rev() {
-                        if m.role == hermix_core::MessageRole::Assistant {
-                            if m
-                                .content
-                                .as_deref()
-                                .map(|c| c.trim().is_empty())
-                                .unwrap_or(true)
-                            {
-                                m.content = Some(fallback.clone());
-                            }
-                            break;
-                        }
-                    }
-                    fallback
+        // Return the LLM's raw content as-is. If content is empty but
+        // reasoning_content exists (MiniMax puts its response in reasoning),
+        // use reasoning_content so the user sees the LLM's actual response.
+        let reply_text = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == hermix_core::MessageRole::Assistant)
+            .and_then(|m| {
+                let c = m.content.as_deref().unwrap_or("").trim();
+                if !c.is_empty() {
+                    Some(c.to_string())
+                } else {
+                    m.reasoning_content
+                        .as_deref()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
                 }
-            } else {
-                raw
-            }
-        };
+            })
+            .unwrap_or_default();
 
-        // Persist updated session (after fallback has been mirrored into
-        // messages, so reload shows the fallback too). Log on failure rather
-        // than silently swallow: see the matching call in `send_message_sync`
-        // for the rationale.
+        // Persist updated session. Log on failure rather than silently
+        // swallow: see the matching call in `send_message_sync` for the
+        // rationale.
         //
         // v4 (2026-06-22): attach the timeline we captured during
         // streaming to the trailing assistant message before
@@ -1966,6 +1988,10 @@ impl AgentService for LocalAgentService {
             None,
             None,
             snapshot.as_ref().map(|_| session_id),
+            // workspace / expert_id: leave unchanged on post-run persist
+            // so the user's binding survives a session reload.
+            None,
+            None,
             snapshot.as_ref(),
         ) {
             tracing::warn!(
@@ -2025,7 +2051,7 @@ impl AgentService for LocalAgentService {
         // the raw turn wording live in `compression_archives` and
         // `compression_summary_history`. Build a query from the
         // most recent user message, fan out through the shared
-        // `MemoryRouter` (embedded SQLite + ByteRover), and inject
+        // `MemoryRouter` (embedded SQLite), and inject
         // any relevant hits as a system message *after* the summary
         // block so the LLM has both the local handoff AND
         // cross-session context.
@@ -2105,7 +2131,7 @@ impl AgentService for LocalAgentService {
             // Delete session by persisting an empty session
             let _ =
                 self.session_persistence
-                    .persist_session(session_id, &[], None, None, None, None, None);
+                    .persist_session(session_id, &[], None, None, None, None, None, None, None);
         }
         Ok(())
     }
@@ -2152,7 +2178,7 @@ impl AgentService for LocalAgentService {
 /// `LocalAgentService` instance, mirroring the same
 /// `block_in_place + all_plugins_as_router` shape used by
 /// `spawn_agent_loop`. The router wraps `EmbeddedMemoryBackend`
-/// (the SQLite-backed `memory.db`) and ByteRover — see
+/// (the SQLite-backed `memory.db`) — see
 /// `crate::memory_layer_adapter::all_plugins_as_router` for the
 /// wiring.
 ///
