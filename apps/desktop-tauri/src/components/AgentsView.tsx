@@ -274,8 +274,8 @@ async function saveAgentAsync(agent: AgentPersona): Promise<void> {
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   } catch {
-    // Fallback: save entire list to localStorage
-    saveAgentsLocal([agent]);
+    // Fallback: merge into the localStorage cache (don't clobber other agents)
+    upsertAgentLocal(agent);
   }
 }
 
@@ -295,6 +295,19 @@ async function deleteAgentAsync(id: string, remaining: AgentPersona[]): Promise<
 /** Batch-save to localStorage (fallback path). */
 function saveAgentsLocal(agents: AgentPersona[]) {
   try { storage.setItem(STORAGE_KEY, JSON.stringify(agents)); } catch {}
+}
+
+/** Upsert a single agent into the localStorage fallback cache without
+ *  clobbering the rest of the list (the wrong `saveAgentsLocal([agent])`
+ *  would overwrite the whole cache with one entry on backend-down). */
+function upsertAgentLocal(agent: AgentPersona) {
+  try {
+    const existing = loadAgentsLocal();
+    const idx = existing.findIndex((a) => a.id === agent.id);
+    if (idx >= 0) existing[idx] = agent;
+    else existing.push(agent);
+    storage.setItem(STORAGE_KEY, JSON.stringify(existing));
+  } catch {}
 }
 
 function buildSystemPrompt(agent: Partial<AgentPersona>): string {
@@ -1527,9 +1540,11 @@ export function AgentsView({
     loadAgentsAsync().then(setAgents);
   }, []);
 
-  // Persist to localStorage as a sync cache (the backend save happens
-  // in the individual handlers below)
-  useEffect(() => { saveAgentsLocal(agents); }, [agents]);
+  // NOTE: no auto-persist useEffect here. The backend (`/api/agents/custom`)
+  // is the source of truth; individual handlers call saveAgentAsync /
+  // deleteAgentAsync which upsert the localStorage fallback cache
+  // explicitly. Auto-saving `agents` on every state change (P1-1) would
+  // persist half-typed drafts if the app crashed mid-edit.
 
   /** 切 tab 时如果向导/表单开着,自动重置 — 否则用户切到"内置专家"再切回"我的专家"还会被向导锁住 */
   const switchTab = (newTab: AgentsTab) => {
