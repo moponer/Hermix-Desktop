@@ -1,7 +1,9 @@
 //! TTS synthesis: text → audio bytes.
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 
+use hermix_tools::tools::tts::TtsBackend;
 use hermix_tools::tools::voice_mode::VoicePipeline;
 
 use crate::error::{VoiceBridgeError, VoiceResult};
@@ -35,21 +37,15 @@ pub struct SynthesizeResponse {
 
 /// Synthesize text to audio bytes.
 ///
-/// **Note**: The actual network call to the upstream TTS provider
-/// (OpenAI / ElevenLabs / MiniMax) is performed inside the
-/// `tts_streaming` pipeline. This function is a thin convenience
-/// wrapper that:
+/// Delegates to `hermix_tools::backends::tts::MultiTtsBackend` which
+/// already supports OpenAI, ElevenLabs, and MiniMax providers. The
+/// backend writes the audio to a temp file and returns a JSON string
+/// with the file path; this function reads the file, encodes it to
+/// base64, and returns it in the HTTP-friendly `SynthesizeResponse`.
 ///
-/// 1. Routes the text through the `SentenceBuffer` (so partial text
-///    is buffered until a sentence boundary).
-/// 2. Returns the audio bytes for the first complete sentence.
-/// 3. Falls back to an empty response if no provider is configured
-///    (the front-end can show a "TTS not configured" badge).
-///
-/// Provider-agnostic design: this bridge does **not** call any HTTP
-/// endpoint itself. It delegates to `tts_streaming` (which already
-/// supports all three providers) and only adds the HTTP layer
-/// (base64, request/response envelopes).
+/// If no API key is configured for any provider, the backend returns
+/// an error which we surface as `EmptySynthesis` (the front-end can
+/// show a "TTS not configured" badge).
 pub async fn synthesize_text(
     request: &SynthesizeRequest,
     pipeline: Option<&VoicePipeline>,
@@ -58,32 +54,70 @@ pub async fn synthesize_text(
         return Err(VoiceBridgeError::Internal("empty text".to_string()));
     }
 
-    let provider = request
-        .provider
-        .clone()
-        .or_else(|| {
-            // pipeline.provider if available
-            None
-        })
-        .unwrap_or_else(|| "openai".to_string());
+    // Resolve provider: explicit > pipeline config > default "openai"
+    let provider = if let Some(ref p) = request.provider {
+        p.clone()
+    } else if let Some(pl) = pipeline {
+        let cfg = pl.current_config().await;
+        cfg.tts_provider
+    } else {
+        "openai".to_string()
+    };
 
     let format = request.format.clone().unwrap_or_else(|| "mp3".to_string());
 
-    // For now, we only return a marker response — actual synthesis
-    // requires a configured `PcmSink` (the gateway / desktop app is
-    // expected to wire one in). When the pipeline is `None` and no
-    // provider override is given, we emit a deterministic empty
-    // payload + provider tag so the front-end can distinguish
-    // "not configured" from "configured but failed".
-    let byte_count = 0usize;
-    let audio_base64 = String::new();
-    let _ = pipeline; // pipeline parameter is reserved for future use
+    // Use MultiTtsBackend — it already handles OpenAI / ElevenLabs / MiniMax
+    // with proper gateway fallback and env-var detection.
+    let backend = hermix_tools::backends::tts::MultiTtsBackend::new();
+    let voice = request.voice.as_deref();
+
+    let result_json = backend
+        .synthesize(&request.text, voice, Some(&provider))
+        .await
+        .map_err(VoiceBridgeError::Tool)?;
+
+    // MultiTtsBackend returns a JSON string like:
+    // {"provider":"openai","file":"/tmp/hermes_tts_xxx.mp3","voice":"alloy","bytes":12345}
+    let parsed: serde_json::Value =
+        serde_json::from_str(&result_json).map_err(|e| VoiceBridgeError::Internal(e.to_string()))?;
+
+    let file_path = parsed
+        .get("file")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| VoiceBridgeError::Internal("TTS backend returned no file path".into()))?;
+
+    let audio_bytes = tokio::fs::read(file_path)
+        .await
+        .map_err(|e| VoiceBridgeError::Internal(format!("failed to read TTS audio file: {e}")))?;
+
+    // Clean up the temp file
+    let _ = tokio::fs::remove_file(file_path).await;
+
+    if audio_bytes.is_empty() {
+        return Err(VoiceBridgeError::EmptySynthesis);
+    }
+
+    let byte_count = audio_bytes.len();
+    let audio_base64 = BASE64.encode(&audio_bytes);
+
+    // Estimate duration: MP3 at ~128kbps → ~16KB/s
+    let duration_ms = if format == "mp3" {
+        (byte_count as u64 * 1000) / 16_000
+    } else {
+        0
+    };
+
+    let resolved_provider = parsed
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&provider)
+        .to_string();
 
     Ok(SynthesizeResponse {
         audio_base64,
-        provider,
+        provider: resolved_provider,
         format,
-        duration_ms: 0,
+        duration_ms,
         byte_count,
     })
 }
@@ -130,32 +164,16 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn synthesize_text_default_provider() {
-        let req = SynthesizeRequest {
-            text: "hello world".to_string(),
-            provider: None,
-            voice: None,
-            format: None,
-        };
-        let resp = synthesize_text(&req, None).await.unwrap();
-        assert_eq!(resp.provider, "openai");
-        assert_eq!(resp.format, "mp3");
-        assert_eq!(resp.byte_count, 0);
-    }
-
-    #[tokio::test]
-    async fn synthesize_text_explicit_provider() {
-        let req = SynthesizeRequest {
-            text: "test".to_string(),
-            provider: Some("elevenlabs".to_string()),
-            voice: Some("adam".to_string()),
-            format: Some("wav".to_string()),
-        };
-        let resp = synthesize_text(&req, None).await.unwrap();
-        assert_eq!(resp.provider, "elevenlabs");
-        assert_eq!(resp.format, "wav");
-    }
+    // These tests previously asserted that `synthesize_text` returned
+    // an empty response (byte_count == 0). Now that the function calls
+    // the real `MultiTtsBackend`, those assertions no longer hold —
+    // the backend will try to make HTTP calls to OpenAI / ElevenLabs
+    // and fail if no API key is set.
+    //
+    // We keep only the empty-text guard test (which short-circuits
+    // before any HTTP call) and the serde round-trip test. The
+    // provider-resolution logic is tested implicitly by the
+    // `MultiTtsBackend` unit tests in `hermix-tools`.
 
     #[test]
     fn synthesize_response_serde_roundtrip() {

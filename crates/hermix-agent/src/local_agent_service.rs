@@ -684,7 +684,16 @@ impl LocalAgentService {
                 // (`DEFAULT_BREAKER_THRESHOLD = 3`,
                 // `DEFAULT_BREAKER_COOLDOWN_SECS = 600`) when the user
                 // hasn't customised the field — backward compatible.
-                let (breaker_threshold, breaker_cooldown_secs, summary_model) = {
+                //
+                // P0-1 (Frontend Audit 2026-07-13): also pull
+                // `min_summary_tokens` / `summary_tokens_ceiling` from
+                // `compaction:` so the desktop Settings → Advanced tab
+                // can tune the LLM-compressor's token budget live. Each
+                // field is `Option<u64>` on the config side; `None`
+                // means "use the agent's hardcoded default" — no
+                // regression for existing config.yaml files.
+                let (breaker_threshold, breaker_cooldown_secs, summary_model,
+                     min_summary_tokens, summary_tokens_ceiling) = {
                     let cfg = self
                         .config
                         .lock()
@@ -697,13 +706,23 @@ impl LocalAgentService {
                             crate::compression::DEFAULT_BREAKER_COOLDOWN_SECS,
                         ),
                         cfg.compaction.summary_model.clone(),
+                        cfg.compaction.min_summary_tokens,
+                        cfg.compaction.summary_tokens_ceiling,
                     )
                 };
+                // Resolve token-budget overrides against CompressorConfig
+                // defaults so a `None` value still picks up the existing
+                // 2_000 / 12_000 baseline (no surprise regressions).
+                let mut comp_cfg = crate::compression::CompressorConfig::default();
+                if let Some(v) = min_summary_tokens {
+                    comp_cfg.min_summary_tokens = v;
+                }
+                if let Some(v) = summary_tokens_ceiling {
+                    comp_cfg.summary_tokens_ceiling = v;
+                }
+                comp_cfg.summary_model_override = summary_model;
                 let compressor = crate::compression::ContextCompressor::new(
-                    crate::compression::CompressorConfig {
-                        summary_model_override: summary_model,
-                        ..crate::compression::CompressorConfig::default()
-                    },
+                    comp_cfg,
                     aux.clone(),
                 )
                 .with_breaker_config(breaker_threshold, breaker_cooldown_secs);

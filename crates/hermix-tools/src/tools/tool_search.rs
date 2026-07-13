@@ -69,12 +69,21 @@ pub fn classify_tools_with_meta<'a>(
         if is_bridge(&s.name) {
             // Bridge tools are always visible
             visible.push(s);
-        } else if meta.len() > 0 && meta.is_deferred(&s.name) {
-            deferred.push(s);
-        } else if meta.len() > 0 && meta.is_resident(&s.name) {
-            visible.push(s);
+        } else if meta.get(&s.name).is_some() {
+            // Tool is explicitly registered — honour the metadata.
+            // Note: `meta.is_resident` returns true for unregistered tools
+            // (defensive default), so we must gate the meta path on
+            // `meta.get(...).is_some()` first to avoid silently promoting
+            // every unknown tool to "resident".
+            if meta.is_deferred(&s.name) {
+                deferred.push(s);
+            } else {
+                visible.push(s);
+            }
         } else if is_core(&s.name) {
-            // Fall back to hard-coded list when tool isn't in the registry
+            // Unregistered tool that happens to be in the hard-coded
+            // CORE_TOOLS whitelist — keep it visible for backwards
+            // compatibility with callers that haven't migrated.
             visible.push(s);
         } else {
             deferred.push(s);

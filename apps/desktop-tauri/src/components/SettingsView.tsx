@@ -1191,13 +1191,35 @@ function AdvancedTab() {
     setSaved(false);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    // P0-1 fix (Frontend Audit 2026-07-13): the previous
+    // implementation only wrote to localStorage, which the running
+    // agent never read from. Now we PUT the values to the backend
+    // via `api.updateConfig`, which writes config.yaml and pushes
+    // the new shape to the live agent service. The localStorage
+    // copy is kept as a UI-preference mirror so the form re-opens
+    // with the same numbers across reloads even if the backend
+    // boot order hasn't materialised yet (e.g. cold start before
+    // the agent service is wired up).
     try {
+      await api.updateConfig({
+        compaction: {
+          min_summary_tokens: config.min_summary_tokens,
+          summary_tokens_ceiling: config.summary_tokens_ceiling,
+        },
+        advanced: {
+          sub_agent_timeout_secs: config.sub_agent_timeout_secs,
+          sub_agent_min_turns: config.sub_agent_min_turns,
+          sub_agent_max_turns_cap: config.sub_agent_max_turns_cap,
+          delegation_max_iterations: config.delegation_max_iterations,
+        },
+      } as unknown as api.HermesConfig);
       storage.setItem(STORAGE_KEYS.advancedConfig, JSON.stringify(config));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
       console.error("Failed to save advanced config:", e);
+      setSaved(false);
     }
   };
 

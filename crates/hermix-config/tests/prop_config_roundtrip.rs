@@ -9,10 +9,10 @@ use proptest::prelude::*;
 use std::collections::HashMap;
 
 use hermix_config::{
-    AgentLoopBehaviorConfig, ApprovalConfig, CompactionConfig, DailyReset, GatewayConfig,
-    IdleReset, PlatformConfig, ProfileConfig, SessionConfig, SessionResetPolicy, SkillsSettings,
-    SmartModelRoutingConfig, StreamingConfig, TerminalConfig, ToolCapabilityConfig,
-    ToolsSettings, UnauthorizedDmBehavior,
+    AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CompactionConfig,
+    DailyReset, GatewayConfig, IdleReset, PlatformConfig, ProfileConfig, SessionConfig,
+    SessionResetPolicy, SkillsSettings, SmartModelRoutingConfig, StreamingConfig,
+    TerminalConfig, ToolCapabilityConfig, ToolsSettings, UnauthorizedDmBehavior,
 };
 use hermix_core::BudgetConfig;
 
@@ -126,6 +126,7 @@ fn arb_gateway_config() -> impl Strategy<Value = GatewayConfig> {
                 llm_providers: HashMap::new(),
                 smart_model_routing: SmartModelRoutingConfig::default(),
                 compaction: CompactionConfig::default(),
+                advanced: AdvancedSettingsConfig::default(),
                 proxy: None,
                 approval: ApprovalConfig::default(),
                 skills: SkillsSettings::default(),

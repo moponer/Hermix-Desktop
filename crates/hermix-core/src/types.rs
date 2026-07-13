@@ -759,8 +759,10 @@ impl TaskStatus {
             (self, next),
             (Pending, Planning)
                 | (Pending, InProgress)
+                | (Pending, Completed)
                 | (Pending, Archived)
                 | (Planning, InProgress)
+                | (Planning, Completed)
                 | (Planning, Archived)
                 | (Planning, Failed)
                 | (InProgress, Completed)
@@ -1083,9 +1085,12 @@ mod tests {
         assert!(TaskStatus::Archived
             .validate_transition(TaskStatus::InProgress)
             .is_err());
-        assert!(TaskStatus::Pending
-            .validate_transition(TaskStatus::Completed)
-            .is_err());
+        // 2026-07-13: Pending → Completed is now LEGAL (P0 automation
+        // flow: automation creates a Pending task, fires a NoopAgent
+        // which returns Ok immediately, the trigger marks the task
+        // Completed without ever going through InProgress). The
+        // test now pins Pending → Failed as still illegal (no work
+        // was attempted, can't fail without trying).
         assert!(TaskStatus::Pending
             .validate_transition(TaskStatus::Failed)
             .is_err());

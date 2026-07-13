@@ -86,6 +86,13 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub compaction: CompactionConfig,
 
+    /// P0-1 (Frontend Audit 2026-07-13): sub-agent / delegation
+    /// tuning surfaced by the desktop Settings → Advanced tab.
+    /// All fields optional; old config.yaml without this block
+    /// uses the agent's hardcoded defaults.
+    #[serde(default)]
+    pub advanced: AdvancedSettingsConfig,
+
     /// Optional HTTP/SOCKS proxy settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
@@ -147,6 +154,7 @@ impl Default for GatewayConfig {
             llm_providers: HashMap::new(),
             smart_model_routing: SmartModelRoutingConfig::default(),
             compaction: CompactionConfig::default(),
+            advanced: AdvancedSettingsConfig::default(),
             proxy: None,
             approval: ApprovalConfig::default(),
             skills: SkillsSettings::default(),
@@ -280,6 +288,44 @@ pub struct CompactionConfig {
     /// keeping a more capable model for chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_model: Option<String>,
+    /// P0-1 (Frontend Audit 2026-07-13): minimum token budget the
+    /// LLM-compressor must produce. Mirrors
+    /// `hermix_agent::compression::CompressorConfig::min_summary_tokens`
+    /// so the desktop Settings → Advanced tab can tune it via the
+    /// `PUT /api/config` endpoint without restarting the agent
+    /// process (the live config is forwarded via
+    /// `agent_service.set_config`). Default in the agent crate is
+    /// `2000`; the backend currently treats `None` as "use the
+    /// hardcoded default" so existing deployments are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_summary_tokens: Option<u64>,
+    /// P0-1 (Frontend Audit 2026-07-13): maximum token budget the
+    /// LLM-compressor is allowed to emit. Mirrors
+    /// `hermix_agent::compression::CompressorConfig::summary_tokens_ceiling`.
+    /// Backend default is `12_000`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_tokens_ceiling: Option<u64>,
+}
+
+/// Sub-agent orchestration / multi-step delegation tuning knobs.
+/// Sits at `advanced.sub_agent_*` / `advanced.delegation_*` in
+/// config.yaml. Defaults match `hermix_agent::agent_config::AgentConfig`
+/// so existing deployments without this block still behave identically.
+///
+/// P0-1 (Frontend Audit 2026-07-13): exposed by the desktop
+/// Settings → Advanced tab. The values are forwarded to the live
+/// agent service via `agent_service.set_config`; the agent
+/// re-reads them on every turn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct AdvancedSettingsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_agent_timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_agent_min_turns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_agent_max_turns_cap: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_max_iterations: Option<u32>,
 }
 
 impl Default for CompactionConfig {
@@ -295,6 +341,8 @@ impl Default for CompactionConfig {
             circuit_breaker_threshold: None,
             circuit_breaker_cooldown_secs: None,
             summary_model: None,
+            min_summary_tokens: None,
+            summary_tokens_ceiling: None,
         }
     }
 }

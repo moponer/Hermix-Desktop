@@ -470,8 +470,8 @@ mod tests {
         assert_eq!(runs[0].status, "success");
     }
 
-    #[test]
-    fn test_scheduler_handle_shutdown() {
+    #[tokio::test]
+    async fn test_scheduler_handle_shutdown() {
         let (svc, _tmp) = test_automation_service();
         let bus = OrchestrationEventBus::new();
         let agent: Arc<dyn AgentService> = Arc::new(NoopAgent);

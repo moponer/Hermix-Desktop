@@ -114,6 +114,28 @@ pub fn build_agent_config(
         // context window for `custom-{id}:{model}` instead of falling back
         // to `DEFAULT_FALLBACK_CONTEXT` (128k).
         llm_providers: config.llm_providers.clone(),
+        // P0-1 (Frontend Audit 2026-07-13): forward the desktop Settings →
+        // Advanced tab values into the live AgentConfig. Each field is
+        // `Option<…>` on the hermix-config side, so a `None` means "user
+        // didn't customise" and we keep the hardcoded default from
+        // `SubAgentConfig::default()` — preserving full backward compat
+        // for existing config.yaml files that lack the `advanced:` block.
+        sub_agent: {
+            let mut sa = AgentConfig::default().sub_agent;
+            if let Some(v) = config.advanced.sub_agent_timeout_secs {
+                sa.timeout_secs = v;
+            }
+            if let Some(v) = config.advanced.sub_agent_min_turns {
+                sa.min_turns = v;
+            }
+            if let Some(v) = config.advanced.sub_agent_max_turns_cap {
+                sa.max_turns_cap = v;
+            }
+            if let Some(v) = config.advanced.delegation_max_iterations {
+                sa.delegation_max_iterations = v;
+            }
+            sa
+        },
         ..AgentConfig::default()
     }
 }
