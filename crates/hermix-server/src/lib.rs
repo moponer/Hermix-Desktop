@@ -3716,11 +3716,15 @@ async fn handle_ws_stream_send(
         let todo_rid = request.request_id.clone();
         let mut todo_rx = todo_tx.subscribe();
         tokio::spawn(async move {
-            // v1: originating_message_id left as None so new group cards
-            // append at the end of the message stream. A future patch
-            // will thread the active assistant message_id through from
-            // agent_loop.
-            let originating_message_id: Option<String> = None;
+            // P0-T1 (Frontend Audit 2026-07-13): per-change
+            // `originating_message_id` extracted from the change itself
+            // (the `todo` tool stamps it from `set_active_message_id`
+            // at the top of the turn) instead of a hardcoded `None`.
+            // The TodoHandler is process-wide and shared across all
+            // sessions, so we MUST read the id off the event payload
+            // — not from a captured local — otherwise a turn in
+            // session-B would stamp session-A's id onto its own
+            // events.
             loop {
                 match todo_rx.recv().await {
                     Ok(change) => {
@@ -3739,6 +3743,18 @@ async fn handle_ws_stream_send(
                             .session_id
                             .clone()
                             .unwrap_or_else(|| todo_session.clone());
+                        // Pull the originating message id off the
+                        // change itself. Only `GroupStarted` carries
+                        // it; for `Upsert` / `Delete` it's `None` —
+                        // the front-end already anchors those by
+                        // group_id, not by message_id.
+                        let originating_message_id: Option<String> =
+                            match &change.change {
+                                hermix_tools::tools::todo::TodoChangeKind::GroupStarted {
+                                    message_id, ..
+                                } => message_id.clone(),
+                                _ => None,
+                            };
                         let event =
                             todo_change_to_stream(&originating, originating_message_id.as_deref(), change);
                         if let Some(ev) = event {
@@ -4918,7 +4934,7 @@ fn todo_change_to_stream(
 ) -> Option<StreamEvent> {
     use hermix_tools::tools::todo::TodoChangeKind;
     match change.change {
-        TodoChangeKind::GroupStarted { group_id, group_title } => {
+        TodoChangeKind::GroupStarted { group_id, group_title, .. } => {
             Some(StreamEvent::TodoGroupStarted {
                 session_id: session_id.to_string(),
                 message_id: message_id.map(String::from),

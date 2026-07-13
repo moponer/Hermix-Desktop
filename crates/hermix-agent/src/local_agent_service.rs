@@ -1158,6 +1158,24 @@ impl AgentService for LocalAgentService {
         self.tool_registry
             .set_active_session_for_tool("todo", Some(session_id.to_string()));
 
+        // P0-T1 (Frontend Audit 2026-07-13): stamp the **wire-format id
+        // of the upcoming assistant message** onto the todo tool so its
+        // `GroupStarted` events can anchor the inline card to the right
+        // assistant message (instead of falling back to the fragile
+        // "latest assistant message ≤ first item.created_at" heuristic).
+        //
+        // The id is `${session_id}-${rowIdx}` — the exact formula
+        // `hermix_server::...::get_session_messages` uses on read.
+        // `messages.len()` is the index the new assistant row will
+        // occupy once it's persisted (the user message we just pushed
+        // is at the previous index, so the assistant that the LLM is
+        // about to produce lands at exactly this position).
+        let upcoming_assistant_idx = messages.len();
+        let upcoming_assistant_id =
+            format!("{}-{}", session_id, upcoming_assistant_idx);
+        self.tool_registry
+            .set_active_message_id_for_tool("todo", Some(upcoming_assistant_id));
+
         // Build provider
         let provider = self.resolve_provider(&effective_model)?;
 
@@ -1447,6 +1465,24 @@ impl AgentService for LocalAgentService {
         // are — one message in flight per session).
         self.tool_registry
             .set_active_session_for_tool("todo", Some(session_id.to_string()));
+
+        // P0-T1 (Frontend Audit 2026-07-13): stamp the **wire-format id
+        // of the upcoming assistant message** onto the todo tool so its
+        // `GroupStarted` events can anchor the inline card to the right
+        // assistant message (instead of falling back to the fragile
+        // "latest assistant message ≤ first item.created_at" heuristic).
+        //
+        // The id is `${session_id}-${rowIdx}` — the exact formula
+        // `hermix_server::...::get_session_messages` uses on read.
+        // `messages.len()` is the index the new assistant row will
+        // occupy once it's persisted (the user message we just pushed
+        // is at the previous index, so the assistant that the LLM is
+        // about to produce lands at exactly this position).
+        let upcoming_assistant_idx = messages.len();
+        let upcoming_assistant_id =
+            format!("{}-{}", session_id, upcoming_assistant_idx);
+        self.tool_registry
+            .set_active_message_id_for_tool("todo", Some(upcoming_assistant_id));
 
         // Build provider
         let provider = self.resolve_provider(&effective_model)?;

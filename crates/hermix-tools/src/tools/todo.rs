@@ -37,6 +37,15 @@ pub enum TodoChangeKind {
     GroupStarted {
         group_id: String,
         group_title: Option<String>,
+        /// Wire-format id of the assistant message that produced
+        /// this group (`${session_id}-${rowIdx}`). Stamped from
+        /// `set_active_message_id` at the top of the turn so the
+        /// front-end can anchor the inline card next to the right
+        /// assistant message even after reload (the same formula
+        /// reproduces the same id from the persisted row order).
+        /// `None` for CLI / legacy paths that have no message
+        /// context.
+        message_id: Option<String>,
     },
     /// Single-item upsert (create / update / depend / record_execution).
     Upsert(crate::backends::todo::TodoItem),
@@ -137,6 +146,13 @@ pub struct TodoHandler {
     /// on scope exit. `std::sync::Mutex` is fine: publish is sync,
     /// the lock never crosses `.await`.
     active_session: std::sync::Mutex<Option<String>>,
+    /// Active assistant message id for the **current** tool-call
+    /// batch. Stamped onto `TodoChangeKind::GroupStarted` so the
+    /// front-end can anchor the inline card to the originating
+    /// assistant message. Set via `set_active_message_id` from
+    /// `agent_loop` before each tool-call batch.
+    /// P0-T1 (Frontend Audit 2026-07-13).
+    active_message_id: std::sync::Mutex<Option<String>>,
     /// Group ids we have already announced via `TodoChangeKind::GroupStarted`
     /// for this process lifetime. Ensures the front-end gets exactly one
     /// `GroupStarted` per plan, not one per `create` call within the plan.
@@ -154,6 +170,7 @@ impl TodoHandler {
             backend,
             event_tx,
             active_session: std::sync::Mutex::new(None),
+            active_message_id: std::sync::Mutex::new(None),
             announced_groups: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
@@ -187,9 +204,15 @@ impl TodoHandler {
             return; // already announced
         }
         drop(seen);
+        let message_id = self
+            .active_message_id
+            .lock()
+            .expect("todo active_message_id mutex poisoned")
+            .clone();
         self.publish(TodoChangeKind::GroupStarted {
             group_id: group_id.to_string(),
             group_title,
+            message_id,
         });
     }
 
@@ -268,6 +291,17 @@ impl SessionStamper for TodoHandler {
             .lock()
             .expect("todo active_session mutex poisoned");
         std::mem::replace(&mut *guard, session_id)
+    }
+
+    fn set_active_message_id(
+        &self,
+        message_id: Option<String>,
+    ) -> Option<String> {
+        let mut guard = self
+            .active_message_id
+            .lock()
+            .expect("todo active_message_id mutex poisoned");
+        std::mem::replace(&mut *guard, message_id)
     }
 }
 
@@ -561,5 +595,210 @@ mod tests {
     async fn test_todo_schema() {
         let handler = TodoHandler::new(Arc::new(MockTodoBackend), None);
         assert_eq!(handler.schema().name, "todo");
+    }
+
+    /// P0-T1 (Frontend Audit 2026-07-13) regression: when an
+    /// `assistant_message_id` is set via the SessionStamper before
+    /// the first `todo.create`, the emitted `TodoChangeKind::GroupStarted`
+    /// must carry that id so the WS forwarder can stamp the front-end
+    /// event with it (and `ChatView` can anchor the inline card to the
+    /// correct assistant message instead of using the fragile
+    /// created_at fallback).
+    #[tokio::test]
+    async fn test_todo_group_started_carries_active_message_id() {
+        use crate::tools::session_stamper::SessionStamper;
+        use crate::tools::todo::TodoChangeKind;
+
+        // Backend that returns a real `id` so the post-create upsert
+        // path triggers `announce_group` → `publish(GroupStarted)`.
+        struct BackendWithId;
+        #[async_trait]
+        impl TodoBackend for BackendWithId {
+            async fn create(
+                &self,
+                title: &str,
+                _description: Option<&str>,
+                _priority: Option<&str>,
+                _group_id: Option<&str>,
+                _group_title: Option<&str>,
+            ) -> Result<String, ToolError> {
+                Ok(json!({"id": "todo-1", "title": title}).to_string())
+            }
+            async fn update(
+                &self,
+                _id: &str,
+                _title: Option<&str>,
+                _description: Option<&str>,
+                _status: Option<&str>,
+                _priority: Option<&str>,
+            ) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+            async fn list(&self, _status: Option<&str>) -> Result<String, ToolError> {
+                Ok(json!({"todos": [{
+                    "id": "todo-1",
+                    "title": "x",
+                    "description": null,
+                    "status": "pending",
+                    "priority": "medium",
+                    "created_at": "2026-07-13T00:00:00Z",
+                    "depends_on": [],
+                    "last_result": null,
+                    "execution_count": 0,
+                    "group_id": "group-1",
+                    "group_title": "My plan",
+                }]}).to_string())
+            }
+            async fn add_dependency(&self, _: &str, _: &[String]) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+            async fn get_next(&self) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+            async fn delete(&self, _: &str) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+            async fn record_execution(&self, _: &str, _: &str) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+            async fn get_dependencies(&self, _: &str) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+        }
+
+        let (tx, mut rx) = broadcast::channel::<TodoChange>(16);
+        let handler = Arc::new(TodoHandler::new(Arc::new(BackendWithId), Some(tx)));
+
+        // Stamp active session + assistant_message_id (the wire-format
+        // `${session_id}-${rowIdx}` formula). Both must show up on the
+        // broadcast.
+        let stamper: Arc<dyn SessionStamper> = handler.clone() as Arc<dyn SessionStamper>;
+        let prev_sess = stamper.set_active_session(Some("sess-1".to_string()));
+        assert_eq!(prev_sess, None, "first stamp should be None");
+        let prev_msg =
+            stamper.set_active_message_id(Some("sess-1-3".to_string()));
+        assert_eq!(prev_msg, None, "first message_id stamp should be None");
+
+        // Trigger `GroupStarted` by creating the first todo in a new group.
+        handler
+            .execute(json!({
+                "action": "create",
+                "title": "Do the thing",
+                "group_title": "My plan",
+            }))
+            .await
+            .unwrap();
+
+        // Drain the broadcast — first event should be GroupStarted.
+        let evt = rx.recv().await.unwrap();
+        assert_eq!(evt.session_id.as_deref(), Some("sess-1"));
+        match evt.change {
+            TodoChangeKind::GroupStarted { group_id, group_title, message_id } => {
+                assert_eq!(group_id, "group-1");
+                assert_eq!(group_title.as_deref(), Some("My plan"));
+                assert_eq!(
+                    message_id.as_deref(),
+                    Some("sess-1-3"),
+                    "GroupStarted must carry the assistant_message_id \
+                     stamped via set_active_message_id so the front-end \
+                     can anchor the inline card to the right message"
+                );
+            }
+            other => panic!("expected GroupStarted, got {:?}", other),
+        }
+    }
+
+    /// P0-T1 follow-up: when no message_id is set (legacy CLI / HTTP
+    /// paths), `GroupStarted.message_id` is `None` — the front-end
+    /// falls back to the timestamp-based anchoring path.
+    #[tokio::test]
+    async fn test_todo_group_started_message_id_none_when_unset() {
+        use crate::tools::session_stamper::SessionStamper;
+        use crate::tools::todo::TodoChangeKind;
+
+        struct BackendWithId;
+        #[async_trait]
+        impl TodoBackend for BackendWithId {
+            async fn create(
+                &self,
+                title: &str,
+                _description: Option<&str>,
+                _priority: Option<&str>,
+                _group_id: Option<&str>,
+                _group_title: Option<&str>,
+            ) -> Result<String, ToolError> {
+                Ok(json!({"id": "todo-1", "title": title}).to_string())
+            }
+            async fn update(
+                &self,
+                _id: &str,
+                _title: Option<&str>,
+                _description: Option<&str>,
+                _status: Option<&str>,
+                _priority: Option<&str>,
+            ) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+            async fn list(&self, _status: Option<&str>) -> Result<String, ToolError> {
+                Ok(json!({"todos": [{
+                    "id": "todo-1",
+                    "title": "x",
+                    "description": null,
+                    "status": "pending",
+                    "priority": "medium",
+                    "created_at": "2026-07-13T00:00:00Z",
+                    "depends_on": [],
+                    "last_result": null,
+                    "execution_count": 0,
+                    "group_id": "group-1",
+                    "group_title": null,
+                }]}).to_string())
+            }
+            async fn add_dependency(&self, _: &str, _: &[String]) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+            async fn get_next(&self) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+            async fn delete(&self, _: &str) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+            async fn record_execution(&self, _: &str, _: &str) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+            async fn get_dependencies(&self, _: &str) -> Result<String, ToolError> {
+                Ok("{}".to_string())
+            }
+        }
+
+        let (tx, mut rx) = broadcast::channel::<TodoChange>(16);
+        let handler = Arc::new(TodoHandler::new(Arc::new(BackendWithId), Some(tx)));
+
+        // Only stamp the session, NOT the message_id (legacy path).
+        let stamper: Arc<dyn SessionStamper> = handler.clone() as Arc<dyn SessionStamper>;
+        stamper.set_active_session(Some("sess-2".to_string()));
+        // Deliberately do NOT call set_active_message_id.
+
+        handler
+            .execute(json!({
+                "action": "create",
+                "title": "Plain",
+                "group_title": null,
+            }))
+            .await
+            .unwrap();
+
+        let evt = rx.recv().await.unwrap();
+        assert_eq!(evt.session_id.as_deref(), Some("sess-2"));
+        match evt.change {
+            TodoChangeKind::GroupStarted { message_id, .. } => {
+                assert!(
+                    message_id.is_none(),
+                    "GroupStarted.message_id must be None when no message_id was stamped; \
+                     legacy / CLI / HTTP paths don't have a message context"
+                );
+            }
+            other => panic!("expected GroupStarted, got {:?}", other),
+        }
     }
 }

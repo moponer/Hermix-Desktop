@@ -891,6 +891,30 @@ impl ToolRegistry {
         true
     }
 
+    /// Stamp the active **assistant message id** onto a tool whose
+    /// handler impls `SessionStamper`. Returns `true` if the tool
+    /// exists AND opted in. See
+    /// [`SessionStamper::set_active_message_id`] for the full
+    /// rationale (P0-T1 Frontend Audit 2026-07-13).
+    pub fn set_active_message_id_for_tool(
+        &self,
+        name: &str,
+        message_id: Option<String>,
+    ) -> bool {
+        let stamper = {
+            let inner = self.inner.read().unwrap();
+            match inner.tools.get(name) {
+                Some(e) => match e.session_stamper.as_ref() {
+                    Some(s) => Arc::clone(s),
+                    None => return false,
+                },
+                None => return false,
+            }
+        };
+        stamper.set_active_message_id(message_id);
+        true
+    }
+
     /// Format an error as JSON: `{"error": "msg"}`.
     pub fn tool_error(msg: &str) -> String {
         serde_json::json!({ "error": msg }).to_string()
