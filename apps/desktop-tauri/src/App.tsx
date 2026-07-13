@@ -16,6 +16,7 @@ import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useAcuiState, type AcuiDecisionBus } from "./acui";
 import type { Artifact } from "./utils/artifacts";
 import * as api from "./api";
@@ -2063,6 +2064,7 @@ streamPhaseRef.current = null;
             has `min-w-0` so inner content scrolls instead of getting
             pushed below usable width. Three-column layout never wraps —
             it auto-collapses to two columns at 1140px. */}
+        <ErrorBoundary name="主内容区">
         <main className="pane pane-main min-w-0 flex-1">
           {page === "chat" && (
             <ChatView
@@ -2178,8 +2180,7 @@ contextUsage={contextUsage}
           {page === "analytics" && <AnalyticsView />}
           {page === "settings" && <SettingsView />}
         </main>
-
-        {/* Right sidebar — grid column 3; 0px when closed (collapsed), full
+        </ErrorBoundary>        {/* Right sidebar — grid column 3; 0px when closed (collapsed), full
             width when open. Grid ensures main content (column 2, 1fr) is
             never squeezed — it gets all remaining space after fixed columns. */}
         {rightOpen && (
