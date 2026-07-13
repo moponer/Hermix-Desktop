@@ -622,3 +622,76 @@ localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY);
 | `apps/desktop-tauri/src/components/VoiceButton.tsx` | 添加 `webmBlobToPcmBase64()` 函数（Web Audio API 转码）；onstop handler 改用 PCM 转码 |
 | `apps/desktop-tauri/src/components/AgentsView.tsx` | `runGeneration` + `send` 两处改为自动检测 provider + API key |
 | `apps/desktop-tauri/src/utils/storageCompat.ts` | 添加 `advancedConfig` key 到 `STORAGE_KEYS` |
+---
+
+## 修复状态报告（2026-07-13 第二轮 · 全量收口）
+
+> 本轮对 P0~P3 全部 31 项逐项复核源码（Read + Grep），修正了首轮状态报告中
+> 与当前代码不符的结论，并补齐了首轮遗留的收尾项。结论：**31 项中 30 项已确认
+> 修复/验证通过，仅 P1-7 的 AgentsView 文件级拆分标记为「内部已分治、文件级拆分暂缓」**。
+
+### 逐项最终结论
+
+| 编号 | 状态 | 说明 |
+|---|---|---|
+| P0-1 | ✅ | 首轮已修复（AdvancedTab localStorage 持久化） |
+| P0-2 | ✅ | 首轮已修复（BrowserTab 接入 cua_browser_*） |
+| P0-3 | ✅ | 首轮已修复（get_runtime_info command） |
+| P0-4 | ✅ | 首轮已修复（webm→PCM 转码） |
+| P0-5 | ✅ | `VoicePlayer.tsx` 已含 `audio_base64` 为空 → "TTS 未配置"提示分支 |
+| P0-6 | ✅ | `AgentsView.tsx` 已改为自动检测 provider + 调 provider OpenAI 端点（`apiUrl` 为 provider base，非 hermix server） |
+| P0-7 | ✅ | **后端 `/api/agents/custom` 早已实现并注册**（dashboard/agents.rs:88-299, mod.rs:285-289）；前端 `loadAgentsAsync`/`saveAgentAsync`/`deleteAgentAsync` 已走该端点。首轮状态报告称"仍需后端"属过时结论 |
+| P0-8 | ✅ | 首轮已修复（+ 添加 MCP 按钮） |
+| P0-9 | ✅ | 首轮已修复（onAddFileToChat prop 链路） |
+| P0-10 | ✅ | 首轮已修复（workspace 折叠按钮） |
+| P1-1 | ✅ | 删除 `useEffect(()=>saveAgentsLocal(agents),[agents])` 自动持久化；新增 `upsertAgentLocal` 修正 fallback 路径 `saveAgentsLocal([agent])` 覆盖整列缓存的 bug |
+| P1-2 | ✅ | 已走 `storageCompat` 抽象层（首轮验证） |
+| P1-3 | ✅ | `API_BASE` 集中到 `api.ts` 并 `export`；`AgentsView` 经 `import { API_BASE }` 使用，无散落硬编码 |
+| P1-4 | ✅ | `polish.ts` 过期注释已删除，正确指向 `dashboard/polish.rs` |
+| P1-5 | ✅ | 新增 `lib/diag.ts`（`isDiagEnabled`/`diagLog`/`diagWarn`/`nextDiagId`），所有 `__sendDiagId` 调试钩子改为 DEV/flag 门控；boot localStorage dump 已 `import.meta.env.DEV` 包裹 |
+| P1-6 | ✅ | `ModeSelector.tsx` 全仓 0 引用（已移除） |
+| P1-7 | 🔶 | **App.tsx / ChatView.tsx / MessageBubble.tsx 已完成文件级拆分**（见下）；AgentsView（2005 行）内部已按 AgentCard/AgentForm/AIGenerateWizard/TestDialog/BuiltInExpertsTab 分函数为独立子组件，文件级拆分暂缓（理由见「暂缓项」） |
+| P1-8 | ✅ | `tryArtifactPathExists` 候选根重试链稳健（首轮验证） |
+| P2-1 | ✅ | 已建 `vitest` 基建 + `storageCompat` 10 项单测（本轮扩至 12 项含 KNOWN_KEYS） |
+| P2-2 | ✅ | 新增 `KNOWN_KEYS`（由 `STORAGE_KEYS` 派生），`migrateLegacyKeys` 改为遍历注册表；App.tsx 弃用手写 17-key 列表 |
+| P2-3 | ✅ | 首轮已修复（文件树 Delete/Rename 接入 backend） |
+| P2-4 | ✅ | `AutomationView.tsx` 已有「新建自动化」按钮调用 `api.createAutomationTask`；全仓无 "功能开发中" 死状态 |
+| P2-5 | ✅ | `session_persistence.rs` 已移除 read-path 的 `ToolCallSanitizer::feed+flush`（test 钉死契约），仅 write path 保留 sanitizer |
+| P2-6 | ✅ | `App.tsx` 已有 7 类错误映射（API key / 连接拒绝 / 超时 / 鉴权 / 限流 / 模型不存在 / 通用）；Rust 栈追踪不再直透用户 |
+| P2-7 | ✅ | `storageCompat.migrateLegacyKeys` 新增冲突日志（双命名空间 `hermes.*`/`hermix.*` 同时存在时，DEV 或 `hermix.compat.debug=1` 下输出） |
+| P3-1 | ✅ | tokens.css 亮/暗两套 `--color-link`/`--color-link-soft` 均由饱和蓝改为中性 slate；修正残留 "blue" 注释 |
+| P3-2 | ✅ | 首轮已修复（Element Plus 弹窗覆盖） |
+| P3-3 | ✅ | `ErrorBoundary.tsx` 已存在并挂于 `main.tsx` 与 `App.tsx` 主内容区 |
+| P3-4 | ✅ | 脚本扫描出 28 个无 accessible name 的 icon-only `<button>`：25 个带 `title` 的自动补 `aria-label`（13 文件），3 个无 title 的（AgentsView 关闭/发送、RoomSettingsDrawer 关闭）补显式 `aria-label` |
+| P3-5 | ✅ | 首轮已修复（embed-worker lazy fallback） |
+| P3-6 | ✅ | `ChatView.tsx` 已有 `MemoMessageBubble`（自定义 comparator，仅 message id + 关键 callback 变化才重渲），消除每次流式 chunk 全列表重渲；虚拟列表因流式+滚动锚定风险未引入 |
+
+### 本轮新修复清单（git 提交）
+
+| 提交 | 内容 |
+|---|---|
+| `d0aaec1` | P2-2 KNOWN_KEYS 注册表 + P2-7 双命名空间冲突日志 + P3-1 亮/暗 link 去蓝 |
+| `2496f43` | P0-7/P1-1 agents 持久化：弃用自动持久化 useEffect + 修正 fallback 覆盖 bug |
+| `653df95` | P3-4 a11y：28 个 icon-only 按钮补 aria-label |
+| `a515916` | P1-7 MessageBubble 拆分：8 个 cua_* 预览组件 + 3 个共享 helper 抽到 `components/bubbles/ToolOutputPreviews.tsx`（2874→2232 行） |
+
+（P1-5 diag.ts / ChatView leaf indicators / vitest 基建为更早提交，详见 git log）
+
+### 暂缓项（P1-7 AgentsView 文件级拆分）
+
+**结论**：AgentsView.tsx 维持单文件（2005 行），但内部已按职责分治为独立函数
+（AgentCard / AgentForm / AIGenerateWizard / TestDialog / BuiltInExpertsTab /
+CategoryChip / ExpertCard）。
+
+**暂缓理由**：
+1. **共享状态耦合**：`agents`/`form`/`mode`/`tab` 等状态在 AgentsView 顶层与各子视图间
+   透传，文件级拆分需引入 props 透传或 context，改动面大。
+2. **拆分脚本品类风险**：尝试用脚本按括号匹配抽取 `AIGenerateWizard` 时，JSX 的
+   `{expr}` 与模板字符串 `${}` 使朴素括号计数完全失效（会误判函数边界、截断函数体），
+   手工逐函数搬迁又极易引入回归——而该文件是 agent 管理的核心功能，回归代价高。
+3. **收益边际**：首轮已拆分 App.tsx / ChatView.tsx，本轮又拆分 MessageBubble.tsx，
+   4 个 God Object 中 3 个已完成文件级收敛，AgentsView 的内部分治已满足可维护性下限。
+
+如后续仍要做文件级拆分，建议人工（非脚本）将 `AIGenerateWizard` + 其 3 个依赖 helper
+（`pickColor`/`buildSystemPrompt`/`generateFromTemplate`）整体搬到
+`components/agents/AIGenerateWizard.tsx`，并用 `import type { AgentPersona }` 解决类型环依赖。
