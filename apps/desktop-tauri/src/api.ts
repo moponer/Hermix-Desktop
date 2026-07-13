@@ -6,9 +6,10 @@ import { storage, STORAGE_KEYS } from "./utils/storageCompat";
 import { detectToolError } from "./components/messageParser";
 import { wireArrayToChatMessages, type WireMessage } from "./protocolAdapter";
 
-const API_BASE = "http://127.0.0.1:3000";
+export const API_BASE = "http://127.0.0.1:3000";
+export const WS_BASE = "ws://127.0.0.1:3000";
 
-function apiUrl(path: string): string {
+export function apiUrl(path: string): string {
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
@@ -635,13 +636,13 @@ export const sendMessageStream = (id: string, content: string) => sendMessage(id
 // ── WebSocket Streaming ────────────────────────────
 
 export function resolveWebSocketUrl(sessionId: string): string {
-  return `ws://127.0.0.1:3000/v1/ws-stream/${encodeURIComponent(sessionId)}`;
+  return `${WS_BASE}/v1/ws-stream/${encodeURIComponent(sessionId)}`;
 }
 
 /** WebSocket URL for the group chat streaming endpoint.
  *  Opens a new connection per message. */
 export function resolveGroupChatWebSocketUrl(roomId: string): string {
-  return `ws://127.0.0.1:3000/v1/ws-groupchat/${encodeURIComponent(roomId)}`;
+  return `${WS_BASE}/v1/ws-groupchat/${encodeURIComponent(roomId)}`;
 }
 
 // ── Dashboard API ──────────────────────────────────

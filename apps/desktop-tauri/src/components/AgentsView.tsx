@@ -8,6 +8,7 @@ import { clsx } from "clsx";
 import { BUILTIN_EXPERTS, EXPERT_CATEGORIES, type ExpertDef } from "../data/builtinExperts";
 import { useSessionExpert } from "../hooks/useExpert";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
+import { apiUrl, API_BASE } from "../api";
 
 const STORAGE_KEY = STORAGE_KEYS.agents;
 
@@ -223,13 +224,12 @@ const TEMPLATES: AgentTemplate[] = [
    Storage helpers — async API with localStorage fallback
    ════════════════════════════════════════════════════════════════ */
 
-const API_BASE = "http://127.0.0.1:3000";
 
 /** Load agents from the backend API, falling back to localStorage
  *  if the server is unreachable (e.g. running in standalone mode). */
 async function loadAgentsAsync(): Promise<AgentPersona[]> {
   try {
-    const resp = await fetch(`${API_BASE}/api/agents/custom`);
+    const resp = await fetch(apiUrl("/api/agents/custom"));
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json() as { agents: AgentPersona[] };
     if (!data.agents || !Array.isArray(data.agents)) return [];
@@ -267,7 +267,7 @@ function loadAgentsLocal(): AgentPersona[] {
  *  localStorage batch-save if the server is unreachable. */
 async function saveAgentAsync(agent: AgentPersona): Promise<void> {
   try {
-    const resp = await fetch(`${API_BASE}/api/agents/custom`, {
+    const resp = await fetch(apiUrl("/api/agents/custom"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(agent),
@@ -283,7 +283,7 @@ async function saveAgentAsync(agent: AgentPersona): Promise<void> {
  *  localStorage batch-save if the server is unreachable. */
 async function deleteAgentAsync(id: string, remaining: AgentPersona[]): Promise<void> {
   try {
-    const resp = await fetch(`${API_BASE}/api/agents/custom/${encodeURIComponent(id)}`, {
+    const resp = await fetch(apiUrl(`/api/agents/custom/${encodeURIComponent(id)}`), {
       method: "DELETE",
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -772,14 +772,13 @@ function AIGenerateWizard({ onComplete, onCancel, initialDescription = "" }: AIG
       // P0-6: Auto-detect the LLM provider and API key from the backend
       // instead of calling the non-existent /v1/chat/completions on the
       // local server. Falls back to the user-configured agentsServerUrl.
-      const defaultBase = "http://127.0.0.1:3000";
       let apiUrl = storage.getItem(STORAGE_KEYS.agentsServerUrl) || "";
       let apiKey = storage.getItem(STORAGE_KEYS.agentsApiKey) || "";
 
       // If no custom server URL is set, auto-detect from backend model config.
-      if (!apiUrl || apiUrl === defaultBase) {
+      if (!apiUrl || apiUrl === API_BASE) {
         try {
-          const modelResp = await fetch(`${defaultBase}/api/model/info`);
+          const modelResp = await fetch(`${API_BASE}/api/model/info`);
           if (modelResp.ok) {
             const modelInfo = await modelResp.json() as { provider?: string; model?: string };
             const provider = modelInfo.provider || "openai";
@@ -811,7 +810,7 @@ function AIGenerateWizard({ onComplete, onCancel, initialDescription = "" }: AIG
               volcengine: "ARK_API_KEY",
             };
             const envKey = envKeyMap[provider] || "OPENAI_API_KEY";
-            const revealResp = await fetch(`${defaultBase}/api/env/reveal`, {
+            const revealResp = await fetch(`${API_BASE}/api/env/reveal`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ key: envKey }),
@@ -1346,12 +1345,11 @@ function TestDialog({ agent, onClose }: TestDialogProps) {
     abortRef.current = new AbortController();
     try {
       // P0-6: Same auto-detect logic as runGeneration.
-      const defaultBase = "http://127.0.0.1:3000";
       let apiUrl = storage.getItem(STORAGE_KEYS.agentsServerUrl) || "";
       let apiKey = storage.getItem(STORAGE_KEYS.agentsApiKey) || "";
-      if (!apiUrl || apiUrl === defaultBase) {
+      if (!apiUrl || apiUrl === API_BASE) {
         try {
-          const modelResp = await fetch(`${defaultBase}/api/model/info`);
+          const modelResp = await fetch(`${API_BASE}/api/model/info`);
           if (modelResp.ok) {
             const modelInfo = await modelResp.json() as { provider?: string };
             const provider = modelInfo.provider || "openai";
@@ -1372,7 +1370,7 @@ function TestDialog({ agent, onClose }: TestDialogProps) {
               siliconflow: "SILICONFLOW_API_KEY", volcengine: "ARK_API_KEY",
             };
             const envKey = envKeyMap[provider] || "OPENAI_API_KEY";
-            const revealResp = await fetch(`${defaultBase}/api/env/reveal`, {
+            const revealResp = await fetch(`${API_BASE}/api/env/reveal`, {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ key: envKey }),
             });

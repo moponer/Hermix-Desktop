@@ -1,9 +1,10 @@
 // src/api/polish.ts
 //
-// Calls the backend `/api/polish/{chat,automation}` endpoints to rewrite user
-// input. If the backend endpoint is unreachable or returns `null`, falls back
-// to a no-op that only collapses whitespace, so the UI stays usable while the
-// polish backend is being built out. See `docs/TODO.md` for the rollout plan.
+// Calls the backend `/api/polish/{chat,automation}` endpoints (implemented at
+// `crates/hermix-server/src/dashboard/polish.rs`, wired at `dashboard/mod.rs`).
+// If the backend endpoint is unreachable or returns `null`, falls back to a
+// no-op that only collapses whitespace, so the UI stays usable when the server
+// isn't running.
 
 import { CHAT_POLISH_PROMPT, type ChatPolishInput } from "../prompts/polish.chat";
 import { AUTOMATION_POLISH_PROMPT, type AutomationPolishInput } from "../prompts/polish.automation";
@@ -15,9 +16,8 @@ interface PolishBackendResponse {
 }
 
 async function callPolishEndpoint(endpoint: string, payload: unknown): Promise<string | null> {
-  // Polish backend not yet implemented (see `docs/TODO.md`): `fetch` returns
-  // `null` whenever the endpoint is absent or errors, which the callers
-  // interpret as "use the local whitespace-only fallback" below.
+  // Backend routes are at /api/polish/{chat, automation} (dashboard/polish.rs).
+  // Falls back to whitespace-only polish when the server is unreachable.
   try {
     const resp = await fetch(endpoint, {
       method: "POST",

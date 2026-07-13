@@ -6,7 +6,7 @@ import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { useCurrentModel, writeModelConfigAndNotify } from "../hooks/useCurrentModel";
 import { ProviderIcon } from "./ProviderIcon";
 
-const API_BASE = "http://127.0.0.1:3000";
+import { apiUrl } from "../api";
 
 // ── Provider definitions ───────────────────────────
 
@@ -187,7 +187,7 @@ function ModelTab() {
         const MAX_RETRIES = 2;
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
           try {
-            const revealResp = await fetch(`${API_BASE}/api/env/reveal`, {
+            const revealResp = await fetch(apiUrl("/api/env/reveal"), {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ key: p.keyEnvVar }),
@@ -251,7 +251,7 @@ function ModelTab() {
             PROVIDERS.forEach((p) => { keys2[p.id] = !!envVars2[p.keyEnvVar]?.is_set; });
             for (const p of PROVIDERS.filter((p) => keys2[p.id])) {
               try {
-                const revealResp = await fetch(`${API_BASE}/api/env/reveal`, {
+                const revealResp = await fetch(apiUrl("/api/env/reveal"), {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ key: p.keyEnvVar }),
@@ -384,10 +384,8 @@ function ModelTab() {
 
   // ── Custom provider model handlers ──
   const updateCustomModels = useCallback((providerId: string, models: string[]) => {
-    console.log(`[updateCustomModels] called providerId=${providerId} models.length=${models.length}`, models);
     setCustomModels((prev) => {
       const next = { ...prev, [providerId]: models };
-      console.log(`[updateCustomModels] setCustomModels new keys=`, Object.keys(next));
       return next;
     });
     setConfig((prev) => {

@@ -1,12 +1,11 @@
 import { useState, useRef, useCallback } from "react";
 import { Mic } from "lucide-react";
+import { apiUrl } from "../api";
 
 interface VoiceButtonProps {
   onTranscribe: (text: string) => void;
   disabled?: boolean;
 }
-
-const API_BASE = "http://127.0.0.1:3000";
 
 /**
  * P0-4: Convert a webm audio Blob to 16kHz mono s16 PCM base64.
@@ -96,7 +95,7 @@ export function VoiceButton({ onTranscribe, disabled }: VoiceButtonProps) {
         try {
           // P0-4: Convert webm → 16kHz mono s16 PCM before sending.
           const pcmBase64 = await webmBlobToPcmBase64(blob);
-          const res = await fetch(`${API_BASE}/v1/voice/transcribe`, {
+          const res = await fetch(apiUrl("/v1/voice/transcribe"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

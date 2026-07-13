@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import { Volume2, Square } from "lucide-react";
+import { apiUrl } from "../api";
 
 /**
  * L3: VoicePlayer — plays back TTS audio received from
@@ -40,8 +41,6 @@ interface VoicePlayerProps {
   hidden?: boolean;
 }
 
-const API_BASE = "http://127.0.0.1:3000";
-
 export function VoicePlayer({
   text,
   voice,
@@ -70,7 +69,7 @@ export function VoicePlayer({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/v1/voice/synthesize`, {
+      const res = await fetch(apiUrl("/v1/voice/synthesize"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, voice, provider, format }),

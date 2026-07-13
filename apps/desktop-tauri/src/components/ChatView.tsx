@@ -353,7 +353,7 @@ import {
 import { useExpertCutoff } from "../hooks/useExpertCutoff";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
-import { getSessionArchiveRefs, getAvailableTools, updateSessionMetadata, type ArchiveRef, type ToolDescriptor } from "../api";
+import { getSessionArchiveRefs, getAvailableTools, updateSessionMetadata, apiUrl, type ArchiveRef, type ToolDescriptor } from "../api";
 import { ArchiveRefsGraph } from "./ArchiveRefsGraph";
 import type { Session } from "../types";
 import type { ChatOverrides } from "../hooks/useStreamChat";
@@ -485,7 +485,7 @@ function useModelSelector() {
       // Fetch default model + all custom provider models from backend.
       // This ensures the model picker shows ALL configured models,
       // not just the active one — fixes "新建对话只有一个模型".
-      const defaultModelPromise = fetch("http://127.0.0.1:3000/api/model/info")
+      const defaultModelPromise = fetch(apiUrl("/api/model/info"))
         .then((r) => (r.ok ? r.json() : null))
         .then((info: { model?: string; provider?: string } | null) => {
           if (cancelled || !info?.model || !info?.provider) return null;
@@ -493,7 +493,7 @@ function useModelSelector() {
         })
         .catch(() => null as { providerId: string; modelId: string } | null);
 
-      const customProvidersPromise = fetch("http://127.0.0.1:3000/api/custom-providers")
+      const customProvidersPromise = fetch(apiUrl("/api/custom-providers"))
         .then((r) => (r.ok ? r.json() : null))
         .then((providers: { id: string; models: string[] }[] | null) => {
           if (cancelled || !providers) return [] as { providerId: string; modelId: string }[];
