@@ -15,9 +15,9 @@ import { useStreamChat } from "./hooks/useStreamChat";
 import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
+import { useArtifacts } from "./hooks/useArtifacts";
 import { useAcuiState, type AcuiDecisionBus } from "./acui";
-import { extractArtifacts, type Artifact, type ArtifactKind } from "./utils/artifacts";
-import { tryArtifactPathExists } from "./utils/artifactReader";
+import type { Artifact } from "./utils/artifacts";
 import * as api from "./api";
 import { registerBuiltinsToBackend } from "./data/builtinExperts";
 import type { NavPage, Session, ChatMessage, ApprovalDecision, TimelineStep, ExecutionTimelineEvent } from "./types";
@@ -489,8 +489,6 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     setRightOpen(false);
   }, []);
 
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
-
   // 左列 / 右列：viewport-aware 夹紧在下面那个 useEffect 里集中做（每次
   // window.resize、rightOpen 切换、右列宽度变化时重算），不再给
   // useResizable 传 dynamicMax — 那样做会让两个 useResizable 互为依赖，
@@ -825,6 +823,12 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
 
+  const { rawArtifacts, artifacts, selectedArtifactId, setSelectedArtifactId, handlePathClick } = useArtifacts({
+    activeSession,
+    workspaceRoot,
+    onOpenRightSidebar: () => setRightOpen(true),
+  });
+
   /**
    * Number of tool messages whose `status === "running"` in the active
    * session. We surface this to `ChatView` so the post-stream
@@ -857,118 +861,6 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
         (firstUserContent.length > 28 ? "…" : "")
       : s.title;
   };
-
-  // Artifacts derived from the active session's messages. The workspaceRoot
-  // is passed through so the Tauri read command can anchor relative paths
-  // the LLM mentions in body text (e.g. "tmp/xx/方案.md").
-  //
-  // Two-phase approach:
-  //   1. `rawArtifacts` — synchronous extraction from message text (cheap)
-  //   2. `artifacts`     — async existence filter via Tauri IPC
-  //      This prevents showing files that the LLM mentioned but don't
-  //      actually exist on disk (e.g. /.hermix/skills/SKILL.md paths).
-  const rawArtifacts = useMemo(() => {
-    if (!activeSession) return [];
-    return extractArtifacts(activeSession.messages, workspaceRoot);
-  }, [activeSession, workspaceRoot]);
-
-  const [verifiedArtifacts, setVerifiedArtifacts] = useState<Artifact[]>([]);
-  useEffect(() => {
-    const raw = rawArtifacts;
-    if (raw.length === 0) { setVerifiedArtifacts([]); return; }
-    let cancelled = false;
-    // Batch-check all artifact paths in parallel. Each probe walks
-    // the retry chain (workspaceRoot → drive root → ancestors) so a
-    // path on a different drive than the workspace still gets found.
-    Promise.all(
-      raw.map(async (a) => {
-        const exists = await tryArtifactPathExists(a.path, workspaceRoot);
-        return { a, exists };
-      }),
-    ).then((results) => {
-      if (cancelled) return;
-      const next = results.filter((r) => r.exists).map((r) => r.a);
-      setVerifiedArtifacts(next);
-      // Lightweight diagnostic — gated so it's invisible unless
-      // explicitly enabled, but immediately useful when a file
-      // "looks like an artifact" but the panel is empty.
-      if (typeof window !== "undefined" && window.localStorage?.getItem("hermixDebugArtifacts") === "1") {
-        const dropped = results.filter((r) => !r.exists).map((r) => r.a.path);
-        // eslint-disable-next-line no-console
-        console.debug(
-          "[artifacts] raw=%d verified=%d workspaceRoot=%s",
-          raw.length, next.length, workspaceRoot ?? "(null)",
-        );
-        if (dropped.length > 0) {
-          // eslint-disable-next-line no-console
-          console.debug("[artifacts] dropped paths:", dropped);
-        }
-      }
-    });
-    return () => { cancelled = true; };
-  }, [rawArtifacts, workspaceRoot]);
-
-  // Alias so downstream consumers don't need to know about the two-phase trick.
-  const artifacts = verifiedArtifacts;
-
-  /** Programmatic file open from inside a markdown body. We:
-   *   1. find (or invent) an artifact record for this path
-   *   2. select it
-   *   3. open the right sidebar
-   *   4. bump the preview token so RightSidebar swaps into preview mode
-   *
-   * The "invent" step matters: a markdown body may quote a path
-   * that the artifact extractor missed (e.g. a deep cell.value
-   * reference that was never written by an LLM tool call). We use
-   * the same `classify` helper as the extractor to assign a
-   * `kind`, and we push it into `verifiedArtifacts` so the panel
-   * stays in sync. */
-  const handlePathClick = useCallback(
-    (path: string) => {
-      const existing = artifacts.find((a) => a.path === path || a.path.endsWith(path));
-      if (existing) {
-        setSelectedArtifactId(existing.id);
-      } else {
-        // Build a synthetic artifact so the panel has something to
-        // select. The id is just the path itself; we re-derive the
-        // kind from the extension here (mirrors `classify` inside
-        // `artifacts.ts`, but kept local to avoid exporting an
-        // implementation detail from a module that doesn't already
-        // re-export it).
-        const ext = path.split(".").pop()?.toLowerCase() ?? "";
-        const synth: Artifact = {
-          id: `path:${path}`,
-          name: path.split(/[\\/]/).pop() ?? path,
-          path,
-          kind: classifyFromExtension(ext),
-          tool: "inline",
-          timestamp: new Date().toISOString(),
-          isAbsolute: /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/"),
-        };
-        setVerifiedArtifacts((prev) => [...prev, synth]);
-        setSelectedArtifactId(synth.id);
-      }
-      setRightOpen(true);
-    },
-    [artifacts],
-  );
-
-  /** Mirror of the `classify` logic in `utils/artifacts.ts` — kept
-   * local so we don't widen that module's public surface just to
-   * classify a synthetic artifact on the path-click path. */
-  function classifyFromExtension(ext: string): ArtifactKind {
-    const CODE_EXTS = new Set(["ts", "tsx", "js", "jsx", "mjs", "rs", "py", "go", "java", "kt", "c", "cpp", "cxx", "h", "hpp", "rb", "php", "sh", "bash", "css", "html", "vue", "sql", "json", "yaml", "yml", "toml", "xml", "md", "txt", "log", "ini"]);
-    const DOC_EXTS = new Set(["docx", "doc", "pdf", "rtf", "odt"]);
-    const DATA_EXTS = new Set(["csv", "tsv", "xlsx", "xls", "xlsm", "parquet", "sqlite", "db"]);
-    const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"]);
-    const OFFICE_EXTS = new Set(["docx", "doc", "xlsx", "xls", "pptx", "ppt", "odt", "ods", "odp"]);
-    if (IMAGE_EXTS.has(ext)) return "image";
-    if (OFFICE_EXTS.has(ext)) return "office";
-    if (CODE_EXTS.has(ext)) return "code";
-    if (DATA_EXTS.has(ext)) return "data";
-    if (DOC_EXTS.has(ext)) return "doc";
-    return "file";
-  }
 
   const handleNewChat = useCallback(async () => {
     if (isCreatingSessionRef.current) return;
