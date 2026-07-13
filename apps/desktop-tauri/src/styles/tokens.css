@@ -70,10 +70,11 @@
   --color-warning: #d97706;
   --color-warning-soft: rgba(217, 119, 6, 0.12);
   --color-text-warning: #d97706;       /* warning text — used by StreamingBubble/InliningThinkingDot */
-  /* v5: 主操作色 = info 蓝（hover 才出底色）。
-     之前 info = success (绿)，跟成功色冲突。这里独立成蓝色。 */
-  --color-info: #3b82f6;
-  --color-info-soft: rgba(59, 130, 246, 0.10);
+  /* v5: 主操作色 = info。设计铁律禁用饱和蓝/紫（no blue/indigo/violet/
+     purple），用与 --color-accent 同族的 slate 中性色，避免"蓝"观感
+     同时和全局 accent 保持一致。 */
+  --color-info: #475569;
+  --color-info-soft: rgba(71, 85, 105, 0.10);
 
   /* ── Buttons (v3 Cool Slate 工具感,无饱和填充) ── */
   --color-btn-primary-bg: #475569;
@@ -158,9 +159,9 @@
   --color-accent-soft-strong: rgba(203, 213, 225, 0.22);
   --color-accent-on-text: #0f172a;
 
-  /* ── Link (dark mode) ── */
-  --color-link: #60a5fa;
-  --color-link-hover: #93c5fd;
+  /* ── Link (dark mode) ── 设计铁律禁蓝: 用 slate 中性色代替蓝链 */
+  --color-link: #94a3b8;
+  --color-link-hover: #cbd5e1;
 
   /* ── Link-soft: 暗模式下柔和蓝（文件变更等辅助场景） ── */
   --color-link-soft: #7d9bce;
@@ -173,8 +174,8 @@
   --color-warning: #f59e0b;
   --color-warning-soft: rgba(245, 158, 11, 0.15);
   --color-text-warning: #f59e0b;       /* warning text — dark mode: brighter amber */
-  --color-info: #60a5fa;
-  --color-info-soft: rgba(96, 165, 250, 0.14);
+  --color-info: #94a3b8;
+  --color-info-soft: rgba(148, 163, 184, 0.14);
 
   --color-btn-primary-bg: #cbd5e1;
   --color-btn-primary-text: #0f172a;

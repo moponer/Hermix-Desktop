@@ -106,8 +106,8 @@ export function BackendStatus() {
     }
     if (restarting) {
       return (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-blue-400" title="后端正在重启...">
-          <RefreshCw size={11} className="animate-spin text-blue-400" />
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-zinc-400" title="后端正在重启...">
+          <RefreshCw size={11} className="animate-spin text-zinc-400" />
           <span>重启中...</span>
         </div>
       );

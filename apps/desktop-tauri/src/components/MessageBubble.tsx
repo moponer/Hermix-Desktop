@@ -825,25 +825,25 @@ const TOOL_CATEGORIES: ToolCategory[] = [
     bg: "#22c55e",
     kind: "shell",
   },
-  // 2. 文件读取 (蓝色)
+  // 2. 文件读取 (teal, 设计铁律禁蓝)
   {
     keywords: ["read_file", "read_pdf", "read_xls", "read_xlsx", "read_docx", "read_doc", "read_pptx", "read_image", "view_file", "cat", "open_file", "preview", "inspect"],
     verb: "读取文件",
-    bg: "#3b82f6",
+    bg: "#14b8a6",
     kind: "read",
   },
-  // 3. 文件写入/创建 (蓝色)
+  // 3. 文件写入/创建 (teal, 设计铁律禁蓝)
   {
     keywords: ["write_file", "create_file", "save_file", "add_file", "new_file", "output_file", "append_file"],
     verb: "写入文件",
-    bg: "#3b82f6",
+    bg: "#14b8a6",
     kind: "write",
   },
-  // 4. 文件编辑/修改 (蓝色)
+  // 4. 文件编辑/修改 (teal, 设计铁律禁蓝)
   {
     keywords: ["edit_file", "edit", "patch", "update_file", "modify_file", "rewrite", "replace", "change_file"],
     verb: "编辑文件",
-    bg: "#3b82f6",
+    bg: "#14b8a6",
     kind: "edit",
   },
   // 5. 删除文件 (红色)
@@ -853,32 +853,32 @@ const TOOL_CATEGORIES: ToolCategory[] = [
     bg: "#ef4444",
     kind: "delete",
   },
-  // 6. 操作文件(通用) (蓝色)
+  // 6. 操作文件(通用) (teal, 设计铁律禁蓝)
   {
     keywords: ["file_operation", "file_op", "move_file", "rename_file", "copy_file"],
     verb: "操作文件",
-    bg: "#3b82f6",
+    bg: "#14b8a6",
     kind: "edit",
   },
-  // 7. 网络搜索 (紫色)
+  // 7. 网络搜索 (teal-600, 设计铁律禁紫)
   {
     keywords: ["search_web", "web_search", "google", "bing", "duckduckgo", "search_internet", "search_query"],
     verb: "搜索网络",
-    bg: "#a855f7",
+    bg: "#0d9488",
     kind: "search-web",
   },
-  // 8. 文件搜索 (紫色)
+  // 8. 文件搜索 (teal-600, 设计铁律禁紫)
   {
     keywords: ["search_files", "file_search", "file_query", "grep", "find_file", "locate", "search", "search_directory"],
     verb: "搜索文件",
-    bg: "#a855f7",
+    bg: "#0d9488",
     kind: "search-file",
   },
-  // 9. 列表目录 (蓝色)
+  // 9. 列表目录 (teal, 设计铁律禁蓝)
   {
     keywords: ["list_files", "list_dir", "list_directory", "ls", "dir", "tree", "walk", "readdir", "glob"],
     verb: "查看目录",
-    bg: "#3b82f6",
+    bg: "#14b8a6",
     kind: "list",
   },
   // 10. 网页访问 (青色)
@@ -895,11 +895,11 @@ const TOOL_CATEGORIES: ToolCategory[] = [
     bg: "#06b6d4",
     kind: "network",
   },
-  // 12. PDF 解析 (蓝色)
+  // 12. PDF 解析 (teal, 设计铁律禁蓝)
   {
     keywords: ["parse_pdf", "extract_pdf", "pdf_to_text", "pdf_parse", "read_pdf"],
     verb: "解析 PDF",
-    bg: "#3b82f6",
+    bg: "#14b8a6",
     kind: "parse",
   },
   // 13. 图片处理 (绿色)
@@ -972,11 +972,11 @@ const TOOL_CATEGORIES: ToolCategory[] = [
     bg: "#6b7280",
     kind: "desktop",
   },
-  // 23. 思考/推理 (紫色)
+  // 23. 思考/推理 (slate-400 中性, 设计铁律禁紫)
   {
     keywords: ["think", "reason", "reflect", "analyze", "plan_task", "plan"],
     verb: "正在思考",
-    bg: "#a855f7",
+    bg: "#94a3b8",
     kind: "reason",
   },
   // 24. 询问用户 (黄色)
@@ -2710,7 +2710,7 @@ function ClarifyCard({
     <div className="flex gap-2.5 h-enter items-start">
       <div
         className="shrink-0 mt-0.5 w-[22px] h-[22px] rounded-md flex items-center justify-center"
-        style={{ background: "rgba(59, 130, 246, 0.10)" }}
+        style={{ background: "rgba(20, 184, 166, 0.10)" }}
         title="需要确认"
       >
         <HelpCircle size={12} className="text-accent" />

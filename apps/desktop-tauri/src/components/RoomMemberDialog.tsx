@@ -324,7 +324,7 @@ export function RoomMemberDialog({
               <span
                 className="text-[10.5px] px-1.5 py-px rounded-md font-semibold"
                 style={{
-                  background: tab === t ? "var(--color-accent-soft, rgba(99,102,241,0.15))" : "var(--color-bg-tertiary)",
+                  background: tab === t ? "var(--color-accent-soft, rgba(71,85,105,0.10))" : "var(--color-bg-tertiary)",
                   color: tab === t ? "var(--color-accent)" : "var(--color-text-muted)",
                 }}
               >

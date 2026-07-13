@@ -1402,8 +1402,8 @@
 
 [data-theme="light"] .file-pill.is-created  { color: #15803d; border-color: rgba(34, 197, 94, 0.30); background: rgba(34, 197, 94, 0.10); }
 [data-theme="light"] .file-pill.is-created  svg { color: #15803d; }
-[data-theme="light"] .file-pill.is-modified { color: #0369a1; border-color: rgba(59, 130, 246, 0.30); background: rgba(59, 130, 246, 0.10); }
-[data-theme="light"] .file-pill.is-modified svg { color: #0369a1; }
+[data-theme="light"] .file-pill.is-modified { color: #b45309; border-color: rgba(245, 158, 11, 0.30); background: rgba(245, 158, 11, 0.10); }
+[data-theme="light"] .file-pill.is-modified svg { color: #b45309; }
 [data-theme="light"] .file-pill.is-deleted  { color: #b91c1c; border-color: rgba(239, 68, 68, 0.30); background: rgba(239, 68, 68, 0.10); }
 [data-theme="light"] .file-pill.is-deleted  svg { color: #b91c1c; }
 [data-theme="light"] .file-pill.is-renamed  { color: #b45309; border-color: rgba(245, 158, 11, 0.30); background: rgba(245, 158, 11, 0.10); }
@@ -1411,8 +1411,8 @@
 
 [data-theme="dark"]  .file-pill.is-created  { color: #4ade80; border-color: rgba(34, 197, 94, 0.40); background: rgba(34, 197, 94, 0.16); }
 [data-theme="dark"]  .file-pill.is-created  svg { color: #4ade80; }
-[data-theme="dark"]  .file-pill.is-modified { color: #60a5fa; border-color: rgba(59, 130, 246, 0.40); background: rgba(59, 130, 246, 0.16); }
-[data-theme="dark"]  .file-pill.is-modified svg { color: #60a5fa; }
+[data-theme="dark"]  .file-pill.is-modified { color: #fbbf24; border-color: rgba(245, 158, 11, 0.40); background: rgba(245, 158, 11, 0.16); }
+[data-theme="dark"]  .file-pill.is-modified svg { color: #fbbf24; }
 [data-theme="dark"]  .file-pill.is-deleted  { color: #f87171; border-color: rgba(239, 68, 68, 0.40); background: rgba(239, 68, 68, 0.16); }
 [data-theme="dark"]  .file-pill.is-deleted  svg { color: #f87171; }
 [data-theme="dark"]  .file-pill.is-renamed  { color: #fbbf24; border-color: rgba(245, 158, 11, 0.40); background: rgba(245, 158, 11, 0.16); }
@@ -2226,8 +2226,8 @@
   height: 100%;
   background: linear-gradient(
     90deg,
-    var(--color-accent, #6366f1) 0%,
-    var(--color-accent-soft, #818cf8) 100%
+    var(--color-accent, #475569) 0%,
+    var(--color-accent-soft, rgba(71, 85, 105, 0.10)) 100%
   );
   /* Soft shimmer so the bar feels "alive" instead of frozen
      when the underlying interval ticks. Disabled under

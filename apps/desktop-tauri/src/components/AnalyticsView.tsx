@@ -81,7 +81,7 @@ export function AnalyticsView() {
           icon={<Cpu className="w-4 h-4" />}
           label="输入 Token"
           value={formatNumber(totals.total_input)}
-          color="text-blue-400"
+          color="text-zinc-400"
         />
         <StatCard
           icon={<Zap className="w-4 h-4" />}
@@ -229,7 +229,7 @@ function DailyCurve({ daily }: { daily: import("../api").AnalyticsDailyEntry[] }
         <h3 className="text-sm font-medium">Token 用量时间曲线</h3>
         <div className="flex items-center gap-3 text-xs text-text-faint">
           <span className="flex items-center gap-1">
-            <span className="inline-block w-2 h-2 bg-blue-400 rounded-sm" />输入
+            <span className="inline-block w-2 h-2 bg-zinc-400 rounded-sm" />输入
           </span>
           <span className="flex items-center gap-1">
             <span className="inline-block w-2 h-2 bg-green-400 rounded-sm" />输出

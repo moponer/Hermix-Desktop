@@ -28,7 +28,7 @@ import type { AcuiComponent } from "../AcuiRegistry";
 export type SelfCheckStatus = "running" | "ok" | "warn" | "fail" | "skip";
 
 const STATUS_GLYPH: Record<SelfCheckStatus, { Icon: typeof Check; cls: string; label: string }> = {
-  running: { Icon: Loader2, cls: "text-blue-300 animate-spin", label: "进行中" },
+  running: { Icon: Loader2, cls: "text-zinc-300 animate-spin", label: "进行中" },
   ok:      { Icon: Check,   cls: "text-emerald-300",            label: "通过" },
   warn:    { Icon: AlertTriangle, cls: "text-amber-300",         label: "警告" },
   fail:    { Icon: X,       cls: "text-rose-300",               label: "失败" },
