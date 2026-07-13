@@ -288,7 +288,7 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
  * @param messages  full ordered chat history
  * @returns true iff the assistant bubble at `idx` should render its header
  */
-function shouldShowAssistantHeader(idx: number, messages: ChatMessage[]): boolean {
+function shouldShowAssistantHeader(idx: number, messages: ReadonlyArray<{ role?: ChatMessage["role"] }>): boolean {
   const msg = messages[idx];
   if (!msg || msg.role !== "assistant") return false;
   // Skip backward over ALL messages that belong to the same agent-loop
@@ -303,9 +303,19 @@ function shouldShowAssistantHeader(idx: number, messages: ChatMessage[]): boolea
   // up assistant2 in session.messages, its prev is assistant1 — not a
   // user — so the header would be suppressed. Skipping ALL assistant
   // messages (not just empty ones) ensures we find the turn boundary.
+  //
+  // The `role?` shape is structural: `ChatMessage[]` (raw reload)
+  // matches, and so does the P0-T1 `streamRow` (each element carries
+  // either a `msg.role` or no `role` for todo rows). Todo rows with
+  // `role === undefined` are skipped via the `r === undefined` branch.
   let prevIdx = idx - 1;
   while (prevIdx >= 0) {
     const r = messages[prevIdx]?.role;
+    if (r === undefined) {
+      // Interleaved todo row — keep walking back.
+      prevIdx--;
+      continue;
+    }
     if (r === "assistant" || r === "tool" || r === "approval" || r === "clarify") {
       prevIdx--;
     } else {
@@ -1631,6 +1641,97 @@ const clearPendingImages = useCallback(() => {
     return result;
   }, [session?.messages, streamingAssistantId, streamingMsg]);
 
+  // P0-T1 (Frontend Audit 2026-07-13): anchor every TodoListCard to
+  // its originating assistant message. The server currently
+  // hard-codes `originating_message_id = None` (see
+  // hermix-server/src/lib.rs todo_event listener) so a freshly-
+  // created plan group arrives without an anchor. We fall back to
+  // "earliest item.created_at ⇒ the latest assistant message
+  // whose timestamp ≤ that" which is good enough in practice: the
+  // group_started event fires during the same streaming turn that
+  // produced the assistant message, so the timing is tight.
+  //
+  // Once the server threads real message_id through (future patch),
+  // anchorMessageId will be non-null and the explicit lookup below
+  // wins. Both paths share the same downstream renderer, so the
+  // transition is invisible to users.
+  const streamRow = useMemo<
+    Array<
+      | { kind: "message"; msg: ChatMessage; role: ChatMessage["role"] }
+      | { kind: "todo"; group: NonNullable<typeof todoGroups>[number]; role: undefined }
+    >
+  >(() => {
+    const rows: Array<
+      | { kind: "message"; msg: ChatMessage; role: ChatMessage["role"] }
+      | { kind: "todo"; group: NonNullable<typeof todoGroups>[number]; role: undefined }
+    > = messagesWithStream.map((msg) => ({ kind: "message", msg, role: msg.role } as
+      | { kind: "message"; msg: ChatMessage; role: ChatMessage["role"] }
+      | { kind: "todo"; group: NonNullable<typeof todoGroups>[number]; role: undefined }
+    ));
+
+    const groups = todoGroups ?? [];
+    if (groups.length === 0) return rows;
+
+    // Pre-compute assistant message index for anchor lookup.
+    const assistantIdxById = new Map<string, number>();
+    messagesWithStream.forEach((m, i) => {
+      if (m.role === "assistant") assistantIdxById.set(m.id, i);
+    });
+
+    type Pending = { group: NonNullable<typeof todoGroups>[number]; insertAfter: number };
+    const anchored: Pending[] = [];
+    const unanchored: NonNullable<typeof todoGroups>[number][] = [];
+
+    for (const g of groups) {
+      if (g.anchorMessageId && assistantIdxById.has(g.anchorMessageId)) {
+        anchored.push({ group: g, insertAfter: assistantIdxById.get(g.anchorMessageId)! });
+        continue;
+      }
+      // Fallback: anchor to the latest assistant message whose
+      // timestamp ≤ the earliest item's created_at. If no assistant
+      // message is older than the first item (e.g. todos created
+      // during the user-message turn before any assistant reply),
+      // the group falls through to the unanchored bucket and
+      // appends to the end of the stream.
+      const items = Object.values(g.itemsById);
+      if (items.length === 0) {
+        unanchored.push(g);
+        continue;
+      }
+      let earliest = items[0].created_at;
+      for (const it of items) {
+        if (it.created_at < earliest) earliest = it.created_at;
+      }
+      let chosen = -1;
+      for (let i = 0; i < messagesWithStream.length; i++) {
+        const m = messagesWithStream[i];
+        if (m.role !== "assistant") continue;
+        if (m.timestamp <= earliest) chosen = i;
+        else break; // timestamps are monotonically non-decreasing in this list
+      }
+      if (chosen < 0) unanchored.push(g);
+      else anchored.push({ group: g, insertAfter: chosen });
+    }
+
+    // Stable order: groups that anchor at the same message keep
+    // their original order (declared by App.tsx onTodoChange).
+    anchored.sort((a, b) => a.insertAfter - b.insertAfter);
+
+    // Splice anchored groups right after their anchor message.
+    // Walk insertAfter descending so earlier splices don't shift
+    // later indices.
+    const out = rows.slice();
+    for (let i = anchored.length - 1; i >= 0; i--) {
+      const { group, insertAfter } = anchored[i];
+      out.splice(insertAfter + 1, 0, { kind: "todo", group, role: undefined as undefined });
+    }
+    // Append unanchored groups (legacy / pre-tool-call / snapshot
+    // hydrate with no anchoring data) at the very end of the stream,
+    // in their declared order.
+    for (const g of unanchored) out.push({ kind: "todo", group: g, role: undefined as undefined });
+    return out;
+  }, [messagesWithStream, todoGroups]);
+
   const handleSubmit = async () => {
     const trimmed = input.trim();
     if (!trimmed) return;
@@ -1932,31 +2033,27 @@ const clearPendingImages = useCallback(() => {
           onToggle={() => setArchiveOpen((v) => !v)}
         />
       )}
-      {/* v2 (2026-07-07): inline todo cards. App.tsx owns the groups
-        store and threads it down via . Each group renders
-        as its own card. For v1 (before agent_loop stamps message_id),
-        every card anchors at the end of the message stream. A future
-        patch can map anchorMessageId -> message index and render
-        cards inline at the originating assistant message. */}
-      {todoGroups && todoGroups.length > 0 && (
-        <div className="todo-strip px-3 sm:px-4 pt-3 pb-2">
-          <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto flex flex-col gap-2">
-            {todoGroups.map((g) => (
-              <TodoListCard
-                key={g.groupId}
-                groupId={g.groupId}
-                groupTitle={g.groupTitle}
-                itemsById={g.itemsById}
-                onPatch={onTodoPatch}
-                justPatchedRef={justPatchedTodoRef}
-              />
-            ))}
-          </div>
-        </div>
-      )}
+      {/* P0-T1 (Frontend Audit 2026-07-13): todo cards are now
+        spliced inline next to their originating assistant message
+        (see `streamRow` useMemo above). The previous top-of-stream
+        strip is gone. */}
       <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
         <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-5">
-          {messagesWithStream.map((msg, idx) => {
+          {streamRow.map((row, idx) => {
+            if (row.kind === "todo") {
+              return (
+                <div key={`todo-${row.group.groupId}`} className="todo-anchor">
+                  <TodoListCard
+                    groupId={row.group.groupId}
+                    groupTitle={row.group.groupTitle}
+                    itemsById={row.group.itemsById}
+                    onPatch={onTodoPatch}
+                    justPatchedRef={justPatchedTodoRef}
+                  />
+                </div>
+              );
+            }
+            const msg = row.msg;
             if (streamingAssistantId && msg.id === streamingAssistantId && streamingMsg) {
               // Streaming placeholder shares the same header rule as
               // the post-stream MemoMessageBubble — see
@@ -1995,13 +2092,14 @@ const clearPendingImages = useCallback(() => {
             // same header and the body text just continues below the
             // first bubble's avatar column.
             //
-            // We compute shouldShowAssistantHeader from messagesWithStream
-            // (the merged array). Since shouldShowAssistantHeader now
+            // We compute shouldShowAssistantHeader from streamRow
+            // (the merged array) and find the position of the current
+            // message in it. Since shouldShowAssistantHeader now
             // skips ALL same-turn roles (assistant/tool/approval/clarify),
             // it correctly finds the turn boundary (user message) even
             // when mergeConsecutiveAssistantMessages has collapsed
             // multiple server-persisted assistant rows into one.
-            const showHeader = msg.role !== "assistant" || shouldShowAssistantHeader(idx, messagesWithStream);
+            const showHeader = msg.role !== "assistant" || shouldShowAssistantHeader(idx, streamRow);
             return (
               <MemoMessageBubble
                 key={msg.id}
