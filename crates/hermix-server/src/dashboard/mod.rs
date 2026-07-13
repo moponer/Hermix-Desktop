@@ -3,6 +3,7 @@
 //! These endpoints mirror the Python `hermix_cli/web_server.py` API surface,
 //! providing the `/api/*` routes consumed by the React web dashboard.
 
+pub mod agents;
 pub mod custom_providers;
 pub mod analytics;
 pub mod cua;
@@ -275,6 +276,18 @@ pub fn router() -> Router<HttpServerState> {
         .route(
             "/api/polish/automation",
             post(polish::post_polish_automation),
+        )
+        // Custom agent (persona) persistence — read/write JSON files
+        // under `$HERMIX_HOME/agents/*.json`. The front-end `AgentsView`
+        // calls these endpoints instead of (or alongside) localStorage
+        // so agents survive across browser caches.
+        .route(
+            "/api/agents/custom",
+            get(agents::list_agents).post(agents::save_agent),
+        )
+        .route(
+            "/api/agents/custom/{id}",
+            delete(agents::delete_agent),
         )
         // CUA trace panel backend — Stage 4.1. Reads the
         // JSONL action log that `hermix-tools/tools/cua.rs`

@@ -24,8 +24,8 @@ import { Volume2, Square } from "lucide-react";
  * Design notes:
  * - "做好自己,不要去感知外部" — this component only consumes the
  *   existing hermix-server endpoints; no new external HTTP calls.
- * - Errors are silent (button just doesn't react) so a misconfigured
- *   TTS provider doesn't break the chat UI.
+ * - Errors show a small tooltip so the user knows why TTS isn't
+ *   working (e.g. API key not configured).
  */
 interface VoicePlayerProps {
   /** The reply text to speak. Player is hidden if this is empty. */
@@ -51,6 +51,7 @@ export function VoicePlayer({
 }: VoicePlayerProps) {
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
 
@@ -67,6 +68,7 @@ export function VoicePlayer({
   const play = useCallback(async () => {
     if (!text || loading) return;
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch(`${API_BASE}/v1/voice/synthesize`, {
         method: "POST",
@@ -74,7 +76,15 @@ export function VoicePlayer({
         body: JSON.stringify({ text, voice, provider, format }),
       });
       if (!res.ok) {
-        // TTS not configured or upstream provider failed — silent.
+        // TTS not configured or upstream provider failed.
+        const errBody = await res.text().catch(() => "");
+        let msg = `TTS 服务返回错误 (${res.status})`;
+        if (errBody.includes("not set") || errBody.includes("not configured")) {
+          msg = "TTS 未配置：请在设置中填入 OPENAI_API_KEY 或 ELEVENLABS_API_KEY";
+        } else if (res.status >= 500) {
+          msg = "TTS 服务暂时不可用";
+        }
+        setError(msg);
         setLoading(false);
         return;
       }
@@ -83,8 +93,7 @@ export function VoicePlayer({
         format?: string;
       };
       if (!data.audio_base64) {
-        // No audio bytes (server returns empty payload when no
-        // provider is configured). Silent — UI just doesn't react.
+        setError("TTS 返回空音频，请检查 API Key 配置");
         setLoading(false);
         return;
       }
@@ -103,7 +112,7 @@ export function VoicePlayer({
         setPlaying(true);
       }
     } catch {
-      // network error — silent
+      setError("无法连接 TTS 服务");
     } finally {
       setLoading(false);
     }
@@ -112,29 +121,38 @@ export function VoicePlayer({
   if (hidden || !text) return null;
 
   return (
-    <button
-      type="button"
-      onClick={playing ? stop : play}
-      title={playing ? "停止播放" : "朗读回复"}
-      className={`p-1 rounded transition-colors ${
-        playing
-          ? "bg-accent text-white"
-          : "text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
-      }`}
-    >
-      {playing ? <Square size={12} /> : <Volume2 size={12} />}
-      {loading && <span className="ml-1 text-[10px]">…</span>}
-      <audio
-        ref={audioRef}
-        onEnded={() => {
-          setPlaying(false);
-          if (objectUrlRef.current) {
-            URL.revokeObjectURL(objectUrlRef.current);
-            objectUrlRef.current = null;
-          }
-        }}
-        onError={() => setPlaying(false)}
-      />
-    </button>
+    <div className="relative inline-flex">
+      <button
+        type="button"
+        onClick={playing ? stop : play}
+        title={error || (playing ? "停止播放" : "朗读回复")}
+        className={`p-1 rounded transition-colors ${
+          error
+            ? "text-warning hover:text-warning"
+            : playing
+              ? "bg-accent text-white"
+              : "text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
+        }`}
+      >
+        {playing ? <Square size={12} /> : <Volume2 size={12} />}
+        {loading && <span className="ml-1 text-[10px]">…</span>}
+        <audio
+          ref={audioRef}
+          onEnded={() => {
+            setPlaying(false);
+            if (objectUrlRef.current) {
+              URL.revokeObjectURL(objectUrlRef.current);
+              objectUrlRef.current = null;
+            }
+          }}
+          onError={() => setPlaying(false)}
+        />
+      </button>
+      {error && (
+        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 whitespace-nowrap rounded bg-error px-2 py-0.5 text-[9px] text-white opacity-90 pointer-events-none z-10">
+          {error}
+        </span>
+      )}
+    </div>
   );
 }

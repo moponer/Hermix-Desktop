@@ -220,15 +220,38 @@ const TEMPLATES: AgentTemplate[] = [
 ];
 
 /* ════════════════════════════════════════════════════════════════
-   Storage helpers
+   Storage helpers — async API with localStorage fallback
    ════════════════════════════════════════════════════════════════ */
 
-function loadAgents(): AgentPersona[] {
+const API_BASE = "http://127.0.0.1:3000";
+
+/** Load agents from the backend API, falling back to localStorage
+ *  if the server is unreachable (e.g. running in standalone mode). */
+async function loadAgentsAsync(): Promise<AgentPersona[]> {
+  try {
+    const resp = await fetch(`${API_BASE}/api/agents/custom`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json() as { agents: AgentPersona[] };
+    if (!data.agents || !Array.isArray(data.agents)) return [];
+    // Migrate old records to new shape
+    return data.agents.map((a) => ({
+      ...a,
+      colorTheme: a.colorTheme || pickColor(a.name || a.id),
+      usageCount: a.usageCount ?? 0,
+      lastUsedAt: a.lastUsedAt ?? a.updatedAt ?? a.createdAt ?? Date.now(),
+    }));
+  } catch {
+    // Fallback to localStorage
+    return loadAgentsLocal();
+  }
+}
+
+/** Synchronous localStorage-only loader (used as fallback and for initial state). */
+function loadAgentsLocal(): AgentPersona[] {
   try {
     const raw = storage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as AgentPersona[];
-    // Migrate old records to new shape
     return parsed.map((a) => ({
       ...a,
       colorTheme: a.colorTheme || pickColor(a.name || a.id),
@@ -240,7 +263,37 @@ function loadAgents(): AgentPersona[] {
   }
 }
 
-function saveAgents(agents: AgentPersona[]) {
+/** Save a single agent to the backend (upsert). Falls back to
+ *  localStorage batch-save if the server is unreachable. */
+async function saveAgentAsync(agent: AgentPersona): Promise<void> {
+  try {
+    const resp = await fetch(`${API_BASE}/api/agents/custom`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(agent),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  } catch {
+    // Fallback: save entire list to localStorage
+    saveAgentsLocal([agent]);
+  }
+}
+
+/** Delete a single agent from the backend. Falls back to
+ *  localStorage batch-save if the server is unreachable. */
+async function deleteAgentAsync(id: string, remaining: AgentPersona[]): Promise<void> {
+  try {
+    const resp = await fetch(`${API_BASE}/api/agents/custom/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  } catch {
+    saveAgentsLocal(remaining);
+  }
+}
+
+/** Batch-save to localStorage (fallback path). */
+function saveAgentsLocal(agents: AgentPersona[]) {
   try { storage.setItem(STORAGE_KEY, JSON.stringify(agents)); } catch {}
 }
 
@@ -1465,13 +1518,20 @@ export function AgentsView({
   onAfterHire,
 }: AgentsViewProps = {}) {
   const [tab, setTab] = useState<AgentsTab>(initialTab);
-  const [agents, setAgents] = useState<AgentPersona[]>(loadAgents);
+  const [agents, setAgents] = useState<AgentPersona[]>(loadAgentsLocal);
   const [mode, setMode] = useState<"list" | "create" | "generate">("list");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<"recent" | "popular" | "name">("recent");
 
-  useEffect(() => { saveAgents(agents); }, [agents]);
+  // Load agents from backend API on mount (falls back to localStorage)
+  useEffect(() => {
+    loadAgentsAsync().then(setAgents);
+  }, []);
+
+  // Persist to localStorage as a sync cache (the backend save happens
+  // in the individual handlers below)
+  useEffect(() => { saveAgentsLocal(agents); }, [agents]);
 
   /** 切 tab 时如果向导/表单开着,自动重置 — 否则用户切到"内置专家"再切回"我的专家"还会被向导锁住 */
   const switchTab = (newTab: AgentsTab) => {
@@ -1487,15 +1547,19 @@ export function AgentsView({
     const now = Date.now();
     const systemPrompt = data.systemPrompt || buildSystemPrompt(data);
     if (editingId) {
-      setAgents((prev) => prev.map((a) =>
+      const updated = agents.map((a) =>
         a.id === editingId
           ? { ...a, ...data, systemPrompt, colorTheme: data.colorTheme || a.colorTheme, updatedAt: now }
           : a
-      ));
+      );
+      setAgents(updated);
+      // Persist to backend
+      const agent = updated.find((a) => a.id === editingId);
+      if (agent) saveAgentAsync(agent);
       setEditingId(null);
     } else {
       const newAgent: AgentPersona = {
-        id: `agent-${Date.now()}`,
+        id: `agent-${now}`,
         name: data.name || "未命名专家",
         avatar: data.avatar || "🤖",
         role: data.role || "AI 助手",
@@ -1509,19 +1573,22 @@ export function AgentsView({
         systemPrompt,
         model: data.model,
         sampleDialog: data.sampleDialog,
-        colorTheme: data.colorTheme || pickColor(data.name || `agent-${Date.now()}`),
+        colorTheme: data.colorTheme || pickColor(data.name || `agent-${now}`),
         usageCount: 0,
         lastUsedAt: now,
         createdAt: now,
         updatedAt: now,
       };
       setAgents((prev) => [...prev, newAgent]);
+      saveAgentAsync(newAgent);
     }
     setMode("list");
   };
 
   const handleDelete = (id: string) => {
-    setAgents((prev) => prev.filter((a) => a.id !== id));
+    const remaining = agents.filter((a) => a.id !== id);
+    setAgents(remaining);
+    deleteAgentAsync(id, remaining);
   };
 
   const handleEdit = (id: string) => {
@@ -1531,9 +1598,12 @@ export function AgentsView({
 
   const handleUse = (id: string) => {
     // Increment usage + stamp lastUsedAt
-    setAgents((prev) => prev.map((a) =>
+    const updated = agents.map((a) =>
       a.id === id ? { ...a, usageCount: a.usageCount + 1, lastUsedAt: Date.now() } : a
-    ));
+    );
+    setAgents(updated);
+    const agent = updated.find((a) => a.id === id);
+    if (agent) saveAgentAsync(agent);
     onAfterHire?.();
   };
 
