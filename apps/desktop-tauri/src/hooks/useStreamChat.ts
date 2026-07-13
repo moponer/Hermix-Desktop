@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { resolveWebSocketUrl } from "../api";
+import { diagLog, diagWarn, nextDiagId } from "../lib/diag";
 import type { AcuiDirective } from "../acui/types";
 
 /**
@@ -410,14 +411,14 @@ export function useStreamChat() {
         const DEDUP_WINDOW_MS = 15_000;
         const contentHash = `${sessionId}:${content}`;
         const now = Date.now();
-        const __sendDiagId = ((globalThis as any).__sendDiagId || 0);
-        console.log(`[diag #${__sendDiagId}] sendStream ENTER`, { sessionId, content, lastSend: lastSendRef.current, now });
+        const __sendDiagId = nextDiagId();
+        diagLog(`[diag #${__sendDiagId}] sendStream ENTER`, { sessionId, content, lastSend: lastSendRef.current, now });
         if (
           lastSendRef.current &&
           lastSendRef.current.hash === contentHash &&
           now - lastSendRef.current.ts < DEDUP_WINDOW_MS
         ) {
-          console.warn(
+          diagWarn(
             `[useStreamChat #${__sendDiagId}] dedup: same content sent ${now - lastSendRef.current.ts}ms ago, skipping`,
           );
           resolve("");
@@ -670,9 +671,9 @@ export function useStreamChat() {
                 }
                 ws.send(JSON.stringify(payload));
                 sentToServerRef.current = true;
-                const __sendDiagId2 = ((globalThis as any).__sendDiagId = ((globalThis as any).__sendDiagId || 0) + 1);
+                const __sendDiagId2 = nextDiagId();
                 const __sendDiagTs2 = performance.now().toFixed(1);
-                console.log(`[diag #${__sendDiagId2} @${__sendDiagTs2}ms] WS connected → ws.send(payload) FIRED, retryCount=${retryCount}, textLen=${content.length}, sessionId=${sessionId}`);
+                diagLog(`[diag #${__sendDiagId2} @${__sendDiagTs2}ms] WS connected → ws.send(payload) FIRED, retryCount=${retryCount}, textLen=${content.length}, sessionId=${sessionId}`);
                 updatePhase("streaming");
                 armTimeouts();
 
@@ -1211,8 +1212,8 @@ export function useStreamChat() {
               if (retryCount < MAX_RETRIES) {
                 retryCount++;
                 const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-                const __sendDiagId3 = ((globalThis as any).__sendDiagId || 0);
-                console.log(`[diag #${__sendDiagId3}] onerror → retry ${retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
+                const __sendDiagId3 = nextDiagId();
+                diagLog(`[diag #${__sendDiagId3}] onerror → retry ${retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
                 updatePhase("reconnecting");
                 wsRef.current = null;
                 setTimeout(doConnect, delay);
@@ -1251,8 +1252,8 @@ export function useStreamChat() {
                 if (retryCount < MAX_RETRIES) {
                   retryCount++;
                   const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
-                  const __sendDiagId4 = ((globalThis as any).__sendDiagId || 0);
-                  console.log(`[diag #${__sendDiagId4}] onclose (no content) → retry ${retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
+                  const __sendDiagId4 = nextDiagId();
+                  diagLog(`[diag #${__sendDiagId4}] onclose (no content) → retry ${retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
                   updatePhase("reconnecting");
                   wsRef.current = null;
                   setTimeout(doConnect, delay);

@@ -16,6 +16,7 @@ import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
+import { diagLog, nextDiagId } from "./lib/diag";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useAcuiState, type AcuiDecisionBus } from "./acui";
 import type { Artifact } from "./utils/artifacts";
@@ -1145,9 +1146,9 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     // itself was called 1x or 10x. Pair with the timestamp so we can
     // distinguish "10 calls in 50ms" (retry storm) from "10 calls in 60s"
     // (user actually pressed Enter 10x).
-    const __diagId = ((globalThis as any).__sendDiagId = ((globalThis as any).__sendDiagId || 0) + 1);
+    const __diagId = nextDiagId();
     const __diagTs = performance.now().toFixed(1);
-    console.log(`[diag #${__diagId} @${__diagTs}ms] handleSendMessage ENTER`, { content, streamingSessionId, queueLen: messageQueue.length });
+    diagLog(`[diag #${__diagId} @${__diagTs}ms] handleSendMessage ENTER`, { content, streamingSessionId, queueLen: messageQueue.length });
     // Note: console.trace removed (was just stack; the 1-line call above is enough).
     // Clear any previous stream error — the user is starting a new turn,
     // so the old error is stale.  If this turn also fails the error
@@ -1969,10 +1970,10 @@ streamPhaseRef.current = null;
   useEffect(() => {
     if (!streaming && messageQueue.length > 0) {
       const next = messageQueue[0];
-      console.log("[diag] queue drain: firing", { content: next, queueLen: messageQueue.length, streaming });
+      diagLog("[diag] queue drain: firing", { content: next, queueLen: messageQueue.length, streaming });
       setMessageQueue(prev => prev.slice(1));
       handleSendMessage(next).catch((_cause) => {
-        console.log("[diag] queue drain: handleSendMessage failed, re-enqueueing", { next, cause: _cause instanceof Error ? _cause.message : String(_cause) });
+        diagLog("[diag] queue drain: handleSendMessage failed, re-enqueueing", { next, cause: _cause instanceof Error ? _cause.message : String(_cause) });
         // Limit retries: track per-message so a permanently failing
         // backend doesn't spin forever.
         const key = next.slice(0, 60); // first 60 chars as key

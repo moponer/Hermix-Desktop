@@ -6,15 +6,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { storage, STORAGE_KEYS, sessionKey } from "./storageCompat";
 
-function ls(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (let i = 0; i < window.localStorage.length; i++) {
-    const k = window.localStorage.key(i);
-    if (k) out[k] = window.localStorage.getItem(k) ?? "";
-  }
-  return out;
-}
-
 beforeEach(() => {
   window.localStorage.clear();
   window.localStorage.setItem("hermix.compat.migrated", "1"); // suppress real migration
