@@ -234,3 +234,62 @@ pub(crate) fn cap_delegates(max_concurrent_delegates: u32, tool_calls: &mut Vec<
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use hermix_core::{FunctionCall, ToolCall};
+
+    /// Stable, canonical key for cross-turn tool-call deduplication.
+    ///
+    /// Moved to `#[cfg(test)]` — the cross-turn dedup feature was removed
+    /// (2026-07-09), so this function only lives on for its test.
+    fn tool_call_dedup_key(tc: &ToolCall) -> String {
+        let name = tc.function.name.to_lowercase();
+        let args = tc.function.arguments.trim();
+        let canonical = serde_json::from_str::<serde_json::Value>(args)
+            .ok()
+            .and_then(|v| serde_json::to_string(&v).ok())
+            .unwrap_or_else(|| args.to_string());
+        format!("{}:{}", name, canonical)
+    }
+
+    fn tc(name: &str, args: &str) -> ToolCall {
+        ToolCall {
+            id: format!("call-{}", name),
+            function: FunctionCall {
+                name: name.to_string(),
+                arguments: args.to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn dedup_key_is_canonical_and_case_insensitive() {
+        // Reordered JSON keys must collide (canonical sort).
+        let a = tc("fetch_webpage", r#"{"url":"https://x","mode":"fast"}"#);
+        let b = tc("fetch_webpage", r#"{"mode":"fast","url":"https://x"}"#);
+        assert_eq!(
+            tool_call_dedup_key(&a),
+            tool_call_dedup_key(&b),
+            "reordered JSON args should produce the same dedup key"
+        );
+
+        // Different casing on the tool name must collide.
+        let c = tc("FetchWebpage", r#"{"url":"https://x"}"#);
+        let d = tc("fetchWebpage", r#"{"url":"https://x"}"#);
+        assert_eq!(
+            tool_call_dedup_key(&c),
+            tool_call_dedup_key(&d),
+            "tool name casing should not affect the dedup key"
+        );
+
+        // Different args must NOT collide.
+        let e = tc("fetch_webpage", r#"{"url":"https://x"}"#);
+        let f = tc("fetch_webpage", r#"{"url":"https://y"}"#);
+        assert_ne!(
+            tool_call_dedup_key(&e),
+            tool_call_dedup_key(&f),
+            "different URLs must produce distinct dedup keys"
+        );
+    }
+}

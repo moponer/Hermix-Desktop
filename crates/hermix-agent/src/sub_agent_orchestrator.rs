@@ -80,6 +80,12 @@ pub struct SubAgentLineage {
     pub estimated_cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// P6-4: Role of the sub-agent.
+    #[serde(default)]
+    pub role: SubAgentRole,
+    /// P6-4: Parent task ID for linking sub-agents to the task tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_task_id: Option<String>,
 }
 
 /// Terminal state vocabulary for sub-agent lineage records.
@@ -95,6 +101,100 @@ pub enum SubAgentStatus {
 
 /// Default max iterations for sub-agent delegation (Hermes Agent parity).
 pub const DEFAULT_DELEGATION_MAX_ITERATIONS: u32 = 50;
+
+/// Role for a sub-agent. Determines the toolset and system prompt.
+///
+/// (Phase 6 — P6-4)
+///
+/// - **General** — full toolset, general-purpose task execution.
+///   Suitable for most delegation scenarios.
+/// - **Explore** — read-only toolset. Used for information gathering,
+///   code exploration, web search. Cannot modify files or execute
+///   shell commands that write.
+/// - **Plan** — planning toolset. Used for producing plans and
+///   strategies. Has access to read tools + todo/task tools but
+///   not write tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SubAgentRole {
+    /// General-purpose sub-agent with full tool access.
+    #[default]
+    General,
+    /// Read-only explorer — information gathering, code exploration.
+    Explore,
+    /// Planner — produces plans, has read + task/todo tools.
+    Plan,
+}
+
+impl SubAgentRole {
+    /// Returns the toolset restriction for this role.
+    /// `None` means no restriction (full toolset).
+    /// `Some(set)` means only tools in the set are available.
+    pub fn allowed_tools(&self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::General => None,
+            Self::Explore => Some(&EXPLORE_ROLE_TOOLS),
+            Self::Plan => Some(&PLAN_ROLE_TOOLS),
+        }
+    }
+
+    /// Returns a human-readable description of the role.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::General => "general-purpose sub-agent with full tool access",
+            Self::Explore => "read-only explorer for information gathering",
+            Self::Plan => "planner that produces plans and strategies",
+        }
+    }
+}
+
+/// Tools available to the Explore role (read-only).
+const EXPLORE_ROLE_TOOLS: &[&str] = &[
+    "read_file",
+    "list_files",
+    "search_files",
+    "web_search",
+    "web_extract",
+    "url_safety",
+    "session_search",
+    "memory_search",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_scroll",
+    "browser_back",
+    "browser_press",
+    "browser_get_images",
+    "browser_vision",
+    "browser_console",
+    "vision_analyze",
+    "tool_search",
+    "tool_describe",
+    "tool_call",
+];
+
+/// Tools available to the Plan role (read + planning).
+const PLAN_ROLE_TOOLS: &[&str] = &[
+    "read_file",
+    "list_files",
+    "search_files",
+    "web_search",
+    "web_extract",
+    "url_safety",
+    "session_search",
+    "memory_search",
+    "memory_store",
+    "todo",
+    "task_create",
+    "task_update",
+    "task_list",
+    "task_get",
+    "clarify",
+    "tool_search",
+    "tool_describe",
+    "tool_call",
+];
 
 /// Parameters forwarded by the `delegate_task` tool invocation.
 #[derive(Debug, Clone, Default)]
@@ -113,6 +213,12 @@ pub struct SubAgentRequest {
     /// When set, overrides the derived max_turns from parent budget.
     /// Default: `DEFAULT_DELEGATION_MAX_ITERATIONS` (50).
     pub max_iterations: Option<u32>,
+    /// P6-4: Role of the sub-agent. Determines the toolset and system prompt.
+    /// Defaults to `General` (full tool access).
+    pub role: SubAgentRole,
+    /// P6-4: Parent task ID for linking sub-agents to the task tree.
+    /// When set, the sub-agent's results are attributed to this task.
+    pub parent_task_id: Option<String>,
 }
 
 /// Configuration for [`SubAgentOrchestrator`].
@@ -196,6 +302,8 @@ impl SubAgentOrchestrator {
             completion_tokens: None,
             estimated_cost_usd: None,
             error: None,
+            role: req.role,
+            parent_task_id: req.parent_task_id.clone(),
         };
 
         // Best-effort lineage persistence — failures must never break delegation.
@@ -311,6 +419,16 @@ impl SubAgentOrchestrator {
         // fence.
         let child_tool_registry = tool_registry
             .without_tools(crate::sub_agent_safety::BLOCKED_TOOLS_FOR_SUBAGENT.iter().copied());
+
+        // P6-4: Apply role-based toolset restriction. For Explore and Plan
+        // roles, strip all tools that aren't in the role's allowed list.
+        // General role has no restriction (beyond the blocklist above).
+        let child_tool_registry = if let Some(allowed) = req.role.allowed_tools() {
+            let allowed_set: std::collections::HashSet<&str> = allowed.iter().copied().collect();
+            child_tool_registry.retain_only(|name| allowed_set.contains(name))
+        } else {
+            child_tool_registry
+        };
         let join = tokio::spawn(async move {
             let child_agent = AgentLoop::with_interrupt(
                 child_config,

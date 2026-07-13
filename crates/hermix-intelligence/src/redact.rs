@@ -193,6 +193,7 @@ impl Redactor {
             // drop the timeline rather than leak it. Future: add
             // a deep redactor pass.
             execution_timeline: None,
+            ephemeral: message.ephemeral,
         }
     }
 

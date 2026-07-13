@@ -273,8 +273,15 @@ export default function App() {
     setPageRaw(p);
     if (p !== "chat") setRightOpen(false);
   }, []);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [messageQueue, setMessageQueue] = useState<string[]>([]);
+const [sessions, setSessions] = useState<Session[]>([]);
+const [messageQueue, setMessageQueue] = useState<string[]>([]);
+// P0-9: External file attachment from right-sidebar “加入对话” context menu.
+const [pendingFileAttachment, setPendingFileAttachment] = useState<string | null>(null);
+const handleAddFileToChat = useCallback((path: string) => {
+setPendingFileAttachment(path);
+// Ensure we're on the chat page so the user sees the attachment chip.
+setPage("chat");
+}, []);
   // Queue mutation handlers — kept memoized so ChatComposer doesn't
   // re-render on every keystroke in the main textarea.
   // 2026-06-28: added per-item remove / edit / send-now callbacks
@@ -505,7 +512,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     max: RIGHT_MAX,
     side: "right",
   });
-  const { streaming, streamingSessionId, streamingStatus, compactionStatus, send: sendStream, cancel: cancelStream } = useStreamChat();
+  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, send: sendStream, cancel: cancelStream } = useStreamChat();
 
   // Per-send phase tracking. Set by the `onPhaseChange` callback in
   // `handleSendMessage` and scoped to the current `sessionId` so the
@@ -687,6 +694,24 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, []);
+
+  // P1-T4 (Frontend Audit 2026-07-13): clear `todoGroups` when the
+  // user switches sessions. Without this, todos from the previous
+  // session leak into the new session's chat (the WS listener
+  // already filters per-session, but stale state from a same-tab
+  // session switch would persist). The new session is re-hydrated
+  // by the next `todo_snapshot` WS event (P0-T2).
+  //
+  // Note: this only triggers when `activeSessionId` actually
+  // changes, not on every render. The `todoGroupsByIdRef` mirror is
+  // cleared in the same pass so the dedup set never sees ghosts.
+  const prevActiveSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevActiveSessionIdRef.current === activeSessionId) return;
+    prevActiveSessionIdRef.current = activeSessionId;
+    todoGroupsByIdRef.current.clear();
+    setTodoGroups([]);
+  }, [activeSessionId]);
 
   // Viewport-aware layout: 三列共存阈值从 state 读取, 不再硬编码 1140.
   //
@@ -1745,6 +1770,43 @@ streamPhaseRef.current = null;
                 next[i] = updated;
                 todoGroupsByIdRef.current.set(updated.groupId, updated);
               };
+              // P0-T2 (Frontend Audit 2026-07-13): server-sent
+              // `TodoSnapshot` rebuilds groups from authoritative
+              // items, preserving first-seen order within each group.
+              // Items with no `group_id` (legacy / pre-v2) collapse
+              // into a `_legacy` bucket so they still render.
+              if (change.kind === "snapshot") {
+                todoGroupsByIdRef.current.clear();
+                next.length = 0;
+                const order: string[] = [];
+                const bucket = new Map<string, TodoSnapshotItem[]>();
+                for (const it of change.items) {
+                  const gid = it.group_id || "_legacy";
+                  if (!bucket.has(gid)) {
+                    bucket.set(gid, []);
+                    order.push(gid);
+                  }
+                  bucket.get(gid)!.push(it);
+                }
+                for (const gid of order) {
+                  const items = bucket.get(gid)!;
+                  const itemsById: Record<string, TodoSnapshotItem> = {};
+                  let title: string | null = null;
+                  for (const it of items) {
+                    itemsById[it.id] = it;
+                    if (!title && it.group_title) title = it.group_title;
+                  }
+                  const g: TodoGroup = {
+                    groupId: gid,
+                    groupTitle: title,
+                    anchorMessageId: null,
+                    itemsById,
+                  };
+                  todoGroupsByIdRef.current.set(gid, g);
+                  next.push(g);
+                }
+                return next;
+              }
               if (change.kind === "group_started") {
                 // Ignore duplicates for the same group_id.
                 if (todoGroupsByIdRef.current.has(change.groupId)) {
@@ -2138,6 +2200,7 @@ streamPhaseRef.current = null;
               streamingPhase={streamPhase ?? (isStreamingActiveSession ? "streaming" : null)}
               streamingStatus={streamingStatus}
               compactionStatus={compactionStatus}
+contextUsage={contextUsage}
               pendingToolsCount={pendingToolsCount}
               environmentLabel="本地Hermix"
               isSandbox={false}
@@ -2171,6 +2234,8 @@ streamPhaseRef.current = null;
               onToggleRight={handleToggleRight}
               onEnterWelcome={handleEnterWelcome}
               onPathClick={handlePathClick}
+              pendingFileAttachment={pendingFileAttachment}
+              onConsumeFileAttachment={() => setPendingFileAttachment(null)}
             />
           )}
           {page === "search" && <SearchView sessions={sessions} onSelectSession={handleSelectSession} />}
@@ -2242,6 +2307,7 @@ streamPhaseRef.current = null;
               workspaceRoot={workspaceRoot}
               activeTab={rightTab}
               onTabChange={setRightTab}
+              onAddFileToChat={handleAddFileToChat}
             />
           </div>
         )}

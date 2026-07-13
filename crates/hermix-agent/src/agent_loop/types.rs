@@ -124,6 +124,106 @@ pub(crate) struct LoopState {
     /// Phase 5 (2026-07-03): extracted from 3 inline fields to consolidate
     /// the throttle/cooldown rules in [`ContextPressureMonitor::should_emit_warning`].
     pub(crate) context_pressure: ContextPressureMonitor,
+    /// 2026-07-09 (AL-8): convergence detector for no-progress / error
+    /// loop / similar content detection. Goes beyond simple tool dedup
+    /// to catch agents that are "working" (calling different tools) but
+    /// not making real progress.
+    pub(crate) convergence_detector: crate::convergence_detector::ConvergenceDetector,
+}
+
+// ---------------------------------------------------------------------------
+// Explicit state-machine phases (AL-6, 2026-07-09)
+// ---------------------------------------------------------------------------
+
+/// Explicit representation of the Agent Loop's state machine.
+/// Each variant maps to a distinct phase in the perception-decision-action
+/// cycle. Previously these phases were implicit — buried in `if`/`else`,
+/// `match`, `continue`, and `return` statements scattered across ~1,700
+/// lines of `run()` + `run_stream()`. Making them explicit serves three
+/// purposes:
+///
+/// 1. **Documentation** — a new reader can see all possible states at a glance.
+/// 2. **Observability** — emitted via `tracing` so dashboards can show
+///    which phase each turn is in.
+/// 3. **Future unification** — when `run()` and `run_stream()` merge into
+///    `run_engine`, this enum becomes the match target of the single loop.
+///
+/// The phases flow in order, but some can skip (e.g. `PostLlmCall` →
+/// `Finalize` if no tool calls) or loop back (`PostToolExec` → `PreTurnSetup`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub(crate) enum LoopPhase {
+    /// Initial setup: sanitize messages, route tools, build system prompt,
+    /// hydrate todo store, prefetch memory. Executed once before the loop.
+    Init,
+    /// Start of each turn: interrupt check, max-turns guard, turn counter,
+    /// OAuth refresh, checkpoint, memory sync, hook invocation.
+    PreTurnSetup,
+    /// Pre-LLM prefetch: intent classification, safe tool dispatch,
+    /// thinking-mode selection.
+    Prefetch,
+    /// LLM API call with transport retry + semantic empty/thinking recovery.
+    /// Contains the inner retry loop (`classify_post_llm_response`).
+    LlmCall,
+    /// Post-LLM response processing: cost guard, finalize/continue decision,
+    /// assistant message persistence.
+    PostLlmCall,
+    /// Tool call validation: invalid name check, invalid JSON check,
+    /// argument normalization, cross-turn dedup split.
+    ToolValidation,
+    /// Tool execution: dispatch to tool backends, collect results.
+    ToolExecution,
+    /// Post-tool iteration: hooks, file-change events, budget enforcement,
+    /// context pressure, auto-compression.
+    PostToolExec,
+    /// Session finalized: persist session, emit terminal events,
+    /// return `AgentResult`.
+    Finalize,
+}
+
+impl LoopPhase {
+    /// Short label for tracing spans.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Init => "init",
+            Self::PreTurnSetup => "pre_turn_setup",
+            Self::Prefetch => "prefetch",
+            Self::LlmCall => "llm_call",
+            Self::PostLlmCall => "post_llm_call",
+            Self::ToolValidation => "tool_validation",
+            Self::ToolExecution => "tool_execution",
+            Self::PostToolExec => "post_tool_exec",
+            Self::Finalize => "finalize",
+        }
+    }
+
+    /// Map this fine-grained phase to a coarse-grained orchestration
+    /// stage (P3-1). The four stages correspond to the
+    /// perception-reasoning-action-observation cycle:
+    ///
+    /// - **Perception** — Init, PreTurnSetup, Prefetch
+    /// - **Reasoning** — LlmCall, PostLlmCall
+    /// - **Action** — ToolValidation, ToolExecution
+    /// - **Observation** — PostToolExec, Finalize
+    ///
+    /// Used by `TurnReport` for observability and by the frontend
+    /// for progress display.
+    pub(crate) fn as_orchestration_stage(&self) -> crate::orchestrator::OrchestrationStage {
+        use crate::orchestrator::OrchestrationStage;
+        match self {
+            Self::Init | Self::PreTurnSetup | Self::Prefetch => {
+                OrchestrationStage::Perception
+            }
+            Self::LlmCall | Self::PostLlmCall => OrchestrationStage::Reasoning,
+            Self::ToolValidation | Self::ToolExecution => OrchestrationStage::Action,
+            Self::PostToolExec | Self::Finalize => OrchestrationStage::Observation,
+        }
+    }
+}
+
+impl std::fmt::Display for LoopPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 // ---------------------------------------------------------------------------

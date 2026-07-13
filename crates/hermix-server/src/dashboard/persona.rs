@@ -130,7 +130,16 @@ fn handle_text_put(
 pub async fn get_soul(
     State(state): State<HttpServerState>,
 ) -> Result<Json<TextFileResponse>, HttpError> {
-    handle_text_get(persona_dir(&state).join("SOUL.md"))
+    let path = persona_dir(&state).join("SOUL.md");
+    if !path.exists() {
+        // 文件缺失时回退到内置中文身份,使前端首次打开即可见;用户保存即覆盖。
+        return Ok(Json(TextFileResponse {
+            path: path.to_string_lossy().into_owned(),
+            content: Some(hermix_agent::context::DEFAULT_AGENT_IDENTITY.to_string()),
+            updated_at: None,
+        }));
+    }
+    handle_text_get(path)
 }
 
 pub async fn put_soul(
@@ -192,8 +201,12 @@ pub async fn list_personalities(
 ) -> Result<Json<Vec<PersonalitySummary>>, HttpError> {
     let mut out: Vec<PersonalitySummary> = Vec::new();
 
-    // 1) Built-in personas — hard-coded; surfaced as read-only.
-    for (name, body) in BUILTIN_PERSONAS {
+    // 1) Built-in personas — single source of truth in `hermix_agent::context`; surfaced as read-only.
+    for (name, body) in [
+        ("coder", hermix_agent::context::BUILTIN_PERSONALITY_CODER),
+        ("writer", hermix_agent::context::BUILTIN_PERSONALITY_WRITER),
+        ("analyst", hermix_agent::context::BUILTIN_PERSONALITY_ANALYST),
+    ] {
         out.push(PersonalitySummary {
             name: name.to_string(),
             summary: body.lines().find(|l| !l.trim().is_empty()).map(|s| s.trim().to_string()),
@@ -334,41 +347,19 @@ fn is_safe_slug(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-// ── BUILT-IN PERSONALITY MIRROR ───────────────────────────────────
+// ── BUILT-IN PERSONALITIES (single source of truth) ──────────────
 //
-// Mirrors the `BUILTIN_PERSONALITY_*` constants in
-// `crates/hermes-agent/src/context.rs`. The agent's runtime reads
-// those constants directly via `resolve_personality`; we duplicate
-// them here so the dashboard can render the catalog and content.
-// When you edit one, edit both.
-
-const BUILTIN_PERSONA_CODER: &str = "You are operating in the `coder` persona.\n\
-Focus on correctness, idiomatic style, and minimal surface area.\n\
-Prefer simple, debuggable solutions over clever ones; explain trade-offs only when the choice is non-obvious.\n\
-Format code with the project's existing style; never introduce new dependencies without flagging the cost.\n\
-When you need to verify behavior, run the code or call the relevant tool — don't guess from memory.";
-
-const BUILTIN_PERSONA_WRITER: &str = "You are operating in the `writer` persona.\n\
-Prioritize clarity, structure, and audience-aware phrasing.\n\
-Use concise sections, strong topic sentences, and remove unnecessary repetition.\n\
-When asked to revise, preserve meaning while improving readability and flow.";
-
-const BUILTIN_PERSONA_ANALYST: &str = "You are operating in the `analyst` persona.\n\
-Prioritize evidence, explicit reasoning, and clear uncertainty bounds.\n\
-Break complex problems into assumptions, observations, and conclusions.\n\
-When data is missing, state what is unknown and propose the next highest-value check.";
-
-const BUILTIN_PERSONAS: &[(&str, &str)] = &[
-    ("coder", BUILTIN_PERSONA_CODER),
-    ("writer", BUILTIN_PERSONA_WRITER),
-    ("analyst", BUILTIN_PERSONA_ANALYST),
-];
+// 规范定义位于 `hermix_agent::context`(运行时经 `resolve_personality`
+// 注入的同一组常量)。此处直接复用,确保前端目录展示与 agent 实际运行的
+// 系统提示完全一致,不再有双份常量漂移。
 
 fn builtin_personality_body(slug: &str) -> Option<&'static str> {
-    BUILTIN_PERSONAS
-        .iter()
-        .find(|(name, _)| *name == slug)
-        .map(|(_, body)| *body)
+    match slug {
+        "coder" => Some(hermix_agent::context::BUILTIN_PERSONALITY_CODER),
+        "writer" => Some(hermix_agent::context::BUILTIN_PERSONALITY_WRITER),
+        "analyst" => Some(hermix_agent::context::BUILTIN_PERSONALITY_ANALYST),
+        _ => None,
+    }
 }
 
 // ── PERSONA OVERRIDES (system_prompt + preferences) ──────────────

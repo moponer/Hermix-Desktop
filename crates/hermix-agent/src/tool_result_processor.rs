@@ -94,3 +94,42 @@ pub fn push_tool_result(
     let filtered = apply_terminal_filter(content, tool_name, tool_calls, tool_call_id);
     ctx.add_message(Message::tool_result(tool_call_id, &filtered, tool_name));
 }
+
+/// v34 (2026-07-09): push a `tool_result` message that exists **only**
+/// in the in-memory context — it is never persisted to the DB.
+/// Used by the replay path where the tool wasn't actually re-executed;
+/// the message is needed to satisfy the provider API's `tool_call_id`
+/// pairing requirement, but the original execution's `tool_result` is
+/// already persisted. Creating a second non-ephemeral row would produce
+/// duplicate cards on the frontend after a session reload.
+///
+/// v35 (2026-07-09): the content is prefixed with a `[CACHED]` marker
+/// so the LLM can clearly see this is a replay of a previous call —
+/// not a new execution. Without this marker, the LLM has no way to
+/// distinguish a fresh tool result from a cached one, and may re-issue
+/// the same call in the next turn because it thinks the tool hasn't
+/// been called yet.
+pub fn push_ephemeral_tool_result(
+    ctx: &mut ContextManager,
+    tool_calls: &[ToolCall],
+    tool_call_id: &str,
+    content: &str,
+) {
+    let tool_name = tool_calls
+        .iter()
+        .find(|tc| tc.id == tool_call_id)
+        .map(|tc| tc.function.name.as_str());
+
+    let filtered = apply_terminal_filter(content, tool_name, tool_calls, tool_call_id);
+    // Prefix with [CACHED] so the LLM knows this is a replay, not a
+    // fresh execution. This is the root-cause fix for the "LLM
+    // re-issues the same tool call" bug — without this marker, the
+    // LLM sees identical tool_result content and cannot tell whether
+    // it already ran this call or not, especially after context
+    // compression has replaced the original tool_result with a
+    // summary.
+    let cached_content = format!("[CACHED — this tool was already executed in a previous turn; do not call it again with the same arguments]\n{filtered}");
+    let mut msg = Message::tool_result(tool_call_id, &cached_content, tool_name);
+    msg.ephemeral = true;
+    ctx.add_message(msg);
+}

@@ -396,6 +396,7 @@ mod tests {
                         reasoning_content: None,
                         cache_control: None,
                         execution_timeline: None,
+                        ephemeral: false,
                     },
                     finish_reason: Some("stop".into()),
                     model: model.unwrap_or("test").to_string(),
@@ -434,6 +435,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 

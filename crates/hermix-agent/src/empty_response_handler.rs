@@ -1,128 +1,124 @@
 //! Protocol fallback single point (C2 refactor).
 //!
-//! ## Why this exists
+//! ## Design philosophy (revised 2026-07-09)
 //!
-//! Before C2, the "no tool calls" branch in both `run_blocking` and `run`
-//! open-coded four overlapping decisions inline:
+//! The normal flow is simple:
+//! 1. LLM thinks → `</think>` goes to collapsible block in the UI
+//! 2. LLM outputs visible text → rendered as Markdown for the user
+//! 3. LLM calls tools → results go into context → next turn LLM naturally summarizes
 //!
-//! 1. **Codex ack continuation** — when running on the Codex Responses API
-//!    and the assistant produced a planning/ack reply, inject a
-//!    `[System: Continue now …]` user message and re-ask the LLM.
-//! 2. **Autonomous-mode nudge** — when `autonomous_mode = true` and the LLM
-//!    "stopped" mid-task without using a tool, push it back into action with
-//!    a system message.
-//! 3. **Patch last assistant content** — when the current turn's assistant
-//!    message has no visible text after stripping think blocks, replace it
-//!    with the most recent visible text the model produced alongside tool
-//!    calls (so the user does not see a blank bubble).
-//! 4. **Finalize** — hand back control to the loop, which will run the
-//!    final memory sync and return the result.
+//! The system prompt already contains `TOOL_EXECUTION_SUMMARY_GUIDANCE`,
+//! `STOPPING_SUMMARY_GUIDANCE`, and `THINKING_DISCIPLINE_GUIDANCE` — these
+//! instruct the LLM to produce visible text after tool execution. We trust
+//! the LLM to follow these instructions.
 //!
-//! Those four decisions were copy-pasted across `run_blocking` and `run` —
-//! see the `codex_ack_continuations`/`autonomous_nudge_count` blocks at
-//! `agent_loop.rs:5347-5470` and `agent_loop.rs:6319-6470`. They are the
-//! authority for whether the loop will emit a user-visible message when
-//! the LLM produces no tool calls, so any divergence between the two
-//! paths was a silent UX bug (different code, different fallback rules).
+//! This module handles the **rare edge cases** where the LLM stops without
+//! tool calls and we need to decide what to do:
 //!
-//! `decide_empty_response` is the **single authority** for that
-//! decision. Both call sites now reduce to:
+//! 1. **Codex ack continuation** — protocol-level need for the Codex
+//!    Responses API when the model emits a planning reply.
+//! 2. **Autonomous pre-tool nudge** — when autonomous mode is on and the
+//!    LLM hasn't used any tools yet, push it to start. (One time only.)
+//! 3. **Finalize** — default: let the loop end naturally.
 //!
-//! ```ignore
-//! let outcome = decide_empty_response(input);
-//! match outcome.action { /* continue / patch / finalize */ }
-//! ```
+//! Removed (2026-07-09):
+//! - **Patch blank bubble** — previously, if the LLM produced no visible text
+//!   but a previous turn had visible text alongside tool calls, we'd reuse
+//!   that text to fill the blank bubble. This is **fabricating LLM output**.
+//! - **RetryReasoning inner-loop retry** — previously, when the LLM returned
+//!   only reasoning_content, the inner loop retried up to 2 times. This was
+//!   counterproductive: the reasoning-only message was added to context, so
+//!   the LLM saw its own "answer" and returned reasoning-only again.
 //!
-//! Unit tests in this file cover each priority branch in isolation so
-//! the rules cannot drift.
+//! Added (2026-07-09):
+//! - **Post-tool nudge** — when the LLM stops after tool execution with only
+//!   reasoning_content (no visible text, no tool calls), inject ONE system
+//!   message asking it to produce visible text or continue working. This gives
+//!   the LLM the chance to "decide" — summarize results or call more tools.
+//!   Fires once only. If the LLM still doesn't produce visible text, the
+//!   `local_agent_service` falls back to `reasoning_content` as the visible
+//!   reply so the user always sees something.
 
 use crate::python_alignment::{looks_like_codex_intermediate_ack, CODEX_CONTINUE_USER_MESSAGE};
 use crate::ApiMode;
 use hermix_core::Message;
 
-/// Hard cap on Codex-style ack continuations. The original inline code
-/// used `< 2`; preserved here so a future bump is one obvious place to
-/// change. (Both call sites had this magic number duplicated.)
+/// Hard cap on Codex-style ack continuations.
 pub const CODEX_MAX_ACK_CONTINUATIONS: u32 = 2;
 
+/// Max post-tool nudges before respecting the LLM's stop signal.
+///
+/// When the LLM stops after tool execution with only reasoning_content
+/// (no visible text, no tool calls), we inject a system nudge to push it
+/// to produce visible output or continue working. Previously this fired
+/// only once (`== 0` check), which was too aggressive: the LLM often
+/// needs 2-3 attempts to recover, especially when:
+///   - The `<think>` tag wasn't closed, routing all text to reasoning
+///   - The LLM was confused by a tool error and needs to re-orient
+///   - The LLM's first nudge response was still thinking-only
+///
+/// After `MAX_POST_TOOL_NUDGES` attempts, we respect the LLM's decision
+/// and finalize. The `local_agent_service` falls back to
+/// `reasoning_content` as the visible reply so the user always sees
+/// something.
+pub const MAX_POST_TOOL_NUDGES: u32 = 3;
+
 /// What should the agent loop do when the LLM responded with no tool
-/// calls? This enum is the entire fallback surface — there is no
-/// "default" branch at the call site.
+/// calls?
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmptyResponseAction {
     /// Inject a user message (e.g. Codex continue) and start the next
     /// turn immediately.
     ContinueWithUserMsg(String),
-    /// Inject a system nudge (autonomous mode) and start the next turn.
+    /// Inject a system nudge (autonomous mode, pre-tool) and start the
+    /// next turn.
     ContinueWithSystemNudge(String),
-    /// Replace the just-added assistant message's `content` with the
-    /// supplied fallback text (used when the LLM emitted no visible
-    /// text but previously emitted text alongside tool calls).
-    PatchLastAssistant { content: String },
     /// Hand control back to the loop, which will run the final memory
     /// sync and return the result.
     Finalize,
 }
 
-/// All inputs the fallback decision needs. The function takes everything
-/// by value/reference so the call site does not need to know which
-/// internal state the decision touches.
+/// All inputs the decision needs.
 #[derive(Debug)]
 pub struct EmptyResponseInput<'a> {
-    /// The assistant message returned by the LLM this turn.
     pub assistant_msg: &'a Message,
-    /// The API mode in use (CodexResponses needs ack continuation,
-    /// other modes skip it).
     pub api_mode: ApiMode,
-    /// Whether the agent has any tool schemas at all (a model with no
-    /// tools cannot use a "use a tool" nudge).
     pub has_tool_schemas: bool,
-    /// Whether the conversation history contains any `MessageRole::Tool`
-    /// entry (autonomous mode only nudges after at least one tool ran).
     pub history_includes_tool: bool,
-    /// The original user task (used by the Codex ack detector).
     pub task_hint: &'a str,
-    /// Current Codex ack continuation count.
     pub codex_ack_continuations: u32,
-    /// Whether autonomous mode is on (autonomous-mode nudge is opt-in).
     pub autonomous_mode: bool,
-    /// Current autonomous-mode nudge count.
     pub autonomous_nudge_count: u32,
-    /// Current turn index (1-based).
+    pub post_tool_nudge_count: u32,
     pub total_turns: u32,
-    /// Maximum allowed turns for this run.
     pub max_turns: u32,
-    /// Hard cap for the autonomous-mode nudge (typically 8).
     pub max_autonomous_nudges: u32,
-    /// Visible text saved from the most recent assistant turn that
-    /// emitted text alongside tool calls. Consumed (taken) by the
-    /// decision so the caller does not need to clear it.
-    pub last_content_with_tools: Option<String>,
-    /// Helper: is there any visible text in the assistant message
-    /// after stripping think blocks? Provided as a function pointer so
-    /// the new module does not need to depend on the agent loop's
-    /// private helper.
     pub assistant_has_visible_text: fn(&Message) -> bool,
 }
 
-/// The decision, plus the counter increments the caller should apply
-/// before re-entering the loop body.
+/// The decision, plus counter increments.
 #[derive(Debug)]
 pub struct EmptyResponseOutput {
     pub action: EmptyResponseAction,
     pub new_codex_ack_continuations: u32,
     pub new_autonomous_nudge_count: u32,
+    pub new_post_tool_nudge_count: u32,
 }
 
 /// Single authority for "what should the loop do when the LLM produces
-/// no tool calls this turn". Priority order matches the original inline
-/// code (Codex ack first, autonomous nudge second, fallback content
-/// third, finalize last).
+/// no tool calls this turn".
+///
+/// Priority order:
+/// 1. Codex ack continuation (protocol need)
+/// 2. Post-tool nudge (push LLM to produce visible text after tools — one time only)
+/// 3. Autonomous pre-tool nudge (push LLM to start working — one time only)
+/// 4. Finalize (default — trust the LLM's stop signal)
 pub fn decide_empty_response(
     input: EmptyResponseInput<'_>,
 ) -> EmptyResponseOutput {
-    // 1. Codex ack continuation — only relevant on the Codex Responses
-    //    API when the model emitted a planning/ack reply.
+    // 1. Codex ack continuation — protocol-level: the Codex Responses
+    //    API sometimes emits a planning/ack reply that needs an explicit
+    //    "continue" user message to proceed.
     if input.api_mode == ApiMode::CodexResponses
         && input.has_tool_schemas
         && input.codex_ack_continuations < CODEX_MAX_ACK_CONTINUATIONS
@@ -138,49 +134,117 @@ pub fn decide_empty_response(
             ),
             new_codex_ack_continuations: input.codex_ack_continuations + 1,
             new_autonomous_nudge_count: input.autonomous_nudge_count,
+            new_post_tool_nudge_count: input.post_tool_nudge_count,
         };
     }
 
-    // 2. Autonomous-mode nudge — re-drive the LLM if it stopped mid-task.
+    // 2. Post-tool nudge — when the LLM stops after tool execution
+    //    with only reasoning_content (no visible text, no tool calls),
+    //    give it up to MAX_POST_TOOL_NUDGES more turns to produce
+    //    visible text or call more tools. This lets the LLM "decide"
+    //    whether to summarize results or continue working — exactly
+    //    what the user expects after a tool executes.
+    //
+    //    Previously this fired only once (count == 0), which was too
+    //    aggressive: the LLM often needs 2-3 attempts to recover,
+    //    especially when the `<think>` tag wasn't closed (routing all
+    //    text to reasoning_content) or the LLM was confused by a tool
+    //    error. With only one nudge, the loop would finalize while
+    //    the LLM was still trying to work — the "agent stops without
+    //    completing the task" bug.
+    //
+    //    After MAX_POST_TOOL_NUDGES attempts, respect the LLM's
+    //    decision and finalize. The `local_agent_service` falls back
+    //    to `reasoning_content` as the visible reply.
+    if input.history_includes_tool
+        && input.has_tool_schemas
+        && (input.max_turns == 0 || input.total_turns < input.max_turns)
+        && input.post_tool_nudge_count < MAX_POST_TOOL_NUDGES
+        && !(input.assistant_has_visible_text)(input.assistant_msg)
+    {
+        let nudge = if input.post_tool_nudge_count == 0 {
+            // First nudge: gentle reminder.
+            "You just completed tool execution. Provide a visible summary of the results for the user, or continue with the next tool call if more work is needed. Do not stop without visible output."
+                .to_string()
+        } else {
+            // Subsequent nudges: more forceful, diagnose the issue.
+            // The LLM's previous response(s) had no visible text —
+            // likely because all text went to reasoning_content
+            // (e.g. an unclosed <think> tag). Tell the LLM exactly
+            // what went wrong so it can fix it.
+            format!(
+                "Your last {} response(s) produced NO visible text for the user — \
+                 only reasoning_content was generated. This usually happens when \
+                 you open a <think> tag but don't close it with </think>, causing \
+                 all text to be routed to the hidden reasoning channel. \
+                 You MUST either:\n\
+                 1. Call a tool to continue working, OR\n\
+                 2. Produce visible text (outside any <think> block) summarizing \
+                    the results so far.\n\
+                 Do NOT produce another reasoning-only response.",
+                input.post_tool_nudge_count
+            )
+        };
+        tracing::info!(
+            nudge_count = input.post_tool_nudge_count + 1,
+            max = MAX_POST_TOOL_NUDGES,
+            total_turns = input.total_turns,
+            "post_tool_nudge: injecting system nudge to push LLM for visible output"
+        );
+        return EmptyResponseOutput {
+            action: EmptyResponseAction::ContinueWithSystemNudge(nudge),
+            new_codex_ack_continuations: input.codex_ack_continuations,
+            new_autonomous_nudge_count: input.autonomous_nudge_count,
+            new_post_tool_nudge_count: input.post_tool_nudge_count + 1,
+        };
+    }
+
+    // 3. Autonomous pre-tool nudge — when autonomous mode is on and the
+    //    LLM hasn't used any tools yet, push it to start working.
+    //    Fires once only (count == 0). If the LLM still doesn't use tools
+    //    after one nudge, respect its decision and finalize.
+    //
+    //    This does NOT fire after tools have run — the post-tool nudge
+    //    above handles that case.
     if input.autonomous_mode
         && input.has_tool_schemas
-        && input.history_includes_tool
-        && input.total_turns < input.max_turns
-        && input.autonomous_nudge_count < input.max_autonomous_nudges
+        && !input.history_includes_tool
+        && (input.max_turns == 0 || input.total_turns < input.max_turns)
+        && input.autonomous_nudge_count == 0
+        && !(input.assistant_has_visible_text)(input.assistant_msg)
     {
+        let turns_info = if input.max_turns > 0 {
+            format!("{} of {} used", input.total_turns, input.max_turns)
+        } else {
+            format!("{} turns used", input.total_turns)
+        };
         let nudge = format!(
             "You have not yet completed the user's task. \
-             Tools are available and more turns remain ({} of {} used). \
+             Tools are available and more turns remain ({}). \
              Do NOT stop here — continue working. \
              If you need information, use a tool to obtain it rather than asking the user. \
              Resume immediately with the next tool call.",
-            input.total_turns, input.max_turns
+            turns_info
         );
         return EmptyResponseOutput {
             action: EmptyResponseAction::ContinueWithSystemNudge(nudge),
             new_codex_ack_continuations: input.codex_ack_continuations,
             new_autonomous_nudge_count: input.autonomous_nudge_count + 1,
+            new_post_tool_nudge_count: input.post_tool_nudge_count,
         };
     }
 
-    // 3. Patch the just-added assistant message with the most recent
-    //    visible text, but only if the current message has no visible
-    //    text of its own.
-    if !(input.assistant_has_visible_text)(input.assistant_msg) {
-        if let Some(fallback) = input.last_content_with_tools {
-            return EmptyResponseOutput {
-                action: EmptyResponseAction::PatchLastAssistant { content: fallback },
-                new_codex_ack_continuations: input.codex_ack_continuations,
-                new_autonomous_nudge_count: input.autonomous_nudge_count,
-            };
-        }
-    }
-
-    // 4. Default: let the loop finalize.
+    // 4. Default: trust the LLM's stop signal and finalize.
+    //
+    //    If the LLM chose to stop without visible text, we respect
+    //    that. The thinking content is in the collapsible block.
+    //    The `local_agent_service` will fall back to `reasoning_content`
+    //    as the visible reply if `content` is empty.
     EmptyResponseOutput {
         action: EmptyResponseAction::Finalize,
         new_codex_ack_continuations: input.codex_ack_continuations,
         new_autonomous_nudge_count: input.autonomous_nudge_count,
+        new_post_tool_nudge_count: input.post_tool_nudge_count,
     }
 }
 
@@ -203,8 +267,6 @@ mod tests {
         m
     }
 
-    // visible_text_fn used by tests: returns true if the message has
-    // visible (non-think) text.
     fn visible_text_fn(m: &Message) -> bool {
         let Some(c) = m.content.as_deref() else {
             return false;
@@ -222,10 +284,10 @@ mod tests {
             codex_ack_continuations: 0,
             autonomous_mode: false,
             autonomous_nudge_count: 0,
+            post_tool_nudge_count: 0,
             total_turns: 3,
             max_turns: 30,
             max_autonomous_nudges: 8,
-            last_content_with_tools: None,
             assistant_has_visible_text: visible_text_fn,
         }
     }
@@ -239,11 +301,6 @@ mod tests {
 
     #[test]
     fn codex_ack_continuation_fires_on_codex_api_with_planning_reply() {
-        // codex ack detector requires: history_includes_tool=false +
-        // assistant mentions "let me"/"i will" + action marker + workspace
-        // context. Easiest: history_includes_tool=false (no tool yet) +
-        // a reply that hits "let me" + "look into"/"read" + a task hint
-        // that mentions a directory.
         let m = make_assistant_msg(
             Some("Let me look into the project directory to find what we need."),
             false,
@@ -273,23 +330,99 @@ mod tests {
         input.history_includes_tool = false;
         input.task_hint = "scan the directory and list files";
         input.codex_ack_continuations = CODEX_MAX_ACK_CONTINUATIONS;
-        // Hits the cap → falls through to autonomous/finalize. With
-        // autonomous_mode=false, history_includes_tool=true (base) but
-        // no fallback set, expect Finalize.
         let out = decide_empty_response(input);
         assert_eq!(out.action, EmptyResponseAction::Finalize);
     }
 
     #[test]
-    fn autonomous_nudge_fires_when_stopped_mid_task() {
-        let m = make_assistant_msg(Some("ok done"), false);
-        let mut input = base_input(&m);
-        input.autonomous_mode = true;
-        // history_includes_tool=true (set in base_input)
+    fn post_tool_nudge_fires_when_no_visible_text() {
+        // When tools have run and the LLM stops with no visible text,
+        // the post-tool nudge should fire (count == 0).
+        let m = make_assistant_msg(None, false);
+        let input = base_input(&m); // history_includes_tool=true, post_tool_nudge_count=0
         let out = decide_empty_response(input);
         match out.action {
             EmptyResponseAction::ContinueWithSystemNudge(text) => {
-                assert!(text.contains("3 of 30"));
+                assert!(
+                    text.contains("visible summary"),
+                    "post-tool nudge should ask for visible summary, got: {text}"
+                );
+            }
+            other => panic!("expected ContinueWithSystemNudge, got {:?}", other),
+        }
+        assert_eq!(out.new_post_tool_nudge_count, 1);
+    }
+
+    #[test]
+    fn post_tool_nudge_does_not_fire_when_visible_text_present() {
+        // When the LLM produced visible text after tool execution,
+        // no nudge — respect the LLM's answer.
+        let m = make_assistant_msg(Some("20个子目录（车辆），无文件。"), false);
+        let input = base_input(&m); // history_includes_tool=true
+        let out = decide_empty_response(input);
+        assert_eq!(
+            out.action,
+            EmptyResponseAction::Finalize,
+            "should finalize when LLM gave visible text"
+        );
+    }
+
+    #[test]
+    fn post_tool_nudge_fires_up_to_max() {
+        // Post-tool nudge should fire up to MAX_POST_TOOL_NUDGES times.
+        // count=0 → fires (gentle), count=1 → fires (forceful),
+        // count=2 → fires (forceful), count=3 → Finalize.
+        let m = make_assistant_msg(None, false);
+
+        // count=1: should still fire (forceful nudge)
+        let mut input = base_input(&m);
+        input.post_tool_nudge_count = 1;
+        let out = decide_empty_response(input);
+        match out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
+                assert!(
+                    text.contains("NO visible text"),
+                    "forceful nudge should diagnose the issue, got: {text}"
+                );
+            }
+            other => panic!("expected ContinueWithSystemNudge at count=1, got {:?}", other),
+        }
+        assert_eq!(out.new_post_tool_nudge_count, 2);
+
+        // count=2: should still fire (forceful nudge)
+        let mut input = base_input(&m);
+        input.post_tool_nudge_count = 2;
+        let out = decide_empty_response(input);
+        assert!(
+            matches!(out.action, EmptyResponseAction::ContinueWithSystemNudge(_)),
+            "should still nudge at count=2"
+        );
+        assert_eq!(out.new_post_tool_nudge_count, 3);
+
+        // count=MAX: should finalize
+        let mut input = base_input(&m);
+        input.post_tool_nudge_count = MAX_POST_TOOL_NUDGES;
+        let out = decide_empty_response(input);
+        assert_eq!(
+            out.action,
+            EmptyResponseAction::Finalize,
+            "should finalize after MAX_POST_TOOL_NUDGES"
+        );
+    }
+
+    #[test]
+    fn autonomous_nudge_fires_when_no_tools_yet() {
+        let m = make_assistant_msg(None, false);
+        let mut input = base_input(&m);
+        input.autonomous_mode = true;
+        input.history_includes_tool = false;
+        let out = decide_empty_response(input);
+        match out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
+                assert!(
+                    text.contains("continue working"),
+                    "pre-tool nudge should say 'continue working', got: {text}"
+                );
             }
             other => panic!("expected ContinueWithSystemNudge, got {:?}", other),
         }
@@ -297,63 +430,59 @@ mod tests {
     }
 
     #[test]
-    fn autonomous_nudge_caps_at_max() {
-        let m = make_assistant_msg(Some("ok done"), false);
+    fn autonomous_nudge_does_not_fire_when_visible_text_present() {
+        let m = make_assistant_msg(
+            Some("20个子目录（车辆），无文件。"),
+            false,
+        );
         let mut input = base_input(&m);
         input.autonomous_mode = true;
-        input.autonomous_nudge_count = input.max_autonomous_nudges;
-        let out = decide_empty_response(input);
-        assert_eq!(out.action, EmptyResponseAction::Finalize);
-    }
-
-    #[test]
-    fn autonomous_nudge_does_not_fire_when_no_history_tool() {
-        let m = make_assistant_msg(Some("ok done"), false);
-        let mut input = base_input(&m);
-        input.autonomous_mode = true;
-        input.history_includes_tool = false;
-        // No fallback content set either → Finalize.
-        let out = decide_empty_response(input);
-        assert_eq!(out.action, EmptyResponseAction::Finalize);
-    }
-
-    #[test]
-    fn patch_last_assistant_when_visible_text_empty_and_fallback_set() {
-        let m = make_assistant_msg(None, false);
-        let mut input = base_input(&m);
-        input.last_content_with_tools = Some("previous text".to_string());
+        input.history_includes_tool = true;
+        input.autonomous_nudge_count = 0;
         let out = decide_empty_response(input);
         assert_eq!(
             out.action,
-            EmptyResponseAction::PatchLastAssistant {
-                content: "previous text".to_string()
-            }
+            EmptyResponseAction::Finalize,
+            "must finalize when LLM gave visible text — never nudge on a real answer"
+        );
+        assert_eq!(out.new_autonomous_nudge_count, 0);
+    }
+
+    #[test]
+    fn autonomous_nudge_fires_only_once() {
+        // After one nudge (count=1), if the LLM still stops without tools,
+        // respect its decision and finalize.
+        let m = make_assistant_msg(None, false);
+        let mut input = base_input(&m);
+        input.autonomous_mode = true;
+        input.history_includes_tool = false;
+        input.autonomous_nudge_count = 1;
+        let out = decide_empty_response(input);
+        assert_eq!(
+            out.action,
+            EmptyResponseAction::Finalize,
+            "should finalize after one nudge — respect the LLM's decision"
         );
     }
 
     #[test]
-    fn patch_skipped_when_current_assistant_has_visible_text() {
-        let m = make_assistant_msg(Some("ok done"), false);
-        let mut input = base_input(&m);
-        input.last_content_with_tools = Some("previous text".to_string());
-        // Current message has visible text → no patch, finalize.
-        let out = decide_empty_response(input);
-        assert_eq!(out.action, EmptyResponseAction::Finalize);
-    }
-
-    #[test]
-    fn patch_skipped_when_no_fallback_set() {
+    fn no_patch_blank_bubble_even_with_fallback() {
+        // Removed PatchLastAssistant: even when there's a fallback
+        // from a previous turn's visible text, we don't fabricate
+        // output. Finalize instead.
         let m = make_assistant_msg(None, false);
         let mut input = base_input(&m);
-        input.last_content_with_tools = None;
+        input.history_includes_tool = false;
         let out = decide_empty_response(input);
-        assert_eq!(out.action, EmptyResponseAction::Finalize);
+        assert_eq!(
+            out.action,
+            EmptyResponseAction::Finalize,
+            "should finalize — never fabricate LLM output"
+        );
     }
 
     #[test]
     fn priority_codex_over_autonomous() {
-        // On CodexResponses with autonomous mode and a planning reply,
-        // Codex ack should win (matches original inline order).
         let m = make_assistant_msg(
             Some("Let me look into the project directory to find what we need."),
             false,

@@ -25,6 +25,13 @@ pub struct TodoItem {
     /// Execution count (how many times this task was attempted).
     #[serde(default)]
     pub execution_count: u32,
+    /// Plan / group id. Every todo belongs to exactly one plan.
+    /// `#[serde(default)]` so legacy items deserialize into an empty string.
+    #[serde(default)]
+    pub group_id: String,
+    /// Human label for the plan (e.g. "rename all files"). Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_title: Option<String>,
 }
 
 /// File-based todo backend storing tasks as JSON.
@@ -109,12 +116,21 @@ impl TodoBackend for FileTodoBackend {
         title: &str,
         description: Option<&str>,
         priority: Option<&str>,
+        group_id: Option<&str>,
+        group_title: Option<&str>,
     ) -> Result<String, ToolError> {
         let mut items = self
             .items
             .lock()
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
+        // If group_id is missing, fall back to the active group_id or
+        // synthesize a new one. This keeps old LLM behavior (no group)
+        // working while letting LLM explicitly start a new plan.
+        let resolved_group_id = match group_id {
+            Some(g) if !g.is_empty() => g.to_string(),
+            _ => uuid::Uuid::new_v4().to_string(),
+        };
         let item = TodoItem {
             id: id.clone(),
             title: title.to_string(),
@@ -125,10 +141,18 @@ impl TodoBackend for FileTodoBackend {
             depends_on: Vec::new(),
             last_result: None,
             execution_count: 0,
+            group_id: resolved_group_id.clone(),
+            group_title: group_title.map(String::from),
         };
         items.push(item.clone());
         self.save(&items)?;
-        Ok(json!({"status": "ok", "id": id, "title": title}).to_string())
+        Ok(json!({
+            "status": "ok",
+            "id": id,
+            "title": title,
+            "group_id": resolved_group_id,
+            "group_title": group_title,
+        }).to_string())
     }
 
     async fn update(
@@ -187,6 +211,8 @@ impl TodoBackend for FileTodoBackend {
                     "depends_on": i.depends_on,
                     "last_result": i.last_result,
                     "execution_count": i.execution_count,
+                    "group_id": i.group_id,
+                    "group_title": i.group_title,
                 })
             })
             .collect();
@@ -250,6 +276,20 @@ impl TodoBackend for FileTodoBackend {
                 "message": "No pending tasks available. All tasks are completed or blocked by unmet dependencies."
             }).to_string()),
         }
+    }
+
+    async fn delete(&self, id: &str) -> Result<String, ToolError> {
+        let mut items = self
+            .items
+            .lock()
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+        let idx = items
+            .iter()
+            .position(|i| i.id == id)
+            .ok_or_else(|| ToolError::NotFound(format!("Todo '{}' not found", id)))?;
+        items.remove(idx);
+        self.save(&items)?;
+        Ok(json!({"status": "ok", "id": id, "action": "deleted"}).to_string())
     }
 
     async fn record_execution(&self, task_id: &str, result: &str) -> Result<String, ToolError> {

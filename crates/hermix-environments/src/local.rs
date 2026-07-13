@@ -161,6 +161,14 @@ impl TerminalBackend for LocalBackend {
             c.arg("/c").arg(command);
             c
         };
+        // Hide the console window on Windows — without CREATE_NO_WINDOW,
+        // every shell tool call (dir /b, etc.) flashes a black cmd window
+        // on the user's desktop. Same pattern as cdp_bootstrap.rs.
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         // Use explicit workdir, or fall back to workspace_root.

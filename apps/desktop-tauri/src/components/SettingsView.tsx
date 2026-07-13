@@ -1177,7 +1177,13 @@ const DEFAULT_ADVANCED_CONFIG: AdvancedConfig = {
 };
 
 function AdvancedTab() {
-  const [config, setConfig] = useState<AdvancedConfig>(DEFAULT_ADVANCED_CONFIG);
+  const [config, setConfig] = useState<AdvancedConfig>(() => {
+    try {
+      const raw = storage.getItem(STORAGE_KEYS.advancedConfig);
+      if (raw) return { ...DEFAULT_ADVANCED_CONFIG, ...JSON.parse(raw) };
+    } catch {}
+    return DEFAULT_ADVANCED_CONFIG;
+  });
   const [saved, setSaved] = useState(false);
 
   const handleChange = (key: keyof AdvancedConfig, value: number) => {
@@ -1186,10 +1192,13 @@ function AdvancedTab() {
   };
 
   const handleSave = () => {
-    // TODO: Save to backend config
-    console.log("Advanced config saved:", config);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      storage.setItem(STORAGE_KEYS.advancedConfig, JSON.stringify(config));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      console.error("Failed to save advanced config:", e);
+    }
   };
 
   return (

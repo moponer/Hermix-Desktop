@@ -349,6 +349,28 @@ pub enum StreamEvent {
     },
     Status { content: String },
     Activity { content: String },
+    /// Context window usage snapshot. Emitted after every agent-loop
+    /// turn so the frontend can render a persistent context-usage
+    /// bar (e.g. "48k / 200k tokens (24%)").
+    ContextUsage {
+        /// Tokens currently consumed in the context window.
+        used_tokens: u64,
+        /// Maximum context window size for the active model.
+        max_tokens: u64,
+        /// Threshold at which auto-compression triggers.
+        threshold_tokens: u64,
+        /// Percentage of threshold consumed (0.0–100.0).
+        percent: f64,
+    },
+    /// Compaction pipeline status snapshot. Emitted when the
+    /// compression pipeline transitions state (pressure detected,
+    /// breaker tripped, recovery probe, etc.).
+    CompactionStatus {
+        /// The `BreakerSnapshot` as a raw JSON value so the
+        /// transport layer doesn't need to depend on the
+        /// compression types.
+        snapshot: serde_json::Value,
+    },
     /// Server → client: "the agent is about to run a risk-bearing tool;
     /// tell me whether to proceed." The client echoes back via
     /// [`WsClientMessage::ApprovalResponse`] with the same `request_id`.
@@ -522,6 +544,145 @@ pub enum StreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         finish_reason: Option<String>,
     },
+    // ── Todo (task list) events ─────────────────────────────
+    /// Snapshot of the full task list. Sent on (a) session start so
+    /// the front-end can hydrate without a separate HTTP fetch, and
+    /// (b) after every LLM-driven todo tool call so any late joiner
+    /// catches up. Front-end uses this as the authoritative full
+    /// state — applies upserts/removes lazily via TodoItem*.
+    TodoSnapshot {
+        session_id: String,
+        items: Vec<TodoSnapshotItem>,
+    },
+    /// Single-item upsert. Emitted on create / update / depend /
+    /// record_execution. Front-end merges by `id`. For "delete", see
+    /// `TodoItemRemoved`.
+    TodoItemUpserted {
+        session_id: String,
+        item: TodoSnapshotItem,
+    },
+    /// Single-item removal. Emitted when the LLM (or a future HTTP
+    /// endpoint) deletes a task. Front-end filters by `id`.
+    TodoItemRemoved {
+        session_id: String,
+        id: String,
+    },
+    /// LLM started a new plan. Emitted on the FIRST `todo.create` for a
+    /// fresh group_id. Front-end creates a new inline card anchored to
+    /// the assistant message with `message_id`. Subsequent TodoItemUpserted
+    /// for the same group_id updates the existing card in place.
+    ///
+    /// `message_id` lets the front-end know where in the message stream
+    /// to render the new card. `None` means the change came from outside
+    /// an agent loop (HTTP PATCH / direct WS) and the front-end should
+    /// fall back to anchoring at the end of the stream.
+    TodoGroupStarted {
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        group_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group_title: Option<String>,
+    },
+    // ── Orchestration Engine events (Phase 0 / P0-4) ───────────
+    /// A new Task was created. Front-end can open a task card or
+    /// refresh the task list panel.
+    TaskCreated {
+        task_id: String,
+        title: String,
+        mode: String,
+        workspace_path: String,
+    },
+    /// A Task's fields were updated (title, context, result_refs, etc.).
+    /// Front-end upserts the task card.
+    TaskUpdated {
+        task_id: String,
+        title: String,
+        status: String,
+    },
+    /// A Task's status transitioned (e.g. pending → in_progress →
+    /// completed). Front-end updates the status badge and may trigger
+    /// UI flows (e.g. show "方案确认" dialog on →planning, show
+    /// results panel on →completed).
+    TaskStatusChanged {
+        task_id: String,
+        old_status: String,
+        new_status: String,
+    },
+    /// An automation fired and spawned a new Task. Front-end can
+    /// show a toast notification and navigate to the new task.
+    AutomationTriggered {
+        automation_id: String,
+        automation_name: String,
+        task_id: String,
+    },
+    /// The agent produced deliverable artifacts for a Task. The
+    /// front-end renders these in the "产物" tab of the results
+    /// panel. `result_refs` carries the full snapshot so the client
+    /// doesn't need a separate HTTP fetch.
+    ResultDelivered {
+        task_id: String,
+        result_refs: Vec<hermix_core::TaskResultRef>,
+    },
+    /// Agent loop entered a new phase (P3-2). Front-end can display
+    /// a progress indicator showing which stage the agent is in
+    /// (perception / reasoning / action / observation).
+    LoopPhaseChanged {
+        /// Session ID for correlation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        /// Task ID if running within a Task context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        /// Fine-grained phase name (e.g. "llm_call", "tool_execution").
+        phase: String,
+        /// Coarse-grained orchestration stage
+        /// (perception / reasoning / action / observation).
+        stage: String,
+        /// Turn number (1-based, 0 for Init).
+        turn: u32,
+    },
+    /// Plan mode: the agent has produced a plan and is waiting for
+    /// user confirmation before executing (P2-2). Front-end should
+    /// display the plan confirmation dialog.
+    PlanConfirmationRequired {
+        task_id: String,
+        /// The plan text produced by the agent.
+        plan_text: String,
+    },
+}
+
+/// One row in the task list. Same shape as
+/// `hermix_tools::backends::todo::TodoItem`, but defined here so the
+/// transport crate doesn't depend on hermix-tools (which would form
+/// a cycle hermix-server → hermix-tools → hermix-transport).
+///
+/// Fields mirror `TodoItem` 1:1 — when adding a field there, mirror
+/// it here too and bump the todo event protocol version in
+/// `AGENTS.md`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TodoSnapshotItem {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// "pending" | "in_progress" | "completed" | "failed"
+    pub status: String,
+    /// "low" | "medium" | "high"
+    pub priority: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_result: Option<String>,
+    #[serde(default)]
+    pub execution_count: u32,
+    /// Plan / group id (UUID per "plan"). Empty string for legacy items.
+    #[serde(default)]
+    pub group_id: String,
+    /// Human label for the plan (e.g. "rename all files"). Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_title: Option<String>,
 }
 
 /// Inbound message from the client over the streaming WebSocket. The server

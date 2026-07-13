@@ -157,6 +157,8 @@ export const STORAGE_KEYS = {
   // agents view generate-flow: backend URL + key (per-user override)
   agentsServerUrl: "hermix.agents.server_url",
   agentsApiKey: "hermix.agents.api_key",
+  // advanced config (Settings → Advanced tab)
+  advancedConfig: "hermix.desktop.advanced_config",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

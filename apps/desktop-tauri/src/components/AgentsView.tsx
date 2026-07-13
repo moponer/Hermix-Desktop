@@ -716,8 +716,64 @@ function AIGenerateWizard({ onComplete, onCancel, initialDescription = "" }: AIG
     setGenerating(true);
     setError(null);
     try {
-      const apiUrl = storage.getItem(STORAGE_KEYS.agentsServerUrl) || "http://127.0.0.1:3000";
-      const apiKey = storage.getItem(STORAGE_KEYS.agentsApiKey) || "";
+      // P0-6: Auto-detect the LLM provider and API key from the backend
+      // instead of calling the non-existent /v1/chat/completions on the
+      // local server. Falls back to the user-configured agentsServerUrl.
+      const defaultBase = "http://127.0.0.1:3000";
+      let apiUrl = storage.getItem(STORAGE_KEYS.agentsServerUrl) || "";
+      let apiKey = storage.getItem(STORAGE_KEYS.agentsApiKey) || "";
+
+      // If no custom server URL is set, auto-detect from backend model config.
+      if (!apiUrl || apiUrl === defaultBase) {
+        try {
+          const modelResp = await fetch(`${defaultBase}/api/model/info`);
+          if (modelResp.ok) {
+            const modelInfo = await modelResp.json() as { provider?: string; model?: string };
+            const provider = modelInfo.provider || "openai";
+            // Map provider to its API base URL.
+            const providerUrls: Record<string, string> = {
+              openai: "https://api.openai.com",
+              anthropic: "https://api.anthropic.com",
+              openrouter: "https://openrouter.ai/api",
+              deepseek: "https://api.deepseek.com",
+              dashscope: "https://dashscope.aliyuncs.com/compatible-mode",
+              zhipu: "https://open.bigmodel.cn/api/paas/v4",
+              moonshot: "https://api.moonshot.cn",
+              minimax: "https://api.minimax.chat",
+              siliconflow: "https://api.siliconflow.cn",
+              volcengine: "https://ark.cn-beijing.volces.com/api/v3",
+            };
+            const baseUrl = providerUrls[provider] || providerUrls.openai;
+            // Try to get the API key from the backend's env var.
+            const envKeyMap: Record<string, string> = {
+              openai: "OPENAI_API_KEY",
+              anthropic: "ANTHROPIC_API_KEY",
+              openrouter: "OPENROUTER_API_KEY",
+              deepseek: "DEEPSEEK_API_KEY",
+              dashscope: "DASHSCOPE_API_KEY",
+              zhipu: "ZHIPUAI_API_KEY",
+              moonshot: "MOONSHOT_API_KEY",
+              minimax: "MINIMAX_API_KEY",
+              siliconflow: "SILICONFLOW_API_KEY",
+              volcengine: "ARK_API_KEY",
+            };
+            const envKey = envKeyMap[provider] || "OPENAI_API_KEY";
+            const revealResp = await fetch(`${defaultBase}/api/env/reveal`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ key: envKey }),
+            });
+            if (revealResp.ok) {
+              const revealData = await revealResp.json() as { value?: string };
+              if (revealData.value) apiKey = revealData.value;
+            }
+            apiUrl = baseUrl;
+          }
+        } catch {
+          // Auto-detect failed — will fall back to template generation.
+        }
+      }
+
       const domainText = DOMAIN_OPTIONS.find((o) => o.id === clarify.domain)?.label || clarify.domain;
       const styleText  = STYLE_OPTIONS.find((o) => o.id === clarify.style)?.label  || clarify.style || "未指定";
       const toolsText  = clarify.tools.map((id) => TOOL_OPTIONS.find((o) => o.id === id)?.label).filter(Boolean).join("、") || "无";
@@ -1236,8 +1292,44 @@ function TestDialog({ agent, onClose }: TestDialogProps) {
     setStreaming(true);
     abortRef.current = new AbortController();
     try {
-      const apiUrl = storage.getItem(STORAGE_KEYS.agentsServerUrl) || "http://127.0.0.1:3000";
-      const apiKey = storage.getItem(STORAGE_KEYS.agentsApiKey) || "";
+      // P0-6: Same auto-detect logic as runGeneration.
+      const defaultBase = "http://127.0.0.1:3000";
+      let apiUrl = storage.getItem(STORAGE_KEYS.agentsServerUrl) || "";
+      let apiKey = storage.getItem(STORAGE_KEYS.agentsApiKey) || "";
+      if (!apiUrl || apiUrl === defaultBase) {
+        try {
+          const modelResp = await fetch(`${defaultBase}/api/model/info`);
+          if (modelResp.ok) {
+            const modelInfo = await modelResp.json() as { provider?: string };
+            const provider = modelInfo.provider || "openai";
+            const providerUrls: Record<string, string> = {
+              openai: "https://api.openai.com", anthropic: "https://api.anthropic.com",
+              openrouter: "https://openrouter.ai/api", deepseek: "https://api.deepseek.com",
+              dashscope: "https://dashscope.aliyuncs.com/compatible-mode",
+              zhipu: "https://open.bigmodel.cn/api/paas/v4", moonshot: "https://api.moonshot.cn",
+              minimax: "https://api.minimax.chat", siliconflow: "https://api.siliconflow.cn",
+              volcengine: "https://ark.cn-beijing.volces.com/api/v3",
+            };
+            apiUrl = providerUrls[provider] || providerUrls.openai;
+            const envKeyMap: Record<string, string> = {
+              openai: "OPENAI_API_KEY", anthropic: "ANTHROPIC_API_KEY",
+              openrouter: "OPENROUTER_API_KEY", deepseek: "DEEPSEEK_API_KEY",
+              dashscope: "DASHSCOPE_API_KEY", zhipu: "ZHIPUAI_API_KEY",
+              moonshot: "MOONSHOT_API_KEY", minimax: "MINIMAX_API_KEY",
+              siliconflow: "SILICONFLOW_API_KEY", volcengine: "ARK_API_KEY",
+            };
+            const envKey = envKeyMap[provider] || "OPENAI_API_KEY";
+            const revealResp = await fetch(`${defaultBase}/api/env/reveal`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ key: envKey }),
+            });
+            if (revealResp.ok) {
+              const revealData = await revealResp.json() as { value?: string };
+              if (revealData.value) apiKey = revealData.value;
+            }
+          }
+        } catch {}
+      }
       const res = await fetch(`${apiUrl}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },

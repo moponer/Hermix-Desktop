@@ -60,10 +60,23 @@ impl AgentLoop {
         self.pre_api_apply_pending_steer(ctx);
 
         // --- Max turns guard ---
-        if state.total_turns >= self.config.max_turns {
+        // max_turns == 0 means unlimited — no turn cap. The real
+        // protections are: ErrorLoop hard stop (convergence detector),
+        // Cost Guard (max_cost_usd), and the LLM's natural stopping
+        // behavior (no tool calls → finalize). max_turns is a
+        // last-resort safety net for runaway loops that other
+        // mechanisms don't catch.
+        if self.config.max_turns > 0 && state.total_turns >= self.config.max_turns {
             tracing::warn!(
                 "Max turns ({}) exceeded, requesting final summary",
                 self.config.max_turns
+            );
+            self.emit_status(
+                "lifecycle",
+                &format!(
+                    "已达到最大轮次限制 ({})，正在生成总结…",
+                    self.config.max_turns
+                ),
             );
             let summary_msg = self.handle_max_iterations(ctx).await?;
             if let Some(msg) = summary_msg {
@@ -339,6 +352,32 @@ impl AgentLoop {
         // Context pressure check
         let total_tokens = ctx.total_tokens();
         let threshold = ctx.pressure_threshold_tokens();
+        let max_tokens = ctx.max_context_tokens();
+        // Fire a context_usage event every turn so the frontend can
+        // render a persistent context-usage bar. We send it through
+        // the on_chunk callback (same path as status/compaction events).
+        if let Some(on_c) = on_chunk {
+            let percent = if threshold > 0 {
+                (total_tokens as f64 / threshold as f64) * 100.0
+            } else {
+                0.0
+            };
+            on_c(StreamChunk {
+                delta: Some(hermix_core::StreamDelta {
+                    content: None,
+                    tool_calls: None,
+                    extra: Some(serde_json::json!({
+                        "event": "context_usage",
+                        "used_tokens": total_tokens as u64,
+                        "max_tokens": max_tokens as u64,
+                        "threshold_tokens": threshold as u64,
+                        "percent": percent,
+                    })),
+                }),
+                finish_reason: None,
+                usage: None,
+            });
+        }
         if threshold > 0 {
             let progress = total_tokens as f64 / threshold as f64;
             let tier = if progress >= 0.95 {

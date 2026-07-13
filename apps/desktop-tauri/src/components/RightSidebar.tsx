@@ -15,6 +15,7 @@ import { FileTypeIcon } from "./FileTypeIcon";
 import { clsx } from "clsx";
 import type { Artifact, ArtifactKind } from "../utils/artifacts";
 import { openExternalUrl } from "../desktopBridge";
+import { invoke } from "@tauri-apps/api/core";
 import {
   tryReadArtifact,
   tryReadArtifactBytes,
@@ -1132,12 +1133,12 @@ function FileTreeItem({
         navigator.clipboard.writeText(file.path);
         break;
       case "open_in_terminal":
-        // TODO: Open terminal at file location
-        console.log("Open in terminal:", file.path);
+        // Open the directory in the system file explorer.
+        openExternalUrl(file.path);
         break;
       case "preview":
-        // TODO: Open file preview
-        console.log("Preview:", file.path);
+        // Open the file with the default system application.
+        openExternalUrl(file.path);
         break;
     }
   };
@@ -1230,30 +1231,68 @@ function ContextMenu({
   );
 }
 
-// ── Browser Tab (Placeholder) ──────────────────────────────
+// ── Browser Tab ───────────────────────────────────────
+
+interface BrowserCommandResult {
+  kind: string;
+  ok: boolean;
+  elapsedMs: number;
+  result: unknown;
+}
 
 function BrowserTab() {
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [pageTitle, setPageTitle] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
+  const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [actionResult, setActionResult] = useState<string | null>(null);
 
   const handleNavigate = async () => {
     if (!url.trim()) return;
     setStatus("loading");
+    setScreenshot(null);
     try {
-      // TODO: Call browser_navigate tool via Tauri
-      setPageTitle(`页面: ${url}`);
-      setHistory((prev) => [url, ...prev].slice(0, 20));
-      setStatus("ready");
+      const resp = await invoke<BrowserCommandResult>("cua_browser_navigate", { url });
+      if (resp.ok) {
+        setPageTitle(url);
+        setHistory((prev) => [url, ...prev].slice(0, 20));
+        setStatus("ready");
+      } else {
+        setStatus("error");
+      }
     } catch (e) {
       setStatus("error");
+      setActionResult(`导航失败: ${e}`);
     }
   };
 
   const handleScreenshot = async () => {
-    // TODO: Call browser_snapshot tool
-    console.log("Take screenshot");
+    try {
+      const resp = await invoke<BrowserCommandResult>("cua_browser_screenshot");
+      if (resp.ok && resp.result && typeof resp.result === "object" && "png_base64" in (resp.result as Record<string, unknown>)) {
+        const b64 = (resp.result as { png_base64: string }).png_base64;
+        setScreenshot(`data:image/png;base64,${b64}`);
+      } else {
+        setActionResult("截图失败: 浏览器未运行");
+      }
+    } catch (e) {
+      setActionResult(`截图失败: ${e}`);
+    }
+  };
+
+  const handleEvaluate = async (expression: string, label: string) => {
+    try {
+      const resp = await invoke<BrowserCommandResult>("cua_browser_evaluate", { expression });
+      if (resp.ok) {
+        const text = typeof resp.result === "string" ? resp.result : JSON.stringify(resp.result, null, 2);
+        setActionResult(`[${label}] ${text.slice(0, 500)}`);
+      } else {
+        setActionResult(`[${label}] 执行失败`);
+      }
+    } catch (e) {
+      setActionResult(`[${label}] 错误: ${e}`);
+    }
   };
 
   return (
@@ -1294,10 +1333,25 @@ function BrowserTab() {
             onClick={handleScreenshot}
             className="ml-auto px-2 py-0.5 rounded text-[10px] text-text-muted hover:bg-bg-hover transition-colors"
           >
-            📸 截图
+            截图
           </button>
         )}
       </div>
+
+      {/* Screenshot Preview */}
+      {screenshot && (
+        <div className="px-3 py-2 border-b border-border-primary">
+          <img src={screenshot} alt="Screenshot" className="w-full rounded-lg border border-border-secondary" />
+        </div>
+      )}
+
+      {/* Action Result */}
+      {actionResult && (
+        <div className="px-3 py-2 border-b border-border-primary">
+          <pre className="text-[10.5px] text-text-muted whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{actionResult}</pre>
+          <button onClick={() => setActionResult(null)} className="text-[10px] text-accent hover:underline mt-1">清除</button>
+        </div>
+      )}
 
       {/* Quick Actions */}
       <div className="px-3 py-3 space-y-3">
@@ -1306,22 +1360,25 @@ function BrowserTab() {
           <QuickAction
             icon={<Search size={14} />}
             label="搜索页面"
-            onClick={() => console.log("Search")}
+            onClick={() => handleEvaluate("document.title", "页面标题")}
           />
           <QuickAction
             icon={<Eye size={14} />}
             label="元素检查"
-            onClick={() => console.log("Inspect")}
+            onClick={() => handleEvaluate("document.querySelector('h1')?.textContent || '(无 h1)'", "H1 检查")}
           />
           <QuickAction
             icon={<Copy size={14} />}
             label="复制内容"
-            onClick={() => console.log("Copy")}
+            onClick={async () => {
+              await handleEvaluate("document.body.innerText.slice(0, 5000)", "页面文本");
+              if (actionResult) navigator.clipboard.writeText(actionResult);
+            }}
           />
           <QuickAction
             icon={<FileText size={14} />}
             label="提取文本"
-            onClick={() => console.log("Extract")}
+            onClick={() => handleEvaluate("document.body.innerText.slice(0, 2000)", "页面文本")}
           />
         </div>
       </div>

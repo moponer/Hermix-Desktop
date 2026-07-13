@@ -483,6 +483,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }];
         strip_budget_warnings_from_messages(&mut messages);
         let parsed: serde_json::Value =

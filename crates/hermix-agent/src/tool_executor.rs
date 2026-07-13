@@ -214,6 +214,28 @@ impl AgentLoop {
                         .get("max_iterations")
                         .and_then(|v| v.as_u64())
                         .map(|v| v as u32),
+                    // P6-4: Parse role from args; default to General.
+                    role: parsed
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| match s {
+                            "explore" => Some(
+                                crate::sub_agent_orchestrator::SubAgentRole::Explore,
+                            ),
+                            "plan" => Some(
+                                crate::sub_agent_orchestrator::SubAgentRole::Plan,
+                            ),
+                            "general" => Some(
+                                crate::sub_agent_orchestrator::SubAgentRole::General,
+                            ),
+                            _ => None,
+                        })
+                        .unwrap_or_default(),
+                    // P6-4: Parse parent_task_id from args if present.
+                    parent_task_id: parsed
+                        .get("parent_task_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
                 };
                 // Orchestrator internally runs the child on its own
                 // `tokio::spawn` task, which erases the child future and breaks

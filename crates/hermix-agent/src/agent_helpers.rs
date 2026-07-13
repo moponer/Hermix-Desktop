@@ -120,6 +120,19 @@ impl ToolRegistry {
         }
         out
     }
+
+    /// Return a clone of this registry with only the named tools
+    /// retained. Used by [`crate::sub_agent_orchestrator`] to give
+    /// role-restricted sub-agents a registry that only contains
+    /// the tools allowed for their role (P6-4).
+    pub fn retain_only<F>(&self, predicate: F) -> Self
+    where
+        F: Fn(&str) -> bool,
+    {
+        let mut out = self.clone();
+        out.tools.retain(|name, _| predicate(name));
+        out
+    }
 }
 
 impl Default for ToolRegistry {
@@ -448,6 +461,24 @@ pub struct AgentCallbacks {
     /// No-op if no callback is wired (unit tests, batched runs).
     pub on_section_gate:
         Option<Arc<dyn Fn(&crate::context::SectionGateReport) + Send + Sync>>,
+    /// P3-2: Called when the agent loop enters a new phase.
+    ///
+    /// Payload is a JSON string: `{"phase":"llm_call","stage":"reasoning","turn":3}`.
+    /// The upstream layer (e.g. `LocalAgentService`) bridges this into a
+    /// `LoopPhaseChanged` WS event via the orchestration bus.
+    ///
+    /// No-op if no callback is wired (unit tests, batched runs).
+    pub on_loop_phase_changed: Option<Arc<dyn Fn(&str, &str, u32) + Send + Sync>>,
+    /// P3-5: Called when the agent loop finalizes, indicating the task
+    /// should be marked as completed or failed.
+    ///
+    /// Arguments: `(success: bool, task_id: Option<&str>)`.
+    /// The upstream layer uses this to transition the Task status and
+    /// trigger result delivery (Phase 7).
+    ///
+    /// No-op if no callback is wired.
+    pub on_task_complete:
+        Option<Arc<dyn Fn(bool, Option<&str>) + Send + Sync>>,
 }
 
 // ---------------------------------------------------------------------------

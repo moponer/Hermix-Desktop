@@ -10,7 +10,7 @@ export async function pickDirectory(): Promise<string | null> {
 }
 
 export async function getRuntimeInfo(): Promise<{ runtime: string; platform: string; userDataDir: string }> {
-  return invoke("desktop:get-runtime-info");
+  return invoke("get_runtime_info");
 }
 
 /**

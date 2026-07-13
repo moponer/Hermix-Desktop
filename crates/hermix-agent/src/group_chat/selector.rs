@@ -3,7 +3,7 @@
 //!
 //! Mirrors AutoGen's `SelectorGroupChat` pattern.
 
-use crate::orchestrator::{GroupChatMessage, GroupChatParticipant};
+use crate::group_chat::{GroupChatMessage, GroupChatParticipant};
 
 /// LLM-based speaker selection. Requires an LLM call to decide who
 /// should speak next based on the conversation context.

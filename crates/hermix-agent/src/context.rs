@@ -7,6 +7,54 @@
 //! Also provides SOUL.md personality loading, context file injection, and
 //! full system prompt assembly (corresponding to Python `run_agent.py`'s
 //! `_build_system_prompt`).
+//!
+//! # Context Layer Model (AL-9, 2026-07-09)
+//!
+//! The agent's context is composed of 5 distinct layers, each with
+//! different invalidation semantics and cache strategies:
+//!
+//! ## Layer 1: System Prompt (Stable)
+//! - **Contents**: Soul/identity, configured `system_prompt`, directions,
+//!   tool definitions section, personality profile, platform hints.
+//! - **Invalidation**: Only on model / personality / `system_prompt` /
+//!   workspace change.
+//! - **Cache**: `PromptCache` keyed on stable attributes.
+//! - **Builder**: `build_stable_layer()` in `prompt_assembly.rs`.
+//!
+//! ## Layer 2: Tool Definitions
+//! - **Contents**: JSON schemas for all available tools.
+//! - **Invalidation**: On tool registry change (rare during a session).
+//! - **Cache**: Part of the stable layer cache.
+//! - **Builder**: `ToolSchema` vec passed to `chat_completion[_stream]`.
+//!
+//! ## Layer 3: Conversation History
+//! - **Contents**: User messages, assistant messages (with thinking blocks),
+//!   tool calls, tool results. This is the largest and most volatile layer.
+//! - **Invalidation**: Every turn (new messages added).
+//! - **Cache**: No cache — recomputed every turn via `messages_for_api_call`.
+//! - **Compression**: `ContextCompressor` triggers at 80% of budget.
+//! - **Filtering**: `messages_for_api_call` normalizes messages (merge
+//!   consecutive user, strip stale errors, strip old `reasoning_content`).
+//!
+//! ## Layer 4: Memory
+//! - **Contents**: Built-in memory snapshot, memory router blocks, skills
+//!   prompt, workspace/personal context files.
+//! - **Invalidation**: On memory / skills / context-files mutation (signalled
+//!   by an `epoch` u64 tick).
+//! - **Cache**: `PromptCache` context layer, keyed on epoch.
+//! - **Builder**: `build_context_layer()` in `prompt_assembly.rs`.
+//!
+//! ## Layer 5: Dynamic Suffix
+//! - **Contents**: Timestamp block (model + provider name), optional
+//!   `session_id` line.
+//! - **Invalidation**: Every turn (timestamp changes).
+//! - **Cache**: No cache — rebuilt every turn.
+//! - **Builder**: `build_dynamic_suffix()` in `prompt_assembly.rs`.
+//!
+//! The 3-layer cache layout (stable / context / volatile) ensures that a
+//! mutation to one layer does not force the other to re-render. The
+//! `build_system_prompt()` function assembles all three layers into the
+//! final system prompt string.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -449,7 +497,7 @@ impl ContextManager {
 /// "how I work" — short and direct, no fluff, no vague exhortations.
 /// SOUL.md (when present) overrides both halves.
 pub const DEFAULT_AGENT_IDENTITY: &str = "\
-Hello!我是 Hermix,一个基于 Hermes-Agent-rs基座构建的智能助手。\n\
+Hello!我是 Hermix。\n\
 \n\
 我的能力涵盖回答问题、编写与修改代码、分析信息、创意写作,以及通过工具执行实际操作。\n\
 \n\
@@ -460,42 +508,40 @@ Hello!我是 Hermix,一个基于 Hermes-Agent-rs基座构建的智能助手。\n
 - 在探索和调查时保持精准高效,不做过度展开\n\
 - 默认中文回复;如果用户用其他语言提问,使用相同语言回答\n\
 \n\
-## 自主进化(我具备,且鼓励使用)\n\
-我可以在对话过程中**主动沉淀 skill / 脚本 / 习惯**,这是我的程序性记忆,而非越权:\n\
-- 完成一项**重复 ≥ 2 步**或**用户鼓励**的任务后,我会考虑调用 `skill_manage auto_create` 把流程固化为 skill。\n\
-- 用户告诉我\"以后这样做\" / \"记住这个\" / \"存为脚本\" → 立刻调 `skill_manage create` 或 `update`。\n\
-- 发现已有 skill 不够好时,调 `skill_manage self_improve` 追加 feedback 段。\n\
-- 沉淀完成后**必须**告诉用户我做了什么、写在哪个文件,以便复核。\n\
-- skill 文件约定:`~/.hermix/skills/<slug>/SKILL.md`(frontmatter `---` 包裹 `name/description/commands`)——具体路径在 system prompt 的 \"Runtime Environment\" 块中给出。\n\
-- **不**沉淀到 hermix home 之外的目录;**不**改动 SOUL.md / config.yaml / .env 等系统文件;**不**为沉淀而沉淀(只做一次的任务不必存)。\n\
+## 自主进化\n\
+我支持在对话中主动沉淀 skill / 脚本 / 习惯(这属于我的程序性记忆,而非越权)。具体沉淀规则见系统提示中的「Self-Evolution」章节;每次沉淀后我会明确告诉你我做了什么、写在了哪个文件。\n\
 \n\
 Introduction in English (use when the user writes in English):\n\
-Hi! I'm Hermix, an intelligent AI assistant built on the Hermes-Agent-rs foundation.\n\
+Hi! I'm Hermix.\n\
 About my identity, the only facts you need to know: Hermes is the name of this agent framework, and my name is Hermix.\n\
 \n\
-## Self-evolution (I can do this, and should)\n\
-During a conversation I can **proactively persist skills / scripts / habits** as my procedural memory — this is in scope, not overreach:\n\
-- After a task that took **≥ 2 distinct steps** or that the user explicitly encouraged, I consider `skill_manage auto_create` to crystallize the workflow as a skill.\n\
-- If the user says \"do it this way from now on\" / \"remember this\" / \"save as script\" → call `skill_manage create` or `update` right away.\n\
-- If I find an existing skill lacking, call `skill_manage self_improve` to append a feedback section.\n\
-- After persisting I **must** tell the user what I wrote and where, so they can review.\n\
-- Skill file convention: `~/.hermix/skills/<slug>/SKILL.md` (frontmatter delimited by `---` with `name`/`description`/`commands`). The exact path is given in the \"Runtime Environment\" block of the system prompt.\n\
-- I do **not** persist outside the hermix home; I do **not** modify SOUL.md / config.yaml / .env / system files; I do **not** persist one-off tasks.";
+## Self-evolution\n\
+I can proactively persist skills / scripts / habits as my procedural memory — not overreach. The concrete rules live in the \"Self-Evolution\" section of the system prompt; after each persistence I tell you what I wrote and where.";
 
-const BUILTIN_PERSONALITY_CODER: &str = "You are operating in the `coder` persona.\n\
-Prioritize correctness, explicit assumptions, and deterministic execution steps.\n\
-When editing code, prefer small verifiable changes and explain trade-offs briefly.\n\
-Always include concrete verification steps (tests, build, or runtime checks).";
+pub const BUILTIN_PERSONALITY_CODER: &str = "\
+你是「工程师」角色。\n\
+\n\
+- 先想清楚再动手:改动越小越可控,优先拆成可验证的小步。\n\
+- 正确性与可验证性高于一切:每次改动后立刻跑验证(编译 / 测试 / 类型检查 / 实跑),不凭记忆判断行为。\n\
+- 沿用项目既有的风格与约定,不擅自引入新依赖;确需引入时,先说明成本与理由。\n\
+- 只解释非显而易见的取舍,不啰嗦;面对多种合理方案时,给出推荐并说明权衡。\n\
+- 不确定时先用工具或跑代码确认,而不是猜测。";
 
-const BUILTIN_PERSONALITY_WRITER: &str = "You are operating in the `writer` persona.\n\
-Prioritize clarity, structure, and audience-aware phrasing.\n\
-Use concise sections, strong topic sentences, and remove unnecessary repetition.\n\
-When asked to revise, preserve meaning while improving readability and flow.";
+pub const BUILTIN_PERSONALITY_WRITER: &str = "\
+你是「写作者」角色。\n\
+\n\
+- 先搭骨架再填内容:用清晰的结构、有力的主题句组织文字。\n\
+- 删掉一切不必要的重复与废话,优先保证可读性与流畅度。\n\
+- 修订时保住原意,只提升表达;不擅自改变作者的立场与结论。\n\
+- 该用例子就用例子,不堆砌术语;面向读者,而非炫技。";
 
-const BUILTIN_PERSONALITY_ANALYST: &str = "You are operating in the `analyst` persona.\n\
-Prioritize evidence, explicit reasoning, and clear uncertainty bounds.\n\
-Break complex problems into assumptions, observations, and conclusions.\n\
-When data is missing, state what is unknown and propose the next highest-value check.";
+pub const BUILTIN_PERSONALITY_ANALYST: &str = "\
+你是「分析师」角色。\n\
+\n\
+- 结论要有证据:显式给出推理链,标注每一步的前提与不确定性。\n\
+- 把复杂问题拆成「假设 → 观察 → 结论」逐层推进,不跳步。\n\
+- 数据缺失时,先说清楚不知道什么,再给出性价比最高的下一步验证。\n\
+- 不下无据的结论;概率性判断要标注置信度与适用边界。";
 
 /// Discipline guidance for self-evolution. Injected as a guidance
 /// block so the model sees the same operational rules in every
@@ -761,6 +807,9 @@ pub enum DirRoute {
     HasSkillKeyword,
     /// Active tool list contains `todo` — task-orchestration guidance.
     HasTodo,
+    /// Active tool list contains `task_create` — orchestration-engine
+    /// task tracker guidance (Phase 4 / P4-2).
+    HasTaskTracker,
     /// Active tool list contains `compact_tool_chain` AND user message
     /// mentions batch-related keyword.
     HasBatchKeyword,
@@ -774,8 +823,21 @@ pub enum DirRoute {
     MiniMaxFamily,
     /// Conversation has 5+ tool calls — multi-step task focus guidance.
     MultiStepTask,
+    /// This turn actually invoked 1+ tool calls — only then should
+    /// "summarize what you did" or "next step" guidance fire. Trivial
+    /// conversational turns (no tool use) get the default guidance
+    /// only, so the model is not pressured into inventing filler
+    /// summaries for turns where there is nothing to summarize.
+    HadAnyToolUse,
     /// Always-on (USER_STYLE_GUIDANCE, tool failure rule).
     Always,
+    /// Active workspace's `AGENTS.md` exposes a project-conventions
+    /// section. **Non-generic, deployment-specific tuning** — injected
+    /// only when `collect_directions` is given conventions text, so the
+    /// universal core stays free of any single user's preferences.
+    /// `matches` always returns true because the direction is only
+    /// queued when conventions exist.
+    HasProjectConventions,
 }
 
 #[derive(Debug, Clone)]
@@ -896,11 +958,20 @@ impl DirRoute {
                 if has("todo") { (true, None) }
                 else { (false, Some("todo tool not active".into())) }
             }
+            DirRoute::HasTaskTracker => {
+                if has("task_create") { (true, None) }
+                else { (false, Some("task_create tool not active".into())) }
+            }
             DirRoute::MultiStepTask => {
                 if ctx.tool_call_count >= 5 { (true, None) }
                 else { (false, Some(format!("tool_call_count {} < 5", ctx.tool_call_count))) }
             }
+            DirRoute::HadAnyToolUse => {
+                if ctx.tool_call_count >= 1 { (true, None) }
+                else { (false, Some(format!("no tool calls this turn (count={})", ctx.tool_call_count))) }
+            }
             DirRoute::Always => (true, None),
+            DirRoute::HasProjectConventions => (true, None),
         }
     }
 }
@@ -1645,6 +1716,40 @@ let ctx = RouteContext {
         assert!(patched.contains(Section::ToolEnforce.marker()));
     }
 
+    /// M3 (Round 22 — 2026-07-07): `DirRoute::HadAnyToolUse` only fires
+    /// when the turn actually invoked 1+ tool calls. Trivial conversational
+    /// turns (count == 0) must NOT receive this guidance, otherwise the
+    /// model invents filler summaries and the "(等待中) ×N" pattern
+    /// observed on M2.7 / Hermes fine-tunes.
+    #[test]
+    fn had_any_tool_use_fires_only_when_count_positive() {
+        let tool_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        // Trivial turn → must NOT fire.
+        let trivial = RouteContext {
+            user_message: "你好",
+            tool_names: &tool_names,
+            model_name: "minimax:MiniMax-M2.7",
+            autonomous_mode: false,
+            tool_call_count: 0,
+        };
+        assert_eq!(
+            DirRoute::HadAnyToolUse.matches(&trivial),
+            (false, Some("no tool calls this turn (count=0)".to_string()))
+        );
+        // After a single tool call → must fire.
+        let with_one_tool = RouteContext {
+            tool_call_count: 1,
+            ..trivial
+        };
+        assert_eq!(DirRoute::HadAnyToolUse.matches(&with_one_tool), (true, None));
+        // Multi-tool turn → still fires (no upper bound).
+        let many_tools = RouteContext {
+            tool_call_count: 10,
+            ..trivial
+        };
+        assert_eq!(DirRoute::HadAnyToolUse.matches(&many_tools), (true, None));
+    }
+
     /// C3 marker protocol (2026-06-29): each `Section` has a stable
     /// human-readable `label()` distinct from its detection
     /// `marker()`. Locked in here so a refactor that conflates the
@@ -1992,7 +2097,9 @@ let ctx = RouteContext {
     #[test]
     fn test_resolve_personality_builtin() {
         let coder = resolve_personality("coder", None).unwrap_or_default();
-        assert!(coder.contains("`coder` persona"));
+        // 2026-07-12: Builtin personas were localized to Chinese.
+        // Verify the persona loaded and contains the Chinese role label.
+        assert!(coder.contains("工程师"));
     }
 
     #[test]
@@ -2120,22 +2227,23 @@ let ctx = RouteContext {
     #[test]
     fn test_persona_snapshot_coder() {
         let p = resolve_personality("coder", None).unwrap();
-        assert!(p.contains("`coder` persona"));
-        assert!(p.contains("correctness"));
+        // 2026-07-12: Localized to Chinese — verify key content markers.
+        assert!(p.contains("工程师"));
+        assert!(p.contains("正确性"));
     }
 
     #[test]
     fn test_persona_snapshot_writer() {
         let p = resolve_personality("writer", None).unwrap();
-        assert!(p.contains("`writer` persona"));
-        assert!(p.contains("clarity"));
+        assert!(p.contains("写作者"));
+        assert!(p.contains("可读性"));
     }
 
     #[test]
     fn test_persona_snapshot_analyst() {
         let p = resolve_personality("analyst", None).unwrap();
-        assert!(p.contains("`analyst` persona"));
-        assert!(p.contains("evidence"));
+        assert!(p.contains("分析师"));
+        assert!(p.contains("证据"));
     }
 
     #[test]
@@ -2156,8 +2264,9 @@ let ctx = RouteContext {
             b.build().to_string()
         };
 
-        assert!(!base.contains("`coder` persona"));
-        assert!(coder_prompt.contains("`coder` persona"));
-        assert!(coder_prompt.contains("correctness"));
+        // 2026-07-12: Localized to Chinese.
+        assert!(!base.contains("工程师"));
+        assert!(coder_prompt.contains("工程师"));
+        assert!(coder_prompt.contains("正确性"));
     }
 }

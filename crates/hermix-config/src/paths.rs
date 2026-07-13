@@ -454,6 +454,32 @@ pub fn sessions_db_path() -> PathBuf {
     data_dir().join("sessions.db")
 }
 
+/// Tasks database path. Currently shares the same `sessions.db` file
+/// as session persistence (the `tasks` and `automation_*` tables are
+/// created alongside `sessions` / `messages` in the same SQLite file
+/// to avoid dual-writer journal contention — 铁律 D/WAL).
+///
+/// **Always** go through this helper (or [`tasks_db_path_in`]).
+/// In the future, if task data grows large enough to warrant a
+/// separate file, only this function needs to change.
+///
+/// (Phase 0 — P0-2)
+pub fn tasks_db_path() -> PathBuf {
+    // Same file as sessions.db — single-writer SQLite + WAL avoids
+    // cross-file journal contention (铁律 D).
+    sessions_db_path()
+}
+
+/// `<data>/sessions.db` for an explicitly-provided data dir.
+///
+/// Tasks share this file. See [`tasks_db_path`] for rationale.
+///
+/// (Phase 0 — P0-2)
+pub fn tasks_db_path_in(data_dir: impl AsRef<Path>) -> PathBuf {
+    // Same as sessions_db_path_in — single SQLite file.
+    data_dir.as_ref().join("sessions.db")
+}
+
 /// `<data>/sessions.db` for an explicitly-provided data dir.
 ///
 /// Use this whenever a component already holds the resolved data dir
@@ -1071,6 +1097,8 @@ mod tests {
         assert_eq!(sessions_db_path_in(&home), home.join("sessions.db"));
         assert_eq!(sessions_dir_in(&home), home.join("sessions"));
         assert_eq!(trajectories_dir_in(&home), home.join("trajectories"));
+        // P0-2: tasks_db_path_in mirrors sessions_db_path_in
+        assert_eq!(tasks_db_path_in(&home), home.join("sessions.db"));
     }
 
     #[test]

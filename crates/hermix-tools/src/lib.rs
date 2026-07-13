@@ -25,6 +25,7 @@ pub mod dispatch;
 pub mod essential;
 pub mod register_builtins;
 pub mod registry;
+pub mod tool_meta;
 pub mod tools;
 pub mod toolset;
 pub mod toolset_distributions;
@@ -50,6 +51,7 @@ pub use approval::{
 
 // Re-export credential guard
 pub mod credential_guard;
+pub mod deferred_loader;
 pub use credential_guard::CredentialGuard;
 
 // Re-export all tool handler implementations and their backend traits
@@ -78,13 +80,14 @@ pub use tools::image_gen::{ImageGenBackend, ImageGenerateHandler};
 pub use tools::memory::{MemoryBackend, MemoryHandler};
 pub use tools::messaging::{MessagingBackend, SendMessageHandler};
 pub use tools::session_search::{SessionSearchBackend, SessionSearchHandler};
+pub use tools::session_stamper::SessionStamper;
 pub use tools::skill_commands;
 pub use tools::skill_utils;
 pub use tools::skills::{SkillManageHandler, SkillViewHandler, SkillsListHandler};
 pub use tools::terminal::{ProcessBackend, ProcessHandler, TerminalHandler};
 pub use tools::todo::{TodoBackend, TodoHandler};
 pub use tools::tool_search::{
-    assemble_tool_schemas, classify_tools, is_bridge, AssemblyResult,
+    assemble_tool_schemas, classify_tools, classify_tools_with_meta, is_bridge, AssemblyResult,
     ToolCallHandler, ToolDescribeHandler, ToolSearchHandler,
 };
 pub use tools::tts::{TextToSpeechHandler, TtsBackend};
@@ -111,6 +114,12 @@ pub use backends::todo::FileTodoBackend;
 pub use backends::tts::MultiTtsBackend;
 pub use backends::vision::OpenAiVisionBackend;
 pub use backends::web::{BaiduHtmlSearchBackend, SimpleExtractBackend};
+
+// Re-export tool metadata types (P6-1)
+pub use tool_meta::{LoadingStrategy, ToolMeta, ToolMetaRegistry, DEFAULT_RESIDENT_TOOLS};
+
+// Re-export deferred loader types (P6-2)
+pub use deferred_loader::{assemble_tool_schemas_with_meta, DeferredToolLoader};
 
 // Re-export builtin registration helper
 pub use register_builtins::register_builtin_tools;

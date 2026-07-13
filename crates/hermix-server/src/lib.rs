@@ -4308,6 +4308,57 @@ async fn handle_ws_stream_send(
                                 event,
                             }
                         }
+                        "context_usage" => {
+                            let used = extra.get("used_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let max = extra.get("max_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let threshold = extra.get("threshold_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let percent = extra.get("percent")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0);
+                            WsEnvelope {
+                                version: 1,
+                                request_id: request_id.clone(),
+                                trace_id: trace_id_for_stream.clone(),
+                                event: StreamEvent::ContextUsage {
+                                    used_tokens: used,
+                                    max_tokens: max,
+                                    threshold_tokens: threshold,
+                                    percent,
+                                },
+                            }
+                        }
+                        "compaction_status" => {
+                            let snapshot = extra.get("snapshot")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
+                            WsEnvelope {
+                                version: 1,
+                                request_id: request_id.clone(),
+                                trace_id: trace_id_for_stream.clone(),
+                                event: StreamEvent::CompactionStatus { snapshot },
+                            }
+                        }
+                        "section_gate" | "prefetch_intent" | "acui" => {
+                            // Forward these structured events as raw
+                            // JSON so the frontend's `useStreamChat`
+                            // handler can parse them. We wrap the entire
+                            // `extra` object as the WS event payload.
+                            let raw = extra.clone();
+                            WsEnvelope {
+                                version: 1,
+                                request_id: request_id.clone(),
+                                trace_id: trace_id_for_stream.clone(),
+                                event: StreamEvent::Status {
+                                    content: raw.to_string(),
+                                },
+                            }
+                        }
                         _ => {
                             tracing::debug!(event = %event_type, "unknown extra event type; skipping");
                             return;
@@ -4420,6 +4471,7 @@ async fn handle_ws_stream_send(
         session = %session_id,
         "ws_stream: rx forward loop starting"
     );
+    let mut was_client_disconnect = false;
     while let Some(event_json) = rx.recv().await {
         if socket
             .send(WsMessage::Text(
@@ -4434,6 +4486,7 @@ async fn handle_ws_stream_send(
             // skips its terminal Done/Error event, then abort the
             // task to stop processing as soon as possible (at the
             // next .await boundary in send_message_stream).
+            was_client_disconnect = true;
             ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
             agent_handle.abort();
             // Release the session lock since the spawned task may
@@ -4445,6 +4498,7 @@ async fn handle_ws_stream_send(
     }
     tracing::info!(
         session = %session_id,
+        was_client_disconnect = was_client_disconnect,
         "ws_stream: rx forward loop EXITED — handle_ws_stream_send returning"
     );
 }

@@ -96,6 +96,13 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         // 2026-07-06: production build path added this; mirror
         // here so the dashboard test fixtures stay in sync.
         recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        // 2026-07-07: Todo event bus. Test fixtures don't exercise
+        // the WS forwarder, so None is fine.
+        todo_event_tx: None,
+        orchestration_bus: crate::OrchestrationEventBus::new(),
+        task_service: None,
+        automation_service: None,
+        automation_engine_scheduler: None,
     }
 }
 

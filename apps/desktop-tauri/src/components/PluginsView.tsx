@@ -665,6 +665,18 @@ function ConfirmDialog({
 function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
   const [servers, setServers] = useState<api.McpServerEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [newServer, setNewServer] = useState({
+    name: "",
+    transport: "stdio" as api.McpTransport,
+    command: "",
+    args: "",
+    url: "",
+    env: "",
+    description: "",
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -684,6 +696,33 @@ function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string)
     const list = await api.resetMcpServersToOfficial();
     setServers(list);
   };
+  const handleAdd = async () => {
+    if (!newServer.name.trim()) { setAddError("名称不能为空"); return; }
+    if (newServer.transport === "stdio" && !newServer.command.trim()) { setAddError("stdio 模式需要填写 command"); return; }
+    if (newServer.transport === "http" && !newServer.url.trim()) { setAddError("http 模式需要填写 URL"); return; }
+    setAdding(true);
+    setAddError(null);
+    try {
+      const spec: Omit<api.McpServerEntry, "id" | "createdAt"> = {
+        name: newServer.name.trim(),
+        transport: newServer.transport,
+        command: newServer.transport === "stdio" ? newServer.command.trim() : undefined,
+        args: newServer.transport === "stdio" && newServer.args.trim() ? newServer.args.trim().split(/\s+/) : undefined,
+        url: newServer.transport === "http" ? newServer.url.trim() : undefined,
+        env: newServer.env.trim() ? Object.fromEntries(newServer.env.trim().split("\n").filter(Boolean).map((line) => { const idx = line.indexOf("="); return idx > 0 ? [line.slice(0, idx).trim(), line.slice(idx + 1).trim()] : null; }).filter(Boolean) as [string, string][]) : undefined,
+        enabled: true,
+        description: newServer.description.trim() || undefined,
+      };
+      const created = await api.addMcpServer(spec);
+      setServers((prev) => [...prev, created]);
+      setNewServer({ name: "", transport: "stdio", command: "", args: "", url: "", env: "", description: "" });
+      setShowAddForm(false);
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAdding(false);
+    }
+  };
 
   const q = query.trim().toLowerCase();
   const filtered = q
@@ -700,14 +739,78 @@ function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string)
         <span className="text-[11.5px] text-text-muted">
           MCP (Model Context Protocol) 服务,通过 stdio 启动本地子进程或 HTTP/SSE 连接远程端点。
         </span>
-        <button
-          onClick={reset}
-          className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
-          title="恢复为官方示例 5 个 seed"
-        >
-          <RotateCcw size={11} /> 恢复官方示例
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowAddForm((v) => !v)}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-accent hover:bg-bg-tertiary"
+            title="添加自定义 MCP 服务"
+          >
+            <Plus size={11} /> 添加 MCP
+          </button>
+          <button
+            onClick={reset}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
+            title="恢复为官方示例 5 个 seed"
+          >
+            <RotateCcw size={11} /> 恢复官方示例
+          </button>
+        </div>
       </div>
+
+      {showAddForm && (
+        <div className="rounded-xl border border-border-primary bg-bg-card p-4 mb-3 space-y-3">
+          <div className="text-sm font-medium text-text-primary">添加 MCP 服务</div>
+          {addError && (
+            <div className="text-[11px] text-error bg-error/10 rounded px-2 py-1">{addError}</div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10.5px] text-text-muted">名称</label>
+              <input value={newServer.name} onChange={(e) => setNewServer((p) => ({ ...p, name: e.target.value }))} placeholder="my-mcp-server" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+            </div>
+            <div>
+              <label className="text-[10.5px] text-text-muted">传输方式</label>
+              <select value={newServer.transport} onChange={(e) => setNewServer((p) => ({ ...p, transport: e.target.value as api.McpTransport }))} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary">
+                <option value="stdio">stdio</option>
+                <option value="http">http</option>
+              </select>
+            </div>
+            {newServer.transport === "stdio" ? (
+              <>
+                <div>
+                  <label className="text-[10.5px] text-text-muted">Command</label>
+                  <input value={newServer.command} onChange={(e) => setNewServer((p) => ({ ...p, command: e.target.value }))} placeholder="npx" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                </div>
+                <div>
+                  <label className="text-[10.5px] text-text-muted">Args (空格分隔)</label>
+                  <input value={newServer.args} onChange={(e) => setNewServer((p) => ({ ...p, args: e.target.value }))} placeholder="-y @modelcontextprotocol/server-filesystem /tmp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                </div>
+              </>
+            ) : (
+              <div className="col-span-2">
+                <label className="text-[10.5px] text-text-muted">URL</label>
+                <input value={newServer.url} onChange={(e) => setNewServer((p) => ({ ...p, url: e.target.value }))} placeholder="https://example.com/mcp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+              </div>
+            )}
+            <div className="col-span-2">
+              <label className="text-[10.5px] text-text-muted">环境变量 (每行 KEY=value)</label>
+              <textarea value={newServer.env} onChange={(e) => setNewServer((p) => ({ ...p, env: e.target.value }))} placeholder={"API_KEY=xxx"} rows={2} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary resize-none" />
+            </div>
+            <div className="col-span-2">
+              <label className="text-[10.5px] text-text-muted">描述 (可选)</label>
+              <input value={newServer.description} onChange={(e) => setNewServer((p) => ({ ...p, description: e.target.value }))} placeholder="自定义文件系统 MCP" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={handleAdd} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:opacity-90 disabled:opacity-50">
+              {adding ? "添加中..." : "确认添加"}
+            </button>
+            <button onClick={() => { setShowAddForm(false); setAddError(null); }} className="px-3 py-1.5 rounded-lg text-xs text-text-muted hover:text-text-primary hover:bg-bg-tertiary">
+              取消
+            </button>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <SkeletonGrid count={3} />
@@ -734,7 +837,7 @@ function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string)
       )}
 
       <p className="text-xs text-text-muted pb-6 mt-4">
-        配置需要 {`npx`} / {`uvx`} 等运行时可用。密钥请填入 env 字段,正式接入需等后端 /api/mcp/servers 路由上线。
+        配置需要 {`npx`} / {`uvx`} 等运行时可用。密钥请填入 env 字段。
       </p>
     </>
   );

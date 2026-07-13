@@ -143,44 +143,49 @@ use `browser_*` tools — NOT `web_fetch`. The two are not interchangeable:\n\
 
 /// Injected when `AgentConfig::autonomous_mode = true`.
 ///
-/// This block instructs the LLM to exhaust all tool-based approaches before
-/// stopping and asking the user for input. The loop itself mirrors this by
-/// re-injecting a "keep going" system message whenever the model outputs
-/// plain text without tool calls while turns remain.
+/// Streamlined (2026-07-08): the original 8 rules collapsed into a single
+/// stopping-condition principle + execution bias.  The nudge loop
+/// (`re-inject keep going`) still complements this block when the model
+/// outputs plain text without tool calls.
+///
+/// Reference: prompt-comparison-report.md § 四·十一, openclaw Execution Bias.
 const AUTONOMOUS_EXECUTION_GUIDANCE: &str = "\
-# Autonomous execution (mandatory)
+# Autonomous execution
 
-You are operating in **autonomous mode**. Your directive is to complete the \
-user's goal entirely on your own, without stopping mid-task to ask the user \
-for clarification or missing information.
+You are in autonomous mode. Your only valid stopping condition is **task \
+completion**. Do not stop mid-task unless no available tool can make further \
+progress — and in that case, clearly explain what you tried and what blocks you.
 
-## Rules
-1. **Never stop to ask the user for information that a tool call could retrieve.** \
-   If you need credentials, page content, file data, or any other value — call a \
-   tool to obtain it first. Only ask the user if every tool-based path has been \
-   exhausted and you truly cannot proceed.
-2. **Prefer trying over asking.** If you are uncertain whether an approach will \
-   work, try it with a tool call. Do not ask for permission before attempting.
-3. **On tool failure, adapt immediately.** If a tool returns an error or unexpected \
-   result, revise your plan and call a different tool. Do not output a failure \
-   summary and stop — keep working.
-4. **The only valid stopping condition is task completion or genuine impossibility.** \
-   You may stop and address the user only when (a) the task is fully done, or \
-   (b) you have tried every available tool and none can make further progress — \
-   in which case clearly explain what was attempted and what is blocking you.
-5. **Do not ask for confirmation before taking reversible actions.** Click buttons, \
-   fill forms, navigate pages, write files — just do it. Reserve confirmation \
-   requests for irreversible or destructive operations only.
-6. **If you lack a required value (e.g. a password), look for it on-screen, in \
-   context, or via a tool before asking the user.** Scroll, screenshot, read files, \
-   search memory — try everything first.
-7. **When you say \"let me use X\" you MUST emit the tool call in the same turn.** \
-   Saying \"let me use vision\" or \"let me try a snapshot\" without an actual \
-   tool call in that turn will not advance the task — the loop will treat it as a \
-   stop and you will be re-prompted. If you announce a tool, call it.
-8. **Same tool returning the same output 2+ times in a row = stuck.** Vary the \
-   arguments, try a different tool, scroll the page, wait for loading, change the \
-   selector — do NOT keep calling the same tool with the same args.";
+## Completion requires evidence
+A task is complete only when you have produced a **verified outcome**:
+- You changed or confirmed something: file written, command succeeded, test \
+  passed, question answered with concrete data, investigation concluded with \
+  actionable findings.
+- Actions, not intentions. \"Here's a plan\", \"I could try X\", or a directory \
+  listing without follow-up is not completion — execute first, then report.
+
+## During execution
+- Tools before questions. Look it up, try it, or vary the approach before \
+  asking the user.
+- If a tool fails, switch tools or arguments — don't repeat what already failed.
+- Non-final turns: advance with tool calls, not promises.";
+
+/// Safety guardrail — always-on, independent of autonomous mode.
+///
+/// Injected unconditionally. Does not replace the tool-level approval engine;
+/// it serve as a prompt-level backstop for models that ignore tool-side
+/// guards (especially fine-tunes and non-OpenAI providers).
+///
+/// Reference: prompt-comparison-report.md § 九, openclaw Safety block.
+const SAFETY_GUIDANCE: &str = "\
+# Safety
+
+- No self-preservation, replication, or resource acquisition beyond the task \
+  assigned by the user.
+- Safety and oversight take priority over completion. When in conflict: \
+  pause and explain the concern — do not proceed.
+- Do not persuade users to expand access, disable safeguards, or take \
+  actions that could cause harm.";
 
 /// System-prompt block injected for MiniMax / MiniMax-style models.
 ///
@@ -340,7 +345,9 @@ Before each tool call, mentally check:
 
 const TASK_FOCUS_SHORT: &str = "\
 ## Task focus
-Before each tool call, check: (1) original goal, (2) current progress, (3) next step. Don't repeat completed work. If stuck, explain what you've tried.";
+Before each tool call, check: (1) original goal, (2) current progress, (3) next step. \
+Do NOT repeat completed work — if a tool was already called and returned a result, do not call it again with the same arguments. \
+If stuck, explain what you've tried.";
 
 const TODO_GUIDANCE: &str = "\
 # Task list (`todo` tool) — use it proactively
@@ -379,6 +386,46 @@ inline task card. Use group_title to label a plan when you start it:
 - One plan per topic. If the user asks a fresh question while a
   previous plan is still in flight, START A NEW PLAN with a new
    rather than overloading the old card.";
+
+const TASK_TRACKER_GUIDANCE: &str = "\
+# Orchestration Engine — Task Tracker (`task_create` / `task_update` / `task_list` / `task_get`)
+
+The orchestration engine gives you first-class Task objects to track work units.
+Use these tools to manage tasks throughout a conversation:
+
+## When to use task tools
+- **Multi-step work**: When the user's request involves 3+ distinct steps, create
+  a parent task and subtasks to track progress.
+- **Complex deliverables**: When producing files, reports, or code changes,
+  create a task to track the deliverable lifecycle.
+- **User visibility**: Tasks appear in the frontend task panel, giving the user
+  real-time progress feedback.
+
+## How to decompose large tasks (铁律 T)
+1. **Create a parent task**: `task_create(title='Implement feature X', mode='craft')`
+2. **Create subtasks**: `task_create(title='Step 1: Research', parent_task_id='<parent_id>')`
+   — repeat for each step.
+3. **Start a subtask**: `task_update(task_id='<subtask_id>', status='in_progress')`
+4. **Complete a subtask**: `task_update(task_id='<subtask_id>', status='completed')`
+5. **Check progress**: `task_list(status='in_progress')` or `task_get(task_id='<parent_id>')`
+6. **Complete the parent**: After all subtasks are done,
+   `task_update(task_id='<parent_id>', status='completed')`
+
+## Same-turn completion (铁律 T)
+It is perfectly valid to create a task and complete it within the same turn.
+The frontend panel may briefly lag behind, but the database is always correct.
+Do NOT hesitate to create+complete a task in one turn for quick items.
+
+## State machine
+- `pending` → `planning` (Plan mode only) → `in_progress` → `completed` / `failed`
+- `ask` mode tasks stay `pending` (read-only advisory, no execution)
+- Terminal states: `completed`, `failed`, `archived`
+
+## Discipline
+- Keep task titles short and action-oriented.
+- One parent task per logical unit of work; subtasks for steps.
+- Always transition to `completed` or `failed` — never leave tasks dangling in `in_progress`.
+- Use `task_get` to inspect a task's current state and children before making decisions.";
 
 const TOOL_EXECUTION_SUMMARY_GUIDANCE: &str = "\
 # Tool execution summary (mandatory)
@@ -484,7 +531,10 @@ use crate::prompt_assembly::should_inject_tool_enforcement;
 /// system prompt. Each direction is one inline `if/else` branch
 /// extracted from the previous monolith of `build_system_prompt` —
 /// see `context::DirRoute` for the gate logic.
-pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
+pub fn collect_directions(
+    route_ctx: &RouteContext<'_>,
+    project_conventions: Option<&str>,
+) -> Vec<SystemDir> {
     let user_message = route_ctx.user_message;
     let tool_names = route_ctx.tool_names;
     let model_for_prompt = route_ctx.model_name;
@@ -551,6 +601,12 @@ pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
         DirRoute::Autonomous,
         AUTONOMOUS_EXECUTION_GUIDANCE,
     ));
+    // Safety guardrail — always-on, prompt-level backstop.
+    dirs.push(SystemDir::new(
+        "safety.block",
+        DirRoute::Always,
+        SAFETY_GUIDANCE,
+    ));
     // Browser tool-selection discipline.
     dirs.push(SystemDir::new(
         "browser.discipline",
@@ -594,14 +650,30 @@ pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
             CONTEXT_BUDGET_GUIDANCE,
         ));
     }
-    // Task focus guidance for multi-step tasks (5+ tool calls).
+    // Phase 4 / P4-2: Orchestration-engine task tracker guidance.
+    // Fires when task_create is available, guiding the LLM on task
+    // decomposition and same-turn completion (铁律 T).
+    if tool_names.contains("task_create") {
+        dirs.push(SystemDir::new(
+            "task_tracker.guide",
+            DirRoute::HasTaskTracker,
+            TASK_TRACKER_GUIDANCE,
+        ));
+    }
+    // Task focus guidance for multi-step tasks.
+    // v35 (2026-07-09): lowered the short-form threshold from 2 to 1
+    // so that even single-tool-use turns get the "do not repeat
+    // completed work" guidance. Previously, turns with only 1 tool
+    // call got no focus guidance, which was a root cause of the LLM
+    // re-issuing identical tool calls — it had no reminder that
+    // repeating completed work is forbidden.
     if route_ctx.tool_call_count >= 5 {
         dirs.push(SystemDir::new(
             "task_focus.guide",
             DirRoute::MultiStepTask,
             TASK_FOCUS_GUIDANCE,
         ));
-    } else if route_ctx.tool_call_count >= 2 {
+    } else if route_ctx.tool_call_count >= 1 {
         dirs.push(SystemDir::new(
             "task_focus.short",
             DirRoute::MultiStepTask,
@@ -712,5 +784,126 @@ pub fn collect_directions(route_ctx: &RouteContext<'_>) -> Vec<SystemDir> {
             MINIMAX_TOOL_FORMAT_GUIDANCE,
         ));
     }
+    // Project conventions — non-generic, deployment-specific tuning.
+    // Injected only when the active workspace's AGENTS.md exposes a
+    // conventions section. Keeps the universal core free of any single
+    // user's preferences (see docs/HERMIX_AGENT_SYSTEM_PROMPT.md v2).
+    if let Some(conv) = project_conventions {
+        if !conv.trim().is_empty() {
+            dirs.push(SystemDir::new(
+                "project.conventions",
+                DirRoute::HasProjectConventions,
+                conv,
+            ));
+        }
+    }
     dirs
+}
+
+/// Load project-specific conventions from the active workspace's
+/// `AGENTS.md`. Returns `None` when there is no workspace, no
+/// `AGENTS.md`, or no conventions section — in which case the universal
+/// core prompt is used unchanged.
+///
+/// The conventions section is matched by a heading containing any of
+/// `项目约定` / `project conventions` / `conventions` (case-insensitive),
+/// at `#` or `##` level. Everything up to the next heading is returned.
+///
+/// This is the data-injection hook that keeps the agent's *universal*
+/// behaviour (see `docs/HERMIX_AGENT_SYSTEM_PROMPT.md`) separate from
+/// any single deployment's tuning. A different user / workspace simply
+/// gets a different `AGENTS.md` — the core never changes.
+pub fn load_project_conventions(workspace: &str) -> Option<String> {
+    let agents = std::path::Path::new(workspace).join("AGENTS.md");
+    let text = std::fs::read_to_string(&agents).ok()?;
+    extract_conventions_section(&text)
+}
+
+fn extract_conventions_section(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let keywords = ["项目约定", "project conventions", "conventions"];
+    let mut start: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        if (t.starts_with("## ") || t.starts_with("# "))
+            && keywords.iter().any(|k| t.to_lowercase().contains(k))
+        {
+            start = Some(i + 1);
+            break;
+        }
+    }
+    let start = start?;
+    let mut end = lines.len();
+    for (i, line) in lines.iter().enumerate().skip(start) {
+        let t = line.trim_start();
+        if (t.starts_with("## ") || t.starts_with("# ")) && i > start {
+            end = i;
+            break;
+        }
+    }
+    let section = lines[start..end].join("\n").trim().to_string();
+    if section.is_empty() {
+        None
+    } else {
+        Some(section)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_conventions_section_by_heading() {
+        let md = "# Title\n\n## Conventions\nrule one\nrule two\n\n## Build\ncargo check\n";
+        let got = extract_conventions_section(md).unwrap();
+        assert!(got.contains("rule one"));
+        assert!(got.contains("rule two"));
+        assert!(!got.contains("cargo check"));
+    }
+
+    #[test]
+    fn extracts_chinese_conventions_heading() {
+        let md = "intro\n\n## 项目约定\n- 无蓝紫\n- sidecar cp\n\n## 其他\nx\n";
+        let got = extract_conventions_section(md).unwrap();
+        assert!(got.contains("无蓝紫"));
+        assert!(!got.contains("x"));
+    }
+
+    #[test]
+    fn no_conventions_section_returns_none() {
+        let md = "# Title\n## Build\ncargo check\n";
+        assert!(extract_conventions_section(md).is_none());
+    }
+
+    #[test]
+    fn collect_directions_injects_conventions_when_present() {
+        let mut tn = std::collections::HashSet::new();
+        tn.insert("todo");
+        let ctx = RouteContext {
+            user_message: "",
+            tool_names: &tn,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+            tool_call_count: 0,
+        };
+        let dirs = collect_directions(&ctx, Some("禁用蓝紫配色"));
+        assert!(dirs.iter().any(|d| {
+            d.tag == "project.conventions" && d.body.contains("禁用蓝紫配色")
+        }));
+    }
+
+    #[test]
+    fn collect_directions_skips_conventions_when_absent() {
+        let tn = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message: "",
+            tool_names: &tn,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+            tool_call_count: 0,
+        };
+        let dirs = collect_directions(&ctx, None);
+        assert!(!dirs.iter().any(|d| d.tag == "project.conventions"));
+    }
 }

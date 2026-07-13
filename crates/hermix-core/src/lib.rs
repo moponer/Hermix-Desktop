@@ -34,6 +34,12 @@ pub use types::{
     ToolErrorRecord, ToolResult, UsageStats, BUDGET_CONFIG_MAX_CHARS,
 };
 
+// Re-export Orchestration Engine types (Phase 0 — P0-1)
+pub use types::{
+    TaskArtifactType, TaskContext, TaskContextRef, TaskContextRefKind, TaskMode, TaskResultRef,
+    TaskStatus,
+};
+
 // Re-export tool schema types
 pub use tool_schema::{tool_schema, JsonSchema, ToolCatalogEntry, ToolSchema};
 

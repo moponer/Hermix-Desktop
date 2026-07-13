@@ -156,7 +156,7 @@ impl MemoryRouter {
     /// Phase 17 (safety net): bind every backend to the given
     /// session + hermix_home. Most call sites already call
     /// `initialize()` on each backend as they construct it (e.g.
-    /// `memory_layer_adapter` does this for ByteRover and the
+    /// `memory_layer_adapter` does this for the
     /// embedded backend). This method exists so `MemoryRouter`
     /// can guarantee its backends are bound even if the
     /// construction site forgot. Safe to call multiple times —
@@ -415,8 +415,7 @@ impl MemoryLayer for MemoryRouter {
     // ------------------------------------------------------------------
 
     /// Fan-out `sync_turn` to all backends. Synchronous — each backend
-    /// is responsible for its own threading if needed (ByteRover uses
-    /// `std::thread::spawn` internally).
+    /// is responsible for its own threading if needed.
     fn sync_turn(&self, user: &str, assistant: &str, session_id: &str) {
         for backend in &self.backends {
             backend.sync_turn(user, assistant, session_id);

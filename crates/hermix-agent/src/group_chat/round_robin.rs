@@ -1,6 +1,6 @@
 //! Round-robin speaker selection — participants speak in fixed order.
 
-use crate::orchestrator::{GroupChatMessage, GroupChatParticipant};
+use crate::group_chat::{GroupChatMessage, GroupChatParticipant};
 
 /// Round-robin speaker selection: cycles through participants in order,
 /// skipping humans (they speak when they want).

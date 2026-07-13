@@ -5,43 +5,21 @@ use indexmap::IndexMap;
 use serde_json::Value;
 
 use crate::ToolRegistry;
+use crate::tool_meta::{ToolMetaRegistry, DEFAULT_RESIDENT_TOOLS};
 
 /// Tools that are ALWAYS visible to the LLM (never deferred).
 /// Anything not in this list becomes a candidate for tool_search bridge.
-const CORE_TOOLS: &[&str] = &[
-    "read_file",
-    "write_file",
-    "patch_file",
-    "search_files",
-    "terminal",
-    "memory",
-    "clarify",
-    "todo",
-    "skills_list",
-    "skill_view",
-    "skill_manage",
-    "session_search",
-    "browser_navigate",
-    "browser_snapshot",
-    "browser_click",
-    "browser_type",
-    "browser_scroll",
-    "browser_back",
-    "browser_press",
-    "browser_get_images",
-    "browser_vision",
-    "browser_console",
-    "process",
-    "tool_search",
-    "tool_describe",
-    "tool_call",
-];
+///
+/// P6-1: This constant is kept for backwards compatibility with
+/// `classify_tools`. The canonical source is now
+/// [`crate::tool_meta::DEFAULT_RESIDENT_TOOLS`] (same contents).
+const CORE_TOOLS: &[&str] = DEFAULT_RESIDENT_TOOLS;
 
 pub const BRIDGE_TOOL_NAMES: &[&str] = &["tool_search", "tool_describe", "tool_call"];
 
 /// Threshold: when deferred tool count exceeds this, activate bridge.
 /// This is a count-based threshold; token-based is future work.
-const DEFERRED_THRESHOLD: usize = 25;
+pub(crate) const DEFERRED_THRESHOLD: usize = 25;
 
 // ── Classification ──────────────────────────────────────────────────
 
@@ -53,11 +31,50 @@ pub fn is_bridge(name: &str) -> bool {
     BRIDGE_TOOL_NAMES.iter().any(|b| *b == name)
 }
 
+/// Classify tools into (visible, deferred) using the hard-coded
+/// `CORE_TOOLS` list. Maintained for backwards compatibility.
+///
+/// Prefer [`classify_tools_with_meta`] when a [`ToolMetaRegistry`] is
+/// available — it uses per-tool metadata instead of a hard-coded list.
 pub fn classify_tools(schemas: &[ToolSchema]) -> (Vec<&ToolSchema>, Vec<&ToolSchema>) {
     let mut visible = Vec::new();
     let mut deferred = Vec::new();
     for s in schemas {
         if is_core(&s.name) || is_bridge(&s.name) {
+            visible.push(s);
+        } else {
+            deferred.push(s);
+        }
+    }
+    (visible, deferred)
+}
+
+/// Classify tools into (visible, deferred) using a [`ToolMetaRegistry`].
+///
+/// P6-1: This is the metadata-driven replacement for [`classify_tools`].
+/// Tools registered as `LoadingStrategy::Deferred` in the metadata
+/// registry are placed in the deferred bucket; all others (including
+/// unregistered tools and bridge tools) are visible.
+///
+/// When the metadata registry is empty or a tool is not registered,
+/// the function falls back to the `CORE_TOOLS` list so behaviour is
+/// preserved for callers that haven't migrated yet.
+pub fn classify_tools_with_meta<'a>(
+    schemas: &'a [ToolSchema],
+    meta: &'a ToolMetaRegistry,
+) -> (Vec<&'a ToolSchema>, Vec<&'a ToolSchema>) {
+    let mut visible = Vec::new();
+    let mut deferred = Vec::new();
+    for s in schemas {
+        if is_bridge(&s.name) {
+            // Bridge tools are always visible
+            visible.push(s);
+        } else if meta.len() > 0 && meta.is_deferred(&s.name) {
+            deferred.push(s);
+        } else if meta.len() > 0 && meta.is_resident(&s.name) {
+            visible.push(s);
+        } else if is_core(&s.name) {
+            // Fall back to hard-coded list when tool isn't in the registry
             visible.push(s);
         } else {
             deferred.push(s);
@@ -101,7 +118,7 @@ pub fn assemble_tool_schemas(all: Vec<ToolSchema>) -> AssemblyResult {
     }
 }
 
-fn bridge_tool_schemas(deferred_count: usize) -> Vec<ToolSchema> {
+pub(crate) fn bridge_tool_schemas(deferred_count: usize) -> Vec<ToolSchema> {
     vec![
         ToolSchema::new(
             "tool_search",
@@ -737,6 +754,64 @@ mod tests {
         let (visible, deferred) = classify_tools(&schemas);
         assert_eq!(visible.len(), 2);
         assert_eq!(deferred.len(), 1);
+    }
+
+    // ── P6-1: classify_tools_with_meta tests ──────────────────────
+
+    #[test]
+    fn classify_with_meta_uses_registry() {
+        let meta = ToolMetaRegistry::new();
+        meta.register(crate::tool_meta::ToolMeta::resident("read_file", "Read", "file"));
+        meta.register(crate::tool_meta::ToolMeta::deferred("image_gen", "Generate", "ai"));
+
+        let schemas = vec![
+            ToolSchema::new("read_file", "Read", JsonSchema::new("object")),
+            ToolSchema::new("image_gen", "Generate", JsonSchema::new("object")),
+            ToolSchema::new("tool_search", "Search", JsonSchema::new("object")),
+            ToolSchema::new("unknown_plugin", "Unknown", JsonSchema::new("object")),
+        ];
+
+        let (visible, deferred) = classify_tools_with_meta(&schemas, &meta);
+        assert_eq!(visible.len(), 2); // read_file + tool_search
+        assert_eq!(deferred.len(), 2); // image_gen + unknown_plugin
+        let vis_names: Vec<&str> = visible.iter().map(|s| s.name.as_str()).collect();
+        assert!(vis_names.contains(&"read_file"));
+        assert!(vis_names.contains(&"tool_search"));
+        let def_names: Vec<&str> = deferred.iter().map(|s| s.name.as_str()).collect();
+        assert!(def_names.contains(&"image_gen"));
+        assert!(def_names.contains(&"unknown_plugin"));
+    }
+
+    #[test]
+    fn classify_with_meta_falls_back_when_empty() {
+        // Empty registry → behaves like classify_tools (uses CORE_TOOLS)
+        let meta = ToolMetaRegistry::new();
+        let schemas = vec![
+            ToolSchema::new("read_file", "Read", JsonSchema::new("object")),
+            ToolSchema::new("some_plugin", "Plugin", JsonSchema::new("object")),
+        ];
+        let (visible, deferred) = classify_tools_with_meta(&schemas, &meta);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(deferred.len(), 1);
+    }
+
+    #[test]
+    fn classify_with_meta_can_override_core_tool_to_deferred() {
+        // The metadata registry can mark a core tool as deferred
+        let meta = ToolMetaRegistry::new();
+        meta.mark_deferred("terminal");
+
+        let schemas = vec![
+            ToolSchema::new("terminal", "Terminal", JsonSchema::new("object")),
+            ToolSchema::new("read_file", "Read", JsonSchema::new("object")),
+        ];
+
+        let (visible, deferred) = classify_tools_with_meta(&schemas, &meta);
+        // terminal should be deferred, read_file should be visible
+        let def_names: Vec<&str> = deferred.iter().map(|s| s.name.as_str()).collect();
+        assert!(def_names.contains(&"terminal"));
+        let vis_names: Vec<&str> = visible.iter().map(|s| s.name.as_str()).collect();
+        assert!(vis_names.contains(&"read_file"));
     }
 }
 

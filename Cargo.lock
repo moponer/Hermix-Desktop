@@ -1853,7 +1853,6 @@ dependencies = [
  "async-stream",
  "async-trait",
  "chrono",
- "dirs",
  "eventsource-stream",
  "fastrand",
  "futures",
@@ -1886,6 +1885,25 @@ dependencies = [
  "tracing",
  "uuid",
  "which 7.0.3",
+]
+
+[[package]]
+name = "hermix-automation"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "cron",
+ "hermix-config",
+ "hermix-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2123,6 +2141,7 @@ dependencies = [
  "cron",
  "futures",
  "hermix-agent",
+ "hermix-automation",
  "hermix-config",
  "hermix-core",
  "hermix-cron",
@@ -2132,6 +2151,7 @@ dependencies = [
  "hermix-mcp",
  "hermix-runtime",
  "hermix-skills",
+ "hermix-task",
  "hermix-telemetry",
  "hermix-tools",
  "hermix-transport",
@@ -2176,6 +2196,22 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "hermix-task"
+version = "0.1.1"
+dependencies = [
+ "chrono",
+ "hermix-config",
+ "hermix-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
  "tracing",
  "uuid",
 ]

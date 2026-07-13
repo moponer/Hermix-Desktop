@@ -862,7 +862,7 @@ mod tests {
 
     #[test]
     fn loop_detector_triggers_at_threshold() {
-        let mut ctx = base_ctx();
+        let ctx = base_ctx();
         let d = LoopDetector::default();
         // 前 4 次不触发
         for _ in 0..4 {

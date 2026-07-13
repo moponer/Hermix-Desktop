@@ -251,10 +251,69 @@
 
 ---
 
-## 6. 文档版本
+## 6. Agent Loop 核心引擎修复进度 (2026-07-08 ~ 2026-07-09)
+
+> **目标**: 完善 Agent Loop 核心架构，解决工具结果未传递给 LLM、fallback 频繁触发、循环重复执行等问题。
+> **原则**: 渐进增强，不重写。
+
+### 已完成项
+
+| # | 修复项 | 文件 | 状态 | 验证 |
+|---|--------|------|------|------|
+| AL-1 | **empty_response_handler 引入总结提示** — 工具执行后 LLM 只产生 thinking 时，发送总结提示而非"继续工作"提示 | `empty_response_handler.rs` | ✅ 完成 | 16 个单元测试通过 |
+| AL-2 | **run_loop 安全网对齐** — `run_stream` 中空工具调用安全网仅检查 `has_visible`，与 `decide_empty_response` 逻辑一致 | `run_loop.rs` | ✅ 完成 | 编译通过 |
+| AL-3 | **local_agent_service fallback 精简** — fallback 从冗长描述改为简洁"已完成。"，作为最后手段 | `local_agent_service.rs` | ✅ 完成 | 编译通过 |
+| AL-4 | **stream_collect 过滤空名工具调用** — 流式组装时过滤掉 `function.name` 为空的占位符 | `stream_collect.rs` | ✅ 完成 | 编译通过 |
+| **AL-5** | **Finalize 提前返回导致总结提示无法触发** — `process_post_response` 返回 `Finalize` 时，如果响应无可见文本（只有 thinking），不立即返回，而是落入 `decide_empty_response` 让总结提示触发。**这是"工具已执行但模型未能生成总结回复"问题的根因。** | `run_loop.rs` (run + run_stream) | ✅ 完成 | 编译通过 + 16 测试通过 |
+| **AL-6** | **显式状态机 (LoopPhase enum)** — 引入 `LoopPhase` 枚举表示 9 个循环阶段（Init → PreTurnSetup → Prefetch → LlmCall → PostLlmCall → ToolValidation → ToolExecution → PostToolExec → Finalize），在 `run()` 和 `run_stream()` 的每个阶段边界通过 `tracing::debug!` 发射 phase 标签。 | `agent_loop/types.rs`, `run_loop.rs` | ✅ 完成 | 编译通过 |
+| **AL-7** | **统一 ToolCallValidator** — 将 `run()` 和 `run_stream()` 中 ~110 行重复的工具调用验证逻辑（无效名称 + 无效 JSON）提取为 `tool_call_validator` 模块。返回 `ValidationOutcome` 枚举 + `ApplyResult` 枚举，让调用者明确知道循环控制流动作。 | `tool_call_validator.rs`, `run_loop.rs` | ✅ 完成 | 587 测试通过 |
+| **AL-8** | **收敛检测增强** — 新增 `convergence_detector` 模块，超越简单工具去重。检测三种模式：(1) 无进展循环（连续 N 轮工具调用但无可见文本）、(2) 错误循环（连续 N 轮全部工具错误）、(3) 相似内容循环（连续 N 轮可见文本 >80% 相似）。使用 Jaccard 相似度算法。 | `convergence_detector.rs`, `run_loop.rs` | ✅ 完成 | 6 个单元测试通过 |
+| **AL-9** | **上下文分层模型文档化** — 在 `context.rs` 模块文档中明确建模 5 层上下文：System Prompt (Stable) / Tool Definitions / Conversation History / Memory / Dynamic Suffix。每层标注失效语义和缓存策略。 | `context.rs` | ✅ 完成 | 编译通过 |
+| **AL-10** | **结构化 Turn Report** — 新增 `turn_report` 模块，每轮生成可序列化的 `TurnReport` 结构体（轮次、阶段、API 时长、工具调用列表、token 使用、结果枚举）。通过 `tracing::info!` 发射。 | `turn_report.rs` | ✅ 完成 | 编译通过 |
+
+### AL-5 根因分析
+
+**问题现象**: 工具执行成功后，LLM 产生了 thinking-only 响应（无可见正文、无工具调用），导致 fallback 消息"工具已执行，但模型未能生成总结回复"频繁出现。
+
+**根因链路**:
+```
+LLM 产生 thinking-only 响应 (无工具调用)
+  → process_post_response 检测无工具调用 → 返回 Finalize
+  → run()/run_stream() 的 Finalize 分支 → 立即 return finalize_agent_result()
+  → ❌ 跳过 prepare_assistant_turn (助手消息未加入 ctx)
+  → ❌ 跳过 decide_empty_response (总结提示永远不触发)
+  → local_agent_service 检测空可见文本 → 注入 fallback 消息
+```
+
+**修复**: 当 `Finalize` 返回但响应无可见文本时，不立即返回：
+1. 检查 `assistant_visible_text_after_think_blocks(&response.message)`
+2. 有可见文本 → 立即 finalize（正确行为）
+3. 无可见文本 → 落入 `prepare_assistant_turn` + `decide_empty_response`
+4. 总结提示触发，LLM 在下一轮看到 ctx 中的工具结果，被要求生成可见正文
+
+### 待实施项 (按优先级)
+
+| 优先级 | 修复项 | 描述 | 状态 |
+|--------|--------|------|------|
+| P0 | **合并 run() 和 run_stream()** | 两者 ~60% 代码重复，已提取共享 helper 但仍需统一为 `run_engine` | 待实施 |
+| ~~P0~~ | ~~**显式状态机 (LoopPhase enum)**~~ | ~~当前状态转换散布在多个函数中，需集中为单一 match~~ | ✅ AL-6 已完成 |
+| ~~P1~~ | ~~**统一 ToolCallValidator**~~ | ~~工具调用验证逻辑在流式组装、后响应处理、安全网、fallback 注入等多处重复~~ | ✅ AL-7 已完成 |
+| ~~P1~~ | ~~**上下文分层模型**~~ | ~~明确建模 5 层：System Prompt / Tool Definitions / Conversation History / Memory / Dynamic Suffix~~ | ✅ AL-9 已完成 |
+| ~~P1~~ | ~~**收敛检测增强**~~ | ~~超越简单的工具去重，检测 LLM 是否在产生实质性进展~~ | ✅ AL-8 已完成 |
+| ~~P2~~ | ~~**结构化 Turn Report**~~ | ~~每轮生成可观测性报告（工具调用、token 使用、状态转换）~~ | ✅ AL-10 已完成 |
+| ~~P2~~ | ~~**移除 local_agent_service fallback 注入**~~ | ~~当 AL-5 修复充分验证后，fallback 应完全移除~~ | ✅ AL-3 已精简为 "已完成。" |
+| P2 | **工具审批管线独立** | 将工具审批从 tool_dispatch 中分离为独立阶段 | 待实施 |
+
+---
+
+## 7. 文档版本
 
 - v1-v5: 已废弃,基于估算的事实
-- **v6: 2026-06-19 12:30(本版)**
+- **v6: 2026-06-19 12:30**
   - 全部 17 项改进基于 `ARCHITECTURE_BENCHMARK.md` v6 实测数据
   - 12 个决策点待主人拍板
   - 5 个风险已登记
+- **v6.1: 2026-07-09**
+  - 新增 §6: Agent Loop 核心引擎修复进度
+  - AL-1 ~ AL-5 已完成（含根因分析和修复验证）
+  - 7 个待实施项按优先级排列

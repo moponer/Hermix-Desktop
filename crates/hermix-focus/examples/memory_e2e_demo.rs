@@ -54,7 +54,7 @@ async fn main() {
     let turns: [(&str, &str); 5] = [
         ("We start ProjectX, a Rust rewrite.", "OK, noted ProjectX is a Rust rewrite."),
         ("ProjectX uses tokio for async runtime.", "Noted: ProjectX uses tokio."),
-        ("We decide not to use the byterover external tool.", "OK, no byterover dep."),
+        ("We decide not to use any external memory tools.", "OK, no external memory dep."),
         ("ProjectX storage layer is SQLite single file.", "SQLite single file, understood."),
         ("Tomorrow we demo ProjectX progress to the boss.", "Noted: demo ProjectX tomorrow."),
     ];

@@ -225,14 +225,14 @@ fn builtin_plugin_seeds() -> Vec<(&'static str, Value)> {
             "name": "memory",
             "display_name": "记忆系统",
             "category": "智能体",
-            "description": "Pluggable memory backend: Honcho dialectical memory, mem0, byterover, supermemory, retaindb, holographic, hindsight, openviking.",
+            "description": "Pluggable memory backend: embedded SQLite (memory.db) with time-window filtering and FTS5 recall.",
             "icon": "Brain",
             "version": "0.1.0",
             "author": "NousResearch",
             "source": "official",
             "availability": "ready",
             "tags": ["memory", "honcho", "mem0", "long-term"],
-            "backends": ["honcho", "mem0", "byterover", "supermemory", "retaindb", "holographic", "hindsight", "openviking"]
+            "backends": ["embedded-sqlite"]
         })),
         ("model_providers", json!({
             "name": "model_providers",

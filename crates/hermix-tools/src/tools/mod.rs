@@ -38,6 +38,7 @@ pub mod pdf;
 pub mod platforms;
 pub mod security_guidance;
 pub mod session_search;
+pub mod session_stamper;
 pub mod skill_commands;
 pub mod skill_utils;
 pub mod skills;
@@ -45,6 +46,7 @@ pub mod skills;
 pub mod terminal;
 pub mod todo;
 pub mod task_manager;
+pub mod task_tracker;
 pub mod approval_tokens;
 pub mod file_converter;
 pub mod tool_search;
@@ -56,12 +58,14 @@ pub mod vision;
 pub mod voice_mode;
 pub mod web;
 
-use std::sync::Arc;
+    use std::sync::Arc;
 
-use hermix_core::{SkillProvider, TerminalBackend};
+    use hermix_core::{SkillProvider, TerminalBackend};
 
-use crate::tools::browser::BrowserBackend;
-use crate::ToolRegistry;
+    use crate::tools::browser::BrowserBackend;
+    use crate::ToolRegistry;
+    // `clarify::ClarifyBackend` is no longer imported here — clarify
+    // registration moved entirely to `register_builtin_tools`.
 
 /// Register all migrated tools via their self-registration functions.
 /// During migration, unmigrated tools still go through `register_builtins.rs`.
@@ -86,6 +90,7 @@ pub fn register_all(
     terminal_backend: Arc<dyn TerminalBackend>,
     skill_provider: Arc<dyn SkillProvider>,
     browser_backend: Arc<dyn BrowserBackend>,
+    todo_event_tx: Option<tokio::sync::broadcast::Sender<todo::TodoChange>>,
 ) {
     // P1.2 per-tool migration (completed 2026-07-01):
     disk_cleanup::register(registry);
@@ -93,7 +98,7 @@ pub fn register_all(
     security_guidance::register(registry);
     platforms::register(registry);
     cronjob::register(registry);
-    todo::register(registry);
+    todo::register(registry, todo_event_tx);
     task_manager::register(registry);
     approval_tokens::register(registry);
     file_converter::register(registry);
@@ -107,11 +112,12 @@ pub fn register_all(
     kanban::register(registry);
     model_providers::register(registry);
     url_safety::register(registry);
-    clarify::register(
-        registry,
-        Arc::new(crate::backends::clarify::SignalClarifyBackend::new())
-            as Arc<dyn clarify::ClarifyBackend>,
-    );
+    // NOTE: `clarify` is deliberately NOT registered here. It is
+    // registered by `register_builtin_tools` after `register_all`
+    // returns, because the caller may supply a custom backend (e.g.
+    // the desktop's `ChannelClarifyBackend`). Registering here with
+    // the signal default would cause a duplicate-registration error
+    // when `register_builtin_tools` tries to override it.
     delegation::register(
         registry,
         Arc::new(crate::backends::delegation::SignalDelegationBackend::new())

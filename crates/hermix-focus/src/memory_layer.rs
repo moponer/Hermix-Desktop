@@ -2,12 +2,10 @@
 //!
 //! Reference: `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §3 H5.
 //!
-//! The 8 existing memory plugins (`honcho`, `hindsight`, `retaindb`,
-//! `openviking`, `byterover`, `mem0`, `supermemory`, `holographic`) are
-//! each adapted to this trait by a thin wrapper. New backends — embedded
-//! SQLite, vector DBs, plain files — can be plugged in by implementing
-//! these 4 methods. The agent loop speaks only `MemoryLayer`; it doesn't
-//! care which backend is behind the trait object.
+//! New backends — embedded SQLite, vector DBs, plain files —
+//! can be plugged in by implementing these 4 methods. The agent loop
+//! speaks only `MemoryLayer`; it doesn't care which backend is behind
+//! the trait object.
 
 use std::sync::Arc;
 
@@ -363,8 +361,8 @@ pub trait MemoryLayer: Send + Sync {
     // ---------------------------------------------------------------
 
     /// Bind the backend to a session + hermix_home. Backends that
-    /// need to create workspace dirs (ByteRover) or open a connection
-    /// pool (Holographic) override this. Default is a no-op.
+    /// need to create workspace dirs or open a connection
+    /// pool override this. Default is a no-op.
     fn initialize(&self, _session_id: &str, _hermix_home: &str) {}
 
     /// Clean shutdown — flush buffers, close pools. Default no-op.

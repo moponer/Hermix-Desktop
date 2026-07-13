@@ -998,8 +998,10 @@ interface ChatViewProps {
   streamingPhase?: StreamPhase | null;
   /** Transient status text from backend (e.g. "Still waiting for the model…"). */
   streamingStatus?: string | null;
-  /** Compaction pipeline status from backend's `compaction_status` WS event. */
-  compactionStatus?: CompactionStatus | null;
+/** Compaction pipeline status from backend's `compaction_status` WS event. */
+compactionStatus?: CompactionStatus | null;
+/** Context window usage from backend's `context_usage` WS event. */
+contextUsage?: { usedTokens: number; maxTokens: number; thresholdTokens: number; percent: number } | null;
   /** Number of `role="tool"` messages currently in `running` state
    *  in the active session. Drives the post-stream "执行工具中…"
    *  indicator so the user doesn't see a blank gap between the
@@ -1017,6 +1019,12 @@ interface ChatViewProps {
   onEditQueueItem?: (idx: number, newText: string) => void;
   /** Send the message at the given index immediately (out of turn) */
   onSendFromQueue?: (idx: number) => void;
+  /** External file path to attach to the chat input (e.g. from right-sidebar
+   *  file tree right-click “加入对话”). When set, ChatView adds it to the
+   *  pending filePaths and calls onConsumeFileAttachment to clear it. */
+  pendingFileAttachment?: string | null;
+  /** Called after pendingFileAttachment is consumed so the parent can clear it. */
+  onConsumeFileAttachment?: () => void;
 }
 
 export function ChatView({
@@ -1054,9 +1062,12 @@ export function ChatView({
   onRemoveFromQueue,
   onEditQueueItem,
   onSendFromQueue,
+  pendingFileAttachment,
+  onConsumeFileAttachment,
   pendingToolsCount = 0,
   streamingStatus,
   compactionStatus = null,
+contextUsage = null,
   onEnterWelcome,
 }: ChatViewProps) {
   const [input, setInput] = useState("");
@@ -1336,6 +1347,16 @@ useEffect(() => {
 
 const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
 const [filePaths, setFilePaths] = useState<string[]>([]);
+
+// P0-9: Consume external file attachment from right-sidebar “加入对话”.
+// When the parent sets `pendingFileAttachment`, add it to `filePaths`
+// (which renders as a chip above the input) and clear the parent state.
+useEffect(() => {
+if (pendingFileAttachment) {
+setFilePaths((prev) => prev.includes(pendingFileAttachment) ? prev : [...prev, pendingFileAttachment]);
+onConsumeFileAttachment?.();
+}
+}, [pendingFileAttachment, onConsumeFileAttachment]);
 
 /**
  * 防 WebView2 内存泄漏：组件卸载时清理所有 blob URL。
@@ -2101,11 +2122,33 @@ const clearPendingImages = useCallback(() => {
             </div>
           )}
 
-          {/* Day 1-B: compaction pipeline status banner. Rendered above
-              the composer so it stays in view while the user types.
-              Today the prop is always null (no backend wiring yet) so
-              the banner is a no-op. Day 2 will plumb the WS event. */}
-          <CompactionStatusBanner status={compactionStatus} />
+{/* Day 1-B: compaction pipeline status banner. Rendered above
+the composer so it stays in view while the user types.
+Today the prop is always null (no backend wiring yet) so
+the banner is a no-op. Day 2 will plumb the WS event. */}
+<CompactionStatusBanner status={compactionStatus} />
+
+{/* Context usage indicator — shows current context window usage
+as a small bar with token count and percentage. Turns amber
+at ≥85% and red at ≥95% of the compression threshold. */}
+{contextUsage && contextUsage.maxTokens > 0 && (
+  <div className="mb-2 flex items-center gap-2 px-1 text-[11px] text-text-secondary">
+    {(() => {
+      const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);
+      const pct = Math.min(100, contextUsage.percent);
+      const color = pct >= 95 ? "bg-rose-500" : pct >= 85 ? "bg-amber-500" : "bg-emerald-500";
+      const textColor = pct >= 95 ? "text-rose-600 dark:text-rose-400" : pct >= 85 ? "text-amber-600 dark:text-amber-400" : "";
+      return (<>
+        <div className="flex-1 h-1.5 rounded-full bg-black/5 dark:bg-white/10 overflow-hidden">
+          <div className={`h-full rounded-full transition-all duration-300 ${color}`} style={{ width: `${pct}%` }} />
+        </div>
+        <span className={`shrink-0 tabular-nums ${textColor}`}>
+          {fmt(contextUsage.usedTokens)} / {fmt(contextUsage.maxTokens)} tokens ({Math.round(pct)}%)
+        </span>
+      </>);
+    })()}
+  </div>
+)}
 
           <Composer
             input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit}

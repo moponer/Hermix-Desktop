@@ -1,7 +1,7 @@
 //! Termination conditions for group chat — determines when a group
 //! chat session should end.
 
-use crate::orchestrator::GroupChatMessage;
+use crate::group_chat::GroupChatMessage;
 
 /// A condition that, when met, terminates the group chat.
 #[derive(Clone)]

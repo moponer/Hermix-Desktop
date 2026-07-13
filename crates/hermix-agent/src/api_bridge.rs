@@ -242,6 +242,7 @@ impl CodexProvider {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         };
 
         Ok(LlmResponse {
@@ -529,6 +530,7 @@ mod tests {
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                ephemeral: false,
             },
             Message::tool_result("call_1", "file contents", Some("read_file")),
         ];

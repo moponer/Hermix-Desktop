@@ -30,7 +30,17 @@ pub struct TodoChange {
 
 #[derive(Debug, Clone)]
 pub enum TodoChangeKind {
+    /// LLM declared a new plan. Emitted on the first `todo.create`
+    /// for a fresh `group_id`. The front-end creates a new inline
+    /// card anchored to the assistant message that emitted this
+    /// event.
+    GroupStarted {
+        group_id: String,
+        group_title: Option<String>,
+    },
+    /// Single-item upsert (create / update / depend / record_execution).
     Upsert(crate::backends::todo::TodoItem),
+    /// Single-item removal.
     Delete { id: String },
 }
 
@@ -74,11 +84,18 @@ pub fn register(
 #[async_trait]
 pub trait TodoBackend: Send + Sync {
     /// Create a new todo item.
+    ///
+    /// `group_id` and `group_title` let the LLM attach this task to an
+    /// existing plan (`group_id`) or start a new one (`group_title`).
+    /// When neither is provided, the backend synthesizes a fresh
+    /// group_id so each call lands in its own plan card.
     async fn create(
         &self,
         title: &str,
         description: Option<&str>,
         priority: Option<&str>,
+        group_id: Option<&str>,
+        group_title: Option<&str>,
     ) -> Result<String, ToolError>;
     /// Update a todo item.
     async fn update(
@@ -120,6 +137,12 @@ pub struct TodoHandler {
     /// on scope exit. `std::sync::Mutex` is fine: publish is sync,
     /// the lock never crosses `.await`.
     active_session: std::sync::Mutex<Option<String>>,
+    /// Group ids we have already announced via `TodoChangeKind::GroupStarted`
+    /// for this process lifetime. Ensures the front-end gets exactly one
+    /// `GroupStarted` per plan, not one per `create` call within the plan.
+    /// Reset is intentionally implicit (process restart) so a refresh of
+    /// the backend still re-fans-out the surviving groups on next create.
+    announced_groups: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl TodoHandler {
@@ -131,6 +154,7 @@ impl TodoHandler {
             backend,
             event_tx,
             active_session: std::sync::Mutex::new(None),
+            announced_groups: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -148,6 +172,25 @@ impl TodoHandler {
         if let Some(tx) = self.event_tx.as_ref() {
             let _ = tx.send(TodoChange { session_id, change });
         }
+    }
+
+    /// Emit a `GroupStarted` for a freshly-created plan (first time we
+    /// see this `group_id`). Subsequent calls for the same id are
+    /// no-ops. Caller must already have a successful backend response
+    /// (so the id is real and persisted).
+    fn announce_group(&self, group_id: &str, group_title: Option<String>) {
+        let mut seen = self
+            .announced_groups
+            .lock()
+            .expect("announced_groups mutex poisoned");
+        if !seen.insert(group_id.to_string()) {
+            return; // already announced
+        }
+        drop(seen);
+        self.publish(TodoChangeKind::GroupStarted {
+            group_id: group_id.to_string(),
+            group_title,
+        });
     }
 
     /// After a mutating action, re-`list` the backend and pull out the
@@ -209,6 +252,8 @@ impl TodoHandler {
             depends_on: Vec::new(),
             last_result: None,
             execution_count: 0,
+            group_id: params.get("group_id").and_then(|v| v.as_str()).map(String::from).unwrap_or_default(),
+            group_title: params.get("group_title").and_then(|v| v.as_str()).map(String::from),
         })
     }
 }
@@ -242,7 +287,11 @@ impl ToolHandler for TodoHandler {
                     .ok_or_else(|| ToolError::InvalidParams("Missing 'title' parameter".into()))?;
                 let description = params.get("description").and_then(|v| v.as_str());
                 let priority = params.get("priority").and_then(|v| v.as_str());
-                self.backend.create(title, description, priority).await
+                let group_id = params.get("group_id").and_then(|v| v.as_str());
+                let group_title = params.get("group_title").and_then(|v| v.as_str());
+                self.backend
+                    .create(title, description, priority, group_id, group_title)
+                    .await
             }
             "update" => {
                 let id = params
@@ -337,6 +386,14 @@ impl ToolHandler for TodoHandler {
                 .or_else(|| self.fallback_item_from_params(action, &params));
 
             if let Some(item) = item {
+                // If this item belongs to a plan we have not announced yet
+                // (LLM started a brand-new plan in this turn, or this is the
+                // first create after a process restart for an existing plan),
+                // emit a GroupStarted so the front-end can mount a fresh
+                // inline card anchored to the originating message.
+                if !item.group_id.is_empty() {
+                    self.announce_group(&item.group_id, item.group_title.clone());
+                }
                 self.publish(TodoChangeKind::Upsert(item));
             }
         }
@@ -389,6 +446,20 @@ impl ToolHandler for TodoHandler {
             }),
         );
         props.insert(
+            "group_id".into(),
+            json!({
+                "type": "string",
+                "description": "Plan id to attach this task to. Omit (or pass the same id from an earlier response) to extend an existing plan. When starting a brand-new plan, set group_title instead and let the backend mint a fresh id."
+            }),
+        );
+        props.insert(
+            "group_title".into(),
+            json!({
+                "type": "string",
+                "description": "Human label for a new plan (for example rename all files). Pass this on the FIRST create of a new plan; subsequent creates in the same plan should reuse the returned group_id and omit group_title."
+            }),
+        );
+        props.insert(
             "depends_on".into(),
             json!({
                 "type": "array",
@@ -424,6 +495,8 @@ mod tests {
             title: &str,
             _description: Option<&str>,
             _priority: Option<&str>,
+            _group_id: Option<&str>,
+            _group_title: Option<&str>,
         ) -> Result<String, ToolError> {
             Ok(format!("Created todo: {}", title))
         }
@@ -445,6 +518,9 @@ mod tests {
         }
         async fn get_next(&self) -> Result<String, ToolError> {
             Ok(json!({"id": null, "message": "No pending tasks"}).to_string())
+        }
+        async fn delete(&self, _id: &str) -> Result<String, ToolError> {
+            Ok(format!("Deleted todo"))
         }
         async fn record_execution(&self, task_id: &str, _result: &str) -> Result<String, ToolError> {
             Ok(format!("Recorded execution for: {}", task_id))

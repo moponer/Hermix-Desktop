@@ -3,10 +3,10 @@
 //! Receives a task, selects the next speaker via a configurable strategy,
 //! broadcasts messages to all participants, and checks termination conditions.
 
-use crate::orchestrator::round_robin::RoundRobinGroupChat;
-use crate::orchestrator::selector::SelectorGroupChat;
-use crate::orchestrator::termination::TerminationCondition;
-use crate::orchestrator::{GroupChatMessage, GroupChatParticipant, GroupChatTurnResult};
+use crate::group_chat::round_robin::RoundRobinGroupChat;
+use crate::group_chat::selector::SelectorGroupChat;
+use crate::group_chat::termination::TerminationCondition;
+use crate::group_chat::{GroupChatMessage, GroupChatParticipant, GroupChatTurnResult};
 
 /// Speaker selection strategy for the group chat.
 pub enum SpeakerSelection {

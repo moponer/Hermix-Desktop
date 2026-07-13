@@ -47,7 +47,6 @@ pub mod interrupt;
 pub mod local_agent_service;
 pub mod llm_retry;
 pub mod memory_layer_adapter;
-pub mod memory_plugins;
 pub mod memory_hooks;
 pub mod memory_prefetch;
 pub mod message_cache;
@@ -56,6 +55,7 @@ pub mod native_plugin;
 pub mod no_op_compression_engine;
 pub mod oauth_refresh;
 pub mod orchestrator;
+pub mod group_chat;
 pub mod pii_redact;
 pub mod plugins;
 pub mod empty_response_handler;
@@ -70,11 +70,15 @@ pub mod retry_counters;
 pub mod session_persistence;
 pub mod session_lifecycle;
 pub mod skill_orchestrator;
+pub mod skill_loader;
 pub mod smart_model_routing;
 pub mod stream_collect;
 pub mod steer;
 pub mod sub_agent_orchestrator;
 pub mod tool_result_processor;
+pub mod tool_call_validator;
+pub mod convergence_detector;
+pub mod turn_report;
 pub mod terminal_filter;
 pub mod tool_dispatch;
 pub mod turn_timings;
@@ -115,7 +119,7 @@ pub use budget::{check_aggregate_budget, enforce_budget, truncate_result};
 
 // Re-export LLM providers
 pub use api_bridge::CodexProvider;
-pub use auxiliary_builder::{build_default_auxiliary_client, AuxiliaryWiringSummary};
+pub use auxiliary_builder::{build_auxiliary_client_with_config, build_default_auxiliary_client, AuxiliaryWiringSummary};
 pub use provider::{AnthropicProvider, GenericProvider, OpenRouterProvider};
 
 // Re-export rate limiting, credential pool, and fallback chain
@@ -134,16 +138,20 @@ pub use interrupt::InterruptController;
 // (the `MemoryProviderPlugin` trait was its sole remaining occupant).
 // All write-path hooks now route through `MemoryRouter`, which fans
 // out to every registered `MemoryLayer` backend — single trait, single
-// fan-out path. The 7 non-ByteRover bundled memory plugins
-// (Hindsight / Honcho / Mem0 / RetainDB / OpenViking / SuperMemory /
-// Holographic) were already culled on 2026-06-21 for lacking real
-// write hooks.
+// fan-out path. All external memory plugins (Hindsight / Honcho / Mem0 /
+// RetainDB / ByteRover / OpenViking / SuperMemory / Holographic) were
+// culled — the project now relies solely on the built-in
+// `EmbeddedMemoryBackend` (SQLite-backed `memory.db`) for persistent
+// memory.
 
 // Re-export plugin system
 pub use plugins::{install_plugin_tools_into_registry, Plugin, PluginManager, PluginMeta};
 
 // Re-export skill orchestrator
 pub use skill_orchestrator::SkillOrchestrator;
+
+// Re-export skill loader (P6-3)
+pub use skill_loader::{SkillLoader, SkillMatch};
 
 // Re-export session persistence
 pub use session_persistence::{

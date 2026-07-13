@@ -806,6 +806,39 @@ async fn spawn_python_version(python: &Path) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+/// Return runtime environment info for the desktop app.
+///
+/// The frontend's `desktopBridge.getRuntimeInfo()` calls this to
+/// display OS, arch, version, and data directory in Settings → Backend.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeInfo {
+    pub runtime: String,
+    pub platform: String,
+    pub user_data_dir: String,
+}
+
+#[tauri::command]
+pub fn get_runtime_info() -> Result<RuntimeInfo, String> {
+    let platform = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "unknown"
+    };
+
+    let data_dir = resolve_data_dir();
+
+    Ok(RuntimeInfo {
+        runtime: format!("hermix-desktop"),
+        platform: platform.to_string(),
+        user_data_dir: data_dir.to_string_lossy().to_string(),
+    })
+}
+
 /// Persist a Python interpreter override. The frontend writes this
 /// before calling `python_detect`; the value is used by the resolver
 /// in `hermix_tools::backends::code_execution::find_python_bin` if

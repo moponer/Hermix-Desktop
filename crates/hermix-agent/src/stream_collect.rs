@@ -444,6 +444,28 @@ pub(crate) async fn collect_stream_llm_response(
         }
     }
 
+    // 2026-07-08: filter out tool calls with empty function names.
+    // MiniMax M2.7 streaming sometimes creates placeholder tool call
+    // entries (via the index-based delta assembly above) whose `name`
+    // field never arrives — the name delta was either lost in transit
+    // or the model emitted the tool call as raw XML that the sanitizer
+    // already stripped. Without this filter, `process_post_response`
+    // sees `has_tool_calls = true` (vec is non-empty) and returns
+    // `Continue`, but then `run_stream` filters them out at line ~1315
+    // and falls into the `decide_empty_response` path — which in
+    // autonomous_mode fires a nudge that re-drives the LLM to re-run
+    // the same tools. Filtering here ensures `process_post_response`
+    // sees the correct state (no valid tool calls → `Finalize`).
+    let empty_name_count = tool_calls.iter().filter(|tc| tc.function.name.is_empty()).count();
+    if empty_name_count > 0 {
+        tracing::info!(
+            total = tool_calls.len(),
+            empty_names = empty_name_count,
+            "Filtering out tool calls with empty function names (streaming placeholder entries)"
+        );
+        tool_calls.retain(|tc| !tc.function.name.is_empty());
+    }
+
     let message =
         assemble_stream_assistant_message(&content, &reasoning_content, &tool_calls);
 

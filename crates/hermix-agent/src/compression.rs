@@ -66,7 +66,7 @@ pub const SUMMARY_PREFIX: &str =
 pub const LEGACY_SUMMARY_PREFIX: &str = "[CONTEXT SUMMARY]:";
 
 /// Placeholder substituted for old, oversized tool results.
-pub const PRUNED_TOOL_PLACEHOLDER: &str = "[Old tool output cleared to save context space]";
+pub const PRUNED_TOOL_PLACEHOLDER: &str = "[ALREADY EXECUTED] [Old tool output cleared to save context space]";
 
 /// Regex patterns for sensitive information that must not leak into summaries.
 static SENSITIVE_PATTERNS: once_cell::sync::Lazy<Vec<(regex::Regex, &'static str)>> =
@@ -281,19 +281,25 @@ pub fn summarize_tool_result(tool_name: &str, tool_args: &str, tool_content: &st
 
     let t = tool_name.to_lowercase();
 
+    // v35 (2026-07-09): All summarized tool results are prefixed with
+    // `[ALREADY EXECUTED]` so the LLM knows this tool was already called
+    // in a previous turn. Without this prefix, the LLM may see the
+    // truncated summary and think the tool hasn't been called yet,
+    // leading it to re-issue the same call — the root cause of the
+    // "duplicate tool call" bug.
     if t.contains("terminal") || t.contains("bash") || t.contains("exec") {
         let cmd = get_str("command");
         let cmd = if cmd.len() > 80 { format!("{}...", &cmd[..77]) } else { cmd };
-        return format!("[terminal] ran `{cmd}` -> {line_count} lines output");
+        return format!("[ALREADY EXECUTED] [terminal] ran `{cmd}` -> {line_count} lines output");
     }
     if t.contains("read_file") {
         let path = get_str("path");
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(1);
-        return format!("[read_file] read {path} from line {offset} ({content_len} chars)");
+        return format!("[ALREADY EXECUTED] [read_file] read {path} from line {offset} ({content_len} chars)");
     }
     if t.contains("write_file") {
         let path = get_str("path");
-        return format!("[write_file] wrote to {path} ({line_count} lines)");
+        return format!("[ALREADY EXECUTED] [write_file] wrote to {path} ({line_count} lines)");
     }
     if t.contains("search_files") {
         let pattern = get_str("pattern");
@@ -303,7 +309,7 @@ pub fn summarize_tool_result(tool_name: &str, tool_args: &str, tool_content: &st
             get_str("directory")
         };
         let count = args.get("total_count").and_then(|v| v.as_u64()).unwrap_or(0);
-        return format!("[search_files] search for '{pattern}' in {path} -> {count} matches");
+        return format!("[ALREADY EXECUTED] [search_files] search for '{pattern}' in {path} -> {count} matches");
     }
     if t.contains("patch") || t.contains("edit") {
         let path = get_str("path");
@@ -312,7 +318,7 @@ pub fn summarize_tool_result(tool_name: &str, tool_args: &str, tool_content: &st
         } else {
             "replace".to_string()
         };
-        return format!("[patch] {mode} in {path} ({content_len} chars)");
+        return format!("[ALREADY EXECUTED] [patch] {mode} in {path} ({content_len} chars)");
     }
     if t.contains("browser") {
         let url = get_str("url");
@@ -323,36 +329,36 @@ pub fn summarize_tool_result(tool_name: &str, tool_args: &str, tool_content: &st
         } else {
             format!(" ({content_len} chars)")
         };
-        return format!("[{tool_name}] {detail}{suffix}");
+        return format!("[ALREADY EXECUTED] [{tool_name}] {detail}{suffix}");
     }
     if t.contains("web_search") {
         let query = get_str("query");
-        return format!("[web_search] query='{query}' ({content_len} chars)");
+        return format!("[ALREADY EXECUTED] [web_search] query='{query}' ({content_len} chars)");
     }
     if t.contains("web_extract") || t.contains("fetch") {
-        return format!("[{tool_name}] ({content_len} chars)");
+        return format!("[ALREADY EXECUTED] [{tool_name}] ({content_len} chars)");
     }
     if t.contains("delegate_task") {
         let goal = get_str("goal");
         let goal = if goal.len() > 60 { format!("{}...", &goal[..57]) } else { goal };
-        return format!("[delegate_task] '{goal}' ({content_len} chars)");
+        return format!("[ALREADY EXECUTED] [delegate_task] '{goal}' ({content_len} chars)");
     }
     if t.contains("execute_code") || t.contains("code_execution") {
         let code = get_str("code");
         let preview: String = code.chars().take(60).collect();
-        return format!("[execute_code] `{preview}` ({line_count} lines)");
+        return format!("[ALREADY EXECUTED] [execute_code] `{preview}` ({line_count} lines)");
     }
     if t.contains("skill") {
         let name = get_str("name");
-        return format!("[{tool_name}] name={name} ({content_len} chars)");
+        return format!("[ALREADY EXECUTED] [{tool_name}] name={name} ({content_len} chars)");
     }
     if t.contains("memory") {
         let action = get_str("action");
         let target = get_str("target");
-        return format!("[memory] {action} on {target}");
+        return format!("[ALREADY EXECUTED] [memory] {action} on {target}");
     }
     if t.contains("todo") {
-        return "[todo] updated task list".to_string();
+        return "[ALREADY EXECUTED] [todo] updated task list".to_string();
     }
 
     // Generic fallback
@@ -369,7 +375,7 @@ pub fn summarize_tool_result(tool_name: &str, tool_args: &str, tool_content: &st
     } else {
         format!(" ({content_len} chars)")
     };
-    format!("[{tool_name}] {args_str}{suffix}")
+    format!("[ALREADY EXECUTED] [{tool_name}] {args_str}{suffix}")
 }
 
 /// Shrink long string values inside a tool-call arguments JSON blob while
@@ -1384,7 +1390,7 @@ impl ContextCompressor {
             if let Some(&prev_idx) = content_hashes.get(&h) {
                 let _ = prev_idx; // keep only the most recent copy
                 result[i].content = Some(
-                    "[Duplicate tool output — same content as a more recent call]".into(),
+                    "[ALREADY EXECUTED] [Duplicate tool output — same content as a more recent call]".into(),
                 );
                 pruned += 1;
                 deduped += 1;
@@ -1725,7 +1731,7 @@ Write only the summary body. Do not include any preamble or prefix."
                             patched.push(Message {
                                 role: MessageRole::Tool,
                                 content: Some(
-                                    "[Result from earlier conversation — see context summary above]"
+                                    "[ALREADY EXECUTED] [Result from earlier conversation — see context summary above]"
                                         .into(),
                                 ),
                                 content_parts: None,
@@ -1735,6 +1741,7 @@ Write only the summary body. Do not include any preamble or prefix."
                                 reasoning_content: None,
                                 cache_control: None,
                                 execution_timeline: None,
+                                ephemeral: false,
                             });
                         }
                     }
@@ -2003,6 +2010,7 @@ Write only the summary body. Do not include any preamble or prefix."
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                ephemeral: false,
             });
         }
 
@@ -2428,6 +2436,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 
@@ -2442,6 +2451,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 
@@ -2462,6 +2472,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 
@@ -2506,6 +2517,7 @@ mod tests {
                     reasoning_content: None,
                     cache_control: None,
                     execution_timeline: None,
+                    ephemeral: false,
                 },
                 finish_reason: Some("stop".into()),
                 model: model.unwrap_or("test").to_string(),
@@ -2708,10 +2720,10 @@ mod tests {
 
         let (out, _dedup, pruned) = compressor.prune_old_tool_results(&messages, 20, None);
         assert!(pruned >= 1);
-        // Smart summary replaces oversized output (e.g. "[shell]  (500 chars)")
+        // Smart summary replaces oversized output (e.g. "[ALREADY EXECUTED] [shell]  (500 chars)")
         let first_tool_content = out[3].content.as_deref().unwrap_or("");
         assert!(
-            first_tool_content.starts_with("[shell]") || first_tool_content == PRUNED_TOOL_PLACEHOLDER,
+            first_tool_content.starts_with("[ALREADY EXECUTED] [shell]") || first_tool_content == PRUNED_TOOL_PLACEHOLDER,
             "first oversized tool output should be pruned to a smart summary, got: {first_tool_content}"
         );
         assert_eq!(
@@ -3159,7 +3171,8 @@ mod tests {
     #[test]
     fn summarize_terminal_tool() {
         let summary = summarize_tool_result("terminal", r#"{"command":"npm test"}"#, "42 tests passed\n0 failed");
-        assert!(summary.starts_with("[terminal]"));
+        // 2026-07-12: v35 added [ALREADY EXECUTED] prefix to all summaries.
+        assert!(summary.starts_with("[ALREADY EXECUTED] [terminal]"));
         assert!(summary.contains("npm test"));
         assert!(summary.contains("2 lines"));
     }
@@ -3167,7 +3180,7 @@ mod tests {
     #[test]
     fn summarize_read_file_tool() {
         let summary = summarize_tool_result("read_file", r#"{"path":"/src/main.rs","offset":10}"#, &"x".repeat(500));
-        assert!(summary.starts_with("[read_file]"));
+        assert!(summary.starts_with("[ALREADY EXECUTED] [read_file]"));
         assert!(summary.contains("/src/main.rs"));
         assert!(summary.contains("line 10"));
     }
@@ -3175,7 +3188,7 @@ mod tests {
     #[test]
     fn summarize_unknown_tool_fallback() {
         let summary = summarize_tool_result("custom_tool", r#"{"foo":"bar"}"#, "output");
-        assert!(summary.starts_with("[custom_tool]"));
+        assert!(summary.starts_with("[ALREADY EXECUTED] [custom_tool]"));
         assert!(summary.contains("foo=bar"));
     }
 
@@ -3478,7 +3491,7 @@ mod tests {
         // At least one message should now carry the duplicate marker.
         assert!(
             out.iter()
-                .any(|m| m.content.as_deref().unwrap_or("").starts_with("[Duplicate tool output")),
+                .any(|m| m.content.as_deref().unwrap_or("").starts_with("[ALREADY EXECUTED] [Duplicate tool output")),
             "dedup marker must replace at least one tool result, got: {:#?}",
             out.iter().map(|m| m.content.clone()).collect::<Vec<_>>()
         );

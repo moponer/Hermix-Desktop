@@ -9,8 +9,9 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use parking_lot::{Mutex as PLMutex, RwLock};
 
 use hermix_core::{
     AgentError, CacheControl, FunctionCall, FunctionCallDelta, LlmProvider, LlmResponse, Message,
@@ -36,10 +37,12 @@ pub struct GenericProvider {
     pub api_key: String,
     /// Default model identifier.
     pub model: String,
-    /// HTTP client.
-    client: Arc<Mutex<Client>>,
+    /// HTTP client. Uses RwLock so concurrent reads (the hot path —
+    /// every LLM API call) proceed without contention; only the rare
+    /// `refresh_client` takes a write lock.
+    client: Arc<RwLock<Client>>,
     /// Last time we rebuilt the client transport.
-    client_refreshed_at: Arc<Mutex<Instant>>,
+    client_refreshed_at: Arc<PLMutex<Instant>>,
     /// Optional custom headers to send with every request.
     pub extra_headers: Vec<(String, String)>,
     /// Optional rate limit tracker.
@@ -135,8 +138,8 @@ impl GenericProvider {
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
-            client: Arc::new(Mutex::new(Client::new())),
-            client_refreshed_at: Arc::new(Mutex::new(Instant::now())),
+            client: Arc::new(RwLock::new(Client::new())),
+            client_refreshed_at: Arc::new(PLMutex::new(Instant::now())),
             extra_headers: Vec::new(),
             rate_limiter: None,
             credential_pool: None,
@@ -246,30 +249,19 @@ impl GenericProvider {
     }
 
     fn current_client(&self) -> Client {
-        self.client
-            .lock()
-            .map(|c| c.clone())
-            .unwrap_or_else(|_| Client::new())
+        self.client.read().clone()
     }
 
     fn refresh_client(&self, reason: &str) {
         tracing::warn!("rebuilding primary HTTP client: {}", reason);
-        if let Ok(mut c) = self.client.lock() {
-            *c = Client::new();
-        }
-        if let Ok(mut t) = self.client_refreshed_at.lock() {
-            *t = Instant::now();
-        }
+        *self.client.write() = Client::new();
+        *self.client_refreshed_at.lock() = Instant::now();
     }
 
     async fn maybe_refresh_stale_client(&self, probe_url: &str) {
         const STALE_CLIENT_REFRESH_SECS: u64 = 300;
         let stale_after = Duration::from_secs(STALE_CLIENT_REFRESH_SECS);
-        let should_refresh = self
-            .client_refreshed_at
-            .lock()
-            .map(|t| t.elapsed() >= stale_after)
-            .unwrap_or(false);
+        let should_refresh = self.client_refreshed_at.lock().elapsed() >= stale_after;
         if !should_refresh {
             return;
         }
@@ -281,15 +273,13 @@ impl GenericProvider {
             .await
         {
             Ok(_) => {
-                if let Ok(mut t) = self.client_refreshed_at.lock() {
-                    *t = Instant::now();
-                }
+                *self.client_refreshed_at.lock() = Instant::now();
             }
             Err(e) => {
                 if Self::is_connection_recoverable(&e) {
                     self.refresh_client(&format!("stale connection probe failed: {e}"));
-                } else if let Ok(mut t) = self.client_refreshed_at.lock() {
-                    *t = Instant::now();
+                } else {
+                    *self.client_refreshed_at.lock() = Instant::now();
                 }
             }
         }
@@ -789,10 +779,10 @@ pub struct AnthropicProvider {
     pub api_key: String,
     /// Default model identifier.
     pub model: String,
-    /// HTTP client.
-    client: Arc<Mutex<Client>>,
+    /// HTTP client. Uses RwLock for concurrent reads (same as GenericProvider).
+    client: Arc<RwLock<Client>>,
     /// Last time we rebuilt the client transport.
-    client_refreshed_at: Arc<Mutex<Instant>>,
+    client_refreshed_at: Arc<PLMutex<Instant>>,
     /// Anthropic API version header.
     pub api_version: String,
     /// Optional rate limit tracker.
@@ -808,8 +798,8 @@ impl AnthropicProvider {
             base_url: "https://api.anthropic.com".to_string(),
             api_key: api_key.into(),
             model: "claude-3-5-sonnet-20241022".to_string(),
-            client: Arc::new(Mutex::new(Client::new())),
-            client_refreshed_at: Arc::new(Mutex::new(Instant::now())),
+            client: Arc::new(RwLock::new(Client::new())),
+            client_refreshed_at: Arc::new(PLMutex::new(Instant::now())),
             api_version: "2023-06-01".to_string(),
             rate_limiter: None,
             credential_pool: None,
@@ -864,30 +854,19 @@ impl AnthropicProvider {
     }
 
     fn current_client(&self) -> Client {
-        self.client
-            .lock()
-            .map(|c| c.clone())
-            .unwrap_or_else(|_| Client::new())
+        self.client.read().clone()
     }
 
     fn refresh_client(&self, reason: &str) {
         tracing::warn!("rebuilding anthropic HTTP client: {}", reason);
-        if let Ok(mut c) = self.client.lock() {
-            *c = Client::new();
-        }
-        if let Ok(mut t) = self.client_refreshed_at.lock() {
-            *t = Instant::now();
-        }
+        *self.client.write() = Client::new();
+        *self.client_refreshed_at.lock() = Instant::now();
     }
 
     async fn maybe_refresh_stale_client(&self, probe_url: &str) {
         const STALE_CLIENT_REFRESH_SECS: u64 = 300;
         let stale_after = Duration::from_secs(STALE_CLIENT_REFRESH_SECS);
-        let should_refresh = self
-            .client_refreshed_at
-            .lock()
-            .map(|t| t.elapsed() >= stale_after)
-            .unwrap_or(false);
+        let should_refresh = self.client_refreshed_at.lock().elapsed() >= stale_after;
         if !should_refresh {
             return;
         }
@@ -899,15 +878,13 @@ impl AnthropicProvider {
             .await
         {
             Ok(_) => {
-                if let Ok(mut t) = self.client_refreshed_at.lock() {
-                    *t = Instant::now();
-                }
+                *self.client_refreshed_at.lock() = Instant::now();
             }
             Err(e) => {
                 if GenericProvider::is_connection_recoverable(&e) {
                     self.refresh_client(&format!("stale connection probe failed: {e}"));
-                } else if let Ok(mut t) = self.client_refreshed_at.lock() {
-                    *t = Instant::now();
+                } else {
+                    *self.client_refreshed_at.lock() = Instant::now();
                 }
             }
         }
@@ -1150,6 +1127,7 @@ impl AnthropicProvider {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         };
 
         Ok(LlmResponse {
@@ -1888,14 +1866,27 @@ fn parse_openai_response(json: &Value) -> Result<LlmResponse, AgentError> {
                 .collect::<Vec<_>>()
         });
 
-    // Parse usage
-    let usage = json.get("usage").and_then(|u| {
-        Some(UsageStats {
-            prompt_tokens: u.get("prompt_tokens")?.as_u64()?,
-            completion_tokens: u.get("completion_tokens")?.as_u64()?,
-            total_tokens: u.get("total_tokens")?.as_u64()?,
+    // Parse usage — tolerant of both OpenAI-style (prompt_tokens/completion_tokens)
+    // and Anthropic-style (input_tokens/output_tokens) field names.
+    let usage = json.get("usage").map(|u| {
+        // Try OpenAI-style fields first, fall back to Anthropic-style.
+        let prompt = u.get("prompt_tokens")
+            .and_then(|v| v.as_u64())
+            .or_else(|| u.get("input_tokens").and_then(|v| v.as_u64()))
+            .unwrap_or(0);
+        let completion = u.get("completion_tokens")
+            .and_then(|v| v.as_u64())
+            .or_else(|| u.get("output_tokens").and_then(|v| v.as_u64()))
+            .unwrap_or(0);
+        let total = u.get("total_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(prompt + completion);
+        UsageStats {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            total_tokens: total,
             estimated_cost: None,
-        })
+        }
     });
 
     let role = message_obj
@@ -1924,6 +1915,7 @@ fn parse_openai_response(json: &Value) -> Result<LlmResponse, AgentError> {
         reasoning_content,
         cache_control: None,
         execution_timeline: None,
+        ephemeral: false,
     };
 
     let finish_reason = choice
@@ -2116,6 +2108,7 @@ mod tests {
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                ephemeral: false,
             },
             Message::tool_result("tc_1", "file contents here", Some("read_file")),
         ];

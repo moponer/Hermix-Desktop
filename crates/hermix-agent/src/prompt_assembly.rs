@@ -439,9 +439,6 @@ pub fn build_system_prompt(
     model_for_prompt: &str,
     tool_call_count: usize,
 ) -> String {
-    // ★ Record direction audit counters on the active span. Rendered once
-    //   per turn on the stable layer because directions depend on the
-    //   tool set + user message.
     let tool_names_set: HashSet<&str> =
         tool_schemas.iter().map(|t| t.name.as_str()).collect();
 
@@ -455,6 +452,54 @@ pub fn build_system_prompt(
         model_for_prompt,
         tool_call_count,
     );
+
+    // ★ directions[] — evaluated per-turn with the REAL tool_call_count so
+    //   HadAnyToolUse / MultiStepTask routes fire correctly. This block
+    //   lives OUTSIDE the cached stable layer (keyed on
+    //   model/personality/system_prompt/workspace only) because
+    //   tool_call_count changes every turn. Previously directions were
+    //   baked into the stable cache with tool_call_count=0, so
+    //   HadAnyToolUse never fired — summary/stopping guidance was
+    //   silently skipped, leaving the LLM with no "stop after real work"
+    //   constraint and producing filler + repeated tool calls.
+    let directions_text = {
+        use crate::context::{RouteContext, SystemPromptBuilder};
+        let route_ctx = RouteContext {
+            user_message,
+            tool_names: &tool_names_set,
+            model_name: model_for_prompt,
+            autonomous_mode: config.autonomous_mode,
+            tool_call_count,
+        };
+        let project_conventions = config
+            .workspace
+            .as_deref()
+            .and_then(crate::directions::load_project_conventions);
+        let directions =
+            crate::directions::collect_directions(&route_ctx, project_conventions.as_deref());
+        let mut b = SystemPromptBuilder::new();
+        b = b.with_directions(directions);
+        b.assemble_directions(&route_ctx);
+        let audit = b.direction_audit();
+        let fired_count = audit.iter().filter(|a| a.fired).count();
+        let skipped_count = audit.len() - fired_count;
+        tracing::Span::current().record("dir_fired", fired_count);
+        tracing::Span::current().record("dir_skipped", skipped_count);
+        if !audit.is_empty() {
+            tracing::debug!(
+                target: "hermix.directions",
+                fired = fired_count,
+                skipped = skipped_count,
+                tool_call_count,
+                "build_system_prompt direction audit ({} fired / {} skipped, tool_call_count={})",
+                fired_count,
+                skipped_count,
+                tool_call_count
+            );
+        }
+        b.build().to_string()
+    };
+
     let context_text = build_context_layer(
         config,
         prompt_cache,
@@ -464,7 +509,7 @@ pub fn build_system_prompt(
 
     let suffix_text = build_dynamic_suffix(config, model_for_prompt);
 
-    let prompt = format!("{stable_text}{context_text}{suffix_text}");
+    let prompt = format!("{stable_text}{directions_text}{context_text}{suffix_text}");
     tracing::Span::current().record("out_chars", prompt.len());
 
     // ★ Cache-effectiveness summary (2026-07-05): one info event per
@@ -506,9 +551,9 @@ fn build_stable_layer(
     config: &AgentConfig,
     prompt_cache: &Mutex<crate::agent_helpers::PromptCache>,
     _memory_router: Option<&MemoryRouter>,
-    user_message: &str,
+    _user_message: &str,
     tool_schemas: &[ToolSchema],
-    tool_names_set: &HashSet<&str>,
+    _tool_names_set: &HashSet<&str>,
     model_for_prompt: &str,
     _tool_call_count: usize,
 ) -> String {
@@ -548,38 +593,16 @@ fn build_stable_layer(
         builder = builder.with_system_message(base);
     }
 
-    // ★ directions[] — M1: collapse the six inline if/else cascades
-    //   below (format/think/tools/plan/autonomous/browser + tool-family
-    //   extras) into a typed route-gated queue assembled in
-    //   `context::DirRoute::matches`. The audit log is emitted via
-    //   `hermix.directions` tracing target and surfaced to the
-    //   frontend through `system_prompt_directions` hook events.
-    use crate::context::RouteContext;
-    let route_ctx = RouteContext {
-        user_message,
-        tool_names: tool_names_set,
-        model_name: model_for_prompt,
-        autonomous_mode: config.autonomous_mode,
-        tool_call_count: 0,
-    };
-    let directions = crate::directions::collect_directions(&route_ctx);
-    builder = builder.with_directions(directions);
-    builder.assemble_directions(&route_ctx);
-    let audit = builder.direction_audit();
-    let fired_count = audit.iter().filter(|a| a.fired).count();
-    let skipped_count = audit.len() - fired_count;
-    tracing::Span::current().record("dir_fired", fired_count);
-    tracing::Span::current().record("dir_skipped", skipped_count);
-    if !audit.is_empty() {
-        tracing::debug!(
-            target: "hermix.directions",
-            fired = fired_count,
-            skipped = skipped_count,
-            "build_system_prompt direction audit ({} fired / {} skipped)",
-            fired_count,
-            skipped_count
-        );
-    }
+    // ★ directions[] moved to the per-turn dynamic layer in
+    //   `build_system_prompt` (2026-07-08). Previously directions were
+    //   baked into the stable cache with tool_call_count=0, which meant
+    //   HadAnyToolUse / MultiStepTask routes never fired — summary and
+    //   stopping guidance were silently skipped every turn, leaving the
+    //   LLM with no "stop after real work" constraint and producing
+    //   filler + repeated tool calls. Evaluating directions per-turn with
+    //   the real tool_call_count fixes this. The stable layer must NOT
+    //   depend on per-turn state (tool_call_count) so the cache key stays
+    //   stable across turns.
 
     // ★ Inject the active tool list as a `<tools>` text block so the model
     //   is *always* aware of what it can call — even if the native

@@ -4,7 +4,7 @@
 
 **自进化的 AI 助手。零安装，零环境。**
 
-`181,127 行 Rust` · `1,378 个测试` · `18 个 crate` · `33 个内置 Skill` · `~80MB 解压即用`
+`约 200K 行 Rust` · `1,834 个测试` · `18 个 crate` · `33 个内置 Skill` · `~80MB 解压即用`
 
 [下载 zip](#) · [文档](#) · [更新日志](#) · [问题反馈](#)
 
@@ -183,7 +183,7 @@
 # 全 workspace 编译检查
 cargo check --workspace --all-targets
 
-# 全 workspace 测试（1,378 个）
+# 全 workspace 测试（1,834 个）
 cargo test --workspace --lib
 
 # 前端类型检查
@@ -215,11 +215,11 @@ A: 把 `~/.hermix/` 拷到新电脑相同位置即可。
 
 ## 技术栈
 
-- **后端**: Rust 18 个 crate，~181K 行
+- **后端**: Rust 18 个 crate，~200K 行
 - **前端**: React 19 + Tauri v2 + Tailwind 4
 - **运行时**: 静态二进制，无 Python/Node 依赖
 - **数据**: SQLite + FTS5 + JSON + 文件树
-- **测试**: 1,378 个单元测试
+- **测试**: 1,834 个单元测试
 
 ---
 

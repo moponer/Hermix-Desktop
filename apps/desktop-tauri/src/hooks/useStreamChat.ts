@@ -52,9 +52,11 @@ export interface TodoSnapshotItem {
  *                (server crash, network blip). The partial text
  *                is preserved; the chip is "AI 响应未完成（已收到部分内容）"
  *                in muted tone, not red.
- * • `timeout`  — 120s elapsed with no `done`; the stream is
- *                genuinely abandoned and the chip is "AI 响应超时"
- *                in warning tone.
+ * • `timeout`  — 300s elapsed with no data received (idle);
+ *                the stream is genuinely abandoned and the chip
+ *                is "AI 响应超时" in warning tone. The timer resets
+ *                on every received WS event, so long-running tasks
+ *                that are actively streaming will never hit this.
  * • `error`    — server sent an `error` event, or WS closed with
  *                no content. Chip is "出错了" in muted tone.
  * • `completed`— server sent `done` with `finish_reason: "stop"`.
@@ -157,8 +159,12 @@ interface StreamCallbacks {
     fileSummary?: string;
   }) => void;
   /**
-   * A todo list mutation fired by the server. Three kinds:
+   * A todo list mutation fired by the server. Four kinds:
    *
+   *  - `snapshot`: full authoritative state (sent on session start
+   *    and after every LLM `todo` tool call by the server). Caller
+   *    should rebuild `todoGroups` from this. Mirrors
+   *    `StreamEvent::TodoSnapshot` in hermix-transport.
    *  - `group_started`: LLM declared a new plan (first `todo.create`
    *    for a fresh group_id). Front-end creates a new inline card
    *    anchored to the assistant message with `messageId` (or end of
@@ -166,11 +172,13 @@ interface StreamCallbacks {
    *  - `upsert`: create / update / depend / record_execution.
    *  - `remove`: LLM (or HTTP DELETE) removed the item.
    *
-   * Mirrors `StreamEvent::TodoGroupStarted` / `TodoItemUpserted` /
-   * `TodoItemRemoved` in hermix-transport. `sessionId` is stamped
-   * by the server based on which WS connection produced the change.
+   * Mirrors `StreamEvent::TodoSnapshot` / `TodoGroupStarted` /
+   * `TodoItemUpserted` / `TodoItemRemoved` in hermix-transport.
+   * `sessionId` is stamped by the server based on which WS
+   * connection produced the change.
    */
   onTodoChange?: (change:
+    | { kind: "snapshot"; sessionId: string; items: TodoSnapshotItem[] }
     | { kind: "group_started"; sessionId: string; groupId: string; groupTitle: string | null; messageId: string | null }
     | { kind: "upsert"; sessionId: string; item: TodoSnapshotItem }
     | { kind: "remove"; sessionId: string; id: string }
@@ -299,6 +307,11 @@ export function useStreamChat() {
   // ChatView can render the banner without further plumbing work later.
   const [compactionStatus, setCompactionStatus] =
     useState<import("../components/CompactionStatusBanner").CompactionStatus | null>(null);
+  // 2026-07-12: context window usage. Updated every turn via the
+  // `context_usage` WS event. Displayed as a small bar in the chat
+  // footer so the user always knows how much context budget remains.
+  const [contextUsage, setContextUsage] =
+    useState<{ usedTokens: number; maxTokens: number; thresholdTokens: number; percent: number } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   // Refs to hold the per-send promise resolvers + callbacks,
   // so cancel() can settle the promise immediately without waiting
@@ -482,18 +495,31 @@ export function useStreamChat() {
         // and two assistant replies in the DB — visible to the user
         // as "重复回复".
         sentToServerRef.current = false;
-        let totalTimeout: ReturnType<typeof setTimeout> | null = null;
+        let idleTimeout: ReturnType<typeof setTimeout> | null = null;
         // 30s first-chunk slow-hint timer handle (see ws.onmessage "connected"
         // branch). Tracked so settle()/disarmTimeouts() can cancel it — without
         // a handle, a stale 30s timer can fire after the stream already
         // terminated, flipping `phase` back to "slow" right after the user
         // already saw "completed".
         let slowHintTimer: ReturnType<typeof setTimeout> | null = null;
-        const TOTAL_TIMEOUT_MS = 120_000;
+        // 2026-07-12: Changed from a 120s TOTAL timeout to a 300s IDLE
+        // timeout. The old total timeout killed long-running tasks (code
+        // review, plan generation) that legitimately take >120s of wall
+        // clock time even while actively streaming. The idle timeout
+        // resets on every received WS event (text, thinking, tool_start,
+        // tool_complete, status, etc.), so as long as the agent is
+        // making progress the stream stays alive.
+        const IDLE_TIMEOUT_MS = 300_000;
 
         const armTimeouts = () => {
-          if (totalTimeout !== null) clearTimeout(totalTimeout);
-          totalTimeout = setTimeout(() => {
+          resetIdleTimeout();
+        };
+        // Reset the idle timer. Called on every received WS event.
+        // If no event arrives within IDLE_TIMEOUT_MS, the stream is
+        // considered abandoned and we settle with "timeout".
+        const resetIdleTimeout = () => {
+          if (idleTimeout !== null) clearTimeout(idleTimeout);
+          idleTimeout = setTimeout(() => {
             if (!doneRef.current) {
               updatePhase("timeout");
               // Force-settle so the promise doesn't hang forever.
@@ -501,12 +527,12 @@ export function useStreamChat() {
               // with `sending=true` indefinitely.
               settleRef.current?.("", undefined, "timeout", "timeout");
             }
-          }, TOTAL_TIMEOUT_MS);
+          }, IDLE_TIMEOUT_MS);
         };
         const disarmTimeouts = () => {
-          if (totalTimeout !== null) {
-            clearTimeout(totalTimeout);
-            totalTimeout = null;
+          if (idleTimeout !== null) {
+            clearTimeout(idleTimeout);
+            idleTimeout = null;
           }
           if (slowHintTimer !== null) {
             clearTimeout(slowHintTimer);
@@ -598,6 +624,20 @@ export function useStreamChat() {
             // 2026-07-10: Stale WS guard — if a new send has started,
             // ignore events from the old WS.
             if (activeSendIdRef.current !== mySendId) return;
+            // 2026-07-12: Reset the idle timeout on every received
+            // event. As long as the agent is actively producing data
+            // (text, thinking, tool events, status), the stream stays
+            // alive. Only when no event arrives for IDLE_TIMEOUT_MS
+            // does the timeout fire.
+            if (idleTimeout !== null) {
+              clearTimeout(idleTimeout);
+              idleTimeout = setTimeout(() => {
+                if (!doneRef.current) {
+                  updatePhase("timeout");
+                  settleRef.current?.("", undefined, "timeout", "timeout");
+                }
+              }, IDLE_TIMEOUT_MS);
+            }
             try {
               const data = JSON.parse(String(evt.data));
 
@@ -750,11 +790,30 @@ export function useStreamChat() {
               }
 
               // Todo (task list) mutations. Wire format:
-              //   { type: "todo_group_started", event: { session_id, group_id, group_title, message_id } }
-              //   { type: "todo_item_upserted", event: { session_id, item: {...} } }
-              //   { type: "todo_item_removed",  event: { session_id, id: "..." } }
+              //   { type: "todo_snapshot",       event: { session_id, items: [...] } }
+              //   { type: "todo_group_started",  event: { session_id, group_id, group_title, message_id } }
+              //   { type: "todo_item_upserted",  event: { session_id, item: {...} } }
+              //   { type: "todo_item_removed",   event: { session_id, id: "..." } }
               // Routing is straight to onTodoChange; no message-bubble
               // side effects (the TodoListCard subscribes directly).
+              //
+              // P0-T2 (Frontend Audit 2026-07-13): the `todo_snapshot`
+              // branch was missing — reload / reconnect / multi-client
+              // hydration silently dropped. Now handled: caller rebuilds
+              // `todoGroups` from the authoritative server state.
+              if (evtType === "todo_snapshot") {
+                const ev = data?.event ?? data ?? {};
+                const items = ev?.items ?? [];
+                const sessionId = ev?.session_id ?? ev?.sessionId ?? "";
+                if (Array.isArray(items)) {
+                  callbacks.onTodoChange?.({
+                    kind: "snapshot",
+                    sessionId,
+                    items: items as TodoSnapshotItem[],
+                  });
+                }
+                return;
+              }
               if (evtType === "todo_group_started") {
                 const ev = data?.event ?? data ?? {};
                 const groupId = ev?.group_id ?? ev?.groupId ?? "";
@@ -919,6 +978,25 @@ export function useStreamChat() {
                 if (directive && typeof directive === "object" && "op" in directive) {
                   callbacks.onAcuiDirective?.(directive as AcuiDirective);
                 }
+                return;
+              }
+
+              // Context usage snapshot — fired after every agent-loop turn.
+              // Used to render a persistent context-usage bar in the chat footer.
+              if (evtType === "context_usage" || evtType === "ContextUsage") {
+                const used = typeof (data?.used_tokens ?? data?.event?.used_tokens) === "number"
+                  ? (data?.used_tokens ?? data?.event?.used_tokens) as number
+                  : 0;
+                const max = typeof (data?.max_tokens ?? data?.event?.max_tokens) === "number"
+                  ? (data?.max_tokens ?? data?.event?.max_tokens) as number
+                  : 0;
+                const threshold = typeof (data?.threshold_tokens ?? data?.event?.threshold_tokens) === "number"
+                  ? (data?.threshold_tokens ?? data?.event?.threshold_tokens) as number
+                  : 0;
+                const pct = typeof (data?.percent ?? data?.event?.percent) === "number"
+                  ? (data?.percent ?? data?.event?.percent) as number
+                  : 0;
+                setContextUsage({ usedTokens: used, maxTokens: max, thresholdTokens: threshold, percent: pct });
                 return;
               }
 
@@ -1230,5 +1308,5 @@ export function useStreamChat() {
     setStreamingSessionId(null);
   }, []);
 
-  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, cancel };
+  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, cancel };
 }

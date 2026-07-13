@@ -176,6 +176,16 @@ pub struct Message {
     /// know whether a tool call was running, succeeded or failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_timeline: Option<Vec<ExecutionTimelineEvent>>,
+    /// v34 (2026-07-09): ephemeral messages exist only in the
+    /// in-memory context — they are **never** persisted to the DB.
+    /// Used for replay-path `tool_result` messages that satisfy the
+    /// provider API's `tool_call_id` pairing requirement without
+    /// creating duplicate DB rows (the original execution's
+    /// `tool_result` is already persisted). Skipping persistence at
+    /// the source eliminates the need for downstream dedup logic
+    /// in the frontend.
+    #[serde(default, skip)]
+    pub ephemeral: bool,
 }
 
 /// One entry in an assistant message's execution timeline.
@@ -233,6 +243,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 
@@ -248,6 +259,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 
@@ -263,6 +275,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 
@@ -278,6 +291,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 
@@ -306,6 +320,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 
@@ -327,6 +342,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 
@@ -349,6 +365,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            ephemeral: false,
         }
     }
 }
@@ -671,6 +688,172 @@ pub struct StreamChunk {
 }
 
 // ---------------------------------------------------------------------------
+// Orchestration Engine types (Phase 0 — P0-1)
+// ---------------------------------------------------------------------------
+
+/// Working mode for a Task. Determines whether the engine blocks for user
+/// confirmation before executing (Plan), runs straight through (Craft), or
+/// only answers questions without writing (Ask).
+///
+/// Maps to the WorkBuddy mode state machine: the mode is set at Task
+/// creation time and governs the lifecycle transitions available.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskMode {
+    /// Direct execution — the agent runs tools immediately, no plan
+    /// confirmation step. Suitable for short, well-defined tasks.
+    #[default]
+    Craft,
+    /// Plan-then-execute — the agent first produces a plan, pauses for
+    /// user confirmation, then executes. The Task enters `planning`
+    /// status before transitioning to `in_progress`.
+    Plan,
+    /// Read-only advisory — the agent may read files and answer
+    /// questions but MUST NOT execute write-class tools (write_file,
+    /// patch, terminal, etc.). Enforced by the mode gate in the
+    /// orchestrator.
+    Ask,
+}
+
+/// Lifecycle status for a Task. The transitions are:
+///
+/// ```text
+///   pending → planning → in_progress → completed
+///                                    ↘ failed
+///                         any → archived
+/// ```
+///
+/// `Planning` is only entered when `mode == Plan`. `Craft` goes straight
+/// from `pending` to `in_progress`. `Ask` never enters `in_progress`
+/// (the task is answered, not executed).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    #[default]
+    Pending,
+    Planning,
+    InProgress,
+    Completed,
+    Failed,
+    Archived,
+}
+
+impl TaskStatus {
+    /// Returns `true` if the task is in a terminal state (no further
+    /// transitions except `Archived`).
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Archived)
+    }
+
+    /// Returns `true` if the task is currently being actively worked on.
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Planning | Self::InProgress)
+    }
+
+    /// Validate that a transition from `self` to `next` is legal per
+    /// the state machine. Returns `Ok(())` on success, `Err` with a
+    /// human-readable message on illegal transition.
+    pub fn validate_transition(&self, next: TaskStatus) -> Result<(), String> {
+        use TaskStatus::*;
+        let legal = matches!(
+            (self, next),
+            (Pending, Planning)
+                | (Pending, InProgress)
+                | (Pending, Archived)
+                | (Planning, InProgress)
+                | (Planning, Archived)
+                | (Planning, Failed)
+                | (InProgress, Completed)
+                | (InProgress, Failed)
+                | (InProgress, Archived)
+                | (Completed, Archived)
+                | (Failed, Archived)
+                | (Archived, Archived) // idempotent
+        );
+        if legal {
+            Ok(())
+        } else {
+            Err(format!(
+                "illegal task status transition: {:?} → {:?}",
+                self, next
+            ))
+        }
+    }
+}
+
+/// Context attached to a Task — references to files, screenshots,
+/// uploaded documents, and free-form notes that the agent should
+/// consider when working on this Task.
+///
+/// Serialized as `context_json` in the `tasks` table. The `@`-reference
+/// parser (P1-3) populates `references` from the user's natural-language
+/// input.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TaskContext {
+    /// `@`-references resolved from user input (file paths, URLs, etc.).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<TaskContextRef>,
+    /// Screenshot image paths (absolute or relative to workspace).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub screenshots: Vec<String>,
+    /// Uploaded file paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
+    /// Free-form notes the user typed alongside the task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+/// A single `@`-reference in a Task's context.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskContextRef {
+    /// The raw text after `@` (e.g. `@src/main.rs` → `src/main.rs`).
+    pub target: String,
+    /// What kind of reference was resolved.
+    pub kind: TaskContextRefKind,
+}
+
+/// Classification of a `@`-reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskContextRefKind {
+    File,
+    Directory,
+    Url,
+    Session,
+    Unknown,
+}
+
+/// A reference to a deliverable artifact produced by the agent for a Task.
+///
+/// Collected by the `present_files` equivalent (P7-1) and stored as
+/// `result_refs_json` in the `tasks` table. The frontend renders these
+/// in the "产物" tab of the results panel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskResultRef {
+    /// Absolute path or URL to the artifact.
+    pub path: String,
+    /// Artifact type — drives the preview rendering.
+    pub artifact_type: TaskArtifactType,
+    /// Optional one-line summary extracted from the tool output or
+    /// generated by the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+/// Classification of a deliverable artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskArtifactType {
+    Html,
+    Image,
+    Report,
+    Video,
+    File,
+    Directory,
+}
+
+// ---------------------------------------------------------------------------
 // Skill and Memory types (referenced by trait definitions)
 // ---------------------------------------------------------------------------
 
@@ -828,5 +1011,120 @@ mod tests {
     #[test]
     fn test_budget_config_validate_or_warn_does_not_panic_on_default() {
         BudgetConfig::default().validate_or_warn();
+    }
+
+    // ── Orchestration Engine types (P0-1) ──────────────────
+
+    #[test]
+    fn test_task_mode_serde() {
+        let json = serde_json::to_string(&TaskMode::Craft).unwrap();
+        assert_eq!(json, "\"craft\"");
+        let json = serde_json::to_string(&TaskMode::Plan).unwrap();
+        assert_eq!(json, "\"plan\"");
+        let json = serde_json::to_string(&TaskMode::Ask).unwrap();
+        assert_eq!(json, "\"ask\"");
+    }
+
+    #[test]
+    fn test_task_status_serde() {
+        let json = serde_json::to_string(&TaskStatus::InProgress).unwrap();
+        assert_eq!(json, "\"in_progress\"");
+        let s: TaskStatus = serde_json::from_str("\"completed\"").unwrap();
+        assert_eq!(s, TaskStatus::Completed);
+    }
+
+    #[test]
+    fn test_task_status_default_is_pending() {
+        assert_eq!(TaskStatus::default(), TaskStatus::Pending);
+    }
+
+    #[test]
+    fn test_task_status_is_terminal() {
+        assert!(TaskStatus::Completed.is_terminal());
+        assert!(TaskStatus::Failed.is_terminal());
+        assert!(TaskStatus::Archived.is_terminal());
+        assert!(!TaskStatus::Pending.is_terminal());
+        assert!(!TaskStatus::InProgress.is_terminal());
+    }
+
+    #[test]
+    fn test_task_status_validate_transition_legal() {
+        assert!(TaskStatus::Pending
+            .validate_transition(TaskStatus::Planning)
+            .is_ok());
+        assert!(TaskStatus::Pending
+            .validate_transition(TaskStatus::InProgress)
+            .is_ok());
+        assert!(TaskStatus::Planning
+            .validate_transition(TaskStatus::InProgress)
+            .is_ok());
+        assert!(TaskStatus::InProgress
+            .validate_transition(TaskStatus::Completed)
+            .is_ok());
+        assert!(TaskStatus::InProgress
+            .validate_transition(TaskStatus::Failed)
+            .is_ok());
+        assert!(TaskStatus::Completed
+            .validate_transition(TaskStatus::Archived)
+            .is_ok());
+        assert!(TaskStatus::Archived
+            .validate_transition(TaskStatus::Archived)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_task_status_validate_transition_illegal() {
+        assert!(TaskStatus::Completed
+            .validate_transition(TaskStatus::InProgress)
+            .is_err());
+        assert!(TaskStatus::Failed
+            .validate_transition(TaskStatus::InProgress)
+            .is_err());
+        assert!(TaskStatus::Archived
+            .validate_transition(TaskStatus::InProgress)
+            .is_err());
+        assert!(TaskStatus::Pending
+            .validate_transition(TaskStatus::Completed)
+            .is_err());
+        assert!(TaskStatus::Pending
+            .validate_transition(TaskStatus::Failed)
+            .is_err());
+    }
+
+    #[test]
+    fn test_task_context_serde_roundtrip() {
+        let ctx = TaskContext {
+            references: vec![TaskContextRef {
+                target: "src/main.rs".to_string(),
+                kind: TaskContextRefKind::File,
+            }],
+            screenshots: vec!["screenshot1.png".to_string()],
+            attachments: vec![],
+            notes: Some("Fix the bug".to_string()),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        let back: TaskContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctx, back);
+    }
+
+    #[test]
+    fn test_task_context_default_empty() {
+        let ctx = TaskContext::default();
+        assert!(ctx.references.is_empty());
+        assert!(ctx.screenshots.is_empty());
+        assert!(ctx.attachments.is_empty());
+        assert!(ctx.notes.is_none());
+    }
+
+    #[test]
+    fn test_task_result_ref_serde() {
+        let r = TaskResultRef {
+            path: "/output/report.html".to_string(),
+            artifact_type: TaskArtifactType::Html,
+            summary: Some("Generated report".to_string()),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: TaskResultRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
     }
 }

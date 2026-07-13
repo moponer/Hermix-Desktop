@@ -40,7 +40,6 @@ use crate::message_helpers::{
     assistant_has_reasoning, assistant_visible_text, emit_status, extra_body_for_api_mode,
 };
 use crate::plugins::PluginManager;
-use crate::python_alignment::strip_think_blocks_for_ack;
 
 /// Populate [`AgentConfig::stored_system_prompt`] from SQLite
 /// (`sessions.system_prompt`) for session continuation.
@@ -161,20 +160,19 @@ pub fn prepare_assistant_turn(
     let assistant_msg = response.message.clone();
     let tool_calls = assistant_msg.tool_calls.clone();
     ctx.add_message(assistant_msg.clone());
-    if assistant_msg
-        .tool_calls
-        .as_ref()
-        .is_some_and(|v| !v.is_empty())
-        && crate::message_helpers::assistant_visible_text_after_think_blocks(&assistant_msg)
-    {
-        message_cache.store_content_with_tools(
-            assistant_msg
-                .content
-                .as_deref()
-                .map(strip_think_blocks_for_ack)
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
-        );
+if assistant_msg
+.tool_calls
+.as_ref()
+.is_some_and(|v| !v.is_empty())
+&& crate::message_helpers::assistant_visible_text_after_think_blocks(&assistant_msg)
+{
+message_cache.store_content_with_tools(
+assistant_msg
+.content
+.as_deref()
+.map(|s| s.trim().to_string())
+.filter(|s| !s.is_empty()),
+);
     }
     (history_includes_tool, assistant_msg, tool_calls)
 }
@@ -191,8 +189,7 @@ pub fn prepare_assistant_turn(
 /// `ContinueWithSystemNudge` variant injected a message into the
 /// context — the caller should `continue;` to restart the loop with
 /// the injected message. Returns `false` when the variant was
-/// `PatchLastAssistant` (which mutated the last assistant message
-/// in place) or `Finalize` (a no-op) — the caller should fall
+/// `Finalize` (a no-op) — the caller should fall
 /// through to its terminal finalize path.
 pub fn apply_fallback_outcome(
     ctx: &mut ContextManager,
@@ -207,29 +204,18 @@ pub fn apply_fallback_outcome(
             ctx.add_message(Message::user(&msg));
             true
         }
-        EmptyResponseAction::ContinueWithSystemNudge(msg) => {
-            tracing::debug!(
-                nudge_count = autonomous_nudge_count,
-                total_turns,
-                "autonomous_mode{}: nudging LLM back into action",
-                if stream_mode { "" } else { " [non-stream]" }
-            );
-            ctx.add_message(Message::system(&msg));
-            true
-        }
-        EmptyResponseAction::PatchLastAssistant { content } => {
-            if let Some(last) = ctx.get_messages_mut().last_mut() {
-                if last.role == MessageRole::Assistant {
-                    last.content = Some(content);
-                }
-            }
-            // Last assistant's content changed; refresh the running
-            // token cache so the next pressure check sees the new size.
-            ctx.recompute_total_tokens();
-            false
-        }
-        EmptyResponseAction::Finalize => false,
-    }
+EmptyResponseAction::ContinueWithSystemNudge(msg) => {
+tracing::debug!(
+nudge_count = autonomous_nudge_count,
+total_turns,
+"autonomous_mode{}: nudging LLM back into action",
+if stream_mode { "" } else { " [non-stream]" }
+);
+ctx.add_message(Message::system(&msg));
+true
+}
+EmptyResponseAction::Finalize => false,
+}
 }
 
 /// Phase 1.3a (2026-07-03): the post-LLM logic that was duplicated
@@ -280,11 +266,20 @@ where
     F: FnOnce() -> Option<String>,
     G: FnOnce(String) -> crate::agent_loop::TurnRuntimeRoute,
 {
+    // 2026-07-08: check for tool calls with NON-EMPTY function names.
+    // MiniMax M2.7 streaming can create placeholder tool call entries
+    // whose `name` field is empty (the name delta never arrived, or
+    // the tool call XML was already stripped by the sanitizer). Without
+    // this check, `has_tool_calls` would be `true` for a vec of
+    // empty-named entries, causing `process_post_response` to return
+    // `Continue` — but then `run_stream` filters them out and falls
+    // into the `decide_empty_response` path, which fires a nudge that
+    // re-drives the LLM to re-run the same tools.
     let has_tool_calls = response
         .message
         .tool_calls
         .as_ref()
-        .is_some_and(|tc| !tc.is_empty());
+        .is_some_and(|tc| tc.iter().any(|t| !t.function.name.is_empty()));
 
     if stream_mode {
         tracing::info!(
@@ -349,30 +344,30 @@ where
         return Ok(crate::agent_loop::PostResponseAction::CostGuardTripped);
     }
 
+    // Use the same non-empty-name check as `has_tool_calls` above.
     let tool_calls_present = response
         .message
         .tool_calls
         .as_ref()
-        .is_some_and(|tc| !tc.is_empty());
+        .is_some_and(|tc| tc.iter().any(|t| !t.function.name.is_empty()));
 
     if !tool_calls_present {
         // No tool calls — agent is done. Save the last assistant
         // content for ack-continuation tracking.
-        if response
-            .message
-            .content
-            .as_deref()
-            .is_some_and(|s| !s.is_empty())
-        {
-            message_cache.store_content_with_tools(
-                response
-                    .message
-                    .content
-                    .as_deref()
-                    .map(strip_think_blocks_for_ack)
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-            );
+if response
+.message
+.content
+.as_deref()
+.is_some_and(|s| !s.is_empty())
+{
+message_cache.store_content_with_tools(
+response
+.message
+.content
+.as_deref()
+.map(|s| s.trim().to_string())
+.filter(|s| !s.is_empty()),
+);
         }
         return Ok(crate::agent_loop::PostResponseAction::Finalize);
     }
@@ -504,14 +499,23 @@ pub fn finalize_agent_result(
 
 /// Per-attempt classification inside the retry loop (shared by
 /// `run()` and `run_stream()`). Decides whether the LLM response
-/// warrants a retry (empty content, reasoning-only) or breaks out.
+/// warrants a retry (empty content) or breaks out.
+///
+/// 2026-07-09: Removed `RetryReasoning` (thinking-only inner-loop
+/// retry). When the LLM returns only `reasoning_content` with no
+/// visible text and no tool calls, we break immediately and let
+/// the outer loop's `decide_empty_response` handle it with a
+/// single post-tool nudge. The inner-loop retry was
+/// counterproductive: it added the reasoning-only message to
+/// context, so the LLM saw its own "answer" and returned
+/// reasoning-only again on every retry.
 pub(crate) fn classify_post_llm_response(
     config: &AgentConfig,
     callbacks: &AgentCallbacks,
     r: LlmResponse,
-    inner_thinking: &mut u32,
+    _inner_thinking: &mut u32,
     inner_empty: &mut u32,
-    ctx: &mut ContextManager,
+    _ctx: &mut ContextManager,
 ) -> PostLlmAction {
     let has_tools = r
         .message
@@ -524,24 +528,14 @@ pub(crate) fn classify_post_llm_response(
     if assistant_visible_text(&r.message) {
         return PostLlmAction::Break(r);
     }
-    if assistant_has_reasoning(&r.message)
-        && *inner_thinking < config.thinking_prefill_max_retries
-    {
-        *inner_thinking += 1;
-        emit_status(
-            config,
-            callbacks,
-            "lifecycle",
-            &format!(
-                "Reasoning-only response — retrying ({}/{})",
-                *inner_thinking, config.thinking_prefill_max_retries
-            ),
-        );
-        ctx.add_message(r.message.clone());
-        return PostLlmAction::RetryReasoning;
+    // Reasoning-only (no visible text, no tools): break immediately.
+    // The outer loop's `decide_empty_response` will decide whether
+    // to nudge the LLM or finalize. No inner-loop retry.
+    if assistant_has_reasoning(&r.message) {
+        return PostLlmAction::Break(r);
     }
-    if !assistant_has_reasoning(&r.message)
-        && *inner_empty < config.empty_content_max_retries
+    // Truly empty (no reasoning, no visible text, no tools): retry.
+    if *inner_empty < config.empty_content_max_retries
     {
         *inner_empty += 1;
         tracing::warn!(
@@ -564,6 +558,13 @@ pub(crate) fn classify_post_llm_response(
 }
 
 /// Ask the LLM for a final summary when the turn budget is exhausted.
+///
+/// If the summary LLM call itself fails (e.g. context too long, rate
+/// limit, provider error), we gracefully return `None` instead of
+/// propagating the error. This prevents the max-turns guard from
+/// turning into a hard error that the frontend misinterprets as
+/// "模型不可用". The agent already has a full conversation history;
+/// finalizing without a summary is better than showing an error.
 pub async fn handle_max_iterations(
     config: &AgentConfig,
     llm_provider: &Arc<dyn LlmProvider>,
@@ -573,7 +574,7 @@ pub async fn handle_max_iterations(
         "[SYSTEM] Maximum conversation turns reached. Please provide a brief summary of \
          what was accomplished and any remaining tasks.",
     ));
-    let response = llm_provider
+    match llm_provider
         .chat_completion(
             ctx.get_messages(),
             &[],
@@ -583,6 +584,14 @@ pub async fn handle_max_iterations(
             extra_body_for_api_mode(config, &config.api_mode).as_ref(),
         )
         .await
-        .map_err(|e| AgentError::LlmApi(e.to_string()))?;
-    Ok(Some(response.message))
+    {
+        Ok(response) => Ok(Some(response.message)),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "handle_max_iterations: summary LLM call failed; finalizing without summary"
+            );
+            Ok(None)
+        }
+    }
 }

@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use hermix_config::GatewayConfig;
 use hermix_core::LlmProvider;
 use hermix_intelligence::auxiliary::{
     AuxiliaryClient, AuxiliaryConfig, AuxiliarySource, ProviderCandidate,
@@ -47,8 +48,80 @@ pub struct AuxiliaryWiringSummary {
 ///   register direct-key candidates (OpenAI-compatible base URLs)
 ///
 /// Order matches Python: OpenRouter > Custom > Anthropic > direct keys.
+///
+/// **Deprecated**: prefer [`build_auxiliary_client_with_config`] which also
+/// reads API keys from `config.yaml`'s `[llm_providers]` section. This
+/// env-only constructor is kept for backward compatibility (tests, CLI).
 pub fn build_default_auxiliary_client(
     config: AuxiliaryConfig,
+) -> (AuxiliaryClient, AuxiliaryWiringSummary) {
+    build_auxiliary_client_inner(config, None)
+}
+
+/// Build an [`AuxiliaryClient`] from both `config.yaml` and environment variables.
+///
+/// For each provider, the key is resolved as:
+///   1. `config.llm_providers[provider].api_key` (from config.yaml)
+///   2. Environment variable (e.g. `MINIMAX_API_KEY`)
+///
+/// This mirrors the main provider's resolution logic in `build_provider`,
+/// ensuring the compression auxiliary client uses the same API key as the
+/// main conversation. Without this, a user who configured their key only in
+/// config.yaml (not as an env var) would see 401 errors from the compression
+/// health check even though normal conversations work fine.
+pub fn build_auxiliary_client_with_config(
+    config: AuxiliaryConfig,
+    gateway: &GatewayConfig,
+) -> (AuxiliaryClient, AuxiliaryWiringSummary) {
+    build_auxiliary_client_inner(config, Some(gateway))
+}
+
+/// Resolve an API key for a provider: config.yaml first, env var second.
+fn resolve_key(gateway: Option<&GatewayConfig>, provider_name: &str, env_var: &str) -> Option<String> {
+    // 1. config.yaml
+    if let Some(gw) = gateway {
+        if let Some(pc) = gw.llm_providers.get(provider_name) {
+            if let Some(ref k) = pc.api_key {
+                if !k.trim().is_empty() {
+                    return Some(k.trim().to_string());
+                }
+            }
+        }
+    }
+    // 2. env var
+    if let Ok(k) = std::env::var(env_var) {
+        if !k.trim().is_empty() {
+            return Some(k.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Resolve base URL: config.yaml first, env var second, fallback to default.
+fn resolve_base_url(
+    gateway: Option<&GatewayConfig>,
+    provider_name: &str,
+    env_var: &str,
+    default: &str,
+) -> String {
+    if let Some(gw) = gateway {
+        if let Some(pc) = gw.llm_providers.get(provider_name) {
+            if let Some(ref u) = pc.base_url {
+                if !u.trim().is_empty() {
+                    return u.trim().to_string();
+                }
+            }
+        }
+    }
+    std::env::var(env_var)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+fn build_auxiliary_client_inner(
+    config: AuxiliaryConfig,
+    gateway: Option<&GatewayConfig>,
 ) -> (AuxiliaryClient, AuxiliaryWiringSummary) {
     let mut summary = AuxiliaryWiringSummary {
         registered: Vec::new(),
@@ -56,70 +129,58 @@ pub fn build_default_auxiliary_client(
     };
     let mut builder = AuxiliaryClient::builder().config(config);
 
-    if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
-        if !key.trim().is_empty() {
-            let provider: Arc<dyn LlmProvider> = Arc::new(
-                OpenRouterProvider::new(key.trim())
-                    .with_model(default_models::OPENROUTER)
-                    .with_http_referer("https://hermes-agent.nousresearch.com")
-                    .with_x_title("Hermix"),
-            );
-            builder = builder.add_candidate(ProviderCandidate::new(
-                AuxiliarySource::OpenRouter,
-                default_models::OPENROUTER,
-                provider,
-            ));
-            summary.registered.push("openrouter".into());
-        } else {
-            summary.skipped.push("openrouter (empty)".into());
-        }
+    // OpenRouter
+    if let Some(key) = resolve_key(gateway, "openrouter", "OPENROUTER_API_KEY") {
+        let provider: Arc<dyn LlmProvider> = Arc::new(
+            OpenRouterProvider::new(&key)
+                .with_model(default_models::OPENROUTER)
+                .with_http_referer("https://hermes-agent.nousresearch.com")
+                .with_x_title("Hermix"),
+        );
+        builder = builder.add_candidate(ProviderCandidate::new(
+            AuxiliarySource::OpenRouter,
+            default_models::OPENROUTER,
+            provider,
+        ));
+        summary.registered.push("openrouter".into());
     } else {
         summary.skipped.push("openrouter (no key)".into());
     }
 
-    // Custom OpenAI-compatible endpoint (covers OPENAI_API_KEY + custom base
-    // URLs). We mark it `Custom` rather than the OpenAI source so that the
-    // chain dedup logic doesn't collide with explicitly-named providers.
-    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        if !key.trim().is_empty() {
-            let base_url = std::env::var("OPENAI_BASE_URL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-            let model = std::env::var("OPENAI_AUXILIARY_MODEL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| default_models::OPENAI.into());
-            let provider: Arc<dyn LlmProvider> =
-                Arc::new(GenericProvider::new(base_url, key.trim(), model.clone()));
-            builder = builder.add_candidate(ProviderCandidate::new(
-                AuxiliarySource::Custom,
-                model,
-                provider,
-            ));
-            summary.registered.push("custom".into());
-        } else {
-            summary.skipped.push("custom (empty key)".into());
-        }
+    // Custom OpenAI-compatible endpoint
+    if let Some(key) = resolve_key(gateway, "openai", "OPENAI_API_KEY") {
+        let base_url = resolve_base_url(gateway, "openai", "OPENAI_BASE_URL", "https://api.openai.com/v1");
+        let model = std::env::var("OPENAI_AUXILIARY_MODEL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| default_models::OPENAI.into());
+        let provider: Arc<dyn LlmProvider> =
+            Arc::new(GenericProvider::new(base_url, &key, model.clone()));
+        builder = builder.add_candidate(ProviderCandidate::new(
+            AuxiliarySource::Custom,
+            model,
+            provider,
+        ));
+        summary.registered.push("custom".into());
     } else {
         summary.skipped.push("custom (no key)".into());
     }
 
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        if !key.trim().is_empty() {
-            let provider: Arc<dyn LlmProvider> =
-                Arc::new(AnthropicProvider::new(key.trim()).with_model(default_models::ANTHROPIC));
-            builder = builder.add_candidate(ProviderCandidate::new(
-                AuxiliarySource::Anthropic,
-                default_models::ANTHROPIC,
-                provider,
-            ));
-            summary.registered.push("anthropic".into());
-        }
+    // Anthropic
+    if let Some(key) = resolve_key(gateway, "anthropic", "ANTHROPIC_API_KEY") {
+        let provider: Arc<dyn LlmProvider> =
+            Arc::new(AnthropicProvider::new(&key).with_model(default_models::ANTHROPIC));
+        builder = builder.add_candidate(ProviderCandidate::new(
+            AuxiliarySource::Anthropic,
+            default_models::ANTHROPIC,
+            provider,
+        ));
+        summary.registered.push("anthropic".into());
     } else {
         summary.skipped.push("anthropic (no key)".into());
     }
 
+    // Direct-key providers (env-var only — config.yaml names may not match)
     register_direct_key(
         &mut builder,
         &mut summary,
@@ -136,30 +197,25 @@ pub fn build_default_auxiliary_client(
         "https://api.moonshot.ai/v1",
         default_models::KIMI,
     );
-    // MiniMax — supports MINIMAX_BASE_URL override (mirrors OPENAI_BASE_URL pattern)
-    if let Ok(key) = std::env::var("MINIMAX_API_KEY") {
-        if !key.trim().is_empty() {
-            let base_url = std::env::var("MINIMAX_BASE_URL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| "https://api.minimax.io/v1".to_string());
-            let provider: Arc<dyn LlmProvider> = Arc::new(GenericProvider::new(
-                base_url,
-                key.trim(),
-                default_models::MINIMAX,
-            ));
-            builder = builder.add_candidate(ProviderCandidate::new(
-                AuxiliarySource::DirectKey("minimax".to_string()),
-                default_models::MINIMAX,
-                provider,
-            ));
-            summary.registered.push("minimax".into());
-        } else {
-            summary.skipped.push("minimax (empty key)".into());
-        }
+
+    // MiniMax — config.yaml first, env var second
+    if let Some(key) = resolve_key(gateway, "minimax", "MINIMAX_API_KEY") {
+        let base_url = resolve_base_url(gateway, "minimax", "MINIMAX_BASE_URL", "https://api.minimax.io/v1");
+        let provider: Arc<dyn LlmProvider> = Arc::new(GenericProvider::new(
+            base_url,
+            &key,
+            default_models::MINIMAX,
+        ));
+        builder = builder.add_candidate(ProviderCandidate::new(
+            AuxiliarySource::DirectKey("minimax".to_string()),
+            default_models::MINIMAX,
+            provider,
+        ));
+        summary.registered.push("minimax".into());
     } else {
         summary.skipped.push("minimax (no key)".into());
     }
+
     register_direct_key(
         &mut builder,
         &mut summary,

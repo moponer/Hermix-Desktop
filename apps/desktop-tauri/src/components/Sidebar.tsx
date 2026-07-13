@@ -187,6 +187,17 @@ export function Sidebar({
   }, [orphanPaths, addWorkspace]);
 
   const [collapsedWs, setCollapsedWs] = useState<Set<string>>(new Set());
+  // P0-10: Workspace section collapse state (persisted to localStorage).
+  const [wsSectionCollapsed, setWsSectionCollapsed] = useState<boolean>(() => {
+    try { return storage.getItem(sessionKey("ui", "ws_section_collapsed")) === "1"; } catch { return false; }
+  });
+  const toggleWsSection = useCallback(() => {
+    setWsSectionCollapsed((prev) => {
+      const next = !prev;
+      try { storage.setItem(sessionKey("ui", "ws_section_collapsed"), next ? "1" : "0"); } catch {}
+      return next;
+    });
+  }, []);
   const toggleWsCollapsed = (id: string) => {
     setCollapsedWs((prev) => {
       const next = new Set(prev);
@@ -284,9 +295,12 @@ export function Sidebar({
         {/* Workspaces section */}
         <div className="section-header">
           <button
-            onClick={() => {}}
+            onClick={toggleWsSection}
             className="section-header-toggle"
           >
+            {wsSectionCollapsed
+              ? <ChevronRight size={12} className="section-header-chevron" />
+              : <ChevronDown  size={12} className="section-header-chevron" />}
             <Briefcase size={12} className="section-header-icon" />
             <span>工作区</span>
             {workspaces.length > 0 && (
@@ -298,12 +312,14 @@ export function Sidebar({
           </button>
         </div>
 
-        {workspaces.length === 0 ? (
-          <p className="list-group-empty">
-            还没有工作区<br />
-            <span style={{ fontSize: "10.5px" }}>点 + 选择本地目录后开始受限对话</span>
-          </p>
-        ) : (
+        {!wsSectionCollapsed && (
+          <>
+          {workspaces.length === 0 ? (
+            <p className="list-group-empty">
+              还没有工作区<br />
+              <span style={{ fontSize: "10.5px" }}>点 + 选择本地目录后开始受限对话</span>
+            </p>
+          ) : (
           <div className="stack-v" style={{ gap: 2 }}>
             {workspaces.filter((ws) => (sessionsByWs[ws.path] ?? []).length > 0).map((ws) => {
               const wsSessions = sessionsByWs[ws.path] ?? [];
@@ -352,6 +368,8 @@ export function Sidebar({
               );
             })}
           </div>
+          )}
+          </>
         )}
 
         {/* Ungrouped sessions */}

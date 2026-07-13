@@ -40,6 +40,7 @@ pub fn register_builtin_tools(
     skill_provider: Arc<dyn SkillProvider>,
     clarify_backend: Option<Arc<dyn ClarifyBackend>>,
     enabled_toolsets: Option<HashSet<String>>,
+    todo_event_tx: Option<tokio::sync::broadcast::Sender<crate::tools::todo::TodoChange>>,
 ) {
     // 1. Browser backend. We construct it here (not inside
     //    `tools::browser::register`) because the allowlist / port /
@@ -80,6 +81,7 @@ pub fn register_builtin_tools(
         terminal_backend,
         skill_provider,
         browser_backend,
+        todo_event_tx,
     );
     crate::tools::clarify::register(registry, clarify_backend);
     // Mark interactive tools that must not run in parallel with others.
@@ -242,6 +244,7 @@ mod tests {
             Arc::new(NoopSkills),
             None,
             None,
+            None,
         );
         let risk = registry
             .risk_level("terminal")
@@ -267,6 +270,7 @@ mod tests {
             &registry,
             Arc::new(NoopTerminal),
             Arc::new(NoopSkills),
+            None,
             None,
             None,
         );

@@ -45,6 +45,7 @@ impl MessageCache {
     /// Take the cached assistant content out (used by the finalize
     /// path when handing off to the next session / persisting the
     /// agent result). Leaves `None` behind.
+    #[allow(dead_code)] // P1-3: production caller removed; kept for tests + future use
     pub(crate) fn take_content_with_tools(&mut self) -> Option<String> {
         self.last_content_with_tools.take()
     }

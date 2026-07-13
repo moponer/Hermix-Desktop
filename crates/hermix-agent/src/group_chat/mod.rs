@@ -212,8 +212,8 @@ mod tests {
 
     #[test]
     fn test_group_chat_manager_round_robin_flow() {
-        use crate::orchestrator::group_chat_manager::SpeakerSelection;
-        use crate::orchestrator::round_robin::RoundRobinGroupChat;
+        use crate::group_chat::group_chat_manager::SpeakerSelection;
+        use crate::group_chat::round_robin::RoundRobinGroupChat;
 
         let participants = vec![
             GroupChatParticipant::new("bot1", "Helper A", false),
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn test_group_chat_manager_selector_flow() {
-        use crate::orchestrator::group_chat_manager::SpeakerSelection;
+        use crate::group_chat::group_chat_manager::SpeakerSelection;
 
         let participants = vec![
             GroupChatParticipant::new("alice", "Python expert", false),
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_group_chat_manager_history_accessors() {
-        use crate::orchestrator::group_chat_manager::SpeakerSelection;
+        use crate::group_chat::group_chat_manager::SpeakerSelection;
 
         let participants = vec![
             GroupChatParticipant::new("bot1", "Helper", false),

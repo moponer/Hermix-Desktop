@@ -174,6 +174,7 @@ pub fn run() {
             commands::artifact_path_exists,
             commands::restart_sidecar,
             commands::render_office_preview,
+            commands::get_runtime_info,
             // Phase L1.4 (2026-06-29): Settings → Backend → Python
             // 运行时探测。`python_detect` 列出 override / env / sibling
             // / PATH 四档候选，给 UI 看；`set_python_override` 把
