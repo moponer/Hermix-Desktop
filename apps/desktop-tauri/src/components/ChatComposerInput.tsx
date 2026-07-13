@@ -229,7 +229,7 @@ export const ChatComposerInput = memo(
                 color: "white",
               }}
               title="停止生成"
-            >
+             aria-label="停止生成">
               <Square size={12} fill="currentColor" />
             </button>
           ) : (
@@ -243,7 +243,7 @@ export const ChatComposerInput = memo(
                 color: canSend ? "var(--color-accent-on-text)" : "var(--color-text-faint)",
               }}
               title="发送 (Enter)"
-            >
+             aria-label="发送 (Enter)">
               <Send size={13} />
             </button>
           )}

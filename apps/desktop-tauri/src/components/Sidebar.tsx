@@ -307,7 +307,7 @@ export function Sidebar({
               <span className="section-header-count">{workspaces.length}</span>
             )}
           </button>
-          <button onClick={handleAddWorkspace} className="section-header-add" title="添加工作区">
+          <button onClick={handleAddWorkspace} className="section-header-add" title="添加工作区" aria-label="添加工作区">
             <Plus size={13} />
           </button>
         </div>
@@ -475,7 +475,7 @@ export function Sidebar({
                     className="icon-btn"
                     title="创建"
                     style={{ opacity: !newRoomName.trim() || creatingRoom ? 0.4 : 1 }}
-                  >
+                   aria-label="创建">
                     <Plus size={14} />
                   </button>
                   <button

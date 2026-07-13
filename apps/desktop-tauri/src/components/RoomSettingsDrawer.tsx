@@ -130,7 +130,7 @@ export function RoomSettingsDrawer({ roomId, roomName, onClose }: RoomSettingsDr
             <Settings size={16} className="text-text-secondary" />
             <h3 className="text-[14px] font-semibold text-text-primary">{roomName} — 规则设置</h3>
           </div>
-          <button onClick={onClose} className="p-1 rounded-md hover:bg-bg-hover text-text-muted">
+          <button onClick={onClose} aria-label="关闭" className="p-1 rounded-md hover:bg-bg-hover text-text-muted">
             <X size={16} />
           </button>
         </div>

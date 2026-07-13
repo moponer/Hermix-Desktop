@@ -292,7 +292,7 @@ function TaskCard({
           onClick={onDelete}
           className="flex items-center gap-1 px-2 py-1 text-[10.5px] text-text-faint hover:text-error hover:bg-bg-hover rounded"
           title="删除"
-        >
+         aria-label="删除">
           <Trash2 size={10} />
         </button>
         <div className="flex-1" />

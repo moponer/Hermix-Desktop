@@ -516,7 +516,7 @@ export function PreviewPanel({
             onClick={onBack}
             title="关闭预览"
             className="head-action is-danger"
-          >
+           aria-label="关闭预览">
             <X size={14} />
           </button>
         </div>
@@ -856,7 +856,7 @@ export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArt
           onClick={onClose}
           title="关闭右侧栏"
           className="ml-auto p-1.5 m-1 rounded-md hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
-        >
+         aria-label="关闭右侧栏">
           <X size={13} />
         </button>
       </div>

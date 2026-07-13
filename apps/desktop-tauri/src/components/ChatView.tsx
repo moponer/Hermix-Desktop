@@ -2007,7 +2007,7 @@ const clearPendingImages = useCallback(() => {
                   className="shrink-0 ml-1 p-0.5 rounded-md hover:bg-amber-200/50 dark:hover:bg-amber-700/30 transition-colors text-amber-500 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-200"
                   title="关闭"
                   type="button"
-                >
+                 aria-label="关闭">
                   <X size={14} />
                 </button>
               </div>
@@ -2214,7 +2214,7 @@ const clearPendingImages = useCallback(() => {
                 onClick={onClearStreamError}
                 className="shrink-0 ml-1 p-0.5 rounded-md hover:bg-amber-200/50 dark:hover:bg-amber-700/30 transition-colors text-amber-500 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-200"
                 title="关闭"
-              >
+               aria-label="关闭">
                 <X size={14} />
               </button>
             </div>

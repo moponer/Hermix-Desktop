@@ -366,7 +366,7 @@ function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: string) => 
           disabled={loading}
           className="btn-secondary btn-sm flex-shrink-0"
           title="刷新技能列表"
-        >
+         aria-label="刷新技能列表">
           <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
         </button>
       </div>
@@ -482,7 +482,7 @@ function SkillCard({ skill, catLabel, onToggle }: {
           <button onClick={openContent}
             className="w-9 h-9 rounded-lg bg-bg-tertiary flex items-center justify-center text-text-secondary shrink-0 hover:bg-bg-surface transition-colors"
             title="查看技能内容"
-          >
+           aria-label="查看技能内容">
             <Wand2 size={14} />
           </button>
           <div className="min-w-0 flex-1 cursor-pointer" onClick={openContent}>
@@ -905,7 +905,7 @@ function ConnectorRow({
           onClick={onRemove}
           className="h-7 w-7 rounded-md text-text-muted hover:text-error hover:bg-error/10 flex items-center justify-center"
           title="删除"
-        >
+         aria-label="删除">
           <Trash2 size={13} />
         </button>
       </div>

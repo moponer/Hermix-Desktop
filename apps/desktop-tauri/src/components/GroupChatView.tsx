@@ -32,7 +32,7 @@ function InlineError({ message, onDismiss }: { message: string; onDismiss: () =>
         className="shrink-0 opacity-60 hover:opacity-100"
         title="关闭"
         type="button"
-      >
+       aria-label="关闭">
         <X size={12} />
       </button>
     </div>

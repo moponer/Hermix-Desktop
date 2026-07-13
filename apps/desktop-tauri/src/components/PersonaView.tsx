@@ -294,7 +294,7 @@ function PersonalitiesEditor() {
                 className="flex-1 rounded-md px-2 py-1 text-[12px] text-text-primary placeholder:text-text-faint outline-none"
                 style={{ background: "var(--color-bg-primary)" }}
               />
-              <button onClick={handleCreate} className="p-1 rounded text-accent hover:bg-bg-hover" title="创建">
+              <button onClick={handleCreate} className="p-1 rounded text-accent hover:bg-bg-hover" title="创建" aria-label="创建">
                 <Check size={12} />
               </button>
               <button onClick={() => { setShowNew(false); setNewName(""); }} className="p-1 rounded text-text-muted hover:bg-bg-hover" title="取消">
@@ -361,7 +361,7 @@ function PersonalitiesEditor() {
                       onClick={handleDelete}
                       className="p-1.5 rounded-md text-text-muted hover:text-error hover:bg-bg-hover"
                       title="删除人设"
-                    >
+                     aria-label="删除人设">
                       <Trash2 size={12} />
                     </button>
                   )}
@@ -524,7 +524,7 @@ export function PersonaView() {
           onClick={refresh}
           className="ml-auto p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-hover"
           title="重新加载"
-        >
+         aria-label="重新加载">
           <RefreshCw size={13} />
         </button>
       </div>

@@ -413,7 +413,7 @@ function AgentCard({ agent, onEdit, onDelete, onTest, onUse }: AgentCardProps) {
           title="快速测试"
           className="p-1.5 rounded-lg hover:bg-bg-hover"
           style={{ color: "var(--color-btn-ghost-text)" }}
-        >
+         aria-label="快速测试">
           <Play size={11} />
         </button>
         <button
@@ -421,7 +421,7 @@ function AgentCard({ agent, onEdit, onDelete, onTest, onUse }: AgentCardProps) {
           title="编辑"
           className="p-1.5 rounded-lg hover:bg-bg-hover"
           style={{ color: "var(--color-btn-ghost-text)" }}
-        >
+         aria-label="编辑">
           <Edit3 size={11} />
         </button>
         <button
@@ -429,7 +429,7 @@ function AgentCard({ agent, onEdit, onDelete, onTest, onUse }: AgentCardProps) {
           title="删除"
           className="p-1.5 rounded-lg hover:bg-error-soft"
           style={{ color: "var(--color-btn-ghost-text)" }}
-        >
+         aria-label="删除">
           <Trash2 size={11} />
         </button>
       </div>
@@ -1456,7 +1456,7 @@ function TestDialog({ agent, onClose }: TestDialogProps) {
             <p className="text-[13px] font-semibold text-text-primary truncate">{agent.name}</p>
             <p className="text-[10.5px] text-text-muted truncate">{agent.role}</p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-hover">
+          <button onClick={onClose} aria-label="关闭" className="p-1.5 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-hover">
             <X size={14} />
           </button>
         </div>
@@ -1500,6 +1500,7 @@ function TestDialog({ agent, onClose }: TestDialogProps) {
           <button
             onClick={send}
             disabled={!input.trim() || streaming}
+            aria-label="发送"
             className="p-2 rounded-lg disabled:opacity-40"
             style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
           >

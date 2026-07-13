@@ -19,7 +19,7 @@ export function ThemeToggle({ compact = false }: ThemeToggleProps) {
         onClick={cycle}
         title={title}
         className="h-10 w-10 flex items-center justify-center text-text-muted hover:bg-bg-hover hover:text-text-secondary transition-colors"
-      >
+       aria-label={title}>
         <Icon size={15} />
       </button>
     );

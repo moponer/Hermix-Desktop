@@ -86,7 +86,7 @@ export function BackendStatus() {
       disabled={restarting}
       className="ml-1 p-0.5 rounded hover:bg-white/10 transition-colors disabled:opacity-50"
       title="重启后端服务"
-    >
+     aria-label="重启后端服务">
       <RefreshCw
         size={11}
         className={restarting ? "animate-spin text-text-muted" : "text-text-muted"}

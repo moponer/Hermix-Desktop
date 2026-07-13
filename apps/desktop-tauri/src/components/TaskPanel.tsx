@@ -956,7 +956,7 @@ function AnnouncementSection({
           onClick={beginEdit}
           className="p-0.5 rounded-md text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors"
           title="编辑"
-        >
+         aria-label="编辑">
           <Pencil size={10} />
         </button>
         <button
@@ -965,7 +965,7 @@ function AnnouncementSection({
           disabled={busy}
           className="p-0.5 rounded-md text-text-muted hover:text-red-400 hover:bg-bg-tertiary transition-colors disabled:opacity-40"
           title="撤销公告"
-        >
+         aria-label="撤销公告">
           <X size={10} />
         </button>
       </div>

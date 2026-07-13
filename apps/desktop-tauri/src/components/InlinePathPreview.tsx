@@ -197,7 +197,7 @@ export function InlinePathPreview({ path, workspaceRoot, onClose, anchor }: Inli
             onClick={onClose}
             className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
             title="关闭 (ESC)"
-          >
+           aria-label="关闭 (ESC)">
             <X size={11} />
           </button>
         </div>
