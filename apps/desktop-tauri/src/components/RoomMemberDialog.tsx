@@ -3,7 +3,7 @@ import { X, Users, UserPlus, LogOut, Check, AlertCircle, Search, Cpu, Crown, Pen
 import { clsx } from "clsx";
 import * as api from "../api";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
-import type { AgentPersona } from "./AgentsView";
+import type { AgentPersona } from "./agents/types";
 
 interface RoomMemberDialogProps {
   roomId: string;

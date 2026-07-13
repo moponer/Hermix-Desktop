@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { Users, Plus, Trash2, MessageCircle, X, Settings, AlertCircle, Crown, ListChecks, Copy, Search } from "lucide-react";
 import { clsx } from "clsx";
-import type { AgentPersona } from "./AgentsView";
+import type { AgentPersona } from "./agents/types";
 import { BUILTIN_EXPERTS, type ExpertDef } from "../data/builtinExperts";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import * as api from "../api";

@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { X, ListChecks, AlertCircle, CheckCircle2, Loader2, Clock, ChevronDown, ChevronRight, Scale, Skull, Megaphone, Pencil, Check } from "lucide-react";
 import { clsx } from "clsx";
 import * as api from "../api";
-import type { AgentPersona } from "./AgentsView";
+import type { AgentPersona } from "./agents/types";
 
 // ── Task engine event types (mirror RoomEvent in Rust) ────────
 //
