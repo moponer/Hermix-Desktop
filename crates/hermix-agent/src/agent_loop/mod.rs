@@ -2065,7 +2065,12 @@ mod tests {
     #[test]
     pub(crate) fn test_agent_config_default() {
         let config = AgentConfig::default();
-        assert_eq!(config.max_turns, 30);
+        // 2026-07-13 (claude-era regression): `default_max_turns()`
+        // changed to 0 (= "unlimited", governed by ErrorLoop hard
+        // stop / Cost Guard / LLM natural stop). Test was still
+        // asserting 30. Aligning the assertion with the new contract;
+        // see `agent_config.rs::default_max_turns()` for the rationale.
+        assert_eq!(config.max_turns, 0);
         assert_eq!(config.model, "gpt-4o");
         assert!(!config.stream);
         assert_eq!(config.max_concurrent_delegates, 1);

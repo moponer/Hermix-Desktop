@@ -298,11 +298,20 @@ export async function triggerAutomation(
 
 // ── Todo (task list) ─────────────────────────────────────────
 //
-// `listTodos` powers the TodoPanel's initial hydration. `patchTodo`
-// is what the user's manual checkbox click calls — server dispatches
-// the update through the same `todo` tool the LLM uses, so the WS
-// forwarder fires automatically and every connected client sees
-// the change.
+// The TodoPanel was retired in v2 (2026-07-07) in favor of inline
+// TodoListCard components rendered into the message stream. Card
+// state is fed by three WS events:
+//   - `todo_group_started` — LLM declared a new plan
+//   - `todo_item_upserted`  — create / update / depend / record_execution
+//   - `todo_item_removed`   — delete
+// See `useStreamChat.ts` for the parser. WS is the single source of
+// truth (铁律 H).
+//
+// `patchTodo` is what the user's manual checkbox click calls — the
+// server dispatches the update through the same `todo` tool the
+// LLM uses, the WS forwarder fires, every connected client sees
+// the change. `TodoListCard` consumes the optimistic patch result
+// and the bounce-back WS event via `justPatchedTodoRef`.
 
 export interface TodoItem {
   id: string;
@@ -320,6 +329,13 @@ export interface TodoItem {
   group_title?: string | null;
 }
 
+/**
+ * @deprecated since 2026-07-13 — the TodoPanel that consumed this
+ * was replaced by per-message TodoListCard components fed by WS.
+ * Front-end callers vanished with the panel. The HTTP endpoint is
+ * kept server-side for legacy CLI / script users; the UI no longer
+ * polls it. Tracked by Frontend Audit 2026-07-13 (P0-T3).
+ */
 export async function listTodos(): Promise<{ todos: TodoItem[]; total: number }> {
   return fetchJSON(`/v1/todos`);
 }
