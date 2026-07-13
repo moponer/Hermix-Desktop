@@ -159,6 +159,8 @@ export const STORAGE_KEYS = {
   agentsApiKey: "hermix.agents.api_key",
   // advanced config (Settings → Advanced tab)
   advancedConfig: "hermix.desktop.advanced_config",
+  // python runtime override
+  pythonOverride: "hermix.python.override",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

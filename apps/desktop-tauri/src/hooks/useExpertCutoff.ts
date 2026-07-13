@@ -12,9 +12,9 @@
 // - 切换的瞬间成为新旧消息的"分水岭"
 
 import { useEffect, useState, useCallback } from "react";
-import { storage } from "../utils/storageCompat";
+import { storage, sessionKey } from "../utils/storageCompat";
 
-const EXPERT_CUTOFF_KEY = (sessionId: string) => `hermix.session.${sessionId}.expertCutoffAt`;
+const EXPERT_CUTOFF_KEY = (sessionId: string) => sessionKey(sessionId, "expertCutoffAt");
 
 export function useExpertCutoff(sessionId: string | null | undefined): {
   cutoffAt: number | null;

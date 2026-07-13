@@ -1332,8 +1332,6 @@ interface PythonProbeResult {
   selected: string | null;
 }
 
-const PYTHON_OVERRIDE_STORAGE_KEY = "hermix.python.override";
-
 function PythonRuntimePanel() {
   const [probe, setProbe] = useState<PythonProbeResult | null>(null);
   const [probeLoading, setProbeLoading] = useState(false);
@@ -1345,7 +1343,7 @@ function PythonRuntimePanel() {
   // Load persisted override from localStorage on mount + refresh.
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(PYTHON_OVERRIDE_STORAGE_KEY) ?? "";
+      const stored = storage.getItem(STORAGE_KEYS.pythonOverride) ?? "";
       setOverrideInput(stored);
     } catch {}
   }, []);
@@ -1382,9 +1380,9 @@ function PythonRuntimePanel() {
       }).__TAURI_INTERNALS__.invoke("set_python_override", { path: value || null });
       try {
         if (value) {
-          window.localStorage.setItem(PYTHON_OVERRIDE_STORAGE_KEY, value);
+          storage.setItem(STORAGE_KEYS.pythonOverride, value);
         } else {
-          window.localStorage.removeItem(PYTHON_OVERRIDE_STORAGE_KEY);
+          storage.removeItem(STORAGE_KEYS.pythonOverride);
         }
       } catch {}
       setOverrideStatus(value ? "已保存覆盖路径，下次 `execute_code` 调用立即生效" : "已清除覆盖路径，恢复默认探测顺序");
