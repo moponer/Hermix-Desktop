@@ -9,7 +9,9 @@
     "dev": "echo [dev] Building hermix-server... && cargo build -p hermix-server && echo [dev] Copying fresh binary to sidecar dir... && copy /y ..\\..\\release\\target\\debug\\hermix.exe src-tauri\\binaries\\hermix-x86_64-pc-windows-msvc.exe && echo [dev] Starting Tauri dev... && cargo tauri dev",
     "build:vite": "vite build",
     "build:backend": "cargo build -p hermix-server --release",
-    "build": "npm run build:backend && cargo tauri build"
+    "build": "npm run build:backend && cargo tauri build",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@lobehub/icons": "^5.10.0",
@@ -41,6 +43,10 @@
     "postcss": "^8.5.4",
     "tailwindcss": "^4.1.7",
     "typescript": "^5.8.3",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "vitest": "^3.1.1",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "jsdom": "^26.1.0"
   }
 }
