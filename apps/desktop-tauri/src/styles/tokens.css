@@ -54,13 +54,13 @@
   --color-accent-soft-strong: rgba(71, 85, 105, 0.16);
   --color-accent-on-text: #ffffff;
 
-  /* ── Link (blue, for prose hyperlinks) ── */
-  --color-link: #2563eb;
-  --color-link-hover: #1d4ed8;
+  /* ── Link (slate, neutral per no-blue law; prose hyperlinks) ── */
+  --color-link: #475569;
+  --color-link-hover: #334155;
 
-  /* ── Link-soft: 辅助色用蓝色（更淡，用于文件变更、引用等不抢重心的场景） ── */
-  --color-link-soft: #6f93d4;
-  --color-link-soft-hover: #4f7bc2;
+  /* ── Link-soft: 中性 slate（更淡，用于文件变更、引用等不抢重心的场景） ── */
+  --color-link-soft: #64748b;
+  --color-link-soft-hover: #475569;
 
   /* ── Semantic (必要且无蓝紫) ── */
   --color-success: #16a34a;
@@ -163,9 +163,9 @@
   --color-link: #94a3b8;
   --color-link-hover: #cbd5e1;
 
-  /* ── Link-soft: 暗模式下柔和蓝（文件变更等辅助场景） ── */
-  --color-link-soft: #7d9bce;
-  --color-link-soft-hover: #95b0dc;
+  /* ── Link-soft: 暗模式下中性 slate（文件变更等辅助场景，禁蓝） ── */
+  --color-link-soft: #64748b;
+  --color-link-soft-hover: #94a3b8;
 
   --color-success: #22c55e;
   --color-success-soft: rgba(34, 197, 94, 0.12);

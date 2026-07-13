@@ -101,9 +101,18 @@ export const storage = {
    * (so we don't block the splash) and gated behind a
    * `localStorage.getItem("hermix.compat.migrated") !== "1"` flag
    * so the work happens at most once per browser profile.
+   *
+   * Dual-namespace debug (P2-7): set `hermix.compat.debug=1` (or run a
+   * dev build) to log every visited key and flag conflicts where both
+   * `hermes.*` and `hermix.*` hold data. When both exist we keep the
+   * current `hermix.*` value (conservative — never silently overwrite).
    */
   migrateLegacyKeys(keys: readonly string[]): void {
     if (typeof window === "undefined") return;
+    const debug =
+      window.localStorage.getItem(`${CURRENT_PREFIX}.compat.debug`) === "1" ||
+      (typeof import.meta !== "undefined" &&
+        (import.meta as { env?: { DEV?: boolean } }).env?.DEV === true);
     if (window.localStorage.getItem(`${CURRENT_PREFIX}.compat.migrated`) === "1") {
       return;
     }
@@ -112,10 +121,24 @@ export const storage = {
       const lk = legacyKey(bare);
       const nk = newKey(bare);
       const legacyVal = window.localStorage.getItem(lk);
+      const currentVal = window.localStorage.getItem(nk);
       if (legacyVal === null) continue;
-      if (window.localStorage.getItem(nk) === null) {
-        window.localStorage.setItem(nk, legacyVal);
+      if (currentVal !== null) {
+        // Conflict: both namespaces hold data. We keep the current `hermix.*`
+        // value and leave the legacy key in place (conservative: never
+        // silently overwrite user data). Surface it when debug is on.
+        if (debug) {
+          console.info(
+            `[storageCompat] conflict on "${bare}": keeping hermix value, legacy hermes value ignored. ` +
+              `set hermix.compat.debug=0 or clear hermes.${bare} to silence.`,
+          );
+        }
+        continue;
       }
+      if (debug) {
+        console.info(`[storageCompat] migrating hermes.${bare} → hermix.${bare}`);
+      }
+      window.localStorage.setItem(nk, legacyVal);
     }
     window.localStorage.setItem(`${CURRENT_PREFIX}.compat.migrated`, "1");
   },
@@ -164,6 +187,14 @@ export const STORAGE_KEYS = {
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];
+
+/**
+ * Flat list of every canonical storage key, derived from `STORAGE_KEYS`.
+ * Used by `migrateLegacyKeys` so that any new key added to `STORAGE_KEYS`
+ * is automatically included in the hermes → hermix migration pass — no
+ * need to keep a second hand-maintained list in sync (P2-2).
+ */
+export const KNOWN_KEYS: readonly string[] = Object.values(STORAGE_KEYS);
 
 /**
  * Build the namespaced per-session key. Sessions are user-owned data

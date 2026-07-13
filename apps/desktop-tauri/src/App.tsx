@@ -26,7 +26,7 @@ import type { NavPage, Session, ChatMessage, ApprovalDecision, TimelineStep, Exe
 // 2026-07-10: expandTimelineToMessages and detectToolError imports removed —
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
-import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
+import { storage, STORAGE_KEYS, KNOWN_KEYS, sessionKey } from "./utils/storageCompat";
 
 // 2026-07-12: Welcome-state draft workspace. Read at App-level so
 // both `handleNewChat` (新建对话 button) and `handleSendMessage`
@@ -345,25 +345,10 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   // `hermix.*` so users on a pre-rename install keep their settings.
   // Idempotent: gated by `hermix.compat.migrated` flag inside the helper.
   useEffect(() => {
-    storage.migrateLegacyKeys([
-      STORAGE_KEYS.theme,
-      STORAGE_KEYS.sidebarWidth,
-      STORAGE_KEYS.rightWidth,
-      STORAGE_KEYS.rightOpen,
-      STORAGE_KEYS.activeSession,
-      STORAGE_KEYS.agents,
-      STORAGE_KEYS.recentExperts,
-      STORAGE_KEYS.permissionLevel,
-      STORAGE_KEYS.modelConfig,
-      STORAGE_KEYS.modelCache,
-      STORAGE_KEYS.workspaceRoot,
-      STORAGE_KEYS.workspaces,
-      STORAGE_KEYS.groupChatRooms,
-      STORAGE_KEYS.groupChatMessages,
-      STORAGE_KEYS.mcpServers,
-      STORAGE_KEYS.agentsServerUrl,
-      STORAGE_KEYS.agentsApiKey,
-    ]);
+    // Iterate the canonical registry so newly added STORAGE_KEYS are
+    // auto-migrated (P2-2). Draft keys are intentionally cleared below,
+    // not migrated, to avoid cross-restart residue in the welcome UI.
+    storage.migrateLegacyKeys(KNOWN_KEYS);
 
     // 主人反馈：重启后欢迎界面的「目录/专家」选择状态不应保留。
     // draft 槽位（hermix.desktop.draft.*）用于无 session 时的欢迎界面，

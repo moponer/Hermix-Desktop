@@ -4,7 +4,7 @@
  * Covers the 4 recommended core tests from P2-1 of FRONTEND_AUDIT_2026-07-13.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { storage, STORAGE_KEYS, sessionKey } from "./storageCompat";
+import { storage, STORAGE_KEYS, KNOWN_KEYS, sessionKey } from "./storageCompat";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -82,5 +82,25 @@ describe("storageCompat", () => {
   it("sessionKey generates correct hermix.session.* key", () => {
     const key = sessionKey("abc-123", "expertId");
     expect(key).toBe("hermix.session.abc-123.expertId");
+  });
+
+  // ── KNOWN_KEYS registry (P2-2) ──
+  it("KNOWN_KEYS derives from STORAGE_KEYS and is non-empty", () => {
+    expect(KNOWN_KEYS.length).toBeGreaterThan(0);
+    expect(KNOWN_KEYS).toContain(STORAGE_KEYS.theme);
+    expect(KNOWN_KEYS).toContain(STORAGE_KEYS.agents);
+    // every value is a canonical hermix.* / hermix- prefixed key
+    for (const k of KNOWN_KEYS) {
+      expect(k.startsWith("hermix")).toBe(true);
+    }
+  });
+
+  it("migrateLegacyKeys iterates KNOWN_KEYS (all registered keys migrate)", () => {
+    window.localStorage.clear();
+    window.localStorage.removeItem("hermix.compat.migrated");
+    // Seed one legacy value for a key NOT in the manual subset but in STORAGE_KEYS
+    window.localStorage.setItem("hermes.desktop.advanced_config", "x");
+    storage.migrateLegacyKeys(KNOWN_KEYS);
+    expect(window.localStorage.getItem("hermix.desktop.advanced_config")).toBe("x");
   });
 });
