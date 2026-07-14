@@ -129,6 +129,12 @@ pub(crate) struct LoopState {
     /// to catch agents that are "working" (calling different tools) but
     /// not making real progress.
     pub(crate) convergence_detector: crate::convergence_detector::ConvergenceDetector,
+    /// Phase 19 (A): keys (canonical_key) most recently surfaced
+    /// by `recall_scheduler`. The scheduler reads this list to
+    /// detect drift against the current user turn (cheap first-
+    /// token compare; no embedding). On a recall hit we replace
+    /// it with the new top-k.
+    pub(crate) last_recall_keys: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

@@ -486,6 +486,46 @@ impl EmbeddedMemoryBackend {
             // we don't depend on whoever opened it last.
             conn.execute_batch("PRAGMA synchronous = NORMAL")?;
         }
+        // v6 (2026-07-14): `reflections` table for E (memory
+        // evolution — reflexive notes written at session end, no LLM
+        // required). Reflective summaries about a session's
+        // what_went_well / what_to_improve / user_preferences_observed
+        // / next_session_hint, driven by deterministic aggregation
+        // of tool errors + user.style facts + fact count. Surfaced
+        // via `StreamEvent::MemoryUpdate { kind: "reflection" }`
+        // so the user can see them in chat, and indexed so the
+        // recall scheduler (A) can pull the most recent ones when
+        // drift is detected.
+        //
+        // We don't FTS the reflection content (it's tiny text, a
+        // cheap LIKE scan is fine) but we DO index by session and
+        // by created_at so "most recent N for this session" is a
+        // single index lookup.
+        if current_version < 6 {
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS reflections (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id  TEXT NOT NULL,
+                    kind        TEXT NOT NULL,
+                    content     TEXT NOT NULL,
+                    salience    REAL NOT NULL DEFAULT 0.5,
+                    tags        TEXT NOT NULL DEFAULT '[]',
+                    source      TEXT NOT NULL DEFAULT 'reflection_generator',
+                    turn_count  INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT NOT NULL,
+                    visibility  INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS reflections_session_idx
+                    ON reflections(session_id);
+                CREATE INDEX IF NOT EXISTS reflections_created_at_idx
+                    ON reflections(created_at);
+                CREATE INDEX IF NOT EXISTS reflections_session_kind_idx
+                    ON reflections(session_id, kind);
+                "#,
+            )?;
+            let _ = conn.execute_batch("PRAGMA user_version = 6");
+        }
         Ok(())
     }
 
@@ -988,6 +1028,179 @@ impl EmbeddedMemoryBackend {
             tags.push(format!("session:{session_id}"));
         }
         self.upsert_fact(&key, payload, c.salience, &tags, "compression_backfill")
+    }
+
+    /// Phase 19 (A): top-N visible facts by stored salience.
+    ///
+    /// Used by `recall_scheduler` to pull candidates for re-rank.
+    /// We don't recompute salience here (no `salience_cfg` access
+    /// without rebuilding one per call) — the stored value already
+    /// reflects the most-recent write's salience, which is good
+    /// enough for recall. Touch/pin effects will be picked up by
+    /// `boost_fact_access` (called on each recall hit).
+    pub fn top_facts_for_recall(&self, limit: u32) -> Result<Vec<(String, String, f32)>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT canonical_key, payload, salience FROM facts
+             WHERE visibility = 1
+             ORDER BY salience DESC, updated_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f32>(2)?,
+            ))
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    // =================================================================
+    // Phase 19 (E): reflections table API
+    //
+    // Reflections are written by `reflection_generator` at session
+    // end. We deliberately keep these helpers minimal — no full-text
+    // search, no embedding (the content is short and meta-cognitive;
+    // the recall scheduler (A) does its own salience-rank against
+    // `facts`, not against `reflections`).
+    // =================================================================
+
+    /// Persist one reflection row. Returns the new id.
+    ///
+    /// Visibility defaults to 1 (visible). Caller doesn't need to
+    /// pre-set timestamps — we record the UTC RFC3339 now() here
+    /// to avoid drift between Rust and SQLite clocks if a future
+    /// caller runs from a different time zone.
+    pub fn add_reflection(
+        &self,
+        session_id: &str,
+        kind: &str,
+        content: &str,
+        salience: f32,
+        tags: &[String],
+        turn_count: u32,
+        source: &str,
+    ) -> Result<i64> {
+        let conn = self.conn.lock();
+        let tags_json = serde_json::to_string(tags)?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO reflections
+             (session_id, kind, content, salience, tags, source, turn_count, created_at, visibility)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+            params![
+                session_id,
+                kind,
+                content,
+                salience,
+                tags_json,
+                source,
+                turn_count,
+                now,
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Return the most recent N reflections for a session, newest
+    /// first. Used by the recall scheduler (A) and by `memory_router`
+    /// debug views. `limit == 0` means "no rows" (we don't return
+    /// every row — that would explode unbounded on long sessions).
+    pub fn list_recent_reflections(&self, session_id: &str, limit: u32) -> Result<Vec<Reflection>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, kind, content, salience, tags, source, turn_count, created_at
+             FROM reflections
+             WHERE session_id = ?1 AND visibility = 1
+             ORDER BY id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit as i64], |row| {
+            let tags_s: String = row.get(5)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_s).unwrap_or_default();
+            Ok(Reflection {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                kind: row.get(2)?,
+                content: row.get(3)?,
+                salience: row.get(4)?,
+                tags,
+                source: row.get(6)?,
+                turn_count: row.get::<_, i64>(7)? as u32,
+                created_at: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Count tool_error rows for this session — drives the
+    /// `what_to_improve` reflection. Returns 0 if no errors
+    /// (which is the happy case).
+    ///
+    /// We scan `recall_audit` because every `tool_error` already
+    /// gets audited there in Phase 18; duplicating into a new
+    /// table would just create two sources of truth.
+    pub fn count_session_tool_errors(&self, session_id: &str) -> Result<u32> {
+        let conn = self.conn.lock();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_writes
+                 WHERE session_id = ?1 AND source = 'tool_error'",
+                params![session_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        Ok(n.max(0) as u32)
+    }
+
+    /// Count distinct facts authored during this session. Used by
+    /// `reflection_generator` to decide whether the session was
+    /// knowledge-light (few facts) or knowledge-heavy (many).
+    pub fn count_session_facts(&self, session_id: &str) -> Result<u32> {
+        let conn = self.conn.lock();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM facts
+                 WHERE visibility = 1
+                   AND tags LIKE ?1",
+                params![format!("%session:{session_id}%")],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        Ok(n.max(0) as u32)
+    }
+
+    /// Phase 19 (E): pick the most-frequently-accessed user.style
+    /// fact (`canonical_key = user.style:<style>`). Returns None if
+    /// no style has been recorded yet (early session, no rules
+    /// matched).
+    pub fn most_frequent_user_style(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock();
+        let key: Option<String> = conn
+            .query_row(
+                "SELECT canonical_key FROM facts
+                 WHERE visibility = 1
+                   AND canonical_key LIKE 'user.style:%'
+                 ORDER BY access_count DESC, updated_at DESC
+                 LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        Ok(key.map(|k| {
+            // Strip the "user.style:" prefix to leave just the style
+            // token (e.g. "direct", "exploratory").
+            k.strip_prefix("user.style:")
+                .map(|s| s.to_string())
+                .unwrap_or(k)
+        }))
     }
 
     /// L1.3: persist (or replace) the embedding for a frame.
@@ -1743,6 +1956,27 @@ pub struct SessionSnapshot {
     pub summary: String,
     pub frame_ids: Vec<String>,
     pub ts: String,
+}
+
+/// Phase 19 (E: memory evolution) — reflective note recorded at
+/// session end. Written by `reflection_generator` (no LLM) and
+/// surfaced as a `StreamEvent::MemoryUpdate { kind: "reflection" }`
+/// so the user can see "what the agent thinks it learned" in chat.
+///
+/// Distinct from `facts` (atomic user/assistant assertions) and
+/// from `session_snapshots` (state freezes for replay). Reflections
+/// are **short, meta-cognitive notes** about the session itself.
+#[derive(Debug, Clone)]
+pub struct Reflection {
+    pub id: i64,
+    pub session_id: String,
+    pub kind: String,
+    pub content: String,
+    pub salience: f32,
+    pub tags: Vec<String>,
+    pub source: String,
+    pub turn_count: u32,
+    pub created_at: String,
 }
 
 impl StoredFrame {
@@ -2965,5 +3199,124 @@ mod tests {
             .unwrap();
         // in-memory returns 0; we only assert the PRAGMA did not panic.
         let _ = timeout_ms;
+    }
+}
+
+// =================================================================
+// Phase 19 (E): reflections API round-trip
+// =================================================================
+
+#[cfg(test)]
+mod p19_reflections_tests {
+    use super::*;
+
+    fn b() -> EmbeddedMemoryBackend {
+        EmbeddedMemoryBackend::open_in_memory().expect("open_in_memory")
+    }
+
+    #[tokio::test]
+    async fn p19_add_reflection_round_trip() {
+        let backend = b();
+        let id = backend
+            .add_reflection(
+                "s1",
+                "what_went_well",
+                "本次会话 5 轮，无工具调用错误。",
+                0.4,
+                &["reflection:what_went_well".into(), "session:s1".into()],
+                5,
+                "reflection_generator",
+            )
+            .expect("add_reflection");
+        assert!(id > 0);
+
+        let rows = backend
+            .list_recent_reflections("s1", 10)
+            .expect("list_recent");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, "what_went_well");
+        assert_eq!(rows[0].session_id, "s1");
+        assert_eq!(rows[0].turn_count, 5);
+        assert!(rows[0].content.contains("5 轮"));
+        assert!(rows[0].tags.contains(&"reflection:what_went_well".to_string()));
+    }
+
+    #[tokio::test]
+    async fn p19_list_recent_reflections_respects_limit() {
+        let backend = b();
+        for i in 0..5 {
+            backend
+                .add_reflection(
+                    "s2",
+                    "next_session_hint",
+                    &format!("hint {i}"),
+                    0.5,
+                    &[],
+                    i,
+                    "reflection_generator",
+                )
+                .expect("add");
+        }
+        let rows = backend
+            .list_recent_reflections("s2", 3)
+            .expect("list_recent");
+        assert_eq!(rows.len(), 3);
+        // newest first
+        assert!(rows[0].content.contains("4"));
+        assert!(rows[1].content.contains("3"));
+        assert!(rows[2].content.contains("2"));
+    }
+
+    #[tokio::test]
+    async fn p19_list_recent_reflections_zero_limit_returns_empty() {
+        let backend = b();
+        backend
+            .add_reflection("s3", "x", "x", 0.5, &[], 1, "test")
+            .expect("add");
+        let rows = backend
+            .list_recent_reflections("s3", 0)
+            .expect("list_recent");
+        assert_eq!(rows.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn p19_top_facts_for_recall_orders_by_salience() {
+        let backend = b();
+        // Two facts with very different salience
+        backend
+            .upsert_fact("k:low", serde_json::json!("low salience"), 0.1, &[], "test")
+            .expect("upsert low");
+        backend
+            .upsert_fact("k:high", serde_json::json!("high salience"), 0.9, &[], "test")
+            .expect("upsert high");
+        let top = backend.top_facts_for_recall(5).expect("top");
+        assert_eq!(top.len(), 2);
+        // The high-salience row should come first.
+        assert!(top[0].0.starts_with("k:high"));
+        assert!(top[0].2 > top[1].2);
+    }
+
+    #[tokio::test]
+    async fn p19_most_frequent_user_style_returns_dominant() {
+        let backend = b();
+        // Bump access_count to simulate "most used".
+        backend
+            .upsert_fact("user.style:direct", serde_json::json!("x"), 0.5, &[], "test")
+            .expect("upsert direct");
+        backend
+            .upsert_fact("user.style:exploratory", serde_json::json!("y"), 0.5, &[], "test")
+            .expect("upsert exploratory");
+        // Bump direct's access_count so it wins
+        let _ = backend.boost_fact_access("user.style:direct");
+        let _ = backend.boost_fact_access("user.style:direct");
+        let style = backend.most_frequent_user_style().expect("style");
+        assert_eq!(style, Some("direct".to_string()));
+    }
+
+    #[tokio::test]
+    async fn p19_most_frequent_user_style_none_when_empty() {
+        let backend = b();
+        let style = backend.most_frequent_user_style().expect("style");
+        assert_eq!(style, None);
     }
 }

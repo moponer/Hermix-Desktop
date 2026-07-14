@@ -17,8 +17,8 @@ import type {
 } from "../types";
 import { formatRelativeTime } from "../utils/time";
 import {
-  parseContent, groupTimeline, extractFileChanges, extractMemoryUpdates, resolveSteps,
-  type FileChangeEntry, type MemoryUpdateEntry,
+  parseContent, groupTimeline, extractFileChanges, extractMemoryUpdates, extractMemoryRecalls, resolveSteps,
+  type FileChangeEntry, type MemoryUpdateEntry, type MemoryRecallEntry,
 } from "./messageParser";
 import {
   ScreenshotPreview, WindowListPreview, WindowAtPointPreview, UiTreePreview,
@@ -409,6 +409,7 @@ function UnifiedTimelineRenderer({
   onPathClick,
   fileChanges,
   memoryUpdates,
+  memoryRecalls,
   toolCalls,
   hasRunningTool,
   parsedTasks,
@@ -418,6 +419,7 @@ function UnifiedTimelineRenderer({
   onPathClick?: (path: string, e: React.MouseEvent) => void;
   fileChanges: FileChangeEntry[];
   memoryUpdates: MemoryUpdateEntry[];
+  memoryRecalls: MemoryRecallEntry[];
   toolCalls: NonNullable<ChatMessage["tool_calls"]>;
   hasRunningTool: boolean;
   parsedTasks: ReturnType<typeof parseContent>["tasks"];
@@ -506,6 +508,13 @@ function UnifiedTimelineRenderer({
                 <MemoryUpdateBlock updates={memoryUpdates} />
               </div>
             )}
+            {/* Memory recalls — surfaces when the agent re-pulled
+                related facts from memory this turn. */}
+            {i === steps.length - 1 && memoryRecalls.length > 0 && (
+              <div className="msg-channel" data-channel="memory-recalls">
+                <MemoryRecallBlock recalls={memoryRecalls} />
+              </div>
+            )}
           </div>
         );
       })}
@@ -582,6 +591,10 @@ function AssistantMessage({
     () => extractMemoryUpdates(message.execution_timeline),
     [message.execution_timeline],
   );
+  const memoryRecalls = useMemo(
+    () => extractMemoryRecalls(message.execution_timeline),
+    [message.execution_timeline],
+  );
   const steps = useMemo(() => resolveSteps(message), [message]);
   const toolCalls = message.tool_calls ?? [];
   /** True when there's at least one tool still in "running" state */
@@ -651,6 +664,7 @@ function AssistantMessage({
           onPathClick={onPathClick}
           fileChanges={fileChanges}
           memoryUpdates={memoryUpdates}
+          memoryRecalls={memoryRecalls}
           toolCalls={toolCalls}
           hasRunningTool={hasRunningTool}
           parsedTasks={parsed.tasks}
@@ -821,6 +835,55 @@ function MemoryUpdateBlock({ updates }: { updates: MemoryUpdateEntry[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+// ── Memory recall (Phase 19 A) ──────────────────────────────────
+// Surfaces the agent's per-turn memory recall so the user can see
+// when the agent re-pulled related facts. Distinct from
+// `MemoryUpdateBlock` (writes); this fires on reads. Kept visually
+// subtle — a single "💭 想到 N 条" chip with a preview of the keys.
+function MemoryRecallBlock({ recalls }: { recalls: MemoryRecallEntry[] }) {
+  const labelFor = (t: MemoryRecallEntry["trigger"]) => {
+    switch (t) {
+      case "first_turn": return "首轮热身";
+      case "interval": return "周期召回";
+      case "drift": return "主题漂移";
+    }
+  };
+  return (
+    <div className="memory-recall-block">
+      {recalls.map((r, i) => {
+        const keys = r.previewKeys.slice(0, 3).join(", ");
+        const more = r.previewKeys.length > 3 ? ` …+${r.previewKeys.length - 3}` : "";
+        const chars = typeof r.totalChars === "number" && r.totalChars > 0
+          ? ` · ${r.totalChars} 字`
+          : "";
+        return (
+          <div
+            key={`${r.trigger}-${r.turnNumber}-${i}`}
+            className="memory-recall-row"
+            title={`第 ${r.turnNumber} 轮 ${labelFor(r.trigger)}`}
+          >
+            <Brain size={12} className="shrink-0 text-zinc-500" />
+            <span className="memory-recall-label">
+              💭 第 {r.turnNumber} 轮 想到 {r.count} 条
+            </span>
+            <span className="memory-recall-trigger">
+              {labelFor(r.trigger)}
+            </span>
+            {keys ? (
+              <span className="memory-recall-keys">
+                {keys}{more}
+              </span>
+            ) : null}
+            {chars ? (
+              <span className="memory-recall-chars">{chars}</span>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

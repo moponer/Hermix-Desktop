@@ -1625,6 +1625,52 @@ streamPhaseRef.current = null;
                     memory_count: count,
                     created_at: new Date().toISOString(),
                   };
+return {
+                ...m,
+                execution_timeline: [...timeline, event],
+              };
+            }),
+                updated_at: new Date().toISOString(),
+              };
+            }));
+          },
+          // Phase 19 (A): memory recall — surface the "💭 想到
+          // N 条" chip inline so the user can see when the agent
+          // re-pulled related facts. De-dupe by (trigger,
+          // turn_number) since drift recalls can fire close in time.
+          onMemoryRecall: ({ trigger, count, totalChars, previewKeys, turnNumber }) => {
+            if (count === 0) return;
+            setSessions((prev) => prev.map((s) => {
+              if (s.id !== sessionId) return s;
+              const target =
+                currentAssistantIdRef.current ??
+                [...s.messages].reverse().find((m) => m.role === "assistant")?.id ??
+                null;
+              if (!target) return s;
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== target) return m;
+                  const timeline = m.execution_timeline ?? [];
+                  // Same (trigger, turn) → idempotent (drift
+                  // recalls can land in adjacent events).
+                  const exists = timeline.some(
+                    (e) =>
+                      e.type === "memory_recall" &&
+                      e.memory_recall_trigger === trigger &&
+                      e.memory_recall_turn_number === turnNumber,
+                  );
+                  if (exists) return m;
+                  const event: import("./types").ExecutionTimelineEvent = {
+                    type: "memory_recall",
+                    tool: "memory_recall",
+                    memory_recall_trigger: trigger,
+                    memory_recall_count: count,
+                    memory_recall_total_chars: totalChars,
+                    memory_recall_preview_keys: previewKeys,
+                    memory_recall_turn_number: turnNumber,
+                    created_at: new Date().toISOString(),
+                  };
                   return {
                     ...m,
                     execution_timeline: [...timeline, event],

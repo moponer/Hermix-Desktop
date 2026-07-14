@@ -1600,6 +1600,52 @@
   color: var(--color-text-faint);
 }
 
+/* ── Memory recall block (Phase 19 A) ── */
+/* Single-line "💭 想到 N 条" chip per recall. Visually subtler
+ * than memory-update (it's a read, not a write). */
+.memory-recall-block {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.memory-recall-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-secondary);
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.memory-recall-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+.memory-recall-trigger {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24; /* amber-400, allowed */
+}
+.memory-recall-keys {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--color-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+.memory-recall-chars {
+  color: var(--color-text-faint);
+  font-size: 11px;
+}
+
 /* ── Task block (compact inline style) ── */
 .tasks-block {
   overflow: visible;

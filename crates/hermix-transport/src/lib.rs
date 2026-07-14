@@ -454,6 +454,31 @@ pub enum StreamEvent {
         /// refused run, which preserves their existing semantics.
         decision: String,
     },
+    /// Phase 19 (A): server → client: the agent recalled N related
+    /// facts from memory this turn. Surfaced as a small "💭 想到 N 条"
+    /// chip in the conversation. Different from `MemoryUpdate`
+    /// (which fires on writes): this fires on reads.
+    ///
+    /// The full recall content is injected into the system prompt
+    /// by `prompt_assembly`; this event only carries metadata
+    /// (count + a small preview of `canonical_key`s) for the UI.
+    MemoryRecall {
+        /// Why the recall fired: `"first_turn" | "interval" | "drift"`.
+        trigger: String,
+        /// How many facts were pulled (≤ 5; see
+        /// `recall_scheduler::MAX_RECALLS_PER_TURN`).
+        count: u32,
+        /// Total characters of the pulled payloads (≤ 4000).
+        /// Optional so we can skip when 0 (most recalls hit at least
+        /// one item, so this is rare in practice).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_chars: Option<u64>,
+        /// Up to 3 `canonical_key`s for the UI preview.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        preview_keys: Vec<String>,
+        /// Which turn number this recall fired on.
+        turn_number: u32,
+    },
     /// Server → client: the agent called the `clarify` tool and is now
     /// blocked waiting for the user to answer. The client renders a
     /// question card and replies via [`WsClientMessage::ClarifyResponse`]

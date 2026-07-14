@@ -66,3 +66,101 @@ describe("extractMemoryUpdates", () => {
     expect(extractMemoryUpdates(events)).toEqual([]);
   });
 });
+
+function recallEvent(over: Partial<ExecutionTimelineEvent>): ExecutionTimelineEvent {
+  return {
+    type: "memory_recall",
+    tool: "memory_recall",
+    created_at: new Date().toISOString(),
+    ...over,
+  } as ExecutionTimelineEvent;
+}
+
+import { extractMemoryRecalls } from "./messageParser";
+
+describe("extractMemoryRecalls", () => {
+  it("returns [] when there are no events", () => {
+    expect(extractMemoryRecalls(undefined)).toEqual([]);
+    expect(extractMemoryRecalls([])).toEqual([]);
+  });
+
+  it("skips zero-count recalls (server-side guard)", () => {
+    const events = [
+      recallEvent({
+        memory_recall_trigger: "interval",
+        memory_recall_count: 0,
+        memory_recall_turn_number: 5,
+      }),
+    ];
+    expect(extractMemoryRecalls(events)).toEqual([]);
+  });
+
+  it("collects recall events and maps fields", () => {
+    const events = [
+      recallEvent({
+        memory_recall_trigger: "interval",
+        memory_recall_count: 3,
+        memory_recall_total_chars: 1200,
+        memory_recall_preview_keys: ["fact:owner_rust", "fact:user_style", "fact:no_blue"],
+        memory_recall_turn_number: 5,
+      }),
+    ];
+    const out = extractMemoryRecalls(events);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      trigger: "interval",
+      count: 3,
+      totalChars: 1200,
+      turnNumber: 5,
+    });
+    expect(out[0].previewKeys).toEqual([
+      "fact:owner_rust",
+      "fact:user_style",
+      "fact:no_blue",
+    ]);
+  });
+
+  it("dedupes by (trigger, turnNumber)", () => {
+    const events = [
+      recallEvent({
+        memory_recall_trigger: "drift",
+        memory_recall_count: 2,
+        memory_recall_turn_number: 4,
+      }),
+      recallEvent({
+        memory_recall_trigger: "drift",
+        memory_recall_count: 2,
+        memory_recall_turn_number: 4,
+      }),
+    ];
+    expect(extractMemoryRecalls(events)).toHaveLength(1);
+  });
+
+  it("keeps recalls across different turns", () => {
+    const events = [
+      recallEvent({
+        memory_recall_trigger: "first_turn",
+        memory_recall_count: 5,
+        memory_recall_turn_number: 1,
+      }),
+      recallEvent({
+        memory_recall_trigger: "interval",
+        memory_recall_count: 5,
+        memory_recall_turn_number: 5,
+      }),
+    ];
+    expect(extractMemoryRecalls(events)).toHaveLength(2);
+  });
+
+  it("ignores non-recall events", () => {
+    const events = [
+      memEvent({ memory_key: "x", memory_summary: "y" }),
+      recallEvent({
+        memory_recall_trigger: "interval",
+        memory_recall_count: 1,
+        memory_recall_turn_number: 1,
+      }),
+    ];
+    expect(extractMemoryRecalls(events)).toHaveLength(1);
+  });
+});

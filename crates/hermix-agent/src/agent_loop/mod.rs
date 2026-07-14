@@ -1164,6 +1164,80 @@ impl AgentLoop {
         );
     }
 
+    /// Phase 19 (A): per-turn memory recall. Cheap heuristic
+    /// scheduler that decides whether to emit a `memory_recall`
+    /// event this turn (so the user sees "the agent thought of N
+    /// related facts"), and updates the next-turn drift baseline.
+    ///
+    /// Does NOT inject anything into the LLM prompt here — that's
+    /// `prompt_assembly::build_system_prompt`'s job. We only emit
+    /// the visibility event and refresh the drift tracker.
+    ///
+    /// Returns `Some(RecallPlan)` if a recall was emitted; the
+    /// caller stores the keys in `state.last_recall_keys` for the
+    /// next drift check.
+    pub(crate) fn maybe_recall(
+        &self,
+        state: &LoopState,
+        user_text: &str,
+    ) -> Option<crate::recall_scheduler::RecallPlan> {
+        if self.config.skip_memory || self.config.quiet_mode {
+            return None;
+        }
+        let backend = self
+            .memory_router
+            .as_deref()
+            .and_then(|r| r.find_embedded_backend());
+        let last_keys_refs: Vec<&str> = state
+            .last_recall_keys
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let inputs = crate::recall_scheduler::RecallInputs {
+            turn_number: state.total_turns,
+            user_text,
+            last_recall_keys: &last_keys_refs,
+            recall_interval: self.config.memory_flush_interval,
+        };
+        let trigger = crate::recall_scheduler::should_recall(&inputs);
+        if trigger == crate::recall_scheduler::TriggerReason::None {
+            return None;
+        }
+        let plan = match crate::recall_scheduler::gather_recall_items(backend.as_deref(), user_text, trigger) {
+            Some(p) => p,
+            None => return None,
+        };
+
+        // 2026-07-14: emit `memory_recall` so the user sees the
+        // agent thought of something. The transport event carries
+        // a small preview (top-3 keys + char count); the full plan
+        // is only injected into the system prompt by
+        // `build_system_prompt`, not by this path.
+        if let Some(cb) = self.callbacks.status_callback.as_ref() {
+            let preview_keys: Vec<&str> = plan
+                .items
+                .iter()
+                .take(3)
+                .map(|i| i.canonical_key.as_str())
+                .collect();
+            let payload = serde_json::json!({
+                "trigger": match plan.triggered_by {
+                    crate::recall_scheduler::TriggerReason::FirstTurn => "first_turn",
+                    crate::recall_scheduler::TriggerReason::Interval => "interval",
+                    crate::recall_scheduler::TriggerReason::Drift => "drift",
+                    crate::recall_scheduler::TriggerReason::None => "none",
+                },
+                "count": plan.items.len(),
+                "total_chars": plan.total_chars,
+                "preview_keys": preview_keys,
+                "turn_number": state.total_turns,
+            });
+            cb("memory_recall", &payload.to_string());
+        }
+
+        Some(plan)
+    }
+
     pub(crate) fn memory_pre_compress_note(&self, messages: &[Message]) -> Option<String> {
         crate::memory_prefetch::memory_pre_compress_note(
             &self.config,

@@ -144,6 +144,26 @@ impl AgentLoop {
         self.maybe_freeze_snapshot(session_id, state.total_turns);
         self.maybe_enforce_frame_cap(state.total_turns);
 
+        // --- Phase 19 (A): per-turn memory recall ---
+        // Cheap heuristic: every Nth turn (default 5) OR when the
+        // user turn's first token differs from the previous recall,
+        // we re-pull the top-N salient facts and emit a
+        // `memory_recall` status event. The drift check uses the
+        // first meaningful token of the user text (no embedding).
+        let user_text: String = ctx
+            .get_messages()
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::User)
+            .and_then(|m| m.content.as_deref())
+            .unwrap_or("")
+            .to_string();
+        if let Some(plan) = self.maybe_recall(state, &user_text) {
+            // Track keys for next-turn drift detection.
+            state.last_recall_keys =
+                plan.items.iter().map(|i| i.canonical_key.clone()).collect();
+        }
+
         // --- Pre-LLM hook + route resolution ---
         let turn_runtime_route = state
             .route_state

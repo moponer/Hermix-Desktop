@@ -228,7 +228,7 @@ export interface ToolCall {
 }
 
 export interface ExecutionTimelineEvent {
-  type: "tool_start" | "tool_stdout" | "tool_complete" | "status" | "file_change" | "section_gate" | "reasoning" | "text" | "memory_update";
+  type: "tool_start" | "tool_stdout" | "tool_complete" | "status" | "file_change" | "section_gate" | "reasoning" | "text" | "memory_update" | "memory_recall";
   tool?: string;
   content?: string;
   arguments?: string;
@@ -247,10 +247,18 @@ export interface ExecutionTimelineEvent {
    *  what the agent is remembering (writes / updates / deletes /
    *  summaries). Mirrors `StreamEvent::MemoryUpdate` in hermix-transport. */
   memory_action?: "write" | "update" | "delete" | "summarize" | "cleanup" | "snapshot";
-  memory_type?: "fact" | "style" | "summary" | "tool" | "snapshot";
+  memory_type?: "fact" | "style" | "summary" | "tool" | "snapshot" | "reflection";
   memory_key?: string;
   memory_summary?: string;
   memory_count?: number;
+  /** memory_recall-only fields — surfaced inline as a small chip so the
+   *  user can see "the agent thought of N related facts this turn".
+   *  Mirrors `StreamEvent::MemoryRecall` in hermix-transport. */
+  memory_recall_trigger?: "first_turn" | "interval" | "drift";
+  memory_recall_count?: number;
+  memory_recall_total_chars?: number;
+  memory_recall_preview_keys?: string[];
+  memory_recall_turn_number?: number;
   /** 2026-06-29 (C3 marker protocol): section_gate-only payload.
    *  Carries the serialised `SectionGateReport` from the backend.
    *  `patched` lists sections the gate auto-spliced in;

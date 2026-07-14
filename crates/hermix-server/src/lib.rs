@@ -4496,6 +4496,50 @@ async fn handle_ws_stream_send(
                                 },
                             }
                         }
+                        "memory_recall" => {
+                            // 2026-07-14 (Phase 19 A): the agent recalled
+                            // N related facts from memory this turn. We
+                            // surface a small preview (top-3 keys + count)
+                            // to the chat so the user can see "the agent
+                            // thought of something". The full recall
+                            // content is injected into the system prompt
+                            // by `prompt_assembly`, not via this event.
+                            let trigger = extra
+                                .get("trigger")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("interval")
+                                .to_string();
+                            let count = extra
+                                .get("count")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0) as u32;
+                            let total_chars = extra.get("total_chars").and_then(|v| v.as_u64());
+                            let preview_keys: Vec<String> = extra
+                                .get("preview_keys")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let turn_number = extra
+                                .get("turn_number")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0) as u32;
+                            WsEnvelope {
+                                version: 1,
+                                request_id: request_id.clone(),
+                                trace_id: trace_id_for_stream.clone(),
+                                event: StreamEvent::MemoryRecall {
+                                    trigger,
+                                    count,
+                                    total_chars,
+                                    preview_keys,
+                                    turn_number,
+                                },
+                            }
+                        }
                         _ => {
                             tracing::debug!(event = %event_type, "unknown extra event type; skipping");
                             return;

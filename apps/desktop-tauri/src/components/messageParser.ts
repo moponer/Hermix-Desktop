@@ -408,6 +408,51 @@ export function extractMemoryUpdates(events?: ExecutionTimelineEvent[]): MemoryU
 }
 
 /**
+ * Phase 19 (A): a memory-recall event fired when the agent
+ * re-pulled related facts this turn. Distinct from
+ * `MemoryUpdateEntry` (which fires on writes). Used to render the
+ * inline "💭 想到 N 条" chip.
+ */
+export interface MemoryRecallEntry {
+  trigger: "first_turn" | "interval" | "drift";
+  count: number;
+  totalChars?: number;
+  previewKeys: string[];
+  turnNumber: number;
+  timestamp: string;
+}
+
+/**
+ * Collect memory-recall events. We don't dedupe as aggressively
+ * as `extractMemoryUpdates` because two recalls on adjacent turns
+ * carry different `turnNumber`s and should both render.
+ */
+export function extractMemoryRecalls(events?: ExecutionTimelineEvent[]): MemoryRecallEntry[] {
+  if (!events) return [];
+  const out: MemoryRecallEntry[] = [];
+  const seen = new Set<string>();
+  for (const ev of events) {
+    if (ev.type !== "memory_recall") continue;
+    const count = ev.memory_recall_count ?? 0;
+    if (count === 0) continue;
+    const turnNumber = ev.memory_recall_turn_number ?? 0;
+    const trigger = (ev.memory_recall_trigger ?? "interval") as MemoryRecallEntry["trigger"];
+    const dedupeKey = `${trigger}::${turnNumber}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    out.push({
+      trigger,
+      count,
+      totalChars: ev.memory_recall_total_chars,
+      previewKeys: ev.memory_recall_preview_keys ?? [],
+      turnNumber,
+      timestamp: ev.created_at,
+    });
+  }
+  return out;
+}
+
+/**
  * Canonicalize a JSON args string the same way the backend's
  * `tool_call_dedup_key` does (parse + re-serialize with sorted keys;
  * fall back to the trimmed raw string if it isn't valid JSON). Used to

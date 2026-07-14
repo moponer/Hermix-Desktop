@@ -104,6 +104,10 @@ pub enum MemoryKind {
     Tool,
     /// A frozen session snapshot.
     Snapshot,
+    /// Phase 19 (E): a session-end reflection (template-driven,
+    /// not LLM-generated). Surfaced as a `MemoryUpdate` so the user
+    /// sees "what the agent thinks it learned".
+    Reflection,
 }
 
 impl MemoryKind {
@@ -114,6 +118,7 @@ impl MemoryKind {
             MemoryKind::Summary => "summary",
             MemoryKind::Tool => "tool",
             MemoryKind::Snapshot => "snapshot",
+            MemoryKind::Reflection => "reflection",
         }
     }
 }
@@ -887,6 +892,47 @@ pub fn memory_on_session_end(
         .filter_map(|m| serde_json::to_value(m).ok())
         .collect();
     router_owned.on_session_end(&as_values);
+
+    // 2026-07-14 (Phase 19 E): emit per-session reflections
+    // (what_went_well / what_to_improve / user_preferences_observed /
+    // next_session_hint). No LLM — pure template aggregation over
+    // facts + tool_errors + user.style. The user sees these in chat
+    // via `StreamEvent::MemoryUpdate { kind: "reflection" }`.
+    //
+    // We aggregate synchronously because the inputs are small and
+    // we want the UI to render them in the same frame as the
+    // session-end summary emit above.
+    if !config.quiet_mode {
+        if let Some(backend) = router_owned.find_embedded_backend() {
+            let turn_count = messages
+                .iter()
+                .filter(|m| matches!(m.role, MessageRole::User))
+                .count() as u32;
+            let tool_error_count = backend.count_session_tool_errors(&session_id).unwrap_or(0);
+            let session_fact_count = backend.count_session_facts(&session_id).unwrap_or(0);
+            let dominant_user_style = backend.most_frequent_user_style().unwrap_or(None);
+            let inputs = crate::reflection_generator::ReflectionInputs {
+                session_id: session_id.clone(),
+                turn_count,
+                tool_error_count,
+                session_fact_count,
+                dominant_user_style,
+            };
+            let n = crate::reflection_generator::write_and_emit_reflections(
+                &backend,
+                callbacks,
+                &inputs,
+            );
+            if n > 0 {
+                tracing::debug!(
+                    target: "hermix.agent",
+                    session_id = %session_id,
+                    count = n,
+                    "memory_on_session_end: reflections written + emitted"
+                );
+            }
+        }
+    }
 }
 
 /// Dispatch delegation tool-call results through the memory subsystem:

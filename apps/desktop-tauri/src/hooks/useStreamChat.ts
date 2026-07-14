@@ -169,10 +169,23 @@ interface StreamCallbacks {
    */
   onMemoryUpdate?: (info: {
     action: "write" | "update" | "delete" | "summarize" | "cleanup" | "snapshot";
-    memoryType: "fact" | "style" | "summary" | "tool" | "snapshot";
+    memoryType: "fact" | "style" | "summary" | "tool" | "snapshot" | "reflection";
     key: string;
     summary: string;
     count?: number;
+  }) => void;
+  /**
+   * Phase 19 (A): fired by the server when the agent recalls N
+   * related facts from memory this turn. The full content is
+   * injected into the system prompt by `prompt_assembly`; this
+   * callback only carries a small preview for the UI chip.
+   */
+  onMemoryRecall?: (info: {
+    trigger: "first_turn" | "interval" | "drift";
+    count: number;
+    totalChars?: number;
+    previewKeys: string[];
+    turnNumber: number;
   }) => void;
   /**
    * A todo list mutation fired by the server. Four kinds:
@@ -869,7 +882,7 @@ export function useStreamChat() {
                 const action = (ev?.action ?? ev?.memory_action ?? "write") as
                   | "write" | "update" | "delete" | "summarize" | "cleanup" | "snapshot";
                 const memoryType = (ev?.memory_type ?? ev?.memoryType ?? "fact") as
-                  | "fact" | "style" | "summary" | "tool" | "snapshot";
+                  | "fact" | "style" | "summary" | "tool" | "snapshot" | "reflection";
                 const key = ev?.key ?? ev?.memory_key ?? "";
                 const summary = ev?.summary ?? ev?.memory_summary ?? "";
                 const count = ev?.count ?? ev?.memory_count ?? undefined;
@@ -880,6 +893,31 @@ export function useStreamChat() {
                   key,
                   summary,
                   count,
+                });
+                return;
+              }
+
+              // Phase 19 (A): recall event. Fires when the agent
+              // re-pulls related facts from memory this turn. We
+              // forward to onMemoryRecall so App.tsx can render a
+              // small "💭 想到 N 条" chip in the conversation.
+              if (evtType === "memory_recall") {
+                const ev = data?.event ?? data ?? {};
+                const trigger = (ev?.trigger ?? "interval") as
+                  | "first_turn" | "interval" | "drift";
+                const count = Number(ev?.count ?? 0);
+                const totalChars = ev?.total_chars ?? ev?.totalChars ?? undefined;
+                const previewKeys: string[] = Array.isArray(ev?.preview_keys ?? ev?.previewKeys)
+                  ? (ev?.preview_keys ?? ev?.previewKeys)
+                  : [];
+                const turnNumber = Number(ev?.turn_number ?? ev?.turnNumber ?? 0);
+                if (count === 0) return;
+                callbacks.onMemoryRecall?.({
+                  trigger,
+                  count,
+                  totalChars,
+                  previewKeys,
+                  turnNumber,
                 });
                 return;
               }
