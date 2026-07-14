@@ -201,6 +201,51 @@ pub fn reflection_label(kind: &str) -> &'static str {
     }
 }
 
+/// P4-T1 (reflection → 行为改写闭环): render a cross-session list
+/// of reflections into a compact markdown block that the agent loop
+/// prepends to the next session's system prompt.
+///
+/// Budget per item: `per_item_char_budget` (default 200). Max items:
+/// `max_items` (default 2). Caps items so a noisy session can't blow
+/// out the system prompt. Returns `None` when the list is empty so
+/// callers can chain.
+pub fn build_prior_session_reflection_block(
+    reflections: &[Reflection],
+    per_item_char_budget: usize,
+    max_items: usize,
+) -> Option<String> {
+    if reflections.is_empty() || max_items == 0 {
+        return None;
+    }
+    let mut lines: Vec<String> = Vec::with_capacity(max_items + 1);
+    lines.push("[上次反思] 以下是从最近会话反思提取的行为改进提示，请纳入本轮回复决策。".to_string());
+    for r in reflections.iter().take(max_items) {
+        let truncated: String = if r.content.chars().count() > per_item_char_budget {
+            // Truncate at the character boundary just before the
+            // budget so we don't chop mid-character and so per-item
+            // length matches the budget on common cases.
+            let mut out = String::with_capacity(per_item_char_budget);
+            for c in r.content.chars() {
+                if out.chars().count() + 1 > per_item_char_budget {
+                    break;
+                }
+                out.push(c);
+            }
+            out.push('…');
+            out
+        } else {
+            r.content.clone()
+        };
+        lines.push(format!("- [{}] {}", reflection_label(r.kind), truncated));
+    }
+    Some(lines.join("\n"))
+}
+
+/// Default per-item char budget for `build_prior_session_reflection_block`.
+pub const REFLECTION_BLOCK_PER_ITEM_CHARS: usize = 200;
+/// Default max items in the block.
+pub const REFLECTION_BLOCK_MAX_ITEMS: usize = 2;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +335,54 @@ mod tests {
         assert_eq!(reflection_label(KIND_USER_PREFERENCES), "观察到的偏好");
         assert_eq!(reflection_label(KIND_NEXT_SESSION_HINT), "下次可延续");
         assert_eq!(reflection_label("unknown"), "反思");
+    }
+
+    // ---------- P4-T1: cross-session reflection block ----------
+
+    fn rkind(kind: &'static str, content: &str) -> Reflection {
+        Reflection {
+            kind,
+            content: content.to_string(),
+            salience: 0.5,
+        }
+    }
+
+    #[test]
+    fn prior_reflection_block_returns_none_on_empty() {
+        let out = build_prior_session_reflection_block(&[], 200, 2);
+        assert!(out.is_none());
+    }
+
+    #[test]
+    fn prior_reflection_block_respects_max_items() {
+        let r = vec![
+            rkind(KIND_WHAT_TO_IMPROVE, "a"),
+            rkind(KIND_WHAT_TO_IMPROVE, "b"),
+            rkind(KIND_WHAT_TO_IMPROVE, "c"),
+        ];
+        let out = build_prior_session_reflection_block(&r, 200, 2).unwrap();
+        // header + exactly 2 bullets
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[1].contains("a"));
+        assert!(lines[2].contains("b"));
+    }
+
+    #[test]
+    fn prior_reflection_block_truncates_oversized_items() {
+        let long = "x".repeat(1_000);
+        let r = vec![rkind(KIND_WHAT_TO_IMPROVE, &long)];
+        let out = build_prior_session_reflection_block(&r, 50, 5).unwrap();
+        // The bullet line should be ≤ 50 chars + budget for the
+        // "[要改进的] " prefix + "…". We accept any compressed view
+        // that's much shorter than the original.
+        assert!(out.len() < 200);
+        assert!(out.contains('…'));
+    }
+
+    #[test]
+    fn prior_reflection_block_disabled_when_max_items_zero() {
+        let r = vec![rkind(KIND_WHAT_TO_IMPROVE, "x")];
+        assert!(build_prior_session_reflection_block(&r, 200, 0).is_none());
     }
 }

@@ -287,6 +287,19 @@ pub struct AgentConfig {
     #[serde(default = "default_memory_recall_limit_first")]
     pub memory_recall_limit_first: usize,
 
+    /// P4-T1 (reflection → 行为改写闭环): number of recent
+    /// cross-session reflections to surface into the `## Prior
+    /// Reflections` block of `memory_prefetch`. Set to 0 to disable.
+    /// Default `2`.
+    #[serde(default = "default_prior_reflection_max_items")]
+    pub prior_reflection_max_items: usize,
+
+    /// P4-T1: per-item character budget in the prior reflection block.
+    /// Caps each reflection body so a noisy session can't blow out
+    /// the system prompt. Default `200`.
+    #[serde(default = "default_prior_reflection_per_item_chars")]
+    pub prior_reflection_per_item_chars: usize,
+
     /// Optional cheap-vs-strong per-turn routing.
     #[serde(default)]
     pub smart_model_routing: SmartModelRoutingConfig,
@@ -586,6 +599,19 @@ fn default_memory_recall_limit_first() -> usize {
     50
 }
 
+/// P4-T1: max cross-session reflections injected into the system
+/// prompt per turn. `2` covers "improvement + preference" most turns.
+fn default_prior_reflection_max_items() -> usize {
+    2
+}
+
+/// P4-T1: per-item char budget on the prior reflection block.
+/// `200` keeps one reflection line short while still surfacing the
+/// actionable sentence.
+fn default_prior_reflection_per_item_chars() -> usize {
+    200
+}
+
 fn default_skill_creation_nudge_interval() -> u32 {
     10
 }
@@ -681,6 +707,8 @@ impl Default for AgentConfig {
             memory_min_salience: default_memory_min_salience(),
             memory_recall_limit_subsequent: default_memory_recall_limit_subsequent(),
             memory_recall_limit_first: default_memory_recall_limit_first(),
+            prior_reflection_max_items: default_prior_reflection_max_items(),
+            prior_reflection_per_item_chars: default_prior_reflection_per_item_chars(),
             smart_model_routing: SmartModelRoutingConfig::default(),
             provider: None,
             platform: None,

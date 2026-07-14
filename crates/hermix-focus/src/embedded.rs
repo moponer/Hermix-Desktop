@@ -1140,6 +1140,49 @@ impl EmbeddedMemoryBackend {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// P4-T1 (reflection → 行为改写闭环): return the most recent
+    /// reflections across **all sessions EXCEPT `exclude_session_id`**,
+    /// newest first. The agent loop calls this in
+    /// `memory_prefetch` of session N+1 so the next session's system
+    /// prompt can carry over the lessons learned from session N's
+    /// reflection notes.
+    ///
+    /// Empty `exclude_session_id` means "all sessions".
+    pub fn list_cross_session_reflections(
+        &self,
+        exclude_session_id: &str,
+        limit: u32,
+    ) -> Result<Vec<Reflection>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, kind, content, salience, tags, source, turn_count, created_at
+             FROM reflections
+             WHERE visibility = 1
+               AND (?1 = '' OR session_id != ?1)
+             ORDER BY id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![exclude_session_id, limit as i64], |row| {
+            let tags_s: String = row.get(5)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_s).unwrap_or_default();
+            Ok(Reflection {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                kind: row.get(2)?,
+                content: row.get(3)?,
+                salience: row.get(4)?,
+                tags,
+                source: row.get(6)?,
+                turn_count: row.get::<_, i64>(7)? as u32,
+                created_at: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// Count tool_error rows for this session — drives the
     /// `what_to_improve` reflection. Returns 0 if no errors
     /// (which is the happy case).
@@ -3265,6 +3308,52 @@ mod p19_reflections_tests {
         assert!(rows[0].content.contains("4"));
         assert!(rows[1].content.contains("3"));
         assert!(rows[2].content.contains("2"));
+    }
+
+    #[tokio::test]
+    async fn p19_list_cross_session_reflections_excludes_target_session() {
+        let backend = b();
+        // Two sessions worth of reflections
+        backend
+            .add_reflection("sA", "what_to_improve", "session A lesson", 0.7, &[], 1, "test")
+            .expect("add A");
+        backend
+            .add_reflection("sB", "what_to_improve", "session B lesson", 0.7, &[], 1, "test")
+            .expect("add B");
+        backend
+            .add_reflection("sA", "next_session_hint", "session A hint", 0.5, &[], 1, "test")
+            .expect("add A second");
+
+        // Excluding sA → only sB's reflection should be returned.
+        let excl_a = backend.list_cross_session_reflections("sA", 10).expect("excl A");
+        assert_eq!(excl_a.len(), 1, "expected 1, got {excl_a:?}");
+        assert_eq!(excl_a[0].session_id, "sB");
+
+        // Empty exclude → returns everything (all 3 rows).
+        let all = backend.list_cross_session_reflections("", 10).expect("all");
+        assert_eq!(all.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn p19_list_cross_session_reflections_limit_caps_results() {
+        let backend = b();
+        for i in 0..6 {
+            backend
+                .add_reflection(
+                    "sessionX",
+                    "what_to_improve",
+                    &format!("x{i}"),
+                    0.5,
+                    &[],
+                    i,
+                    "test",
+                )
+                .expect("add");
+        }
+        let rows = backend
+            .list_cross_session_reflections("some-other-session", 4)
+            .expect("limit");
+        assert_eq!(rows.len(), 4, "expected 4, got {}", rows.len());
     }
 
     #[tokio::test]

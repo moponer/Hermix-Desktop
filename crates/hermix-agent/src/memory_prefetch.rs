@@ -359,6 +359,73 @@ pub async fn memory_prefetch(
         block.push_str(&line);
         total_chars += line.len();
     }
+
+    // P4-T1 (reflection → 行为改写闭环): append a `## Prior
+    // Reflections` section listing the most recent cross-session
+    // reflections so the agent's next turn starts with the lessons
+    // learned last session. Disabled when config.prior_reflection_max_items
+    // is 0 or no embedded backend is wired.
+    //
+    // The block clamps itself to char_budget so we never exceed the
+    // total budget. Errors are swallowed — the rest of the `## Memory`
+    // block stays intact and the user sees noise-free degradation.
+    if config.prior_reflection_max_items > 0 {
+        if let Some(embedded) = router.and_then(|r| r.find_embedded_backend()) {
+            match embedded.list_cross_session_reflections(
+                session_id,
+                config.prior_reflection_max_items as u32,
+            ) {
+                Ok(prior) if !prior.is_empty() => {
+                    // Adapt `hermix_focus::Reflection` to the
+                    // generator-side `Reflection` (kind/content/salience).
+                    // We drop id/session_id — they're metadata for
+                    // tracing, not for the prompt body. The
+                    // `kind: &'static str` requirement forces us to
+                    // own the discriminator and compare eagerly.
+                    let adapted: Vec<crate::reflection_generator::Reflection> = prior
+                        .into_iter()
+                        .map(|r| {
+                            let k: &'static str = match r.kind.as_str() {
+                                "what_went_well" => "what_went_well",
+                                "what_to_improve" => "what_to_improve",
+                                "user_preferences_observed" => "user_preferences_observed",
+                                "next_session_hint" => "next_session_hint",
+                                _ => "reflection",
+                            };
+                            crate::reflection_generator::Reflection {
+                                kind: k,
+                                content: r.content,
+                                salience: r.salience,
+                            }
+                        })
+                        .collect();
+                    if let Some(section) =
+                        crate::reflection_generator::build_prior_session_reflection_block(
+                            &adapted,
+                            config.prior_reflection_per_item_chars,
+                            config.prior_reflection_max_items,
+                        )
+                    {
+                        let header = "\n\n## Prior Reflections\n\n";
+                        let with_header = format!("{header}{section}\n");
+                        if total_chars + with_header.len() <= char_budget {
+                            block.push_str(&with_header);
+                            total_chars += with_header.len();
+                        }
+                    }
+                }
+                Ok(_) => { /* empty — nothing to surface */ }
+                Err(e) => {
+                    tracing::debug!(
+                        target: "hermix.agent",
+                        session_id = %session_id,
+                        error = %e,
+                        "memory_prefetch: list_cross_session_reflections failed (non-fatal)"
+                    );
+                }
+            }
+        }
+    }
     block
 }
 
