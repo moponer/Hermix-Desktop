@@ -315,6 +315,12 @@ pub struct AnalyticsTotals {
     pub total_estimated_cost: f64,
     pub total_actual_cost: f64,
     pub total_sessions: u32,
+    /// 2026-07-14 (Phase 3 / E4): compression telemetry.
+    /// `total_compactions` = number of compression child sessions
+    /// spawned in the window; `total_archived_turns` = the preserved
+    /// (not lost) history folded into those summaries.
+    pub total_compactions: u32,
+    pub total_archived_turns: u64,
 }
 
 #[derive(Debug, Serialize)]

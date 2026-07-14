@@ -1238,6 +1238,7 @@ export interface AnalyticsDailyEntry {
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
+  cache_creation_tokens: number;
   reasoning_tokens: number;
   estimated_cost: number;
   actual_cost: number;
@@ -1248,6 +1249,9 @@ export interface AnalyticsModelEntry {
   model: string;
   input_tokens: number;
   output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  reasoning_tokens: number;
   estimated_cost: number;
   sessions: number;
 }
@@ -1256,10 +1260,13 @@ export interface AnalyticsTotals {
   total_input: number;
   total_output: number;
   total_cache_read: number;
+  total_cache_creation: number;
   total_reasoning: number;
   total_estimated_cost: number;
   total_actual_cost: number;
   total_sessions: number;
+  total_compactions: number;
+  total_archived_turns: number;
 }
 
 export interface AnalyticsSkillEntry {

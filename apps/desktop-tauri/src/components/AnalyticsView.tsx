@@ -1,6 +1,20 @@
 import { useState, useEffect, useMemo } from "react";
-import { BarChart3, TrendingUp, Cpu, DollarSign, Zap, Wrench } from "lucide-react";
+import { BarChart3, TrendingUp, Cpu, DollarSign, Zap, Wrench, Database, Percent, Archive } from "lucide-react";
 import { getAnalytics, type AnalyticsResponse } from "../api";
+
+// Cache hit rate proxy: of all prompt tokens (freshly-written `input`
+// + cache-served `cache_read`), what fraction came from the cache.
+// Providers that don't report cache stats (MiniMax today) yield 0 —
+// which is honestly "no cache hits observed". Defined at module scope
+// so both `AnalyticsView` and the `DailyCurve` helper can use it.
+function cacheHitRate(cacheRead: number, input: number): number {
+  const denom = cacheRead + input;
+  return denom > 0 ? (cacheRead / denom) * 100 : 0;
+}
+
+function hitRateColor(pct: number): string {
+  return pct >= 80 ? "text-green-400" : pct >= 50 ? "text-amber-400" : "text-zinc-400";
+}
 
 export function AnalyticsView() {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
@@ -76,7 +90,7 @@ export function AnalyticsView() {
       </div>
 
       {/* Totals Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <StatCard
           icon={<Cpu className="w-4 h-4" />}
           label="输入 Token"
@@ -93,13 +107,25 @@ export function AnalyticsView() {
           icon={<TrendingUp className="w-4 h-4" />}
           label="会话数"
           value={totals.total_sessions.toString()}
-          color="text-purple-400"
+          color="text-amber-400"
         />
         <StatCard
           icon={<DollarSign className="w-4 h-4" />}
           label="预估费用"
           value={formatCost(totals.total_estimated_cost)}
           color="text-yellow-400"
+        />
+        <StatCard
+          icon={<Database className="w-4 h-4" />}
+          label="缓存命中 Token"
+          value={formatNumber(totals.total_cache_read)}
+          color="text-green-400"
+        />
+        <StatCard
+          icon={<Percent className="w-4 h-4" />}
+          label="缓存命中率"
+          value={`${cacheHitRate(totals.total_cache_read, totals.total_input).toFixed(1)}%`}
+          color={hitRateColor(cacheHitRate(totals.total_cache_read, totals.total_input))}
         />
       </div>
 
@@ -121,6 +147,9 @@ export function AnalyticsView() {
                 <div className="flex items-center gap-4">
                   <span className="text-text-faint">{formatNumber(m.input_tokens + m.output_tokens)} tok</span>
                   <span className="text-text-faint">{m.sessions} 次</span>
+                  <span className={hitRateColor(cacheHitRate(m.cache_read_tokens, m.input_tokens))}>
+                    {cacheHitRate(m.cache_read_tokens, m.input_tokens).toFixed(0)}% 命中
+                  </span>
                   <span className="text-accent">{formatCost(m.estimated_cost)}</span>
                 </div>
               </div>
@@ -171,6 +200,32 @@ export function AnalyticsView() {
           </div>
         </div>
       )}
+
+      {/* E5 (Phase 3): compression telemetry. These numbers answer the
+          user's "does compression lose my memory?" worry concretely:
+          how many compressions ran, and how many history turns were
+          preserved (folded into summaries), not discarded. The
+          underlying mechanism keeps every archived turn as a real
+          message row in a compression child-session, so 0 loss. */}
+      <div className="bg-bg-secondary rounded-xl p-4 border border-border-primary">
+        <div className="flex items-center gap-2 mb-3">
+          <Archive className="w-4 h-4 text-text-secondary" />
+          <h3 className="text-sm font-medium">上下文压缩</h3>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <div className="text-xs text-text-faint">压缩次数</div>
+            <div className="text-lg font-semibold">{totals.total_compactions}</div>
+          </div>
+          <div>
+            <div className="text-xs text-text-faint">保留的历史轮次</div>
+            <div className="text-lg font-semibold">{formatNumber(totals.total_archived_turns)}</div>
+          </div>
+        </div>
+        <p className="text-xs text-text-faint mt-3 leading-relaxed">
+          每次压缩都会创建一个子会话，完整保留被折叠的原始对话（可经 lineage 树回看），不会丢失记忆。
+        </p>
+      </div>
 
       {/* Empty state */}
       {by_model.length === 0 && by_tool.length === 0 && skills.top_skills.length === 0 && (
@@ -235,7 +290,10 @@ function DailyCurve({ daily }: { daily: import("../api").AnalyticsDailyEntry[] }
             <span className="inline-block w-2 h-2 bg-green-400 rounded-sm" />输出
           </span>
           <span className="flex items-center gap-1">
-            <span className="inline-block w-3 h-0.5 bg-purple-400" />会话
+            <span className="inline-block w-3 h-0.5 bg-amber-400" />会话
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-3 h-0.5 bg-accent" />缓存命中率
           </span>
         </div>
       </div>
@@ -282,7 +340,7 @@ function DailyCurve({ daily }: { daily: import("../api").AnalyticsDailyEntry[] }
                   y={innerH - inputH}
                   width={barInnerWidth}
                   height={inputH}
-                  className="fill-blue-400"
+                  className="fill-zinc-400"
                   fillOpacity={0.85}
                 />
                 <rect
@@ -298,11 +356,31 @@ function DailyCurve({ daily }: { daily: import("../api").AnalyticsDailyEntry[] }
                   cx={x + barInnerWidth / 2}
                   cy={innerH - (d.sessions / maxSessions) * innerH}
                   r={2}
-                  className="fill-purple-400"
+                  className="fill-amber-400"
                 />
               </g>
             );
           })}
+
+          {/* cache hit-rate line — 0..100% scale mapped to full height.
+              Distinct from the session line (amber dots): this is the
+              accent-coloured polyline so the user sees "cache saved X%
+              of input" trending over time. */}
+          <polyline
+            fill="none"
+            stroke="currentColor"
+            className="text-accent"
+            strokeWidth={1.5}
+            strokeDasharray="3,2"
+            points={daily
+              .map((d, i) => {
+                const hr = cacheHitRate(d.cache_read_tokens, d.input_tokens);
+                const x = i * barWidth + barWidth / 2;
+                const y = innerH - (hr / 100) * innerH;
+                return `${x},${y}`;
+              })
+              .join(" ")}
+          />
 
           {/* x labels */}
           {daily.map((d, i) => {

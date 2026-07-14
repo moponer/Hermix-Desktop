@@ -47,6 +47,8 @@ pub async fn get_usage(
                 total_estimated_cost: 0.0,
                 daily: vec![],
                 by_tool: vec![],
+                total_compactions: 0,
+                total_archived_turns: 0,
             }
         });
 
@@ -105,6 +107,8 @@ pub async fn get_usage(
             total_estimated_cost: agg.total_estimated_cost,
             total_actual_cost: 0.0,
             total_sessions: agg.total_sessions.max(0) as u32,
+            total_compactions: agg.total_compactions.max(0) as u32,
+            total_archived_turns: agg.total_archived_turns,
         },
         skills: AnalyticsSkillsResponse {
             summary: AnalyticsSkillsSummary {

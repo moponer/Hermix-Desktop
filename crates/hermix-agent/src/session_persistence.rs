@@ -2749,6 +2749,35 @@ impl SessionPersistence {
         // but only 3 this week isn't papered over by ancient noise.
         let by_tool = self.aggregate_tools(&conn, &cutoff_str)?;
 
+        // 8) Phase 3 (E4): compression telemetry. Each compression
+        //    spawns a child session (`parent_session_id` set), so
+        //    counting those within the window gives "compressions
+        //    performed" without a synthetic counter.
+        let total_compactions: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE parent_session_id IS NOT NULL AND updated_at >= ?1",
+                rusqlite::params![cutoff_str],
+                |row| row.get(0),
+            )
+            .map_err(|e| AgentError::Io(format!("Failed to count compressions: {e}")))?;
+
+        // Archived turns = the messages stored inside compression-child
+        // sessions. The summary text itself lives in
+        // `sessions.compressed_summary` (not as a message row), so every
+        // non-system child message is exactly one folded-over turn.
+        let total_archived_turns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages
+                 WHERE session_id IN (
+                     SELECT id FROM sessions
+                     WHERE parent_session_id IS NOT NULL AND updated_at >= ?1
+                 )
+                 AND role != 'system'",
+                rusqlite::params![cutoff_str],
+                |row| row.get(0),
+            )
+            .map_err(|e| AgentError::Io(format!("Failed to count archived turns: {e}")))?;
+
         Ok(UsageAggregate {
             total_sessions,
             total_messages,
@@ -2759,6 +2788,8 @@ impl SessionPersistence {
             total_cache_read_tokens: total_cache_read.max(0) as u64,
             total_cache_creation_tokens: total_cache_creation.max(0) as u64,
             total_reasoning_tokens: total_reasoning.max(0) as u64,
+            total_compactions: total_compactions.max(0) as u64,
+            total_archived_turns: total_archived_turns.max(0) as u64,
             total_estimated_cost: total_cost,
             daily,
             by_tool,
@@ -2894,6 +2925,20 @@ pub struct UsageAggregate {
     /// Surfaced in `/insights` so users can see how much of their
     /// spend is invisible to the visible-text token count.
     pub total_reasoning_tokens: u64,
+    /// 2026-07-14 (Phase 3 / E4): number of compression child sessions
+    /// created within the window. Every auto/manual compression spawns
+    /// a child session with `parent_session_id` set (N-02), so this is
+    /// a real, queryable "how many times did we compress" signal for
+    /// the dashboard's compression card — not a synthetic counter.
+    pub total_compactions: u64,
+    /// 2026-07-14 (Phase 3 / E4): total archived turns folded into
+    /// compression summaries within the window. Counted as the messages
+    /// inside compression-child sessions — those rows ARE the preserved
+    /// history (we deliberately never insert the summary as a `system`
+    /// message row, so every child message is an archived turn). This
+    /// answers the user's "does compression lose my memory?" worry with
+    /// a concrete number: how much history compression kept.
+    pub total_archived_turns: u64,
     pub total_estimated_cost: f64,
     /// P1-3: per-day breakdown for the time-curve SVG on `/insights`.
     /// Length is `days + 1` covering the full window (today inclusive).
@@ -3004,6 +3049,109 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].content.as_deref(), Some("Hello"));
         assert_eq!(loaded[1].content.as_deref(), Some("Hi there!"));
+    }
+
+    // 2026-07-14 (Phase 6 / E1): compression must NOT lose memory.
+    // After a compression event, the folded summary is recoverable via
+    // `load_compressed_summary`, and every archived turn survives as a
+    // real message row inside the compression child-session (returned
+    // by `load_session`). This is the regression guard against
+    // "compression silently dropped my history".
+    #[test]
+    fn compression_child_session_preserves_summary_and_archived_turns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        // Parent session (the live conversation).
+        sp.persist_session(
+            "parent-1",
+            &[Message::user("live message"), Message::assistant("live reply")],
+            Some("gpt-4o"),
+            None,
+            Some("Parent"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Simulate a compression: 3 turns folded into a summary.
+        let archived = vec![
+            Message::user("important question about the config"),
+            Message::assistant("here is the answer with details"),
+            Message::user("follow-up clarification"),
+        ];
+        let snap = CompressionSnapshot {
+            summary: "User asked about config; we explained the YAML layout.".to_string(),
+            archived_turns: archived.clone(),
+            compression_count: 1,
+            ..Default::default()
+        };
+        let child_id = sp
+            .create_compression_child_session("parent-1", &snap, Some("gpt-4o"), None)
+            .unwrap();
+
+        // E1-a: the summary is recoverable after compression.
+        let summary = sp
+            .load_compressed_summary(&child_id)
+            .expect("summary persisted");
+        assert!(summary.contains("config"));
+
+        // E1-b: every archived turn is recoverable (memory not lost).
+        let recovered = sp.load_session(&child_id).unwrap();
+        assert_eq!(recovered.len(), archived.len(), "all archived turns preserved");
+        let joined: String = recovered
+            .iter()
+            .filter_map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(joined.contains("important question about the config"));
+        assert!(joined.contains("here is the answer with details"));
+        assert!(joined.contains("follow-up clarification"));
+    }
+
+    // 2026-07-14 (Phase 3 / E4 + B5): aggregate_usage must surface
+    // real compression telemetry — not zeros. We compress once, then
+    // assert the windowed aggregate reports the compaction count and
+    // the preserved (not lost) archived turns.
+    #[test]
+    fn aggregate_usage_counts_compressions_and_archived_turns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+
+        sp.persist_session(
+            "p-compress",
+            &[Message::user("hi"), Message::assistant("hello")],
+            Some("gpt-4o"),
+            None,
+            Some("P"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let archived = vec![
+            Message::user("turn one"),
+            Message::assistant("turn one reply"),
+        ];
+        let snap = CompressionSnapshot {
+            summary: "compressed".to_string(),
+            archived_turns: archived.clone(),
+            compression_count: 1,
+            ..Default::default()
+        };
+        sp.create_compression_child_session("p-compress", &snap, Some("gpt-4o"), None)
+            .unwrap();
+
+        let agg = sp.aggregate_usage(30).unwrap();
+        assert_eq!(agg.total_compactions, 1, "one compression in window");
+        assert!(
+            agg.total_archived_turns >= archived.len() as u64,
+            "archived turns counted"
+        );
     }
 
     // 2026-07-12 regression (Bug A): createSession must persist
