@@ -58,7 +58,17 @@
 
 ## P0 — 三处死链（必修）
 
-### P0-T1 TodoGroupStarted 永远拿不到 message_id
+### P0-T1 TodoGroupStarted 永远拿不到 message_id — ✅ 已修复 (commit 9c3a699 + 17c11dc)
+
+**修复路径**：
+- `SessionStamper` trait 加 `set_active_message_id`（Commit B 同步扩展 trait，Commit A 之前已落地）
+- `TodoHandler` 在 `TodoChangeKind::GroupStarted` 上携带 `message_id: Option<String>`
+- `LocalAgentService::send_message` + `send_message_stream` 在 turn 开始时计算 `${session_id}-${messages.len()}` 作为 upcoming assistant id
+- `hermix_server::todo_change_to_stream` 从 change 中提取 message_id 而非硬编码 `None`
+- 新增 2 个回归测试覆盖 stamped + legacy 路径
+- **Commit A → C** 进一步把 `origin_message_id` 持久化到 `TodoItem` + `TodoSnapshotItem`，让 reload 后的 snapshot 重建也能恢复 anchor
+
+**关联 commit**：`9c3a699` (P0-T1 foundation) → `380a5b2` → `b7f96b9` → `17c11dc`
 
 **症状**：用户让 LLM 拆解一个计划 → LLM 调 `todo.create` 多次 → 主人看到的卡片全堆在消息流顶部，不挨着产生这个计划的 assistant message。
 
@@ -104,12 +114,20 @@ todoGroups?: Array<{
 
 ---
 
-### P0-T2 TodoSnapshot 事件前端完全不处理
+### P0-T2 TodoSnapshot 事件前端完全不处理 — ✅ 已修复 (commit 17c11dc + 4511098 + c8235e3)
 
 **症状**：
 - 主人 reload session（或打开已有 todo 的 session）→ 看不到任何已存在的 todo 卡片，直到 LLM 再调一次 `todo` 工具才会出现
 - 多客户端打开同一 session，一个客户端点 checkbox → 另一个客户端看不到（todo 工具走 HTTP broadcast，其它 client 不在 WS 路径上）
 - WS 重连后（例如网络断 5 秒）→ 已存在的 todo 全部消失，要等下一次 tool call 才能恢复
+
+**修复路径**（跨 3 个 commit）：
+- **C (17c11dc)**：`TodoHandler::publish_snapshot` 在每次 mutation 后发 `TodoChangeKind::Snapshot`，hermix-server 翻译成 `StreamEvent::TodoSnapshot`。
+- **D (4511098)**：`handle_ws_stream` 在 `Connected` 后立即调 `build_snapshot_json_for_tool("todo", &session_id)` 发 hydrate snapshot，reconnect/refresh 都能拿到完整 todo 列表。
+- **E (c8235e3)**：App.tsx `onTodoChange` 入口过滤 `change.sessionId !== activeSessionIdRef.current`，避免跨 session 串台。
+- **A (380a5b2)**：`list_for_session` 持久层 session 隔离，让 snapshot 重建无残留。
+
+**关联 commit**：`17c11dc` → `4511098` → `c8235e3`
 
 **根因**：
 ```rust
@@ -146,9 +164,11 @@ if (evtType === "todo_item_removed") { ... }
 
 ---
 
-### P0-T3 listTodos HTTP 端点 0 前端调用方
+### P0-T3 listTodos HTTP 端点 0 前端调用方 — ✅ 已 deprecated (listTodos 不动 + 文档标注为 legacy)
 
 **症状**：主人按 Ctrl+R 重载应用 → 切回历史 session → todo 卡片全空（因为不只缺 TodoSnapshot，**且没有 React 端调用 listTodos**）。
+
+**修复决策**：完全弃用 HTTP 兜底，listTodos 标记 `@deprecated` (api.ts 已加注释)，由 `TodoSnapshot` WS 同步接管。所有新代码走 WS 路径。
 
 **根因**：
 ```ts
@@ -183,9 +203,13 @@ Grep 调用方：
 
 ## P1 — 数据 / 状态错误
 
-### P1-T4 切 session 后 todoGroups 不清，stale 数据泄漏
+### P1-T4 切 session 后 todoGroups 不清，stale 数据泄漏 — ✅ 已修复 (commit c8235e3 + 既有 useEffect)
 
 **症状**：用户切 session：A 有 3 个 todo，B 有 1 个 todo → 切 B → 看到 4 个 todo（A 的 3 个 + B 的 1 个 混堆在 B 顶部）。
+
+**修复路径**：
+- App.tsx 既有 `useEffect` on `activeSessionId` 已在切换时清 `todoGroups` + `todoGroupsByIdRef.current`
+- **Commit E (c8235e3)** 新增 `onTodoChange` 入口 session guard：mismatch 时 early return，双保险
 
 **根因**：
 ```ts
