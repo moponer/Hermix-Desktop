@@ -32,6 +32,20 @@ pub struct TodoItem {
     /// Human label for the plan (e.g. "rename all files"). Optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_title: Option<String>,
+    /// Session id this todo was created in. Used by the front-end
+    /// todo panel + WS `todo_snapshot` to filter per-session.
+    /// `None` for pre-session-context items (legacy CLI). `#[serde(default)]`
+    /// keeps old `todos.json` files compatible — they decode as `None`.
+    /// FRONTEND_AUDIT_TODO_2026-07-13 / Commit A.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Wire-format assistant message id that emitted the tool call
+    /// which created this todo (`${session_id}-${rowIdx}`). Anchors
+    /// the inline plan card next to the right assistant message
+    /// after reload. `#[serde(default)]` for legacy compatibility.
+    /// P0-T1 / FRONTEND_AUDIT_TODO_2026-07-13.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_message_id: Option<String>,
 }
 
 /// File-based todo backend storing tasks as JSON.
@@ -118,6 +132,8 @@ impl TodoBackend for FileTodoBackend {
         priority: Option<&str>,
         group_id: Option<&str>,
         group_title: Option<&str>,
+        session_id: Option<&str>,
+        origin_message_id: Option<&str>,
     ) -> Result<String, ToolError> {
         let mut items = self
             .items
@@ -143,6 +159,8 @@ impl TodoBackend for FileTodoBackend {
             execution_count: 0,
             group_id: resolved_group_id.clone(),
             group_title: group_title.map(String::from),
+            session_id: session_id.map(String::from),
+            origin_message_id: origin_message_id.map(String::from),
         };
         items.push(item.clone());
         self.save(&items)?;
@@ -213,10 +231,55 @@ impl TodoBackend for FileTodoBackend {
                     "execution_count": i.execution_count,
                     "group_id": i.group_id,
                     "group_title": i.group_title,
+                    "session_id": i.session_id,
+                    "origin_message_id": i.origin_message_id,
                 })
             })
             .collect();
         Ok(json!({"todos": result, "total": result.len()}).to_string())
+    }
+
+    /// List todos belonging to a specific session. Used by the
+    /// `todo_snapshot` WS hydrate + the front-end panel refresh path.
+    /// Default impl falls back to `list(None)` for legacy in-memory
+    /// backends that don't track sessions; backends with session
+    /// metadata should override for the per-session filter.
+    /// FRONTEND_AUDIT_TODO_2026-07-13 / Commit A.
+    async fn list_for_session(&self, session_id: &str) -> Result<String, ToolError> {
+        let items = self
+            .items
+            .lock()
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+        let filtered: Vec<&TodoItem> = items
+            .iter()
+            .filter(|i| i.session_id.as_deref() == Some(session_id))
+            .collect();
+        let result: Vec<serde_json::Value> = filtered
+            .iter()
+            .map(|i| {
+                json!({
+                    "id": i.id,
+                    "title": i.title,
+                    "description": i.description,
+                    "status": i.status,
+                    "priority": i.priority,
+                    "created_at": i.created_at,
+                    "depends_on": i.depends_on,
+                    "last_result": i.last_result,
+                    "execution_count": i.execution_count,
+                    "group_id": i.group_id,
+                    "group_title": i.group_title,
+                    "session_id": i.session_id,
+                    "origin_message_id": i.origin_message_id,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "todos": result,
+            "total": result.len(),
+            "session_id": session_id,
+        })
+        .to_string())
     }
 
     async fn add_dependency(&self, task_id: &str, depends_on: &[String]) -> Result<String, ToolError> {

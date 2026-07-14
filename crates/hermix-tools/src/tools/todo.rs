@@ -105,6 +105,18 @@ pub trait TodoBackend: Send + Sync {
         priority: Option<&str>,
         group_id: Option<&str>,
         group_title: Option<&str>,
+        // Session id this todo belongs to. `None` for CLI / legacy
+        // paths that have no session context. Persisted on the
+        // `TodoItem` so `todo_snapshot` WS hydrate can serve
+        // per-session lists. FRONTEND_AUDIT_TODO_2026-07-13.
+        session_id: Option<&str>,
+        // Wire-format id of the assistant message that emitted the
+        // `todo.create` tool call (`${session_id}-${rowIdx}`).
+        // Stamped from `set_active_message_id` at the top of the
+        // turn. Anchors the inline plan card to the originating
+        // assistant message after reload. `None` for legacy paths.
+        // P0-T1.
+        origin_message_id: Option<&str>,
     ) -> Result<String, ToolError>;
     /// Update a todo item.
     async fn update(
@@ -117,6 +129,17 @@ pub trait TodoBackend: Send + Sync {
     ) -> Result<String, ToolError>;
     /// List all todo items.
     async fn list(&self, status: Option<&str>) -> Result<String, ToolError>;
+    /// List todos belonging to a specific session. Default impl falls
+    /// back to `list(None)` so legacy backends (no session concept)
+    /// keep working; backends with `TodoItem.session_id` should
+    /// override for the per-session filter. Used by `todo_snapshot`
+    /// WS hydrate on connect + after every mutation. Commit A.
+    async fn list_for_session(&self, session_id: &str) -> Result<String, ToolError> {
+        // Default: ignore session, return everything. The file
+        // backend overrides this to actually filter.
+        let _ = session_id;
+        self.list(None).await
+    }
     /// Add dependency: task_id depends on depends_on tasks.
     async fn add_dependency(&self, task_id: &str, depends_on: &[String]) -> Result<String, ToolError>;
     /// Get the next task to execute (respecting dependencies and priority).
@@ -249,6 +272,19 @@ impl TodoHandler {
         action: &str,
         params: &Value,
     ) -> Option<crate::backends::todo::TodoItem> {
+        // Snapshot the active session/message id **once** so the
+        // fallback path doesn't have to take the locks twice. Commit A.
+        let active_session_id = self
+            .active_session
+            .lock()
+            .expect("todo active_session mutex poisoned")
+            .clone();
+        let active_message_id = self
+            .active_message_id
+            .lock()
+            .expect("todo active_message_id mutex poisoned")
+            .clone();
+
         let id = params.get("id").and_then(|v| v.as_str())?;
         let title = params
             .get("title")
@@ -277,6 +313,11 @@ impl TodoHandler {
             execution_count: 0,
             group_id: params.get("group_id").and_then(|v| v.as_str()).map(String::from).unwrap_or_default(),
             group_title: params.get("group_title").and_then(|v| v.as_str()).map(String::from),
+            // FRONTEND_AUDIT_TODO_2026-07-13 / Commit A: stamp
+            // session/message context from the active stamper so the
+            // fallback snapshot still carries the anchor + session id.
+            session_id: active_session_id,
+            origin_message_id: active_message_id,
         })
     }
 }
@@ -323,8 +364,30 @@ impl ToolHandler for TodoHandler {
                 let priority = params.get("priority").and_then(|v| v.as_str());
                 let group_id = params.get("group_id").and_then(|v| v.as_str());
                 let group_title = params.get("group_title").and_then(|v| v.as_str());
+                // FRONTEND_AUDIT_TODO_2026-07-13 / Commit A: stamp the
+                // active session + assistant-message id so the new
+                // TodoItem is owned by the current conversation and
+                // anchored to the message that produced it.
+                let active_session_id = self
+                    .active_session
+                    .lock()
+                    .expect("todo active_session mutex poisoned")
+                    .clone();
+                let active_message_id = self
+                    .active_message_id
+                    .lock()
+                    .expect("todo active_message_id mutex poisoned")
+                    .clone();
                 self.backend
-                    .create(title, description, priority, group_id, group_title)
+                    .create(
+                        title,
+                        description,
+                        priority,
+                        group_id,
+                        group_title,
+                        active_session_id.as_deref(),
+                        active_message_id.as_deref(),
+                    )
                     .await
             }
             "update" => {
@@ -531,6 +594,8 @@ mod tests {
             _priority: Option<&str>,
             _group_id: Option<&str>,
             _group_title: Option<&str>,
+            _session_id: Option<&str>,
+            _origin_message_id: Option<&str>,
         ) -> Result<String, ToolError> {
             Ok(format!("Created todo: {}", title))
         }
@@ -621,6 +686,8 @@ mod tests {
                 _priority: Option<&str>,
                 _group_id: Option<&str>,
                 _group_title: Option<&str>,
+                _session_id: Option<&str>,
+                _origin_message_id: Option<&str>,
             ) -> Result<String, ToolError> {
                 Ok(json!({"id": "todo-1", "title": title}).to_string())
             }
@@ -726,6 +793,8 @@ mod tests {
                 _priority: Option<&str>,
                 _group_id: Option<&str>,
                 _group_title: Option<&str>,
+                _session_id: Option<&str>,
+                _origin_message_id: Option<&str>,
             ) -> Result<String, ToolError> {
                 Ok(json!({"id": "todo-1", "title": title}).to_string())
             }
@@ -800,5 +869,123 @@ mod tests {
             }
             other => panic!("expected GroupStarted, got {:?}", other),
         }
+    }
+
+    /// Commit A regression: `todo.create` must thread the active
+    /// session id and assistant-message id into the persisted
+    /// `TodoItem` so the `todo_snapshot` WS hydrate can serve
+    /// per-session lists and re-anchor inline cards after reload.
+    /// Backed by a real `FileTodoBackend` writing to a temp file.
+    #[tokio::test]
+    async fn test_todo_create_persists_session_and_message_id() {
+        use crate::backends::todo::FileTodoBackend;
+        use crate::tools::session_stamper::SessionStamper;
+        use crate::tools::todo::TodoBackend as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let backend_path = tmp.path().join("todos.json");
+        let backend = Arc::new(FileTodoBackend::new(backend_path));
+        let (tx, _rx) = broadcast::channel::<TodoChange>(16);
+        let handler = Arc::new(TodoHandler::new(backend.clone(), Some(tx)));
+
+        // Stamp active session + message_id before the create.
+        let stamper: Arc<dyn SessionStamper> = handler.clone() as Arc<dyn SessionStamper>;
+        stamper.set_active_session(Some("sess-A".to_string()));
+        stamper.set_active_message_id(Some("sess-A-7".to_string()));
+
+        handler
+            .execute(json!({
+                "action": "create",
+                "title": "Persisted with context",
+                "group_title": "Persistence plan",
+            }))
+            .await
+            .unwrap();
+
+        // Re-list the backend and confirm the persisted TodoItem
+        // carries both ids.
+        let raw = backend.list(None).await.unwrap();
+        let parsed: Value = serde_json::from_str(&raw).unwrap();
+        let arr = parsed.get("todos").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(arr.len(), 1, "expected 1 todo after create");
+        let item = &arr[0];
+        assert_eq!(
+            item.get("session_id").and_then(|v| v.as_str()),
+            Some("sess-A"),
+            "session_id must be stamped from active stamper"
+        );
+        assert_eq!(
+            item.get("origin_message_id").and_then(|v| v.as_str()),
+            Some("sess-A-7"),
+            "origin_message_id must be stamped from active stamper"
+        );
+    }
+
+    /// Commit A regression: `list_for_session` filters out todos that
+    /// belong to other sessions. Without this the front-end todo
+    /// panel would render every session's tasks in every chat.
+    #[tokio::test]
+    async fn test_list_for_session_isolates_by_session() {
+        use crate::backends::todo::FileTodoBackend;
+        use crate::tools::todo::TodoBackend as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = Arc::new(FileTodoBackend::new(tmp.path().join("todos.json")));
+
+        // Seed two items in different sessions + one unowned.
+        backend
+            .create(
+                "alpha",
+                None,
+                None,
+                Some("g1"),
+                Some("plan1"),
+                Some("sess-X"),
+                Some("sess-X-0"),
+            )
+            .await
+            .unwrap();
+        backend
+            .create(
+                "beta",
+                None,
+                None,
+                Some("g2"),
+                Some("plan2"),
+                Some("sess-Y"),
+                Some("sess-Y-0"),
+            )
+            .await
+            .unwrap();
+        backend
+            .create("orphan", None, None, Some("g3"), Some("plan3"), None, None)
+            .await
+            .unwrap();
+
+        let x_raw = backend.list_for_session("sess-X").await.unwrap();
+        let x: Value = serde_json::from_str(&x_raw).unwrap();
+        let x_items = x.get("todos").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(x_items.len(), 1, "sess-X should only see alpha");
+        assert_eq!(
+            x_items[0].get("title").and_then(|v| v.as_str()),
+            Some("alpha")
+        );
+
+        let y_raw = backend.list_for_session("sess-Y").await.unwrap();
+        let y: Value = serde_json::from_str(&y_raw).unwrap();
+        let y_items = y.get("todos").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(y_items.len(), 1, "sess-Y should only see beta");
+        assert_eq!(
+            y_items[0].get("title").and_then(|v| v.as_str()),
+            Some("beta")
+        );
+
+        // Unknown session → empty list (NOT the orphan).
+        let none_raw = backend.list_for_session("sess-Z").await.unwrap();
+        let none: Value = serde_json::from_str(&none_raw).unwrap();
+        let none_items = none.get("todos").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(
+            none_items.len(),
+            0,
+            "unknown session must not see orphan (no session_id)"
+        );
     }
 }
