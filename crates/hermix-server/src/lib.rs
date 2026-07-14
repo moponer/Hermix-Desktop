@@ -34,7 +34,7 @@ use base64::Engine as _;
 
 use axum::body::Body;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
-use axum::extract::{Path, State, WebSocketUpgrade};
+use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::http::header;
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware;
@@ -2445,10 +2445,24 @@ async fn patch_session(
 
 async fn list_todos(
     State(state): State<HttpServerState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
-    let raw = state
-        .tool_registry
-        .dispatch("todo", serde_json::json!({ "action": "list" }));
+    // Commit D — accept optional `?session_id=...` so the TodoPanel
+    // doesn't fetch every session's tasks when a single tab is open.
+    // Without `session_id` we fall back to the legacy "list all"
+    // behaviour so the dashboard's own panels keep working.
+    let session_id = params.get("session_id").cloned();
+    let raw = match session_id {
+        Some(sid) => state
+            .tool_registry
+            .dispatch(
+                "todo",
+                serde_json::json!({ "action": "list", "session_id": sid }),
+            ),
+        None => state
+            .tool_registry
+            .dispatch("todo", serde_json::json!({ "action": "list" })),
+    };
     // dispatch() returns the JSON envelope as a String. The todo
     // tool's list backend returns `{"todos":[...],"total":N}` so
     // forward it as-is; if it's not valid JSON we surface the raw
@@ -2463,6 +2477,7 @@ async fn list_todos(
 async fn patch_todo(
     Path(id): Path<String>,
     State(state): State<HttpServerState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
     // The TodoPanel only ever flips a task to `completed` /
@@ -2471,21 +2486,37 @@ async fn patch_todo(
     // any of the canonical fields and forward verbatim so we don't
     // surprise the user when their clicks somehow round-trip a
     // back-end update.
-    let mut params = serde_json::json!({
+    let mut params_obj = serde_json::json!({
         "action": "update",
         "id": id,
     });
     if let Some(s) = req.get("status").and_then(|v| v.as_str()) {
-        params["status"] = serde_json::Value::String(s.to_string());
+        params_obj["status"] = serde_json::Value::String(s.to_string());
     }
     if let Some(t) = req.get("title").and_then(|v| v.as_str()) {
-        params["title"] = serde_json::Value::String(t.to_string());
+        params_obj["title"] = serde_json::Value::String(t.to_string());
     }
     if let Some(p) = req.get("priority").and_then(|v| v.as_str()) {
-        params["priority"] = serde_json::Value::String(p.to_string());
+        params_obj["priority"] = serde_json::Value::String(p.to_string());
     }
 
-    let raw = state.tool_registry.dispatch("todo", params);
+    // Commit D — `?session_id=...` so the TodoPanel's checkbox toggle
+    // can be attributed to the right chat. Without it the row would
+    // be persisted with `session_id = None` (orphan) and the WS
+    // snapshot would not include it on the next reconnect.
+    //
+    // We don't restore the previous session after dispatch: the
+    // TodoItem has already been written with the correct session_id
+    // (Commit A) and a concurrent agent-loop turn will re-stamp its
+    // own session before the next mutation. The registry's stamper
+    // is a "last writer wins" cell by design.
+    let session_id = params.get("session_id").cloned();
+    let _ = state
+        .tool_registry
+        .set_active_session_for_tool("todo", session_id);
+
+    let raw = state.tool_registry.dispatch("todo", params_obj);
+
     let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
         serde_json::json!({ "ok": true, "raw": raw })
     });
@@ -2495,15 +2526,26 @@ async fn patch_todo(
 async fn delete_todo(
     Path(id): Path<String>,
     State(state): State<HttpServerState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, HttpError> {
     // Dispatches through `TodoHandler::execute` so the broadcast path
     // (`todo_event_tx`) fires and the WS forwarder drops the row from
     // every connected TodoPanel — keeping the HTTP loop and the WS
     // stream consistent (same rationale as `patch_todo`).
+    //
+    // Commit D — same `?session_id=...` rationale as `patch_todo`:
+    // thread the session through to the persisted TodoItem so the
+    // delete doesn't leave an orphan row in `todos.json`.
+    let session_id = params.get("session_id").cloned();
+    let _ = state
+        .tool_registry
+        .set_active_session_for_tool("todo", session_id);
+
     let raw = state.tool_registry.dispatch(
         "todo",
         serde_json::json!({ "action": "delete", "id": id }),
     );
+
     let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
         serde_json::json!({ "ok": true, "raw": raw })
     });
@@ -5079,6 +5121,112 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
             serde_json::to_string(&connected).unwrap_or_default().into(),
         ))
         .await;
+
+    // Commit D — WS hydrate: send an authoritative per-session
+    // TodoSnapshot right after `Connected` so reconnecting tabs /
+    // WS reconnects see the full current todo list without waiting
+    // for the next mutation. Builds via `SessionStamper` so non-todo
+    // tools pay zero cost (the default returns `None`).
+    if let Some(items) = state
+        .tool_registry
+        .build_snapshot_json_for_tool("todo", &session_id)
+        .await
+    {
+        let wire_items: Vec<hermix_transport::TodoSnapshotItem> = items
+            .into_iter()
+            .filter_map(|v| {
+                let id = v.get("id").and_then(|x| x.as_str())?.to_string();
+                let title = v
+                    .get("title")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let status = v
+                    .get("status")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("pending")
+                    .to_string();
+                let priority = v
+                    .get("priority")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("medium")
+                    .to_string();
+                let created_at = v
+                    .get("created_at")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let description = v
+                    .get("description")
+                    .and_then(|x| x.as_str())
+                    .map(String::from);
+                let last_result = v
+                    .get("last_result")
+                    .and_then(|x| x.as_str())
+                    .map(String::from);
+                let execution_count = v
+                    .get("execution_count")
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0) as u32;
+                let depends_on = v
+                    .get("depends_on")
+                    .and_then(|x| x.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|d| d.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let group_id = v
+                    .get("group_id")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let group_title = v
+                    .get("group_title")
+                    .and_then(|x| x.as_str())
+                    .map(String::from);
+                let item_session_id = v
+                    .get("session_id")
+                    .and_then(|x| x.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| session_id.clone());
+                let origin_message_id = v
+                    .get("origin_message_id")
+                    .and_then(|x| x.as_str())
+                    .map(String::from);
+                Some(hermix_transport::TodoSnapshotItem {
+                    id,
+                    title,
+                    description,
+                    status,
+                    priority,
+                    created_at,
+                    depends_on,
+                    last_result,
+                    execution_count,
+                    group_id,
+                    group_title,
+                    session_id: Some(item_session_id),
+                    origin_message_id,
+                })
+            })
+            .collect();
+        let hydrate = WsEnvelope {
+            version: 1,
+            request_id: None,
+            trace_id: trace_id_base.clone(),
+            event: StreamEvent::TodoSnapshot {
+                session_id: session_id.clone(),
+                items: wire_items,
+            },
+        };
+        let _ = socket
+            .send(WsMessage::Text(
+                serde_json::to_string(&hydrate).unwrap_or_default().into(),
+            ))
+            .await;
+    }
 
     while let Some(Ok(msg)) = socket.next().await {
         match msg {
