@@ -313,6 +313,19 @@ export function useStreamChat() {
   // footer so the user always knows how much context budget remains.
   const [contextUsage, setContextUsage] =
     useState<{ usedTokens: number; maxTokens: number; thresholdTokens: number; percent: number } | null>(null);
+  // 2026-07-14: per-turn token usage snapshot — pushed by the
+  // backend as a `usage_update` WS event after every successful LLM
+  // response. Drives the live "cache hit %" chip next to the
+  // context-usage bar. Accumulated session-wide so the chip shows
+  // a stable running rate instead of jittering every turn.
+  const [usageSnapshot, setUsageSnapshot] =
+    useState<{
+      promptTokens: number;
+      completionTokens: number;
+      cacheReadTokens: number;
+      cacheCreationTokens: number;
+      reasoningTokens: number;
+    } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   // Refs to hold the per-send promise resolvers + callbacks,
   // so cancel() can settle the promise immediately without waiting
@@ -1023,8 +1036,8 @@ export function useStreamChat() {
                 return;
               }
 
-              // Context usage snapshot — fired after every agent-loop turn.
-              // Used to render a persistent context-usage bar in the chat footer.
+// Context usage snapshot — fired after every agent-loop turn.
+// Used to render a persistent context-usage bar in the chat footer.
               if (evtType === "context_usage" || evtType === "ContextUsage") {
                 const used = typeof (data?.used_tokens ?? data?.event?.used_tokens) === "number"
                   ? (data?.used_tokens ?? data?.event?.used_tokens) as number
@@ -1039,6 +1052,33 @@ export function useStreamChat() {
                   ? (data?.percent ?? data?.event?.percent) as number
                   : 0;
                 setContextUsage({ usedTokens: used, maxTokens: max, thresholdTokens: threshold, percent: pct });
+                return;
+              }
+
+              // 2026-07-14: per-turn usage snapshot — backend fires
+              // this after every successful LLM response so the chat
+              // header can show a live "cache hit %" chip next to
+              // the context-usage bar. Mirrors `context_usage`
+              // shape (top-level OR nested under `event`). We keep
+              // the raw counts; the chip computes its own rate so
+              // the formula stays in one place (the consumer).
+              //
+              // Wire shape:
+              //   { "type": "usage_update",
+              //     "event": { prompt_tokens, completion_tokens,
+              //                cache_read_tokens, cache_creation_tokens,
+              //                reasoning_tokens } }
+              if (evtType === "usage_update" || evtType === "UsageUpdate") {
+                const ev = data?.event ?? data ?? {};
+                const toNum = (v: unknown): number =>
+                  typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0;
+                setUsageSnapshot({
+                  promptTokens: toNum(ev.prompt_tokens),
+                  completionTokens: toNum(ev.completion_tokens),
+                  cacheReadTokens: toNum(ev.cache_read_tokens),
+                  cacheCreationTokens: toNum(ev.cache_creation_tokens),
+                  reasoningTokens: toNum(ev.reasoning_tokens),
+                });
                 return;
               }
 
@@ -1350,5 +1390,5 @@ export function useStreamChat() {
     setStreamingSessionId(null);
   }, []);
 
-  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, cancel };
+  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, usageSnapshot, cancel };
 }

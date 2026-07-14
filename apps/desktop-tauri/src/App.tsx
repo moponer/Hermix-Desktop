@@ -497,7 +497,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     max: RIGHT_MAX,
     side: "right",
   });
-  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, send: sendStream, cancel: cancelStream } = useStreamChat();
+  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, usageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat();
 
   // Per-send phase tracking. Set by the `onPhaseChange` callback in
   // `handleSendMessage` and scoped to the current `sessionId` so the
@@ -2113,6 +2113,7 @@ streamPhaseRef.current = null;
               streamingStatus={streamingStatus}
               compactionStatus={compactionStatus}
 contextUsage={contextUsage}
+              usageSnapshot={usageSnapshot}
               pendingToolsCount={pendingToolsCount}
               environmentLabel="本地Hermix"
               isSandbox={false}

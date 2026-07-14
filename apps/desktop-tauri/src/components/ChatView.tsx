@@ -1012,6 +1012,16 @@ interface ChatViewProps {
 compactionStatus?: CompactionStatus | null;
 /** Context window usage from backend's `context_usage` WS event. */
 contextUsage?: { usedTokens: number; maxTokens: number; thresholdTokens: number; percent: number } | null;
+/** 2026-07-14: per-turn token usage snapshot from the backend's
+ *  `usage_update` WS event. Drives the live cache-hit chip next
+ *  to the context-usage bar. */
+usageSnapshot?: {
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  reasoningTokens: number;
+} | null;
   /** Number of `role="tool"` messages currently in `running` state
    *  in the active session. Drives the post-stream "执行工具中…"
    *  indicator so the user doesn't see a blank gap between the
@@ -1078,6 +1088,7 @@ export function ChatView({
   streamingStatus,
   compactionStatus = null,
 contextUsage = null,
+  usageSnapshot = null,
   onEnterWelcome,
 }: ChatViewProps) {
   const [input, setInput] = useState("");
@@ -2236,6 +2247,52 @@ at ≥85% and red at ≥95% of the compression threshold. */}
       const pct = Math.min(100, contextUsage.percent);
       const color = pct >= 95 ? "bg-rose-500" : pct >= 85 ? "bg-amber-500" : "bg-emerald-500";
       const textColor = pct >= 95 ? "text-rose-600 dark:text-rose-400" : pct >= 85 ? "text-amber-600 dark:text-amber-400" : "";
+      // 2026-07-14: derive the live cache-hit rate from the most
+      // recent `usage_update` snapshot. Anthropic-style semantics —
+      // hit rate = cache_read / (cache_read + uncached prompt). The
+      // chip only renders when there's at least one snapshot, so
+      // the bar doesn't shift width mid-stream when it appears.
+      let cacheChip: React.ReactNode = null;
+      if (usageSnapshot) {
+        const cacheRead = usageSnapshot.cacheReadTokens;
+        const uncached = usageSnapshot.promptTokens;
+        const total = cacheRead + uncached;
+        const hasData = total > 0;
+        const rate = hasData ? (cacheRead / total) * 100 : 0;
+        // Tiered colors: green ≥80%, amber 50–80%, muted below.
+        // Zero hits with non-zero prompt tokens → "未命中" muted grey.
+        let rateText: string;
+        let rateTone: string;
+        if (!hasData) {
+          rateText = "—";
+          rateTone = "text-text-faint";
+        } else if (cacheRead === 0) {
+          rateText = "未命中";
+          rateTone = "text-text-faint";
+        } else if (rate >= 80) {
+          rateText = `${Math.round(rate)}% 缓存命中`;
+          rateTone = "text-emerald-600 dark:text-emerald-400";
+        } else if (rate >= 50) {
+          rateText = `${Math.round(rate)}% 缓存命中`;
+          rateTone = "text-amber-600 dark:text-amber-400";
+        } else {
+          rateText = `${Math.round(rate)}% 缓存命中`;
+          rateTone = "text-text-secondary";
+        }
+        cacheChip = (
+          <span
+            data-testid="cache-hit-chip"
+            className={`shrink-0 tabular-nums px-1.5 py-0.5 rounded-md border border-border-subtle transition-colors duration-300 ${rateTone}`}
+            title={
+              hasData
+                ? `缓存读取 ${cacheRead.toLocaleString()} tok / 输入 ${(cacheRead + uncached).toLocaleString()} tok`
+                : "暂无缓存数据"
+            }
+          >
+            {rateText}
+          </span>
+        );
+      }
       return (<>
         <div className="flex-1 h-1.5 rounded-full bg-black/5 dark:bg-white/10 overflow-hidden">
           <div className={`h-full rounded-full transition-all duration-300 ${color}`} style={{ width: `${pct}%` }} />
@@ -2243,6 +2300,7 @@ at ≥85% and red at ≥95% of the compression threshold. */}
         <span className={`shrink-0 tabular-nums ${textColor}`}>
           {fmt(contextUsage.usedTokens)} / {fmt(contextUsage.maxTokens)} tokens ({Math.round(pct)}%)
         </span>
+        {cacheChip}
       </>);
     })()}
   </div>
