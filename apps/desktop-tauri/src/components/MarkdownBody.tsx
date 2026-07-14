@@ -10,12 +10,12 @@
  *     transitions to its final rendered form.
  */
 
-import { Children, isValidElement, useState } from "react";
+import { Children, isValidElement, memo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, X } from "lucide-react";
 
 /* ── Path linkification ──────────────────────────────────────── */
 
@@ -27,7 +27,13 @@ import { Check, Copy } from "lucide-react";
 // `\p{L}` matches any Unicode letter, `\p{N}` any digit, which
 // covers Latin + Han + digits + underscores via \w equivalents,
 // minus the underscore which we add back below.
-const PATH_RE = /(?:[A-Za-z]:)?(?:[\\/][\p{L}\p{N}_\-.\s()（）【】\[\]]+){1,}\.[\p{L}\p{N}]{1,5}/giu;
+// 2026-07-14: added leading/trailing boundary lookarounds so CJK
+// prose like "我们/他们.txt" no longer false-matches. A path must now
+// sit next to start-of-string / whitespace / punctuation (incl. the
+// Chinese 。，、；：etc. covered by \p{P}) on both sides. The documented
+// "已生成 D:\data\发票汇总.xlsx" case keeps a space before the path, so
+// legit links still match.
+const PATH_RE = /(?<=^|[\s\p{P}\p{Z}])(?:[A-Za-z]:)?(?:[\\/][\p{L}\p{N}_\-.\s()（）【】\[\]]+){1,}\.[\p{L}\p{N}]{1,5}(?=$|[\s\p{P}\p{Z}])/giu;
 const ABS_PATH_RE = /^(?:[A-Za-z]:[\\/])|(?:[\/])/;
 
 function isAbsolutePath(p: string): boolean {
@@ -100,12 +106,24 @@ const LANG_LABEL: Record<string, string> = {
   md: "Markdown", txt: "Text",
 };
 
-function CodeBlock({ language, code }: { language: string; code: string }) {
+// 2026-07-14: Exported so PreviewPanel can reuse the same code
+// block rendering (language label + copy button + syntax highlighting)
+// instead of rendering plain <pre><code> elements.
+function CodeBlockImpl({ language, code }: { language: string; code: string }) {
   const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setFailed(false);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Non-secure context / denied permission / Tauri webview edge cases.
+      setFailed(true);
+      setCopied(false);
+      setTimeout(() => setFailed(false), 1500);
+    }
   };
   return (
     // 浅色独立代码块(参考 IDE 截图风格):
@@ -130,15 +148,15 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         }}
       >
         <span className="font-mono uppercase tracking-wider">
-          {LANG_LABEL[language] ?? language}
+          {LANG_LABEL[language] ?? "Code"}
         </span>
         <button
           onClick={handleCopy}
           className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-black/5"
           style={{ color: "var(--color-text-faint)" }}
         >
-          {copied ? <Check size={11} /> : <Copy size={11} />}
-          <span className="font-medium">{copied ? "已复制" : "复制"}</span>
+          {copied ? <Check size={11} /> : failed ? <X size={11} /> : <Copy size={11} />}
+          <span className="font-medium">{copied ? "已复制" : failed ? "复制失败" : "复制"}</span>
         </button>
       </div>
       <SyntaxHighlighter
@@ -172,6 +190,15 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
     </div>
   );
 }
+
+// 2026-07-14: memo so already-rendered code blocks skip re-tokenization
+// on every streaming chunk. This is the real per-chunk cost (not bundle
+// size — the highlighter is statically imported). Output depends only on
+// (language, code), so the comparator is exact.
+export const CodeBlock = memo(
+  CodeBlockImpl,
+  (a, b) => a.language === b.language && a.code === b.code,
+);
 
 /* ── Top-level body renderer ──────────────────────────────── */
 

@@ -42,7 +42,7 @@
  */
 
 import { ChevronDown, ChevronRight, Clock } from "lucide-react";
-import { memo, useDeferredValue, useMemo, useState, useEffect } from "react";
+import { memo, useDeferredValue, useMemo, useState, useEffect, useId } from "react";
 import { Check, Copy, AlertTriangle, XCircle } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { InlineThinkingDot } from "./InlineThinkingDot";
@@ -141,6 +141,7 @@ const NOOP = () => {};
  */
 function StreamingReasoningBlock({ content, isStreaming }: { content: string; isStreaming: boolean }) {
   const [expanded, setExpanded] = useState(true);
+  const bodyId = useId();
   useEffect(() => {
     if (!isStreaming && expanded) {
       const t = setTimeout(() => setExpanded(false), 100);
@@ -156,13 +157,18 @@ function StreamingReasoningBlock({ content, isStreaming }: { content: string; is
     <div className="mb-2">
       <button
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        aria-controls={expanded ? bodyId : undefined}
         className="flex items-center gap-1 text-[11px] text-text-faint hover:text-text-secondary transition-colors"
       >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <span>已深度思考 {isStreaming ? "中…" : ""}</span>
       </button>
       {expanded && (
-        <div className="reasoning-body mt-1.5 px-3 py-2 rounded-r-lg rounded-l-sm text-[12.5px] text-text-secondary leading-relaxed whitespace-pre-wrap font-sans">
+        <div
+          id={bodyId}
+          className="reasoning-body mt-1.5 px-3 py-2 rounded-r-lg rounded-l-sm text-[12.5px] text-text-secondary leading-relaxed whitespace-pre-wrap font-sans"
+        >
           {clean}
         </div>
       )}
@@ -184,9 +190,14 @@ function StreamingBubbleImpl({
   const effectivePhase = phase ?? "streaming";
   const [copied, setCopied] = useState(false);
   const copyMessage = async () => {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard may be unavailable (non-secure context / denied permission).
+      setCopied(false);
+    }
   };
 
   const isStreaming = effectivePhase === "streaming" || effectivePhase === "connecting" || effectivePhase === "slow";

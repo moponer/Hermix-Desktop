@@ -1425,7 +1425,11 @@
    hyperlinks (the "查看全部制品 →" link blue) so paths read as
    part of the prose, not as a UI widget. */
 .md-path-link {
-  display: inline;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   background: transparent;
   border: 0;
   padding: 0;
