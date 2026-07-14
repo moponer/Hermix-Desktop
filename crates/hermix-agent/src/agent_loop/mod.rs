@@ -4471,6 +4471,7 @@ let a = UsageStats {
     estimated_cost: Some(0.01),
     cache_read_tokens: 0,
     cache_creation_tokens: 0,
+    reasoning_tokens: 0,
 };
 let b = UsageStats {
     prompt_tokens: 200,
@@ -4479,6 +4480,7 @@ let b = UsageStats {
     estimated_cost: Some(0.02),
     cache_read_tokens: 0,
     cache_creation_tokens: 0,
+    reasoning_tokens: 0,
 };
         let merged = merge_usage(Some(a), &b);
         assert_eq!(merged.prompt_tokens, 300);
@@ -4496,6 +4498,7 @@ let b = UsageStats {
     estimated_cost: None,
     cache_read_tokens: 0,
     cache_creation_tokens: 0,
+    reasoning_tokens: 0,
 };
         let merged = merge_usage(None, &b);
         assert_eq!(merged.prompt_tokens, 200);
@@ -4511,6 +4514,7 @@ let u = UsageStats {
     estimated_cost: Some(0.42),
     cache_read_tokens: 0,
     cache_creation_tokens: 0,
+    reasoning_tokens: 0,
 };
         let cost = estimate_usage_cost_usd(&u, "openai:gpt-4o", &cfg).unwrap();
         assert!((cost - 0.42).abs() < 1e-9);
@@ -4526,6 +4530,7 @@ let u = UsageStats {
     estimated_cost: None,
     cache_read_tokens: 0,
     cache_creation_tokens: 0,
+    reasoning_tokens: 0,
 };
         let cost = estimate_usage_cost_usd(&u, "openai:gpt-4o-mini", &cfg).unwrap();
         assert!((cost - 0.75).abs() < 1e-9);
@@ -4714,6 +4719,7 @@ let u = UsageStats {
                 estimated_cost: Some(0.001),
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
+                reasoning_tokens: 0,
             }),
             "test-model",
             &AgentConfig::default(),

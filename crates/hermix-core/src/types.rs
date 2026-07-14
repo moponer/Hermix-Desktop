@@ -431,6 +431,13 @@ pub struct UsageStats {
     /// the provider does not support prompt caching.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub cache_creation_tokens: u64,
+    /// 2026-07-14: Tokens billed for hidden reasoning / chain-of-thought
+    /// (e.g. OpenAI o1-series `completion_tokens_details.reasoning_tokens`,
+    /// Anthropic extended-thinking). Distinct from `completion_tokens`
+    /// because reasoning is invisible to the user but counts toward
+    /// the bill. 0 when the provider does not break this out.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub reasoning_tokens: u64,
 }
 
 /// Helper for `skip_serializing_if` on `u64` zero values.

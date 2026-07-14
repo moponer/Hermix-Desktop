@@ -277,7 +277,11 @@ pub struct AnalyticsDailyEntry {
     pub day: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// 2026-07-14: now sourced from `token_usage.cache_read_tokens`
+    /// instead of being hardcoded to 0. Lets the daily curve layer
+    /// cache-hit as a stacked band on top of input/output.
     pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
     pub reasoning_tokens: u64,
     pub estimated_cost: f64,
     pub actual_cost: f64,
@@ -289,6 +293,11 @@ pub struct AnalyticsModelEntry {
     pub model: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// 2026-07-14: per-model cache + reasoning totals so each row
+    /// can show its own cache hit rate.
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub reasoning_tokens: u64,
     pub estimated_cost: f64,
     pub sessions: u32,
 }
@@ -297,7 +306,11 @@ pub struct AnalyticsModelEntry {
 pub struct AnalyticsTotals {
     pub total_input: u64,
     pub total_output: u64,
+    /// 2026-07-14: now aggregated from real `token_usage` rows.
+    /// Distinct from `total_cache_creation` so we can chart "saved"
+    /// vs "spent-on-caching" separately.
     pub total_cache_read: u64,
+    pub total_cache_creation: u64,
     pub total_reasoning: u64,
     pub total_estimated_cost: f64,
     pub total_actual_cost: f64,

@@ -551,6 +551,14 @@ impl SessionPersistence {
         )?;
         // P0-3: Orchestration Engine tables (tasks + automation_*)
         stamp_migration(&conn, 6, "orchestration_engine_tables", None)?;
+        // 2026-07-14: token_usage cache + reasoning columns.
+        // The actual ALTER TABLE lives below the CREATE TABLE block
+        // because the table must exist before we can ADD COLUMN. The
+        // stamp here records the migration as applied so the ALTER
+        // doesn't fire on subsequent opens (the ALTER itself is also
+        // idempotent via "duplicate column name" detection — defense
+        // in depth).
+        stamp_migration(&conn, 7, "token_usage_cache_reasoning_columns", None)?;
 
     /// Record a migration as applied (idempotent). When `marker_sql` is
     /// `Some`, the marker SQL is also executed so future upgrades can
@@ -788,6 +796,14 @@ impl SessionPersistence {
                 prompt_tokens INTEGER NOT NULL DEFAULT 0,
                 completion_tokens INTEGER NOT NULL DEFAULT 0,
                 total_tokens INTEGER NOT NULL DEFAULT 0,
+                -- 2026-07-14: provider cache token breakdown so /insights
+                -- can surface real cache hit rates instead of zeros.
+                -- All three default to 0 so providers that don't report
+                -- cache stats (e.g. MiniMax-M3 today) don't break the
+                -- INSERT path.
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                reasoning_tokens INTEGER NOT NULL DEFAULT 0,
                 estimated_cost REAL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
@@ -876,6 +892,29 @@ impl SessionPersistence {
             [],
         );
 
+        // 2026-07-14: token_usage cache + reasoning columns. Fresh DBs
+        // got them from the CREATE TABLE above. Pre-existing DBs that
+        // predate v7 need an idempotent ALTER per column; "duplicate
+        // column name" is the success signal for "already migrated".
+        // The stamp_migration(v7) earlier in this function prevents
+        // this loop from running again on subsequent opens, but the
+        // duplicate-name guard is the real safety net.
+        for (col, decl) in [
+            ("cache_read_tokens", "INTEGER NOT NULL DEFAULT 0"),
+            ("cache_creation_tokens", "INTEGER NOT NULL DEFAULT 0"),
+            ("reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ] {
+            let sql = format!("ALTER TABLE token_usage ADD COLUMN {col} {decl}");
+            if let Err(e) = conn.execute(&sql, []) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(AgentError::Io(format!(
+                        "token_usage {col} migration: {e}"
+                    )));
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -901,14 +940,18 @@ impl SessionPersistence {
         conn.execute(
             "INSERT INTO token_usage
                 (session_id, model, prompt_tokens, completion_tokens,
-                 total_tokens, estimated_cost, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 total_tokens, cache_read_tokens, cache_creation_tokens,
+                 reasoning_tokens, estimated_cost, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 session_id,
                 model,
                 usage.prompt_tokens as i64,
                 usage.completion_tokens as i64,
                 usage.total_tokens as i64,
+                usage.cache_read_tokens as i64,
+                usage.cache_creation_tokens as i64,
+                usage.reasoning_tokens as i64,
                 usage.estimated_cost,
                 now,
             ],
@@ -2524,6 +2567,9 @@ impl SessionPersistence {
                     COALESCE(SUM(COALESCE(s.message_count, 0)), 0) AS message_sum,
                     COALESCE(SUM(COALESCE(t.prompt_tokens, 0)), 0) AS input_sum,
                     COALESCE(SUM(COALESCE(t.completion_tokens, 0)), 0) AS output_sum,
+                    COALESCE(SUM(COALESCE(t.cache_read_tokens, 0)), 0) AS cache_read_sum,
+                    COALESCE(SUM(COALESCE(t.cache_creation_tokens, 0)), 0) AS cache_creation_sum,
+                    COALESCE(SUM(COALESCE(t.reasoning_tokens, 0)), 0) AS reasoning_sum,
                     COALESCE(SUM(COALESCE(t.estimated_cost, 0)), 0.0) AS cost_sum
                  FROM sessions s
                  LEFT JOIN token_usage t
@@ -2541,7 +2587,10 @@ impl SessionPersistence {
                     message_count: row.get(2)?,
                     input_tokens: row.get::<_, i64>(3)?.max(0) as u64,
                     output_tokens: row.get::<_, i64>(4)?.max(0) as u64,
-                    estimated_cost: row.get::<_, f64>(5).unwrap_or(0.0),
+                    cache_read_tokens: row.get::<_, i64>(5)?.max(0) as u64,
+                    cache_creation_tokens: row.get::<_, i64>(6)?.max(0) as u64,
+                    reasoning_tokens: row.get::<_, i64>(7)?.max(0) as u64,
+                    estimated_cost: row.get::<_, f64>(8).unwrap_or(0.0),
                 })
             })
             .map_err(|e| AgentError::Io(format!("Failed to query by_model: {e}")))?
@@ -2572,16 +2621,19 @@ impl SessionPersistence {
 
         // 5) P1-3: token totals. SUM with COALESCE so a NULL `estimated_cost`
         //    doesn't propagate and break the f64 aggregator.
-        let (total_input, total_output, total_cost): (i64, i64, f64) = conn
+        let (total_input, total_output, total_cache_read, total_cache_creation, total_reasoning, total_cost): (i64, i64, i64, i64, i64, f64) = conn
             .query_row(
                 "SELECT
                     COALESCE(SUM(prompt_tokens), 0),
                     COALESCE(SUM(completion_tokens), 0),
+                    COALESCE(SUM(cache_read_tokens), 0),
+                    COALESCE(SUM(cache_creation_tokens), 0),
+                    COALESCE(SUM(reasoning_tokens), 0),
                     COALESCE(SUM(COALESCE(estimated_cost, 0)), 0.0)
                  FROM token_usage
                  WHERE created_at >= ?1",
                 rusqlite::params![cutoff_str],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .map_err(|e| AgentError::Io(format!("Failed to sum token_usage: {e}")))?;
 
@@ -2601,6 +2653,9 @@ impl SessionPersistence {
                 day: day_start,
                 input_tokens: 0,
                 output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                reasoning_tokens: 0,
                 estimated_cost: 0.0,
                 sessions: 0,
                 messages: 0,
@@ -2617,6 +2672,9 @@ impl SessionPersistence {
                     substr(created_at, 1, 10) AS day,
                     COALESCE(SUM(prompt_tokens), 0),
                     COALESCE(SUM(completion_tokens), 0),
+                    COALESCE(SUM(cache_read_tokens), 0),
+                    COALESCE(SUM(cache_creation_tokens), 0),
+                    COALESCE(SUM(reasoning_tokens), 0),
                     COALESCE(SUM(COALESCE(estimated_cost, 0)), 0.0)
                  FROM token_usage
                  WHERE created_at >= ?1
@@ -2624,17 +2682,24 @@ impl SessionPersistence {
                  ORDER BY day ASC",
             )
             .map_err(|e| AgentError::Io(format!("Failed to prepare daily: {e}")))?;
-        let daily_token_rows: Vec<(String, i64, i64, f64)> = stmt
+        let daily_token_rows: Vec<(String, i64, i64, i64, i64, i64, f64)> = stmt
             .query_map(rusqlite::params![cutoff_str], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((
+                    row.get(0)?, row.get(1)?, row.get(2)?,
+                    row.get(3)?, row.get(4)?, row.get(5)?,
+                    row.get(6)?,
+                ))
             })
             .map_err(|e| AgentError::Io(format!("Failed to query daily: {e}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AgentError::Io(format!("Failed to read daily: {e}")))?;
-        for (day, ip, op, cost) in daily_token_rows {
+        for (day, ip, op, cr, cc, rs, cost) in daily_token_rows {
             if let Some(slot) = daily.iter_mut().find(|d| d.day == day) {
                 slot.input_tokens = ip.max(0) as u64;
                 slot.output_tokens = op.max(0) as u64;
+                slot.cache_read_tokens = cr.max(0) as u64;
+                slot.cache_creation_tokens = cc.max(0) as u64;
+                slot.reasoning_tokens = rs.max(0) as u64;
                 slot.estimated_cost = cost;
             }
         }
@@ -2691,8 +2756,9 @@ impl SessionPersistence {
             recent_sessions,
             total_input_tokens: total_input.max(0) as u64,
             total_output_tokens: total_output.max(0) as u64,
-            total_cache_read_tokens: 0, // not tracked yet — surface as 0
-            total_reasoning_tokens: 0,
+            total_cache_read_tokens: total_cache_read.max(0) as u64,
+            total_cache_creation_tokens: total_cache_creation.max(0) as u64,
+            total_reasoning_tokens: total_reasoning.max(0) as u64,
             total_estimated_cost: total_cost,
             daily,
             by_tool,
@@ -2815,7 +2881,18 @@ pub struct UsageAggregate {
     /// P1-3: token usage summed from `token_usage` within the window.
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
+    /// 2026-07-14: now actually aggregated from `token_usage.cache_read_tokens`
+    /// — the dashboard no longer hardcodes this to 0. Providers that
+    /// don't report cache stats (MiniMax today) will still show 0.
     pub total_cache_read_tokens: u64,
+    /// 2026-07-14: Anthropic-style `cache_creation_input_tokens`. Distinct
+    /// from `cache_read_tokens` so the dashboard can chart "how much
+    /// new prefix are we paying to cache" separately from "how much
+    /// we're saving via cache hits".
+    pub total_cache_creation_tokens: u64,
+    /// 2026-07-14: extended-thinking / o1-style reasoning token totals.
+    /// Surfaced in `/insights` so users can see how much of their
+    /// spend is invisible to the visible-text token count.
     pub total_reasoning_tokens: u64,
     pub total_estimated_cost: f64,
     /// P1-3: per-day breakdown for the time-curve SVG on `/insights`.
@@ -2835,6 +2912,12 @@ pub struct ModelUsageRow {
     /// render the cost-by-model bar list with real numbers.
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// 2026-07-14: cache + reasoning totals so each model's row can
+    /// show its own cache hit rate and reasoning footprint, not
+    /// just the global totals.
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub reasoning_tokens: u64,
     pub estimated_cost: f64,
 }
 
@@ -2854,6 +2937,12 @@ pub struct DailyUsageRow {
     pub day: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// 2026-07-14: cache + reasoning per-day. Lets the SVG daily curve
+    /// layer cache-hit as a stacked band on top of input/output, so
+    /// a "cache saved 60% of input tokens" day is visually obvious.
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub reasoning_tokens: u64,
     pub estimated_cost: f64,
     pub sessions: u32,
     pub messages: u32,
@@ -3096,6 +3185,29 @@ mod tests {
             estimated_cost: cost,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
+            reasoning_tokens: 0,
+        }
+    }
+
+    /// Variant of [`usage`] with explicit cache + reasoning fields so
+    /// 2026-07-14 cache aggregation tests can assert against non-zero
+    /// numbers instead of relying on default zero.
+    fn usage_with_cache(
+        prompt: u64,
+        completion: u64,
+        cost: Option<f64>,
+        cache_read: u64,
+        cache_creation: u64,
+        reasoning: u64,
+    ) -> hermix_core::UsageStats {
+        hermix_core::UsageStats {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            total_tokens: prompt + completion,
+            estimated_cost: cost,
+            cache_read_tokens: cache_read,
+            cache_creation_tokens: cache_creation,
+            reasoning_tokens: reasoning,
         }
     }
 
@@ -3333,6 +3445,97 @@ mod tests {
         assert!((gpt.estimated_cost - 0.01).abs() < 1e-9);
         assert_eq!(claude.input_tokens, 500);
         assert_eq!(claude.output_tokens, 100);
+    }
+
+    /// 2026-07-14: P1-1 cache aggregation. Verifies that real cache
+    /// read / cache creation / reasoning token counts from
+    /// `persist_token_usage` flow through to (a) `UsageAggregate`
+    /// totals, (b) `by_model` per-row, and (c) the `daily` per-day
+    /// row. Before this fix the aggregator hardcoded all three to
+    /// 0 (analytics.rs) and the dashboard always showed "0 cache
+    /// hit" even when the LLM had cache hits.
+    #[test]
+    fn p1_1_aggregate_usage_includes_cache_and_reasoning_tokens() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let messages = vec![Message::user("hi"), Message::assistant("hello!")];
+        sp.persist_session("cache-sess", &messages, Some("claude-opus-4"), None, None, None, None, None, None)
+            .unwrap();
+
+        // Simulate two LLM turns on the same session: 800 prompt tokens,
+        // 600 of which came from the provider's prompt cache, plus
+        // 200 reasoning tokens billed but invisible to the user.
+        sp.persist_token_usage(
+            "cache-sess",
+            "claude-opus-4",
+            &usage_with_cache(800, 100, Some(0.012), 600, 100, 200),
+        )
+        .unwrap();
+        sp.persist_token_usage(
+            "cache-sess",
+            "claude-opus-4",
+            &usage_with_cache(900, 120, Some(0.014), 700, 80, 150),
+        )
+        .unwrap();
+
+        let agg = sp.aggregate_usage(30).unwrap();
+
+        // (a) Totals — should NOT be hardcoded 0.
+        assert_eq!(agg.total_cache_read_tokens, 1300, "totals cache_read");
+        assert_eq!(agg.total_cache_creation_tokens, 180, "totals cache_creation");
+        assert_eq!(agg.total_reasoning_tokens, 350, "totals reasoning");
+
+        // (b) by_model — claude-opus-4 row should reflect the sums.
+        let claude = agg
+            .by_model
+            .iter()
+            .find(|m| m.model == "claude-opus-4")
+            .expect("claude-opus-4 model row");
+        assert_eq!(claude.cache_read_tokens, 1300);
+        assert_eq!(claude.cache_creation_tokens, 180);
+        assert_eq!(claude.reasoning_tokens, 350);
+
+        // (c) daily — today is the only day with data.
+        let today = chrono::Utc::now().date_naive().format("%Y-%m-%d").to_string();
+        let today_row = agg
+            .daily
+            .iter()
+            .find(|d| d.day == today)
+            .expect("today daily row");
+        assert_eq!(today_row.cache_read_tokens, 1300, "daily cache_read");
+        assert_eq!(today_row.cache_creation_tokens, 180, "daily cache_creation");
+        assert_eq!(today_row.reasoning_tokens, 350, "daily reasoning");
+    }
+
+    /// 2026-07-14: cache hit rate sanity check. Hits are aggregated
+    /// separately from `prompt_tokens` (which is "uncached prompt
+    /// tokens billed"), so a UI dividing cache_read by (cache_read +
+    /// prompt_tokens) gets the actual cache coverage. This test
+    /// pins that denominator so future schema changes don't silently
+    /// break the "saved X% by cache" calculation.
+    #[test]
+    fn p1_1_cache_hit_rate_denominator_matches_provider_semantics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        sp.persist_session("hit-rate", &[Message::user("x"), Message::assistant("y")], Some("claude-opus-4"), None, None, None, None, None, None)
+            .unwrap();
+        // 1000 uncached prompt + 500 cache hits → 33% cache coverage
+        // by Anthropic's definition.
+        sp.persist_token_usage(
+            "hit-rate",
+            "claude-opus-4",
+            &usage_with_cache(1000, 50, Some(0.01), 500, 0, 0),
+        )
+        .unwrap();
+
+        let agg = sp.aggregate_usage(30).unwrap();
+        let cache = agg.total_cache_read_tokens as f64;
+        let uncached = agg.total_input_tokens as f64;
+        let rate = cache / (cache + uncached);
+        assert!(
+            (rate - 500.0 / 1500.0).abs() < 1e-9,
+            "cache rate must be 500/(500+1000) ≈ 0.333, got {rate}"
+        );
     }
 
     #[test]

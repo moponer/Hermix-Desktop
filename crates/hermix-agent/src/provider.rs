@@ -1097,6 +1097,7 @@ impl AnthropicProvider {
                 estimated_cost: None,
                 cache_read_tokens: u.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
                 cache_creation_tokens: u.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                reasoning_tokens: 0,
             }
         });
 
@@ -1397,6 +1398,7 @@ impl LlmProvider for AnthropicProvider {
                                     estimated_cost: None,
                                     cache_read_tokens: u.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
                                     cache_creation_tokens: u.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                                    reasoning_tokens: 0,
                                 }
                             });
                             yield Ok(StreamChunk {
@@ -1416,6 +1418,7 @@ impl LlmProvider for AnthropicProvider {
                                     estimated_cost: None,
                                     cache_read_tokens: u.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
                                     cache_creation_tokens: u.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                                    reasoning_tokens: 0,
                                 }
                             });
                             if let Some(u) = usage {
@@ -1753,6 +1756,7 @@ fn parse_sse_chunk(json: &Value) -> Option<StreamChunk> {
         estimated_cost: None,
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
+        reasoning_tokens: 0,
     });
 
     Some(StreamChunk {
@@ -1896,6 +1900,7 @@ fn parse_openai_response(json: &Value) -> Result<LlmResponse, AgentError> {
             estimated_cost: None,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
+            reasoning_tokens: 0,
         }
     });
 
