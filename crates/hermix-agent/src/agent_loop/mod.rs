@@ -1169,9 +1169,11 @@ impl AgentLoop {
     /// event this turn (so the user sees "the agent thought of N
     /// related facts"), and updates the next-turn drift baseline.
     ///
-    /// Does NOT inject anything into the LLM prompt here — that's
-    /// `prompt_assembly::build_system_prompt`'s job. We only emit
-    /// the visibility event and refresh the drift tracker.
+    /// The caller (`run_loop::do_pre_turn_setup`) injects the
+    /// rendered `RecallPlan` into message history as a system
+    /// message via `ctx.add_message(Message::system(...))`, so the
+    /// LLM can actually use the recalled facts. We also emit the
+    /// visibility event so the user sees "thought of N items".
     ///
     /// Returns `Some(RecallPlan)` if a recall was emitted; the
     /// caller stores the keys in `state.last_recall_keys` for the

@@ -162,6 +162,17 @@ impl AgentLoop {
             // Track keys for next-turn drift detection.
             state.last_recall_keys =
                 plan.items.iter().map(|i| i.canonical_key.clone()).collect();
+            // Inject recall block into ctx so the LLM can actually
+            // use it. Previously this was emit-only (user could see
+            // "thought of N items" but the agent couldn't). Now the
+            // rendered block lands in message history as a system
+            // message, same pattern as `memory_prefetch` at session
+            // start. Compression will fold old recall blocks when
+            // the context grows past the threshold.
+            let recall_block = crate::recall_scheduler::render_prompt_block(&plan);
+            if !recall_block.is_empty() {
+                ctx.add_message(Message::system(&recall_block));
+            }
         }
 
         // --- Pre-LLM hook + route resolution ---

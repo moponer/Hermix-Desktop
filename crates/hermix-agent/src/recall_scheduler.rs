@@ -30,7 +30,10 @@
 //!
 //! Both flags are honored at the call site (AgentLoop) — this
 //! module is pure & side-effect-free except for emitting one
-//! `StreamEvent::MemoryRecall` event and the returned context hint.
+//! `StreamEvent::MemoryRecall` event and returning the context
+//! block. The caller renders the plan via `render_prompt_block`
+//! and injects it into message history as a system message so the
+//! LLM can use the recalled facts.
 
 use hermix_focus::EmbeddedMemoryBackend;
 
