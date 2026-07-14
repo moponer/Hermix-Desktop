@@ -1845,6 +1845,13 @@ Write only the summary body. Do not include any preamble or prefix."
         messages: Vec<Message>,
         current_tokens: Option<u64>,
     ) -> Vec<Message> {
+        // Phase -1: Flush sentinel strip (P3-T4). If a caller left
+        // flush-memories sentinels in `messages`, drop them now — must
+        // happen *before* `n_messages` is captured so all downstream
+        // bookkeeping sees the post-strip length. Idempotent: a clean
+        // vector stays clean.
+        let messages = crate::flush_memories::strip_flush_sentinels(messages);
+
         let n_messages = messages.len();
         let min_for_compress = self.config.protect_first_n + 3 + 1;
         if n_messages <= min_for_compress {
@@ -3517,5 +3524,43 @@ mod tests {
         assert_eq!(c.breaker_threshold(), DEFAULT_BREAKER_THRESHOLD);
         // The cooldown is private; verify the threshold stayed at default.
         assert_eq!(c.breaker_threshold(), 3);
+    }
+
+    // ---------- P3-T4 flush-memories integration ----------
+    //
+    // Verifies that a `flush_memories` sentinel left in the messages
+    // vec is stripped by `compress()` before it can leak into the
+    // compressed output or downstream persistence.
+
+    #[tokio::test]
+    async fn compress_strips_flush_sentinel_from_input() {
+        use crate::flush_memories::{
+            build_flush_sentinel, is_flush_sentinel, strip_flush_sentinels,
+        };
+
+        let cfg = quiet_config();
+        let mut compressor =
+            ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("ok")));
+        // Build enough messages to clear the `min_for_compress` guard,
+        // but stay under the snip threshold (50 turns) so we exercise
+        // the strip path without poking the pre-existing snip bug.
+        let mut messages = vec![build_flush_sentinel(), msg(MessageRole::System, "system prompt")];
+        for i in 0..12 {
+            messages.push(msg(MessageRole::User, &format!("user turn {i}")));
+            messages.push(msg(MessageRole::Assistant, &format!("assistant turn {i}")));
+        }
+
+        let out = compressor
+            .compress(messages.clone(), Some(80_000))
+            .await;
+
+        // The sentinel MUST NOT survive into the compressed output.
+        assert!(
+            !out.iter().any(is_flush_sentinel),
+            "flush sentinel leaked into compressed output"
+        );
+        // strip_flush_sentinels itself behaves the same way — sanity.
+        let cleaned = strip_flush_sentinels(messages);
+        assert!(cleaned.iter().any(|m| m.role == MessageRole::Assistant));
     }
 }
