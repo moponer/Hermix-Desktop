@@ -880,6 +880,7 @@ impl AgentLoop {
             recent_messages: recent,
             active_toolsets: self.config.active_toolsets.clone(),
             max_tools: candidates.len().min(self.config.max_routed_tools),
+            priority_tools: Vec::new(),
         };
         let routed: Vec<ToolSchema> = router
             .route(&ctx, candidates)
@@ -3231,6 +3232,111 @@ mod tests {
     }
 
     #[test]
+    pub(crate) fn test_explore_efficiency_and_parallel_guidance_in_system_prompt() {
+        // EXPLORE_EFFICIENCY_GUIDANCE + PARALLEL_EXECUTION_GUIDANCE must be
+        // present in the prompt so the agent stops the "recon-then-act"
+        // anti-pattern (list dirs / fetch metadata / write temp scripts before
+        // touching the target) and issues independent calls in parallel.
+        use futures::stream::BoxStream;
+
+        struct DummyProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for DummyProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<hermix_core::LlmResponse, AgentError> {
+                Ok(hermix_core::LlmResponse {
+                    message: Message::assistant("dummy"),
+                    usage: None,
+                    model: "dummy".into(),
+                    finish_reason: Some("stop".into()),
+                })
+            }
+
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+                futures::stream::empty().boxed()
+            }
+        }
+
+        let config = AgentConfig::default();
+        let agent = AgentLoop::new(
+            config,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(DummyProvider),
+        );
+
+        // 1. Exploration-efficiency guidance present on the FIRST turn (empty
+        //    user message => FirstTurn route), regardless of model/toolset.
+        //    This is what fixes the "list dir then read" recon anti-pattern.
+        let first_turn = crate::prompt_assembly::build_system_prompt(
+            &agent.config,
+            &agent.prompt_cache,
+            agent.memory_router.as_deref(),
+            "",
+            &[],
+            "unknown-model-xyz",
+            0,
+        );
+        assert!(
+            first_turn.contains("Exploration efficiency"),
+            "EXPLORE_EFFICIENCY_GUIDANCE block must be injected on FirstTurn"
+        );
+        assert!(
+            first_turn.contains("list the directory to 'recon'")
+                || first_turn.contains("Go straight to the known entry file"),
+            "explore anti-pattern (don't recon by listing dirs) missing"
+        );
+        assert!(
+            first_turn.contains("Never list the same directory twice"),
+            "explore de-dup rule (no double dir listing) missing"
+        );
+        assert!(
+            first_turn.contains("Do NOT write a temporary script file"),
+            "explore rule (no temp scripts) missing"
+        );
+
+        // 2. Parallel-execution guidance must be model-family-agnostic (Always
+        //    route) — previously it was only inside GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
+        //    so non-Google models serialized every call. Assert it shows up for a
+        //    model NOT in the tool-enforcement whitelist.
+        assert!(
+            !crate::prompt_assembly::should_inject_tool_enforcement("claude-sonnet-4"),
+            "precondition: claude must be outside the whitelist for this test to be meaningful"
+        );
+        let non_google = crate::prompt_assembly::build_system_prompt(
+            &agent.config,
+            &agent.prompt_cache,
+            agent.memory_router.as_deref(),
+            "analyze the rendering code",
+            &[],
+            "claude-sonnet-4",
+            0,
+        );
+        assert!(
+            non_google.contains("Parallel tool execution"),
+            "PARALLEL_EXECUTION_GUIDANCE must be unconditional (non-Google model)"
+        );
+        assert!(
+            non_google.contains("in the same turn in parallel"),
+            "parallel instruction (issue calls in parallel) missing"
+        );
+    }
+
+    #[test]
     pub(crate) fn test_smart_model_routing_cheap_route_for_simple_turn() {
         use futures::stream::BoxStream;
 
@@ -4358,18 +4464,22 @@ mod tests {
 
     #[test]
     pub(crate) fn test_merge_usage() {
-        let a = UsageStats {
-            prompt_tokens: 100,
-            completion_tokens: 50,
-            total_tokens: 150,
-            estimated_cost: Some(0.01),
-        };
-        let b = UsageStats {
-            prompt_tokens: 200,
-            completion_tokens: 100,
-            total_tokens: 300,
-            estimated_cost: Some(0.02),
-        };
+let a = UsageStats {
+    prompt_tokens: 100,
+    completion_tokens: 50,
+    total_tokens: 150,
+    estimated_cost: Some(0.01),
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+};
+let b = UsageStats {
+    prompt_tokens: 200,
+    completion_tokens: 100,
+    total_tokens: 300,
+    estimated_cost: Some(0.02),
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+};
         let merged = merge_usage(Some(a), &b);
         assert_eq!(merged.prompt_tokens, 300);
         assert_eq!(merged.completion_tokens, 150);
@@ -4379,12 +4489,14 @@ mod tests {
 
     #[test]
     pub(crate) fn test_merge_usage_none() {
-        let b = UsageStats {
-            prompt_tokens: 200,
-            completion_tokens: 100,
-            total_tokens: 300,
-            estimated_cost: None,
-        };
+let b = UsageStats {
+    prompt_tokens: 200,
+    completion_tokens: 100,
+    total_tokens: 300,
+    estimated_cost: None,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+};
         let merged = merge_usage(None, &b);
         assert_eq!(merged.prompt_tokens, 200);
     }
@@ -4392,12 +4504,14 @@ mod tests {
     #[test]
     pub(crate) fn test_estimate_usage_cost_prefers_reported_estimate() {
         let cfg = AgentConfig::default();
-        let u = UsageStats {
-            prompt_tokens: 1000,
-            completion_tokens: 1000,
-            total_tokens: 2000,
-            estimated_cost: Some(0.42),
-        };
+let u = UsageStats {
+    prompt_tokens: 1000,
+    completion_tokens: 1000,
+    total_tokens: 2000,
+    estimated_cost: Some(0.42),
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+};
         let cost = estimate_usage_cost_usd(&u, "openai:gpt-4o", &cfg).unwrap();
         assert!((cost - 0.42).abs() < 1e-9);
     }
@@ -4405,12 +4519,14 @@ mod tests {
     #[test]
     pub(crate) fn test_estimate_usage_cost_uses_model_fallback_table() {
         let cfg = AgentConfig::default();
-        let u = UsageStats {
-            prompt_tokens: 1_000_000,
-            completion_tokens: 1_000_000,
-            total_tokens: 2_000_000,
-            estimated_cost: None,
-        };
+let u = UsageStats {
+    prompt_tokens: 1_000_000,
+    completion_tokens: 1_000_000,
+    total_tokens: 2_000_000,
+    estimated_cost: None,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+};
         let cost = estimate_usage_cost_usd(&u, "openai:gpt-4o-mini", &cfg).unwrap();
         assert!((cost - 0.75).abs() < 1e-9);
     }
@@ -4596,6 +4712,8 @@ mod tests {
                 completion_tokens: 20,
                 total_tokens: 30,
                 estimated_cost: Some(0.001),
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
             }),
             "test-model",
             &AgentConfig::default(),

@@ -116,6 +116,24 @@ Response: [tool call to read_pdf]
 This is a compulsory discipline for all tool-using agents. It reduces wasted turns, \
 helps you converge faster, and lets the user see your reasoning before execution.";
 
+const EXPLORE_EFFICIENCY_GUIDANCE: &str = "\
+# Exploration efficiency (mandatory when analyzing/reading code or files)
+
+When the task is to analyze, review, or understand existing code or files:
+- **Go straight to the known entry file with `read_file`** — do NOT first `list_files`/`ls` the directory to 'recon'. A directory listing reveals nothing about code logic.
+- **Never list the same directory twice**, and never re-read a file you already read. (The model often mistakes a second listing for 'new information' — it is not.)
+- **Issue independent reads/searches in the SAME turn in parallel** (e.g. read `MarkdownBody.tsx` and `StreamingBubble.tsx` together), not queued one per turn.
+- **Do NOT write a temporary script file** (`.ps1`/`.sh`/`.py`) into the project just to run one shell command — pass the command inline instead.
+- **Every tool call must serve the deliverable.** Forbidden busywork: listing directories to 'see structure' when the target file is already known, fetching file metadata (size/timestamp) unrelated to the task, or any action that does not feed the final answer.";
+
+const EXPLORE_EFFICIENCY_SHORT: &str = "\
+## Exploration efficiency
+Read known entry files directly — don't list dirs to recon, don't list the same dir twice, don't write temp scripts. Issue independent reads in parallel. Every call must serve the deliverable; skip unrelated metadata/listing busywork.";
+
+const PARALLEL_EXECUTION_GUIDANCE: &str = "\
+# Parallel tool execution
+When you have two or more tool calls whose arguments do NOT depend on each other's results, issue them in the same turn in parallel rather than queuing them one per turn. Only serialize when a later call genuinely needs an earlier result (e.g. 'use the path the previous call returned').";
+
 const TOOL_USE_ENFORCEMENT_GUIDANCE: &str = "# Tool-use enforcement\nYou MUST use your tools to take action. Do not describe what you would do without actually doing it. When you say you will perform an action, make the corresponding tool call in the same response. Every response should either (a) contain tool calls that make progress, or (b) deliver a final result.";
 
 /// Tool-selection discipline for browser automation. Without this block, the
@@ -347,6 +365,7 @@ const TASK_FOCUS_SHORT: &str = "\
 ## Task focus
 Before each tool call, check: (1) original goal, (2) current progress, (3) next step. \
 Do NOT repeat completed work — if a tool was already called and returned a result, do not call it again with the same arguments. \
+Do NOT list the same directory twice — a second listing is not new information. \
 If stuck, explain what you've tried.";
 
 const TODO_GUIDANCE: &str = "\
@@ -525,6 +544,7 @@ blank-line-separated paragraphs. A second '（等待中）' after a first \
 
 use crate::context::{DirRoute, RouteContext, SystemDir};
 use crate::prompt_assembly::should_inject_tool_enforcement;
+use hermix_intelligence::{preset_for, DomainMode};
 
 /// M1: collect the typed, route-gated directions that will be
 /// evaluated against the active route context and rendered into the
@@ -592,7 +612,25 @@ pub fn collect_directions(
         dirs.push(SystemDir::new(
             "plan.short",
             DirRoute::Subsequent,
-            "## Plan discipline\nBefore calling tools, briefly state which tool(s) you will use and what you expect to get back. Max 3 lines. One plan per user request.",
+            "## Plan discipline\nBefore calling tools, briefly state which tool(s) you will use and what you expect to get back. Max 3 lines. One plan per user request. Every call must serve the stated deliverable; skip unrelated busywork (e.g. listing dirs to 'recon', fetching file size/timestamp that don't affect the analysis).",
+        ));
+    }
+    // Exploration-efficiency discipline — fixes the "recon-then-act" anti-pattern
+    // (listing dirs, fetching file metadata, writing temp scripts before touching
+    // the target). Pushed on FirstTurn so the very first exploration turn is
+    // disciplined, and on Subsequent so multi-turn analysis keeps the rule.
+    // Directly addresses duplicated-directory-listing and serial-only execution.
+    if user_message.is_empty() {
+        dirs.push(SystemDir::new(
+            "explore.full",
+            DirRoute::FirstTurn,
+            EXPLORE_EFFICIENCY_GUIDANCE,
+        ));
+    } else {
+        dirs.push(SystemDir::new(
+            "explore.short",
+            DirRoute::Subsequent,
+            EXPLORE_EFFICIENCY_SHORT,
         ));
     }
     // Autonomous execution discipline (gated on opt-in).
@@ -745,6 +783,15 @@ pub fn collect_directions(
         DirRoute::Always,
         URL_SAFETY_GUIDANCE,
     ));
+    // Parallel execution discipline — model-family-agnostic. Previously the only
+    // "parallel when safe" nudge lived inside GOOGLE_MODEL_OPERATIONAL_GUIDANCE
+    // (gated on GoogleFamily + tool-enforcement whitelist), so non-Google models
+    // serialized every call. Now unconditional.
+    dirs.push(SystemDir::new(
+        "parallel.always",
+        DirRoute::Always,
+        PARALLEL_EXECUTION_GUIDANCE,
+    ));
     // Context compression awareness: explain auto-compaction to the model.
     if user_message.is_empty() {
         dirs.push(SystemDir::new(
@@ -795,6 +842,23 @@ pub fn collect_directions(
                 DirRoute::HasProjectConventions,
                 conv,
             ));
+        }
+    }
+    // L1 Domain Mode directive — inject the work-domain-specific
+    // guidance block when domain detection has run. The directive
+    // text comes from the DomainPreset's `system_directive` field.
+    // Chat mode has an empty directive, so we skip it to avoid
+    // injecting an empty block.
+    if let Some(dm) = route_ctx.domain_mode {
+        if dm != DomainMode::Chat {
+            let preset = preset_for(dm);
+            if !preset.system_directive.is_empty() {
+                dirs.push(SystemDir::new(
+                    "domain.directive",
+                    DirRoute::DomainMode(dm),
+                    preset.system_directive,
+                ));
+            }
         }
     }
     dirs
@@ -886,6 +950,7 @@ mod tests {
             model_name: "gpt-4o",
             autonomous_mode: false,
             tool_call_count: 0,
+            domain_mode: None,
         };
         let dirs = collect_directions(&ctx, Some("禁用蓝紫配色"));
         assert!(dirs.iter().any(|d| {
@@ -902,8 +967,75 @@ mod tests {
             model_name: "gpt-4o",
             autonomous_mode: false,
             tool_call_count: 0,
+            domain_mode: None,
         };
         let dirs = collect_directions(&ctx, None);
         assert!(!dirs.iter().any(|d| d.tag == "project.conventions"));
+    }
+
+    #[test]
+    fn collect_directions_injects_domain_directive_for_code() {
+        let tn = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message: "帮我修复 main.rs",
+            tool_names: &tn,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+            tool_call_count: 0,
+            domain_mode: Some(DomainMode::Code),
+        };
+        let dirs = collect_directions(&ctx, None);
+        assert!(dirs.iter().any(|d| {
+            d.tag == "domain.directive" && d.body.contains("代码开发模式")
+        }), "should inject Code domain directive");
+    }
+
+    #[test]
+    fn collect_directions_injects_domain_directive_for_research() {
+        let tn = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message: "搜索一下",
+            tool_names: &tn,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+            tool_call_count: 0,
+            domain_mode: Some(DomainMode::Research),
+        };
+        let dirs = collect_directions(&ctx, None);
+        assert!(dirs.iter().any(|d| {
+            d.tag == "domain.directive" && d.body.contains("信息研究模式")
+        }), "should inject Research domain directive");
+    }
+
+    #[test]
+    fn collect_directions_skips_domain_directive_for_chat() {
+        let tn = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message: "你好",
+            tool_names: &tn,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+            tool_call_count: 0,
+            domain_mode: Some(DomainMode::Chat),
+        };
+        let dirs = collect_directions(&ctx, None);
+        assert!(!dirs.iter().any(|d| d.tag == "domain.directive"),
+            "Chat mode has empty directive, should not inject");
+    }
+
+    #[test]
+    fn collect_directions_skips_domain_directive_when_none() {
+        let tn = std::collections::HashSet::new();
+        let ctx = RouteContext {
+            user_message: "hello",
+            tool_names: &tn,
+            model_name: "gpt-4o",
+            autonomous_mode: false,
+            tool_call_count: 0,
+            domain_mode: None,
+        };
+        let dirs = collect_directions(&ctx, None);
+        assert!(!dirs.iter().any(|d| d.tag == "domain.directive"),
+            "No domain detection → no domain directive");
     }
 }

@@ -277,7 +277,10 @@ function StreamingBubbleImpl({
             {status?.label && (
               <span className={`h-tiny ${status?.className ?? ""}`}>{status?.label}</span>
             )}
-            {statusText && (
+            {/* 流式态下中文 phase label（如"正在思考…"）已表达"等待中"，
+                后端瞬态英文 statusText（"Still waiting for the model…"）属冗余
+                且破坏中文 UI 一致性，故流式态抑制、仅非流式态展示。 */}
+            {statusText && !STREAMING_PHASES.has(effectivePhase) && (
               <span className="h-tiny text-text-faint italic max-w-[240px] truncate">
                 {statusText}
               </span>
