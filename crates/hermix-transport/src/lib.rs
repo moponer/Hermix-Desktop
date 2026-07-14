@@ -371,6 +371,19 @@ pub enum StreamEvent {
         /// compression types.
         snapshot: serde_json::Value,
     },
+    /// 2026-07-14: Per-turn token usage snapshot for the live
+    /// "cache hit" chip in the chat header. Emitted after every
+    /// successful LLM response so the front-end can update its
+    /// session-level rolling cache hit rate in real time. Distinct
+    /// from `ContextUsage` (which tracks window pressure) — this
+    /// tracks what the provider actually billed.
+    UsageUpdate {
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cache_read_tokens: u64,
+        cache_creation_tokens: u64,
+        reasoning_tokens: u64,
+    },
     /// Server → client: "the agent is about to run a risk-bearing tool;
     /// tell me whether to proceed." The client echoes back via
     /// [`WsClientMessage::ApprovalResponse`] with the same `request_id`.

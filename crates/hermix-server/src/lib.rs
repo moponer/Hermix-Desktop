@@ -4415,6 +4415,32 @@ async fn handle_ws_stream_send(
                                 event: StreamEvent::CompactionStatus { snapshot },
                             }
                         }
+                        "usage_update" => {
+                            // 2026-07-14: Per-turn usage snapshot for the
+                            // front-end cache-hit chip. Mirrors the
+                            // `context_usage` branch shape but carries the
+                            // token breakdown instead of window pressure.
+                            // `cache_*` fields default to 0 so providers
+                            // that don't report cache stats (e.g. MiniMax
+                            // today) still round-trip cleanly.
+                            let prompt = extra.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let completion = extra.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let cache_read = extra.get("cache_read_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let cache_creation = extra.get("cache_creation_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let reasoning = extra.get("reasoning_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                            WsEnvelope {
+                                version: 1,
+                                request_id: request_id.clone(),
+                                trace_id: trace_id_for_stream.clone(),
+                                event: StreamEvent::UsageUpdate {
+                                    prompt_tokens: prompt,
+                                    completion_tokens: completion,
+                                    cache_read_tokens: cache_read,
+                                    cache_creation_tokens: cache_creation,
+                                    reasoning_tokens: reasoning,
+                                },
+                            }
+                        }
                         "section_gate" | "prefetch_intent" | "acui" => {
                             // Forward these structured events as raw
                             // JSON so the frontend's `useStreamChat`

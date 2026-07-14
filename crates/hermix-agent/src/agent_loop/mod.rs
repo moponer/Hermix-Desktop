@@ -1169,6 +1169,33 @@ impl AgentLoop {
         crate::message_helpers::emit_status(&self.config, &self.callbacks, event_type, message)
     }
 
+    /// 2026-07-14: emit a `usage_update` status event carrying the
+    /// per-turn token breakdown (cache hits / cache writes /
+    /// reasoning / prompt / completion) so the front-end cache-hit
+    /// chip can update in real time. Bridges through the same
+    /// `status_callback` path that `context_usage` uses, so the
+    /// hermix-server handler in `lib.rs` can convert it to the
+    /// `StreamEvent::UsageUpdate` variant without needing a new
+    /// callback type.
+    ///
+    /// Honors `quiet_mode` like `emit_status` so log-replay jobs
+    /// don't spam the WS stream with usage chips.
+    pub(crate) fn emit_usage_update(&self, usage: &hermix_core::UsageStats) {
+        if self.config.quiet_mode {
+            return;
+        }
+        let payload = serde_json::json!({
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "cache_read_tokens": usage.cache_read_tokens,
+            "cache_creation_tokens": usage.cache_creation_tokens,
+            "reasoning_tokens": usage.reasoning_tokens,
+        });
+        if let Some(cb) = self.callbacks.status_callback.as_ref() {
+            cb("usage_update", &payload.to_string());
+        }
+    }
+
     pub(crate) fn assistant_visible_text_after_think_blocks(m: &Message) -> bool {
         crate::message_helpers::assistant_visible_text_after_think_blocks(m)
     }

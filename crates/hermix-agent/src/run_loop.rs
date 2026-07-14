@@ -542,6 +542,16 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                     turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
                 }
 
+                // 2026-07-14: push the per-turn usage snapshot so
+                // the front-end cache-hit chip updates in real time.
+                // Emitted *after* merge so the chip reflects the
+                // running total across the current turn, not just
+                // the latest chunk. Quiet-mode short-circuits inside
+                // `emit_usage_update`.
+                if let Some(ref u) = turn_usage_acc {
+                    self.emit_usage_update(u);
+                }
+
                 // Phase 4.2 (2026-07-03): ~40 lines of has_tools /
                 // visible_text / reasoning-retry / empty-retry /
                 // exhausted classification now lives in
@@ -1241,6 +1251,14 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
 
                 if let Some(ref u) = r.usage {
                     turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
+                }
+
+                // 2026-07-14: per-turn usage push for the cache-hit
+                // chip. Mirrors the run() side above; emitted on
+                // every streaming chunk so the chip updates
+                // continuously while the response streams in.
+                if let Some(ref u) = turn_usage_acc {
+                    self.emit_usage_update(u);
                 }
 
                 // Phase 4.2 (2026-07-03): mirrors the run() side —
