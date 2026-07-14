@@ -252,8 +252,17 @@ fn slugify_skill_name(name: &str) -> String {
 pub struct SkillOrchestrator {
     /// Mapping from `/command-name` to skill info.
     commands: HashMap<String, SkillCommandInfo>,
-    /// Base skills directory (typically `~/.hermix/skills/`).
+    /// Primary skills directory (typically `~/.hermix/skills/`).
+    /// Always scanned first; commands from here win name conflicts
+    /// against secondary dirs (first-write-wins, deterministic).
     skills_dir: PathBuf,
+    /// P2-T5: secondary roots scanned after `skills_dir` for
+    /// cross-tool compatibility (e.g. Open-Plugins / agentskills.io
+    /// standard `.agents/skills/`, `.cursor/skills/`,
+    /// `.claude/skills/`). Optional; empty by default. Duplicates
+    /// by `name` are silently dropped — the same
+    /// deterministic-first-wins rule as the primary scan.
+    extra_dirs: Vec<PathBuf>,
 }
 
 impl SkillOrchestrator {
@@ -262,6 +271,7 @@ impl SkillOrchestrator {
         Self {
             commands: HashMap::new(),
             skills_dir: skills_dir.into(),
+            extra_dirs: Vec::new(),
         }
     }
 
@@ -276,21 +286,112 @@ impl SkillOrchestrator {
         Self::new(hermix_config::paths::hermix_home().join("skills"))
     }
 
-    /// Scan the skills directory and build the command mapping.
-    ///
-    /// Returns a reference to the updated commands map.
+    /// P2-T5: register an additional skills root to scan in
+    /// addition to `skills_dir`. Used by the Open-Plugins /
+    /// agentskills.io compatibility layer (`~/.agents/skills/`,
+    /// `~/.cursor/skills/`, `~/.claude/skills/`). Order matters:
+    /// primary `skills_dir` always wins name collisions.
+    pub fn with_extra_dirs<I, P>(mut self, dirs: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        self.extra_dirs = dirs.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Return the secondary directories that will be scanned in
+    /// addition to the primary `skills_dir`.
+    pub fn extra_dirs(&self) -> &[PathBuf] {
+        &self.extra_dirs
+    }
+
+    /// Scan all configured roots (primary, then extras) and build
+    /// the slash-command mapping. Duplicates by `name` are
+    /// dropped with first-write-wins, mirroring the prior
+    /// single-dir behavior exactly (no behavioral regression
+    /// for callers that only used `skills_dir`).
     pub fn scan_skill_commands(&mut self) -> &HashMap<String, SkillCommandInfo> {
         self.commands.clear();
 
-        if !self.skills_dir.exists() {
-            return &self.commands;
-        }
-
+        // P2-T3: while we have every SKILL.md in hand for the scan,
+        // we also compute its health score and warn on anything
+        // below 0.5. The score is NOT used to gate loading — we
+        // never want a stale skill to silently disappear — but the
+        // log line helps operators triage their library.
         let mut seen_names = std::collections::HashSet::new();
 
-        self.scan_directory(&self.skills_dir.clone(), &mut seen_names);
+        // Snapshot the directories so we can drop the immutable
+        // borrow on `self.extra_dirs` before mutably borrowing
+        // `self` for the recursive scan.
+        let primary = self.skills_dir.clone();
+        let extras: Vec<PathBuf> = self.extra_dirs.clone();
+
+        // Primary root first (commands from here always win).
+        if primary.exists() {
+            self.scan_directory_with_health(&primary, &mut seen_names);
+        }
+        for extra in &extras {
+            if extra.exists() {
+                self.scan_directory_with_health(extra, &mut seen_names);
+            }
+        }
 
         &self.commands
+    }
+
+    /// Recursively scan a directory for SKILL.md files, scoring
+    /// each one's health for log diagnostics.
+    ///
+    /// `dir` is the directory to scan now (we process it
+    /// unconditionally, regardless of its name). Subsequent
+    /// recursion skips hidden subdirectories so a malicious /
+    /// junk sibling like `.git/` can't smuggle in stray SKILL.md
+    /// files.
+    fn scan_directory_with_health(
+        &mut self,
+        dir: &Path,
+        seen_names: &mut std::collections::HashSet<String>,
+    ) {
+        self.scan_directory_inner(dir, seen_names, true);
+    }
+
+    fn scan_directory_inner(
+        &mut self,
+        dir: &Path,
+        seen_names: &mut std::collections::HashSet<String>,
+        is_root: bool,
+    ) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    // Skip hidden directories at any recursion depth —
+                    // we never want a `.git/` or `.trash/` to leak in
+                    // SKILL.md files. The only exception is the very
+                    // first level we were called with, which may
+                    // legitimately live under `.agents/skills/` etc.
+                    if !is_root && name.starts_with('.') {
+                        continue;
+                    }
+                }
+
+                if path.is_dir() {
+                    let skill_md = path.join("SKILL.md");
+                    if skill_md.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&skill_md) {
+                            crate::skill_health::score_skill_md(&skill_md, &content);
+                        }
+                        self.register_skill(&skill_md, seen_names);
+                    }
+                    self.scan_directory_inner(&path, seen_names, false);
+                }
+            }
     }
 
     /// Recursively scan a directory for SKILL.md files.
@@ -334,19 +435,35 @@ impl SkillOrchestrator {
         // points outside the tree — `entry.path()` would follow
         // it and we'd then read a SKILL.md from a totally
         // unrelated location. Reject anything not lexically
-        // rooted at `self.skills_dir` (we use lexical, not
-        // canonical, to keep this cheap — `walkdir` /
-        // `read_dir` already de-duped realpath collisions
-        // downstream). Mirrors upstream's
-        // `path_security.validate_within_dir` check.
-        if let Some(err) =
-            hermix_core::path_security::path_within_root_lexical(skill_md_path, &self.skills_dir)
-        {
+        // rooted at any configured root (primary + extras; we
+        // use lexical, not canonical, to keep this cheap —
+        // `walkdir` / `read_dir` already de-duped realpath
+        // collisions downstream). Mirrors upstream's
+        // `path_security.validate_within_dir` check. P2-T5
+        // extended the test from primary-only to all roots so
+        // Open-Plugins secondary directories register too.
+        let mut allowed_root = Some(self.skills_dir.as_path());
+        let extras_snapshot: Vec<&Path> =
+            self.extra_dirs.iter().map(|p| p.as_path()).collect();
+        let mut allowed_roots: Vec<&Path> =
+            extras_snapshot.iter().copied().collect();
+        allowed_roots.insert(0, allowed_root.take().unwrap());
+
+        let mut in_any_root = false;
+        for root in &allowed_roots {
+            if hermix_core::path_security::path_within_root_lexical(skill_md_path, root)
+                .is_none()
+            {
+                in_any_root = true;
+                break;
+            }
+        }
+        if !in_any_root {
             tracing::warn!(
                 skill_md = %skill_md_path.display(),
                 skills_dir = %self.skills_dir.display(),
-                error = %err,
-                "rejecting skill: path escaped skills_dir (likely symlink attack)"
+                extra_dirs = ?self.extra_dirs,
+                "rejecting skill: path escaped all configured roots (likely symlink attack)"
             );
             return;
         }
@@ -753,5 +870,90 @@ allowed-tools:
         assert_eq!(missing, vec!["nonexistent"]);
         assert!(prompt.contains("Write clean code."));
         assert!(prompt.contains("preloaded"));
+    }
+
+    // --- P2-T5: multi-root skill scanning ---
+
+    #[test]
+    fn p2_t5_scan_merges_primary_and_extra_dirs_with_first_wins() {
+        // Simulates the open-plugins layout: skills live under
+        // both `~/.hermix/skills/` AND `~/.agents/skills/` and we
+        // want both to come through, with the primary taking
+        // precedence on name collisions.
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        let extra = tmp.path().join(".agents").join("skills");
+        fs::create_dir_all(&primary).unwrap();
+        fs::create_dir_all(&extra).unwrap();
+
+        // Primary has "shared" with description "First instance".
+        let shared_dir = primary.join("shared");
+        fs::create_dir_all(&shared_dir).unwrap();
+        fs::write(
+            shared_dir.join("SKILL.md"),
+            "---\nname: shared\ndescription: First instance\n---\nfirst body",
+        )
+        .unwrap();
+
+        // Extra has its own "shared" (later-suffix) plus a unique
+        // "only-in-extra" skill.
+        let shared_extra = extra.join("shared");
+        let only_extra = extra.join("only-in-extra");
+        fs::create_dir_all(&shared_extra).unwrap();
+        fs::create_dir_all(&only_extra).unwrap();
+        fs::write(
+            shared_extra.join("SKILL.md"),
+            "---\nname: shared\ndescription: Second instance\n---\nsecond body",
+        )
+        .unwrap();
+        fs::write(
+            only_extra.join("SKILL.md"),
+            "---\nname: only-in-extra\ndescription: Lives in extras\n---\nextra body",
+        )
+        .unwrap();
+
+        let mut orch = SkillOrchestrator::new(&primary)
+            .with_extra_dirs([extra.clone()]);
+        orch.scan_skill_commands();
+
+        // Both skills are registered.
+        assert!(orch.get_commands().contains_key("/shared"));
+        assert!(orch.get_commands().contains_key("/only-in-extra"));
+
+        // First-write-wins: the primary `shared` description
+        // survives; the extra's duplicate is dropped silently so
+        // the deterministic rule never depends on filesystem order.
+        let shared_info = &orch.get_commands()["/shared"];
+        assert_eq!(
+            shared_info.description, "First instance",
+            "extra-dir duplicate must not overwrite the primary skill"
+        );
+        // And the primary root is the recorded `skills_dir`.
+        assert_eq!(orch.extra_dirs(), &[extra]);
+    }
+
+    #[test]
+    fn p2_t5_scan_skips_missing_extra_dirs() {
+        // Operator opted an extra directory in that hasn't been
+        // created yet — we silently skip it instead of failing.
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        fs::create_dir_all(&primary).unwrap();
+        let primary_skill = primary.join("lonely");
+        fs::create_dir_all(&primary_skill).unwrap();
+        fs::write(
+            primary_skill.join("SKILL.md"),
+            "---\nname: lonely\ndescription: Primary-only\n---\nbody",
+        )
+        .unwrap();
+
+        let nonexistent = tmp.path().join("does-not-exist-yet");
+        let mut orch = SkillOrchestrator::new(&primary)
+            .with_extra_dirs([nonexistent.clone()]);
+        orch.scan_skill_commands();
+
+        assert_eq!(orch.get_commands().len(), 1);
+        assert!(orch.get_commands().contains_key("/lonely"));
+        assert_eq!(orch.extra_dirs(), &[nonexistent]);
     }
 }

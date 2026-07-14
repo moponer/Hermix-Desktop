@@ -392,6 +392,14 @@ pub struct AgentConfig {
     #[serde(default = "default_skill_creation_nudge_interval")]
     pub skill_creation_nudge_interval: u32,
 
+    /// Maximum characters per turn for the auto-activated skills
+    /// injection block (P2-T1). The loader caps each individual
+    /// SKILL.md body at 500 lines, and this field caps the joined
+    /// block so even many-matched-skills can't blow past the soft
+    /// context budget. Excess is truncated; not an error.
+    #[serde(default = "default_skill_injection_char_budget")]
+    pub skill_injection_char_budget: usize,
+
     /// Run Python-style background memory/skill review after a session (extra LLM calls).
     /// Python has no master off-switch; matches default-on (`cli-config.yaml` can override via `agent`).
     #[serde(default = "default_background_review_enabled")]
@@ -582,6 +590,14 @@ fn default_skill_creation_nudge_interval() -> u32 {
     10
 }
 
+/// P2-T1 (2026-07-15): default auto-skill-injection budget.
+/// 16,000 chars ≈ 4,000 tokens — enough for 3 skills at the 500-line
+/// soft cap, well under any modern context window. Operators can
+/// raise / lower this via `cli-config.yaml`.
+fn default_skill_injection_char_budget() -> usize {
+    16_000
+}
+
 fn default_background_review_enabled() -> bool {
     true
 }
@@ -683,6 +699,7 @@ impl Default for AgentConfig {
             acp_args: Vec::new(),
             memory_nudge_interval: default_memory_nudge_interval(),
             skill_creation_nudge_interval: default_skill_creation_nudge_interval(),
+            skill_injection_char_budget: default_skill_injection_char_budget(),
             background_review_enabled: default_background_review_enabled(),
             background_review_metrics_enabled: default_background_review_metrics_enabled(),
             auto_skill_extraction: default_auto_skill_extraction(),

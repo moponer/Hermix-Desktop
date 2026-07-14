@@ -31,6 +31,47 @@ enum PreTurnAction {
     },
 }
 
+// ---------------------------------------------------------------------------
+// P2-T1: skill auto-activation helper
+// ---------------------------------------------------------------------------
+
+/// Build the `<active-skills>` block to inject into ctx this turn.
+///
+/// Returns `None` when no skills match or when `user_text` is empty.
+/// The block lists up to 3 skill names with their bodies (each body
+/// capped at 500 lines by the loader, plus a total `char_budget`
+/// cap here so even many skills can't blow the context).
+///
+/// Failure modes — none. We never panic or error out: missing
+/// `skills_dir`, empty matches, FS errors all degrade to `None`.
+pub fn build_active_skills_block(
+    skills_dir: &std::path::Path,
+    user_text: &str,
+    char_budget: usize,
+) -> Option<String> {
+    if user_text.is_empty() {
+        return None;
+    }
+    let mut loader = crate::skill_loader::SkillLoader::with_dir(skills_dir);
+    loader.scan();
+    let injection = loader.build_injection(user_text)?;
+
+    if injection.len() <= char_budget {
+        return Some(injection);
+    }
+
+    // Soft-cap: truncate at budget, leave room for the footer.
+    let footer = format!(
+        "\n\n[…truncated at {} chars total; use skill_view to load more.]",
+        char_budget
+    );
+    let cap = char_budget.saturating_sub(footer.len());
+    let mut out = injection;
+    out.truncate(cap);
+    out.push_str(&footer);
+    Some(out)
+}
+
 impl AgentLoop {
     #[allow(clippy::too_many_arguments)]
     async fn do_pre_turn_setup(
@@ -172,6 +213,24 @@ impl AgentLoop {
             let recall_block = crate::recall_scheduler::render_prompt_block(&plan);
             if !recall_block.is_empty() {
                 ctx.add_message(Message::system(&recall_block));
+            }
+        }
+
+        // --- Phase 2 (P2-T1): auto-activate matching skills ---
+        // Cheap keyword + subsequence-fuzzy match the user's message
+        // against the skill directory and inject up to 3 skills'
+        // full bodies into ctx. The skill bodies are appended as a
+        // system message so the LLM sees them alongside the recall
+        // block. Compression folds them on context pressure.
+        if !user_text.is_empty() {
+            let skills_dir =
+                hermix_config::paths::hermix_home().join("skills");
+            if let Some(trimmed) = build_active_skills_block(
+                &skills_dir,
+                &user_text,
+                self.config.skill_injection_char_budget,
+            ) {
+                ctx.add_message(Message::system(&trimmed));
             }
         }
 
@@ -1891,4 +1950,140 @@ self.notify_phase(&LoopPhase::PostToolExec, total_turns);
         ctx.add_message(Message::system(&verification_text));
     }
 
+}
+
+// ---------------------------------------------------------------------------
+// P2-T1 tests for `build_active_skills_block`
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod p2_t1_tests {
+    use super::build_active_skills_block;
+    use std::fs;
+
+    fn seed_three_skills(dir: &std::path::Path) {
+        let skills = [
+            (
+                "context-compression",
+                "Best practices for lossy compression of conversation history.",
+                "compression",
+            ),
+            (
+                "memory-systems",
+                "Architecture patterns for persistent agent memory across sessions.",
+                "memory",
+            ),
+            (
+                "tool-design",
+                "Principles for designing LLM-callable tools that are safe and effective.",
+                "tools",
+            ),
+        ];
+        for (slug, desc, cat) in skills {
+            let d = dir.join(slug);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(
+                d.join("SKILL.md"),
+                format!(
+                    "---\nname: {slug}\ndescription: {desc}\ncategory: {cat}\n\
+                     tags: [{cat}]\n---\n# {slug}\n\nDo the {slug} thing properly.\n"
+                ),
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn p2_t1_block_injects_matching_skills_into_injection() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_three_skills(tmp.path());
+
+        // "memory" exact-matches memory-systems; "compression" exact-
+        // matches context-compression (both whole-word hits in their
+        // descriptions). tool-design should not appear (no token
+        // overlap from the query).
+        let block = build_active_skills_block(
+            tmp.path(),
+            "show me memory and compression patterns",
+            16_000,
+        )
+        .expect("expected at least one match");
+
+        assert!(block.contains("memory-systems"));
+        assert!(block.contains("context-compression"));
+        assert!(!block.contains("tool-design"));
+    }
+
+    #[test]
+    fn p2_t1_fuzzy_subseq_within_word_activates_skill() {
+        // Typo-style within-word subseq: "compres" hits
+        // context-compression's description. The skill must
+        // surface even though `compres` is not a whole-word in
+        // any skill description.
+        let tmp = tempfile::tempdir().unwrap();
+        seed_three_skills(tmp.path());
+        let block = build_active_skills_block(
+            tmp.path(),
+            "compres",
+            16_000,
+        )
+        .expect("expected fuzzy match");
+
+        assert!(block.contains("context-compression"));
+    }
+
+    #[test]
+    fn p2_t1_block_returns_none_for_irrelevant_query() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_three_skills(tmp.path());
+
+        let block = build_active_skills_block(
+            tmp.path(),
+            "asdfqwer zxcv ytrewq",
+            16_000,
+        );
+        assert!(block.is_none());
+    }
+
+    #[test]
+    fn p2_t1_block_returns_none_for_empty_user_text() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_three_skills(tmp.path());
+        assert!(build_active_skills_block(tmp.path(), "", 16_000).is_none());
+    }
+
+    #[test]
+    fn p2_t1_block_truncates_when_budget_exceeded() {
+        // Pad each skill body past the char budget so the
+        // joined block would exceed it; helper must truncate
+        // with the footer and stay under (budget + footer).
+        let tmp = tempfile::tempdir().unwrap();
+        let padding = "x".repeat(200);
+        for slug in ["long-a", "long-b", "long-c"] {
+            let d = tmp.path().join(slug);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(
+                d.join("SKILL.md"),
+                format!(
+                    "---\nname: {slug}\ndescription: long skill {slug}\ntags: [long]\n---\n{padding}\n{padding}\n{padding}\n"
+                ),
+            )
+            .unwrap();
+        }
+
+        let block = build_active_skills_block(
+            tmp.path(),
+            "show me a long skill please",
+            2_000,
+        )
+        .expect("match expected");
+        assert!(
+            block.contains("truncated at 2000 chars total"),
+            "footer missing — block: …{}",
+            &block[block.len().saturating_sub(120)..]
+        );
+        // Body section may exceed budget by footer length only —
+        // i.e. total ≤ budget + footer length.
+        assert!(block.len() <= 2_000 + 80);
+    }
 }

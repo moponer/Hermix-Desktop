@@ -63,6 +63,10 @@ pub struct SkillLoader {
     min_score: f32,
     /// Maximum number of auto-matched skills to inject per turn (default 3).
     max_matches: usize,
+    /// Maximum lines of an auto-injected SKILL.md body (default 500).
+    /// Soft cap — longer bodies are truncated to this many lines, not
+    /// an error.
+    max_body_lines: usize,
 }
 
 impl SkillLoader {
@@ -72,6 +76,7 @@ impl SkillLoader {
             orchestrator: SkillOrchestrator::default_dir(),
             min_score: 0.3,
             max_matches: 3,
+            max_body_lines: 500,
         }
     }
 
@@ -81,6 +86,7 @@ impl SkillLoader {
             orchestrator: SkillOrchestrator::new(skills_dir),
             min_score: 0.3,
             max_matches: 3,
+            max_body_lines: 500,
         }
     }
 
@@ -93,6 +99,14 @@ impl SkillLoader {
     /// Set the maximum number of auto-matched skills per turn.
     pub fn with_max_matches(mut self, max: usize) -> Self {
         self.max_matches = max;
+        self
+    }
+
+    /// Override the per-skill body line cap. Default is 500; we
+    /// expose the setter so tests can pin a tiny cap (5 lines) to
+    /// assert the truncation footer fires deterministically.
+    pub fn with_max_body_lines(mut self, max: usize) -> Self {
+        self.max_body_lines = max;
         self
     }
 
@@ -110,7 +124,13 @@ impl SkillLoader {
     ///
     /// Returns up to `max_matches` skills whose name, description, or tags
     /// contain keywords from the message. The score is based on the ratio
-    /// of matched keywords to total message keywords.
+    /// of matched keywords to total message keywords. P2-T2 added a
+    /// fuzzy subscore on top.
+    ///
+    /// Effective threshold scales with query length: a single-token
+    /// query needs ≥ 0.3 (rich signal required), a multi-token query
+    /// only needs ≥ 0.15 (because 1 hit / 6 stop-words is a real
+    /// relevance signal that a fixed 0.3 threshold would suppress).
     pub fn match_message(&self, message: &str) -> Vec<SkillMatch> {
         let commands = self.orchestrator.get_commands();
         if commands.is_empty() {
@@ -121,11 +141,24 @@ impl SkillLoader {
         let msg_tokens: Vec<&str> = msg_lower
             .split_whitespace()
             .filter(|t| t.len() >= 3) // skip short tokens
+            .filter(|t| !STOPWORDS.contains(t)) // skip trivial words
             .collect();
 
         if msg_tokens.is_empty() {
             return Vec::new();
         }
+
+        // Token-aware effective threshold — but ONLY soften the
+        // default `min_score`. Operator-supplied thresholds
+        // (e.g. a test pinning min_score = 0.99) are honored
+        // verbatim regardless of query length.
+        let effective_min = if msg_tokens.len() == 1 {
+            self.min_score.max(0.3)
+        } else if self.min_score <= 0.3 {
+            0.15
+        } else {
+            self.min_score
+        };
 
         let mut scored: Vec<SkillMatch> = Vec::new();
 
@@ -134,14 +167,42 @@ impl SkillLoader {
             let desc_lower = info.description.to_lowercase();
             let tags_lower: Vec<String> = info.tags.iter().map(|t| t.to_lowercase()).collect();
 
-            // Score: how many message tokens appear in the skill's fields
+            // Whole-word desc-set so the cheap keyword pass doesn't
+            // light up on substrings like "and" inside "safe and
+            // effective". The same split is used by the fuzzy helper
+            // later in the loop, so we cache it once per skill.
+            let desc_words: std::collections::HashSet<&str> = desc_lower
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .collect();
+
+            // Score: how many message tokens appear in the skill's fields.
+            // Phase 2 (P2-T2): we blend the cheap keyword-overlap pass with
+            // a subsequence-based fuzzy score so a query like "compres"
+            // still surfaces "context-compression". The exact-token score
+            // always wins over the fuzzy one — we never want fuzzy hits to
+            // crowd out a clean keyword match.
             let mut matched_tokens = 0;
             let mut matched_on = String::new();
 
             for token in &msg_tokens {
-                let in_name = name_lower.contains(token);
-                let in_desc = desc_lower.contains(token);
-                let in_tags = tags_lower.iter().any(|t| t.contains(token));
+                let in_name = name_lower.split(|c: char| !c.is_alphanumeric())
+                    .filter(|w| !w.is_empty())
+                    .any(|w| w == *token);
+                let in_desc = desc_words.contains(*token);
+                // Tags are short tags; we accept both whole-tag
+                // equality (preserving hyphens, "best-practices")
+                // and word-equality on the hyphen-split so a
+                // bare query token like "best" can still surface
+                // a "best-practices"-tagged skill.
+                let in_tags = tags_lower.iter().any(|t| {
+                    if t == *token {
+                        return true;
+                    }
+                    t.split(|c: char| !c.is_alphanumeric())
+                        .filter(|w| !w.is_empty())
+                        .any(|w| w == *token)
+                });
 
                 if in_name || in_desc || in_tags {
                     matched_tokens += 1;
@@ -155,12 +216,11 @@ impl SkillLoader {
                 }
             }
 
-            if matched_tokens == 0 {
-                continue;
-            }
+            let keyword_score = matched_tokens as f32 / msg_tokens.len() as f32;
+            let fuzzy_score = description_fuzzy_score(&msg_tokens, &desc_lower);
+            let score = keyword_score.max(fuzzy_score);
 
-            let score = matched_tokens as f32 / msg_tokens.len() as f32;
-            if score < self.min_score {
+            if score < effective_min {
                 continue;
             }
 
@@ -168,7 +228,29 @@ impl SkillLoader {
             let body = match std::fs::read_to_string(&info.skill_md_path) {
                 Ok(content) => {
                     let (_, body) = crate::skill_orchestrator::parse_frontmatter(&content);
-                    body.trim().to_string()
+                    let trimmed = body.trim();
+                    // Soft-cap body at `max_body_lines` lines so a 5,000-line
+                    // skill doesn't blow up the context. Trailing truncation
+                    // is not an error — the rest is still on disk and
+                    // retrievable via `skill_view` if the LLM needs more.
+                    let capped: String = if trimmed.lines().count() > self.max_body_lines {
+                        let mut out = String::new();
+                        for (i, line) in trimmed.lines().enumerate() {
+                            if i >= self.max_body_lines {
+                                out.push_str(&format!(
+                                    "\n\n[…truncated at {} lines; use skill_view to load the rest.]",
+                                    self.max_body_lines
+                                ));
+                                break;
+                            }
+                            out.push_str(line);
+                            out.push('\n');
+                        }
+                        out
+                    } else {
+                        trimmed.to_string()
+                    };
+                    capped
                 }
                 Err(_) => continue,
             };
@@ -277,8 +359,173 @@ impl Default for SkillLoader {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Stopword filter (kept tiny on purpose — the auto-router is
+// strict about activating skills, and any word on this list would
+// false-positive virtually every skill with prose descriptions).
 // ---------------------------------------------------------------------------
+
+const STOPWORDS: &[&str] = &[
+    // Pure function / grammatical glue — never a domain concept.
+    "and", "the", "for", "with", "are", "that", "this",
+    "your", "can", "use", "how", "what", "why", "who", "when",
+    "from", "into", "have", "has", "had", "but", "not", "any",
+    "all", "some", "out", "also", "just", "than", "then", "now",
+    "tell", "give", "make", "about",
+];
+
+// ---------------------------------------------------------------------------
+// Fuzzy matching helpers (Phase 2 — P2-T2)
+// ---------------------------------------------------------------------------
+
+/// Returns true if `needle`'s characters all appear in `haystack`,
+/// in order, with adjacent matches no more than 5 characters apart.
+/// This is the cheap fuzzy backbone the keyword pass falls back to
+/// when exact word-overlap misses.
+///
+/// The 5-char gap budget is what separates a real fuzzy hit ("compres"
+/// spans the inside of "compression") from a sparse false positive
+/// ("world" picks up w/o/r/l/d from "review code for quality and best
+/// practices" each separated by 2-12 unrelated characters).
+///
+/// Example: subsequence_match("compres", "context compression")
+/// returns true; subsequence_match("momeression", "context
+/// compression") returns false. It is intentionally *cheap* — no
+/// Levenshtein, no embeddings — so it stays deterministic and
+/// synchronous (the router runs on every turn).
+/// Returns true if `needle`'s characters all appear **inside a
+/// single word** of `haystack`, in order, with adjacent matches no
+/// more than 3 characters apart.
+///
+/// Word-boundary split is what separates a real typo-bridge from
+/// the historical false positive where `needle="world"` substring-
+/// matched "review code for quality and best practices" (w / o / r /
+/// l / d each picked up from unrelated words). Restricting the
+/// search to one word at a time rejects that pattern while still
+/// surfacing within-word partial-prefixes (`compres` → `compression`,
+/// `memry` → `memory`).
+pub fn subsequence_match(needle: &str, haystack: &str) -> bool {
+    const MAX_GAP: usize = 3;
+
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return false;
+    }
+    if needle.len() < 3 {
+        // Anything shorter than 3 chars trips false positives
+        // everywhere ("is" subsequence-matches nearly every word).
+        return false;
+    }
+    // Reject needles that consist only of punctuation —
+    // they'd vacuously "match" everything because the loop
+    // skips non-alphanumeric chars and there are zero
+    // characters left to fail the iteration.
+    if needle.chars().all(|c| !c.is_alphanumeric()) {
+        return false;
+    }
+
+    // Try each word in the haystack independently. A real typo
+    // bridge lives inside a single word; the sparse multi-word
+    // case is exactly what we want to filter out.
+    for word in haystack.split(|c: char| !c.is_alphanumeric()) {
+        if word.is_empty() {
+            continue;
+        }
+        if subsequence_match_within_word(needle, word, MAX_GAP) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Internal: per-word subsequence check with a configurable gap.
+fn subsequence_match_within_word(needle: &str, word: &str, max_gap: usize) -> bool {
+    let w_chars: Vec<char> = word.chars().collect();
+    let mut last_pos: Option<usize> = None;
+
+    for nc in needle.chars() {
+        if !nc.is_alphanumeric() {
+            continue;
+        }
+        let start = last_pos.map(|p| p + 1).unwrap_or(0);
+        let mut found = None;
+        for (i, &hc) in w_chars.iter().enumerate().skip(start) {
+            if hc.eq_ignore_ascii_case(&nc) {
+                found = Some(i);
+                break;
+            }
+        }
+        let i = match found {
+            Some(i) => i,
+            None => return false,
+        };
+        if let Some(last) = last_pos {
+            if i - last > max_gap {
+                return false;
+            }
+        }
+        last_pos = Some(i);
+    }
+    true
+}
+
+/// Returns a fuzzy score (0.0–1.0) for how well a user's message
+/// tokens align with a skill description. We blend two cheap
+/// signals so a richly-described skill beats a thinly-described
+/// skill for the same query:
+///
+///   - exact-token-overlap (count of shared tokens / total message
+///     tokens)
+///   - subsequence coverage (fraction of message tokens with at
+///     least one descriptor-character subsequence hit)
+///
+/// The blend weights are picked to favour the cheaper signal but
+/// still reward descriptions that *contain* the user's intent even
+/// when word boundaries differ (e.g. "memory" vs "memory-systems"
+/// vs "persistent memory across sessions").
+pub fn description_fuzzy_score(message_tokens: &[&str], description_lower: &str) -> f32 {
+    if message_tokens.is_empty() {
+        return 0.0;
+    }
+
+    // Whole-word membership check so a token like "compres" does
+    // NOT count as a substring-hit inside "compression". The
+    // `split_whitespace()` cost is one-shot — we cache the word set
+    // for the whole token list iteration.
+    let desc_words: std::collections::HashSet<&str> = description_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let mut exact_hits = 0usize;
+    let mut subseq_hits = 0usize;
+
+    for token in message_tokens {
+        if desc_words.contains(*token) {
+            exact_hits += 1;
+        } else if subsequence_match(token, description_lower) {
+            subseq_hits += 1;
+        }
+    }
+
+    let exact_score = exact_hits as f32 / message_tokens.len() as f32;
+    // A weighted-token score: an exact hit counts as 1.0, a
+    // subsequence-only hit counts as 0.5 (still substantive but
+    // not as good as a clean word overlap). The combined ratio
+    // stays in 0.0–1.0. We then take the max with `exact_score`
+    // so descriptions with strong whole-word matches always win.
+    //
+    // Examples with default `min_score = 0.3`:
+    //   "compres" 1 token 1 subseq → 0.5/1 = 0.5  ✓ activate
+    //   "memory and compres" 3 tokens (memory exact + compres
+    //     subseq) → (1 + 0.5) / 3 ≈ 0.5 ✓ activate
+    //   "hello world" 2 tokens 1 subseq → 0.5 / 2 = 0.25 ✗ reject
+    let weighted = exact_hits as f32 + subseq_hits as f32 * 0.5;
+    let weighted_score = (weighted / message_tokens.len() as f32).min(1.0);
+
+    exact_score.max(weighted_score)
+}
+
+
 
 #[cfg(test)]
 mod tests {
@@ -289,24 +536,27 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
 
-        // Create a few test skills
+        // Create a few test skills. Tags are comma-separated inside
+        // the inline list so the YAML parser actually splits them
+        // (an unspaced single string inside `[]` collapses into one
+        // tag, which doesn't reflect how real SKILL.md files look).
         let skills = [
             (
                 "commit-message",
                 "Format a Conventional Commit message",
-                "git commit conventional message format",
+                vec!["git", "commit", "conventional", "message", "format"],
                 "# Commit Message Skill\n\nWhen writing a commit message, use the Conventional Commits format.",
             ),
             (
                 "code-review",
                 "Review code for quality and best practices",
-                "code review quality best-practices",
+                vec!["code", "review", "quality", "best-practices"],
                 "# Code Review Skill\n\nReview the code for quality, security, and best practices.",
             ),
             (
                 "pdf-extract",
                 "Extract text and data from PDF files",
-                "pdf extract text data",
+                vec!["pdf", "extract", "text", "data"],
                 "# PDF Extract Skill\n\nUse read_pdf to extract text from PDF files.",
             ),
         ];
@@ -314,8 +564,9 @@ mod tests {
         for (name, desc, tags, body) in &skills {
             let skill_dir = dir.join(name);
             fs::create_dir_all(&skill_dir).unwrap();
+            let tags_inline = tags.join(", ");
             let content = format!(
-                "---\nname: {name}\ndescription: {desc}\ntags: [{tags}]\n---\n{body}"
+                "---\nname: {name}\ndescription: {desc}\ntags: [{tags_inline}]\n---\n{body}"
             );
             fs::write(skill_dir.join("SKILL.md"), content).unwrap();
         }
@@ -462,5 +713,158 @@ mod tests {
 
         let matches = loader.match_message("anything");
         assert!(matches.is_empty());
+    }
+
+    // --- P2-T2: fuzzy matching helpers ---
+
+    #[test]
+    fn p2_fuzzy_subsequence_matches_within_word() {
+        // "compres" subsequence-matches inside "compression" itself —
+        // we want fuzzy to bridge drop-final-letter typos without
+        // crossing whitespace into unrelated words.
+        assert!(subsequence_match("compres", "compression"));
+        // "memry" — needle chars all appear in order inside
+        // "memory" (m-e-m-r-y vs m-e-m-o-r-y, the missing 'o'
+        // is just skipped over via the gap budget).
+        assert!(subsequence_match("memry", "memory"));
+    }
+
+    #[test]
+    fn p2_fuzzy_subsequence_rejects_substitution_typos() {
+        // subsequence_match expects every needle char IN ORDER.
+        // A character-substitution typo (e → o) is not a match —
+        // that's Levenshtein territory, out of scope for our
+        // cheap fuzzy pass.
+        assert!(!subsequence_match("memery", "memory"));
+    }
+
+    #[test]
+    fn p2_fuzzy_subsequence_finds_match_in_any_word() {
+        // With the per-word split, "compres" finds the matching
+        // "compression" word even when it's not the first word in
+        // the description. This is the whole reason we restrict
+        // to within-word: the *first* candidate word ("practices")
+        // would have trapped a naive single-pass matcher if `c`
+        // wasn't the trailing character gap.
+        assert!(subsequence_match(
+            "compres",
+            "best practices for lossy compression of conversation history"
+        ));
+    }
+
+    #[test]
+    fn p2_fuzzy_subsequence_rejects_sparse_multi_word_hit() {
+        // The historical false positive: "world" → "review code
+        // for quality and best practices". Each char of `world`
+        // lives in a different word; the per-word restriction
+        // rejects the pattern even when no single word starts
+        // with `w`.
+        assert!(!subsequence_match(
+            "world",
+            "review code for quality and best practices"
+        ));
+    }
+
+    #[test]
+    fn p2_fuzzy_subsequence_requires_all_chars_in_order() {
+        // "momeression" — same chars scrambled, must NOT match.
+        assert!(!subsequence_match("momeression", "context compression"));
+    }
+
+    #[test]
+    fn p2_fuzzy_subsequence_rejects_short_needles() {
+        // 2-char needles trip false positives everywhere.
+        assert!(!subsequence_match("is", "this is a sentence"));
+        assert!(!subsequence_match("", "anything"));
+    }
+
+    #[test]
+    fn p2_fuzzy_subsequence_skips_needle_punctuation() {
+        // Punctuation in the needle is ignored at the char-iteration
+        // level, so the matcher operates on alphanumeric runs only.
+        // "h-y-p-e-n" effectively becomes "hypen" — a full ordered
+        // hit inside the single haystack word "hypen-ated".
+        assert!(subsequence_match("h-y-p-e-n", "hypen-ated real word"));
+    }
+
+    #[test]
+    fn p2_fuzzy_score_single_subseq_hit_passes_default_threshold() {
+        // "compres" against "compression of conversation history"
+        // (within-word, no cross-word gap):
+        //   → exact_hits = 0 (no whole-word `compres` in desc)
+        //   → subseq_hits = 1, len = 1
+        //   → exact_score = 0, weighted = 0.5, weighted_score = 0.5/1 = 0.5
+        //   → max(0, 0.5) = 0.5 ≥ default `min_score` of 0.3
+        let score = description_fuzzy_score(
+            &["compres"],
+            "compression of conversation history",
+        );
+        assert!(
+            (score - 0.5).abs() < f32::EPSILON,
+            "expected 0.5, got {score}"
+        );
+    }
+
+    #[test]
+    fn p2_fuzzy_score_sparse_subseq_across_tokens_stays_below_threshold() {
+        // The historical false positive that bit us before P2-T2:
+        // "world" subsequence-matches "review code for quality and
+        // best practices" (w-o-r-l-d all scattered around), but
+        // across two message tokens the discounted score must stay
+        // under the default `min_score = 0.3` so we don't surface
+        // an irrelevant skill.
+        let score = description_fuzzy_score(
+            &["hello", "world"],
+            "review code for quality and best practices",
+        );
+        assert!(
+            score < 0.3,
+            "sparse subseq across 2 tokens should not pass 0.3, got {score}"
+        );
+    }
+
+    #[test]
+    fn p2_fuzzy_score_exact_token_dominates_fuzzy() {
+        // Exact token overlap on 1 of 2 tokens → 0.5 ≥ any subseq path.
+        let score = description_fuzzy_score(
+            &["commit", "kangaroo"],
+            "format a conventional commit message",
+        );
+        assert!(score >= 0.5, "exact hit should dominate, got {score}");
+    }
+
+    // --- P2-T1: body line-cap ---
+
+    #[test]
+    fn p2_body_cap_truncates_long_skills_without_erroring() {
+        let tmp = tempfile::tempdir().unwrap();
+        let long_dir = tmp.path().join("long-skill");
+        std::fs::create_dir_all(&long_dir).unwrap();
+
+        // Build a 200-line body — well past `with_max_body_lines(5)`.
+        let mut body = String::from("---\nname: long-skill\ndescription: A long skill\ntags: [long]\n---\n# Long\n");
+        for i in 0..200 {
+            body.push_str(&format!("line {i}\n"));
+        }
+        std::fs::write(long_dir.join("SKILL.md"), body).unwrap();
+
+        let mut loader = SkillLoader::with_dir(tmp.path())
+            .with_max_matches(1)
+            .with_max_body_lines(5);
+        loader.scan();
+
+        let matches = loader.match_message("show me a long skill");
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+
+        // Body has the truncation footer at the configured line cap.
+        assert!(
+            m.body.contains("truncated at 5 lines"),
+            "expected soft-cap footer, got body ending: …{}",
+            &m.body[m.body.len().saturating_sub(80)..]
+        );
+        // It must NOT contain line 199 — that means truncation
+        // actually fired and not just appended a label.
+        assert!(!m.body.contains("line 199"));
     }
 }
