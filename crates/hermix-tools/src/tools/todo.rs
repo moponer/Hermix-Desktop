@@ -322,6 +322,7 @@ impl TodoHandler {
     }
 }
 
+#[async_trait]
 impl SessionStamper for TodoHandler {
     fn set_active_session(
         &self,
@@ -343,6 +344,21 @@ impl SessionStamper for TodoHandler {
             .lock()
             .expect("todo active_message_id mutex poisoned");
         std::mem::replace(&mut *guard, message_id)
+    }
+
+    /// Build a per-session snapshot of the current todo list.
+    /// Pulls from the backend's `list_for_session` (Commit A) so
+    /// the snapshot is the **authoritative** on-disk state, not a
+    /// re-broadcast of in-memory pending events. Used by the WS
+    /// layer to hydrate the front-end todo panel on connect +
+    /// after every mutation. Commit B.
+    async fn build_snapshot_json(
+        &self,
+        session_id: &str,
+    ) -> Option<Vec<serde_json::Value>> {
+        let raw = self.backend.list_for_session(session_id).await.ok()?;
+        let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        parsed.get("todos")?.as_array().cloned()
     }
 }
 
@@ -986,6 +1002,114 @@ mod tests {
             none_items.len(),
             0,
             "unknown session must not see orphan (no session_id)"
+        );
+    }
+
+    /// Commit B regression: `SessionStamper::build_snapshot_json` on
+    /// the `todo` tool returns only items belonging to the requested
+    /// session, as a `serde_json::Value` array ready to be sent down
+    /// the WS as `TodoSnapshot`. The trait default (`None`) for
+    /// tools that don't override is verified separately in the
+    /// `session_stamper` test module.
+    #[tokio::test]
+    async fn test_build_snapshot_json_filters_by_session() {
+        use crate::backends::todo::FileTodoBackend;
+        use crate::tools::session_stamper::SessionStamper;
+        use crate::tools::todo::TodoBackend as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = Arc::new(FileTodoBackend::new(tmp.path().join("todos.json")));
+        let (tx, _rx) = broadcast::channel::<TodoChange>(16);
+        let handler = Arc::new(TodoHandler::new(backend.clone(), Some(tx)));
+
+        // Seed items across two sessions via direct backend calls.
+        backend
+            .create(
+                "first-A",
+                None,
+                None,
+                Some("g1"),
+                Some("plan-A"),
+                Some("sess-A"),
+                Some("sess-A-0"),
+            )
+            .await
+            .unwrap();
+        backend
+            .create(
+                "first-B",
+                None,
+                None,
+                Some("g2"),
+                Some("plan-B"),
+                Some("sess-B"),
+                Some("sess-B-0"),
+            )
+            .await
+            .unwrap();
+
+        let stamper: Arc<dyn SessionStamper> = handler.clone() as Arc<dyn SessionStamper>;
+        let snap_a = stamper.build_snapshot_json("sess-A").await.unwrap();
+        assert_eq!(snap_a.len(), 1);
+        assert_eq!(
+            snap_a[0].get("title").and_then(|v| v.as_str()),
+            Some("first-A")
+        );
+        assert_eq!(
+            snap_a[0].get("session_id").and_then(|v| v.as_str()),
+            Some("sess-A")
+        );
+        assert_eq!(
+            snap_a[0].get("origin_message_id").and_then(|v| v.as_str()),
+            Some("sess-A-0")
+        );
+
+        let snap_b = stamper.build_snapshot_json("sess-B").await.unwrap();
+        assert_eq!(snap_b.len(), 1);
+        assert_eq!(
+            snap_b[0].get("title").and_then(|v| v.as_str()),
+            Some("first-B")
+        );
+
+        // Unknown session → empty array (still Some, so the WS layer
+        // sends an empty snapshot instead of timing out).
+        let snap_none = stamper.build_snapshot_json("sess-Z").await.unwrap();
+        assert_eq!(snap_none.len(), 0);
+    }
+
+    /// Commit B regression: the **default** `build_snapshot_json`
+    /// returns `None` so non-override tools pay zero cost. Tested
+    /// here through a dummy struct that only implements the sync
+    /// methods.
+    #[test]
+    fn test_session_stamper_default_snapshot_is_none() {
+        use crate::tools::session_stamper::SessionStamper;
+
+        struct NoSnapshotTool;
+        impl SessionStamper for NoSnapshotTool {
+            fn set_active_session(
+                &self,
+                _session_id: Option<String>,
+            ) -> Option<String> {
+                None
+            }
+            fn set_active_message_id(
+                &self,
+                _message_id: Option<String>,
+            ) -> Option<String> {
+                None
+            }
+        }
+
+        // We can't easily await an async default method from a sync
+        // test, so we exercise it via a small tokio runtime helper.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(NoSnapshotTool.build_snapshot_json("any"));
+        assert!(
+            result.is_none(),
+            "default SessionStamper::build_snapshot_json must return None"
         );
     }
 }

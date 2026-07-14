@@ -915,6 +915,33 @@ impl ToolRegistry {
         true
     }
 
+    /// Build a per-session snapshot of the named tool's internal
+    /// state via `SessionStamper::build_snapshot_json`. Returns
+    /// `None` if the tool does not exist, did not opt in to
+    /// `SessionStamper`, or did not override `build_snapshot_json`
+    /// (the default returns `None`). Used by the WS layer to
+    /// hydrate the front-end todo panel on connect and after every
+    /// mutation.
+    ///
+    /// FRONTEND_AUDIT_TODO_2026-07-13 / Commit B.
+    pub async fn build_snapshot_json_for_tool(
+        &self,
+        name: &str,
+        session_id: &str,
+    ) -> Option<Vec<Value>> {
+        let stamper = {
+            let inner = self.inner.read().unwrap();
+            match inner.tools.get(name) {
+                Some(e) => match e.session_stamper.as_ref() {
+                    Some(s) => Arc::clone(s),
+                    None => return None,
+                },
+                None => return None,
+            }
+        };
+        stamper.build_snapshot_json(session_id).await
+    }
+
     /// Format an error as JSON: `{"error": "msg"}`.
     pub fn tool_error(msg: &str) -> String {
         serde_json::json!({ "error": msg }).to_string()
