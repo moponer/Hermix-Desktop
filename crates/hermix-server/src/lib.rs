@@ -4956,12 +4956,110 @@ fn todo_change_to_stream(
                 execution_count: item.execution_count,
                 group_id: item.group_id,
                 group_title: item.group_title,
+                // Commit A: thread the persisted session + origin-message
+                // ids onto the wire so the front-end can re-anchor the
+                // inline plan card after reload.
+                session_id: item.session_id,
+                origin_message_id: item.origin_message_id,
             },
         }),
         TodoChangeKind::Delete { id } => Some(StreamEvent::TodoItemRemoved {
             session_id: session_id.to_string(),
             id,
         }),
+        // Commit C: authoritative session-scoped snapshot. Items come
+        // pre-filtered by `list_for_session` from `TodoHandler::publish_snapshot`.
+        // Translate each `serde_json::Value` into the wire
+        // `TodoSnapshotItem` shape. We tolerate missing fields (legacy
+        // `todos.json`) by defaulting to empty strings / `None` — the
+        // front-end already handles missing optionals.
+        TodoChangeKind::Snapshot { session_id: snap_sid, items } => {
+            let wire_sid = snap_sid.unwrap_or_else(|| session_id.to_string());
+            let wire_items = items
+                .into_iter()
+                .filter_map(|v| {
+                    let id = v.get("id").and_then(|x| x.as_str())?.to_string();
+                    let title = v
+                        .get("title")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let status = v
+                        .get("status")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("pending")
+                        .to_string();
+                    let priority = v
+                        .get("priority")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("medium")
+                        .to_string();
+                    let created_at = v
+                        .get("created_at")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let description = v
+                        .get("description")
+                        .and_then(|x| x.as_str())
+                        .map(String::from);
+                    let last_result = v
+                        .get("last_result")
+                        .and_then(|x| x.as_str())
+                        .map(String::from);
+                    let execution_count = v
+                        .get("execution_count")
+                        .and_then(|x| x.as_u64())
+                        .unwrap_or(0) as u32;
+                    let depends_on = v
+                        .get("depends_on")
+                        .and_then(|x| x.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|d| d.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let group_id = v
+                        .get("group_id")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let group_title = v
+                        .get("group_title")
+                        .and_then(|x| x.as_str())
+                        .map(String::from);
+                    let item_session_id = v
+                        .get("session_id")
+                        .and_then(|x| x.as_str())
+                        .map(String::from)
+                        .or_else(|| Some(wire_sid.clone()));
+                    let origin_message_id = v
+                        .get("origin_message_id")
+                        .and_then(|x| x.as_str())
+                        .map(String::from);
+                    Some(hermix_transport::TodoSnapshotItem {
+                        id,
+                        title,
+                        description,
+                        status,
+                        priority,
+                        created_at,
+                        depends_on,
+                        last_result,
+                        execution_count,
+                        group_id,
+                        group_title,
+                        session_id: item_session_id,
+                        origin_message_id,
+                    })
+                })
+                .collect();
+            Some(StreamEvent::TodoSnapshot {
+                session_id: wire_sid,
+                items: wire_items,
+            })
+        }
     }
 }
 

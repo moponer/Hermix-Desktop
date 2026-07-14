@@ -51,6 +51,23 @@ pub enum TodoChangeKind {
     Upsert(crate::backends::todo::TodoItem),
     /// Single-item removal.
     Delete { id: String },
+    /// Authoritative full-state snapshot for the active session.
+    /// Emitted after every mutation so any late joiner (WS
+    /// reconnect, fresh tab) can resync without a separate HTTP
+    /// fetch, and so the WS layer can fan out the same shape on
+    /// `Connected` (hydration). Items are already filtered by
+    /// session_id at the backend level (`list_for_session`).
+    ///
+    /// `serde_json::Value` here instead of `TodoSnapshotItem`
+    /// because `hermix-tools` deliberately does NOT depend on
+    /// `hermix-transport` (that would form a cycle
+    /// `hermix-server → hermix-tools → hermix-transport`). The
+    /// `hermix-server` WS handler translates `Value` → wire
+    /// `TodoSnapshotItem` at the boundary. Commit C.
+    Snapshot {
+        session_id: Option<String>,
+        items: Vec<serde_json::Value>,
+    },
 }
 
 /// Register this tool with the registry.
@@ -236,6 +253,37 @@ impl TodoHandler {
             group_id: group_id.to_string(),
             group_title,
             message_id,
+        });
+    }
+
+    /// After any mutation (create / update / depend / record_execution
+    /// / delete), re-list the **active session's** authoritative state
+    /// from the backend and emit a `Snapshot` event. This is what the
+    /// WS layer forwards as `StreamEvent::TodoSnapshot` so reconnecting
+    /// clients get full state without a separate HTTP fetch.
+    ///
+    /// No-op if no session is active (CLI mode) or if the backend
+    /// `list_for_session` fails — the per-item `Upsert` / `Delete`
+    /// already published, so the UI still gets *something*. Commit C.
+    async fn publish_snapshot(&self) {
+        let session_id = self
+            .active_session
+            .lock()
+            .expect("todo active_session mutex poisoned")
+            .clone();
+        let Some(session_id) = session_id else {
+            return;
+        };
+        let items = match self.backend.list_for_session(&session_id).await {
+            Ok(raw) => serde_json::from_str::<Value>(&raw)
+                .ok()
+                .and_then(|v| v.get("todos").and_then(|t| t.as_array()).cloned())
+                .unwrap_or_default(),
+            Err(_) => return,
+        };
+        self.publish(TodoChangeKind::Snapshot {
+            session_id: Some(session_id),
+            items,
         });
     }
 
@@ -474,6 +522,7 @@ impl ToolHandler for TodoHandler {
 
         // Broadcast mutation events AFTER the backend succeeds.
         // `list`, `get_next`, `get_dependencies` are pure reads — no event.
+        let mut mutated = false;
         if action == "delete" {
             // No snapshot needed — emit the removal so the WS forwarder
             // drops the row from the live TodoPanel.
@@ -481,6 +530,7 @@ impl ToolHandler for TodoHandler {
                 self.publish(TodoChangeKind::Delete {
                     id: id.to_string(),
                 });
+                mutated = true;
             }
         } else if matches!(action, "create" | "update" | "depend" | "record_execution") {
             // For "create" the id lives in the backend's response, not
@@ -508,7 +558,17 @@ impl ToolHandler for TodoHandler {
                     self.announce_group(&item.group_id, item.group_title.clone());
                 }
                 self.publish(TodoChangeKind::Upsert(item));
+                mutated = true;
             }
+        }
+
+        // Commit C: after every mutation emit an authoritative
+        // session-scoped `Snapshot` so a reconnecting WS client (or
+        // a fresh tab) gets full state without a separate HTTP fetch.
+        // Cheap because `list_for_session` only reads the same
+        // backend we just wrote to.
+        if mutated {
+            self.publish_snapshot().await;
         }
 
         Ok(result)
@@ -1111,5 +1171,102 @@ mod tests {
             result.is_none(),
             "default SessionStamper::build_snapshot_json must return None"
         );
+    }
+
+    /// Commit C regression: after a successful `todo.create`,
+    /// `TodoHandler::execute` emits **two** broadcast events on the
+    /// session bus — first the per-item `Upsert`, then an
+    /// authoritative session-scoped `Snapshot` carrying the post-
+    /// mutation list. The WS layer translates the `Snapshot` into
+    /// `StreamEvent::TodoSnapshot` for reconnect-hydration. Real
+    /// `FileTodoBackend` writing to a temp file so the assertion
+    /// round-trips through JSON.
+    #[tokio::test]
+    async fn test_publish_snapshot_after_create() {
+        use crate::backends::todo::FileTodoBackend;
+        use crate::tools::session_stamper::SessionStamper;
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = Arc::new(FileTodoBackend::new(tmp.path().join("todos.json")));
+        let (tx, mut rx) = broadcast::channel::<TodoChange>(16);
+        let handler = Arc::new(TodoHandler::new(backend.clone(), Some(tx)));
+
+        // Stamp an active session so publish_snapshot has a target.
+        let stamper: Arc<dyn SessionStamper> = handler.clone() as Arc<dyn SessionStamper>;
+        stamper.set_active_session(Some("sess-C".to_string()));
+
+        handler
+            .execute(json!({
+                "action": "create",
+                "title": "Snap me",
+                "group_title": "snap plan",
+            }))
+            .await
+            .unwrap();
+
+        // First event: GroupStarted (new plan, fresh group_id).
+        let evt1 = rx.recv().await.unwrap();
+        assert!(matches!(
+            evt1.change,
+            TodoChangeKind::GroupStarted { .. }
+        ));
+
+        // Second event: Upsert with the new item.
+        let evt2 = rx.recv().await.unwrap();
+        let upsert_id = match evt2.change.clone() {
+            TodoChangeKind::Upsert(item) => item.id,
+            other => panic!("expected Upsert, got {:?}", other),
+        };
+        assert_eq!(evt2.session_id.as_deref(), Some("sess-C"));
+
+        // Third event: Snapshot carrying the authoritative list.
+        let evt3 = rx.recv().await.unwrap();
+        match evt3.change.clone() {
+            TodoChangeKind::Snapshot { session_id, items } => {
+                assert_eq!(session_id.as_deref(), Some("sess-C"));
+                assert_eq!(items.len(), 1, "snapshot must show the one item we just created");
+                let snap_item = &items[0];
+                assert_eq!(
+                    snap_item.get("id").and_then(|v| v.as_str()),
+                    Some(upsert_id.as_str())
+                );
+                assert_eq!(
+                    snap_item.get("title").and_then(|v| v.as_str()),
+                    Some("Snap me")
+                );
+                assert_eq!(
+                    snap_item.get("session_id").and_then(|v| v.as_str()),
+                    Some("sess-C"),
+                    "snapshot items must carry session_id for client-side filtering"
+                );
+            }
+            other => panic!("expected Snapshot, got {:?}", other),
+        }
+    }
+
+    /// Commit C regression: a pure read (`list`, `get_next`,
+    /// `get_dependencies`) does NOT emit a `Snapshot` — we only fan
+    /// out the authoritative state on mutation so the broadcast
+    /// channel doesn't get spammed.
+    #[tokio::test]
+    async fn test_read_actions_do_not_publish_snapshot() {
+        use crate::backends::todo::FileTodoBackend;
+        use crate::tools::session_stamper::SessionStamper;
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = Arc::new(FileTodoBackend::new(tmp.path().join("todos.json")));
+        let (tx, mut rx) = broadcast::channel::<TodoChange>(16);
+        let handler = Arc::new(TodoHandler::new(backend.clone(), Some(tx)));
+        let stamper: Arc<dyn SessionStamper> = handler.clone() as Arc<dyn SessionStamper>;
+        stamper.set_active_session(Some("sess-D".to_string()));
+
+        handler.execute(json!({"action": "list"})).await.unwrap();
+        handler.execute(json!({"action": "get_next"})).await.unwrap();
+
+        // No events should have been published for any read action.
+        // `try_recv` returns Err(Empty) immediately because the
+        // channel is empty.
+        match rx.try_recv() {
+            Err(broadcast::error::TryRecvError::Empty) => {}
+            other => panic!("read actions must not emit events; got {:?}", other),
+        }
     }
 }

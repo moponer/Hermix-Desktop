@@ -683,6 +683,19 @@ pub struct TodoSnapshotItem {
     /// Human label for the plan (e.g. "rename all files"). Optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_title: Option<String>,
+    /// Session id this todo belongs to. Used by the front-end todo
+    /// panel + post-snapshot merge logic to drop items that don't
+    /// belong to the active tab. `None` for legacy items written
+    /// before the per-session split. Commit A / C.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Wire-format assistant message id that emitted the tool call
+    /// which created this todo (`${session_id}-${rowIdx}`). Anchors
+    /// the inline plan card to the originating assistant message
+    /// after reload — same formula reproduces the same id from the
+    /// persisted row order. `None` for legacy items. P0-T1 / C.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_message_id: Option<String>,
 }
 
 /// Inbound message from the client over the streaming WebSocket. The server
