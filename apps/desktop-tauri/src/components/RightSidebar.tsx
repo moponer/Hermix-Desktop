@@ -10,6 +10,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CodeView } from "./CodeView";
+import { CodeBlock } from "./MarkdownBody";
 import { SpreadsheetView } from "./SpreadsheetView";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { clsx } from "clsx";
@@ -654,6 +655,16 @@ export function PreviewPanel({
                         {children}
                       </a>
                     ),
+                    // 2026-07-14: Reuse MarkdownBody's CodeBlock so
+                    // fenced code blocks in markdown previews get
+                    // syntax highlighting + language label + copy
+                    // button, matching the chat bubble experience.
+                    code({ className, children, ...props }) {
+                      const match = /language-(\w+)/.exec(className || "");
+                      const codeString = String(children).replace(/\n$/, "");
+                      if (match) return <CodeBlock language={match[1]} code={codeString} />;
+                      return <code {...props}>{children}</code>;
+                    },
                   }}
                 >
                   {previewState.content}

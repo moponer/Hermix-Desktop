@@ -470,6 +470,7 @@ pub fn build_system_prompt(
             model_name: model_for_prompt,
             autonomous_mode: config.autonomous_mode,
             tool_call_count,
+            domain_mode: None,
         };
         let project_conventions = config
             .workspace
@@ -831,6 +832,7 @@ pub fn resolve_initial_system_prompt(
             model_name: &config.model,
             autonomous_mode: config.autonomous_mode,
             tool_call_count,
+            domain_mode: None,
         };
         let (patched, report) = Section::audit_and_patch(&prompt, &route_ctx);
         if report.had_patches() {

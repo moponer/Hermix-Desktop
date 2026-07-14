@@ -37,6 +37,9 @@ use crate::CuaResult;
 /// Click at `(x, y)` with the given button. The cursor is moved
 /// first, then DOWN/UP events are issued.
 pub fn click(x: i32, y: i32, button: MouseButton) -> CuaResult<()> {
+    // SAFETY: `SetCursorPos` is a Win32 API that moves the cursor to
+    // the given screen coordinates. This is safe as long as the
+    // coordinates are within the virtual screen area.
     unsafe {
         if SetCursorPos(x, y).is_err() {
             return Err(CuaError::SendInput(format!(
@@ -56,6 +59,8 @@ pub fn click(x: i32, y: i32, button: MouseButton) -> CuaResult<()> {
         mouse_input(up_flag),
     ];
 
+    // SAFETY: `SendInput` is a Win32 API that synthesises input
+    // events. We pass a valid `INPUT` array with the correct size.
     unsafe {
         let sent = SendInput(
             &mut inputs,
@@ -71,11 +76,11 @@ pub fn click(x: i32, y: i32, button: MouseButton) -> CuaResult<()> {
 }
 
 fn mouse_input(flag: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS) -> INPUT {
-    // Note: `INPUT` has a union (`Anonymous`) that holds either a
-    // `MOUSEINPUT`, `KEYBDINPUT`, or `HARDWAREINPUT`. We always
-    // construct the MOUSEINPUT arm here; the KEYBDINPUT path is
-    // built separately in `unicode_keystroke` /
-    // `vk_keystroke`.
+    // SAFETY: `std::mem::zeroed()` is safe because `INPUT` is a
+    // C-compatible struct where all-zero bytes is a valid
+    // representation. The `Anonymous.mi` union field write is
+    // sound because we set `input.r#type = INPUT_MOUSE` first,
+    // making the `mi` arm the active variant.
     unsafe {
         let mut input: INPUT = std::mem::zeroed();
         input.r#type = INPUT_MOUSE;
@@ -110,6 +115,8 @@ pub fn type_text(text: &str) -> CuaResult<()> {
         inputs.push(down);
         inputs.push(up);
     }
+    // SAFETY: `SendInput` synthesises keystroke events. The `inputs`
+    // vector contains valid `INPUT` structs with correct sizes.
     unsafe {
         let sent = SendInput(
             &mut inputs,
@@ -126,6 +133,10 @@ pub fn type_text(text: &str) -> CuaResult<()> {
 }
 
 fn unicode_keystroke(c: char, key_up: bool) -> INPUT {
+    // SAFETY: `std::mem::zeroed()` is safe because `INPUT` is a
+    // C-compatible struct. `input.r#type = INPUT_KEYBOARD` and
+    // `input.Anonymous.ki` are set immediately, making the union
+    // access sound.
     unsafe {
         let mut input: INPUT = std::mem::zeroed();
         input.r#type = INPUT_KEYBOARD;
@@ -172,6 +183,8 @@ pub fn press_key(chord: &str) -> CuaResult<()> {
         inputs.push(vk_keystroke(*k, true));
     }
 
+    // SAFETY: `SendInput` synthesises keyboard events. The `inputs`
+    // vector contains valid `INPUT` structs with correct sizes.
     unsafe {
         let sent = SendInput(
             &mut inputs,
@@ -188,6 +201,9 @@ pub fn press_key(chord: &str) -> CuaResult<()> {
 }
 
 fn vk_keystroke(vk: VIRTUAL_KEY, key_up: bool) -> INPUT {
+    // SAFETY: Same rationale as `unicode_keystroke` — `INPUT` is a
+    // C-compatible struct, zeroed initialisation is valid, and the
+    // union field `ki` is set immediately after `r#type`.
     unsafe {
         let mut input: INPUT = std::mem::zeroed();
         input.r#type = INPUT_KEYBOARD;

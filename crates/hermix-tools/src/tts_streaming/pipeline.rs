@@ -109,17 +109,17 @@ impl VecSentenceSink {
         Self::default()
     }
     pub fn take(&self) -> Vec<String> {
-        std::mem::take(&mut self.inner.lock().unwrap())
+        std::mem::take(&mut self.inner.lock().expect("sentence sink mutex not poisoned"))
     }
     pub fn snapshot(&self) -> Vec<String> {
-        self.inner.lock().unwrap().clone()
+        self.inner.lock().expect("sentence sink mutex not poisoned").clone()
     }
 }
 
 #[async_trait]
 impl SentenceSink for VecSentenceSink {
     async fn on_sentence(&self, sentence: &str) -> Result<(), ToolError> {
-        self.inner.lock().unwrap().push(sentence.to_string());
+        self.inner.lock().expect("sentence sink mutex not poisoned").push(sentence.to_string());
         Ok(())
     }
 }
@@ -168,7 +168,7 @@ impl TtsStreamingPipeline {
             TextDelta::Chunk(s) => {
                 // (1) Strip <think> blocks across delta boundaries.
                 let visible = {
-                    let mut guard = self.sanitizer.lock().unwrap();
+                    let mut guard = self.sanitizer.lock().expect("pipeline mutex not poisoned");
                     guard.push(&s)
                 };
                 if visible.is_empty() {
@@ -176,7 +176,7 @@ impl TtsStreamingPipeline {
                 }
                 // (2) Feed into the sentence buffer and emit completed ones.
                 let sentences = {
-                    let mut buf = self.buffer.lock().unwrap();
+                    let mut buf = self.buffer.lock().expect("pipeline mutex not poisoned");
                     buf.push(&visible)
                 };
                 for sentence in sentences {
@@ -199,7 +199,7 @@ impl TtsStreamingPipeline {
             return Ok(());
         }
         let flushed = {
-            let mut buf = self.buffer.lock().unwrap();
+            let mut buf = self.buffer.lock().expect("pipeline mutex not poisoned");
             buf.force_flush()
         };
         if let Some(sentence) = flushed {
@@ -212,7 +212,7 @@ impl TtsStreamingPipeline {
     /// buffered text, then notify sinks.
     pub async fn finish(&self) -> Result<PipelineOutcome, ToolError> {
         self.drain_end().await?;
-        let stats = self.stats.lock().unwrap().clone();
+        let stats = self.stats.lock().expect("pipeline mutex not poisoned").clone();
         self.sentence_sink.on_finish(&stats).await?;
         Ok(PipelineOutcome { stats })
     }
@@ -221,12 +221,12 @@ impl TtsStreamingPipeline {
         // Flush sanitizer remainder (dropped per Python semantics if inside
         // an unclosed `<think>` block).
         let tail = {
-            let mut guard = self.sanitizer.lock().unwrap();
+            let mut guard = self.sanitizer.lock().expect("pipeline mutex not poisoned");
             guard.flush()
         };
         if !tail.is_empty() {
             let sentences = {
-                let mut buf = self.buffer.lock().unwrap();
+                let mut buf = self.buffer.lock().expect("pipeline mutex not poisoned");
                 buf.push(&tail)
             };
             for sentence in sentences {
@@ -235,7 +235,7 @@ impl TtsStreamingPipeline {
         }
         // Then flush any remaining buffered text.
         let leftover = {
-            let mut buf = self.buffer.lock().unwrap();
+            let mut buf = self.buffer.lock().expect("pipeline mutex not poisoned");
             buf.finish()
         };
         if let Some(sentence) = leftover {
@@ -246,10 +246,10 @@ impl TtsStreamingPipeline {
 
     async fn emit(&self, sentence: &str) -> Result<(), ToolError> {
         if self.stop.load(Ordering::SeqCst) {
-            self.stats.lock().unwrap().aborted = true;
+            self.stats.lock().expect("pipeline mutex not poisoned").aborted = true;
             return Ok(());
         }
-        self.stats.lock().unwrap().sentences_emitted += 1;
+        self.stats.lock().expect("pipeline mutex not poisoned").sentences_emitted += 1;
         self.sentence_sink.on_sentence(sentence).await?;
         if let (Some(backend), Some(pcm_sink)) =
             (self.streaming_backend.as_ref(), self.pcm_sink.as_ref())
@@ -281,13 +281,13 @@ impl TtsStreamingPipeline {
             .await?;
         while let Some(chunk) = stream.next().await {
             if self.stop.load(Ordering::SeqCst) {
-                self.stats.lock().unwrap().aborted = true;
+                self.stats.lock().expect("pipeline mutex not poisoned").aborted = true;
                 break;
             }
             let bytes = chunk?;
             let len = bytes.len();
             sink.on_chunk(sentence, bytes).await?;
-            let mut stats = self.stats.lock().unwrap();
+            let mut stats = self.stats.lock().expect("pipeline mutex not poisoned");
             stats.pcm_chunks_forwarded += 1;
             stats.pcm_bytes_forwarded += len;
         }

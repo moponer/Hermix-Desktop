@@ -134,6 +134,24 @@ impl ConvergenceDetector {
         }
     }
 
+    /// Adjust the no-progress threshold based on the L1 Domain Mode
+    /// preset's `max_stall_turns`.
+    ///
+    /// Each domain has a different tolerance for tool-only turns:
+    /// - Code: 5 (compile-test cycle is short)
+    /// - Research: 7 (multi-source gathering takes longer)
+    /// - Write: 4 (writing should produce visible text quickly)
+    /// - Operate: 3 (file ops should be fast)
+    /// - Chat: 2 (no tools expected)
+    ///
+    /// Called once per turn from `ModeComposition::preset.max_stall_turns`.
+    #[allow(dead_code)]
+    pub(crate) fn apply_domain_max_stall(&mut self, max_stall_turns: u32) {
+        if max_stall_turns > 0 {
+            self.config.max_no_progress_turns = max_stall_turns;
+        }
+    }
+
     /// Record a completed turn and check for convergence.
     ///
     /// Parameters:
@@ -452,5 +470,43 @@ mod tests {
         d.check(false, 1, 0, "");
         let signal = d.check(false, 1, 0, "");
         assert!(matches!(signal, ConvergenceSignal::Warn { .. }));
+    }
+
+    // ── Domain Mode integration tests ──────────────────────────────
+
+    #[test]
+    fn test_apply_domain_max_stall_adjusts_threshold() {
+        let mut d = ConvergenceDetector::new();
+        // Default is 15
+        assert_eq!(d.config.max_no_progress_turns, 15);
+        // Apply Code domain (max_stall_turns = 5)
+        d.apply_domain_max_stall(5);
+        assert_eq!(d.config.max_no_progress_turns, 5);
+    }
+
+    #[test]
+    fn test_apply_domain_max_stall_zero_is_noop() {
+        let mut d = ConvergenceDetector::new();
+        d.apply_domain_max_stall(0);
+        assert_eq!(d.config.max_no_progress_turns, 15); // unchanged
+    }
+
+    #[test]
+    fn test_domain_adjusted_threshold_takes_effect() {
+        let mut d = ConvergenceDetector::new();
+        // Apply Operate domain (max_stall_turns = 3)
+        d.apply_domain_max_stall(3);
+
+        // 3 no-progress turns should now trigger a warning
+        assert_eq!(d.check(false, 1, 0, ""), ConvergenceSignal::Continue);
+        assert_eq!(d.check(false, 1, 0, ""), ConvergenceSignal::Continue);
+        let signal = d.check(false, 1, 0, "");
+        assert!(matches!(
+            signal,
+            ConvergenceSignal::Warn {
+                reason: ConvergenceReason::NoProgressWithTools,
+                ..
+            }
+        ));
     }
 }

@@ -142,13 +142,13 @@ impl ToolMetaRegistry {
     /// Register metadata for a tool. If metadata for the same name
     /// already exists, it is overwritten.
     pub fn register(&self, meta: ToolMeta) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().expect("tool_meta rwlock not poisoned");
         inner.insert(meta.name.clone(), meta);
     }
 
     /// Register multiple tool metadatas at once.
     pub fn register_all(&self, metas: Vec<ToolMeta>) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().expect("tool_meta rwlock not poisoned");
         for meta in metas {
             inner.insert(meta.name.clone(), meta);
         }
@@ -157,7 +157,7 @@ impl ToolMetaRegistry {
     /// Set the loading strategy for a tool. If the tool isn't registered,
     /// a minimal entry is created with the given name.
     pub fn set_loading_strategy(&self, name: &str, strategy: LoadingStrategy) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().expect("tool_meta rwlock not poisoned");
         inner
             .entry(name.to_string())
             .and_modify(|m| m.loading_strategy = strategy)
@@ -182,7 +182,7 @@ impl ToolMetaRegistry {
 
     /// Get the metadata for a tool.
     pub fn get(&self, name: &str) -> Option<ToolMeta> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("tool_meta rwlock not poisoned");
         inner.get(name).cloned()
     }
 
@@ -190,7 +190,7 @@ impl ToolMetaRegistry {
     /// tool is not registered (safe default — unknown tools are treated
     /// as resident so they don't get hidden behind the bridge).
     pub fn loading_strategy(&self, name: &str) -> LoadingStrategy {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("tool_meta rwlock not poisoned");
         inner
             .get(name)
             .map(|m| m.loading_strategy)
@@ -209,7 +209,7 @@ impl ToolMetaRegistry {
 
     /// Get all resident tool names.
     pub fn resident_names(&self) -> HashSet<String> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("tool_meta rwlock not poisoned");
         inner
             .values()
             .filter(|m| m.loading_strategy.is_resident())
@@ -219,7 +219,7 @@ impl ToolMetaRegistry {
 
     /// Get all deferred tool names.
     pub fn deferred_names(&self) -> HashSet<String> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("tool_meta rwlock not poisoned");
         inner
             .values()
             .filter(|m| m.loading_strategy.is_deferred())
@@ -248,13 +248,13 @@ impl ToolMetaRegistry {
 
     /// Get all registered metadata entries.
     pub fn list(&self) -> Vec<ToolMeta> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("tool_meta rwlock not poisoned");
         inner.values().cloned().collect()
     }
 
     /// Number of registered tools.
     pub fn len(&self) -> usize {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("tool_meta rwlock not poisoned");
         inner.len()
     }
 

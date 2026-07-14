@@ -41,10 +41,14 @@ export interface Artifact {
 // implicit. Anchoring these against a workspace root would silently point
 // at the wrong file, so we drop them as ambiguous.
 //
-// Supports Unicode letters (CJK, etc.) in path segments via \u4e00-\u9fff range.
-const PATH_RE = /(?:(?:[A-Za-z]:[\\/])|(?:[\\/]))(?:[\w.\-\u4e00-\u9fff]+[\\/])+[\w.\-\u4e00-\u9fff]+\.[a-z0-9]{1,5}|(?:[A-Za-z]:[\\/])[\w.\-\u4e00-\u9fff]+\.[a-z0-9]{1,5}|(?:[\w.\-\u4e00-\u9fff]+[\\/]){2,}[\w.\-\u4e00-\u9fff]+\.[a-z0-9]{1,5}/gi;
+// 2026-07-14: Switched from [\w.\-\u4e00-\u9fff] to [\p{L}\p{N}_\-.\s()（）【】\[\]]
+// with the `u` flag so paths with spaces (e.g. "My Documents"), parentheses,
+// and non-CJK Unicode (Korean, Japanese, accented Latin) are matched.
+// The extension character class also switched from [a-z0-9] to [\p{L}\p{N}]
+// for the same reason. This aligns with MarkdownBody.tsx's PATH_RE.
+const PATH_RE = /(?:(?:[A-Za-z]:[\\/])|(?:[\\/]))(?:[\p{L}\p{N}_\-.\s()（）【】\[\]]+[\\/])+[\p{L}\p{N}_\-.\s()（）【】\[\]]+\.[\p{L}\p{N}]{1,5}|(?:[A-Za-z]:[\\/])[\p{L}\p{N}_\-.\s()（）【】\[\]]+\.[\p{L}\p{N}]{1,5}|(?:[\p{L}\p{N}_\-.\s()（）【】\[\]]+[\\/]){2,}[\p{L}\p{N}_\-.\s()（）【】\[\]]+\.[\p{L}\p{N}]{1,5}/giu;
 // Same as PATH_RE but only matches absolute paths. Used to flag confidence.
-const ABS_PATH_RE = /(?:(?:[A-Za-z]:[\\/])|(?:[\/]))(?:[\w.\-\u4e00-\u9fff]+[\\/])+[\w.\-\u4e00-\u9fff]+\.[a-z0-9]{1,5}/gi;
+const ABS_PATH_RE = /(?:(?:[A-Za-z]:[\\/])|(?:[\/]))(?:[\p{L}\p{N}_\-.\s()（）【】\[\]]+[\\/])+[\p{L}\p{N}_\-.\s()（）【】\[\]]+\.[\p{L}\p{N}]{1,5}/giu;
 
 const CODE_EXTS = new Set([
   "ts", "tsx", "js", "jsx", "mjs", "cjs", "rs", "py", "go", "java", "kt",
@@ -280,6 +284,34 @@ export function extractArtifacts(
     }
   };
 
+  // 2026-07-14: Direct path extraction from file_change events.
+  // Instead of relying on PATH_RE to match the file_path inside a
+  // concatenated string (which fails for paths with spaces or
+  // unusual Unicode), we directly create an artifact from the
+  // backend-stamped absolute path. This ensures every file the
+  // LLM writes shows up in the artifact panel.
+  const harvestDirectPath = (
+    rawPath: string,
+    source: { tool: string; timestamp: string },
+  ) => {
+    if (!rawPath) return;
+    const path = rawPath.trim();
+    if (!path) return;
+    const norm = path.replace(/\\/g, "/");
+    if (byPath.has(norm)) return;
+    if (!isArtifactPath(path)) return;
+    const name = basename(path);
+    byPath.set(norm, {
+      id: `art-${n++}`,
+      name,
+      path,
+      kind: classify(name),
+      tool: source.tool,
+      timestamp: source.timestamp,
+      isAbsolute: isAbsolutePath(path),
+    });
+  };
+
   for (const m of messages) {
     if (m.role === "assistant") {
       for (const tc of m.tool_calls ?? []) {
@@ -290,14 +322,23 @@ export function extractArtifacts(
         });
       }
       for (const ev of m.execution_timeline ?? []) {
-        // Most events carry paths in arguments/content (tool_start
-        // args, tool stdout/completion text).  file_change events are
-        // special: the server stamps the absolute path in `file_path`
-        // so the UI can render it without re-parsing freeform text.
+        // file_change events are special: the server stamps the
+        // absolute path in `file_path`. Extract it directly instead
+        // of relying on PATH_RE to match it inside a concatenated
+        // string — the regex may not match paths with spaces or
+        // unusual Unicode characters.
+        if (ev.type === "file_change" && ev.file_path) {
+          harvestDirectPath(ev.file_path, {
+            tool: ev.tool ?? "file_change",
+            timestamp: ev.created_at ?? m.timestamp,
+          });
+        }
+        // Most events also carry paths in arguments/content (tool_start
+        // args, tool stdout/completion text). Harvest those too.
         const parts: string[] = [];
         if (ev.arguments) parts.push(ev.arguments);
         if (ev.content) parts.push(ev.content);
-        if (ev.file_path) parts.push(ev.file_path);
+        // Don't re-harvest file_path via the regex path — already done above.
         const raw = parts.join("\n");
         if (raw) harvest(raw, {
           tool: ev.tool ?? "tool",

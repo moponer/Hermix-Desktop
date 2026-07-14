@@ -169,7 +169,7 @@ impl WebsitePolicy {
         };
 
         let needs_reload = {
-            let last = self.last_modified.read().unwrap();
+            let last = self.last_modified.read().expect("url_safety rwlock not poisoned");
             match *last {
                 Some(prev) => current_mtime > prev,
                 None => true,
@@ -195,7 +195,7 @@ impl WebsitePolicy {
     pub fn check_url(&self, url: &str) -> PolicyCheckResult {
         self.maybe_reload();
 
-        let config = self.config.read().unwrap();
+        let config = self.config.read().expect("url_safety rwlock not poisoned");
         let parsed = url::Url::parse(url);
 
         for (i, rule) in config.rules.iter().enumerate() {
@@ -584,7 +584,7 @@ impl TirithSecurity {
             Err(_) => return,
         };
         let needs_reload = {
-            let last = self.last_modified.read().unwrap();
+            let last = self.last_modified.read().expect("url_safety rwlock not poisoned");
             match *last {
                 Some(prev) => current_mtime > prev,
                 None => true,
@@ -609,7 +609,7 @@ impl TirithSecurity {
     pub fn check_tool_call(&self, tool_name: &str, params: &Value) -> TirithCheckResult {
         self.maybe_reload();
 
-        let config = self.config.read().unwrap();
+        let config = self.config.read().expect("url_safety rwlock not poisoned");
         let params_str = serde_json::to_string(params).unwrap_or_default();
 
         for (i, rule) in config.rules.iter().enumerate() {

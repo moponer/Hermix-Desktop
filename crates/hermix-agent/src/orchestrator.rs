@@ -145,6 +145,15 @@ pub struct ModeGate {
     plan_confirmed: bool,
     /// Cached set of write-class tool names for fast lookup.
     write_tools: HashSet<String>,
+    /// L1 Domain Mode override: write-class tools that are safe to
+    /// allow in Ask mode for the current domain.
+    ///
+    /// Example: Code+Ask allows `write_file` and `patch` because
+    /// the user might want to see code and make small edits without
+    /// switching to Craft mode. Research+Ask has no overrides.
+    ///
+    /// Source: `DomainPreset::safe_write_override`.
+    safe_write_override: HashSet<String>,
 }
 
 impl ModeGate {
@@ -158,12 +167,27 @@ impl ModeGate {
             mode,
             plan_confirmed: false,
             write_tools,
+            safe_write_override: HashSet::new(),
         }
     }
 
     /// Create a Craft mode gate (no restrictions).
     pub fn craft() -> Self {
         Self::new(TaskMode::Craft)
+    }
+
+    /// Set the safe-write override list (from `DomainPreset`).
+    ///
+    /// Tools in this list are allowed even in Ask mode.
+    /// Typically set from `DomainPreset::safe_write_override`.
+    pub fn with_safe_write_override(mut self, tools: &[&str]) -> Self {
+        self.safe_write_override = tools.iter().map(|s| s.to_lowercase()).collect();
+        self
+    }
+
+    /// Set the safe-write override from owned strings.
+    pub fn set_safe_write_override(&mut self, tools: Vec<String>) {
+        self.safe_write_override = tools.into_iter().map(|s| s.to_lowercase()).collect();
     }
 
     /// Returns the current working mode.
@@ -186,14 +210,19 @@ impl ModeGate {
     }
 
     /// Filter tool schemas based on the mode. In Ask mode, write-class
-    /// tools are removed from the list sent to the LLM.
+    /// tools are removed from the list sent to the LLM — unless they
+    /// appear in the `safe_write_override` list (L1 Domain Mode).
     pub fn filter_tool_schemas(&self, schemas: &[ToolSchema]) -> Vec<ToolSchema> {
         if self.mode != TaskMode::Ask {
             return schemas.to_vec();
         }
         schemas
             .iter()
-            .filter(|s| !self.write_tools.contains(&s.name.to_lowercase()))
+            .filter(|s| {
+                let lower = s.name.to_lowercase();
+                // Block write tools unless they're in the override list
+                !self.write_tools.contains(&lower) || self.safe_write_override.contains(&lower)
+            })
             .cloned()
             .collect()
     }
@@ -202,8 +231,14 @@ impl ModeGate {
     /// mode. This is a defense-in-depth check — even if a write tool
     /// somehow appears in the LLM's response (e.g. via a plugin that
     /// registered it after schema filtering), this method will block it.
+    ///
+    /// L1 Domain Mode override: tools in `safe_write_override` are
+    /// allowed even in Ask mode (e.g. `write_file` in Code+Ask).
     pub fn check_tool_call(&self, call: &ToolCall) -> ModeGateDecision {
-        if self.mode == TaskMode::Ask && self.is_write_tool_name(&call.function.name) {
+        if self.mode == TaskMode::Ask
+            && self.is_write_tool_name(&call.function.name)
+            && !self.is_safe_override(&call.function.name)
+        {
             return ModeGateDecision::Block {
                 reason: format!(
                     "Ask mode blocks write-class tool '{}'. \
@@ -240,6 +275,11 @@ impl ModeGate {
     /// Internal: check if a tool name is write-class (case-insensitive).
     fn is_write_tool_name(&self, name: &str) -> bool {
         self.write_tools.contains(&name.to_lowercase())
+    }
+
+    /// Internal: check if a tool name is in the safe-write override list.
+    fn is_safe_override(&self, name: &str) -> bool {
+        self.safe_write_override.contains(&name.to_lowercase())
     }
 }
 
@@ -445,6 +485,84 @@ mod tests {
         ];
         let filtered = gate.filter_tool_schemas(&schemas);
         assert_eq!(filtered.len(), 2);
+    }
+
+    // ── ModeGate: safe_write_override (L1 Domain Mode) ───────────────
+
+    #[test]
+    fn test_ask_mode_with_safe_write_override_allows_write_file() {
+        let gate = ModeGate::new(TaskMode::Ask)
+            .with_safe_write_override(&["write_file", "patch"]);
+        let call = ToolCall {
+            id: "1".into(),
+            function: hermix_core::FunctionCall {
+                name: "write_file".into(),
+                arguments: "{}".into(),
+            },
+        };
+        assert_eq!(gate.check_tool_call(&call), ModeGateDecision::Allow);
+    }
+
+    #[test]
+    fn test_ask_mode_with_safe_write_override_still_blocks_terminal() {
+        let gate = ModeGate::new(TaskMode::Ask)
+            .with_safe_write_override(&["write_file", "patch"]);
+        let call = ToolCall {
+            id: "1".into(),
+            function: hermix_core::FunctionCall {
+                name: "terminal".into(),
+                arguments: "{}".into(),
+            },
+        };
+        // terminal is NOT in the override list, should be blocked
+        assert!(matches!(gate.check_tool_call(&call), ModeGateDecision::Block { .. }));
+    }
+
+    #[test]
+    fn test_ask_mode_filter_schemas_with_override() {
+        let gate = ModeGate::new(TaskMode::Ask)
+            .with_safe_write_override(&["write_file"]);
+        let schemas = vec![
+            ToolSchema::new("read_file", "Read", JsonSchema::new("object")),
+            ToolSchema::new("write_file", "Write", JsonSchema::new("object")),
+            ToolSchema::new("terminal", "Shell", JsonSchema::new("object")),
+        ];
+        let filtered = gate.filter_tool_schemas(&schemas);
+        // read_file (not write) + write_file (override) = 2
+        // terminal (write, no override) = blocked
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().any(|s| s.name == "read_file"));
+        assert!(filtered.iter().any(|s| s.name == "write_file"));
+        assert!(!filtered.iter().any(|s| s.name == "terminal"));
+    }
+
+    #[test]
+    fn test_ask_mode_no_override_blocks_all_write_tools() {
+        let gate = ModeGate::new(TaskMode::Ask);
+        let schemas = vec![
+            ToolSchema::new("read_file", "Read", JsonSchema::new("object")),
+            ToolSchema::new("write_file", "Write", JsonSchema::new("object")),
+        ];
+        let filtered = gate.filter_tool_schemas(&schemas);
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.iter().all(|s| s.name == "read_file"));
+    }
+
+    #[test]
+    fn test_set_safe_write_override_mutates() {
+        let mut gate = ModeGate::new(TaskMode::Ask);
+        // Before: write_file is blocked
+        let call = ToolCall {
+            id: "1".into(),
+            function: hermix_core::FunctionCall {
+                name: "write_file".into(),
+                arguments: "{}".into(),
+            },
+        };
+        assert!(matches!(gate.check_tool_call(&call), ModeGateDecision::Block { .. }));
+        // After set: write_file is allowed
+        gate.set_safe_write_override(vec!["write_file".into()]);
+        assert_eq!(gate.check_tool_call(&call), ModeGateDecision::Allow);
     }
 
 // ── as_orchestration_stage ─────────────────────────────────────

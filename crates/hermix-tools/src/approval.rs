@@ -41,6 +41,13 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// 2026-07-14 (P1-1): Helper to compile static regex patterns without
+// .unwrap(). Uses .expect() with a semantic message as required by
+// the code hardening plan (static init cannot use `?`).
+fn re(pattern: &'static str) -> Regex {
+    Regex::new(pattern).expect("static regex pattern must compile")
+}
+
 // ---------------------------------------------------------------------------
 // ApprovalDecision
 // ---------------------------------------------------------------------------
@@ -63,18 +70,18 @@ pub enum ApprovalDecision {
 /// Patterns that are always denied.
 static DENIED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        Regex::new(r"(?i)\brm\s+(-\w*r\w*f\w*|-\w*f\w*r\w*)\s").unwrap(),
-        Regex::new(r"(?i)\brm\s+(-\w*r\w*f\w*|-\w*f\w*r\w*)\s*/").unwrap(),
-        Regex::new(r"(?i)\brm\s+--no-preserve-root\s").unwrap(),
-        Regex::new(r"(?i)\bmkfs\b").unwrap(),
-        Regex::new(r"(?i)\bdd\s+.*of=/dev/").unwrap(),
-        Regex::new(r"(?i):()\s*>\s*/dev/").unwrap(),
-        Regex::new(r"(?i)>\s*/dev/sd[a-z]").unwrap(),
-        Regex::new(r"(?i)chmod\s+777\s").unwrap(),
-        Regex::new(r"(?i)chmod\s+-R\s+777\s").unwrap(),
+        re(r"(?i)\brm\s+(-\w*r\w*f\w*|-\w*f\w*r\w*)\s"),
+        re(r"(?i)\brm\s+(-\w*r\w*f\w*|-\w*f\w*r\w*)\s*/"),
+        re(r"(?i)\brm\s+--no-preserve-root\s"),
+        re(r"(?i)\bmkfs\b"),
+        re(r"(?i)\bdd\s+.*of=/dev/"),
+        re(r"(?i):()\s*>\s*/dev/"),
+        re(r"(?i)>\s*/dev/sd[a-z]"),
+        re(r"(?i)chmod\s+777\s"),
+        re(r"(?i)chmod\s+-R\s+777\s"),
         // Windows: del /erase with /q (quiet = no prompt)
-        Regex::new(r"(?i)\b(del|erase)\s+.*\b/q\b").unwrap(),
-        Regex::new(r"(?i)\brmdir\s+(/\w+\s+)*/s\s+(/\w+\s+)*/q").unwrap(),
+        re(r"(?i)\b(del|erase)\s+.*\b/q\b"),
+        re(r"(?i)\brmdir\s+(/\w+\s+)*/s\s+(/\w+\s+)*/q"),
         // Windows (2026-06-07 pass): catastrophic destructive ops.
         // - `rd /s` (recursive delete) with /q (quiet) — same shape as rm -rf
         // - `reg delete` against HKLM / HKCR (system hives)
@@ -85,16 +92,16 @@ static DENIED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // - `format C:` / `format <drive>` — already matched but pinned
         //   here too because it's the textbook example
         // - `Remove-Item -Recurse -Force` (PowerShell rm -rf equivalent)
-        Regex::new(r"(?i)\brd\s+(/\w+\s+)*/s\s+(/\w+\s+)*/q").unwrap(),
-        Regex::new(r"(?i)\breg\s+delete\s+(HKLM|HKCR|HKCU\\SYSTEM|HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run)").unwrap(),
-        Regex::new(r"(?i)\bdiskpart\b.*\b(clean|offline|delete)\b").unwrap(),
-        Regex::new(r"(?i)\bsc\s+delete\s").unwrap(),
-        Regex::new(r"(?i)\bcipher\s+/w[ :]").unwrap(),
-        Regex::new(r"(?i)\bbcdedit\s+(/deletevalue|/set)\b").unwrap(),
-        Regex::new(r"(?i)\bformat\s+[A-Z]:").unwrap(),
-        Regex::new(r"(?i)\bRemove-Item\b.*-Recurse.*-Force\b").unwrap(),
-        Regex::new(r"(?i)\bRemove-Item\b.*-Force.*-Recurse\b").unwrap(),
-        Regex::new(r"(?i)\bdel\s+/f\s+/s\s+/q\b").unwrap(),
+        re(r"(?i)\brd\s+(/\w+\s+)*/s\s+(/\w+\s+)*/q"),
+        re(r"(?i)\breg\s+delete\s+(HKLM|HKCR|HKCU\\SYSTEM|HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run)"),
+        re(r"(?i)\bdiskpart\b.*\b(clean|offline|delete)\b"),
+        re(r"(?i)\bsc\s+delete\s"),
+        re(r"(?i)\bcipher\s+/w[ :]"),
+        re(r"(?i)\bbcdedit\s+(/deletevalue|/set)\b"),
+        re(r"(?i)\bformat\s+[A-Z]:"),
+        re(r"(?i)\bRemove-Item\b.*-Recurse.*-Force\b"),
+        re(r"(?i)\bRemove-Item\b.*-Force.*-Recurse\b"),
+        re(r"(?i)\bdel\s+/f\s+/s\s+/q\b"),
     ]
 });
 
@@ -102,39 +109,39 @@ static DENIED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         // sudo commands
-        Regex::new(r"(?i)\bsudo\b").unwrap(),
+        re(r"(?i)\bsudo\b"),
         // rm -r (but not rm -rf which is denied)
-        Regex::new(r"(?i)\brm\s+-[^f]*r").unwrap(),
+        re(r"(?i)\brm\s+-[^f]*r"),
         // System service manipulation
-        Regex::new(r"(?i)\bsystemctl\s+(start|stop|restart|enable|disable)\s").unwrap(),
+        re(r"(?i)\bsystemctl\s+(start|stop|restart|enable|disable)\s"),
         // Package management
-        Regex::new(r"(?i)\b(apt|apt-get|yum|dnf|pacman|brew)\s+(install|remove|purge)\b").unwrap(),
+        re(r"(?i)\b(apt|apt-get|yum|dnf|pacman|brew)\s+(install|remove|purge)\b"),
         // Network configuration
-        Regex::new(r"(?i)\biptables\b").unwrap(),
-        Regex::new(r"(?i)\bifconfig\s").unwrap(),
+        re(r"(?i)\biptables\b"),
+        re(r"(?i)\bifconfig\s"),
         // Process killing
-        Regex::new(r"(?i)\bkill\s+-9\b").unwrap(),
-        Regex::new(r"(?i)\bkillall\b").unwrap(),
+        re(r"(?i)\bkill\s+-9\b"),
+        re(r"(?i)\bkillall\b"),
         // Disk operations
-        Regex::new(r"(?i)\bformat\b").unwrap(),
+        re(r"(?i)\bformat\b"),
         // Cron modifications
-        Regex::new(r"(?i)\bcrontab\s+-r\b").unwrap(),
+        re(r"(?i)\bcrontab\s+-r\b"),
         // Shell pipe to sh
-        Regex::new(r"\|\s*(ba)?sh\b").unwrap(),
+        re(r"\|\s*(ba)?sh\b"),
         // Curl pipe to shell
-        Regex::new(r"(?i)curl\s+.*\|\s*(ba)?sh").unwrap(),
+        re(r"(?i)curl\s+.*\|\s*(ba)?sh"),
         // Writing to system directories
-        Regex::new(r"(?i)>\s*/etc/").unwrap(),
-        Regex::new(r"(?i)>\s*/usr/").unwrap(),
+        re(r"(?i)>\s*/etc/"),
+        re(r"(?i)>\s*/usr/"),
         // Docker operations that affect system
-        Regex::new(r"(?i)\bdocker\s+(rm|rmi|system\s+prune)\b").unwrap(),
+        re(r"(?i)\bdocker\s+(rm|rmi|system\s+prune)\b"),
         // Git force push
-        Regex::new(r"(?i)\bgit\s+push\s+.*--force").unwrap(),
-        Regex::new(r"(?i)\bgit\s+push\s+-f\b").unwrap(),
+        re(r"(?i)\bgit\s+push\s+.*--force"),
+        re(r"(?i)\bgit\s+push\s+-f\b"),
         // Windows file deletion
-        Regex::new(r"(?i)\bdel\s+").unwrap(),
-        Regex::new(r"(?i)\berase\s+").unwrap(),
-        Regex::new(r"(?i)\brmdir\s+(/\w+\s+)*/s\b").unwrap(),
+        re(r"(?i)\bdel\s+"),
+        re(r"(?i)\berase\s+"),
+        re(r"(?i)\brmdir\s+(/\w+\s+)*/s\b"),
         // Windows (2026-06-07 pass): destructive-but-not-catastrophic ops.
         // The user might legitimately want to run these, but the
         // LLM should ask first.
@@ -154,26 +161,26 @@ static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // - `sfc /scannow` is read-only so not blocked
         // - `DISM /Online /Cleanup-Image /RestoreHealth` is
         //   system-state-modifying
-        Regex::new(r"(?i)\btaskkill\s+(/\w+\s+)*/f\b").unwrap(),
-        Regex::new(r"(?i)\b(taskkill|tskill)\s+").unwrap(),
-        Regex::new(r"(?i)\breg\s+delete\s+").unwrap(),
-        Regex::new(r"(?i)\bnet\s+(stop|start)\s+").unwrap(),
-        Regex::new(r"(?i)\bRemove-Item\b.*(-Recurse|-Force)").unwrap(),
-        Regex::new(r"(?i)\b(Stop|Restart|Set)-Service\b").unwrap(),
-        Regex::new(r"(?i)\bwevtutil\s+cl\b").unwrap(),
-        Regex::new(r"(?i)\bvssadmin\s+delete\s+shadows\b").unwrap(),
-        Regex::new(r"(?i)\bwmic\s+.*\bdelete\b").unwrap(),
-        Regex::new(r"(?i)\bnetsh\s+(advfirewall|interface)\b").unwrap(),
-        Regex::new(r"(?i)\bpowercfg\s+/h\s+off\b").unwrap(),
-        Regex::new(r"(?i)\b(takeown|icacls)\s+").unwrap(),
-        Regex::new(r"(?i)\bDISM\s+/Online\s+/Cleanup-Image\s+/RestoreHealth\b").unwrap(),
-        Regex::new(r"(?i)\bsfc\s+/scannow\b").unwrap(),
+        re(r"(?i)\btaskkill\s+(/\w+\s+)*/f\b"),
+        re(r"(?i)\b(taskkill|tskill)\s+"),
+        re(r"(?i)\breg\s+delete\s+"),
+        re(r"(?i)\bnet\s+(stop|start)\s+"),
+        re(r"(?i)\bRemove-Item\b.*(-Recurse|-Force)"),
+        re(r"(?i)\b(Stop|Restart|Set)-Service\b"),
+        re(r"(?i)\bwevtutil\s+cl\b"),
+        re(r"(?i)\bvssadmin\s+delete\s+shadows\b"),
+        re(r"(?i)\bwmic\s+.*\bdelete\b"),
+        re(r"(?i)\bnetsh\s+(advfirewall|interface)\b"),
+        re(r"(?i)\bpowercfg\s+/h\s+off\b"),
+        re(r"(?i)\b(takeown|icacls)\s+"),
+        re(r"(?i)\bDISM\s+/Online\s+/Cleanup-Image\s+/RestoreHealth\b"),
+        re(r"(?i)\bsfc\s+/scannow\b"),
         // PowerShell encoded command (very commonly abused):
         //   powershell -enc <base64> / powershell -EncodedCommand <base64>
         // Also `-ExecutionPolicy Bypass` because it implies the
         // user is trying to skip a safety control.
-        Regex::new(r"(?i)\bpowershell(\.exe)?\s+.*(-enc(odedCommand)?\s|-e\s)").unwrap(),
-        Regex::new(r"(?i)\b-ExecutionPolicy\s+Bypass\b").unwrap(),
+        re(r"(?i)\bpowershell(\.exe)?\s+.*(-enc(odedCommand)?\s|-e\s)"),
+        re(r"(?i)\b-ExecutionPolicy\s+Bypass\b"),
     ]
 });
 

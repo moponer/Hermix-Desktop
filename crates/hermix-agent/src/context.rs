@@ -64,6 +64,7 @@ use hermix_core::{BudgetConfig, Message, MessageRole, ToolSchema};
 use hermix_intelligence::model_metadata::{
     get_model_context_length, get_model_context_length_with, DEFAULT_FALLBACK_CONTEXT,
 };
+use hermix_intelligence::DomainMode;
 
 const MEMORY_ENTRY_DELIMITER: &str = "\n§\n";
 const MEMORY_CHAR_LIMIT: usize = 2200;
@@ -838,6 +839,11 @@ pub enum DirRoute {
     /// `matches` always returns true because the direction is only
     /// queued when conventions exist.
     HasProjectConventions,
+    /// Domain-mode directive — injects the work-domain-specific
+    /// guidance block (Code / Research / Write / Operate / Chat).
+    /// `matches` returns true when `RouteContext.domain_mode` equals
+    /// the variant's domain.
+    DomainMode(DomainMode),
 }
 
 #[derive(Debug, Clone)]
@@ -863,6 +869,9 @@ pub struct RouteContext<'a> {
     pub model_name: &'a str,
     pub autonomous_mode: bool,
     pub tool_call_count: usize,
+    /// L1 Domain Mode detection result for this turn.
+    /// `None` means domain detection was not run (legacy path).
+    pub domain_mode: Option<DomainMode>,
 }
 
 impl<'a> Default for RouteContext<'a> {
@@ -873,6 +882,7 @@ impl<'a> Default for RouteContext<'a> {
             model_name: "",
             autonomous_mode: false,
             tool_call_count: 0,
+            domain_mode: None,
         }
     }
 }
@@ -972,6 +982,13 @@ impl DirRoute {
             }
             DirRoute::Always => (true, None),
             DirRoute::HasProjectConventions => (true, None),
+            DirRoute::DomainMode(dm) => {
+                match ctx.domain_mode {
+                    Some(active) if active == *dm => (true, None),
+                    Some(active) => (false, Some(format!("domain is {:?}, not {:?}", active, dm))),
+                    None => (false, Some("domain mode not detected".into())),
+                }
+            }
         }
     }
 }
@@ -1505,6 +1522,7 @@ let ctx = RouteContext {
                     model_name: "gpt-4o",
                     autonomous_mode: false,
                     tool_call_count: 0,
+                    domain_mode: None,
                 };
         let mut b = SystemPromptBuilder::new();
         b = b.with_directions(vec![
@@ -1539,6 +1557,7 @@ let ctx = RouteContext {
             model_name: "gemini-1.5-flash",
             autonomous_mode: false,
             tool_call_count: 0,
+            domain_mode: None,
         };
         let mut b = SystemPromptBuilder::new();
         b = b.with_directions(vec![
@@ -1596,6 +1615,7 @@ let ctx = RouteContext {
                     model_name: "gpt-4o",
                     autonomous_mode: false,
                     tool_call_count: 0,
+                    domain_mode: None,
                 };
         let prompt = format!(
             "{}\n\n{}\n\n{}\n\n{}\n\n{}",
@@ -1628,6 +1648,7 @@ let ctx = RouteContext {
                     model_name: "gpt-4o",
                     autonomous_mode: false,
                     tool_call_count: 0,
+                    domain_mode: None,
                 };
         let prompt = "no identity block at all, just some prose.";
         let (patched, report) = Section::audit_and_patch(prompt, &ctx);
@@ -1665,6 +1686,7 @@ let ctx = RouteContext {
             model_name: "gpt-4o",
             autonomous_mode: false,
             tool_call_count: 0,
+            domain_mode: None,
         };
         // Provide identity + timestamp + working_dir (the three always-
         // required sections); tool sections deliberately missing.
@@ -1701,6 +1723,7 @@ let ctx = RouteContext {
             model_name: "gpt-4o",
             autonomous_mode: false,
             tool_call_count: 0,
+            domain_mode: None,
         };
         // Only identity present, no tool / no working-dir / no timestamp.
         let prompt = Section::Identity.default_body().to_string();
@@ -1731,6 +1754,7 @@ let ctx = RouteContext {
             model_name: "minimax:MiniMax-M2.7",
             autonomous_mode: false,
             tool_call_count: 0,
+            domain_mode: None,
         };
         assert_eq!(
             DirRoute::HadAnyToolUse.matches(&trivial),

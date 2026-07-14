@@ -215,9 +215,22 @@ impl UiaAutomation {
     ///
     /// Returns `CuaError::Uia` if `CoInitializeEx` or
     /// `CoCreateInstance` fails.
+    ///
+    /// # Safety
+    ///
+    /// Must be called on a thread with a valid COM apartment (STA or MTA).
+    /// The `COINIT_MULTITHREADED` flag initialises the thread for MTA;
+    /// callers must ensure no conflicting STA initialisation exists.
     pub unsafe fn new() -> CuaResult<Self> {
+        // SAFETY: `CoInitializeEx` is safe to call from any thread that
+        // hasn't already initialised a conflicting COM apartment. The
+        // return value is ignored because a previous successful init
+        // on this thread is not an error (S_FALSE).
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
+        // SAFETY: `CoCreateInstance` creates a COM object for `CUIAutomation`.
+        // This is safe because `CUIAutomation` is a system-provided class
+        // that is always available on Windows.
         let inner: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL)
             .map_err(|e| CuaError::Uia(format!("CoCreateInstance(CUIAutomation): {e}")))?;
 
@@ -227,6 +240,12 @@ impl UiaAutomation {
     // -- Root / HWND / Point ----------------------------------------------
 
     /// Root desktop element.
+    ///
+    /// # Safety
+    ///
+    /// The `UiaAutomation` instance must have been created with `new()`
+    /// on a COM-initialised thread. The returned `UiElement` is valid
+    /// for the lifetime of the underlying COM object.
     pub unsafe fn get_root_element(&self) -> CuaResult<UiElement> {
         let raw = self
             .inner
@@ -236,6 +255,10 @@ impl UiaAutomation {
     }
 
     /// Element for a given `HWND`.
+    ///
+    /// # Safety
+    ///
+    /// `hwnd` must be a valid window handle on the current desktop.
     pub unsafe fn element_from_handle(&self, hwnd: isize) -> CuaResult<UiElement> {
         let raw = self
             .inner
@@ -245,6 +268,10 @@ impl UiaAutomation {
     }
 
     /// Element at screen coordinates `(x, y)`.
+    ///
+    /// # Safety
+    ///
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn element_from_point(&self, x: i32, y: i32) -> CuaResult<UiElement> {
         let pt = POINT { x, y };
         let raw = self
@@ -257,6 +284,10 @@ impl UiaAutomation {
     // -- Element finding --------------------------------------------------
 
     /// Find first element matching `condition`, starting from the root.
+    ///
+    /// # Safety
+    ///
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn find_first(&self, condition: &UiaCondition) -> CuaResult<Option<UiElement>> {
         let root = self
             .inner
@@ -266,6 +297,10 @@ impl UiaAutomation {
     }
 
     /// Find first element matching `condition` under a given parent.
+    ///
+    /// # Safety
+    ///
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn find_first_from(
         &self,
         parent: &IUIAutomationElement,
@@ -283,6 +318,10 @@ impl UiaAutomation {
     }
 
     /// Find all elements matching `condition`, starting from the root.
+    ///
+    /// # Safety
+    ///
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn find_all(&self, condition: &UiaCondition) -> CuaResult<Vec<UiElement>> {
         let root = self
             .inner
@@ -292,6 +331,10 @@ impl UiaAutomation {
     }
 
     /// Find all elements matching `condition` under a given parent.
+    ///
+    /// # Safety
+    ///
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn find_all_from(
         &self,
         parent: &IUIAutomationElement,
@@ -324,6 +367,11 @@ impl UiaAutomation {
     /// **Important**: the returned pointer is only valid on the
     /// thread that called this method (the COM apartment thread).
     /// Do NOT stash it in a static or send it across threads.
+    ///
+    /// # Safety
+    ///
+    /// Must be called on a COM-initialised thread. The returned
+    /// `IUIAutomationElement` COM pointer is not thread-safe.
     pub unsafe fn find_first_raw(
         &self,
         condition: &UiaCondition,
@@ -349,6 +397,10 @@ impl UiaAutomation {
     ///
     /// A `max_depth` of 0 means only the root element (no children).
     /// Use `u32::MAX` to walk the full tree (may be very large — 10k+).
+    ///
+    /// # Safety
+    ///
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn get_control_view_tree(&self, max_depth: u32) -> CuaResult<Vec<UiElement>> {
         let true_cond = self
             .inner
@@ -387,6 +439,12 @@ pub enum UiaCondition {
     Or(Vec<UiaCondition>),
 }
 
+/// Build a `UiaCondition` from the high-level `UiaCondition` enum.
+///
+/// # Safety
+///
+/// Must be called on a COM-initialised thread. `automation` must be
+/// a valid `IUIAutomation` COM pointer.
 unsafe fn build_condition(
     automation: &IUIAutomation,
     cond: &UiaCondition,
@@ -436,6 +494,11 @@ unsafe fn build_condition(
     }
 }
 
+/// Create a property condition (e.g. Name = "...").
+///
+/// # Safety
+///
+/// Must be called on a COM-initialised thread.
 unsafe fn create_prop_cond(
     automation: &IUIAutomation,
     prop_id: UIA_PROPERTY_ID,
@@ -498,6 +561,11 @@ fn control_type_to_id(ct: ControlType) -> UIA_CONTROLTYPE_ID {
 // Property collection
 // =========================================================================
 
+/// Collect common properties from a UIA element into a `UiElement`.
+///
+/// # Safety
+///
+/// `raw` must be a valid `IUIAutomationElement` COM pointer.
 unsafe fn collect_properties(
     raw: &IUIAutomationElement,
     depth: u32,
@@ -620,6 +688,13 @@ fn get_prop_string(
 // Tree walking
 // =========================================================================
 
+/// Walk the UIA tree using a `TreeWalker`, collecting up to `max_depth`
+/// levels of children.
+///
+/// # Safety
+///
+/// Must be called on a COM-initialised thread. `walker` and `parent`
+/// must be valid COM pointers.
 unsafe fn walk_node(
     walker: &IUIAutomationTreeWalker,
     current: &IUIAutomationElement,
@@ -667,6 +742,11 @@ unsafe fn walk_node(
 
 /// Try to invoke an element (click a button, etc.) via its Invoke
 /// control pattern.
+///
+/// # Safety
+///
+/// Must be called on a COM-initialised thread. `element` must be a
+/// valid COM pointer with an `IUIAutomationInvokePattern`.
 pub unsafe fn invoke_element(element: &IUIAutomationElement) -> CuaResult<()> {
     let pattern_iunknown = element
         .GetCurrentPattern(UIA_InvokePatternId)
@@ -684,6 +764,10 @@ pub unsafe fn invoke_element(element: &IUIAutomationElement) -> CuaResult<()> {
 }
 
 /// Get the clickable point of an element as `(x, y)` screen coordinates.
+///
+/// # Safety
+///
+/// Must be called on a COM-initialised thread.
 pub unsafe fn get_clickable_point(element: &IUIAutomationElement) -> CuaResult<(i32, i32)> {
     let mut pt = POINT { x: 0, y: 0 };
     let _got_clickable = element
@@ -693,6 +777,10 @@ pub unsafe fn get_clickable_point(element: &IUIAutomationElement) -> CuaResult<(
 }
 
 /// Set keyboard focus to a UIA element via `IUIAutomationElement::SetFocus`.
+///
+/// # Safety
+///
+/// Must be called on a COM-initialised thread.
 pub unsafe fn set_focus_element(element: &IUIAutomationElement) -> CuaResult<()> {
     element
         .SetFocus()
@@ -703,6 +791,10 @@ pub unsafe fn set_focus_element(element: &IUIAutomationElement) -> CuaResult<()>
 /// Convenience: find an element by name, then get its clickable point.
 /// This bundles `find_first_raw + get_clickable_point` into one call,
 /// avoiding the need for the caller to manage raw COM pointers.
+///
+/// # Safety
+///
+/// Must be called on a COM-initialised thread.
 pub unsafe fn click_by_name(
     automation: &UiaAutomation,
     name: &str,
@@ -715,6 +807,10 @@ pub unsafe fn click_by_name(
 }
 
 /// Convenience: find an element by name and invoke its default action.
+///
+/// # Safety
+///
+/// Must be called on a COM-initialised thread.
 pub unsafe fn invoke_by_name(automation: &UiaAutomation, name: &str) -> CuaResult<()> {
     let cond = UiaCondition::Name(name.to_string());
     let raw = automation

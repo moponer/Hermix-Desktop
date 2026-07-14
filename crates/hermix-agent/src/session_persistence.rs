@@ -3094,6 +3094,8 @@ mod tests {
             completion_tokens: completion,
             total_tokens: prompt + completion,
             estimated_cost: cost,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
         }
     }
 

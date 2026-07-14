@@ -405,6 +405,8 @@ mod tests {
                         completion_tokens: 1,
                         total_tokens: 2,
                         estimated_cost: None,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
                     }),
                 }),
                 Outcome::Err(msg) => Err(AgentError::LlmApi(format!("{}: {}", self.label, msg))),

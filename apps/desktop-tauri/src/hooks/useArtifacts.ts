@@ -4,7 +4,7 @@
 // Inputs: activeSession (messages) + workspaceRoot
 // Outputs: verified artifact list + selected artifact + path-click handler
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { extractArtifacts, type Artifact, type ArtifactKind } from "../utils/artifacts";
 import { tryArtifactPathExists } from "../utils/artifactReader";
 
@@ -69,7 +69,18 @@ export function useArtifacts({
     ).then((results) => {
       if (cancelled) return;
       const next = results.filter((r) => r.exists).map((r) => r.a);
-      setVerifiedArtifacts(next);
+      // 2026-07-14: Preserve synthetic artifacts added by
+      // handlePathClick. Without this, the async verification
+      // effect would overwrite verifiedArtifacts and silently
+      // drop artifacts the user just clicked — causing the
+      // preview modal to flash open then immediately close.
+      // We keep any artifact whose path is NOT in rawArtifacts
+      // (i.e. it was injected, not extracted from messages).
+      const rawPaths = new Set(raw.map((a) => a.path.replace(/\\/g, "/")));
+      setVerifiedArtifacts((prev) => {
+        const synthetics = prev.filter((a) => !rawPaths.has(a.path.replace(/\\/g, "/")));
+        return [...next, ...synthetics];
+      });
       if (typeof window !== "undefined" && window.localStorage?.getItem("hermixDebugArtifacts") === "1") {
         const dropped = results.filter((r) => !r.exists).map((r) => r.a.path);
         console.debug(
@@ -86,12 +97,20 @@ export function useArtifacts({
 
   const artifacts = verifiedArtifacts;
 
+  // 2026-07-14: Keep a ref to the latest artifacts so
+  // handlePathClick doesn't need artifacts in its dependency
+  // array. This avoids recreating the callback (and busting
+  // MemoMessageBubble's memo) every time the verification
+  // effect updates verifiedArtifacts.
+  const artifactsRef = useRef(artifacts);
+  artifactsRef.current = artifacts;
+
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
 
   /** Programmatic file open from inside a markdown body. */
   const handlePathClick = useCallback(
     (path: string) => {
-      const existing = artifacts.find((a) => a.path === path || a.path.endsWith(path));
+      const existing = artifactsRef.current.find((a) => a.path === path || a.path.endsWith(path));
       if (existing) {
         setSelectedArtifactId(existing.id);
       } else {
@@ -105,12 +124,18 @@ export function useArtifacts({
           timestamp: new Date().toISOString(),
           isAbsolute: /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/"),
         };
-        setVerifiedArtifacts((prev) => [...prev, synth]);
+        setVerifiedArtifacts((prev) => {
+          // De-dup: don't add if an artifact with the same
+          // normalized path already exists.
+          const norm = synth.path.replace(/\\/g, "/");
+          if (prev.some((a) => a.path.replace(/\\/g, "/") === norm)) return prev;
+          return [...prev, synth];
+        });
         setSelectedArtifactId(synth.id);
       }
       onOpenRightSidebar();
     },
-    [artifacts, onOpenRightSidebar],
+    [onOpenRightSidebar],
   );
 
   return { rawArtifacts, artifacts, selectedArtifactId, setSelectedArtifactId, handlePathClick };

@@ -85,6 +85,7 @@ pub mod turn_timings;
 pub mod sub_agent_safety;
 pub mod subdirectory_hints;
 pub mod tool_executor;
+pub mod mode_composition;
 
 // Re-export primary agent types
 pub use agent_loop::{

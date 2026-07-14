@@ -209,7 +209,11 @@ mod tests {
             _content: &str,
             _category: Option<&str>,
         ) -> Result<Skill, AgentError> {
-            unimplemented!()
+            // NoopSkills is a test mock that does not support skill
+            // creation. Return a proper error instead of panicking.
+            Err(AgentError::ToolExecution(
+                "NoopSkills does not support create_skill".into(),
+            ))
         }
         async fn get_skill(&self, _name: &str) -> Result<Option<Skill>, AgentError> {
             Ok(None)
@@ -222,7 +226,11 @@ mod tests {
             _name: &str,
             _content: &str,
         ) -> Result<Skill, AgentError> {
-            unimplemented!()
+            // NoopSkills is a test mock that does not support skill
+            // updates. Return a proper error instead of panicking.
+            Err(AgentError::ToolExecution(
+                "NoopSkills does not support update_skill".into(),
+            ))
         }
         async fn delete_skill(&self, _name: &str) -> Result<(), AgentError> {
             Ok(())

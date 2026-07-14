@@ -187,7 +187,7 @@ impl ToolRegistry {
     /// uses this to wire the `TerminalHandler` to the same `RwLock` the agent
     /// service writes to.
     pub fn terminal_workspace_handle(&self) -> Arc<std::sync::RwLock<Option<std::path::PathBuf>>> {
-        self.inner.read().unwrap().terminal_workspace.clone()
+        self.inner.read().expect("registry rwlock not poisoned").terminal_workspace.clone()
     }
 
     /// Set the per-turn default workspace for the terminal (and any other
@@ -195,7 +195,7 @@ impl ToolRegistry {
     /// `agent.run_*` from `AgentOverrides::workspace`. Cheap: single
     /// RwLock write.
     pub fn set_terminal_workspace(&self, workspace: Option<std::path::PathBuf>) {
-        if let Ok(mut guard) = self.inner.read().unwrap().terminal_workspace.write() {
+        if let Ok(mut guard) = self.inner.read().expect("registry rwlock not poisoned").terminal_workspace.write() {
             *guard = workspace;
         } else {
             tracing::warn!("terminal_workspace lock poisoned; ignoring update");
@@ -309,7 +309,7 @@ impl ToolRegistry {
         override_existing: bool,
     ) {
         let name = name.into();
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().expect("registry rwlock not poisoned");
         if inner.tools.contains_key(&name) {
             if !override_existing {
                 tracing::error!(
@@ -368,7 +368,7 @@ impl ToolRegistry {
         name: &str,
         stamper: Arc<dyn SessionStamper>,
     ) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().expect("registry rwlock not poisoned");
         if let Some(entry) = inner.tools.get_mut(name) {
             entry.session_stamper = Some(stamper);
         } else {
@@ -383,7 +383,7 @@ impl ToolRegistry {
     /// Interactive tools like `clarify` and `delegate_task` must not run
     /// in parallel with other tools. Returns true if the tool was found.
     pub fn mark_interactive(&self, name: &str) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().expect("registry rwlock not poisoned");
         if let Some(entry) = inner.tools.get_mut(name) {
             entry.is_interactive = true;
             true
@@ -408,7 +408,7 @@ impl ToolRegistry {
     /// the call is a silent no-op (the operator probably hasn't
     /// registered that toolset yet).
     pub fn update_schema(&self, name: &str, new_schema: ToolSchema) {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().expect("registry rwlock not poisoned");
         if let Some(entry) = inner.tools.get_mut(name) {
             entry.schema = new_schema;
         }
@@ -557,7 +557,7 @@ impl ToolRegistry {
     /// none-flip, no half-applied state). The actual atomic
     /// stores use `Release` ordering; readers use `Acquire`.
     pub fn set_toolset_enabled(&self, toolset: &str, enabled: bool) -> usize {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
         let mut count = 0;
         for entry in inner.tools.values() {
             if entry.toolset == toolset {
@@ -572,7 +572,7 @@ impl ToolRegistry {
     /// tool exists. The pre-execution approval hook uses this to decide
     /// whether to prompt the user.
     pub fn risk_level(&self, name: &str) -> Option<RiskLevel> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
         inner.tools.get(name).map(|e| e.risk_level)
     }
 
@@ -580,7 +580,7 @@ impl ToolRegistry {
     ///
     /// Returns `true` if the tool was present and removed.
     pub fn deregister(&self, name: &str) -> bool {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().expect("registry rwlock not poisoned");
         inner.tools.remove(name).is_some()
     }
 
@@ -593,7 +593,7 @@ impl ToolRegistry {
     /// hidden even if user-enabled. This is used to build the tool
     /// list sent to the LLM.
     pub fn get_definitions(&self) -> Vec<ToolSchema> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
         inner
             .tools
             .values()
@@ -646,7 +646,7 @@ impl ToolRegistry {
     /// On success, returns the tool result string.
     /// On failure, returns a JSON error string: `{"error": "..."}`.
     pub fn dispatch(&self, name: &str, params: Value) -> String {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
         let entry = match inner.tools.get(name) {
             Some(e) => e,
             None => return Self::tool_error(&format!("Tool not found: {}", name)),
@@ -727,7 +727,7 @@ impl ToolRegistry {
     pub async fn dispatch_async(&self, name: &str, params: Value) -> String {
         let started = std::time::Instant::now();
         let (handler, max_chars, schema) = {
-            let inner = self.inner.read().unwrap();
+            let inner = self.inner.read().expect("registry rwlock not poisoned");
             match inner.tools.get(name) {
                 Some(e) => (
                     Arc::clone(&e.handler),
@@ -777,7 +777,7 @@ impl ToolRegistry {
     /// Note: This returns a cloned `Arc<ToolEntry>` because we cannot return
     /// a reference to data behind a Mutex lock. Returns `None` if not found.
     pub fn get_tool(&self, name: &str) -> Option<ToolEntryInfo> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
         inner.tools.get(name).map(|e| ToolEntryInfo {
             name: e.name.clone(),
             toolset: e.toolset.clone(),
@@ -792,7 +792,7 @@ impl ToolRegistry {
 
     /// List all registered tool entries.
     pub fn list_tools(&self) -> Vec<ToolEntryInfo> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
         inner
             .tools
             .values()
@@ -811,7 +811,7 @@ impl ToolRegistry {
 
     /// List distinct toolset names.
     pub fn list_toolsets(&self) -> Vec<String> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
         let mut sets: Vec<String> = inner.tools.values().map(|e| e.toolset.clone()).collect();
         sets.sort();
         sets.dedup();
@@ -821,7 +821,7 @@ impl ToolRegistry {
     /// Catalog — lightweight tool directory for agent startup.
     /// Returns only enabled+available tools, ~50 bytes per entry.
     pub fn catalog(&self) -> Vec<hermix_core::ToolCatalogEntry> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
         inner.tools.values()
             .filter(|e| e.is_enabled.load(Ordering::Acquire) && (e.check_fn)())
             .map(|e| hermix_core::ToolCatalogEntry {
@@ -836,7 +836,7 @@ impl ToolRegistry {
     /// Look up the full schema for a single tool, so the agent can
     /// call `get_tool_details("name")` after browsing the catalog.
     pub fn get_tool_schema(&self, name: &str) -> Option<ToolSchema> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
         inner.tools.get(name)
             .filter(|e| e.is_enabled.load(Ordering::Acquire) && (e.check_fn)())
             .map(|e| e.schema.clone())
@@ -846,7 +846,7 @@ impl ToolRegistry {
     /// **and** `is_enabled` is set). See [`Self::get_definitions`]
     /// for the rationale on the double gate.
     pub fn is_available(&self, name: &str) -> bool {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
         match inner.tools.get(name) {
             Some(e) => (e.check_fn)() && e.is_enabled.load(Ordering::Acquire),
             None => false,
@@ -878,7 +878,7 @@ impl ToolRegistry {
         // — `set_active_session` only touches a `std::sync::Mutex` on
         // the concrete handler, never the registry's `RwLock`).
         let stamper = {
-            let inner = self.inner.read().unwrap();
+            let inner = self.inner.read().expect("registry rwlock not poisoned");
             match inner.tools.get(name) {
                 Some(e) => match e.session_stamper.as_ref() {
                     Some(s) => Arc::clone(s),
@@ -902,7 +902,7 @@ impl ToolRegistry {
         message_id: Option<String>,
     ) -> bool {
         let stamper = {
-            let inner = self.inner.read().unwrap();
+            let inner = self.inner.read().expect("registry rwlock not poisoned");
             match inner.tools.get(name) {
                 Some(e) => match e.session_stamper.as_ref() {
                     Some(s) => Arc::clone(s),
@@ -930,7 +930,7 @@ impl ToolRegistry {
         session_id: &str,
     ) -> Option<Vec<Value>> {
         let stamper = {
-            let inner = self.inner.read().unwrap();
+            let inner = self.inner.read().expect("registry rwlock not poisoned");
             match inner.tools.get(name) {
                 Some(e) => match e.session_stamper.as_ref() {
                     Some(s) => Arc::clone(s),

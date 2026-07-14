@@ -55,6 +55,12 @@ pub struct TurnContext {
     pub active_toolsets: Vec<String>,
     /// 最多返回多少个 tool schema(默认 5,Phase 7 §验收 给定)
     pub max_tools: usize,
+    /// L1 Domain Mode 优先工具列表。
+    ///
+    /// 来自 `DomainPreset::priority_tools`，
+    /// 在路由打分后给这些工具加分(+5.0)。
+    /// 空列表 = 无优先工具(默认)。
+    pub priority_tools: Vec<String>,
 }
 
 impl TurnContext {
@@ -65,6 +71,7 @@ impl TurnContext {
             recent_messages: Vec::new(),
             active_toolsets: Vec::new(),
             max_tools: 5,
+            priority_tools: Vec::new(),
         }
     }
 
@@ -83,6 +90,12 @@ impl TurnContext {
     /// Builder: set recent messages.
     pub fn with_recent_messages(mut self, msgs: Vec<Message>) -> Self {
         self.recent_messages = msgs;
+        self
+    }
+
+    /// Builder: set priority tools (from DomainPreset).
+    pub fn with_priority_tools(mut self, tools: Vec<String>) -> Self {
+        self.priority_tools = tools;
         self
     }
 }
@@ -682,6 +695,98 @@ impl ToolSchemaRouter for AlwaysInclude {
 }
 
 // ---------------------------------------------------------------------------
+// Priority-boost wrapper (L1 Domain Mode integration)
+// ---------------------------------------------------------------------------
+
+/// Wraps any router to boost the score of tools listed in
+/// `TurnContext::priority_tools`.
+///
+/// After the inner router produces its ranked output, this wrapper
+/// adds `+5.0` to the score of any tool whose name appears in the
+/// priority list, then re-sorts by score descending.
+///
+/// This is the integration point between L1 Domain Mode and the tool
+/// router: `DomainPreset::priority_tools` flows in via `TurnContext`,
+/// and this wrapper ensures those tools rank higher in the final
+/// output without force-including them (unlike `AlwaysInclude`).
+///
+/// ## Example
+///
+/// ```ignore
+/// let router = PriorityBoost::new(Arc::new(KeywordRouter::new()), 5.0);
+/// let ctx = TurnContext::from_user_message("fix main.rs")
+///     .with_priority_tools(vec!["read_file".into(), "write_file".into()]);
+/// let routed = router.route(&ctx, all_tools);
+/// // read_file and write_file will have +5.0 score boost
+/// ```
+pub struct PriorityBoost {
+    inner: Arc<dyn ToolSchemaRouter>,
+    /// Score delta added to priority tools.
+    boost: f32,
+}
+
+impl std::fmt::Debug for PriorityBoost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PriorityBoost")
+            .field("inner", &self.inner.name())
+            .field("boost", &self.boost)
+            .finish()
+    }
+}
+
+impl PriorityBoost {
+    /// Create with a custom boost amount (default 5.0).
+    pub fn new(inner: Arc<dyn ToolSchemaRouter>, boost: f32) -> Self {
+        Self { inner, boost }
+    }
+
+    /// Create with the default boost of 5.0.
+    pub fn with_default_boost(inner: Arc<dyn ToolSchemaRouter>) -> Self {
+        Self::new(inner, 5.0)
+    }
+}
+
+impl ToolSchemaRouter for PriorityBoost {
+    fn route(&self, ctx: &TurnContext, candidates: Vec<ToolSchema>) -> Vec<RoutedSchema> {
+        // 1. Run the inner router to get the ranked output.
+        let mut routed = self.inner.route(ctx, candidates);
+
+        // 2. If no priority tools, return as-is.
+        if ctx.priority_tools.is_empty() {
+            return routed;
+        }
+
+        // 3. Build a lookup set for O(1) membership check.
+        let priority: HashSet<&str> = ctx
+            .priority_tools
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+
+        // 4. Apply boost to matching tools.
+        for r in &mut routed {
+            if priority.contains(r.schema.name.as_str()) {
+                r.score += self.boost;
+                r.source = format!("{}+priority", r.source);
+            }
+        }
+
+        // 5. Re-sort by score descending.
+        routed.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        routed
+    }
+
+    fn name(&self) -> &str {
+        "PriorityBoost"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1092,5 +1197,69 @@ mod tests {
             assert_eq!(routed.len(), 1);
             assert_eq!(routed[0].score, 0.0);
         });
+    }
+
+    // ----- PriorityBoost (L1 Domain Mode integration) ----------------------
+
+    #[test]
+    fn priority_boost_adds_score_to_priority_tools() {
+        let inner: Arc<dyn ToolSchemaRouter> = Arc::new(KeywordRouter::new());
+        let router = PriorityBoost::with_default_boost(inner);
+        let ctx = TurnContext::from_user_message("天气")
+            .with_max_tools(5)
+            .with_priority_tools(vec!["read_file".into(), "write_file".into()]);
+        let routed = router.route(&ctx, make_tools());
+        // read_file and write_file should have boosted scores
+        let rf = routed.iter().find(|r| r.schema.name == "read_file").unwrap();
+        assert!(rf.score >= 5.0, "read_file should have +5.0 boost, got {}", rf.score);
+        assert!(rf.source.contains("priority"), "source should contain 'priority': {}", rf.source);
+    }
+
+    #[test]
+    fn priority_boost_no_op_when_empty() {
+        let inner: Arc<dyn ToolSchemaRouter> = Arc::new(KeywordRouter::new());
+        let router = PriorityBoost::with_default_boost(inner);
+        let ctx = TurnContext::from_user_message("天气").with_max_tools(5);
+        // No priority_tools set
+        let routed = router.route(&ctx, make_tools());
+        // No tool should have "priority" in its source
+        assert!(routed.iter().all(|r| !r.source.contains("priority")));
+    }
+
+    #[test]
+    fn priority_boost_reranks_after_boost() {
+        let inner: Arc<dyn ToolSchemaRouter> = Arc::new(KeywordRouter::new());
+        let router = PriorityBoost::with_default_boost(inner);
+        // "天气" matches weather, but read_file is in priority_tools
+        let ctx = TurnContext::from_user_message("天气")
+            .with_max_tools(5)
+            .with_priority_tools(vec!["read_file".into()]);
+        let routed = router.route(&ctx, make_tools());
+        // After boost, read_file should rank higher than it would without boost
+        // (weather still wins because keyword match is strong, but read_file
+        //  should be in the top 5 due to +5.0 boost)
+        assert!(routed.iter().any(|r| r.schema.name == "read_file"),
+            "read_file should be in top-5 after priority boost");
+    }
+
+    #[test]
+    fn priority_boost_custom_amount() {
+        let inner: Arc<dyn ToolSchemaRouter> = Arc::new(KeywordRouter::new());
+        let router = PriorityBoost::new(inner, 100.0);
+        let ctx = TurnContext::from_user_message("天气")
+            .with_max_tools(5)
+            .with_priority_tools(vec!["memory".into()]);
+        let routed = router.route(&ctx, make_tools());
+        // memory has no keyword match for "天气", but +100.0 boost should
+        // push it to the top
+        assert_eq!(routed[0].schema.name, "memory",
+            "memory should be #1 after +100.0 boost");
+    }
+
+    #[test]
+    fn priority_boost_name() {
+        let inner: Arc<dyn ToolSchemaRouter> = Arc::new(KeywordRouter::new());
+        let router = PriorityBoost::with_default_boost(inner);
+        assert_eq!(router.name(), "PriorityBoost");
     }
 }

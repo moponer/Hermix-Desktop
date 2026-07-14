@@ -420,6 +420,22 @@ pub struct UsageStats {
     pub total_tokens: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cost: Option<f64>,
+    /// 2026-07-14: Tokens read from the provider's prompt cache
+    /// (e.g. Anthropic `cache_read_input_tokens`). 0 when the
+    /// provider does not support prompt caching or the response
+    /// did not include cache data.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub cache_read_tokens: u64,
+    /// 2026-07-14: Tokens written to the provider's prompt cache
+    /// (e.g. Anthropic `cache_creation_input_tokens`). 0 when
+    /// the provider does not support prompt caching.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub cache_creation_tokens: u64,
+}
+
+/// Helper for `skip_serializing_if` on `u64` zero values.
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
 }
 
 /// Record of a tool error during execution.

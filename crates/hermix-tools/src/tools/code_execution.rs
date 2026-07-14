@@ -20,6 +20,13 @@ use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, t
 use crate::ToolRegistry;
 use std::sync::Arc;
 
+// 2026-07-14 (P1-1): Helper to compile static regex patterns without
+// .unwrap(). Uses .expect() with a semantic message as required by
+// the code hardening plan (static init cannot use `?`).
+fn re(pattern: &'static str) -> Regex {
+    Regex::new(pattern).expect("static regex pattern must compile")
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -94,30 +101,30 @@ pub enum CodeExecutionDecision {
 static DENIED_CODE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         // os.system/popen — direct shell execution from Python
-        Regex::new(r"(?i)\bos\.system\s*\(").unwrap(),
-        Regex::new(r"(?i)\bos\.popen\s*\(").unwrap(),
-        Regex::new(r"(?i)\bos\.execl\b").unwrap(),
-        Regex::new(r"(?i)\bos\.execv\b").unwrap(),
+        re(r"(?i)\bos\.system\s*\("),
+        re(r"(?i)\bos\.popen\s*\("),
+        re(r"(?i)\bos\.execl\b"),
+        re(r"(?i)\bos\.execv\b"),
         // subprocess module — spawning arbitrary processes
-        Regex::new(r"(?i)\bsubprocess\.(run|call|Popen|check_output|check_call)\s*\(").unwrap(),
-        Regex::new(r"(?i)from\s+subprocess\s+import").unwrap(),
+        re(r"(?i)\bsubprocess\.(run|call|Popen|check_output|check_call)\s*\("),
+        re(r"(?i)from\s+subprocess\s+import"),
         // shutil.rmtree — recursive deletion
-        Regex::new(r"(?i)\bshutil\.rmtree\s*\(").unwrap(),
+        re(r"(?i)\bshutil\.rmtree\s*\("),
         // os.remove / os.unlink — file deletion
-        Regex::new(r"(?i)\bos\.(remove|unlink)\s*\(").unwrap(),
+        re(r"(?i)\bos\.(remove|unlink)\s*\("),
         // os.rmdir — directory removal
-        Regex::new(r"(?i)\bos\.rmdir\s*\(").unwrap(),
+        re(r"(?i)\bos\.rmdir\s*\("),
         // os.kill / os.killpg — process signalling
-        Regex::new(r"(?i)\bos\.(kill|killpg)\s*\(").unwrap(),
+        re(r"(?i)\bos\.(kill|killpg)\s*\("),
         // os.chmod / os.chown / os.setuid — permission changes
-        Regex::new(r"(?i)\bos\.(chmod|chown|setuid|setgid)\s*\(").unwrap(),
+        re(r"(?i)\bos\.(chmod|chown|setuid|setgid)\s*\("),
         // Node.js child_process — the `(` is for `require('child_process')` syntax
-        Regex::new(r#"(?i)(require|import)\s*\(?\s*['"]child_process['"]"#).unwrap(),
-        Regex::new(r#"(?i)(require|import)\s*\(?\s*['"]fs['"]"#).unwrap(),
+        re(r#"(?i)(require|import)\s*\(?\s*['"]child_process['"]"#),
+        re(r#"(?i)(require|import)\s*\(?\s*['"]fs['"]"#),
         // Python pathlib destructive methods — only catches obvious patterns
-        Regex::new(r"(?i)\.(unlink|rmdir|symlink_to)\s*\(").unwrap(),
+        re(r"(?i)\.(unlink|rmdir|symlink_to)\s*\("),
         // os.walk combined with os.remove is dangerous
-        Regex::new(r"(?i)\bos\.walk\s*\(").unwrap(),
+        re(r"(?i)\bos\.walk\s*\("),
     ]
 });
 
@@ -125,36 +132,36 @@ static DENIED_CODE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 static CONFIRM_CODE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         // eval / exec — arbitrary code execution
-        Regex::new(r"(?i)\beval\s*\(").unwrap(),
-        Regex::new(r"(?i)\bexec\s*\(").unwrap(),
-        Regex::new(r"(?i)\bcompile\s*\(").unwrap(),
+        re(r"(?i)\beval\s*\("),
+        re(r"(?i)\bexec\s*\("),
+        re(r"(?i)\bcompile\s*\("),
         // __import__ — dynamic imports
-        Regex::new(r"(?i)__import__\s*\(").unwrap(),
+        re(r"(?i)__import__\s*\("),
         // Writing to files (legitimate but should be noted)
-        Regex::new(r#"(?i)open\s*\(.*['"](w|a)['"]"#).unwrap(),
-        Regex::new(r"(?i)\.write_text\s*\(").unwrap(),
-        Regex::new(r"(?i)\.write_bytes\s*\(").unwrap(),
+        re(r#"(?i)open\s*\(.*['"](w|a)['"]"#),
+        re(r"(?i)\.write_text\s*\("),
+        re(r"(?i)\.write_bytes\s*\("),
         // Network access
-        Regex::new(r"(?i)import\s+urllib").unwrap(),
-        Regex::new(r"(?i)from\s+urllib\s+import").unwrap(),
-        Regex::new(r"(?i)(import|from)\s+.*\brequests\b").unwrap(),
-        Regex::new(r"(?i)(import|from)\s+.*\bsocket\b").unwrap(),
-        Regex::new(r"(?i)import\s+paramiko").unwrap(),
-        Regex::new(r"(?i)import\s+http\.(client|server)").unwrap(),
+        re(r"(?i)import\s+urllib"),
+        re(r"(?i)from\s+urllib\s+import"),
+        re(r"(?i)(import|from)\s+.*\brequests\b"),
+        re(r"(?i)(import|from)\s+.*\bsocket\b"),
+        re(r"(?i)import\s+paramiko"),
+        re(r"(?i)import\s+http\.(client|server)"),
         // Database operations
-        Regex::new(r"(?i)import\s+sqlite3").unwrap(),
-        Regex::new(r"(?i)(import|from)\s+.*\bpsycopg2\b").unwrap(),
-        Regex::new(r"(?i)(import|from)\s+.*\bpymongo\b").unwrap(),
+        re(r"(?i)import\s+sqlite3"),
+        re(r"(?i)(import|from)\s+.*\bpsycopg2\b"),
+        re(r"(?i)(import|from)\s+.*\bpymongo\b"),
         // Threading / multiprocessing (can be used for resource abuse)
-        Regex::new(r"(?i)import\s+threading").unwrap(),
-        Regex::new(r"(?i)import\s+multiprocessing").unwrap(),
+        re(r"(?i)import\s+threading"),
+        re(r"(?i)import\s+multiprocessing"),
         // Ctypes — can call arbitrary native code
-        Regex::new(r"(?i)import\s+ctypes").unwrap(),
-        Regex::new(r"(?i)from\s+ctypes\s+import").unwrap(),
+        re(r"(?i)import\s+ctypes"),
+        re(r"(?i)from\s+ctypes\s+import"),
         // os module operations
-        Regex::new(r"(?i)\bos\.(makedirs|rename|replace|symlink|link)\s*\(").unwrap(),
+        re(r"(?i)\bos\.(makedirs|rename|replace|symlink|link)\s*\("),
         // shutil operations other than rmtree
-        Regex::new(r"(?i)\bshutil\.(move|copy|copytree|make_archive)\s*\(").unwrap(),
+        re(r"(?i)\bshutil\.(move|copy|copytree|make_archive)\s*\("),
     ]
 });
 

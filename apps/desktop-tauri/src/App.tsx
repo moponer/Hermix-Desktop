@@ -849,10 +849,11 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
       : s.title;
   };
 
-  const handleNewChat = useCallback(async () => {
-    if (isCreatingSessionRef.current) return;
-    try { cancelStream(); } catch (_) { /* WS may already be closed — swallow */ }
-    try { clearStreamError(); } catch (_) { /* swallow */ }
+const handleNewChat = useCallback(async () => {
+if (isCreatingSessionRef.current) return;
+// 2026-07-14: Do NOT cancel the active stream when creating a new chat.
+// The stream on the previous session should continue in the background.
+try { clearStreamError(); } catch (_) { /* swallow */ }
 
     // Read sessions from ref instead of closure — this callback must NOT
     // depend on `sessions` in its dep array. If it does, every streaming
@@ -921,13 +922,22 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
       isCreatingSessionRef.current = false;
       setIsCreatingSession(false);
     }
-  }, [cancelStream, clearStreamError, setActiveSessionId]);
+  }, [clearStreamError, setActiveSessionId]);
 
   const handleSelectSession = useCallback(async (id: string) => {
-    try { cancelStream(); } catch (_) { /* WS may already be closed — swallow */ }
+    // 2026-07-14: Do NOT cancel the active stream when switching sessions.
+    // The previous implementation called `cancelStream()` which closed the
+    // WebSocket, killing any in-flight agent task on the old session.
+    // Now the stream continues in the background — useStreamChat already
+    // tracks streamingSessionId so the UI correctly scopes the thinking
+    // indicator and phase chip to whichever session is actually streaming.
+    // The Sidebar pulse dot also uses streamingSessionId so the user can
+    // see that the old session is still working even after switching away.
     try { clearStreamError(); } catch (_) { /* swallow */ }
-    // Always advance to the chat view and select the session,
-    // even if cancelStream/clearStreamError threw.
+    // Clear the phase chip — it belongs to the old session. If the
+    // active stream is on the new session, onPhaseChange will
+    // re-set it immediately; otherwise we dont want a stale chip.
+    setStreamPhase(null);
     setActiveSessionId(id);
     setPage("chat");
     if (window.innerWidth < 768) setSidebarOpen(false);
@@ -941,7 +951,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     // v29 preserved: if the session already has in-memory messages
     // (e.g. from a just-ended streaming conversation), the effect
     // skips the fetch and uses the in-memory state directly.
-  }, [clearStreamError, cancelStream, setActiveSessionId, setPage]);
+  }, [clearStreamError, setActiveSessionId, setPage]);
 
   const handleDeleteSession = useCallback(async (id: string) => {
     // 2026-06-26: the previous implementation called `api.deleteSession`

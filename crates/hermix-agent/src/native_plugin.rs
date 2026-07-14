@@ -79,22 +79,40 @@ impl Drop for LoadedNativePlugin {
 }
 
 impl LoadedNativePlugin {
+    /// # Safety
+    ///
+    /// Caller must ensure `dll_path` points to a valid shared library
+    /// that exports `hermix_plugin_init` with the correct C ABI signature.
+    /// The returned pointer from the init function must remain valid for
+    /// the lifetime of the `LoadedNativePlugin`.
     pub unsafe fn load(dll_path: &Path) -> Result<Self, String> {
+        // SAFETY: Caller guarantees `dll_path` is a valid library path.
+        // `libloading::Library::new` loads the library; the `Library`
+        // handle keeps it mapped until dropped.
         let lib = unsafe {
             libloading::Library::new(dll_path)
                 .map_err(|e| format!("Failed to load {}: {}", dll_path.display(), e))?
         };
 
+        // SAFETY: `lib.get` returns a raw symbol pointer. The caller
+        // guarantees the library exports `hermix_plugin_init` with the
+        // correct `unsafe extern "C" fn() -> *const PluginDescriptor` signature.
         let init: unsafe extern "C" fn() -> *const PluginDescriptor = unsafe {
             *lib.get(b"hermix_plugin_init\0")
                 .map_err(|e| format!("Symbol not found in {}: {}", dll_path.display(), e))?
         };
 
+        // SAFETY: `init` is the plugin-provided entry point. Caller
+        // guarantees it returns a valid, non-null `*const PluginDescriptor`
+        // (null is checked immediately after).
         let descriptor = unsafe { init() };
         if descriptor.is_null() {
             return Err(format!("hermix_plugin_init returned null in {}", dll_path.display()));
         }
 
+        // SAFETY: `descriptor` is non-null (checked above) and points to
+        // a `PluginDescriptor` allocated by the plugin. It remains valid
+        // for the lifetime of `lib` (which is held in `self._lib`).
         let desc_ref = unsafe { &*descriptor };
 
         if desc_ref.abi_version != PLUGIN_ABI_VERSION {
@@ -109,6 +127,9 @@ impl LoadedNativePlugin {
         let name = if desc_ref.name.is_null() {
             "unknown".to_string()
         } else {
+            // SAFETY: `desc_ref.name` is non-null (checked above) and
+            // points to a NUL-terminated C string allocated by the plugin.
+            // It remains valid for the lifetime of `lib`.
             unsafe { CStr::from_ptr(desc_ref.name) }.to_string_lossy().into_owned()
         };
 
@@ -124,18 +145,28 @@ impl LoadedNativePlugin {
 
     /// Create tool handler #0 (present if `self.kind == Tools && tool_count > 0`).
     /// For multi-tool plugins, callers can pass `index` 0..tool_count.
+    /// # Safety
+    ///
+    /// Caller must ensure `index < self.tool_count` and that the plugin
+    /// remains loaded (i.e. the originating `LoadedNativePlugin` is not
+    /// dropped) for the lifetime of the returned handler.
     pub unsafe fn create_tool_handler(
         &self,
         index: u32,
     ) -> Result<Arc<dyn ToolHandler>, String> {
+        // SAFETY: `self.descriptor` is valid for the lifetime of `self._lib`.
         let desc_ref = unsafe { &*self.descriptor };
         assert!(index < desc_ref.tool_count);
 
+        // SAFETY: `desc_ref.create_tool` is a valid function pointer
+        // provided by the plugin. `index` is bounds-checked above.
         let raw = unsafe { (desc_ref.create_tool)(index) };
         if raw.is_null() {
             return Err("create_tool returned null".into());
         }
 
+        // SAFETY: `raw` is non-null (checked above) and points to a
+        // `ToolInstance` allocated by the plugin.
         let instance = unsafe { &*raw };
         if instance.vtable.is_null() || instance.user_data.is_null() {
             return Err("ToolInstance has null vtable or user_data".into());
@@ -144,8 +175,14 @@ impl LoadedNativePlugin {
         Ok(Arc::new(NativeToolAdapter { raw, _plugin: () }))
     }
 
+    /// # Safety
+    ///
+    /// Caller must ensure the returned pointer is properly managed
+    /// by the plugin's memory provider contract.
     pub unsafe fn create_memory_provider(&self) -> Option<*mut std::ffi::c_void> {
+        // SAFETY: `self.descriptor` is valid for the lifetime of `self._lib`.
         let desc_ref = unsafe { &*self.descriptor };
+        // SAFETY: `f` is a valid function pointer provided by the plugin.
         desc_ref.create_memory_provider.map(|f| unsafe { f() })
     }
 }
@@ -196,10 +233,17 @@ impl Drop for NativeToolAdapter {
         if self.raw.is_null() {
             return;
         }
+        // SAFETY: `self.raw` is non-null and points to a valid
+        // `ToolInstance` allocated by the plugin.
         let inst = unsafe { &*self.raw };
         if !inst.vtable.is_null() {
+            // SAFETY: `inst.vtable` is non-null and points to a valid
+            // `ToolVtable` allocated by the plugin.
             let vtable = unsafe { &*inst.vtable };
             if let Some(destroy) = vtable.destroy.into() {
+                // SAFETY: `destroy` is the plugin-provided deallocator
+                // for `user_data`. It is safe to call with the same
+                // `user_data` that was provided at creation time.
                 unsafe { destroy(inst.user_data) };
             }
         }
@@ -213,10 +257,14 @@ where
     if raw.is_null() {
         return Err(ToolError::ExecutionFailed("ToolInstance is null".into()));
     }
+    // SAFETY: `raw` is non-null (checked above) and points to a valid
+    // `ToolInstance` allocated by the plugin.
     let inst = unsafe { &*raw };
     if inst.vtable.is_null() {
         return Err(ToolError::ExecutionFailed("vtable is null".into()));
     }
+    // SAFETY: `inst.vtable` is non-null and points to a valid
+    // `ToolVtable` allocated by the plugin.
     let vtable = unsafe { &*inst.vtable };
     f(vtable, inst.user_data)
 }
@@ -225,10 +273,16 @@ where
 impl ToolHandler for NativeToolAdapter {
     fn schema(&self) -> ToolSchema {
         with_vtable(self.raw, |v, ud| {
+            // SAFETY: `v.schema_json` is a valid function pointer
+            // provided by the plugin. `ud` is the user_data pointer
+            // that was associated with this tool instance at creation.
             let ptr = unsafe { (v.schema_json)(ud) };
             if ptr.is_null() {
                 return Err(ToolError::ExecutionFailed("schema_json returned null".into()));
             }
+            // SAFETY: `ptr` is non-null (checked above) and points to a
+            // NUL-terminated C string allocated by the plugin. It is
+            // valid until `v.free_string` is called.
             let raw = unsafe { CStr::from_ptr(ptr) }
                 .to_str()
                 .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
@@ -253,16 +307,24 @@ impl ToolHandler for NativeToolAdapter {
             .map_err(|e| ToolError::ExecutionFailed(format!("CString: {e}")))?;
 
         with_vtable(self.raw, move |v, ud| {
+            // SAFETY: `v.execute` is a valid function pointer provided by
+            // the plugin. `ud` is the user_data pointer from creation time.
+            // `c_params.as_ptr()` is a valid NUL-terminated C string that
+            // remains valid for the duration of this call.
             let raw = unsafe { (v.execute)(ud, c_params.as_ptr()) };
             if raw.is_null() {
                 return Err(ToolError::ExecutionFailed("execute returned null".into()));
             }
+            // SAFETY: `raw` is non-null (checked above) and points to a
+            // NUL-terminated C string allocated by the plugin.
             let s = unsafe { CStr::from_ptr(raw) }
                 .to_str()
                 .map_err(|e| ToolError::ExecutionFailed(format!("execute output: {e}")))?
                 .to_owned();
 
-            // Free the string the plugin malloc'd for us.
+            // SAFETY: `v.free_string` is the plugin-provided deallocator
+            // for strings returned by `execute`. `raw` was allocated by
+            // the plugin's `execute` and is still valid.
             unsafe { (v.free_string)(raw) };
 
             // Attempt to parse as JSON; if it has a "result" field

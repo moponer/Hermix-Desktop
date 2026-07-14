@@ -33,6 +33,13 @@ use regex::Regex;
 use serde_json::json;
 use std::sync::LazyLock;
 
+// 2026-07-14 (P1-1): Helper to compile static regex patterns without
+// .unwrap(). Uses .expect() with a semantic message as required by
+// the code hardening plan (static init cannot use `?`).
+fn re(pattern: &'static str) -> Regex {
+    Regex::new(pattern).expect("static regex pattern must compile")
+}
+
 /// Pattern that triggers a "BLOCKED:" prefix. The patterns are
 /// intentionally narrow — they target *structural* prompt-
 /// injection markers, not specific payloads, so the scanner
@@ -42,21 +49,21 @@ static THREAT_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
         // ChatML / token-injection markers. These are never
         // legitimate user content for a memory entry.
-        Regex::new(r"<\|im_start\|>").unwrap(),
-        Regex::new(r"<\|im_end\|>").unwrap(),
-        Regex::new(r"<\|endoftext\|>").unwrap(),
+        re(r"<\|im_start\|>"),
+        re(r"<\|im_end\|>"),
+        re(r"<\|endoftext\|>"),
         // OpenAI / Anthropic system markers. We don't expect
         // these to appear in MEMORY.md or USER.md; their
         // presence means something is trying to inject
         // turn-level instructions into the persistent record.
-        Regex::new(r"(?i)<\s*/?system\s*>").unwrap(),
-        Regex::new(r"(?i)<\s*/?assistant\s*>").unwrap(),
+        re(r"(?i)<\s*/?system\s*>"),
+        re(r"(?i)<\s*/?assistant\s*>"),
         // XML-instruction smuggling. A memory entry that
         // contains literal `<?xml ... ?>` or `<|channel|>` etc.
         // is trying to slip a parser directive past the LLM
         // boundary.
-        Regex::new(r"<\?xml").unwrap(),
-        Regex::new(r"<\|channel\|>").unwrap(),
+        re(r"<\?xml"),
+        re(r"<\|channel\|>"),
         // Hidden-URL homograph bait (a common LLM trap:
         // "remember this URL: https://аpple.com" where `а` is
         // Cyrillic). We don't try to *resolve* the URL — we
@@ -65,7 +72,7 @@ static THREAT_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // This is the most aggressive rule and may produce
         // false positives for users who paste legit URLs into
         // their own notes. Trade-off accepted.
-        Regex::new(r"(?i)https?://[^\s/$.?#].[^\s]*").unwrap(),
+        re(r"(?i)https?://[^\s/$.?#].[^\s]*"),
     ]
 });
 

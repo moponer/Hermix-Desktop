@@ -9,6 +9,13 @@ use std::sync::LazyLock;
 use hermix_core::ToolError;
 use regex::Regex;
 
+// 2026-07-14 (P1-1): Helper to compile static regex patterns without
+// .unwrap(). Uses .expect() with a semantic message as required by
+// the code hardening plan (static init cannot use `?`).
+fn re(pattern: &'static str) -> Regex {
+    Regex::new(pattern).expect("static regex pattern must compile")
+}
+
 // ---------------------------------------------------------------------------
 // Protected file patterns
 // ---------------------------------------------------------------------------
@@ -57,51 +64,51 @@ static SECRET_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| 
     vec![
         (
             "Private key",
-            Regex::new(r"(?i)-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----").unwrap(),
+            re(r"(?i)-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----"),
         ),
         (
             "API key (sk-)",
-            Regex::new(r"\bsk-[a-zA-Z0-9]{20,}\b").unwrap(),
+            re(r"\bsk-[a-zA-Z0-9]{20,}\b"),
         ),
         (
             "API key (sk_live)",
-            Regex::new(r"\bsk_live_[a-zA-Z0-9]{20,}\b").unwrap(),
+            re(r"\bsk_live_[a-zA-Z0-9]{20,}\b"),
         ),
         (
             "GitHub token",
-            Regex::new(r"\bgh[ps]_[a-zA-Z0-9]{36,}\b").unwrap(),
+            re(r"\bgh[ps]_[a-zA-Z0-9]{36,}\b"),
         ),
         (
             "AWS access key",
-            Regex::new(r"\bAKIA[0-9A-Z]{16}\b").unwrap(),
+            re(r"\bAKIA[0-9A-Z]{16}\b"),
         ),
         (
             "AWS secret key",
-            Regex::new(r"(?i)aws_secret_access_key\s*=\s*\S+").unwrap(),
+            re(r"(?i)aws_secret_access_key\s*=\s*\S+"),
         ),
         (
             "Google API key",
-            Regex::new(r"\bAIza[0-9A-Za-z\-_]{35}\b").unwrap(),
+            re(r"\bAIza[0-9A-Za-z\-_]{35}\b"),
         ),
         (
             "Slack token",
-            Regex::new(r"\bxox[bpras]-[0-9a-zA-Z\-]{10,}\b").unwrap(),
+            re(r"\bxox[bpras]-[0-9a-zA-Z\-]{10,}\b"),
         ),
         (
             "Stripe key",
-            Regex::new(r"\b[rk]k_live_[0-9a-zA-Z]{24,}\b").unwrap(),
+            re(r"\b[rk]k_live_[0-9a-zA-Z]{24,}\b"),
         ),
         (
             "JWT token",
-            Regex::new(r"\beyJ[A-Za-z0-9-_]+\.eyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\b").unwrap(),
+            re(r"\beyJ[A-Za-z0-9-_]+\.eyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\b"),
         ),
         (
             "Password assignment",
-            Regex::new(r"(?i)(?:password|passwd|pwd)\s*[:=]\s*\S+").unwrap(),
+            re(r"(?i)(?:password|passwd|pwd)\s*[:=]\s*\S+"),
         ),
         (
             "Generic secret assignment",
-            Regex::new(r"(?i)(?:secret|token|api_key|apikey|access_key)\s*[:=]\s*\S{8,}").unwrap(),
+            re(r"(?i)(?:secret|token|api_key|apikey|access_key)\s*[:=]\s*\S{8,}"),
         ),
     ]
 });

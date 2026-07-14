@@ -4505,7 +4505,7 @@ async fn handle_ws_stream_send(
                 // here, so the row exists regardless.
                 let done_content = redact_sensitive(&cleaned);
                 let done_finish_reason = reply.finish_reason.clone();
-                let _ = tx
+                if let Err(e) = tx
                     .send(WsEnvelope {
                         version: 1,
                         request_id: request_id_owned.clone(),
@@ -4515,7 +4515,19 @@ async fn handle_ws_stream_send(
                             finish_reason: done_finish_reason,
                         },
                     })
-                    .await;
+                    .await
+                {
+                    // 2026-07-14 (P0-1 defense): tx.send failure means
+                    // the client's WS reader side dropped. Log a warning
+                    // so we can diagnose "stream hung with no Done"
+                    // issues from logs instead of just seeing the Done
+                    // silently disappear.
+                    tracing::warn!(
+                        session = %session_id_clone,
+                        error = %e,
+                        "Done event failed to send — client may not have received terminal event"
+                    );
+                }
             }
             Err(e) => {
                 let _ = tx

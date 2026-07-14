@@ -245,7 +245,13 @@ fall back to the standard Hermes XML form:\n\n\
 <parameter name=\"PARAM\">VALUE</parameter>\n\
 </invoke>\n\
 </function_calls>\n\
-```";
+```\n\n\
+## CRITICAL — never emit empty or placeholder tool calls\n\
+If you do NOT need to call a tool for the current turn, **output only text — do NOT\n\
+emit a tool call at all**. The agent loop interprets `finish_reason: \"tool_calls\"`\n\
+with an empty / unfilled tool-call as a dead end: no tool executes, no text reaches\n\
+the user, and the turn is wasted. When in doubt, answer the user directly instead of\n\
+issuing a speculative tool call you cannot fill with real arguments.";
 
 const FORMATTING_DISCIPLINE_GUIDANCE: &str = "# Output formatting discipline\n\
 Markdown is for **structure**, not emphasis. Chat UIs render every `**...**` as visible bold, and over-bolding creates visual noise that hurts readability.\n\n\

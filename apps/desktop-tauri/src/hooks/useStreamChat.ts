@@ -510,12 +510,23 @@ export function useStreamChat() {
         // resets on every received WS event (text, thinking, tool_start,
         // tool_complete, status, etc.), so as long as the agent is
         // making progress the stream stays alive.
+        //
+        // 2026-07-14 (P0-2 stale-stream hang fix): added a 90s STALE
+        // idle timeout independent from the 300s IDLE. When the backend
+        // agent loop exits silently (Finalize without sending Done, e.g.
+        // MiniMax empty-tool-call dead-end), the 90s guard settles the
+        // stream as "partial" so the user sees the interrupted result
+        // instead of staring at a frozen "thinking..." UI. The 300s
+        // timeout remains as the ultimate safety net.
         const IDLE_TIMEOUT_MS = 300_000;
+        const STALE_STREAM_TIMEOUT_MS = 90_000;
+        let staleStreamTimer: ReturnType<typeof setTimeout> | null = null;
 
         const armTimeouts = () => {
           resetIdleTimeout();
+          resetStaleTimer();
         };
-        // Reset the idle timer. Called on every received WS event.
+        // Reset the IDLE timer (300s). Called on every received WS event.
         // If no event arrives within IDLE_TIMEOUT_MS, the stream is
         // considered abandoned and we settle with "timeout".
         const resetIdleTimeout = () => {
@@ -530,10 +541,32 @@ export function useStreamChat() {
             }
           }, IDLE_TIMEOUT_MS);
         };
+        // Reset the STALE timer (90s). Unlike the IDLE timer, this does
+        // NOT reset on every WS event — it only resets when a text chunk
+        // arrives. This way, tool execution pauses don't trigger it, but
+        // a truly hung agent loop (no text for 90s) will.
+        const resetStaleTimer = () => {
+          if (staleStreamTimer !== null) clearTimeout(staleStreamTimer);
+          staleStreamTimer = setTimeout(() => {
+            if (!doneRef.current) {
+              // Don't override the phase if already in a settled state.
+              settleRef.current?.(
+                "", // preserve text we already have
+                undefined,
+                "stale_stream",
+                "partial"
+              );
+            }
+          }, STALE_STREAM_TIMEOUT_MS);
+        };
         const disarmTimeouts = () => {
           if (idleTimeout !== null) {
             clearTimeout(idleTimeout);
             idleTimeout = null;
+          }
+          if (staleStreamTimer !== null) {
+            clearTimeout(staleStreamTimer);
+            staleStreamTimer = null;
           }
           if (slowHintTimer !== null) {
             clearTimeout(slowHintTimer);
@@ -639,6 +672,10 @@ export function useStreamChat() {
                 }
               }, IDLE_TIMEOUT_MS);
             }
+            // 2026-07-14: also arm the stale timer on every WS event.
+            // This gives the stream 90s of "no text" before auto-settle.
+            // Tool execution pauses don't extend it (text events do).
+            resetStaleTimer();
             try {
               const data = JSON.parse(String(evt.data));
 
@@ -691,6 +728,10 @@ export function useStreamChat() {
               const evtContent = data?.content || data?.event?.content;
 
               if (evtType === "text") {
+                // Reset the stale-stream timer on every text chunk
+                // so tool-only turns (no user-visible output) don't
+                // keep the stream alive indefinitely.
+                resetStaleTimer();
                 firstChunkReceived = true;
                 if (phase === "slow") updatePhase("streaming");
                 const piece = typeof evtContent === "string" ? evtContent : "";

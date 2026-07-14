@@ -110,6 +110,8 @@ pub(crate) fn merge_usage(existing: Option<UsageStats>, new: &UsageStats) -> Usa
                 (None, Some(b)) => Some(b),
                 (None, None) => None,
             },
+            cache_read_tokens: prev.cache_read_tokens + new.cache_read_tokens,
+            cache_creation_tokens: prev.cache_creation_tokens + new.cache_creation_tokens,
         },
         None => new.clone(),
     }

@@ -1159,7 +1159,7 @@ impl ToolHandler for CuaUiFindHandler {
                 parts.push(UiaCondition::ClassName(c.clone()));
             }
             let cond = if parts.len() == 1 {
-                parts.into_iter().next().unwrap()
+                parts.into_iter().next().expect("checked len == 1, must have one element")
             } else {
                 UiaCondition::And(parts)
             };

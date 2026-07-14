@@ -127,6 +127,8 @@ pub fn arb_usage_stats() -> impl Strategy<Value = UsageStats> {
                 completion_tokens,
                 total_tokens: prompt_tokens + completion_tokens,
                 estimated_cost,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
             },
         )
 }

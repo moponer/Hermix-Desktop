@@ -362,6 +362,15 @@ impl AgentLoop {
             } else {
                 0.0
             };
+            // 2026-07-14: Include cumulative cache hit/miss data from
+            // the CostGuard so the frontend can display "缓存命中 45k"
+            // alongside the context usage bar.
+            let (cache_read, cache_creation) = state
+                .cost_guard
+                .accumulated_usage
+                .as_ref()
+                .map(|u| (u.cache_read_tokens, u.cache_creation_tokens))
+                .unwrap_or((0, 0));
             on_c(StreamChunk {
                 delta: Some(hermix_core::StreamDelta {
                     content: None,
@@ -372,6 +381,8 @@ impl AgentLoop {
                         "max_tokens": max_tokens as u64,
                         "threshold_tokens": threshold as u64,
                         "percent": percent,
+                        "cache_read_tokens": cache_read,
+                        "cache_creation_tokens": cache_creation,
                     })),
                 }),
                 finish_reason: None,
@@ -1415,6 +1426,43 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 if has_visible {
                     tracing::info!(
                         "All tool calls had empty names after filtering; LLM produced visible text — finalizing"
+                    );
+                    self.persist_session_terminal(
+                        &ctx,
+                        session_id,
+                        total_turns,
+                        review_memory_at_end,
+                    );
+                    Self::emit_mute_transition(&on_chunk, &stream_mute, false);
+                    return Ok(self.finalize_agent_result(
+                        &ctx,
+                        total_turns,
+                        &tool_errors,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
+                        session_started_hooks_fired,
+                        persist_user_idx,
+                        true,
+                        false,
+                        last_finish_reason.clone(),
+                    ));
+                }
+                // 2026-07-14 (P1-3 streaming hang fix): when the LLM
+                // returned tool_calls but all were filtered out AND the
+                // turn history already contains tool results, the
+                // decide_empty_response path can loop forever —
+                // autonomous_mode fires a ContinueWithSystemNudge that
+                // tells the LLM "you haven't finished", the LLM again
+                // returns empty tool_calls, and the loop repeats until
+                // max_turns. Fix: if the current turn produced tool
+                // calls that were filtered (history_includes_tool=true)
+                // and there's no visible text, finalize immediately
+                // instead of looping. The model chose to stop —
+                // respect its stop signal.
+                if history_includes_tool {
+                    tracing::info!(
+                        turn = total_turns,
+                        "All tool calls were filtered out and history already includes tools; finalizing immediately (no empty-response loop)"
                     );
                     self.persist_session_terminal(
                         &ctx,

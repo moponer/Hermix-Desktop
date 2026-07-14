@@ -471,7 +471,7 @@ impl CloudBrowserProvider for BrowserUseCloudProvider {
             )
         })?;
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("Content-Type", "application/json".parse().unwrap());
+        headers.insert("Content-Type", "application/json".parse().expect("static header value must parse"));
         headers.insert(
             "X-Browser-Use-API-Key",
             config.api_key.parse().map_err(|e| {
@@ -483,7 +483,7 @@ impl CloudBrowserProvider for BrowserUseCloudProvider {
                 "X-Idempotency-Key",
                 format!("browser-use-session-create:{}", uuid::Uuid::new_v4())
                     .parse()
-                    .unwrap(),
+                    .expect("idempotency key must parse"),
             );
         }
         let body = if config.managed_mode {

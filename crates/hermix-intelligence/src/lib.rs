@@ -17,6 +17,8 @@ pub mod anthropic_adapter;
 pub mod auxiliary;
 pub mod context_engine;
 pub mod credential_pool;
+pub mod domain_detector;
+pub mod domain_mode;
 pub mod embedding;
 pub mod display;
 pub mod error_classifier;
@@ -46,6 +48,17 @@ pub use thinking::{
     prompt_prefix_for, select_mode, RoutingDecision, RoutingReason, ThinkingConfig, ThinkingMode,
     L1_PROMPT_PREFIX, L2_PROMPT_PREFIX, L2_SELF_CRITIQUE,
 };
+
+// Re-export domain mode types (L1 — Domain Mode)
+pub use domain_mode::{
+    is_code_workspace, preset_for, tool_to_domain, ConvergenceSignal, DomainMode, DomainPreset,
+    CODE_DOMAIN_DIRECTIVE, RESEARCH_DOMAIN_DIRECTIVE, WRITE_DOMAIN_DIRECTIVE,
+    OPERATE_DOMAIN_DIRECTIVE,
+};
+pub use domain_detector::{
+    DomainDetectConfig, DomainDetection, DomainModeDetector, DetectionSignal, DetectionSource,
+    SignalType,
+};
 pub use usage::{ModelPricing, ModelUsage, UsageRecord, UsageSummary, UsageTracker};
 
 pub use anthropic_adapter::{
@@ -74,6 +87,6 @@ pub use usage_pricing::{
     CostSource, CostStatus, PricingEntry,
 };
 pub use tool_router::{
-    AlwaysInclude, CompositeRouter, KeywordRouter, RoutedSchema, ToolSchemaRouter, ToolsetRouter,
-    TurnContext, VectorRouter,
+    AlwaysInclude, CompositeRouter, KeywordRouter, PriorityBoost, RoutedSchema,
+    ToolSchemaRouter, ToolsetRouter, TurnContext, VectorRouter,
 };

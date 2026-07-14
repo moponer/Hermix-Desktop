@@ -83,7 +83,7 @@ impl SeedDance2Backend {
 
         if let Some(s) = seed {
             body.as_object_mut()
-                .unwrap()
+                .expect("video gen body must be a JSON object")
                 .insert("seed".into(), json!(s));
         }
 
@@ -137,7 +137,7 @@ impl SeedDance2Backend {
 
         if let Some(s) = seed {
             body.as_object_mut()
-                .unwrap()
+                .expect("video gen body must be a JSON object")
                 .insert("seed".into(), json!(s));
         }
 

@@ -203,7 +203,7 @@ impl HermixAchievementsHandler {
     }
 
     fn list(&self) -> Result<String, ToolError> {
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock().expect("achievements mutex not poisoned");
         let badges = builtin_badges();
         let unlocked = state
             .unlocked
@@ -239,7 +239,7 @@ impl HermixAchievementsHandler {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("achievements mutex not poisoned");
 
         // Merge stats (take max of numeric fields) so cumulative progress
         // is preserved across sessions.
@@ -289,7 +289,7 @@ impl HermixAchievementsHandler {
     }
 
     fn reset(&self) -> Result<String, ToolError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().expect("achievements mutex not poisoned");
         state.unlocked.clear();
         state.stats = json!({});
         save_state(&state);

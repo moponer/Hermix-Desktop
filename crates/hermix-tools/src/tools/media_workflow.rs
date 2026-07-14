@@ -292,7 +292,7 @@ impl MediaWorkflowBackend for PlanningWorkflowBackend {
                 if let Some(style) = image_style {
                     img_params
                         .as_object_mut()
-                        .unwrap()
+                        .expect("media workflow body must be a JSON object")
                         .insert("style".into(), json!(style));
                 }
 

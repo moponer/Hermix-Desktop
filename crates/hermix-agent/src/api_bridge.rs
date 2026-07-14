@@ -206,6 +206,8 @@ impl CodexProvider {
                 completion_tokens: output,
                 total_tokens: input + output,
                 estimated_cost: None,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
             }
         });
 
@@ -474,6 +476,8 @@ impl LlmProvider for CodexProvider {
                                     completion_tokens: output,
                                     total_tokens: input + output,
                                     estimated_cost: None,
+                                    cache_read_tokens: 0,
+                                    cache_creation_tokens: 0,
                                 }
                             });
                             yield Ok(StreamChunk {

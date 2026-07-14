@@ -120,11 +120,11 @@ pub fn parse_v4a_patch(patch_content: &str) -> (Vec<PatchOperation>, Option<Stri
     let start = start_idx.map(|i| i + 1).unwrap_or(0);
     let end = end_idx.unwrap_or(lines.len());
 
-    let update_re = Regex::new(r"\*\*\*\s*Update\s+File:\s*(.+)").unwrap();
-    let add_re = Regex::new(r"\*\*\*\s*Add\s+File:\s*(.+)").unwrap();
-    let delete_re = Regex::new(r"\*\*\*\s*Delete\s+File:\s*(.+)").unwrap();
-    let move_re = Regex::new(r"\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+)").unwrap();
-    let hint_re = Regex::new(r"@@\s*(.+?)\s*@@").unwrap();
+    let update_re = Regex::new(r"\*\*\*\s*Update\s+File:\s*(.+)").expect("v4a patch regex must compile");
+    let add_re = Regex::new(r"\*\*\*\s*Add\s+File:\s*(.+)").expect("v4a patch regex must compile");
+    let delete_re = Regex::new(r"\*\*\*\s*Delete\s+File:\s*(.+)").expect("v4a patch regex must compile");
+    let move_re = Regex::new(r"\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+)").expect("v4a patch regex must compile");
+    let hint_re = Regex::new(r"@@\s*(.+?)\s*@@").expect("v4a patch regex must compile");
 
     let mut operations: Vec<PatchOperation> = Vec::new();
     let mut current_op: Option<PatchOperation> = None;
