@@ -411,6 +411,7 @@ pub fn finalize_agent_result(
     finished_naturally: bool,
     interrupted: bool,
     finish_reason: Option<String>,
+    memory_callbacks: Option<&AgentCallbacks>,
 ) -> AgentResult {
     let messages = ctx.get_messages();
     let _ = crate::hook_dispatch::invoke_hook(
@@ -435,7 +436,7 @@ pub fn finalize_agent_result(
             }),
         );
     }
-    crate::memory_prefetch::memory_on_session_end(config, memory_router, focus_stack, messages);
+    crate::memory_prefetch::memory_on_session_end(config, memory_router, focus_stack, messages, memory_callbacks);
     let _ = crate::hook_dispatch::invoke_hook(
         plugin_manager,
         crate::plugins::HookType::OnSessionFinalize,

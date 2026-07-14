@@ -68,5 +68,5 @@ fn session_end_without_router_is_noop() {
     let focus_stack: Mutex<FocusStack<SessionFrame>> = Mutex::new(FocusStack::default());
     let messages: Vec<Message> = vec![];
     // Should not panic.
-    memory_on_session_end(&cfg, None, &focus_stack, &messages);
+    memory_on_session_end(&cfg, None, &focus_stack, &messages, None);
 }

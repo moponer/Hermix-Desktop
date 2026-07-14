@@ -449,6 +449,7 @@ impl AgentLoop {
             finished_naturally,
             interrupted,
             finish_reason,
+            Some(&self.callbacks),
         )
     }
 
@@ -988,11 +989,22 @@ impl AgentLoop {
     /// write-capable backend) actually writes to long-term store.
     pub fn drain_focus_conclusions_to_memory_router(&self) -> usize {
         let session_id = self.config.session_id.clone().unwrap_or_default();
-        crate::memory_prefetch::drain_focus_conclusions(
+        let count = crate::memory_prefetch::drain_focus_conclusions(
             &self.focus_stack,
             self.memory_router.as_ref(),
             &session_id,
-        )
+        );
+        // 2026-07-14: surface drained focus conclusions as "总结" rows.
+        if count > 0 && !self.config.quiet_mode {
+            self.emit_memory_update(&crate::memory_prefetch::MemoryWriteRecord {
+                action: crate::memory_prefetch::MemoryAction::Summarize,
+                memory_type: crate::memory_prefetch::MemoryKind::Summary,
+                key: "session".to_string(),
+                summary: format!("归档了 {count} 条会话结论"),
+                count: Some(count as u64),
+            });
+        }
+        count
     }
 
     /// Pre-LLM-call drain: inject steer into the last tool result if possible; otherwise restash.
@@ -1032,13 +1044,37 @@ impl AgentLoop {
     }
 
     pub(crate) fn memory_sync(&self, user: &str, assistant: &str, session_id: &str) {
-        crate::memory_prefetch::memory_sync(
+        let records = crate::memory_prefetch::memory_sync(
             &self.config,
             self.memory_router.as_deref(),
             user,
             assistant,
             session_id,
-        )
+        );
+        // 2026-07-14: surface per-turn fact/style writes as a single
+        // batched "记住了 N 条事实/偏好" chat row so the user can see
+        // what the agent is remembering without flooding the stream.
+        if !records.is_empty() && !self.config.quiet_mode {
+            let count = records.len() as u64;
+            let listed: String = records
+                .iter()
+                .take(3)
+                .map(|r| r.key.as_str())
+                .collect::<Vec<_>>()
+                .join("、");
+            let more = if records.len() > 3 {
+                format!(" 等 {count} 条")
+            } else {
+                String::new()
+            };
+            self.emit_memory_update(&crate::memory_prefetch::MemoryWriteRecord {
+                action: crate::memory_prefetch::MemoryAction::Write,
+                memory_type: crate::memory_prefetch::MemoryKind::Fact,
+                key: "memory".to_string(),
+                summary: format!("记住 {count} 条事实/偏好：{listed}{more}"),
+                count: Some(count),
+            });
+        }
     }
 
     /// Phase 18 (架构-1): freeze the current session state into a
@@ -1065,24 +1101,40 @@ impl AgentLoop {
     /// months of heavy chat, soft-hidden rows stay on disk for the
     /// audit trail and the 30-day janitor.
     pub(crate) fn maybe_enforce_frame_cap(&self, turn_number: u32) {
-        crate::memory_prefetch::maybe_enforce_frame_cap(
+        let hidden = crate::memory_prefetch::maybe_enforce_frame_cap(
             &self.config,
             self.memory_router.as_deref(),
             turn_number,
-        )
+        );
+        // 2026-07-14: surface the cleanup so the user sees stale memory
+        // being pruned (the "删除" half of their request).
+        if hidden > 0 && !self.config.quiet_mode {
+            self.emit_memory_update(&crate::memory_prefetch::MemoryWriteRecord {
+                action: crate::memory_prefetch::MemoryAction::Cleanup,
+                memory_type: crate::memory_prefetch::MemoryKind::Fact,
+                key: "memory".to_string(),
+                summary: format!("清理了 {hidden} 条过期/低权重记忆"),
+                count: Some(hidden as u64),
+            });
+        }
     }
 
     pub(crate) fn notify_memory_writes(&self, tool_calls: &[ToolCall], results: &[ToolResult]) {
-        crate::memory_prefetch::notify_memory_writes(
+        let records = crate::memory_prefetch::notify_memory_writes(
             &self.config,
             self.memory_router.as_deref(),
             tool_calls,
             results,
-        )
+        );
+        // 2026-07-14: surface explicit `memory` tool add/replace/remove
+        // as precise write/update/delete chat rows.
+        for rec in &records {
+            self.emit_memory_update(rec);
+        }
     }
 
     pub(crate) fn notify_delegations(&self, tool_calls: &[ToolCall], results: &[ToolResult]) {
-        crate::memory_prefetch::notify_delegations(
+        let drained = crate::memory_prefetch::notify_delegations(
             &self.config,
             self.memory_router.as_ref(),
             &self.focus_stack,
@@ -1090,6 +1142,17 @@ impl AgentLoop {
             results,
             self.consciousness_tracker.as_ref(),
         );
+        // 2026-07-14: surface delegation summaries (sub-task conclusions
+        // archived to long-term memory) as "总结" chat rows.
+        if drained > 0 && !self.config.quiet_mode {
+            self.emit_memory_update(&crate::memory_prefetch::MemoryWriteRecord {
+                action: crate::memory_prefetch::MemoryAction::Summarize,
+                memory_type: crate::memory_prefetch::MemoryKind::Summary,
+                key: "delegation".to_string(),
+                summary: format!("归档了 {drained} 条子任务结论"),
+                count: Some(drained as u64),
+            });
+        }
     }
 
     pub(crate) fn memory_on_turn_start(&self, turn: u32, message: &str) {
@@ -1193,6 +1256,27 @@ impl AgentLoop {
         });
         if let Some(cb) = self.callbacks.status_callback.as_ref() {
             cb("usage_update", &payload.to_string());
+        }
+    }
+
+    /// 2026-07-14: emit a `memory_update` status event carrying one
+    /// memory mutation (write/update/delete/summarize/cleanup) so the
+    /// front-end can render it inline in the conversation. Bridges
+    /// through the same `status_callback` path that `usage_update`
+    /// uses. Honors `quiet_mode` like the other emit helpers.
+    pub(crate) fn emit_memory_update(&self, rec: &crate::memory_prefetch::MemoryWriteRecord) {
+        if self.config.quiet_mode {
+            return;
+        }
+        let payload = serde_json::json!({
+            "action": rec.action.as_str(),
+            "memory_type": rec.memory_type.as_str(),
+            "key": rec.key,
+            "summary": rec.summary,
+            "count": rec.count,
+        });
+        if let Some(cb) = self.callbacks.status_callback.as_ref() {
+            cb("memory_update", &payload.to_string());
         }
     }
 

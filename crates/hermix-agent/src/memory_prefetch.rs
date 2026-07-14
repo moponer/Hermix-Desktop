@@ -44,12 +44,118 @@ use hermix_focus::{
 use hermix_intelligence::embedding::EmbeddingProvider;
 
 use crate::agent_config::AgentConfig;
+use crate::agent_helpers::AgentCallbacks;
 use crate::consciousness::ConsciousnessTracker;
 use crate::focus_stack_ops::{current_focus_depth, note_delegation_end};
 use crate::memory_hooks::{build_session_summary, delegation_event_from_tool_result, memory_write_event_from_tool_call};
 use hermix_core::{Message, MessageRole, ToolCall, ToolResult};
 use hermix_focus::SessionFrameStatus;
 use serde_json::Value;
+
+// ── Memory-operation surfacing (2026-07-14) ──────────────────────
+// These types describe a single memory mutation so the agent can
+// emit a `StreamEvent::MemoryUpdate` (bridged via the
+// `status_callback` "memory_update" event) and the front-end can
+// render it inline in the conversation. Keeping them here — at the
+// `memory_*` function layer — means every call site that performs a
+// mutation can return what it did without threading event plumbing
+// through the call stack.
+
+/// What kind of mutation happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryAction {
+    /// New knowledge stored (fact extraction, `memory` add).
+    Write,
+    /// Existing entry overwritten (`memory` replace).
+    Update,
+    /// Entry removed (`memory` remove, stale-frame cleanup).
+    Delete,
+    /// A summary / conclusion was persisted (delegation, session end).
+    Summarize,
+    /// Old / low-salience frames were pruned from the table.
+    Cleanup,
+    /// A periodic checkpoint snapshot was frozen.
+    Snapshot,
+}
+
+impl MemoryAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MemoryAction::Write => "write",
+            MemoryAction::Update => "update",
+            MemoryAction::Delete => "delete",
+            MemoryAction::Summarize => "summarize",
+            MemoryAction::Cleanup => "cleanup",
+            MemoryAction::Snapshot => "snapshot",
+        }
+    }
+}
+
+/// Which memory store the mutation targeted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryKind {
+    /// A user-asserted / extracted fact row.
+    Fact,
+    /// An inferred user-style fact (`user.style:<x>`).
+    Style,
+    /// A session / delegation summary / conclusion.
+    Summary,
+    /// An explicit `memory` tool operation.
+    Tool,
+    /// A frozen session snapshot.
+    Snapshot,
+}
+
+impl MemoryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MemoryKind::Fact => "fact",
+            MemoryKind::Style => "style",
+            MemoryKind::Summary => "summary",
+            MemoryKind::Tool => "tool",
+            MemoryKind::Snapshot => "snapshot",
+        }
+    }
+}
+
+/// One memory mutation, returned by the `memory_*` helpers so the
+/// caller (an `AgentLoop` method with `status_callback` access) can
+/// emit a `MemoryUpdate` event.
+#[derive(Debug, Clone)]
+pub struct MemoryWriteRecord {
+    pub action: MemoryAction,
+    pub memory_type: MemoryKind,
+    /// Canonical key (fact `canonical_key`, `memory` `target`, or
+    /// `"session"` for session-level summaries).
+    pub key: String,
+    /// One-line human-readable description of what changed.
+    pub summary: String,
+    /// Batch size when several operations fold into one record
+    /// (e.g. facts extracted from a single user turn).
+    pub count: Option<u64>,
+}
+
+/// Fire a `memory_update` status event from inside a `memory_*`
+/// helper that has `AgentCallbacks` access. Honors `quiet_mode` via
+/// the `config` flag passed by the caller. No-op when `callbacks`
+/// is `None` (e.g. tests / non-interactive runs).
+pub fn emit_memory_update_event(
+    callbacks: Option<&AgentCallbacks>,
+    record: &MemoryWriteRecord,
+) {
+    let Some(cb) = callbacks else { return };
+    let payload = serde_json::json!({
+        "action": record.action.as_str(),
+        "memory_type": record.memory_type.as_str(),
+        "key": record.key,
+        "summary": record.summary,
+        "count": record.count,
+    });
+    if let Some(scb) = cb.status_callback.as_ref() {
+        scb("memory_update", &payload.to_string());
+    }
+}
+
 
 /// Run the memory prefetch pipeline and return a markdown block
 /// (`"## Memory\n\n..."`) sized to the configured char budget.
@@ -274,9 +380,10 @@ pub fn memory_sync(
     user: &str,
     assistant: &str,
     session_id: &str,
-) {
+) -> Vec<MemoryWriteRecord> {
+    let mut records: Vec<MemoryWriteRecord> = Vec::new();
     if config.skip_memory {
-        return;
+        return records;
     }
     // Route to MemoryRouter (all backends) — replaces legacy
     // `PluginManager::memory_providers` fan-out.
@@ -291,17 +398,34 @@ pub fn memory_sync(
         if let Some(embedded) = router.find_embedded_backend() {
             let facts = fact_extractor::extract_facts_from_turn(user, session_id, 0);
             for fact in facts {
-                if let Err(e) = embedded.upsert_fact(
-                    &fact.canonical_key,
-                    fact.payload.clone(),
-                    0.6, // user_asserted facts: slightly below memory_write (0.7)
-                    &fact.tags,
-                    "fact_extractor",
-                ) {
+                let fact_text = fact
+                    .payload
+                    .get("text")
+                    .or_else(|| fact.payload.get("content"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&fact.canonical_key)
+                    .to_string();
+                if embedded
+                    .upsert_fact(
+                        &fact.canonical_key,
+                        fact.payload.clone(),
+                        0.6, // user_asserted facts: slightly below memory_write (0.7)
+                        &fact.tags,
+                        "fact_extractor",
+                    )
+                    .is_ok()
+                {
+                    records.push(MemoryWriteRecord {
+                        action: MemoryAction::Write,
+                        memory_type: MemoryKind::Fact,
+                        key: fact.canonical_key.clone(),
+                        summary: fact_text,
+                        count: None,
+                    });
+                } else {
                     tracing::debug!(
                         target: "hermix.agent",
                         key = %fact.canonical_key,
-                        error = %e,
                         "fact_extractor: upsert_fact failed"
                     );
                 }
@@ -336,25 +460,36 @@ pub fn memory_sync(
                     "user.style".to_string(),
                     "dialectic".to_string(),
                 ];
-                if let Err(e) = embedded.upsert_fact(
-                    &key,
-                    payload,
-                    // Style facts sit at 0.5 — below preferences
-                    // (0.6) but above ephemeral session metadata.
-                    0.5,
-                    &tags,
-                    "user_style_detector",
-                ) {
+                if embedded
+                    .upsert_fact(
+                        &key,
+                        payload,
+                        // Style facts sit at 0.5 — below preferences
+                        // (0.6) but above ephemeral session metadata.
+                        0.5,
+                        &tags,
+                        "user_style_detector",
+                    )
+                    .is_ok()
+                {
+                    records.push(MemoryWriteRecord {
+                        action: MemoryAction::Write,
+                        memory_type: MemoryKind::Style,
+                        key,
+                        summary: format!("用户风格推断：{}", detected.style),
+                        count: None,
+                    });
+                } else {
                     tracing::debug!(
                         target: "hermix.agent",
                         key = %key,
-                        error = %e,
                         "user_style: upsert_fact failed"
                     );
                 }
             }
         }
     }
+    records
 }
 /// Phase 18 (架构-1): freeze the current session state into a
 /// `session_snapshots` row. Called every N turns (default 50)
@@ -420,34 +555,40 @@ pub fn maybe_enforce_frame_cap(
     config: &AgentConfig,
     router: Option<&hermix_focus::MemoryRouter>,
     turn_number: u32,
-) {
+) -> usize {
     if config.skip_memory {
-        return;
+        return 0;
     }
     const CAP_INTERVAL: u32 = 100;
     const FRAME_CAP: usize = 10_000;
     if !turn_number.is_multiple_of(CAP_INTERVAL) || turn_number == 0 {
-        return;
+        return 0;
     }
     let Some(router) = router else {
-        return;
+        return 0;
     };
     let Some(embedded) = router.find_embedded_backend() else {
-        return;
+        return 0;
     };
     match embedded.enforce_frame_cap(FRAME_CAP) {
-        Ok(0) => {}
-        Ok(n) => tracing::info!(
-            target: "hermix.agent",
-            hidden = n,
-            cap = FRAME_CAP,
-            "frame cap enforced (oldest/lowest-salience hidden)"
-        ),
-        Err(e) => tracing::warn!(
-            target: "hermix.agent",
-            error = %e,
-            "frame cap enforcement failed"
-        ),
+        Ok(0) => 0,
+        Ok(n) => {
+            tracing::info!(
+                target: "hermix.agent",
+                hidden = n,
+                cap = FRAME_CAP,
+                "frame cap enforced (oldest/lowest-salience hidden)"
+            );
+            n
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "hermix.agent",
+                error = %e,
+                "frame cap enforcement failed"
+            );
+            0
+        }
     }
 }
 
@@ -459,12 +600,13 @@ pub fn notify_memory_writes(
     router: Option<&hermix_focus::MemoryRouter>,
     tool_calls: &[ToolCall],
     results: &[ToolResult],
-) {
+) -> Vec<MemoryWriteRecord> {
+    let mut records: Vec<MemoryWriteRecord> = Vec::new();
     if config.skip_memory {
-        return;
+        return records;
     }
     let Some(router) = router else {
-        return;
+        return records;
     };
     for result in results {
         if result.is_error {
@@ -477,7 +619,33 @@ pub fn notify_memory_writes(
             continue;
         };
         router.on_memory_write(&action, &target, &content);
+        // Map the `memory` tool action verb to our surfacing action.
+        let mem_action = match action.as_str() {
+            "add" => MemoryAction::Write,
+            "replace" => MemoryAction::Update,
+            "remove" => MemoryAction::Delete,
+            _ => MemoryAction::Write,
+        };
+        let summary = if content.trim().is_empty() {
+            format!("记忆 {action}：{target}")
+        } else {
+            // Keep the inline summary short so the chat row stays readable.
+            let truncated: String = content
+                .chars()
+                .take(80)
+                .collect();
+            let ellipsis = if content.chars().count() > 80 { "…" } else { "" };
+            format!("记忆 {action}「{target}」：{truncated}{ellipsis}")
+        };
+        records.push(MemoryWriteRecord {
+            action: mem_action,
+            memory_type: MemoryKind::Tool,
+            key: target,
+            summary,
+            count: None,
+        });
     }
+    records
 }
 
 /// Route a `on_turn_start` notification through `MemoryRouter`.
@@ -634,6 +802,7 @@ pub fn memory_on_session_end(
     router: Option<&Arc<MemoryRouter>>,
     focus_stack: &Mutex<FocusStack<SessionFrame>>,
     messages: &[Message],
+    callbacks: Option<&AgentCallbacks>,
 ) {
     if config.skip_memory {
         return;
@@ -650,12 +819,12 @@ pub fn memory_on_session_end(
     // this hook the only writes to memory.db came from
     // `note_delegation_end`, leaving single-shot sessions with
     // 0 rows — the symptom the user reported as "会话记忆不工作".
-    if let Some(text) = build_session_summary(messages) {
+    let wrote_session_summary = build_session_summary(messages).map(|text| {
         let router = router_owned.clone();
         let session_id = config.session_id.clone().unwrap_or_default();
         let conclusion = FocusConclusion {
             source_frame_id: uuid::Uuid::new_v4(),
-            text,
+            text: text.clone(),
             salience: 0.5,
             tags: vec!["session".to_string()],
             created_at: chrono::Utc::now(),
@@ -670,7 +839,8 @@ pub fn memory_on_session_end(
                 );
             }
         });
-    }
+        text
+    });
 
     // Drain any pending focus conclusions.
     let session_id = config.session_id.clone().unwrap_or_default();
@@ -681,6 +851,34 @@ pub fn memory_on_session_end(
             count = drained,
             "memory_on_session_end: drained leftover focus conclusions"
         );
+    }
+
+    // 2026-07-14: surface the session-end summary so the user can
+    // see that the agent "remembered" this session. Emit before the
+    // async persistence completes — we already know synchronously
+    // whether a summary was produced and how many conclusions drained.
+    if !config.quiet_mode {
+        let total = drained + if wrote_session_summary.is_some() { 1 } else { 0 };
+        if total > 0 {
+            let summary = match wrote_session_summary {
+                Some(ref t) => {
+                    let truncated: String = t.chars().take(80).collect();
+                    let ellipsis = if t.chars().count() > 80 { "…" } else { "" };
+                    format!("保存会话总结：{truncated}{ellipsis}")
+                }
+                None => format!("归档 {drained} 条会话结论"),
+            };
+            emit_memory_update_event(
+                callbacks,
+                &MemoryWriteRecord {
+                    action: MemoryAction::Summarize,
+                    memory_type: MemoryKind::Summary,
+                    key: "session".to_string(),
+                    summary,
+                    count: Some(total as u64),
+                },
+            );
+        }
     }
 
     // Route session-end notification through MemoryRouter.
@@ -710,13 +908,13 @@ pub fn notify_delegations(
     tool_calls: &[ToolCall],
     results: &[ToolResult],
     consciousness_tracker: Option<&Arc<ConsciousnessTracker>>,
-) {
+) -> usize {
     if config.skip_memory {
-        return;
+        return 0;
     }
     let router = match router {
         Some(r) => r,
-        None => return,
+        None => return 0,
     };
     let session_id = config.session_id.clone().unwrap_or_default();
     let router_owned: Arc<MemoryRouter> = Arc::clone(router);
@@ -780,13 +978,14 @@ pub fn notify_delegations(
     }
 
     // Step 3: drain any pending focus conclusions.
-    drain_focus_conclusions(focus_stack, Some(&router_owned), &session_id);
+    let drained = drain_focus_conclusions(focus_stack, Some(&router_owned), &session_id);
 
     // Step 4: broadcast the current focus depth to the consciousness
     // tracker (no-op when no tracker is attached).
     if let Some(tracker) = consciousness_tracker {
         tracker.set_focus_depth(current_focus_depth(focus_stack));
     }
+    drained
 }
 
 /// Task context extracted from recent messages for better memory recall.

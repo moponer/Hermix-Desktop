@@ -4456,6 +4456,46 @@ async fn handle_ws_stream_send(
                                 },
                             }
                         }
+                        "memory_update" => {
+                            // 2026-07-14: surface memory writes/updates/
+                            // deletes/summaries in the chat so the user can
+                            // see what the agent is remembering. Mirrors the
+                            // `usage_update` branch shape but carries the
+                            // memory-operation fields instead.
+                            let action = extra
+                                .get("action")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("write")
+                                .to_string();
+                            let memory_type = extra
+                                .get("memory_type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("fact")
+                                .to_string();
+                            let key = extra
+                                .get("key")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let summary = extra
+                                .get("summary")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let count = extra.get("count").and_then(|v| v.as_u64());
+                            WsEnvelope {
+                                version: 1,
+                                request_id: request_id.clone(),
+                                trace_id: trace_id_for_stream.clone(),
+                                event: StreamEvent::MemoryUpdate {
+                                    action,
+                                    memory_type,
+                                    key,
+                                    summary,
+                                    count,
+                                },
+                            }
+                        }
                         _ => {
                             tracing::debug!(event = %event_type, "unknown extra event type; skipping");
                             return;

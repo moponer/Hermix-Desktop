@@ -1584,6 +1584,56 @@ streamPhaseRef.current = null;
             // the id is informational only here.
             void toolCallId;
           },
+          // 2026-07-14: append a `memory_update` event to the active
+          // assistant message's `execution_timeline` (falling back to
+          // the last assistant message when none is active — e.g. at
+          // session end). The chat UI (MemoryUpdateBlock in
+          // MessageBubble) reads this timeline via extractMemoryUpdates()
+          // and renders an inline "记忆" row so the user can see what
+          // the agent is remembering. De-dupe by (action, key) so a
+          // re-emitted event doesn't produce a duplicate row.
+          onMemoryUpdate: ({ action, memoryType, key, summary, count }) => {
+            if (!summary && !key) return;
+            setSessions((prev) => prev.map((s) => {
+              if (s.id !== sessionId) return s;
+              // Prefer the currently-streaming assistant message; if
+              // none (session-end summary), use the last assistant msg.
+              const target =
+                currentAssistantIdRef.current ??
+                [...s.messages].reverse().find((m) => m.role === "assistant")?.id ??
+                null;
+              if (!target) return s;
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== target) return m;
+                  const timeline = m.execution_timeline ?? [];
+                  const exists = timeline.some(
+                    (e) =>
+                      e.type === "memory_update" &&
+                      e.memory_action === action &&
+                      e.memory_key === key,
+                  );
+                  if (exists) return m;
+                  const event: import("./types").ExecutionTimelineEvent = {
+                    type: "memory_update",
+                    tool: "memory_update",
+                    memory_action: action,
+                    memory_type: memoryType,
+                    memory_key: key,
+                    memory_summary: summary,
+                    memory_count: count,
+                    created_at: new Date().toISOString(),
+                  };
+                  return {
+                    ...m,
+                    execution_timeline: [...timeline, event],
+                  };
+                }),
+                updated_at: new Date().toISOString(),
+              };
+            }));
+          },
           // 2026-06-29 (C3 marker protocol): append a
           // `section_gate` event to the active assistant
           // message's `execution_timeline` so the trace panel

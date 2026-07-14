@@ -417,6 +417,31 @@ pub enum StreamEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         choices: Vec<ApprovalChoice>,
     },
+    /// 2026-07-14: Surface memory writes / updates / deletes /
+    /// summaries in the conversation so the user can always see what
+    /// the agent is remembering. Bridged from the agent-loop
+    /// `status_callback` event type `"memory_update"` (mirrors how
+    /// `UsageUpdate` is bridged). One event per operation, or one
+    /// batched event per turn when several facts are extracted at
+    /// once (`count` carries the batch size).
+    ///
+    /// `action` is one of: `"write"` | `"update"` | `"delete"` |
+    /// `"summarize"` | `"cleanup"` | `"snapshot"`.
+    /// `memory_type` is one of: `"fact"` | `"style"` | `"summary"` |
+    /// `"tool"` | `"snapshot"`.
+    MemoryUpdate {
+        action: String,
+        memory_type: String,
+        /// Canonical key — a fact's `canonical_key`, a `memory` tool
+        /// `target`, or `"session"` for session-level summaries.
+        key: String,
+        /// One-line human-readable description of what changed.
+        summary: String,
+        /// Batch size when several operations are folded into one
+        /// event (e.g. facts extracted from a single user turn).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<u64>,
+    },
     /// Server → client: the user resolved a pending approval request.
     /// Emitted right before tool dispatch so the UI can dismiss the dialog
     /// deterministically.

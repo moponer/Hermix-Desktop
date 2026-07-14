@@ -17,8 +17,8 @@ import type {
 } from "../types";
 import { formatRelativeTime } from "../utils/time";
 import {
-  parseContent, groupTimeline, extractFileChanges, resolveSteps,
-  type FileChangeEntry,
+  parseContent, groupTimeline, extractFileChanges, extractMemoryUpdates, resolveSteps,
+  type FileChangeEntry, type MemoryUpdateEntry,
 } from "./messageParser";
 import {
   ScreenshotPreview, WindowListPreview, WindowAtPointPreview, UiTreePreview,
@@ -408,6 +408,7 @@ function UnifiedTimelineRenderer({
   isStreaming,
   onPathClick,
   fileChanges,
+  memoryUpdates,
   toolCalls,
   hasRunningTool,
   parsedTasks,
@@ -416,6 +417,7 @@ function UnifiedTimelineRenderer({
   isStreaming?: boolean;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
   fileChanges: FileChangeEntry[];
+  memoryUpdates: MemoryUpdateEntry[];
   toolCalls: NonNullable<ChatMessage["tool_calls"]>;
   hasRunningTool: boolean;
   parsedTasks: ReturnType<typeof parseContent>["tasks"];
@@ -497,6 +499,13 @@ function UnifiedTimelineRenderer({
                 <FileChangeBlock changes={fileChanges} onPathClick={onPathClick} />
               </div>
             )}
+            {/* Memory updates (only on the last text step) — surfaces
+                what the agent remembered this turn. */}
+            {i === steps.length - 1 && memoryUpdates.length > 0 && (
+              <div className="msg-channel" data-channel="memory-updates">
+                <MemoryUpdateBlock updates={memoryUpdates} />
+              </div>
+            )}
           </div>
         );
       })}
@@ -569,6 +578,10 @@ function AssistantMessage({
     () => extractFileChanges(message.execution_timeline),
     [message.execution_timeline],
   );
+  const memoryUpdates = useMemo(
+    () => extractMemoryUpdates(message.execution_timeline),
+    [message.execution_timeline],
+  );
   const steps = useMemo(() => resolveSteps(message), [message]);
   const toolCalls = message.tool_calls ?? [];
   /** True when there's at least one tool still in "running" state */
@@ -637,6 +650,7 @@ function AssistantMessage({
           isStreaming={isStreaming}
           onPathClick={onPathClick}
           fileChanges={fileChanges}
+          memoryUpdates={memoryUpdates}
           toolCalls={toolCalls}
           hasRunningTool={hasRunningTool}
           parsedTasks={parsed.tasks}
@@ -742,6 +756,71 @@ function FileChangeBlock({
           <ChevronDown size={11} className="rotate-180" />
         </button>
       )}
+    </div>
+  );
+}
+
+// ── Memory updates ───────────────────────────────────────────────
+// Inline "记忆" row surfacing what the agent remembered this turn
+// (write / update / delete / summarize / cleanup). Per the design
+// iron-law, no blue/indigo/violet — action tints use zinc / amber /
+// green / red only.
+function MemoryUpdateBlock({ updates }: { updates: MemoryUpdateEntry[] }) {
+  const iconFor = (action: MemoryUpdateEntry["action"]) => {
+    switch (action) {
+      case "write": return <FilePlus size={12} className="shrink-0" />;
+      case "update": return <Edit3 size={12} className="shrink-0" />;
+      case "delete": return <Trash2 size={12} className="shrink-0" />;
+      case "summarize": return <Brain size={12} className="shrink-0" />;
+      case "cleanup": return <Trash2 size={12} className="shrink-0" />;
+      case "snapshot": return <Database size={12} className="shrink-0" />;
+    }
+  };
+  const labelFor = (action: MemoryUpdateEntry["action"]) => {
+    switch (action) {
+      case "write": return "记忆写入";
+      case "update": return "记忆更新";
+      case "delete": return "记忆删除";
+      case "summarize": return "记忆总结";
+      case "cleanup": return "记忆清理";
+      case "snapshot": return "记忆快照";
+    }
+  };
+  // Action tint (text color). Kept within the gray/zinc/amber/green/red
+  // palette — never blue/purple.
+  const tintFor = (action: MemoryUpdateEntry["action"]) => {
+    switch (action) {
+      case "write": return "text-emerald-400";
+      case "update": return "text-amber-400";
+      case "delete": return "text-red-400";
+      case "summarize": return "text-zinc-300";
+      case "cleanup": return "text-red-400";
+      case "snapshot": return "text-zinc-400";
+    }
+  };
+  return (
+    <div className="memory-update-block">
+      <div className="memory-update-header">
+        <Brain size={12} className="shrink-0 text-zinc-400" />
+        <span>记忆</span>
+        <span className="memory-update-count">（{updates.length}条）</span>
+      </div>
+      <ul className="memory-update-list">
+        {updates.map((u, i) => (
+          <li key={`${u.action}-${u.key}-${i}`} className="memory-update-item">
+            <span className={`memory-update-badge ${tintFor(u.action)}`}>
+              {iconFor(u.action)}
+              {labelFor(u.action)}
+            </span>
+            <span className="memory-update-text" title={u.summary}>
+              {u.summary}
+              {typeof u.count === "number" && u.count > 1 ? (
+                <span className="memory-update-num"> · {u.count}</span>
+              ) : null}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

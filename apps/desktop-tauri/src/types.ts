@@ -228,7 +228,7 @@ export interface ToolCall {
 }
 
 export interface ExecutionTimelineEvent {
-  type: "tool_start" | "tool_stdout" | "tool_complete" | "status" | "file_change" | "section_gate" | "reasoning" | "text";
+  type: "tool_start" | "tool_stdout" | "tool_complete" | "status" | "file_change" | "section_gate" | "reasoning" | "text" | "memory_update";
   tool?: string;
   content?: string;
   arguments?: string;
@@ -243,6 +243,14 @@ export interface ExecutionTimelineEvent {
   file_path?: string;
   change_type?: "created" | "modified" | "deleted" | "renamed";
   file_summary?: string;
+  /** memory_update-only fields — surfaced inline so the user can see
+   *  what the agent is remembering (writes / updates / deletes /
+   *  summaries). Mirrors `StreamEvent::MemoryUpdate` in hermix-transport. */
+  memory_action?: "write" | "update" | "delete" | "summarize" | "cleanup" | "snapshot";
+  memory_type?: "fact" | "style" | "summary" | "tool" | "snapshot";
+  memory_key?: string;
+  memory_summary?: string;
+  memory_count?: number;
   /** 2026-06-29 (C3 marker protocol): section_gate-only payload.
    *  Carries the serialised `SectionGateReport` from the backend.
    *  `patched` lists sections the gate auto-spliced in;

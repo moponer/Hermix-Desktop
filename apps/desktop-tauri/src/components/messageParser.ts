@@ -365,6 +365,48 @@ export function extractFileChanges(events?: ExecutionTimelineEvent[]): FileChang
   return out;
 }
 
+/** A single memory mutation surfaced inline in the conversation. */
+export interface MemoryUpdateEntry {
+  action: "write" | "update" | "delete" | "summarize" | "cleanup" | "snapshot";
+  memoryType: "fact" | "style" | "summary" | "tool" | "snapshot";
+  key: string;
+  summary: string;
+  count?: number;
+  timestamp: string;
+}
+
+/**
+ * Collect memory mutations (write / update / delete / summarize /
+ * cleanup) from the `execution_timeline` so MessageBubble can render
+ * them as inline "记忆" rows. De-dupe by (action, key) to keep the
+ * list stable across re-renders / reload.
+ */
+export function extractMemoryUpdates(events?: ExecutionTimelineEvent[]): MemoryUpdateEntry[] {
+  if (!events) return [];
+  const out: MemoryUpdateEntry[] = [];
+  const seen = new Set<string>();
+  for (const ev of events) {
+    if (ev.type !== "memory_update") continue;
+    const action = (ev.memory_action ?? "write") as MemoryUpdateEntry["action"];
+    const memoryType = (ev.memory_type ?? "fact") as MemoryUpdateEntry["memoryType"];
+    const key = ev.memory_key ?? "";
+    const summary = ev.memory_summary ?? "";
+    if (!summary && !key) continue;
+    const dedupeKey = `${action}::${key}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    out.push({
+      action,
+      memoryType,
+      key,
+      summary,
+      count: ev.memory_count,
+      timestamp: ev.created_at,
+    });
+  }
+  return out;
+}
+
 /**
  * Canonicalize a JSON args string the same way the backend's
  * `tool_call_dedup_key` does (parse + re-serialize with sorted keys;

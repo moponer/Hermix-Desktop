@@ -160,6 +160,21 @@ interface StreamCallbacks {
     fileSummary?: string;
   }) => void;
   /**
+   * A memory mutation (write / update / delete / summarize / cleanup)
+   * was surfaced by the agent. Mirrors `StreamEvent::MemoryUpdate` in
+   * hermix-transport. The front-end renders it as an inline
+   * "记忆" row in the conversation so the user can see what the agent
+   * is remembering. Payload fields are stable across the
+   * WS → message-persistence → reload boundary.
+   */
+  onMemoryUpdate?: (info: {
+    action: "write" | "update" | "delete" | "summarize" | "cleanup" | "snapshot";
+    memoryType: "fact" | "style" | "summary" | "tool" | "snapshot";
+    key: string;
+    summary: string;
+    count?: number;
+  }) => void;
+  /**
    * A todo list mutation fired by the server. Four kinds:
    *
    *  - `snapshot`: full authoritative state (sent on session start
@@ -840,6 +855,31 @@ export function useStreamChat() {
                   filePath,
                   changeType,
                   fileSummary,
+                });
+                return;
+              }
+
+              // Memory mutation surfaced inline (WorkBuddy-style
+              // "记忆" row). Server emits this after the agent writes /
+              // updates / deletes / summarizes memory so the user can
+              // see what was remembered. Mirrors the `file_change`
+              // branch shape.
+              if (evtType === "memory_update") {
+                const ev = data?.event ?? data ?? {};
+                const action = (ev?.action ?? ev?.memory_action ?? "write") as
+                  | "write" | "update" | "delete" | "summarize" | "cleanup" | "snapshot";
+                const memoryType = (ev?.memory_type ?? ev?.memoryType ?? "fact") as
+                  | "fact" | "style" | "summary" | "tool" | "snapshot";
+                const key = ev?.key ?? ev?.memory_key ?? "";
+                const summary = ev?.summary ?? ev?.memory_summary ?? "";
+                const count = ev?.count ?? ev?.memory_count ?? undefined;
+                if (!summary && !key) return;
+                callbacks.onMemoryUpdate?.({
+                  action,
+                  memoryType,
+                  key,
+                  summary,
+                  count,
                 });
                 return;
               }

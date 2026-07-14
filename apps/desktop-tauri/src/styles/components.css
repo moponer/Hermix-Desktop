@@ -1543,6 +1543,63 @@
   text-decoration: underline;
 }
 
+/* ── Memory update block (2026-07-14) ── */
+/* Surfaces what the agent remembered this turn. Palette is strictly
+   gray/zinc + amber/green/red action tints — no blue/indigo/violet. */
+.memory-update-block {
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+.memory-update-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+.memory-update-count {
+  color: var(--color-text-faint);
+  font-size: 11px;
+  font-weight: 400;
+}
+.memory-update-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.memory-update-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.memory-update-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.memory-update-text {
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-update-num {
+  color: var(--color-text-faint);
+}
+
 /* ── Task block (compact inline style) ── */
 .tasks-block {
   overflow: visible;
