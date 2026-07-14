@@ -1642,6 +1642,28 @@ streamPhaseRef.current = null;
           // start / upsert / remove) so ChatView re-renders
           // exactly the affected card.
           onTodoChange: (change) => {
+            // Commit E (Frontend Audit 2026-07-13): client-side
+            // session guard. The WS server already filters by
+            // session_id per connection
+            // (`hermix-server/src/lib.rs::handle_ws_stream`,
+            // ~line 3733), but the TodoPanel still gets every
+            // `todo_group_started` / `todo_item_upserted` /
+            // `todo_snapshot` that arrives on the wire — if a
+            // sibling tab ever shares a WS multiplex, or if a
+            // future code path bypasses the per-connection
+            // filter, the wrong session's groups would land in
+            // `todoGroups` and the inline plan card would render
+            // on the wrong assistant message.
+            //
+            // `change.sessionId` is empty for legacy / non-todo
+            // events — accept those (matches the server's
+            // "None = legacy fan-out, always accept" policy).
+            if (
+              change.sessionId &&
+              change.sessionId !== activeSessionIdRef.current
+            ) {
+              return;
+            }
             setTodoGroups((prev) => {
               const next = prev.slice();
               const bump = (i: number, mut: (g: TodoGroup) => TodoGroup) => {
