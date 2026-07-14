@@ -24,7 +24,7 @@ use futures::StreamExt;
 use tokio::time::sleep;
 
 use hermix_core::tool_call_sanitizer::ToolCallSanitizer;
-use hermix_core::{AgentError, LlmProvider, LlmResponse, Message, StreamChunk, ToolCall, ToolSchema, UsageStats};
+use hermix_core::{AgentError, LlmProvider, LlmResponse, Message, StreamChunk, StreamDelta, ToolCall, ToolSchema, UsageStats};
 
 use crate::agent_config::AgentConfig;
 use crate::agent_helpers::AgentCallbacks;
@@ -112,6 +112,23 @@ pub fn apply_stream_collect_chunk(
     on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
 ) {
     let mut chunk = chunk;
+    // 2026-07-14 (Frontend Audit, "思考被切成两段"): track whether
+    // the think-block parser above already emitted thinking for
+    // THIS chunk. Some providers (MiniMax M2.7 with the
+    // `extra.thinking` adapter, hybrid transports that re-wrap a
+    // streaming provider) populate BOTH `delta.content` with a
+    // `<think>...</think>` span AND `delta.extra.thinking` for the
+    // same logical content. Without this guard the
+    // `callbacks.on_thinking` fires twice — the chat UI accumulates
+    // the same sentence into `unified_steps` twice, rendering as
+    // TWO "已深度思考" blocks for what the model said once.
+    //
+    // Strict priority order: parser-extracted `think_text`
+    // (canonical — same path that the persisted `reasoning_content`
+    // is built from) wins over `delta.extra.thinking`. We only
+    // consult the alternative path when the parser had nothing
+    // to emit this chunk.
+    let mut thinking_emitted_this_chunk = false;
     if let Some(ref mut delta) = chunk.delta {
         if let Some(ref mut text) = delta.content {
             let (clean_text, think_text) = think_parser.feed(text);
@@ -144,13 +161,18 @@ pub fn apply_stream_collect_chunk(
                 if let Some(ref cb) = callbacks.on_thinking {
                     cb(&think_text);
                 }
+                thinking_emitted_this_chunk = true;
             }
         }
-        if let Some(ref extra) = delta.extra {
-            if let Some(thinking) = extra.get("thinking").and_then(|v| v.as_str()) {
-                reasoning_content.push_str(thinking);
-                if let Some(ref cb) = callbacks.on_thinking {
-                    cb(thinking);
+        if !thinking_emitted_this_chunk {
+            if let Some(ref extra) = delta.extra {
+                if let Some(thinking) = extra.get("thinking").and_then(|v| v.as_str()) {
+                    if !thinking.is_empty() {
+                        reasoning_content.push_str(thinking);
+                        if let Some(ref cb) = callbacks.on_thinking {
+                            cb(thinking);
+                        }
+                    }
                 }
             }
         }
@@ -475,4 +497,142 @@ pub(crate) async fn collect_stream_llm_response(
         model: active_model.to_string(),
         finish_reason,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// 2026-07-14 (Frontend Audit, "思考被切成两段"): when a single
+    /// LLM chunk carries BOTH a `<think>...</think>` span in
+    /// `delta.content` AND a `delta.extra.thinking` value, the
+    /// chat UI used to render the same sentence as TWO "已深度思考"
+    /// blocks (one per firing of `callbacks.on_thinking`). The fix
+    /// gives the parser-extracted `think_text` priority and skips
+    /// the `extra.thinking` fallback path entirely for that chunk.
+    #[test]
+    fn apply_stream_collect_chunk_dedupes_double_thinking_emission() {
+        let on_thinking_count = Arc::new(Mutex::new(0usize));
+        let collected_thinking = Arc::new(Mutex::new(String::new()));
+        let count_for_cb = on_thinking_count.clone();
+        let collected_for_cb = collected_thinking.clone();
+        let callbacks = AgentCallbacks {
+            on_thinking: Some(Box::new(move |text: &str| {
+                *count_for_cb.lock().unwrap() += 1;
+                collected_for_cb.lock().unwrap().push_str(text);
+            })),
+            ..Default::default()
+        };
+
+        let chunk = StreamChunk {
+            delta: Some(StreamDelta {
+                content: Some("<think>thinking part 1</think>".to_string()),
+                tool_calls: None,
+                extra: Some(serde_json::json!({
+                    "thinking": "thinking part 1",
+                })),
+            }),
+            finish_reason: None,
+            usage: None,
+        };
+
+        let mut content = String::new();
+        let mut raw_content = String::new();
+        let mut reasoning_content = String::new();
+        let mut think_parser = ThinkBlockParser::new();
+        let mut tool_call_sanitizer = ToolCallSanitizer::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut last_usage: Option<UsageStats> = None;
+        let mut finish_reason: Option<String> = None;
+        apply_stream_collect_chunk(
+            &callbacks,
+            chunk,
+            &mut content,
+            &mut raw_content,
+            &mut reasoning_content,
+            &mut think_parser,
+            &mut tool_call_sanitizer,
+            &mut tool_calls,
+            &mut last_usage,
+            &mut finish_reason,
+            &|_ch| {},
+        );
+
+        let count = *on_thinking_count.lock().unwrap();
+        let collected = collected_thinking.lock().unwrap().clone();
+        // The fix: exactly one emission per chunk, even when both
+        // paths had content. The duplicated sentence would have
+        // produced count == 2 and `collected == "thinking part 1thinking part 1"`.
+        assert_eq!(
+            count, 1,
+            "expected exactly one on_thinking call per chunk, got {count} (collected={collected:?})",
+        );
+        assert_eq!(collected, "thinking part 1");
+        // Reasoning accumulator must only contain the parser's output,
+        // not a duplicate concatenation of both paths.
+        assert_eq!(reasoning_content, "thinking part 1");
+    }
+
+    /// When the parser had nothing to emit but `delta.extra.thinking`
+    /// carries a value (the pure non-embedded path), the fallback
+    /// must still fire — otherwise we silently drop live reasoning
+    /// for providers that only use the `extra.thinking` channel.
+    #[test]
+    fn apply_stream_collect_chunk_uses_extra_thinking_when_parser_empty() {
+        let on_thinking_count = Arc::new(Mutex::new(0usize));
+        let collected_thinking = Arc::new(Mutex::new(String::new()));
+        let count_for_cb = on_thinking_count.clone();
+        let collected_for_cb = collected_thinking.clone();
+        let callbacks = AgentCallbacks {
+            on_thinking: Some(Box::new(move |text: &str| {
+                *count_for_cb.lock().unwrap() += 1;
+                collected_for_cb.lock().unwrap().push_str(text);
+            })),
+            ..Default::default()
+        };
+
+        let chunk = StreamChunk {
+            delta: Some(StreamDelta {
+                content: Some("visible reply, no think tags".to_string()),
+                tool_calls: None,
+                extra: Some(serde_json::json!({
+                    "thinking": "extra-only reasoning",
+                })),
+            }),
+            finish_reason: None,
+            usage: None,
+        };
+
+        let mut content = String::new();
+        let mut raw_content = String::new();
+        let mut reasoning_content = String::new();
+        let mut think_parser = ThinkBlockParser::new();
+        let mut tool_call_sanitizer = ToolCallSanitizer::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut last_usage: Option<UsageStats> = None;
+        let mut finish_reason: Option<String> = None;
+        apply_stream_collect_chunk(
+            &callbacks,
+            chunk,
+            &mut content,
+            &mut raw_content,
+            &mut reasoning_content,
+            &mut think_parser,
+            &mut tool_call_sanitizer,
+            &mut tool_calls,
+            &mut last_usage,
+            &mut finish_reason,
+            &|_ch| {},
+        );
+
+        let count = *on_thinking_count.lock().unwrap();
+        let collected = collected_thinking.lock().unwrap().clone();
+        assert_eq!(
+            count, 1,
+            "expected one fallback emission from extra.thinking, got {count}",
+        );
+        assert_eq!(collected, "extra-only reasoning");
+        assert_eq!(reasoning_content, "extra-only reasoning");
+    }
 }
