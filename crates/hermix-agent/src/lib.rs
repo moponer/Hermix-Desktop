@@ -75,6 +75,7 @@ pub mod skill_health;
 pub mod skill_auto_create;
 pub mod skill_patch;
 pub mod feedback_loop;
+pub mod self_improvement;
 pub mod smart_model_routing;
 pub mod stream_collect;
 pub mod steer;
