@@ -412,6 +412,144 @@ pub fn build_dynamic_suffix(config: &AgentConfig, model_for_prompt: &str) -> Str
     }
     suffix.build().to_string()
 }
+
+/// P4-T2 (tool error demotion): same as [`build_system_prompt`] but
+/// takes a snapshot of the running tool error counts. Tools at or above
+/// `config.tool_error_demotion_threshold` errors are surfaced as a
+/// soft hint block in the system prompt. `None` disables the
+/// injection.
+#[allow(clippy::too_many_arguments)]
+pub fn build_system_prompt_with_tool_errors(
+    config: &AgentConfig,
+    prompt_cache: &Mutex<crate::agent_helpers::PromptCache>,
+    memory_router: Option<&MemoryRouter>,
+    user_message: &str,
+    tool_schemas: &[ToolSchema],
+    model_for_prompt: &str,
+    tool_call_count: usize,
+    tool_error_counts: Option<&std::collections::HashMap<String, u32>>,
+) -> String {
+    let tool_names_set: HashSet<&str> =
+        tool_schemas.iter().map(|t| t.name.as_str()).collect();
+
+    let stable_text = build_stable_layer(
+        config,
+        prompt_cache,
+        memory_router,
+        user_message,
+        tool_schemas,
+        &tool_names_set,
+        model_for_prompt,
+        tool_call_count,
+    );
+
+    // ★ directions[] — evaluated per-turn with the REAL tool_call_count so
+    //   HadAnyToolUse / MultiStepTask routes fire correctly. This block
+    //   lives OUTSIDE the cached stable layer (keyed on
+    //   model/personality/system_prompt/workspace only) because
+    //   tool_call_count changes every turn. Previously directions were
+    //   baked into the stable cache with tool_call_count=0, so
+    //   HadAnyToolUse never fired — summary/stopping guidance was
+    //   silently skipped, leaving the LLM with no "stop after real work"
+    //   constraint and producing filler + repeated tool calls.
+    let mut directions_text = {
+        use crate::context::{RouteContext, SystemPromptBuilder};
+        let route_ctx = RouteContext {
+            user_message,
+            tool_names: &tool_names_set,
+            model_name: model_for_prompt,
+            autonomous_mode: config.autonomous_mode,
+            tool_call_count,
+            domain_mode: None,
+        };
+        let project_conventions = config
+            .workspace
+            .as_deref()
+            .and_then(crate::directions::load_project_conventions);
+        let directions =
+            crate::directions::collect_directions(&route_ctx, project_conventions.as_deref());
+        let mut b = SystemPromptBuilder::new();
+        b = b.with_directions(directions);
+        b.assemble_directions(&route_ctx);
+        let audit = b.direction_audit();
+        let fired_count = audit.iter().filter(|a| a.fired).count();
+        let skipped_count = audit.len() - fired_count;
+        tracing::Span::current().record("dir_fired", fired_count);
+        tracing::Span::current().record("dir_skipped", skipped_count);
+        if !audit.is_empty() {
+            tracing::debug!(
+                target: "hermix.directions",
+                fired = fired_count,
+                skipped = skipped_count,
+                tool_call_count,
+                "build_system_prompt direction audit ({} fired / {} skipped, tool_call_count={})",
+                fired_count,
+                skipped_count,
+                tool_call_count
+            );
+        }
+        b.build().to_string()
+    };
+
+    // P4-T2: append the tool-error demotion block as a separate
+    // `## Tool Failures` section after the directions. Empty when
+    // `tool_error_counts` is None or no tool has reached the configured
+    // threshold. Capped at the configured max rows.
+    if let Some(counts) = tool_error_counts {
+        if let Some(block) = crate::tool_error_demotion::build_tool_error_demotion_block(
+            counts,
+            config.tool_error_demotion_threshold,
+            config.tool_error_demotion_max_items,
+        ) {
+            directions_text.push_str("\n\n## Tool Failures\n\n");
+            directions_text.push_str(&block);
+        }
+    }
+
+    let context_text = build_context_layer(
+        config,
+        prompt_cache,
+        memory_router,
+        &tool_names_set,
+    );
+
+    let suffix_text = build_dynamic_suffix(config, model_for_prompt);
+
+    let prompt = format!("{stable_text}{directions_text}{context_text}{suffix_text}");
+    tracing::Span::current().record("out_chars", prompt.len());
+
+    // ★ Cache-effectiveness summary (2026-07-05): one info event per
+    //   turn so operators can compare token usage before vs after the
+    //   three-tier cache was enabled.  Token estimates use chars ÷ 4.
+    let stable_est = stable_text.len() / 4;
+    let context_est = context_text.len() / 4;
+    let volatile_est = suffix_text.len() / 4;
+    let total_est = prompt.len() / 4;
+    let (cached_stable_key, cached_stable_len, cached_context_key, cached_context_len) =
+        prompt_cache
+            .lock()
+            .map(|s| s.snapshot())
+            .unwrap_or((None, 0, None, 0));
+    tracing::info!(
+        target: "hermix.prompt_cache",
+        stable_chars = stable_text.len(),
+        stable_est_tokens = stable_est,
+        context_chars = context_text.len(),
+        context_est_tokens = context_est,
+        volatile_chars = suffix_text.len(),
+        volatile_est_tokens = volatile_est,
+        total_chars = prompt.len(),
+        total_est_tokens = total_est,
+        cached_stable_prompt_key = ?cached_stable_key,
+        cached_context_prompt_key = ?cached_context_key,
+        cached_stable_chars = cached_stable_len,
+        cached_context_chars = cached_context_len,
+        "prompt_cache: assembled prompt (stable={stable_est}t context={context_est}t volatile={volatile_est}t → total={total_est}t)"
+    );
+
+    prompt
+}
+
 /// Build the full system prompt including identity, memory, and plugin context.
 ///
 /// Aligns with Python behavior:

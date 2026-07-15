@@ -300,6 +300,17 @@ pub struct AgentConfig {
     #[serde(default = "default_prior_reflection_per_item_chars")]
     pub prior_reflection_per_item_chars: usize,
 
+    /// P4-T2 (tool error demotion): failure threshold above which a
+    /// tool is surfaced as a soft-hint in the system prompt. Set
+    /// to `0` to disable the feature entirely. Default `2`.
+    #[serde(default = "default_tool_error_demotion_threshold")]
+    pub tool_error_demotion_threshold: usize,
+
+    /// P4-T2: cap on rows in the tool-error demotion block. Default
+    /// `5` — keeps the block short even when many tools have failed.
+    #[serde(default = "default_tool_error_demotion_max_items")]
+    pub tool_error_demotion_max_items: usize,
+
     /// Optional cheap-vs-strong per-turn routing.
     #[serde(default)]
     pub smart_model_routing: SmartModelRoutingConfig,
@@ -612,6 +623,17 @@ fn default_prior_reflection_per_item_chars() -> usize {
     200
 }
 
+/// P4-T2: tool error demotion threshold. `2` means a tool gets
+/// the soft-hint treatment after the second failed call.
+fn default_tool_error_demotion_threshold() -> usize {
+    2
+}
+
+/// P4-T2: max rows in the demotion block.
+fn default_tool_error_demotion_max_items() -> usize {
+    5
+}
+
 fn default_skill_creation_nudge_interval() -> u32 {
     10
 }
@@ -709,6 +731,8 @@ impl Default for AgentConfig {
             memory_recall_limit_first: default_memory_recall_limit_first(),
             prior_reflection_max_items: default_prior_reflection_max_items(),
             prior_reflection_per_item_chars: default_prior_reflection_per_item_chars(),
+            tool_error_demotion_threshold: default_tool_error_demotion_threshold(),
+            tool_error_demotion_max_items: default_tool_error_demotion_max_items(),
             smart_model_routing: SmartModelRoutingConfig::default(),
             provider: None,
             platform: None,

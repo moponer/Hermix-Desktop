@@ -90,6 +90,7 @@ pub mod mode_composition;
 pub mod reflection_generator;
 pub mod recall_scheduler;
 pub mod flush_memories;
+pub mod tool_error_demotion;
 
 // Re-export primary agent types
 pub use agent_loop::{
