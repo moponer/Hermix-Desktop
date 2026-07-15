@@ -651,6 +651,10 @@ pub struct CompressorConfig {
     pub summary_model_override: Option<String>,
     /// Suppress `tracing::info!` chatter — useful for batch / test runs.
     pub quiet_mode: bool,
+    /// P8-T7 wire: minimum message count before a flush sentinel may be
+    /// injected. Defaults to 6 so short sessions skip the pre-compression
+    //  rescue entirely (the rescue costs a turn of context).
+    pub flush_sentinel_min_turns: usize,
     /// Minimum tokens for a summary to be considered valid.
     pub min_summary_tokens: u64,
     /// Maximum tokens for summary output.
@@ -671,6 +675,7 @@ impl Default for CompressorConfig {
             summary_target_ratio: 0.20,
             summary_model_override: None,
             quiet_mode: false,
+            flush_sentinel_min_turns: 6,
             min_summary_tokens: 2_000,
             summary_tokens_ceiling: 12_000,
             chars_per_token: 4,
@@ -1845,6 +1850,47 @@ Write only the summary body. Do not include any preamble or prefix."
         messages: Vec<Message>,
         current_tokens: Option<u64>,
     ) -> Vec<Message> {
+        // P8-T1 + P8-T7 wire (read-only): diagnose current context
+        // health and consult the flush-integration helper to decide
+        // whether the agent should be given a sentinel to memory-
+        // flush before we touch messages. We never *block* compression
+        // on this — flush is advisory.
+        //
+        // Char-estimate: tokens * 4 is a reasonable upper bound (one
+        // ASCII char ~= 1 token in worst-case repetition). The health
+        // is a soft warning, not a hard gate, so a coarse estimate is
+        // acceptable.
+        let pre_chars = (estimate_messages_tokens(&messages) as u64).saturating_mul(4);
+        let pre_health = crate::context_engine::ContextHealth::diagnose(
+            pre_chars,
+            self.config.context_length as u64,
+        );
+        if pre_health.is_actionable() && !self.config.quiet_mode {
+            tracing::warn!(
+                health = ?pre_health.level,
+                utilization = pre_health.utilization,
+                reasons = pre_health.reasons.len(),
+                "compress(): pre-check found actionable context pressure"
+            );
+        }
+
+        // P3-T4 wire: if the session is long enough and the health
+        // threshold (Red / Clamped) is met, inject a memory-flush
+        // sentinel so the next turn can write to the memory tool.
+        // Idempotent: if a sentinel is already in `messages`, the
+        // helper returns the same vector unchanged.
+        let flush_min = self.config.flush_sentinel_min_turns.max(6);
+        let flush_helper = crate::context_engine::FlushIntegration {
+            min_health_to_skip: crate::context_engine::HealthLevel::Red,
+            flush_min_turns: flush_min,
+            flush_already_requested: false,
+        };
+        let messages = if flush_helper.should_flush(&pre_health, messages.len()) {
+            crate::flush_memories::maybe_inject_flush_sentinel(messages, flush_min)
+        } else {
+            messages
+        };
+
         // Phase -1: Flush sentinel strip (P3-T4). If a caller left
         // flush-memories sentinels in `messages`, drop them now — must
         // happen *before* `n_messages` is captured so all downstream

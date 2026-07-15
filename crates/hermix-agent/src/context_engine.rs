@@ -358,6 +358,28 @@ pub fn fingerprint_messages(roles: &[&str]) -> String {
     format!("{:016x}", h)
 }
 
+/// The default redaction policy used at the runtime boundary
+/// (`execute_tool_calls`): API keys, tokens, IPs, emails, long-hex
+/// blobs. Centralised here so callers don't have to remember which
+/// kinds are safe to ship to the LLM.
+pub fn default_redaction_strategy() -> MaskingStrategy {
+    MaskingStrategy::new(&[
+        MaskKind::OpenaiKey,
+        MaskKind::AwsAccessKey,
+        MaskKind::GithubToken,
+        MaskKind::LongHex,
+        MaskKind::IpAddress,
+        MaskKind::Email,
+    ])
+}
+
+/// P8-T3 wire convenience: redact secret-shaped strings out of an
+/// arbitrary tool result body. Returns the rewritten text + the spans
+/// that were masked (for audit / trace panel rendering).
+pub fn redact_tool_result(body: &str) -> (String, Vec<MaskedSpan>) {
+    default_redaction_strategy().apply(body)
+}
+
 #[derive(Default, Debug)]
 pub struct SnapshotStore {
     next_version: u64,

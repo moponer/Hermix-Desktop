@@ -587,6 +587,21 @@ impl AgentLoop {
                     )
                 })
             })
+            // P8-T3 wire: redact secret-shaped strings (API keys, IPs,
+            // emails) from every tool result *before* the LLM sees it.
+            // Same strategy as the legacy P8-T3 helper; does not fail
+            // the call — just rewrites the content. The `_redactions`
+            // vec is dropped on the floor (an HTTP callback would let
+            // the trace panel display "redacted 3 spans").
+            .map(|r| {
+                let (sanitised, _redactions) =
+                    crate::context_engine::redact_tool_result(&r.content);
+                ToolResult {
+                    tool_call_id: r.tool_call_id,
+                    content: sanitised,
+                    is_error: r.is_error,
+                }
+            })
             .collect()
     }
 }
