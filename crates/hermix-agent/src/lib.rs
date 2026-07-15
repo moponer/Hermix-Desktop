@@ -72,6 +72,7 @@ pub mod session_lifecycle;
 pub mod skill_orchestrator;
 pub mod skill_loader;
 pub mod skill_health;
+pub mod skill_auto_create;
 pub mod smart_model_routing;
 pub mod stream_collect;
 pub mod steer;
