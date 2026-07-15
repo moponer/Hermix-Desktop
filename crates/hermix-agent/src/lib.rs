@@ -78,6 +78,7 @@ pub mod feedback_loop;
 pub mod self_improvement;
 pub mod researcher_os;
 pub mod benchmark_suite;
+pub mod cognition_arch;
 pub mod smart_model_routing;
 pub mod stream_collect;
 pub mod steer;
