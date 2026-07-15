@@ -7,9 +7,67 @@ pub mod sidecar;
 pub mod webview2_probe;
 
 use sidecar::{HermixSidecar, WatchdogConfig};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 use tauri::Manager;
+
+/// Ensure bundled skills (packaged via `tauri.conf.json` → `resources`)
+/// are present under the user's `HERMIX_HOME/skills/` directory on first
+/// launch. Only copies files that do not already exist — subsequent runs
+/// are no-ops.
+fn ensure_bundled_skills(resource_dir: &std::path::Path, skills_dir: &std::path::Path) {
+    let bundled_root = resource_dir.join("resources/skills/modelscope-dev");
+    if !bundled_root.exists() {
+        // No bundled skills at this resource path — the binary may not
+        // have been packaged (e.g. dev build, non-Windows). Silent no-op.
+        return;
+    }
+    let target = skills_dir.join("modelscope-dev");
+    if target.exists() {
+        // Already extracted on a prior launch; skip to avoid
+        // overwriting any user modifications.
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(&target) {
+        eprintln!("[Hermix] failed to create bundled-skills dir: {e}");
+        return;
+    }
+    match copy_dir_recursively(&bundled_root, &target) {
+        Ok(copied) => {
+            println!(
+                "[Hermix] bundled {copied} bundled skill files to {}",
+                target.display()
+            );
+        }
+        Err(e) => {
+            eprintln!("[Hermix] failed to copy bundled skills: {e}");
+        }
+    }
+}
+
+/// Recursive directory copy. Returns the number of files copied.
+fn copy_dir_recursively(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<u32> {
+    let mut count = 0u32;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let file_name = entry.file_name();
+        let src_path = entry.path();
+        let dst_path = dst.join(&file_name);
+        if ty.is_dir() {
+            std::fs::create_dir_all(&dst_path)?;
+            count += copy_dir_recursively(&src_path, &dst_path)?;
+        } else {
+            // Skip copy if the destination already has the file.
+            if !dst_path.exists() {
+                std::fs::copy(&src_path, &dst_path)?;
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
 
 pub struct AppState {
     /// Wrapped in `Arc<Mutex<...>>` so the watchdog background task can hold
@@ -87,13 +145,30 @@ pub fn run() {
             //    subdirs exist before any child process is spawned.
             //    The sidecar below will inherit these env vars
             //    (Command::new does not clear them).
-            match portable_env::install_portable_env() {
+            let hermix_home = match portable_env::install_portable_env() {
                 Ok(root) => {
                     println!("[Hermix] install root: {}", root.display());
+                    root
                 }
                 Err(e) => {
                     eprintln!("[Hermix] failed to install portable env: {e}");
+                    // Fallback so the rest of setup can still proceed.
+                    std::env::var("HERMIX_HOME")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|_| {
+                            dirs::home_dir()
+                                .unwrap_or_else(|| PathBuf::from("."))
+                                .join(".hermix")
+                        })
                 }
+            };
+
+            // 1b. Extract bundled skills to HERMIX_HOME/skills/ on first run.
+            if let Ok(resource_dir) = app.path().resource_dir() {
+                let skills_dir = hermix_home.join("skills");
+                ensure_bundled_skills(&resource_dir, &skills_dir);
+            } else {
+                eprintln!("[Hermix] cannot resolve resource_dir — bundled skills will not be extracted");
             }
 
             let sidecar = Arc::new(Mutex::new(HermixSidecar::new()));

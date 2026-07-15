@@ -45,7 +45,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": []
+    "resources": [
+      "resources/skills/modelscope-dev/frontend-dev/SKILL.md",
+      "resources/skills/modelscope-dev/fullstack-dev/SKILL.md",
+      "resources/skills/modelscope-dev/android-native-dev/SKILL.md",
+      "resources/skills/modelscope-dev/ios-application-dev/SKILL.md"
+    ]
   },
   "plugins": {
     "shell": {
