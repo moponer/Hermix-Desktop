@@ -912,8 +912,16 @@ fn build_context_layer(
     rendered
 }
 
-/// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
-pub fn resolve_initial_system_prompt(
+/// P4-T2 wire: same as [`resolve_initial_system_prompt`] but threads
+/// the running per-tool error counter into the rendered prompt.
+/// `tool_error_counts == None` falls back to the legacy build path;
+/// `Some(map)` triggers the `[Tool Failure Hints]` block via
+/// [`build_system_prompt_with_tool_errors`].
+///
+/// All other behavior — cached prompt restoration, SectionGate audit,
+/// M2 protocol-completeness — is byte-identical to
+/// [`resolve_initial_system_prompt`].
+pub fn resolve_initial_system_prompt_with_tool_errors(
     config: &AgentConfig,
     prompt_cache: &Mutex<crate::agent_helpers::PromptCache>,
     memory_router: Option<&MemoryRouter>,
@@ -921,6 +929,7 @@ pub fn resolve_initial_system_prompt(
     user_message: &str,
     tool_schemas: &[ToolSchema],
     tool_call_count: usize,
+    tool_error_counts: Option<&std::collections::HashMap<String, u32>>,
 ) -> (String, bool) {
     let (prompt, restored) = if let Some(ref s) = config.stored_system_prompt {
         let t = s.trim();
@@ -928,7 +937,7 @@ pub fn resolve_initial_system_prompt(
             (s.clone(), true)
         } else {
             (
-                build_system_prompt(
+                build_system_prompt_with_tool_errors(
                     config,
                     prompt_cache,
                     memory_router,
@@ -936,13 +945,14 @@ pub fn resolve_initial_system_prompt(
                     tool_schemas,
                     &config.model,
                     tool_call_count,
+                    tool_error_counts,
                 ),
                 false,
             )
         }
     } else {
         (
-            build_system_prompt(
+            build_system_prompt_with_tool_errors(
                 config,
                 prompt_cache,
                 memory_router,
@@ -950,6 +960,7 @@ pub fn resolve_initial_system_prompt(
                 tool_schemas,
                 &config.model,
                 tool_call_count,
+                tool_error_counts,
             ),
             false,
         )
@@ -1000,6 +1011,31 @@ pub fn resolve_initial_system_prompt(
         (patched, report)
     };
     (final_prompt, restored)
+}
+
+/// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
+/// Thin shim over [`resolve_initial_system_prompt_with_tool_errors`] with
+/// `tool_error_counts = None`. Preserves the legacy call sites that
+/// pre-date P4-T2 (17 callers in `agent_loop` tests).
+pub fn resolve_initial_system_prompt(
+    config: &AgentConfig,
+    prompt_cache: &Mutex<crate::agent_helpers::PromptCache>,
+    memory_router: Option<&MemoryRouter>,
+    callbacks: &AgentCallbacks,
+    user_message: &str,
+    tool_schemas: &[ToolSchema],
+    tool_call_count: usize,
+) -> (String, bool) {
+    resolve_initial_system_prompt_with_tool_errors(
+        config,
+        prompt_cache,
+        memory_router,
+        callbacks,
+        user_message,
+        tool_schemas,
+        tool_call_count,
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -1164,5 +1200,95 @@ mod tests {
             prompt_skip.len() <= prompt_with.len(),
             "skip_memory prompt must be no larger than default prompt"
         );
+    }
+
+    // -------------------------------------------------------------
+    // P4-T2 wire tests
+    // -------------------------------------------------------------
+
+    #[test]
+    fn resolve_initial_system_prompt_with_tool_errors_injects_demotion_block() {
+        let mut cfg = AgentConfig::default();
+        cfg.tool_error_demotion_threshold = 2;
+        cfg.tool_error_demotion_max_items = 5;
+        let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+
+        let mut counts = std::collections::HashMap::new();
+        counts.insert("search".to_string(), 3);
+        counts.insert("read_file".to_string(), 1);
+
+        let (prompt, restored) = resolve_initial_system_prompt_with_tool_errors(
+            &cfg,
+            &slot,
+            None,
+            &AgentCallbacks::default(),
+            "what time is it?",
+            &[],
+            0,
+            Some(&counts),
+        );
+        assert!(!restored);
+        assert!(
+            prompt.contains("search"),
+            "demoted tool name should appear in the prompt: {}",
+            &prompt[..prompt.len().min(1500)]
+        );
+        assert!(
+            prompt.contains("Tool Failure") || prompt.contains("failure") || prompt.contains("(used"),
+            "demotion block header must be rendered"
+        );
+    }
+
+    #[test]
+    fn resolve_initial_system_prompt_with_tool_errors_none_is_equivalent_to_legacy() {
+        let cfg = AgentConfig::default();
+        let slot_legacy: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+        let slot_new: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+
+        let prompt_legacy = resolve_initial_system_prompt(
+            &cfg,
+            &slot_legacy,
+            None,
+            &AgentCallbacks::default(),
+            "hello",
+            &[],
+            0,
+        );
+        let prompt_new = resolve_initial_system_prompt_with_tool_errors(
+            &cfg,
+            &slot_new,
+            None,
+            &AgentCallbacks::default(),
+            "hello",
+            &[],
+            0,
+            None,
+        );
+        // With `None` snapshot the wire MUST be byte-identical to the
+        // legacy path; otherwise existing callers would see their
+        // cache keys invalidated by the wrapper.
+        assert_eq!(prompt_legacy, prompt_new);
+    }
+
+    #[test]
+    fn resolve_initial_system_prompt_legacy_returns_legacy_prompt() {
+        // Belt-and-braces: existing call sites of the legacy function
+        // must continue to compile and return a non-empty prompt.
+        let cfg = AgentConfig::default();
+        let slot: Arc<Mutex<crate::agent_helpers::PromptCache>> =
+            Arc::new(Mutex::new(crate::agent_helpers::PromptCache::default()));
+        let prompt = resolve_initial_system_prompt(
+            &cfg,
+            &slot,
+            None,
+            &AgentCallbacks::default(),
+            "hi",
+            &[],
+            0,
+        );
+        assert!(!prompt.0.is_empty());
     }
 }

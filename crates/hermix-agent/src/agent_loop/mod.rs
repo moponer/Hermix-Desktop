@@ -114,6 +114,12 @@ pub struct AgentLoop {
     pub primary_credential_pool: Option<Arc<CredentialPool>>,
     /// Memory/skill nudge counters (persist for the lifetime of this `AgentLoop`).
     pub evolution_counters: Arc<Mutex<EvolutionCounters>>,
+    /// P4-T2: per-tool error counter, drained from every
+    /// `finalize_agent_result` call so the agent loop can see its own
+    /// repeated-failure pattern and demote tools via the
+    /// `[Tool Failure Hints]` block. Lives on the same `AgentLoop`
+    /// so it survives across `run()` / `run_stream()` calls.
+    tool_error_counter: Arc<Mutex<crate::tool_error_demotion::ToolErrorCounter>>,
     /// Manager for runtime-provider OAuth token refresh + backoff state.
     pub oauth_refresh: OAuthRefresh,
     /// Optional in-process sub-agent orchestrator. When set, `delegate_task`
@@ -425,6 +431,9 @@ impl AgentLoop {
         interrupted: bool,
         finish_reason: Option<String>,
     ) -> AgentResult {
+        // P4-T2 wire: drain this run's tool errors into the cross-run
+        // counter so the next prompt can surface the demotion block.
+        self.drain_tool_errors_into_counter(tool_errors);
         // P3-2: emit Finalize phase boundary
         self.notify_phase(&LoopPhase::Finalize, total_turns);
         // P3-5: notify upstream that the task is complete.
@@ -613,6 +622,9 @@ impl AgentLoop {
             delegate_depth: 0,
             primary_credential_pool: None,
             evolution_counters: Arc::new(Mutex::new(EvolutionCounters::default())),
+            tool_error_counter: Arc::new(Mutex::new(
+                crate::tool_error_demotion::ToolErrorCounter::default(),
+            )),
             oauth_refresh: OAuthRefresh::default(),
             sub_agent_orchestrator: None,
             pending_steer: Arc::new(Mutex::new(None)),
@@ -658,6 +670,9 @@ impl AgentLoop {
             delegate_depth: 0,
             primary_credential_pool: None,
             evolution_counters: Arc::new(Mutex::new(EvolutionCounters::default())),
+            tool_error_counter: Arc::new(Mutex::new(
+                crate::tool_error_demotion::ToolErrorCounter::default(),
+            )),
             oauth_refresh: OAuthRefresh::default(),
             sub_agent_orchestrator: None,
             pending_steer: Arc::new(Mutex::new(None)),
@@ -1259,7 +1274,8 @@ impl AgentLoop {
         tool_schemas: &[ToolSchema],
         tool_call_count: usize,
     ) -> (String, bool) {
-        crate::prompt_assembly::resolve_initial_system_prompt(
+        let snapshot = self.tool_error_counter.lock().ok().map(|c| c.snapshot());
+        crate::prompt_assembly::resolve_initial_system_prompt_with_tool_errors(
             &self.config,
             &self.prompt_cache,
             self.memory_router.as_deref(),
@@ -1267,7 +1283,39 @@ impl AgentLoop {
             user_message,
             tool_schemas,
             tool_call_count,
+            snapshot.as_ref(),
         )
+    }
+
+    /// P4-T2 wire: snapshot the running per-tool error counter for
+    /// callers that want to compose the demotion block outside the
+    /// normal `resolve_initial_system_prompt` path (e.g. when the
+    /// `user_message` differs from a request body — tests, REPL).
+    pub fn tool_error_snapshot(&self) -> std::collections::HashMap<String, u32> {
+        self.tool_error_counter
+            .lock()
+            .map(|c| c.snapshot())
+            .unwrap_or_default()
+    }
+
+    /// P4-T2 wire: drain a slice of fresh `ToolErrorRecord`s into
+    /// the per-tool error counter so the next prompt carries the
+    /// failure pattern in its `[Tool Failure Hints]`. Called from
+    /// [`AgentLoop::finalize_agent_result`] on every termination,
+    /// so all run-loop paths converge through this counter without
+    /// any per-call-site wiring.
+    pub(crate) fn drain_tool_errors_into_counter(
+        &self,
+        errors: &[hermix_core::ToolErrorRecord],
+    ) {
+        if errors.is_empty() {
+            return;
+        }
+        if let Ok(mut counter) = self.tool_error_counter.lock() {
+            for err in errors {
+                counter.record_error(err.tool_name.as_str());
+            }
+        }
     }
 
     /// Compress when total chars exceed 80% of the context budget (Python auto-compaction).
