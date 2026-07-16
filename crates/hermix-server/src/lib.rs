@@ -3621,8 +3621,10 @@ async fn handle_ws_stream_send(
     );
 
     // 2026-07-06: dedup guard. If the same (session_id, content)
-    // arrived within the last 10s, skip with a synthetic Done
-    // event so the client settles cleanly. Catches:
+    // arrived within DEDUP_WINDOW_SECS (30s, NOT 10s — the comment
+    // below was stale) AND the previous stream is still in flight,
+    // skip with a synthetic Done event so the client settles cleanly.
+    // Catches:
     //   - WS auto-retry storms (useStreamChat's `MAX_RETRIES=3`
     //     path opening a fresh WS on `onerror`/`onclose` and
     //     re-sending the same `text`)
@@ -3630,16 +3632,20 @@ async fn handle_ws_stream_send(
     //     message after a transient failure
     //   - Any external integration that double-fires
     //
-    // The dedup window is 10s — long enough that legitimate
-    // user re-typing the same question after a few seconds (e.g.
-    // "stop", then "stop again" from a different mental model)
-    // still works, short enough that the dedup map stays tiny.
+    // 2026-07-16: `recent_sends` entries are now CLEARED on stream
+    // completion (success, error, or client disconnect) — see the
+    // `recent_sends.lock().unwrap().remove(...)` calls below. This
+    // means a failed send (e.g. "LLM busy, try later") no longer
+    // blocks the user's legitimate retry within the window: the
+    // in-flight duplicate guard is fully handled by `active_sessions`,
+    // and `recent_sends` only needs to cover the brief pre-insert
+    // race window. Do NOT re-add a post-completion block here.
     if let Some(elapsed) = check_recent_send(&state, session_id, &request.text) {
         tracing::warn!(
             session = %session_id,
             text_len = request.text.len(),
             elapsed_secs = elapsed,
-            "dedup: identical content sent within 10s, skipping (client retry storm or queue re-drain)"
+            "dedup: identical content sent within window, skipping (client retry storm or queue re-drain)"
         );
         // Send a synthetic Done so the client settles cleanly
         // (otherwise the WS would hang until the 120s timeout).
@@ -4556,6 +4562,7 @@ async fn handle_ws_stream_send(
     // Call agent service with streaming
     let agent_service = state.agent_service.clone();
     let active_sessions = state.active_sessions.clone();
+    let recent_sends = state.recent_sends.clone();
     let session_id_clone = session_id.to_string();
     let request_text = request.text.clone();
     let trace_id_owned = trace_id.to_string();
@@ -4593,6 +4600,10 @@ async fn handle_ws_stream_send(
             // This allows the user to re-send the message later without
             // hitting the "already being processed" guard.
             active_sessions.lock().unwrap().remove(&active_key_clone);
+            // 2026-07-16: also drop the recent_sends entry so a retry of
+            // the same text after a stop/disconnect is NOT silently
+            // swallowed by the dedup window (user must be able to retry).
+            recent_sends.lock().unwrap().remove(&active_key_clone);
             return;
         }
 
@@ -4659,6 +4670,14 @@ async fn handle_ws_stream_send(
         // Release the per-session stream lock so future sends
         // (same or different content) for this session are allowed.
         active_sessions.lock().unwrap().remove(&active_key_clone);
+        // 2026-07-16: drop the recent_sends entry on stream completion
+        // (success OR error). Otherwise a failed send ("LLM busy, try
+        // later") leaves the text in the dedup map for DEDUP_WINDOW_SECS
+        // (30s), and the user's legitimate retry is silently dropped —
+        // they saw no response at all. In-flight protection is already
+        // covered by active_sessions; recent_sends only needs to guard
+        // the brief pre-insert race window.
+        recent_sends.lock().unwrap().remove(&active_key_clone);
     });
 
     // Forward channel events to WebSocket
