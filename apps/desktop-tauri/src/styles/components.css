@@ -2082,7 +2082,7 @@
   background: transparent;
   transition: none;
   overflow: visible;
-  padding-left: 30px;
+  padding-left: 18px;
 }
 .tw-msg:hover { border: 0; box-shadow: none; }
 .tw-msg--run, .tw-msg--err, .tw-msg--ok { border: 0; background: transparent; position: static; }
@@ -2986,11 +2986,11 @@
 .reasoning-header {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px 2px 6px;
+  gap: 5px;
+  padding: 3px 10px 3px 7px;
   background: transparent;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   cursor: pointer;
   color: inherit;
   font: inherit;
@@ -3040,6 +3040,27 @@
   overflow-wrap: anywhere;
   max-height: 340px;
   overflow-y: auto;
+  /* 2026-07-16: MarkdownBody 处理格式化，不需要 pre-wrap */
+  margin-top: 4px;
+  padding: 8px 12px;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  font-family: inherit;
+}
+/* 缩小 reasoning 内的 prose — 正文 14px，思考 13px */
+.reasoning-body :is(p, li, td, th, blockquote) {
+  font-size: 13px;
+  line-height: 1.55;
+}
+.reasoning-body :is(h1, h2, h3, h4) {
+  margin-top: 0.5em;
+  margin-bottom: 0.3em;
+  font-size: 0.95em;
+}
+.reasoning-body pre {
+  font-size: 12px;
 }
 
 .reasoning-bullets {
@@ -3059,13 +3080,80 @@
   font-style: normal;
 }
 
-/* ── 5a. 主回复 vs 工具调用 视觉区分 ──
+/* ── 5a-0. Timeline Iterations — 轮次分组系统 (2026-07-16) ──────────
+   取代旧版的 msg-card/chat-tool-call 纯文本步骤卡片包装。
+   设计原则:
+     • 正文 (text step) 无背景无边框，纯文本流，呼吸感
+     • 每轮迭代 [think → tools → text] 内间距紧凑 (8px)
+     • 轮次之间留 24px 的节奏间距
+     • reasoning / tools 折叠后是"呼吸点"，展开是"深潜"
+     • 不用分隔线，只用间距和微妙的层级来表达结构 */
+.tl-iterations {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;                     /* 轮次间距 — 唯一的视觉分隔 */
+}
+
+.tl-iteration {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;                      /* 轮内元素间距 — reasoning/tools/text */
+}
+
+/* 单轮消息不需要底部间距 */
+.tl-iterations:only-child .tl-iteration:only-child {
+  /* 保持 gap 但无额外空间 */
+}
+
+/* ── 5a-0a. Text Step — 纯文本流 ── */
+.tl-text-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;                     /* body → file-changes 等紧密排列 */
+  /* 无 background, 无 border, 无 border-radius, 无 padding */
+  /* 正文就是正文 — 不该包在任何卡片里 */
+}
+
+.tl-text-inner {
+  line-height: 1.65;
+  font-size: 14px;
+  color: var(--color-text-primary);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.tl-text-inner--meta {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* ── 5a-0b. Reasoning Block — 轮内折叠 ──
+   折叠时只占一行 header，像呼吸点；
+   展开时露出左边轨的思考内容，像页边注释。 */
+.tl-reasoning {
+  /* gap 由父 .tl-iteration 管理，这里无需额外 margin */
+}
+
+/* ── 5a-0c. Tools Block — 轮内折叠 ── */
+.tl-tools {
+  /* gap 由父 .tl-iteration 管理 */
+}
+
+.tl-tools-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;                     /* 工具卡片之间紧凑排列 */
+  margin-top: 4px;
+}
+
+/* ── 5a-1. 主回复 vs 工具调用 视觉区分 ──
    通过 tokens.css 的 CSS 变量自动响应 light/dark:
      浅色: assistant bg = --color-chat-assistant-bg (#ffffff)
            tool       bg = --color-chat-tool-bg (#f8fafc)
      深色: assistant bg = --color-chat-assistant-bg (#0f172a)
            tool       bg = --color-chat-tool-bg (rgba(30,41,59,0.6))
-   兄弟间隔由父 .msg-stack flex-column 维持. */
+   兄弟间隔由父 .tl-iteration flex-column 维持. */
 .chat-tool-call {
   border-radius: var(--radius-lg);
   transition: background var(--duration-fast) ease;
@@ -3075,7 +3163,7 @@
 }
 .chat-tool-call--tool {
   background: var(--color-chat-tool-bg, #fafafa);
-  margin-left: 32px;
+  margin-left: 20px;
   padding-left: 0;
 }
 
@@ -3100,6 +3188,17 @@
 .dark .msg-card,
 .dark .msg-bubble-assistant {
   color-scheme: dark;
+}
+
+/* ── Timeline Iterations — dark mode ── */
+.dark .tl-text-inner {
+  color: var(--color-text-primary);
+}
+.dark .tl-text-inner--meta {
+  border-top-color: var(--color-border-subtle);
+}
+.dark .reasoning-body {
+  color: var(--color-text-secondary);
 }
 
 /* 用户气泡 — dark mode 用 accent-soft 保持与浅色一致的设计语言 */

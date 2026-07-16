@@ -380,7 +380,7 @@ function ToolTimelineSection({
       : `已完成 ${groups.length}`;
 
   return (
-    <div className="mb-2">
+    <div className="tl-tools">
       <button
         onClick={() => setExpanded(!expanded)}
         className="reasoning-header"
@@ -395,7 +395,7 @@ function ToolTimelineSection({
         <span className="reasoning-count">{summary}</span>
       </button>
       {expanded && (
-        <div className="mt-1.5 flex flex-col gap-1.5">
+        <div className="tl-tools-list">
           {groups.map((g) => (
             <ToolGroupCard key={g.key} group={g} onPathClick={onPathClick} />
           ))}
@@ -461,92 +461,123 @@ function UnifiedTimelineRenderer({
   if (steps.length === 0) {
     if (isStreaming && !hasTools) {
       return (
-        <div className="msg-card msg-stack chat-tool-call chat-tool-call--assistant">
-          <ThinkingDots label="正在处理" />
+        <div className="tl-iterations">
+          <div className="tl-iteration">
+            <ThinkingDots label="正在处理" />
+          </div>
         </div>
       );
     }
     return null;
   }
 
+  // ── Iteration grouping ──────────────────────────────────────────────
+  // 2026-07-16: Group steps into "iterations" so the visual output reads
+  // as a cohesive sequence of rounds rather than a flat interleaving of
+  // reasoning / tools / text blocks. Each iteration is visually grouped
+  // with consistent internal spacing and a subtle gap between iterations.
+  //
+  // Iteration boundary: a "reasoning" or "tools" step that follows a
+  // "text" step marks the start of a new iteration. This preserves the
+  // chronological flow: [think₁ → tools₁ → text₁] · [think₂ → tools₂ → text₂].
+  //
+  // Within each iteration, consecutive text steps are merged into one
+  // prose flow — no card wrapper, no background, no hard 20px breaks.
+  const iterations = useMemo(() => {
+    const iters: { step: TimelineStep; globalIdx: number }[][] = [];
+    let current: { step: TimelineStep; globalIdx: number }[] = [];
+    let lastKind: string | null = null;
+
+    for (let gi = 0; gi < steps.length; gi++) {
+      const step = steps[gi];
+      // Start a new iteration when reasoning/tools appear after text.
+      // This means: [think, tools, text, think, tools, text] → two iterations.
+      if ((step.kind === "reasoning" || step.kind === "tools") && lastKind === "text") {
+        if (current.length > 0) iters.push(current);
+        current = [];
+      }
+      current.push({ step, globalIdx: gi });
+      lastKind = step.kind;
+    }
+    if (current.length > 0) iters.push(current);
+    return iters;
+  }, [steps]);
+
   return (
-    <>
-      {steps.map((step, i) => {
-        if (step.kind === "reasoning") {
-          return <ReasoningBlock key={`step-${i}`} content={step.content} />;
-        }
-        if (step.kind === "tools") {
-          const groups = groupTimeline(step.events);
-          if (groups.length === 0) return null;
-          return (
-            <ToolTimelineSection
-              key={`step-${i}`}
-              groups={groups}
-              isStreaming={isStreaming}
-              onPathClick={onPathClick}
-            />
-          );
-        }
-        // step.kind === "text"
-        const parsed = parseContent(step.content);
-        return (
-          <div
-            key={`step-${i}`}
-            className="msg-card msg-stack chat-tool-call chat-tool-call--assistant"
-          >
-            {/* Tasks (only on the first text step that has them) */}
-            {parsed.tasks.length > 0 && i === firstTextWithTasksIdx && (
-              <div className="msg-channel" data-channel="tasks">
-                <TaskListBlock tasks={parsed.tasks} />
-              </div>
-            )}
-            {parsed.body && (
-              <div className="msg-channel" data-channel="body">
-                <MarkdownBody
-                  content={parsed.body}
-                  onPathClick={onPathClick ?? (() => {})}
+    <div className="tl-iterations">
+      {iterations.map((iter, iterIdx) => (
+        <div key={`iter-${iterIdx}`} className="tl-iteration">
+          {iter.map(({ step, globalIdx }) => {
+            if (step.kind === "reasoning") {
+              return <ReasoningBlock key={`step-${globalIdx}`} content={step.content} />;
+            }
+            if (step.kind === "tools") {
+              const groups = groupTimeline(step.events);
+              if (groups.length === 0) return null;
+              return (
+                <ToolTimelineSection
+                  key={`step-${globalIdx}`}
+                  groups={groups}
+                  isStreaming={isStreaming}
+                  onPathClick={onPathClick}
                 />
+              );
+            }
+            // step.kind === "text" — pure prose, no card wrapper
+            const parsed = parseContent(step.content);
+            return (
+              <div key={`step-${globalIdx}`} className="tl-text-step">
+                {/* Tasks (only on the first text step that has them) */}
+                {parsed.tasks.length > 0 && globalIdx === firstTextWithTasksIdx && (
+                  <div className="tl-text-inner">
+                    <TaskListBlock tasks={parsed.tasks} />
+                  </div>
+                )}
+                {parsed.body && (
+                  <div className="tl-text-inner">
+                    <MarkdownBody
+                      content={parsed.body}
+                      onPathClick={onPathClick ?? (() => {})}
+                    />
+                  </div>
+                )}
+                {/* File changes (only on the very last text step overall) */}
+                {globalIdx === steps.length - 1 && fileChanges.length > 0 && (
+                  <div className="tl-text-inner tl-text-inner--meta">
+                    <FileChangeBlock changes={fileChanges} onPathClick={onPathClick} />
+                  </div>
+                )}
+                {/* Memory updates (only on the last text step) */}
+                {globalIdx === steps.length - 1 && memoryUpdates.length > 0 && (
+                  <div className="tl-text-inner tl-text-inner--meta">
+                    <MemoryUpdateBlock updates={memoryUpdates} />
+                  </div>
+                )}
+                {/* Memory recalls */}
+                {globalIdx === steps.length - 1 && memoryRecalls.length > 0 && (
+                  <div className="tl-text-inner tl-text-inner--meta">
+                    <MemoryRecallBlock recalls={memoryRecalls} />
+                  </div>
+                )}
               </div>
-            )}
-            {/* File changes (only on the last text step) */}
-            {i === steps.length - 1 && fileChanges.length > 0 && (
-              <div className="msg-channel" data-channel="file-changes">
-                <FileChangeBlock changes={fileChanges} onPathClick={onPathClick} />
-              </div>
-            )}
-            {/* Memory updates (only on the last text step) — surfaces
-                what the agent remembered this turn. */}
-            {i === steps.length - 1 && memoryUpdates.length > 0 && (
-              <div className="msg-channel" data-channel="memory-updates">
-                <MemoryUpdateBlock updates={memoryUpdates} />
-              </div>
-            )}
-            {/* Memory recalls — surfaces when the agent re-pulled
-                related facts from memory this turn. */}
-            {i === steps.length - 1 && memoryRecalls.length > 0 && (
-              <div className="msg-channel" data-channel="memory-recalls">
-                <MemoryRecallBlock recalls={memoryRecalls} />
-              </div>
-            )}
-          </div>
-        );
-      })}
+            );
+          })}
+        </div>
+      ))}
 
       {/* Legacy fallback: running tool calls without timeline events.
           Only shown when there are tool_calls but no tool steps
           (pre-migration data) and at least one is still running. */}
       {!hasAnyToolStep && toolCalls.length > 0 && hasRunningTool && (
-        <div className="msg-card msg-stack chat-tool-call chat-tool-call--assistant">
-          <div className="msg-channel" data-channel="tools">
-            <ToolCallsFallback calls={toolCalls} />
-          </div>
+        <div className="tl-iteration">
+          <ToolCallsFallback calls={toolCalls} />
         </div>
       )}
 
       {/* Gap thinking animation: only shown when tools are running
           but we have NOT yet rendered any tool cards. */}
       {hasRunningTool && !hasTools && !hasAnyReasoningStep && (
-        <div className="msg-card msg-stack chat-tool-call chat-tool-call--assistant">
+        <div className="tl-iteration">
           <ThinkingDots label="正在处理" />
         </div>
       )}
@@ -554,11 +585,11 @@ function UnifiedTimelineRenderer({
       {/* All tools done, body still empty → waiting for final text.
           Only fire for the LIVE streaming message. */}
       {hasAnyToolStep && !hasRunningTool && !hasAnyTextStep && parsedTasks.length === 0 && isStreaming && (
-        <div className="msg-card msg-stack chat-tool-call chat-tool-call--assistant">
+        <div className="tl-iteration">
           <ThinkingDots label="等待回复" />
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -2367,7 +2398,7 @@ function ReasoningBlock({ content }: { content: string }) {
   const bullets = clean.split(/\n\n+/).filter((b) => b.trim().length > 0);
 
   return (
-    <div className="mb-2">
+    <div className="tl-reasoning">
       <button
         onClick={() => setExpanded(!expanded)}
         className="reasoning-header"
@@ -2384,8 +2415,8 @@ function ReasoningBlock({ content }: { content: string }) {
         )}
       </button>
       {expanded && (
-        <div className="reasoning-body mt-1.5 px-3 py-2 rounded-r-lg rounded-l-sm text-[12.5px] text-text-secondary leading-relaxed whitespace-pre-wrap break-words font-sans">
-          {clean}
+        <div className="reasoning-body">
+          <MarkdownBody content={clean} onPathClick={() => {}} />
         </div>
       )}
     </div>

@@ -41,8 +41,8 @@
  * layout.
  */
 
-import { ChevronDown, ChevronRight, Clock } from "lucide-react";
-import { memo, useDeferredValue, useMemo, useState, useEffect, useId } from "react";
+import { Brain, ChevronDown, ChevronRight, Clock } from "lucide-react";
+import { memo, useDeferredValue, useMemo, useState, useId } from "react";
 import { Check, Copy, AlertTriangle, XCircle } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { InlineThinkingDot } from "./InlineThinkingDot";
@@ -140,36 +140,34 @@ const NOOP = () => {};
  * state so multiple reasoning steps (one per iteration) can coexist.
  */
 function StreamingReasoningBlock({ content, isStreaming }: { content: string; isStreaming: boolean }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const bodyId = useId();
-  useEffect(() => {
-    if (!isStreaming && expanded) {
-      const t = setTimeout(() => setExpanded(false), 100);
-      return () => clearTimeout(t);
-    }
-    return undefined;
-  }, [isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const clean = content.replace(/<\/?think>/gi, "").trim();
   if (!clean) return null;
 
   return (
-    <div className="mb-2">
+    <div className="tl-reasoning">
       <button
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
         aria-controls={expanded ? bodyId : undefined}
-        className="flex items-center gap-1 text-[11px] text-text-faint hover:text-text-secondary transition-colors"
+        className="reasoning-header"
       >
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <span>已深度思考 {isStreaming ? "中…" : ""}</span>
+        {expanded ? (
+          <ChevronDown size={12} className="reasoning-chevron reasoning-chevron-open" />
+        ) : (
+          <ChevronRight size={12} className="reasoning-chevron" />
+        )}
+        <Brain size={11} />
+        <span className="reasoning-label">已深度思考{isStreaming ? "中…" : ""}</span>
       </button>
       {expanded && (
         <div
           id={bodyId}
-          className="reasoning-body mt-1.5 px-3 py-2 rounded-r-lg rounded-l-sm text-[12.5px] text-text-secondary leading-relaxed whitespace-pre-wrap break-words font-sans"
+          className="reasoning-body"
         >
-          {clean}
+          <MarkdownBody content={clean} onPathClick={() => {}} />
         </div>
       )}
     </div>
@@ -297,47 +295,51 @@ function StreamingBubbleImpl({
         )}
 
         {/* Unified timeline steps — renders reasoning / tools / text
-            in chronological order, matching the settled MessageBubble. */}
-        {effectiveSteps.map((step, i) => {
-          if (step.kind === "reasoning") {
-            return (
-              <StreamingReasoningBlock
-                key={`step-${i}`}
-                content={step.content}
-                isStreaming={isStreaming}
-              />
-            );
-          }
-          if (step.kind === "tools") {
-            const groups = groupTimeline(step.events);
-            if (groups.length === 0) return null;
-            return (
-              <ToolTimelineSection
-                key={`step-${i}`}
-                groups={groups}
-                isStreaming={isStreaming}
-                onPathClick={onPathClick}
-              />
-            );
-          }
-          // step.kind === "text"
-          const parsed = parseContent(step.content);
-          return (
-            <div
-              key={`step-${i}`}
-              className="msg-card msg-stack chat-tool-call chat-tool-call--assistant"
-            >
-              {parsed.body && (
-                <div className="msg-channel" data-channel="body">
-                  <MarkdownBody
-                    content={parsed.body}
-                    onPathClick={onPathClick ?? NOOP}
+            in chronological order, matching the settled MessageBubble.
+            2026-07-16: iteration-based grouping for visual cohesion. */}
+        <div className="tl-iterations">
+          {effectiveSteps.map((step, i) => {
+            if (step.kind === "reasoning") {
+              return (
+                <div key={`step-${i}`} className="tl-iteration">
+                  <StreamingReasoningBlock
+                    content={step.content}
+                    isStreaming={isStreaming}
                   />
                 </div>
-              )}
-            </div>
-          );
-        })}
+              );
+            }
+            if (step.kind === "tools") {
+              const groups = groupTimeline(step.events);
+              if (groups.length === 0) return null;
+              return (
+                <div key={`step-${i}`} className="tl-iteration">
+                  <ToolTimelineSection
+                    groups={groups}
+                    isStreaming={isStreaming}
+                    onPathClick={onPathClick}
+                  />
+                </div>
+              );
+            }
+            // step.kind === "text" — pure prose, no card wrapper
+            const parsed = parseContent(step.content);
+            return (
+              <div key={`step-${i}`} className="tl-iteration">
+                <div className="tl-text-step">
+                  {parsed.body && (
+                    <div className="tl-text-inner">
+                      <MarkdownBody
+                        content={parsed.body}
+                        onPathClick={onPathClick ?? NOOP}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
 
         {/* Gap dot at the end of the last text step */}
         {showGapDot && (
