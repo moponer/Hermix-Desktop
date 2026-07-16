@@ -2142,7 +2142,7 @@ const clearPendingImages = useCallback(() => {
                 onAnswerClarify={onAnswerClarify}
                 showHeader={showHeader}
                 isStreaming={!!streamingAssistantId && msg.id === streamingAssistantId}
-                onPathClick={onPathClick ? (p) => onPathClick(p) : undefined}
+                onPathClick={onPathClick}
                 expertCutoffAt={expertCutoffAt}
               />
             );
