@@ -1,0 +1,82 @@
+# Phase 0.1 — Deterministic validation gate.
+#
+# Every PR must pass:
+#   1. cargo check  (compilation, no type errors)
+#   2. cargo test   (unit + lib tests)
+#   3. tsc --noEmit (frontend type check)
+#
+# The workspace uses an out-of-tree target dir (release/target/) via
+# .cargo/config.toml so we cache that path.
+
+name: validate
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main]
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Cache Cargo target
+        uses: actions/cache@v4
+        with:
+          path: release/target
+          key: cargo-target-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-
+
+      - name: Cargo check
+        run: cargo check --workspace --all-targets 2>&1
+
+      - name: Cargo test (lib only — deterministic, no LLM calls)
+        run: cargo test --workspace --lib 2>&1
+
+  frontend-check:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/desktop-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/desktop-tauri/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript type check
+        run: pnpm tsc --noEmit

@@ -16,6 +16,7 @@
 
 pub mod file_sync;
 pub mod local;
+pub mod local_isolation;
 pub mod manager;
 
 #[cfg(feature = "ssh")]
@@ -30,6 +31,7 @@ pub mod training;
 pub use file_sync::FileSync;
 pub use hermix_core::TerminalBackend;
 pub use local::LocalBackend;
+pub use local_isolation::{HostedAgentPool, LocalIsolationBackend};
 pub use manager::BackendManager;
 pub use training::benchmarks::swe_bench::SweBenchEnv;
 pub use training::benchmarks::terminal_bench::TerminalBenchEnv;

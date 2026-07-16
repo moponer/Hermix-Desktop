@@ -20,7 +20,16 @@
  */
 import { useMemo } from "react";
 import { clsx } from "clsx";
-import { highlight, register } from "refractor";
+// 2026-07-15: refractor 3.x is CJS — module.exports = refract, then
+// properties are added at runtime (refract.highlight = highlight, etc.).
+// Vite/esbuild's static analysis of named exports can't detect these
+// runtime property assignments, so `import { highlight, register } from
+// "refractor"` resolves `highlight` and `register` to `undefined`.
+// This caused `highlight()` to throw TypeError, caught silently by the
+// try/catch below, falling back to plain text — hence "no syntax
+// highlighting in the preview panel".
+// Fix: use a default import so Vite provides the full refract object.
+import refractor from "refractor";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 
@@ -47,6 +56,10 @@ import yaml from "refractor/lang/yaml";
 import toml from "refractor/lang/toml";
 import xml from "refractor/lang/markup";
 import sql from "refractor/lang/sql";
+
+// Destructure after default import — refractor is the full object
+// with .highlight, .register, etc. as runtime properties.
+const { highlight, register } = refractor;
 
 register(python);
 register(typescript);

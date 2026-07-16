@@ -167,7 +167,7 @@ function StreamingReasoningBlock({ content, isStreaming }: { content: string; is
       {expanded && (
         <div
           id={bodyId}
-          className="reasoning-body mt-1.5 px-3 py-2 rounded-r-lg rounded-l-sm text-[12.5px] text-text-secondary leading-relaxed whitespace-pre-wrap font-sans"
+          className="reasoning-body mt-1.5 px-3 py-2 rounded-r-lg rounded-l-sm text-[12.5px] text-text-secondary leading-relaxed whitespace-pre-wrap break-words font-sans"
         >
           {clean}
         </div>

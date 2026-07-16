@@ -42,6 +42,7 @@ libloading = { workspace = true }
 # independent streams. `rand` would also work but pulls in a heavier
 # dependency for what is effectively a few random u64s.
 fastrand = "2"
+fs4 = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

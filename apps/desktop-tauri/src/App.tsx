@@ -22,7 +22,7 @@ import { useAcuiState, type AcuiDecisionBus } from "./acui";
 import type { Artifact } from "./utils/artifacts";
 import * as api from "./api";
 import { registerBuiltinsToBackend } from "./data/builtinExperts";
-import type { NavPage, Session, ChatMessage, ApprovalDecision, TimelineStep, ExecutionTimelineEvent } from "./types";
+import type { NavPage, Session, ChatMessage, ApprovalDecision, TimelineStep, ExecutionTimelineEvent, QueuedMessage, QueuedImage, ChatMessageImage } from "./types";
 // 2026-07-10: expandTimelineToMessages and detectToolError imports removed —
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
@@ -192,15 +192,39 @@ function computeLeftMin(vw: number): number {
 // text) so that multi-iteration agent loops display each step in
 // chronological order instead of a fixed 3-section layout.
 
-/** Append reasoning text to the last reasoning step, or push a new one. */
+/**
+ * Append reasoning text to the last reasoning step, or push a new one.
+ *
+ * 2026-07-15: When the LLM (e.g. MiniMax M3) sends `reasoning_content`
+ * and `content` in the same SSE chunk, the server forwards them as
+ * separate `StreamEvent::Thinking` and `StreamEvent::Text` events.
+ * The text event creates a "text" step that breaks reasoning accumulation,
+ * causing a single thinking process to render as multiple "已深度思考"
+ * blocks. Fix: scan backwards past "text" steps to find the last
+ * "reasoning" step. If found, append to it so all reasoning stays in
+ * one collapsible block. Only "text" steps are skipped — "tools" or
+ * other step types mark a real phase boundary and trigger a new block.
+ */
 function appendReasoningStep(steps: TimelineStep[] | undefined, content: string): TimelineStep[] {
   const arr = steps ? [...steps] : [];
   const last = arr[arr.length - 1];
   if (last && last.kind === "reasoning") {
     arr[arr.length - 1] = { kind: "reasoning", content: last.content + content };
-  } else {
-    arr.push({ kind: "reasoning", content });
+    return arr;
   }
+  // Scan backwards past "text" steps to find the last "reasoning" step.
+  // This prevents interleaved text events from splitting the reasoning.
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (arr[i].kind === "reasoning") {
+      arr[i] = { kind: "reasoning", content: (arr[i] as { content: string }).content + content };
+      return arr;
+    }
+    // Non-text step (e.g. "tools") marks a real phase boundary — stop.
+    if (arr[i].kind !== "text") {
+      break;
+    }
+  }
+  arr.push({ kind: "reasoning", content });
   return arr;
 }
 
@@ -276,7 +300,7 @@ export default function App() {
     if (p !== "chat") setRightOpen(false);
   }, []);
 const [sessions, setSessions] = useState<Session[]>([]);
-const [messageQueue, setMessageQueue] = useState<string[]>([]);
+const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
 // P0-9: External file attachment from right-sidebar “加入对话” context menu.
 const [pendingFileAttachment, setPendingFileAttachment] = useState<string | null>(null);
 const handleAddFileToChat = useCallback((path: string) => {
@@ -297,7 +321,7 @@ setPage("chat");
     setMessageQueue((prev) => prev.filter((_, i) => i !== idx));
   }, []);
   const editQueueItem = useCallback((idx: number, newText: string) => {
-    setMessageQueue((prev) => prev.map((m, i) => (i === idx ? newText : m)));
+    setMessageQueue((prev) => prev.map((m, i) => (i === idx ? { ...m, text: newText } : m)));
   }, []);
 const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
 const isCreatingSessionRef = useRef(false);
@@ -497,7 +521,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     max: RIGHT_MAX,
     side: "right",
   });
-  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, usageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat();
+  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, setContextUsage, usageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat();
 
   // Per-send phase tracking. Set by the `onPhaseChange` callback in
   // `handleSendMessage` and scoped to the current `sessionId` so the
@@ -791,10 +815,10 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
 
     let cancelled = false;
     api.getSessionMessages(activeSessionId)
-      .then((rawMessages) => {
+      .then(({ messages, contextUsage: restoredCtx }) => {
         if (cancelled) return;
         clearLoadError(activeSessionId);
-        const messages = rawMessages;
+        if (restoredCtx) setContextUsage(restoredCtx);
         setSessions((prev) => prev.map((s) =>
           s.id === activeSessionId ? { ...s, messages } : s
         ));
@@ -1135,7 +1159,12 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
     [acui, handleApproveApproval, handleDenyApproval, handleAnswerClarify],
   );
 
-  const handleSendMessage = useCallback(async (content: string, _projectId?: string, overrides?: import("./hooks/useStreamChat").ChatOverrides) => {
+  const handleSendMessage = useCallback(async (
+    content: string,
+    _projectId?: string,
+    overrides?: import("./hooks/useStreamChat").ChatOverrides,
+    attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[] },
+  ) => {
     // ★ DIAG: trace every send_message_stream call to find the trigger chain
     // Global counter survives remounts/HMR; shows whether handleSendMessage
     // itself was called 1x or 10x. Pair with the timestamp so we can
@@ -1202,7 +1231,21 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
 runningToolRef.current.clear();
 streamPhaseRef.current = null;
 
-    const userMsg: ChatMessage = { id: `temp-${Date.now()}`, role: "user", content, timestamp: new Date().toISOString() };
+    // Surface any attached images in the user bubble. We reuse the
+    // in-memory `blobUrl` from the attachment so the preview the user
+    // just saw in the input box appears verbatim in the sent message.
+    const userImages: ChatMessageImage[] | undefined = attachments?.images?.map((i) => ({
+      blobUrl: i.blobUrl,
+      mimeType: i.mimeType,
+      name: i.name,
+    }));
+    const userMsg: ChatMessage = {
+      id: `temp-${Date.now()}`,
+      role: "user",
+      content,
+      timestamp: new Date().toISOString(),
+      ...(userImages && userImages.length ? { images: userImages } : {}),
+    };
     const assistantId = `reply-${Date.now()}`;
     currentAssistantIdRef.current = assistantId;
 
@@ -1234,6 +1277,23 @@ streamPhaseRef.current = null;
         title: computeAutoTitle(s, content),
       };
     }));
+
+    // Fold attachment-derived overrides (image bytes + file paths) into
+    // the overrides object sent to the backend. Centralised here so both
+    // the direct-send and the queue-drain paths use the same conversion.
+    const finalOverrides: import("./hooks/useStreamChat").ChatOverrides = { ...(overrides ?? {}) };
+    if (attachments?.images?.length) {
+      finalOverrides.images = await Promise.all(
+        attachments.images.map(async (img) => ({
+          bytes: Array.from(new Uint8Array(await img.file.arrayBuffer())),
+          mimeType: img.mimeType,
+          name: img.name,
+        })),
+      );
+    }
+    if (attachments?.attachedFilePaths?.length) {
+      finalOverrides.attachedFilePaths = attachments.attachedFilePaths;
+    }
 
     // Real-time stream: append each chunk to the *currently active*
     // assistant message. 2026-07-10: removed needsNewAssistantRef
@@ -1985,7 +2045,7 @@ return {
             acui.reset();
           },
         },
-        overrides,
+        finalOverrides,
       );
     } catch (e) {
       const errText = `⚠️ ${localizeStreamError(String(e))}`;
@@ -2025,20 +2085,17 @@ return {
   //                pick it up the next tick `streaming` settles.
   const sendFromQueue = useCallback(
     async (idx: number) => {
-      // Snapshot the queue atomically inside the updater so we
+      // Snapshot the queue item atomically inside the updater so we
       // don't race against any in-flight queue mutation (e.g. the
-      // drain effect also calls setMessageQueue). Use `undefined`
-      // as the initial value so TS keeps the union alive across
-      // the updater's optional assignment — `null` would narrow
-      // to `never` after the assignment, breaking `.trim()` below.
-      let snapshot: string | undefined;
+      // drain effect also calls setMessageQueue).
+      let snapshot: QueuedMessage | undefined;
       setMessageQueue((prev) => {
         const found = prev[idx];
-        if (typeof found === "string") snapshot = found;
+        if (found && found.text.trim()) snapshot = found;
         return prev;
       });
       const item = snapshot;
-      if (!item || !item.trim()) return;
+      if (!item || !item.text.trim()) return;
 
       // Pop the item first so the UI updates instantly.
       setMessageQueue((prev) => prev.filter((_, i) => i !== idx));
@@ -2047,7 +2104,14 @@ return {
         return;
       }
       try {
-        await handleSendMessage(item);
+        await handleSendMessage(
+          item.text,
+          undefined,
+          undefined,
+          item.images || item.attachedFilePaths
+            ? { images: item.images, attachedFilePaths: item.attachedFilePaths }
+            : undefined,
+        );
       } catch {
         // Failure → put it back at the head of the queue so the
         // user can retry. We don't share the drain effect's retry
@@ -2083,16 +2147,19 @@ return {
   useEffect(() => {
     if (!streaming && messageQueue.length > 0) {
       const next = messageQueue[0];
-      diagLog("[diag] queue drain: firing", { content: next, queueLen: messageQueue.length, streaming });
+      diagLog("[diag] queue drain: firing", { content: next.text, queueLen: messageQueue.length, streaming });
       setMessageQueue(prev => prev.slice(1));
-      handleSendMessage(next).catch((_cause) => {
-        diagLog("[diag] queue drain: handleSendMessage failed, re-enqueueing", { next, cause: _cause instanceof Error ? _cause.message : String(_cause) });
+      const queuedAttachments = next.images || next.attachedFilePaths
+        ? { images: next.images, attachedFilePaths: next.attachedFilePaths }
+        : undefined;
+      handleSendMessage(next.text, undefined, undefined, queuedAttachments).catch((_cause) => {
+        diagLog("[diag] queue drain: handleSendMessage failed, re-enqueueing", { next: next.text, cause: _cause instanceof Error ? _cause.message : String(_cause) });
         // Limit retries: track per-message so a permanently failing
         // backend doesn't spin forever.
-        const key = next.slice(0, 60); // first 60 chars as key
+        const key = next.text.slice(0, 60); // first 60 chars as key
         const retries = queueRetriesRef.current;
         if ((retries[key] ?? 0) >= 3) {
-          console.warn("[queue] giving up on message after 3 retries", next);
+          console.warn("[queue] giving up on message after 3 retries", next.text);
           delete retries[key];
           return; // drop — user can retype
         }
@@ -2111,8 +2178,8 @@ return {
     const res = await api.undoSession(activeSessionId, 1);
     if (!res) return;
     try {
-      const rawMessages = await api.getSessionMessages(activeSessionId);
-      const messages = rawMessages;
+      const { messages, contextUsage: restoredCtx } = await api.getSessionMessages(activeSessionId);
+      if (restoredCtx) setContextUsage(restoredCtx);
       setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, messages } : s));
     } catch {}
   }, [activeSessionId]);
@@ -2124,8 +2191,8 @@ return {
     const res = await api.restoreSession(activeSessionId);
     if (!res) return;
     try {
-      const rawMessages = await api.getSessionMessages(activeSessionId);
-      const messages = rawMessages;
+      const { messages, contextUsage: restoredCtx } = await api.getSessionMessages(activeSessionId);
+      if (restoredCtx) setContextUsage(restoredCtx);
       setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, messages } : s));
     } catch {}
   }, [activeSessionId]);
@@ -2223,7 +2290,7 @@ contextUsage={contextUsage}
               acuiBus={acuiBus}
               acuiStats={acui.stats}
               messageQueue={messageQueue}
-              onAddToQueue={(msg) => setMessageQueue(prev => prev.includes(msg) ? prev : [...prev, msg])}
+              onAddToQueue={(msg) => setMessageQueue(prev => prev.some((m) => m.text === msg.text) ? prev : [...prev, msg])}
               onClearQueue={() => setMessageQueue([])}
               onRemoveFromQueue={removeFromQueue}
               onEditQueueItem={editQueueItem}

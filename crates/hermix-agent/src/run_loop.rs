@@ -711,33 +711,55 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                     if Self::assistant_visible_text_after_think_blocks(
                         &response.message
                     ) {
-                        // 2026-07-12 WW: persist the final assistant
-                        // message into ctx BEFORE terminal persist. The
-                        // Continue branch falls through to
-                        // `prepare_assistant_turn` below, but the
-                        // visible-text Finalize branch used to skip it —
-                        // causing `persist_session_terminal(&ctx, …)` and
-                        // `finalize_agent_result(&ctx, …)` to see a ctx
-                        // missing the final assistant message, so DB /
-                        // disk `.md` only stored up to the tool result
-                        // and the reload view came back truncated.
-                        let _ = self.prepare_assistant_turn(
-                            &mut ctx,
-                            &response,
-                            &mut state.message_cache,
-                        );
-                        return Ok(self.finalize_agent_result(
-                            &ctx,
-                            total_turns,
-                            &tool_errors,
-                            state.cost_guard.accumulated_usage.clone(),
-                            state.cost_guard.session_cost_usd,
-                            session_started_hooks_fired,
-                            persist_user_idx,
-                            false,
-                            false,
-                            None,
-                        ));
+                        // 2026-07-15: In autonomous_mode, if the LLM produced
+                        // visible text but no tool calls and no tools have
+                        // been used yet, fall through to decide_empty_response
+                        // instead of finalizing. The autonomous nudge will push
+                        // the LLM to start using tools. Without this, the agent
+                        // would stop after the LLM says "I'll help you with that"
+                        // without actually doing any work.
+                        let history_has_tool = ctx
+                            .get_messages()
+                            .iter()
+                            .any(|m| m.role == MessageRole::Tool);
+                        let should_autonomous_nudge = self.config.autonomous_mode
+                            && !history_has_tool
+                            && autonomous_nudge_count == 0
+                            && (self.config.max_turns == 0
+                                || total_turns < self.config.max_turns)
+                            && !tool_schemas.is_empty();
+                        if !should_autonomous_nudge {
+                            // 2026-07-12 WW: persist the final assistant
+                            // message into ctx BEFORE terminal persist. The
+                            // Continue branch falls through to
+                            // `prepare_assistant_turn` below, but the
+                            // visible-text Finalize branch used to skip it —
+                            // causing `persist_session_terminal(&ctx, …)` and
+                            // `finalize_agent_result(&ctx, …)` to see a ctx
+                            // missing the final assistant message, so DB /
+                            // disk `.md` only stored up to the tool result
+                            // and the reload view came back truncated.
+                            let _ = self.prepare_assistant_turn(
+                                &mut ctx,
+                                &response,
+                                &mut state.message_cache,
+                            );
+                            return Ok(self.finalize_agent_result(
+                                &ctx,
+                                total_turns,
+                                &tool_errors,
+                                state.cost_guard.accumulated_usage.clone(),
+                                state.cost_guard.session_cost_usd,
+                                session_started_hooks_fired,
+                                persist_user_idx,
+                                false,
+                                false,
+                                None,
+                            ));
+                        }
+                        // Fall through to prepare_assistant_turn +
+                        // decide_empty_response — the autonomous nudge
+                        // will fire and push the LLM to use tools.
                     }
                     // No visible text (thinking-only or empty) — fall
                     // through to decide_empty_response for edge-case
@@ -1438,43 +1460,65 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                     if Self::assistant_visible_text_after_think_blocks(
                         &response.message
                     ) {
-                        // 2026-07-12 WW: persist the final assistant
-                        // message into ctx BEFORE terminal persist. The
-                        // Continue branch falls through to
-                        // `prepare_assistant_turn` below, but the
-                        // visible-text Finalize branch used to skip it —
-                        // causing `persist_session_terminal(&ctx, …)` and
-                        // `finalize_agent_result(&ctx, …)` to see a ctx
-                        // missing the final assistant message, so DB /
-                        // disk `.md` only stored up to the tool result
-                        // and the reload view came back truncated. Owner
-                        // saw this live on the 沪EB5805 "看下目录" session:
-                        // streaming showed the full "老大，目录共 198 条..."
-                        // text but reload was truncated to assistant1+tool.
-                        let _ = self.prepare_assistant_turn(
-                            &mut ctx,
-                            &response,
-                            &mut state.message_cache,
-                        );
-                        self.persist_session_terminal(
-                            &ctx,
-                            session_id,
-                            total_turns,
-                            review_memory_at_end,
-                        );
-                        Self::emit_mute_transition(&on_chunk, &stream_mute, false);
-                        return Ok(self.finalize_agent_result(
-                            &ctx,
-                            total_turns,
-                            &tool_errors,
-                            state.cost_guard.accumulated_usage.clone(),
-                            state.cost_guard.session_cost_usd,
-                            session_started_hooks_fired,
-                            persist_user_idx,
-                            true,
-                            false,
-                            last_finish_reason.clone(),
-                        ));
+                        // 2026-07-15: In autonomous_mode, if the LLM produced
+                        // visible text but no tool calls and no tools have
+                        // been used yet, fall through to decide_empty_response
+                        // instead of finalizing. The autonomous nudge will push
+                        // the LLM to start using tools. Without this, the agent
+                        // would stop after the LLM says "I'll help you with that"
+                        // without actually doing any work.
+                        let history_has_tool = ctx
+                            .get_messages()
+                            .iter()
+                            .any(|m| m.role == MessageRole::Tool);
+                        let should_autonomous_nudge = self.config.autonomous_mode
+                            && !history_has_tool
+                            && autonomous_nudge_count == 0
+                            && (self.config.max_turns == 0
+                                || total_turns < self.config.max_turns)
+                            && !tool_schemas.is_empty();
+                        if !should_autonomous_nudge {
+                            // 2026-07-12 WW: persist the final assistant
+                            // message into ctx BEFORE terminal persist. The
+                            // Continue branch falls through to
+                            // `prepare_assistant_turn` below, but the
+                            // visible-text Finalize branch used to skip it —
+                            // causing `persist_session_terminal(&ctx, …)` and
+                            // `finalize_agent_result(&ctx, …)` to see a ctx
+                            // missing the final assistant message, so DB /
+                            // disk `.md` only stored up to the tool result
+                            // and the reload view came back truncated. Owner
+                            // saw this live on the 沪EB5805 "看下目录" session:
+                            // streaming showed the full "老大，目录共 198 条..."
+                            // text but reload was truncated to assistant1+tool.
+                            let _ = self.prepare_assistant_turn(
+                                &mut ctx,
+                                &response,
+                                &mut state.message_cache,
+                            );
+                            self.persist_session_terminal(
+                                &ctx,
+                                session_id,
+                                total_turns,
+                                review_memory_at_end,
+                            );
+                            Self::emit_mute_transition(&on_chunk, &stream_mute, false);
+                            return Ok(self.finalize_agent_result(
+                                &ctx,
+                                total_turns,
+                                &tool_errors,
+                                state.cost_guard.accumulated_usage.clone(),
+                                state.cost_guard.session_cost_usd,
+                                session_started_hooks_fired,
+                                persist_user_idx,
+                                true,
+                                false,
+                                last_finish_reason.clone(),
+                            ));
+                        }
+                        // Fall through to prepare_assistant_turn +
+                        // decide_empty_response — the autonomous nudge
+                        // will fire and push the LLM to use tools.
                     }
                     // No visible text (thinking-only or empty) — fall
                     // through to decide_empty_response for edge-case

@@ -710,6 +710,22 @@ pub struct StreamChunk {
     pub usage: Option<UsageStats>,
 }
 
+/// Session-level context window usage snapshot. Persisted per session and
+/// returned in `SessionMessagesResponse` so the frontend can show the
+/// context-usage bar immediately after restoring an old session, without
+/// waiting for a fresh live stream to emit a `context_usage` event.
+///
+/// Mirrors the wire shape of the live `context_usage` WS event
+/// (`used_tokens` / `max_tokens` / `threshold_tokens` / `percent`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContextUsagePayload {
+    pub used_tokens: u64,
+    pub max_tokens: u64,
+    pub threshold_tokens: u64,
+    /// Percent of `threshold_tokens` currently consumed (0–100+).
+    pub percent: f64,
+}
+
 // ---------------------------------------------------------------------------
 // Orchestration Engine types (Phase 0 — P0-1)
 // ---------------------------------------------------------------------------

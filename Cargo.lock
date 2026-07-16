@@ -1855,6 +1855,7 @@ dependencies = [
  "chrono",
  "eventsource-stream",
  "fastrand",
+ "fs4",
  "futures",
  "hermix-config",
  "hermix-core",

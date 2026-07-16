@@ -99,6 +99,18 @@ pub mod reflection_generator;
 pub mod recall_scheduler;
 pub mod flush_memories;
 pub mod tool_error_demotion;
+pub mod harness_self_edit;
+pub mod acceptance_gate;
+pub mod experience_archive;
+
+// Phase 1: New capabilities
+pub mod bdi;
+pub mod latent_briefing;
+pub mod long_horizon;
+
+// Phase 2: Researcher OS
+pub mod researcher_loop;
+pub mod researcher_queue;
 
 // Re-export primary agent types
 pub use agent_loop::{

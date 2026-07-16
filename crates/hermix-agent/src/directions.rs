@@ -576,7 +576,7 @@ pub fn collect_directions(
         dirs.push(SystemDir::new(
             "format.short",
             DirRoute::Subsequent,
-            "## Format\nUse markdown. Keep replies concise.",
+            "## Format\n用自然语言交流,像真人对话一样完整、有温度、不端着;只在复杂主题用 markdown 结构化。避免无意义的冗长,但绝不为了「简短」而省略必要内容,也不要把结论压成一句干巴巴的话。",
         ));
     }
     // Thinking discipline.

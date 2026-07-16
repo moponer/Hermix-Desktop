@@ -24,7 +24,7 @@ use futures::StreamExt;
 use tokio::time::sleep;
 
 use hermix_core::tool_call_sanitizer::ToolCallSanitizer;
-use hermix_core::{AgentError, LlmProvider, LlmResponse, Message, StreamChunk, StreamDelta, ToolCall, ToolSchema, UsageStats};
+use hermix_core::{AgentError, LlmProvider, LlmResponse, Message, StreamChunk, ToolCall, ToolSchema, UsageStats};
 
 use crate::agent_config::AgentConfig;
 use crate::agent_helpers::AgentCallbacks;
@@ -502,6 +502,7 @@ pub(crate) async fn collect_stream_llm_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hermix_core::StreamDelta;
     use std::sync::{Arc, Mutex};
 
     /// 2026-07-14 (Frontend Audit, "思考被切成两段"): when a single

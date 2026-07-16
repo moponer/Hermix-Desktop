@@ -3124,9 +3124,11 @@ async fn get_session_messages(
             }
         })
         .collect();
+    let context_usage = state.session_persistence.get_context_usage(&session_id);
     Ok(Json(SessionMessagesResponse {
         session_id,
         messages,
+        context_usage,
     }))
 }
 

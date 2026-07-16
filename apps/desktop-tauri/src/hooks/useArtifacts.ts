@@ -59,7 +59,16 @@ export function useArtifacts({
   const [verifiedArtifacts, setVerifiedArtifacts] = useState<Artifact[]>([]);
   useEffect(() => {
     const raw = rawArtifacts;
-    if (raw.length === 0) { setVerifiedArtifacts([]); return; }
+    if (raw.length === 0) {
+      // 2026-07-15: Don't wipe verifiedArtifacts when rawArtifacts is
+      // empty — synthetic artifacts added by handlePathClick (e.g. a
+      // user clicks a path link the LLM mentioned in prose that the
+      // regex extractor missed) would be immediately cleared, causing
+      // the preview modal to flash open then close.  Instead, keep
+      // only synthetic (non-message-extracted) artifacts.
+      setVerifiedArtifacts((prev) => prev.filter((a) => a.tool === "inline"));
+      return;
+    }
     let cancelled = false;
     Promise.all(
       raw.map(async (a) => {

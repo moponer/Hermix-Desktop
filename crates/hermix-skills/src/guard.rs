@@ -118,6 +118,8 @@ impl SkillGuard {
     /// 1. Required fields (name, description, content steps)
     /// 2. Dangerous patterns in skill content
     /// 3. URL references in skill content
+    /// 4. Documentation structure: description trigger phrases,
+    ///    required sections (When to Activate, Integration)
     pub fn validate_skill(&self, skill: &Skill) -> Result<(), SkillError> {
         // 1. Structure validation: name is required.
         if skill.name.trim().is_empty() {
@@ -170,6 +172,31 @@ impl SkillGuard {
 
         // 3. Validate any URLs found in the content.
         self.validate_urls_in_content(&skill.content)?;
+
+        // 4. Documentation structure checks (Phase 0.2).
+        // Delegates to validator::description_has_trigger / has_section
+        // so the logic lives in one place.
+        if let Some(desc) = &skill.description {
+            if !crate::validator::description_has_trigger(desc) {
+                tracing::warn!(
+                    skill_name = %skill.name,
+                    "skill description should contain a trigger phrase (e.g. 'Use when ...')"
+                );
+            }
+        }
+
+        if !crate::validator::has_section(&skill.content, "When to Activate") {
+            tracing::warn!(
+                skill_name = %skill.name,
+                "skill body should contain `## When to Activate` section"
+            );
+        }
+        if !crate::validator::has_section(&skill.content, "Integration") {
+            tracing::warn!(
+                skill_name = %skill.name,
+                "skill body should contain `## Integration` section"
+            );
+        }
 
         Ok(())
     }

@@ -214,6 +214,12 @@ pub struct ListSessionsResponse {
 pub struct SessionMessagesResponse {
     pub session_id: SessionId,
     pub messages: Vec<ProtocolMessage>,
+    /// 2026-07-16: last persisted context-usage snapshot for the session,
+    /// so the frontend can show the context-usage bar immediately after
+    /// restoring an old session. `None` on sessions that never streamed
+    /// (or pre-migration DBs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_usage: Option<hermix_core::types::ContextUsagePayload>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -1468,5 +1468,5 @@ export function useStreamChat() {
     setStreamingSessionId(null);
   }, []);
 
-  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, usageSnapshot, cancel };
+  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, cancel };
 }

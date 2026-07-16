@@ -410,7 +410,9 @@ pub async fn memory_prefetch(
                         let with_header = format!("{header}{section}\n");
                         if total_chars + with_header.len() <= char_budget {
                             block.push_str(&with_header);
-                            total_chars += with_header.len();
+                            // Note: total_chars not updated here because this is
+                            // the last budget check in the function — no subsequent
+                            // reads need the updated value.
                         }
                     }
                 }

@@ -1688,7 +1688,34 @@ impl LlmProvider for OpenRouterProvider {
 
 /// Parse a single SSE data JSON object into a StreamChunk (OpenAI format).
 fn parse_sse_chunk(json: &Value) -> Option<StreamChunk> {
+    // Usage may appear in the final chunk as a top-level field, even when
+    // `choices` is empty (OpenAI's `stream_options.include_usage` format).
+    // Extract it FIRST so we never discard usage from a choices=[] chunk.
+    let usage = json.get("usage").map(|u| UsageStats {
+        prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+        completion_tokens: u
+            .get("completion_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+        estimated_cost: None,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        reasoning_tokens: 0,
+    });
+
     let choices = json.get("choices").and_then(|c| c.as_array())?;
+
+    // Empty choices with usage = usage-only final chunk (include_usage).
+    // Return a StreamChunk carrying only the usage data.
+    if choices.is_empty() && usage.is_some() {
+        return Some(StreamChunk {
+            delta: None,
+            finish_reason: None,
+            usage,
+        });
+    }
+
     let choice = choices.first()?;
 
     let delta_obj = choice.get("delta")?;
@@ -1744,20 +1771,6 @@ fn parse_sse_chunk(json: &Value) -> Option<StreamChunk> {
         .get("finish_reason")
         .and_then(|f| f.as_str())
         .map(|s| s.to_string());
-
-    // Usage may appear in the final chunk
-    let usage = json.get("usage").map(|u| UsageStats {
-        prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        completion_tokens: u
-            .get("completion_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        estimated_cost: None,
-        cache_read_tokens: 0,
-        cache_creation_tokens: 0,
-        reasoning_tokens: 0,
-    });
 
     Some(StreamChunk {
         delta,
@@ -2062,6 +2075,28 @@ mod tests {
         let chunk = parse_sse_chunk(&json).unwrap();
         assert_eq!(chunk.finish_reason.as_deref(), Some("stop"));
         assert_eq!(chunk.usage.as_ref().unwrap().total_tokens, 150);
+    }
+
+    #[test]
+    fn test_parse_sse_chunk_usage_only_no_choices() {
+        // OpenAI's `stream_options.include_usage` sends a final chunk with
+        // `choices: []` and usage at top level. Before the fix, this chunk
+        // was silently dropped because `choices.first()` returned None.
+        let json = serde_json::json!({
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 80,
+                "total_tokens": 280
+            }
+        });
+        let chunk = parse_sse_chunk(&json).unwrap();
+        assert!(chunk.delta.is_none());
+        assert!(chunk.finish_reason.is_none());
+        let usage = chunk.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 200);
+        assert_eq!(usage.completion_tokens, 80);
+        assert_eq!(usage.total_tokens, 280);
     }
 
     #[test]

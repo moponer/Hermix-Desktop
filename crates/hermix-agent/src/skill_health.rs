@@ -1,27 +1,30 @@
-//! Skill health scoring (P2-T3).
+//! Skill health scoring (P2-T3, extended Phase 0.3).
 //!
 //! Skills can drift over time — wrong examples, dead URLs,
 //! duplicated boilerplate — and we want the scanner to flag
 //! suspicious ones without outright refusing to load them.
 //!
-//! The score is a 0.0–1.0 composite of four cheap deterministic
-//! signals:
+//! The score is a 0.0–1.0 composite of **nine** deterministic
+//! signals (expanded from the original four in Phase 0.3):
 //!
-//! 1. **Frontmatter completeness** (0.20 weight): every
-//!    SKILL.md should expose `name` and `description`. The
-//!    open-standard agentskills.io fields (`version`, `tags`,
-//!    `allowed_tools`) are bonuses, not requirements.
-//! 2. **Section structure** (0.30 weight): at least 3 markdown
-//!    `##` headings — skills with no structure are nearly
-//!    impossible for the LLM to follow.
-//! 3. **Token budget** (0.30 weight): line count 50–500 is
-//!    the sweet spot. Below 50 the skill is suspiciously thin;
-//!    above 500 the body gets soft-truncated by the loader so
-//!    the user is paying a budget penalty for little gain.
-//! 4. **Code-example presence** (0.20 weight): at least one
-//!    fenced code block (` ``` `) — the task description says
-//!    "no API cost" so we accept any fence, even if the
-//!    language tag is missing.
+//! | # | Dimension                         | Weight | Source     |
+//! |---|-----------------------------------|--------|------------|
+//! | 1 | Frontmatter `name` present        | 0.10   | Original   |
+//! | 2 | Frontmatter `description` + trigger| 0.15   | Extended   |
+//! | 3 | `## When to Activate` section     | 0.15   | New        |
+//! | 4 | `## Core Concepts` / `## Instructions` | 0.10 | Split from structure |
+//! | 5 | `## Practical Guidance` / `## Examples` | 0.10 | Extended from examples |
+//! | 6 | `## Gotchas` section              | 0.05   | New        |
+//! | 7 | `## Integration` section          | 0.05   | New        |
+//! | 8 | `## References` section           | 0.05   | New        |
+//! | 9 | Body ≤ 500 lines (budget)         | 0.05   | Adjusted   |
+//! |   | **Total**                         | **0.80**|           |
+//!
+//! Bonus dimensions (up to 0.20 extra, capping composite at 1.0):
+//! - Version field present (+0.05)
+//! - Tags field present (+0.05)
+//! - Code-example present (+0.05)
+//! - Additional section count > 3 (+0.05)
 //!
 //! Anything below 0.5 is logged at WARN with a clear message;
 //! the loader still indexes the skill (we never want the
@@ -34,24 +37,159 @@
 /// rubric into a single opaque number.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HealthBreakdown {
-    pub frontmatter: f32,
-    pub structure: f32,
+    // --- Core 9 dimensions (Phase 0.3) ---
+    /// Frontmatter `name` present (0.10 weight).
+    pub frontmatter_name: f32,
+    /// Frontmatter `description` present and contains trigger phrase (0.15 weight).
+    pub frontmatter_description: f32,
+    /// `## When to Activate` section present (0.15 weight).
+    pub when_to_activate: f32,
+    /// `## Core Concepts` or `## Instructions` present (0.10 weight).
+    pub core_concepts: f32,
+    /// `## Practical Guidance` or `## Examples` present (0.10 weight).
+    pub practical_guidance: f32,
+    /// `## Gotchas` section present (0.05 weight).
+    pub gotchas: f32,
+    /// `## Integration` section present (0.05 weight).
+    pub integration: f32,
+    /// `## References` section present (0.05 weight).
+    pub references: f32,
+    /// Body line count within budget (≤ 500 lines) (0.05 weight).
     pub budget: f32,
-    pub examples: f32,
+
+    // --- Bonus dimensions (up to 0.20 extra) ---
+    /// Version field in frontmatter (+0.05 bonus).
+    pub bonus_version: f32,
+    /// Tags field in frontmatter (+0.05 bonus).
+    pub bonus_tags: f32,
+    /// At least one fenced code block (+0.05 bonus).
+    pub bonus_code_example: f32,
+    /// More than 3 `##` headings (+0.05 bonus).
+    pub bonus_section_count: f32,
 }
 
 impl HealthBreakdown {
-    /// Weighted sum with the constants chosen so each dimension
-    /// maxes out at its declared weight (`frontmatter` ≤ 0.20,
-    /// etc.) and the overall composite lives in [0.0, 1.0].
+    /// Weighted sum with the constants chosen so each core dimension
+    /// maxes out at its declared weight and the overall composite
+    /// lives in [0.0, 1.0]. Bonus dimensions can push the raw
+    /// composite above 1.0, which is then clamped.
     pub fn composite(&self) -> f32 {
-        let c = self.frontmatter * 0.20
-            + self.structure * 0.30
-            + self.budget * 0.30
-            + self.examples * 0.20;
-        c.clamp(0.0, 1.0)
+        let core = self.frontmatter_name * 0.10
+            + self.frontmatter_description * 0.15
+            + self.when_to_activate * 0.15
+            + self.core_concepts * 0.10
+            + self.practical_guidance * 0.10
+            + self.gotchas * 0.05
+            + self.integration * 0.05
+            + self.references * 0.05
+            + self.budget * 0.05;
+        let bonus = self.bonus_version * 0.05
+            + self.bonus_tags * 0.05
+            + self.bonus_code_example * 0.05
+            + self.bonus_section_count * 0.05;
+        (core + bonus).clamp(0.0, 1.0)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Section detection helpers
+// ---------------------------------------------------------------------------
+
+/// Check if a markdown body contains a `## Section Name` heading
+/// (case-insensitive).
+fn has_section(body: &str, heading: &str) -> bool {
+    body.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("## ") && trimmed[3..].trim().eq_ignore_ascii_case(heading)
+    })
+}
+
+/// Trigger-word patterns that indicate a description tells the LLM
+/// *when* to activate the skill.
+const TRIGGER_PHRASES: &[&str] = &[
+    "use when",
+    "use this when",
+    "activate when",
+    "use for",
+    "use this for",
+    "applies when",
+    "relevant when",
+    "use in",
+    "use case",
+];
+
+/// Check if the description contains a trigger phrase.
+fn description_has_trigger(desc: &str) -> bool {
+    let lower = desc.to_lowercase();
+    TRIGGER_PHRASES.iter().any(|phrase| lower.contains(phrase))
+}
+
+/// Count the number of `##` headings in the body.
+fn count_headings(body: &str) -> usize {
+    body.lines()
+        .filter(|l| l.trim_start().starts_with("## "))
+        .count()
+}
+
+// ---------------------------------------------------------------------------
+// Corpus scoring
+// ---------------------------------------------------------------------------
+
+/// Aggregate health report for a corpus of skills.
+#[derive(Debug, Clone)]
+pub struct SkillHealthReport {
+    /// Total number of skills scored.
+    pub total: usize,
+    /// Number of skills with composite < 0.5 (flagged).
+    pub flagged: usize,
+    /// Average composite score across all skills.
+    pub avg_composite: f32,
+    /// Per-skill breakdowns: (name, composite, breakdown).
+    pub entries: Vec<(String, f32, HealthBreakdown)>,
+}
+
+/// Score all SKILL.md files in a directory. Each immediate subdirectory
+/// is expected to contain a `SKILL.md` file.
+pub fn score_corpus(skills_dir: &std::path::Path) -> SkillHealthReport {
+    let mut entries = Vec::new();
+    let mut sum = 0.0f32;
+    let mut flagged = 0usize;
+
+    if let Ok(read_dir) = std::fs::read_dir(skills_dir) {
+        for entry in read_dir.flatten() {
+            let skill_md = entry.path().join("SKILL.md");
+            if skill_md.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&skill_md) {
+                    let b = score_skill_md(&skill_md, &content);
+                    let composite = b.composite();
+                    let name = entry
+                        .file_name()
+                        .to_string_lossy()
+                        .to_string();
+                    if composite < 0.5 {
+                        flagged += 1;
+                    }
+                    sum += composite;
+                    entries.push((name, composite, b));
+                }
+            }
+        }
+    }
+
+    let total = entries.len();
+    let avg_composite = if total > 0 { sum / total as f32 } else { 0.0 };
+
+    SkillHealthReport {
+        total,
+        flagged,
+        avg_composite,
+        entries,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main scoring function
+// ---------------------------------------------------------------------------
 
 /// Score a SKILL.md file. `path` is used for log context only
 /// — all reading happens against the supplied `content`.
@@ -59,64 +197,64 @@ impl HealthBreakdown {
 /// Returns the breakdown so callers can log per-axis warnings.
 pub fn score_skill_md(path: &std::path::Path, content: &str) -> HealthBreakdown {
     let mut b = HealthBreakdown::default();
-
-    // --- Frontmatter completeness (0.20) ---
     let (frontmatter, body) = crate::skill_orchestrator::parse_frontmatter(content);
-    b.frontmatter = {
-        let mut partial = 0.0f32;
-        if frontmatter.name.is_some() {
-            partial += 0.5;
+
+    // --- 1. Frontmatter name (0.10) ---
+    b.frontmatter_name = if frontmatter.name.is_some() { 1.0 } else { 0.0 };
+
+    // --- 2. Frontmatter description + trigger (0.15) ---
+    b.frontmatter_description = match &frontmatter.description {
+        None => 0.0,
+        Some(desc) if desc.trim().is_empty() => 0.0,
+        Some(desc) => {
+            if description_has_trigger(desc) {
+                1.0
+            } else {
+                // Description present but no trigger phrase: partial credit.
+                0.5
+            }
         }
-        if frontmatter.description.is_some() {
-            partial += 0.5;
-        }
-        // Bonus for at least one open-standard extension field.
-        let extras = [
-            frontmatter.version.is_some(),
-            frontmatter.author.is_some(),
-            frontmatter.allowed_tools.is_some(),
-            frontmatter.tags.is_some(),
-        ]
-        .iter()
-        .filter(|x| **x)
-        .count();
-        if extras >= 1 {
-            partial += 0.25;
-        }
-        partial.min(1.0)
     };
 
-    // --- Section structure (0.30) ---
-    let heading_count = body
-        .lines()
-        .filter(|l| l.trim_start().starts_with("## "))
-        .count();
-    b.structure = match heading_count {
-        0 => 0.0,
-        1 => 0.4,
-        2 => 0.7,
-        _ => 1.0,
-    };
+    // --- 3. ## When to Activate (0.15) ---
+    b.when_to_activate = if has_section(body, "When to Activate") { 1.0 } else { 0.0 };
 
-    // --- Token / line budget (0.30) ---
-    // We count lines because chars is a poor proxy for cost; the
-    // loader already uses a 500-line soft cap.
-    let line_count = body.lines().count().max(1);
-    b.budget = if line_count < 10 {
-        // Suspiciously thin.
-        0.2
-    } else if line_count < 50 {
-        0.6
-    } else if line_count <= 500 {
+    // --- 4. ## Core Concepts or ## Instructions (0.10) ---
+    b.core_concepts = if has_section(body, "Core Concepts")
+        || has_section(body, "Instructions")
+    {
         1.0
     } else {
-        // Past the soft cap.
-        0.5
+        0.0
     };
 
-    // --- Code example (0.20) ---
-    let code_fence_count = body.matches("```").count() / 2;
-    b.examples = if code_fence_count >= 1 { 1.0 } else { 0.0 };
+    // --- 5. ## Practical Guidance or ## Examples (0.10) ---
+    b.practical_guidance = if has_section(body, "Practical Guidance")
+        || has_section(body, "Examples")
+    {
+        1.0
+    } else {
+        0.0
+    };
+
+    // --- 6. ## Gotchas (0.05) ---
+    b.gotchas = if has_section(body, "Gotchas") { 1.0 } else { 0.0 };
+
+    // --- 7. ## Integration (0.05) ---
+    b.integration = if has_section(body, "Integration") { 1.0 } else { 0.0 };
+
+    // --- 8. ## References (0.05) ---
+    b.references = if has_section(body, "References") { 1.0 } else { 0.0 };
+
+    // --- 9. Body line budget (0.05) ---
+    let line_count = body.lines().count().max(1);
+    b.budget = if line_count <= 500 { 1.0 } else { 0.0 };
+
+    // --- Bonus dimensions ---
+    b.bonus_version = if frontmatter.version.is_some() { 1.0 } else { 0.0 };
+    b.bonus_tags = if frontmatter.tags.is_some() { 1.0 } else { 0.0 };
+    b.bonus_code_example = if body.matches("```").count() / 2 >= 1 { 1.0 } else { 0.0 };
+    b.bonus_section_count = if count_headings(body) > 3 { 1.0 } else { 0.0 };
 
     let composite = b.composite();
     if composite < 0.5 {
@@ -144,17 +282,16 @@ mod tests {
     #[test]
     fn health_score_perfect_skill() {
         let tmp = tempfile::tempdir().unwrap();
-        // 50+ line body so the budget dimension earns its 1.0;
-        // we want every axis at full to confirm the composite
-        // reaches the upper end.
         let body = (0..60)
             .map(|i| format!("body line {i}\n"))
             .collect::<String>();
         let path = write_skill(
             tmp.path(),
             &format!(
-                "---\nname: foo\ndescription: A skill\nversion: 1.0.0\ntags: [x]\n---\n\
-                 # Title\n\n## Overview\n\nIntro.\n\n## Steps\n\n1. Do this.\n2. Do that.\n\n```bash\necho hi\n```\n\n## Notes\n\n{body}"
+                "---\nname: foo\ndescription: Use when refactoring code\nversion: 1.0.0\ntags: [x]\n---\n\
+                 # Title\n\n## When to Activate\n\nWhen refactoring.\n\n## Core Concepts\n\nConcepts.\n\n\
+                 ## Practical Guidance\n\n```bash\necho hi\n```\n\n## Gotchas\n\nWatch out.\n\n\
+                 ## Integration\n\nWorks with debugging.\n\n## References\n\n- context.rs\n\n## Notes\n\n{body}"
             ),
         );
         let content = std::fs::read_to_string(&path).unwrap();
@@ -169,7 +306,6 @@ mod tests {
     #[test]
     fn health_score_below_threshold_with_just_frontmatter() {
         let tmp = tempfile::tempdir().unwrap();
-        // No body, only frontmatter + one paragraph.
         let path = write_skill(
             tmp.path(),
             "---\nname: foo\ndescription: A skill\n---\nJust one line.",
@@ -186,16 +322,15 @@ mod tests {
     #[test]
     fn health_score_penalises_too_long_body() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut body = String::from("---\nname: foo\ndescription: A skill\n---\n");
+        let mut body = String::from("---\nname: foo\ndescription: Use when coding\n---\n");
         for i in 0..600 {
             body.push_str(&format!("line {i}\n"));
         }
         let path = write_skill(tmp.path(), &body);
         let content = std::fs::read_to_string(&path).unwrap();
         let b = score_skill_md(&path, &content);
-        // Budget is capped (0.5) once past 500 lines; the other
-        // three dimensions are missing too, so the composite
-        // should be well below 0.7.
+        // Budget should be 0.0 for > 500 lines; the composite should
+        // be below 0.7 since many other dimensions are missing too.
         assert!(
             b.composite() < 0.7,
             "600-line body should pull composite under 0.7, got {}",
@@ -208,12 +343,110 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = write_skill(
             tmp.path(),
-            "---\nname: foo\ndescription: A skill\n---\n## A\n\n## B\n\n## C\n",
+            "---\nname: foo\ndescription: Use when testing\n---\n## A\n\n## B\n\n## C\n\n## D\n",
         );
         let content = std::fs::read_to_string(&path).unwrap();
         let b = score_skill_md(&path, &content);
-        // 3 headings → structure = 1.0; no code → examples = 0.0
-        assert!((b.structure - 1.0).abs() < f32::EPSILON);
-        assert!((b.examples - 0.0).abs() < f32::EPSILON);
+        // 4+ headings → bonus_section_count = 1.0
+        assert!((b.bonus_section_count - 1.0).abs() < f32::EPSILON);
+        // No When to Activate → when_to_activate = 0.0
+        assert!((b.when_to_activate - 0.0).abs() < f32::EPSILON);
+        // Description has trigger → frontmatter_description = 1.0
+        assert!((b.frontmatter_description - 1.0).abs() < f32::EPSILON);
+    }
+
+    // --- Phase 0.3: New dimension tests ---
+
+    #[test]
+    fn new_dimensions_when_to_activate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_skill(
+            tmp.path(),
+            "---\nname: foo\ndescription: Use when coding\n---\n## When to Activate\n\nActivate me.",
+        );
+        let content = std::fs::read_to_string(&path).unwrap();
+        let b = score_skill_md(&path, &content);
+        assert!((b.when_to_activate - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn new_dimensions_gotchas() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_skill(
+            tmp.path(),
+            "---\nname: foo\ndescription: Use when coding\n---\n## Gotchas\n\nBe careful.",
+        );
+        let content = std::fs::read_to_string(&path).unwrap();
+        let b = score_skill_md(&path, &content);
+        assert!((b.gotchas - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn new_dimensions_integration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_skill(
+            tmp.path(),
+            "---\nname: foo\ndescription: Use when coding\n---\n## Integration\n\nWorks with bar.",
+        );
+        let content = std::fs::read_to_string(&path).unwrap();
+        let b = score_skill_md(&path, &content);
+        assert!((b.integration - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn new_dimensions_references() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_skill(
+            tmp.path(),
+            "---\nname: foo\ndescription: Use when coding\n---\n## References\n\n- context.rs",
+        );
+        let content = std::fs::read_to_string(&path).unwrap();
+        let b = score_skill_md(&path, &content);
+        assert!((b.references - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn description_without_trigger_gets_partial_credit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_skill(
+            tmp.path(),
+            "---\nname: foo\ndescription: A generic skill\n---\n## When to Activate\n\nWhen needed.",
+        );
+        let content = std::fs::read_to_string(&path).unwrap();
+        let b = score_skill_md(&path, &content);
+        // Description present but no trigger → 0.5 partial credit
+        assert!(
+            (b.frontmatter_description - 0.5).abs() < f32::EPSILON,
+            "expected 0.5 partial credit, got {}",
+            b.frontmatter_description
+        );
+    }
+
+    #[test]
+    fn corpus_scoring_works() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(skills_dir.join("good-skill")).unwrap();
+        std::fs::create_dir_all(skills_dir.join("bad-skill")).unwrap();
+
+        std::fs::write(
+            skills_dir.join("good-skill").join("SKILL.md"),
+            "---\nname: good\ndescription: Use when testing\nversion: 1.0\ntags: [x]\n---\n\
+             ## When to Activate\n\nWhen testing.\n\n## Core Concepts\n\nStuff.\n\n\
+             ## Practical Guidance\n\n```bash\necho\n```\n\n## Gotchas\n\nNone.\n\n\
+             ## Integration\n\nNone.\n\n## References\n\n- mod.rs",
+        )
+        .unwrap();
+
+        std::fs::write(
+            skills_dir.join("bad-skill").join("SKILL.md"),
+            "---\nname: bad\n---\nNo structure.",
+        )
+        .unwrap();
+
+        let report = score_corpus(&skills_dir);
+        assert_eq!(report.total, 2);
+        assert_eq!(report.flagged, 1); // bad-skill should be flagged
+        assert!(report.avg_composite > 0.0);
     }
 }

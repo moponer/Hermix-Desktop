@@ -10,6 +10,7 @@ mod guard;
 mod hub;
 mod skill;
 mod store;
+mod validator;
 mod version;
 
 pub use expert::{ExpertEntry, ExpertRegistry};
@@ -17,4 +18,8 @@ pub use guard::SkillGuard;
 pub use hub::{SkillUpdate, SkillsHubClient};
 pub use skill::{SkillError, SkillManager};
 pub use store::{FileSkillStore, SkillEvent, SkillEventCallback, SkillStore, SkillWatcher};
+pub use validator::{
+    description_has_trigger, has_section, validate_skill_md, Severity, ValidationFinding,
+    ValidationResult,
+};
 pub use version::{compare_versions, compute_version, track_change, SkillChange, SkillVersion};

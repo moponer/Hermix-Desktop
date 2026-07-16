@@ -58,7 +58,17 @@ const WORKSPACES_CHANGED_EVT = "hermix:workspaces-changed";
 function saveAll(list: Workspace[]): void {
   try {
     storage.setItem(STORAGE_KEY, JSON.stringify(list));
-    window.dispatchEvent(new CustomEvent(WORKSPACES_CHANGED_EVT));
+    // 2026-07-15: Defer the cross-instance sync event to a microtask
+    // so it doesn't fire synchronously inside a setState callback.
+    // When addWorkspace is called from a useEffect (e.g. Sidebar's
+    // orphan-reconciliation or ChatView's workspace-auto-add), the
+    // synchronous dispatchEvent would trigger the onChanged listener
+    // in the other component's useWorkspaces instance immediately,
+    // causing "Cannot update a component (`ChatView`) while rendering
+    // a different component (`Sidebar`)" React warnings.
+    queueMicrotask(() => {
+      window.dispatchEvent(new CustomEvent(WORKSPACES_CHANGED_EVT));
+    });
   } catch {
     // quota exceeded / private mode — silently ignore
   }

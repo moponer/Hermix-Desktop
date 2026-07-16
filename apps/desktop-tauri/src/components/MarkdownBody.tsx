@@ -170,14 +170,11 @@ function CodeBlockImpl({ language, code }: { language: string; code: string }) {
           background: "transparent",  // 继承 wrapper 浅灰
           lineHeight: "1.65",
         }}
-        PreTag="pre"
-        preTagProps={{
-          // The highlighter wraps the content in `<pre>` which
-          // would otherwise carry its own background. Strip it so
-          // the wrapper's surface is the only one in play.
-          className: "code-block-body",
-          style: { background: "transparent", margin: 0 },
-        }}
+        // 2026-07-15: Removed preTagProps — react-syntax-highlighter
+        // passes it through to the DOM <pre> element, causing a React
+        // warning "does not recognize the `preTagProps` prop".  The
+        // className we needed (code-block-body) is now applied via CSS
+        // targeting `pre` inside the wrapper div.
         codeTagProps={{
           // The inner `<code>` element has its own padding from
           // `.prose pre code`. Reset it so the outer `pre`'s

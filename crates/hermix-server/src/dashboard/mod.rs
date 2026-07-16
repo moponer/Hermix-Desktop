@@ -17,6 +17,7 @@ pub mod migration;
 pub mod persona;
 pub mod plugins_inspect;
 pub mod polish;
+pub mod researcher;
 pub mod skills;
 pub mod status;
 pub mod stubs;

@@ -607,11 +607,44 @@ export const renameSession = async (id: string, title: string): Promise<boolean>
   return true;
 };
 
-export const getSessionMessages = async (id: string): Promise<ChatMessage[]> => {
-  const res = await fetchJSON<{ messages: WireMessage[] }>(
+/** Session-level context-usage snapshot returned alongside messages when
+ *  restoring a session. `null` when the backend has no persisted snapshot
+ *  (e.g. a session that never streamed, or a pre-migration DB). */
+export interface RestoredContextUsage {
+  usedTokens: number;
+  maxTokens: number;
+  thresholdTokens: number;
+  percent: number;
+}
+
+export interface SessionMessagesResult {
+  messages: ChatMessage[];
+  contextUsage: RestoredContextUsage | null;
+}
+
+export const getSessionMessages = async (id: string): Promise<SessionMessagesResult> => {
+  const res = await fetchJSON<{
+    messages: WireMessage[];
+    context_usage?: {
+      used_tokens: number;
+      max_tokens: number;
+      threshold_tokens: number;
+      percent: number;
+    } | null;
+  }>(
     `/v1/sessions/${encodeURIComponent(id)}/messages`
   );
-  return wireArrayToChatMessages(res.messages, id, detectToolError);
+  const messages = wireArrayToChatMessages(res.messages, id, detectToolError);
+  let contextUsage: RestoredContextUsage | null = null;
+  if (res.context_usage) {
+    contextUsage = {
+      usedTokens: res.context_usage.used_tokens,
+      maxTokens: res.context_usage.max_tokens,
+      thresholdTokens: res.context_usage.threshold_tokens,
+      percent: res.context_usage.percent,
+    };
+  }
+  return { messages, contextUsage };
 };
 
 export const sendMessage = async (id: string, content: string): Promise<ChatMessage> => {

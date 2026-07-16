@@ -17,6 +17,7 @@ import { clsx } from "clsx";
 import type { Artifact, ArtifactKind } from "../utils/artifacts";
 import { openExternalUrl } from "../desktopBridge";
 import { invoke } from "@tauri-apps/api/core";
+import { homeDir } from "@tauri-apps/api/path";
 import {
   tryReadArtifact,
   tryReadArtifactBytes,
@@ -1015,8 +1016,17 @@ function ComputerTab({ workspaceRoot, onAddToChat }: { workspaceRoot?: string | 
   const [files, setFiles] = useState<FileNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rootPath, setRootPath] = useState<string>(workspaceRoot || "");
 
-  const rootPath = workspaceRoot || "~";
+  // 2026-07-15: workspaceRoot may be null (e.g. on first launch or
+  // when no session is active). Previously defaulted to "~" which is
+  // a Unix shell convention — on Windows, readDir("~") fails with
+  // "系统找不到指定的路径" (os error 3).  Now we resolve the user's
+  // home directory via the Tauri path API as a sensible fallback.
+  useEffect(() => {
+    if (workspaceRoot) { setRootPath(workspaceRoot); return; }
+    homeDir().then(setRootPath).catch(() => setRootPath(""));
+  }, [workspaceRoot]);
 
   // Load directory contents using Tauri FS API
   const loadDirectory = useCallback(async (path: string) => {
@@ -1060,8 +1070,11 @@ function ComputerTab({ workspaceRoot, onAddToChat }: { workspaceRoot?: string | 
     });
   }, [loadDirectory]);
 
-  // Load root directory on mount
+  // Load root directory when rootPath changes (may resolve
+  // asynchronously from Tauri's homeDir()). Skip the load if
+  // rootPath is empty (still resolving or resolution failed).
   useEffect(() => {
+    if (!rootPath) return;
     loadDirectory(rootPath);
   }, [rootPath, loadDirectory]);
 

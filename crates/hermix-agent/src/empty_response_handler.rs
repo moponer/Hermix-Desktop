@@ -206,26 +206,47 @@ pub fn decide_empty_response(
     //
     //    This does NOT fire after tools have run — the post-tool nudge
     //    above handles that case.
+    //
+    //    2026-07-15: Removed the `!(assistant_has_visible_text)` guard.
+    //    Previously, if the LLM produced visible text (e.g. "I'll help you
+    //    with that") but no tool calls, the loop would finalize immediately.
+    //    The user saw a reply but the task wasn't actually started. Now the
+    //    nudge fires even when visible text is present, pushing the LLM to
+    //    use tools. The nudge message is updated to acknowledge the text
+    //    and redirect to tool usage. After one nudge, the LLM's decision
+    //    is respected — if it still doesn't use tools, the loop finalizes.
     if input.autonomous_mode
         && input.has_tool_schemas
         && !input.history_includes_tool
         && (input.max_turns == 0 || input.total_turns < input.max_turns)
         && input.autonomous_nudge_count == 0
-        && !(input.assistant_has_visible_text)(input.assistant_msg)
     {
         let turns_info = if input.max_turns > 0 {
             format!("{} of {} used", input.total_turns, input.max_turns)
         } else {
             format!("{} turns used", input.total_turns)
         };
-        let nudge = format!(
-            "You have not yet completed the user's task. \
-             Tools are available and more turns remain ({}). \
-             Do NOT stop here — continue working. \
-             If you need information, use a tool to obtain it rather than asking the user. \
-             Resume immediately with the next tool call.",
-            turns_info
-        );
+        let has_visible = (input.assistant_has_visible_text)(input.assistant_msg);
+        let nudge = if has_visible {
+            format!(
+                "You produced a text reply but have not yet started working on the task. \
+                 Tools are available and more turns remain ({}). \
+                 Do NOT stop here — use tools to actually accomplish the task. \
+                 If you need information, use a tool to obtain it. \
+                 If you need to read or write files, execute commands, or search, \
+                 call the appropriate tool now. Resume immediately with a tool call.",
+                turns_info
+            )
+        } else {
+            format!(
+                "You have not yet completed the user's task. \
+                 Tools are available and more turns remain ({}). \
+                 Do NOT stop here — continue working. \
+                 If you need information, use a tool to obtain it rather than asking the user. \
+                 Resume immediately with the next tool call.",
+                turns_info
+            )
+        };
         return EmptyResponseOutput {
             action: EmptyResponseAction::ContinueWithSystemNudge(nudge),
             new_codex_ack_continuations: input.codex_ack_continuations,
@@ -430,7 +451,36 @@ mod tests {
     }
 
     #[test]
-    fn autonomous_nudge_does_not_fire_when_visible_text_present() {
+    fn autonomous_nudge_fires_with_visible_text_when_no_tools_yet() {
+        // 2026-07-15: The autonomous nudge should fire even when the LLM
+        // produced visible text, as long as no tools have been used yet.
+        // The LLM might say "I'll help you with that" but not actually
+        // start working — the nudge pushes it to use tools.
+        let m = make_assistant_msg(
+            Some("好的，我来帮你完成这个任务。"),
+            false,
+        );
+        let mut input = base_input(&m);
+        input.autonomous_mode = true;
+        input.history_includes_tool = false;
+        input.autonomous_nudge_count = 0;
+        let out = decide_empty_response(input);
+        match out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
+                assert!(
+                    text.contains("tool"),
+                    "nudge with visible text should redirect to tools, got: {text}"
+                );
+            }
+            other => panic!("expected ContinueWithSystemNudge, got {:?}", other),
+        }
+        assert_eq!(out.new_autonomous_nudge_count, 1);
+    }
+
+    #[test]
+    fn autonomous_nudge_does_not_fire_when_tools_already_used() {
+        // After tools have been used, the autonomous pre-tool nudge
+        // should NOT fire — the post-tool nudge handles that case.
         let m = make_assistant_msg(
             Some("20个子目录（车辆），无文件。"),
             false,
@@ -443,7 +493,7 @@ mod tests {
         assert_eq!(
             out.action,
             EmptyResponseAction::Finalize,
-            "must finalize when LLM gave visible text — never nudge on a real answer"
+            "must finalize when LLM gave visible text after tools — respect the answer"
         );
         assert_eq!(out.new_autonomous_nudge_count, 0);
     }

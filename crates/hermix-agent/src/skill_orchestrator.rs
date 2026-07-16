@@ -395,6 +395,9 @@ impl SkillOrchestrator {
     }
 
     /// Recursively scan a directory for SKILL.md files.
+    /// NOTE: superseded by `scan_directory_with_health` / `scan_directory_inner`
+    /// but retained as a simpler fallback for future use.
+    #[allow(dead_code)]
     fn scan_directory(&mut self, dir: &Path, seen_names: &mut std::collections::HashSet<String>) {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,

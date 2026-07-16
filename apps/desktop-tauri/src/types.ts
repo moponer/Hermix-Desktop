@@ -200,6 +200,14 @@ export interface ChatMessage {
    * 3-step list from the legacy fields.
    */
   unified_steps?: TimelineStep[];
+  /**
+   * User-attached images for this message (display only). `blobUrl` is
+   * an in-memory object URL valid for the live session — it is NOT
+   * persisted across reloads (the backend stores the raw bytes; the
+   * front-end would need to re-fetch and recreate the blob to show
+   * images after a session reload).
+   */
+  images?: ChatMessageImage[];
   // ── N-09 wire-only carry-over fields ─────────────────────────────────
   //
   // Carried verbatim from the JSON response so a session reload shows
@@ -219,6 +227,36 @@ export interface ChatMessage {
     expires_at?: number | null;
     linked_assistant_id?: string | null;
   };
+}
+
+/**
+ * A user-attached image surfaced inside the user message bubble.
+ * `blobUrl` is an in-memory object URL valid only for the live session —
+ * it is NOT persisted across reloads.
+ */
+export interface ChatMessageImage {
+  blobUrl: string;
+  mimeType: string;
+  name: string;
+}
+
+/**
+ * A user attachment buffered in the send queue while a previous turn is
+ * still streaming. `file` carries the original handle so the drain path
+ * can re-read the bytes; `blobUrl` renders the preview in the bubble.
+ */
+export interface QueuedImage {
+  file: File;
+  blobUrl: string;
+  mimeType: string;
+  name: string;
+}
+
+/** An item held in `messageQueue` between turns. */
+export interface QueuedMessage {
+  text: string;
+  images?: QueuedImage[];
+  attachedFilePaths?: string[];
 }
 
 export interface ToolCall {

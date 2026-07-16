@@ -182,6 +182,19 @@ function UserMessage({ message }: { message: ChatMessage }) {
   return (
     <div className="flex justify-end h-enter items-start mt-5">
       <div className="msg-bubble-user whitespace-pre-wrap break-words">
+        {message.images && message.images.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: message.content ? 6 : 0 }}>
+            {message.images.map((img, i) => (
+              <img
+                key={i}
+                src={img.blobUrl}
+                alt={img.name}
+                style={{ maxWidth: 180, maxHeight: 180, borderRadius: 8, border: "1px solid #2e2e34", objectFit: "cover" }}
+                loading="lazy"
+              />
+            ))}
+          </div>
+        )}
         {message.content}
       </div>
     </div>
@@ -2371,7 +2384,7 @@ function ReasoningBlock({ content }: { content: string }) {
         )}
       </button>
       {expanded && (
-        <div className="reasoning-body mt-1.5 px-3 py-2 rounded-r-lg rounded-l-sm text-[12.5px] text-text-secondary leading-relaxed whitespace-pre-wrap font-sans">
+        <div className="reasoning-body mt-1.5 px-3 py-2 rounded-r-lg rounded-l-sm text-[12.5px] text-text-secondary leading-relaxed whitespace-pre-wrap break-words font-sans">
           {clean}
         </div>
       )}

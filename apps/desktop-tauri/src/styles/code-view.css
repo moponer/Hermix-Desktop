@@ -671,11 +671,12 @@
 }
 
 /* 2026-07-14: Reset plain-markdown pre styles when CodeBlock's
-   SyntaxHighlighter is used inside the preview panel. The
-   `code-block-body` class is set by CodeBlock's preTagProps so
-   we can target it and neutralise the .preview-md-body pre rules
-   that would otherwise double-border / double-pad the code area. */
-.preview-pane .preview-md-body pre.code-block-body {
+   SyntaxHighlighter is used inside the preview panel. Previously
+   targeted `pre.code-block-body` (class set via preTagProps), but
+   preTagProps was removed in 2026-07-15 because it caused a React
+   warning. Now we target `pre` inside the CodeBlock wrapper div
+   (.not-prose) which is the same element SyntaxHighlighter renders. */
+.preview-pane .preview-md-body .not-prose pre {
   margin: 0;
   padding: 16px;
   background: transparent;
@@ -684,7 +685,7 @@
   font-size: 13px;
   line-height: 1.65;
 }
-.preview-pane .preview-md-body pre.code-block-body code {
+.preview-pane .preview-md-body .not-prose pre code {
   padding: 0;
   background: transparent;
   border: 0;

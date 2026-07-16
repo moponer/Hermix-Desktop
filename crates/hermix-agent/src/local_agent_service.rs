@@ -1493,7 +1493,42 @@ impl AgentService for LocalAgentService {
 
         // Convert Arc to Box for AgentLoop
         let stream_forwarder = on_chunk.clone();
+        let cu_session_id = session_id.to_string();
+        let cu_persistence = self.session_persistence.clone();
         let boxed_on_chunk: Box<dyn Fn(StreamChunk) + Send + Sync> = Box::new(move |chunk| {
+            // 2026-07-16: persist the context-usage snapshot on every
+            // agent-loop turn so a restored session shows the context-usage
+            // bar without waiting for a fresh live stream.
+            if let Some(delta) = &chunk.delta {
+                if let Some(extra) = &delta.extra {
+                    if extra.get("event").and_then(|v| v.as_str()) == Some("context_usage") {
+                        let used = extra.get("used_tokens").and_then(|v| v.as_u64());
+                        let max = extra.get("max_tokens").and_then(|v| v.as_u64());
+                        let threshold = extra.get("threshold_tokens").and_then(|v| v.as_u64());
+                        let pct = extra.get("percent").and_then(|v| v.as_f64());
+                        if let (Some(used), Some(max), Some(threshold), Some(pct)) =
+                            (used, max, threshold, pct)
+                        {
+                            let payload = hermix_core::types::ContextUsagePayload {
+                                used_tokens: used,
+                                max_tokens: max,
+                                threshold_tokens: threshold,
+                                percent: pct,
+                            };
+                            if let Err(e) =
+                                cu_persistence.update_context_usage(&cu_session_id, &payload)
+                            {
+                                tracing::warn!(
+                                    target: "hermix.agent",
+                                    session_id = %cu_session_id,
+                                    error = %e,
+                                    "failed to persist context_usage"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             stream_forwarder(chunk);
         });
 

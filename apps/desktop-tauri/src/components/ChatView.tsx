@@ -3,7 +3,7 @@ import {
   PanelRight,
   Lock,
 } from "lucide-react";
-import type { ChatMessage, TimelineStep } from "../types";
+import type { ChatMessage, TimelineStep, QueuedMessage, QueuedImage } from "../types";
 import type { CompressMethod } from "../utils/imageCompressor";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
 import type { CompactionStatus } from "./CompactionStatusBanner";
@@ -872,7 +872,7 @@ function ModelStatusBar({
 
 interface ChatViewProps {
   session: Session | null;
-  onSendMessage: (content: string, projectId?: string, overrides?: ChatOverrides) => Promise<void>;
+  onSendMessage: (content: string, projectId?: string, overrides?: ChatOverrides, attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[] }) => Promise<void>;
   onNewChat?: () => void;
   /**
    * v2 (2026-07-07): inline todo cards in the message stream. App.tsx
@@ -1028,9 +1028,9 @@ usageSnapshot?: {
    *  LLM settling (`done`) and the next agent-loop turn beginning. */
   pendingToolsCount?: number;
   /** Message queue for mid-stream input */
-  messageQueue?: string[];
+  messageQueue?: QueuedMessage[];
   /** Add a message to the queue */
-  onAddToQueue?: (msg: string) => void;
+  onAddToQueue?: (msg: QueuedMessage) => void;
   /** Clear the message queue */
   onClearQueue?: () => void;
   /** Remove a single message at the given index */
@@ -1455,11 +1455,14 @@ const removePendingImage = useCallback((index: number) => {
   });
 }, []);
 
+// Clears the input-box attachment previews. Unlike `removePendingImage`
+// (which revokes a single blob the user explicitly dropped), this does
+// NOT revoke the blob URLs: the send path transfers ownership of the
+// previews to the user message bubble (ChatMessage.images) so the same
+// image the user saw in the input box appears in the sent bubble. Blob
+// URLs are in-memory only and are released when the document unloads.
 const clearPendingImages = useCallback(() => {
-  setPendingImages((prev) => {
-    prev.forEach((img) => URL.revokeObjectURL(img.blobUrl));
-    return [];
-  });
+  setPendingImages([]);
 }, []);
 
   /**
@@ -1746,6 +1749,22 @@ const clearPendingImages = useCallback(() => {
   const handleSubmit = async () => {
     const trimmed = input.trim();
     if (!trimmed) return;
+    // Snapshot the current attachments up-front so both the enqueue
+    // (streaming) and direct-send paths share one source of truth.
+    const attachedImages: QueuedImage[] = pendingImages.map((img) => ({
+      file: img.file,
+      blobUrl: img.blobUrl,
+      mimeType: img.mimeType,
+      name: img.name,
+    }));
+    const attachedPaths: string[] = filePaths.length > 0 ? [...filePaths] : [];
+    const attachments: { images?: QueuedImage[]; attachedFilePaths?: string[] } | undefined =
+      attachedImages.length > 0 || attachedPaths.length > 0
+        ? {
+            images: attachedImages.length > 0 ? attachedImages : undefined,
+            attachedFilePaths: attachedPaths.length > 0 ? attachedPaths : undefined,
+          }
+        : undefined;
     // Clear any previous stream error — the user is starting a new
     // turn, so the old error is stale.  The banner will disappear
     // immediately and, if this turn also fails, re-appear via the
@@ -1767,7 +1786,18 @@ const clearPendingImages = useCallback(() => {
     // both the streaming-in-progress case and the within-Render-
     // Tick race.
     if (isStreaming || sending) {
-      onAddToQueue?.(trimmed);
+      // Enqueue the FULL payload (text + images + file paths) so the
+      // queued message is sent exactly like a direct one once the
+      // stream settles. Detach the images from the input box WITHOUT
+      // revoking their blob URLs — they travel on the queued message
+      // and render in the user bubble after the drain.
+      onAddToQueue?.({
+        text: trimmed,
+        images: attachedImages.length > 0 ? attachedImages : undefined,
+        attachedFilePaths: attachedPaths.length > 0 ? attachedPaths : undefined,
+      });
+      clearPendingImages();
+      setFilePaths([]);
       return;
     }
     setSending(true);
@@ -1831,21 +1861,12 @@ const clearPendingImages = useCallback(() => {
         })();
       if (fallbackWorkspace) overrides.workspace = fallbackWorkspace;
       if (activeSkills.length > 0) overrides.skills = activeSkills;
-      if (pendingImages.length > 0) {
-        // 二进制直传：Vec<u8> 不走 base64 字符串
-        // Tauri 2 需要可序列化的 Array（不是 Uint8Array）
-        overrides.images = await Promise.all(
-          pendingImages.map(async (img) => ({
-            bytes: Array.from(new Uint8Array(await img.file.arrayBuffer())),
-            mimeType: img.mimeType,
-            name: img.name,
-          })),
-        );
-      }
-      if (filePaths.length > 0) {
-        overrides.attachedFilePaths = [...filePaths];
-      }
-      await onSendMessage(trimmed, undefined, overrides);
+      // Images + attached file paths are forwarded via `attachments` so
+      // App.handleSendMessage can build the backend `overrides.images`
+      // bytes and the in-bubble `ChatMessage.images` from a single
+      // source. (Previously the bytes were built here and the bubble
+      // never received the preview, so images were sent but invisible.)
+      await onSendMessage(trimmed, undefined, overrides, attachments);
     } finally {
       setSending(false);
       clearPendingImages();
@@ -2240,7 +2261,7 @@ the banner is a no-op. Day 2 will plumb the WS event. */}
 {/* Context usage indicator — shows current context window usage
 as a small bar with token count and percentage. Turns amber
 at ≥85% and red at ≥95% of the compression threshold. */}
-{contextUsage && contextUsage.maxTokens > 0 && (
+{contextUsage && contextUsage.maxTokens > 0 ? (
   <div className="mb-2 flex items-center gap-2 px-1 text-[11px] text-text-secondary">
     {(() => {
       const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);
@@ -2303,6 +2324,15 @@ at ≥85% and red at ≥95% of the compression threshold. */}
         {cacheChip}
       </>);
     })()}
+  </div>
+) : !isStreaming && (
+  // 2026-07-16: 恢复的会话（非流式）没有活跃 WS 流，后端不推送
+  // context_usage，因此显示占位而非整块静默消失，避免与 live 会话
+  // 行为不一致。一旦用户发送消息、收到首个 context_usage 事件即被
+  // 上面的真实进度条替换。
+  <div className="mb-2 flex items-center gap-2 px-1 text-[11px] text-text-faint">
+    <div className="flex-1 h-1.5 rounded-full bg-black/5 dark:bg-white/10" />
+    <span className="shrink-0">上下文用量将在发送消息后更新</span>
   </div>
 )}
 
@@ -2395,8 +2425,8 @@ interface ComposerProps {
   permissionLevel: PermissionLevel;
   setPermissionLevel: (lvl: PermissionLevel) => void;
   placeholder: string;
-  messageQueue?: string[];
-  onAddToQueue?: (msg: string) => void;
+  messageQueue?: QueuedMessage[];
+  onAddToQueue?: (msg: QueuedMessage) => void;
   onClearQueue?: () => void;
   onRemoveFromQueue?: (idx: number) => void;
   onEditQueueItem?: (idx: number, newText: string) => void;
@@ -2565,10 +2595,10 @@ function Composer(p: ComposerProps) {
           <ul className="space-y-1 max-h-32 overflow-y-auto">
             {p.messageQueue.map((msg, idx) => (
               <QueueItemRow
-                key={`${idx}-${msg.slice(0, 24)}`}
+                key={`${idx}-${msg.text.slice(0, 24)}`}
                 index={idx}
                 total={p.messageQueue!.length}
-                text={msg}
+                text={msg.text}
                 canEdit={!!p.onEditQueueItem}
                 canRemove={!!p.onRemoveFromQueue}
                 canSend={!!p.onSendFromQueue}

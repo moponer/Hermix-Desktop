@@ -483,6 +483,18 @@ impl SessionPersistence {
             }
         }
 
+        // Migration (2026-07-16): add `last_context_usage` column to
+        // persist the most recent context-usage snapshot so a restored
+        // session shows the context-usage bar without a fresh stream.
+        if let Err(e) = conn.execute("ALTER TABLE sessions ADD COLUMN last_context_usage TEXT", []) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") && !msg.contains("no such table") {
+                return Err(AgentError::Io(format!(
+                    "Failed to migrate sessions.last_context_usage: {e}"
+                )));
+            }
+        }
+
         // Migration: execution_timeline (tool call events) and
         // reasoning_content (LLM think blocks). Without these columns,
         // tool cards show as stale "运行中" on reload and thinking
@@ -640,7 +652,8 @@ impl SessionPersistence {
                 compressed_summary TEXT,
                 parent_session_id TEXT,
                 workspace TEXT,
-                expert_id TEXT
+                expert_id TEXT,
+                last_context_usage TEXT
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -1146,6 +1159,45 @@ impl SessionPersistence {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// 2026-07-16: persist the latest context-usage snapshot for a session.
+    /// Called every agent-loop turn when a `context_usage` event is emitted,
+    /// so a restored session can show the context-usage bar without waiting
+    /// for a fresh live stream.
+    pub fn update_context_usage(
+        &self,
+        session_id: &str,
+        payload: &hermix_core::types::ContextUsagePayload,
+    ) -> Result<(), AgentError> {
+        let json = serde_json::to_string(payload)
+            .map_err(|e| AgentError::Io(format!("Failed to serialize context_usage: {e}")))?;
+        let conn = open_with_wal(&self.db_path)?;
+        conn.execute(
+            "UPDATE sessions SET last_context_usage = ?1 WHERE id = ?2",
+            rusqlite::params![json, session_id],
+        )
+        .map_err(|e| AgentError::Io(format!("Failed to persist context_usage: {e}")))?;
+        Ok(())
+    }
+
+    /// 2026-07-16: read the last persisted context-usage snapshot for a
+    /// session, if any. Returns `None` when the column is missing (old DB)
+    /// or empty.
+    pub fn get_context_usage(&self, session_id: &str) -> Option<hermix_core::types::ContextUsagePayload> {
+        let conn = match open_with_wal(&self.db_path) {
+            Ok(c) => c,
+            Err(_) => return None,
+        };
+        let row: Option<String> = conn
+            .query_row(
+                "SELECT last_context_usage FROM sessions WHERE id = ?1",
+                rusqlite::params![session_id],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten();
+        row.and_then(|s| serde_json::from_str::<hermix_core::types::ContextUsagePayload>(&s).ok())
+    }
+
     fn save_session_atomic_inner(
         &self,
         session_id: &str,
@@ -1180,8 +1232,8 @@ impl SessionPersistence {
             // 0 placeholder and patch it in step 3 with the real count
             // returned by `flush_messages`.
             conn.execute(
-                "INSERT INTO sessions (id, model, platform, created_at, updated_at, title, message_count, system_prompt, compressed_summary, parent_session_id, workspace, expert_id)
-                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10)
+                "INSERT INTO sessions (id, model, platform, created_at, updated_at, title, message_count, system_prompt, compressed_summary, parent_session_id, workspace, expert_id, last_context_usage)
+                 VALUES (?1, ?2, ?3, ?4, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(id) DO UPDATE SET
                     updated_at = ?4,
                     title = COALESCE(?5, sessions.title),
@@ -1189,7 +1241,8 @@ impl SessionPersistence {
                     compressed_summary = COALESCE(?7, sessions.compressed_summary),
                     parent_session_id = COALESCE(?8, sessions.parent_session_id),
                     workspace = COALESCE(?9, sessions.workspace),
-                    expert_id = COALESCE(?10, sessions.expert_id)",
+                    expert_id = COALESCE(?10, sessions.expert_id),
+                    last_context_usage = COALESCE(?11, sessions.last_context_usage)",
                 rusqlite::params![
                     session_id,
                     model.unwrap_or("unknown"),
@@ -1201,6 +1254,7 @@ impl SessionPersistence {
                     parent_session_id,
                     workspace,
                     expert_id,
+                    None::<String>,   // last_context_usage: managed by update_context_usage()
                 ],
             )
             .map_err(|e| AgentError::Io(format!("Failed to upsert session: {e}")))?;

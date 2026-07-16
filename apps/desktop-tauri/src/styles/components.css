@@ -3034,6 +3034,12 @@
 .reasoning-body {
   background: var(--color-bg-secondary);
   border-left: 2px solid var(--color-border-secondary);
+  /* 防止长 token(URL / base64 / 代码行 / 文件哈希)横向溢出气泡;
+     限制高度,超长思考内部滚动,避免撑爆整页布局 (修复「思考过程溢出」) */
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-height: 340px;
+  overflow-y: auto;
 }
 
 .reasoning-bullets {

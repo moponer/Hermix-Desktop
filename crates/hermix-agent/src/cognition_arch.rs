@@ -200,9 +200,8 @@ impl LatentBriefing {
 
     /// Stable hash so the caller can cache `render()` outputs.
     pub fn digest(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
         let mut h: u64 = 0xcbf29ce484222325;
-        let mut mix = |s: &str, h_ref: &mut u64| {
+        let mix = |s: &str, h_ref: &mut u64| {
             for b in s.bytes() {
                 *h_ref ^= b as u64;
                 *h_ref = h_ref.wrapping_mul(0x100000001b3);
