@@ -328,6 +328,12 @@ export function useStreamChat() {
   // when `streamingSessionId === activeSessionId`, and `null` is the
   // unambiguous "no stream in flight" sentinel.
   const [streamingSessionId, setStreamingSessionId] = useState<string | null>(null);
+  // 2026-07-17: synchronous mirror of `streamingSessionId`. The stable
+  // `send` callback closes over the INITIAL state value, so it can't
+  // read the live `streamingSessionId` inside `dedup`. This ref lets the
+  // dedup check ask "is a stream currently in flight for this session?"
+  // without re-creating the callback.
+  const streamingSessionIdRef = useRef<string | null>(null);
   // Transient status text from the backend (e.g. "Still waiting for the model…").
   const [streamingStatus, setStreamingStatus] = useState<string | null>(null);
   // Compaction pipeline status (Day 1-B placeholder). In Day 2 the backend
@@ -471,7 +477,15 @@ export function useStreamChat() {
         if (
           lastSendRef.current &&
           lastSendRef.current.hash === contentHash &&
-          now - lastSendRef.current.ts < DEDUP_WINDOW_MS
+          now - lastSendRef.current.ts < DEDUP_WINDOW_MS &&
+          // 2026-07-17: only coalesce a same-content re-send WHILE this
+          // session is actively streaming. Once the stream has settled
+          // (LLM self-interrupted / user stopped / stale-timeout),
+          // `streamingSessionId` is cleared, so a re-send of the
+          // original question is a deliberate retry and must pass
+          // through to the backend — which now takes over any stale
+          // in-flight task instead of dropping the send as a "duplicate".
+          streamingSessionIdRef.current === sessionId
         ) {
           diagWarn(
             `[useStreamChat #${__sendDiagId}] dedup: same content sent ${now - lastSendRef.current.ts}ms ago, skipping`,
@@ -488,6 +502,7 @@ export function useStreamChat() {
         // edge cases where the old WS's `onclose` fires asynchronously.
         const mySendId = ++activeSendIdRef.current;
 
+        streamingSessionIdRef.current = sessionId;
         setStreamingSessionId(sessionId);
         let fullText = "";
         doneRef.current = false;
@@ -653,6 +668,7 @@ export function useStreamChat() {
           if (pending) callbacks.onChunk?.(pending);
 
           doneRef.current = true;
+          streamingSessionIdRef.current = null;
           setStreamingSessionId(null);
           setStreamingStatus(null);
           wsRef.current?.close();
@@ -1490,6 +1506,7 @@ export function useStreamChat() {
     // already nulled by a racing onclose handler).
     wsRef.current?.close();
     wsRef.current = null;
+    streamingSessionIdRef.current = null;
     setStreamingSessionId(null);
   }, []);
 

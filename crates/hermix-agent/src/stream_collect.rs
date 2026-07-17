@@ -453,6 +453,23 @@ pub(crate) async fn collect_stream_llm_response(
     }
     tool_call_sanitizer.flush();
 
+    // 2026-07-17: last-line defence for models that ignore the system
+    // prompt and emit an unwrapped reasoning monologue as visible content.
+    // If the whole reply reads like internal analysis ("I think...",
+    // "trying to reconstruct...", etc.) and never used a ` <think` tag,
+    // route it to `reasoning_content` so the UI renders it as a collapsed
+    // thinking block instead of flooding the chat.
+    if !content.is_empty()
+        && reasoning_content.is_empty()
+        && crate::python_alignment::looks_like_untagged_reasoning(&content)
+    {
+        tracing::warn!(
+            content_len = content.len(),
+            "untagged reasoning monologue detected; routing to reasoning_content"
+        );
+        std::mem::swap(&mut content, &mut reasoning_content);
+    }
+
     if tool_calls.is_empty() {
         let parsed = hermix_core::tool_call_parser::parse_tool_calls(&raw_content)
             .unwrap_or_default();

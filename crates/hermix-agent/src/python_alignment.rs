@@ -153,7 +153,60 @@ pub fn strip_think_blocks_for_ack(content: &str) -> String {
     c = ACK_THINK.replace_all(&c, "").to_string();
     c = ACK_REASON.replace_all(&c, "").to_string();
     c = ACK_PLAN.replace_all(&c, "").to_string();
+    // 2026-07-17: models sometimes ignore the system prompt and emit an
+    // unwrapped reasoning monologue ("I think...", "trying to...",
+    // "probably...") as the visible reply. Treat the whole blob as
+    // internal reasoning so it doesn't leak into the user-facing chat.
+    if looks_like_untagged_reasoning(&c) {
+        return String::new();
+    }
     c
+}
+
+/// Heuristic: detect a reasoning monologue that the model forgot to wrap
+/// in a think block. These are internal monologues that should render as
+/// collapsed reasoning blocks, not as user-visible reply text.
+///
+/// Only triggers when:
+///   * there is no ` <think` / `</think` tag anywhere in the text (so the
+///     normal parser already had its chance), and
+///   * the text is non-trivial, and
+///   * the opening words read like self-directed analysis rather than an
+///     answer to the user.
+///
+/// This is intentionally conservative — false positives would hide real
+/// user-facing answers. It targets the common failure mode where a model
+/// emits "I think..." / "trying to reconstruct..." before any visible reply.
+pub fn looks_like_untagged_reasoning(content: &str) -> bool {
+    if content.contains("<think") || content.contains("</think") {
+        return false;
+    }
+    let trimmed = content.trim();
+    if trimmed.len() < 40 {
+        return false;
+    }
+    let head = trimmed.chars().take(240).collect::<String>().to_lowercase();
+    const SIGNALS: &[&str] = &[
+        "trying to",
+        "i think",
+        "i see",
+        "probably",
+        "could mean",
+        "might be",
+        "reconstruct",
+        "let me trace",
+        "let me check",
+        "actually,",
+        "seems like",
+        "looking at",
+        "the diff shows",
+        "the issue is",
+        "i believe",
+        "i suspect",
+        "i'm trying",
+        "i am trying",
+    ];
+    SIGNALS.iter().any(|s| head.contains(s))
 }
 
 // ---------------------------------------------------------------------------
@@ -726,6 +779,35 @@ mod tests {
         assert!(!r.contains("<think>"));
         assert_eq!(c, "");
         assert!(p.is_in_think());
+    }
+
+    /// Regression: models that ignore the system prompt and emit an
+    /// unwrapped reasoning monologue ("I think...", "trying to...")
+    /// must be detected as reasoning, not user-visible content.
+    #[test]
+    fn detects_untagged_reasoning_monologue() {
+        let text = "trying to reconstruct what's actually there. The pattern max(1) could mean unwrap_or(1) or something else entirely. I think the issue is that .max(1) is actually a typo.";
+        assert!(looks_like_untagged_reasoning(text));
+    }
+
+    #[test]
+    fn rejects_wrapped_thinking_as_untagged() {
+        let text = format!("{open}I should think about this.{close}Here is the answer.", open = "<think>", close = "</think>");
+        assert!(!looks_like_untagged_reasoning(&text));
+    }
+
+    #[test]
+    fn rejects_normal_user_reply_as_untagged_reasoning() {
+        assert!(!looks_like_untagged_reasoning("你好！有什么可以帮你的？"));
+        assert!(!looks_like_untagged_reasoning("Here is the fixed code."));
+        assert!(!looks_like_untagged_reasoning("ok"));
+    }
+
+    #[test]
+    fn strip_think_blocks_for_ack_wipes_untagged_reasoning() {
+        let text = "I think the issue is the missing close tag. Let me check again.";
+        let stripped = strip_think_blocks_for_ack(text);
+        assert_eq!(stripped, "");
     }
 }
 

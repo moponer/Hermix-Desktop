@@ -639,6 +639,7 @@ mod approval_registry_tests {
             // path; test_state mirrors it.
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            active_handles: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             todo_event_tx: None,
             orchestration_bus: OrchestrationEventBus::new(),
             task_service: None,
@@ -1027,6 +1028,14 @@ pub struct HttpServerState {
     /// two agent loops run in parallel, producing duplicate tool calls
     /// and doubling the response text — the user sees "LLM 重复回复".
     pub active_sessions: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// 2026-07-17: per-active-stream `JoinHandle`, keyed by the same
+    /// `dedup_key(session_id, text)` used for `active_sessions`. Enables
+    /// the "user re-sends the original question after the LLM self-
+    /// interrupts / hangs" recovery path: when a fresh send arrives for
+    /// a (session, text) that STILL has a live task, we `abort()` the
+    /// stale task, free the lock, and let the new send take over —
+    /// instead of silently dropping the retry as a "duplicate".
+    pub active_handles: Arc<std::sync::Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>>,
     /// Phase 14 / H3 — agent "consciousness stream" tracker. The
     /// desktop UI subscribes to this over WebSocket and renders the
     /// samples as a full-screen ECG visualization. Cheap to clone
@@ -1454,6 +1463,7 @@ impl HttpServerState {
             // clients that produced the storm are also gone.
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            active_handles: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             // Todo event bus — created lazily below in `build()` after
             // we know the runtime config. Initialised to None here so
             // the early struct literal doesn't need to await anything.
@@ -1652,6 +1662,7 @@ impl HttpServerState {
             // clients that produced the storm are also gone.
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            active_handles: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             todo_event_tx: Some(todo_event_tx.clone()), // injected after register_builtin_tools below
             orchestration_bus: OrchestrationEventBus::new(),
             task_service: {
@@ -3620,32 +3631,48 @@ async fn handle_ws_stream_send(
         trace_id
     );
 
-    // 2026-07-06: dedup guard. If the same (session_id, content)
-    // arrived within DEDUP_WINDOW_SECS (30s, NOT 10s — the comment
-    // below was stale) AND the previous stream is still in flight,
-    // skip with a synthetic Done event so the client settles cleanly.
-    // Catches:
-    //   - WS auto-retry storms (useStreamChat's `MAX_RETRIES=3`
-    //     path opening a fresh WS on `onerror`/`onclose` and
-    //     re-sending the same `text`)
-    //   - App.tsx queue re-drain races that re-enqueue the same
-    //     message after a transient failure
-    //   - Any external integration that double-fires
+    // 2026-07-17: user-retry recovery. The key is
+    // `dedup_key(session_id, text)` — the same collision domain used by
+    // `active_sessions` and `active_handles`.
     //
-    // 2026-07-16: `recent_sends` entries are now CLEARED on stream
-    // completion (success, error, or client disconnect) — see the
-    // `recent_sends.lock().unwrap().remove(...)` calls below. This
-    // means a failed send (e.g. "LLM busy, try later") no longer
-    // blocks the user's legitimate retry within the window: the
-    // in-flight duplicate guard is fully handled by `active_sessions`,
-    // and `recent_sends` only needs to cover the brief pre-insert
-    // race window. Do NOT re-add a post-completion block here.
-    if let Some(elapsed) = check_recent_send(&state, session_id, &request.text) {
+    // Order of checks (most-specific first):
+    //   1. LIVE TASK (override): if the same (session, text) STILL has a
+    //      spawned agent task, the user has re-sent the original question
+    //      after the LLM self-interrupted (or the backend task hung
+    //      without emitting `Done`, so the frontend gave up via its
+    //      stale-timeout but the lock is still held). This is an explicit
+    //      retry — abort the stale task, free BOTH dedup locks, and let
+    //      the new send take over. This is the fix for "LLM stopped on
+    //      its own; re-sending the question does nothing".
+    //   2. RECENT SEND (storm guard): no live task, but identical content
+    //      arrived within DEDUP_WINDOW_SECS — that's a genuine client
+    //      retry storm / queue re-drain, still coalesced as before.
+    let active_key = dedup_key(session_id, &request.text);
+
+    let stale_handle = {
+        let mut handles = state.active_handles.lock().unwrap();
+        handles.remove(&active_key)
+    };
+    if let Some(handle) = stale_handle {
+        tracing::warn!(
+            session = %session_id,
+            text_len = request.text.len(),
+            "retry override: same (session,text) still has a live task — aborting stale task and taking over"
+        );
+        // Abort the zombie task (same mechanism as the Stop button's
+        // `agent_handle.abort()`). Its cleanup `remove` won't run, so we
+        // free the locks here ourselves.
+        handle.abort();
+        state.active_sessions.lock().unwrap().remove(&active_key);
+        state.recent_sends.lock().unwrap().remove(&active_key);
+        // Fall through: the `active_sessions` insert below re-takes the
+        // lock for THIS send.
+    } else if let Some(elapsed) = check_recent_send(&state, session_id, &request.text) {
         tracing::warn!(
             session = %session_id,
             text_len = request.text.len(),
             elapsed_secs = elapsed,
-            "dedup: identical content sent within window, skipping (client retry storm or queue re-drain)"
+            "dedup: identical content sent within window (no live task), skipping (client retry storm or queue re-drain)"
         );
         // Send a synthetic Done so the client settles cleanly
         // (otherwise the WS would hang until the 120s timeout).
@@ -3664,14 +3691,12 @@ async fn handle_ws_stream_send(
         return;
     }
 
-    // 2026-07-06: session-level active-stream lock. If the same
-    // (session_id, text) already has an agent running (from a
-    // prior retry whose WS disconnected before the previous agent
-    // finished), reject the duplicate. The key is derived from
-    // `dedup_key` so both checks use the same collision domain.
-    // This catches retries that arrive AFTER the 10s dedup window
-    // (when `check_recent_send` above misses them).
-    let active_key = dedup_key(session_id, &request.text);
+    // 2026-07-06: session-level active-stream lock. After the override
+    // above freed a stale entry, this insert succeeds for the new send.
+    // The key is derived from `dedup_key` so both checks use the same
+    // collision domain. This catches retries that arrive AFTER the
+    // window (when `check_recent_send` above misses them) and is a
+    // safety net for any entry that slipped past the override.
     let is_duplicate = {
         let mut active = state.active_sessions.lock().unwrap();
         if !active.insert(active_key.clone()) {
@@ -3684,7 +3709,7 @@ async fn handle_ws_stream_send(
         tracing::warn!(
             session = %session_id,
             text_len = request.text.len(),
-            "active_stream: duplicate (session_id, text) already running; settling as deduped"
+            "active_stream: duplicate (session_id, text) still locked; settling as deduped (safety net)"
         );
         // 2026-07-17: 之前这个分支返回 `StreamEvent::Error`(code=
         // "duplicate_stream")，桌面端把它渲染成红色的「发送失败」横幅——
@@ -4569,6 +4594,7 @@ async fn handle_ws_stream_send(
     // Call agent service with streaming
     let agent_service = state.agent_service.clone();
     let active_sessions = state.active_sessions.clone();
+    let active_handles = state.active_handles.clone();
     let recent_sends = state.recent_sends.clone();
     let session_id_clone = session_id.to_string();
     let request_text = request.text.clone();
@@ -4607,6 +4633,7 @@ async fn handle_ws_stream_send(
             // This allows the user to re-send the message later without
             // hitting the "already being processed" guard.
             active_sessions.lock().unwrap().remove(&active_key_clone);
+            active_handles.lock().unwrap().remove(&active_key_clone);
             // 2026-07-16: also drop the recent_sends entry so a retry of
             // the same text after a stop/disconnect is NOT silently
             // swallowed by the dedup window (user must be able to retry).
@@ -4687,6 +4714,14 @@ async fn handle_ws_stream_send(
         recent_sends.lock().unwrap().remove(&active_key_clone);
     });
 
+    // 2026-07-17: register the live task handle OUTSIDE the spawned
+    // future (the handle does not exist inside its own closure) so a
+    // user retry of the same (session, text) can abort it if it later
+    // hangs without sending a terminal `Done` event. This runs
+    // synchronously right after `tokio::spawn`, before the task body
+    // executes, so the cleanup `remove` below always finds the entry.
+    state.active_handles.lock().unwrap().insert(active_key.clone(), agent_handle);
+
     // Forward channel events to WebSocket
     tracing::info!(
         session = %session_id,
@@ -4703,18 +4738,25 @@ async fn handle_ws_stream_send(
             .await
             .is_err()
         {
+        {
             // Client disconnected — mark the flag so the agent task
             // skips its terminal Done/Error event, then abort the
             // task to stop processing as soon as possible (at the
             // next .await boundary in send_message_stream).
             was_client_disconnect = true;
             ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-            agent_handle.abort();
+            // 2026-07-17: take the handle out of the registry before
+            // aborting; the handle was moved into `active_handles` on
+            // spawn, so we cannot keep a local copy here.
+            if let Some(h) = state.active_handles.lock().unwrap().remove(&active_key) {
+                h.abort();
+            }
             // Release the session lock since the spawned task may
             // not reach its cleanup code (abort cancels at the next
             // .await, which could be deeper in send_message_stream).
             state.active_sessions.lock().unwrap().remove(&active_key);
             break;
+        }
         }
     }
     tracing::info!(

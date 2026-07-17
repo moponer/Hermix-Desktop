@@ -222,12 +222,29 @@ export function wireToChatMessage(
   const wireRecord = wire as Record<string, unknown>;
   const reasoningRaw =
     wireRecord.reasoning_content ?? wireRecord.reasoningContent;
-  const reasoningContent =
+  let reasoningContent =
     typeof reasoningRaw === "string" ? reasoningRaw : undefined;
+  let visibleContent = wire.content;
+  // 2026-07-17: defence for messages already persisted before the backend
+  // fix. If the visible content is an unwrapped reasoning monologue (the
+  // model ignored the system prompt and emitted "I think..." / "trying
+  // to..." without a ` <think` tag), move it to reasoningContent so the UI
+  // folds it instead of leaking it into the chat body.
+  if (
+    visibleContent &&
+    !visibleContent.includes("<think") &&
+    !visibleContent.includes("</think") &&
+    looksLikeUntaggedReasoning(visibleContent)
+  ) {
+    reasoningContent = reasoningContent
+      ? reasoningContent + "\n\n" + visibleContent
+      : visibleContent;
+    visibleContent = "";
+  }
   return {
     id,
     role,
-    content: wire.content,
+    content: visibleContent,
     timestamp,
     model: wire.model,
     stopReason: wire.stopReason,
@@ -242,6 +259,40 @@ export function wireToChatMessage(
     tool_arguments: wire.tool_arguments,
     extra: wire.extra,
   };
+}
+
+/**
+ * Conservative heuristic: detect an unwrapped reasoning monologue that
+ * the model forgot to put inside `  <think...`. Targets the common
+ * failure mode where the assistant starts with self-directed analysis
+ * ("I think...", "trying to reconstruct...", "probably...") instead of
+ * a direct user-facing reply.
+ */
+function looksLikeUntaggedReasoning(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 40) return false;
+  const head = trimmed.slice(0, 240).toLowerCase();
+  const signals = [
+    "trying to",
+    "i think",
+    "i see",
+    "probably",
+    "could mean",
+    "might be",
+    "reconstruct",
+    "let me trace",
+    "let me check",
+    "actually,",
+    "seems like",
+    "looking at",
+    "the diff shows",
+    "the issue is",
+    "i believe",
+    "i suspect",
+    "i'm trying",
+    "i am trying",
+  ];
+  return signals.some((s) => head.includes(s));
 }
 
 /**
