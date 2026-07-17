@@ -20,6 +20,7 @@ import { diagLog, nextDiagId } from "./lib/diag";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useAcuiState, type AcuiDecisionBus } from "./acui";
 import type { Artifact } from "./utils/artifacts";
+import { classifyArtifactKind } from "./utils/artifacts";
 import * as api from "./api";
 import { registerBuiltinsToBackend } from "./data/builtinExperts";
 import type { NavPage, Session, ChatMessage, ApprovalDecision, TimelineStep, ExecutionTimelineEvent, QueuedMessage, QueuedImage, ChatMessageImage } from "./types";
@@ -313,6 +314,28 @@ const handleAddFileToChat = useCallback((path: string) => {
 setPendingFileAttachment(path);
 // Ensure we're on the chat page so the user sees the attachment chip.
 setPage("chat");
+}, []);
+
+// Computer file explorer → preview modal: create a synthetic Artifact
+// from a file path so the existing PreviewPanel (with syntax highlighting,
+// image preview, spreadsheet rendering, etc.) can display it.
+const [computerPreviewArtifact, setComputerPreviewArtifact] = useState<Artifact | null>(null);
+const handlePreviewFileFromExplorer = useCallback((path: string, name: string) => {
+  // 2026-07-17: this used to define its own (long) extension sets inline,
+  // which drifted from InlinePathPreview.tsx's classify() — same file
+  // could pick a different icon / preview branch depending on which side
+  // of the app opened it. Now uses the shared canonical classifier in
+  // utils/artifacts so all three surfaces agree.
+  const kind = classifyArtifactKind(name);
+  setComputerPreviewArtifact({
+    id: `computer-preview-${Date.now()}`,
+    name,
+    path,
+    kind,
+    tool: "file_explorer",
+    timestamp: new Date().toISOString(),
+    isAbsolute: true,
+  });
 }, []);
   // Queue mutation handlers — kept memoized so ChatComposer doesn't
   // re-render on every keystroke in the main textarea.
@@ -2395,6 +2418,7 @@ contextUsage={contextUsage}
               activeTab={rightTab}
               onTabChange={setRightTab}
               onAddFileToChat={handleAddFileToChat}
+              onPreviewFile={handlePreviewFileFromExplorer}
             />
           </div>
         )}
@@ -2407,7 +2431,8 @@ contextUsage={contextUsage}
           当用户在产物栏点文件 / 在 markdown 里点产物链接,
           这里渲染一个全屏 modal,完全遮罩整个 App,
           与右栏没有任何视觉关联——关闭只看 X / ESC / 遮罩点击。 */}
-      {selectedArtifactId && (() => {
+      {/* Artifact preview from the "产物" tab */}
+      {selectedArtifactId && !computerPreviewArtifact && (() => {
         const artifact = artifacts.find((a) => a.id === selectedArtifactId) ?? null;
         if (!artifact) return null;
         return (
@@ -2418,6 +2443,14 @@ contextUsage={contextUsage}
           />
         );
       })()}
+      {/* File preview from the "电脑" tab file explorer */}
+      {computerPreviewArtifact && (
+        <ArtifactPreviewModal
+          artifact={computerPreviewArtifact}
+          workspaceRoot={workspaceRoot}
+          onClose={() => setComputerPreviewArtifact(null)}
+        />
+      )}
     </div>
   );
 }

@@ -112,6 +112,28 @@ export async function renderOfficePreview(
   return invoke("render_office_preview", { filePath, workspaceRoot: workspaceRoot ?? null });
 }
 
+/// List the contents of a directory for the "电脑" (Computer) tab.
+/// Uses the same security model as `readArtifactFile` — the path must
+/// live under an allowed artifact root (or `workspaceRoot`). This
+/// replaces the direct `@tauri-apps/plugin-fs` `readDir` call which was
+/// limited to `$HOME` by the Tauri capability scope and failed for
+/// workspace directories on other drives (e.g. `F:\`).
+export interface DirEntry {
+  name: string;
+  path: string;
+  isDir: boolean;
+  size: number;
+  modifiedMs: number;
+  extension?: string;
+}
+
+export async function listDirectory(
+  path: string,
+  workspaceRoot?: string | null,
+): Promise<DirEntry[]> {
+  return invoke("list_directory", { path, workspaceRoot: workspaceRoot ?? null });
+}
+
 // Aliases for SettingsView compatibility
 //
 // `openSettingsDirectory` is the legacy name used by SettingsView.

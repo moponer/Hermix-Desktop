@@ -650,6 +650,125 @@ pub async fn artifact_path_exists(
 }
 
 // ---------------------------------------------------------------------------
+// Directory listing for the "电脑" (Computer) tab in the right sidebar.
+// ---------------------------------------------------------------------------
+
+/// A single entry returned by [`list_directory`].
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirEntry {
+    pub name: String,
+    /// Canonical absolute path with the `\\?\` prefix stripped.
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    /// Modified time as Unix milliseconds. 0 if unavailable.
+    pub modified_ms: u64,
+    pub extension: Option<String>,
+}
+
+/// List the contents of a directory.
+///
+/// Uses the same security model as [`read_artifact_file`]: the
+/// canonicalized directory path must live under one of the allowed
+/// artifact roots (or the caller-provided `workspace_root`). This
+/// replaces the direct `@tauri-apps/plugin-fs` `readDir` call which
+/// was limited to `$HOME` by the Tauri capability scope and failed
+/// for workspace directories on other drives (e.g. `F:\`).
+#[tauri::command]
+pub async fn list_directory(
+    path: String,
+    workspace_root: Option<String>,
+) -> Result<Vec<DirEntry>, String> {
+    let raw = PathBuf::from(&path);
+    if raw.as_os_str().is_empty() {
+        return Err("empty path".to_string());
+    }
+
+    // Resolve relative paths against workspace root.
+    let anchored: PathBuf = if raw.is_absolute() {
+        raw
+    } else {
+        let base = workspace_root
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| env_compat("HERMIX_DESKTOP_WORKSPACE_ROOT", "HERMES_DESKTOP_WORKSPACE_ROOT").map(PathBuf::from))
+            .or_else(|| allowed_roots().into_iter().next())
+            .or_else(dirs::home_dir)
+            .ok_or_else(|| "no workspace base available for relative path".to_string())?;
+        base.join(&raw)
+    };
+
+    // Canonicalize resolves `..` and symlinks.
+    let canonical = anchored
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve path '{}': {e}", anchored.display()))?;
+
+    if !is_under_allowed_root_with(&canonical, workspace_root.as_deref()) {
+        return Err(format!(
+            "path '{}' is outside the allowed artifact roots",
+            canonical.display()
+        ));
+    }
+
+    let entries = std::fs::read_dir(&canonical)
+        .map_err(|e| format!("cannot read directory '{}': {e}", canonical.display()))?;
+
+    let mut out: Vec<DirEntry> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            // Skip hidden files (dotfiles) — matches the previous
+            // frontend behaviour and keeps the listing clean.
+            if name.starts_with('.') {
+                return None;
+            }
+            let meta = match e.metadata() {
+                Ok(m) => m,
+                Err(_) => return None,
+            };
+            let is_dir = meta.is_dir();
+            let size = if is_dir { 0 } else { meta.len() };
+            let modified_ms = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let extension = e
+                .path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|s| s.to_ascii_lowercase());
+
+            // Build the full path using the OS separator so Windows
+            // paths stay as `C:\Users\…\file.txt`, not `C:\Users\…/file.txt`.
+            let full_path = strip_unc_prefix(e.path().as_os_str());
+
+            Some(DirEntry {
+                name,
+                path: full_path,
+                is_dir,
+                size,
+                modified_ms,
+                extension,
+            })
+        })
+        .collect();
+
+    // Sort: directories first, then files, alphabetical within each group.
+    out.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Python runtime probe (used by Settings → Backend tab → "Python 运行时" UI)
 // ---------------------------------------------------------------------------
 

@@ -71,6 +71,23 @@ function classify(name: string): ArtifactKind {
   return "file";
 }
 
+/**
+ * Public version of [`classify`] — maps a file name (with or without path)
+ * to its [`ArtifactKind`]. Order of checks is significant: `doc` > `code`
+ * > `data` > `image` > `office` > `file` (e.g. a `.json` is `data`, never
+ * `code`; a `.pdf` is `doc`, never `file`).
+ *
+ * 2026-07-17: extracted from `InlinePathPreview.tsx` and the inline
+ * classifier in `App.tsx`. Both duplicates had drifted extension sets
+ * (one missed `.sql`/`.pdf`/`.ico`/`.odt`/`.bmp`/`.tiff`), causing
+ * different preview branches and icons for the same file depending on
+ * which side of the app showed it. Keep all three call sites pointing
+ * here so the mapping stays canonical.
+ */
+export function classifyArtifactKind(name: string): ArtifactKind {
+  return classify(name);
+}
+
 function basename(p: string): string {
   return p.split(/[\\/]/).pop() ?? p;
 }

@@ -3,6 +3,7 @@ import { X, ExternalLink, Copy, Check, Loader2, AlertTriangle, FileText, FileCod
 import { clsx } from "clsx";
 import { openExternalUrl } from "../desktopBridge";
 import { tryReadArtifact, tryRenderOfficePreview } from "../utils/artifactReader";
+import { classifyArtifactKind } from "../utils/artifacts";
 
 interface InlinePathPreviewProps {
   /** Raw path the user clicked (may be relative — backend will anchor). */
@@ -25,15 +26,13 @@ type PreviewState =
 
 const OFFICE_EXTS = new Set(["docx", "doc", "xlsx", "xls", "pptx", "ppt"]);
 
-function classify(name: string): "code" | "doc" | "data" | "image" | "office" | "file" {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["md", "mdx", "txt", "rst", "adoc", "tex"].includes(ext)) return "doc";
-  if (["ts", "tsx", "js", "jsx", "rs", "py", "go", "java", "c", "cpp", "h", "hpp", "css", "html", "vue", "json", "yaml", "yml", "toml", "xml", "sh", "bash", "ps1"].includes(ext)) return "code";
-  if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext)) return "image";
-  if (["json", "yaml", "yml", "toml", "xml", "csv", "tsv", "ini"].includes(ext)) return "data";
-  if (["docx", "doc", "xlsx", "xls", "pptx", "ppt"].includes(ext)) return "office";
-  return "file";
-}
+// 2026-07-17: extension→kind mapping used to be defined here with its
+// own (smaller) extension set, drifted from the App.tsx duplicate and
+// from the canonical one in utils/artifacts.ts. Now uses the shared
+// `classifyArtifactKind` so the same file renders the same icon /
+// lands in the same preview branch regardless of which surface the
+// user clicked it from.
+const classify = classifyArtifactKind;
 
 function FileIcon({ name, size = 12 }: { name: string; size?: number }) {
   const k = classify(name);

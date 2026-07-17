@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
   X, Search, FileText, FileCode, FileJson,
   FileImage, FileType2, FolderOpen,
   Loader2, AlertTriangle, Monitor, Globe,
-  ChevronRight, ChevronDown, File,
-  Terminal, Copy, Eye,
+  ChevronRight,
+  Copy, Eye, ExternalLink,
+  List, LayoutGrid, ArrowLeft, ArrowUp,
+  ArrowRight,
+  Folder, RefreshCw,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -15,7 +18,7 @@ import { SpreadsheetView } from "./SpreadsheetView";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { clsx } from "clsx";
 import type { Artifact, ArtifactKind } from "../utils/artifacts";
-import { openExternalUrl } from "../desktopBridge";
+import { openExternalUrl, listDirectory, type DirEntry } from "../desktopBridge";
 import { invoke } from "@tauri-apps/api/core";
 import { homeDir } from "@tauri-apps/api/path";
 import {
@@ -41,6 +44,8 @@ interface RightSidebarProps {
   rawCount?: number;
   /** Callback when a file is added to chat from the file explorer. */
   onAddFileToChat?: (path: string) => void;
+  /** Callback when a file should be previewed from the file explorer. */
+  onPreviewFile?: (path: string, name: string) => void;
   /** 2026-07-08 (user): 允许外部控制当前标签（如点目录 chip 直接切到「电脑」） */
   activeTab?: RightTab;
   onTabChange?: (tab: RightTab) => void;
@@ -798,7 +803,7 @@ export function PreviewPanel({
   );
 }
 
-export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArtifact, workspaceRoot, rawCount, onAddFileToChat, activeTab: activeTabProp, onTabChange }: RightSidebarProps) {
+export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArtifact, workspaceRoot, rawCount, onAddFileToChat, onPreviewFile, activeTab: activeTabProp, onTabChange }: RightSidebarProps) {
   // 2026-07-08 (user): activeTab 可被外部控制（点目录 chip → 切到「电脑」）。
   // 传了 activeTab/onTabChange 走受控；否则用内部 state。
   const [internalTab, setInternalTab] = useState<RightTab>("products");
@@ -875,7 +880,11 @@ export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArt
 
       {/* Tab content */}
       {activeTab === "computer" && (
-        <ComputerTab workspaceRoot={workspaceRoot} onAddToChat={onAddFileToChat} />
+        <ComputerTab
+          workspaceRoot={workspaceRoot}
+          onAddToChat={onAddFileToChat}
+          onPreviewFile={onPreviewFile}
+        />
       )}
 
       {activeTab === "products" && (
@@ -1004,252 +1013,564 @@ function TabButton({
 
 // ── Computer Tab (File Explorer) ──────────────────────────
 
-interface FileNode {
-  name: string;
-  path: string;
-  isDir: boolean;
-  children?: FileNode[];
+type ViewMode = "list" | "detail" | "icons";
+
+/** Format a timestamp (ms since epoch) as a short date string. */
+function formatModifiedDate(ms: number): string {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${yyyy}/${mm}/${dd} ${hh}:${mi}`;
 }
 
-function ComputerTab({ workspaceRoot, onAddToChat }: { workspaceRoot?: string | null; onAddToChat?: (path: string) => void }) {
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
-  const [files, setFiles] = useState<FileNode[]>([]);
+/** Split a path into breadcrumb segments for the address bar.
+ *  Handles both `\` (Windows) and `/` (POSIX) separators. */
+function pathToBreadcrumbs(p: string): Array<{ label: string; path: string }> {
+  const parts = p.split(/[\\/]/).filter(Boolean);
+  const result: Array<{ label: string; path: string }> = [];
+  let acc = "";
+  for (let i = 0; i < parts.length; i++) {
+    if (i === 0 && /^[A-Za-z]:$/.test(parts[0])) {
+      // Drive letter like "C:" → "C:\"
+      acc = parts[0] + "\\";
+      result.push({ label: parts[0], path: acc });
+    } else {
+      acc = acc ? acc + "\\" + parts[i] : parts[i];
+      result.push({ label: parts[i], path: acc });
+    }
+  }
+  return result;
+}
+
+function ComputerTab({
+  workspaceRoot,
+  onAddToChat,
+  onPreviewFile,
+}: {
+  workspaceRoot?: string | null;
+  onAddToChat?: (path: string) => void;
+  onPreviewFile?: (path: string, name: string) => void;
+}) {
+  const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentPath, setCurrentPath] = useState<string>("");
   const [rootPath, setRootPath] = useState<string>(workspaceRoot || "");
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [historyStack, setHistoryStack] = useState<string[]>([]);
+  const [forwardStack, setForwardStack] = useState<string[]>([]);
+  const [selectedEntry, setSelectedEntry] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: DirEntry } | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  // 2026-07-15: workspaceRoot may be null (e.g. on first launch or
-  // when no session is active). Previously defaulted to "~" which is
-  // a Unix shell convention — on Windows, readDir("~") fails with
-  // "系统找不到指定的路径" (os error 3).  Now we resolve the user's
-  // home directory via the Tauri path API as a sensible fallback.
+  // Resolve the initial root path: prefer workspaceRoot, fall back to
+  // the user's home directory via Tauri's path API.
   useEffect(() => {
     if (workspaceRoot) { setRootPath(workspaceRoot); return; }
     homeDir().then(setRootPath).catch(() => setRootPath(""));
   }, [workspaceRoot]);
 
-  // Load directory contents using Tauri FS API
+  // Load directory contents using the backend `list_directory` command.
+  // This replaces `@tauri-apps/plugin-fs` `readDir` which was limited to
+  // `$HOME` by the Tauri capability scope and failed for workspace
+  // directories on other drives (e.g. `F:\`).
   const loadDirectory = useCallback(async (path: string) => {
+    if (!path) return;
     setLoading(true);
     setError(null);
     try {
-      const { readDir } = await import("@tauri-apps/plugin-fs");
-      const entries = await readDir(path);
-      const fileNodes: FileNode[] = entries
-        .filter((e) => !e.name.startsWith(".")) // Skip hidden files
-        .map((e) => ({
-          name: e.name,
-          path: `${path}/${e.name}`,
-          isDir: e.isDirectory,
-        }))
-        .sort((a, b) => {
-          // Directories first, then files
-          if (a.isDir && !b.isDir) return -1;
-          if (!a.isDir && b.isDir) return 1;
-          return a.name.localeCompare(b.name);
-        });
-      setFiles(fileNodes);
+      const result = await listDirectory(path, workspaceRoot);
+      setEntries(result);
+      setCurrentPath(path);
     } catch (e) {
-      setError(String(e));
+      setError(String(e).replace(/^"|"$/g, ""));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceRoot]);
 
-  // Toggle directory expansion
-  const toggleDir = useCallback((path: string) => {
-    setExpandedDirs((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-        loadDirectory(path);
-      }
-      return next;
-    });
-  }, [loadDirectory]);
-
-  // Load root directory when rootPath changes (may resolve
-  // asynchronously from Tauri's homeDir()). Skip the load if
-  // rootPath is empty (still resolving or resolution failed).
+  // Load root directory when rootPath changes.
   useEffect(() => {
     if (!rootPath) return;
     loadDirectory(rootPath);
   }, [rootPath, loadDirectory]);
 
+  // Navigate to a path, pushing the current path onto the history stack
+// and clearing the forward stack (browser-style: any new forward navigation
+// invalidates the redo chain).
+  const navigateTo = useCallback((path: string) => {
+    if (!path) return;
+    if (currentPath && path !== currentPath) {
+      setHistoryStack((prev) => [...prev, currentPath]);
+      setForwardStack([]); // new branch — no redo possible
+    }
+    loadDirectory(path);
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [currentPath, loadDirectory]);
+
+  // Navigate back in history. The path we're leaving gets pushed onto
+  // the forward stack so navigateForward() can return to it.
+  const navigateBack = useCallback(() => {
+    setHistoryStack((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      setCurrentPath((cur) => {
+        if (cur && cur !== last) {
+          setForwardStack((fwd) => [...fwd, cur]);
+        }
+        return last;
+      });
+      loadDirectory(last);
+      return prev.slice(0, -1);
+    });
+  }, [loadDirectory]);
+
+  // Navigate forward (after a back). Same as back but mirrored.
+  const navigateForward = useCallback(() => {
+    setForwardStack((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      setCurrentPath((cur) => {
+        if (cur && cur !== last) {
+          setHistoryStack((back) => [...back, cur]);
+        }
+        return last;
+      });
+      loadDirectory(last);
+      return prev.slice(0, -1);
+    });
+  }, [loadDirectory]);
+
+  // Navigate up one directory. Handle the Windows drive-root case
+  // (`C:\foo` → `C:\`) and POSIX root (`/foo` → `/`) without producing
+  // an empty parent that confuses the regex strip below.
+  const navigateUp = useCallback(() => {
+    if (!currentPath) return;
+    let parent: string;
+    if (/^[A-Za-z]:[\\/]?$/.test(currentPath)) {
+      // Already at drive root (e.g. `C:\` or `C:`) — no further up.
+      return;
+    }
+    if (currentPath === "/" || currentPath === "\\") {
+      return;
+    }
+    // Strip the trailing segment. The result is the parent directory.
+    parent = currentPath.replace(/[\\/][^\\/]+$/, "") || currentPath;
+    // Strip any trailing separator that wasn't already collapsed; if the
+    // result is just a drive letter with no separator, normalize it so
+    // navigateTo sees a consistent path.
+    if (/^[A-Za-z]:$/.test(parent)) parent = parent + "\\";
+    if (parent && parent !== currentPath) {
+      navigateTo(parent);
+    }
+  }, [currentPath, navigateTo]);
+
+  // Handle file/directory click.
+  const handleEntryClick = useCallback((entry: DirEntry) => {
+    if (entry.isDir) {
+      navigateTo(entry.path);
+    } else {
+      onPreviewFile?.(entry.path, entry.name);
+    }
+  }, [navigateTo, onPreviewFile]);
+
+  // Handle entry double-click (open in system explorer for dirs).
+  const handleEntryDoubleClick = useCallback((entry: DirEntry) => {
+    if (entry.isDir) {
+      navigateTo(entry.path);
+    }
+  }, [navigateTo]);
+
+  // Handle right-click context menu.
+  // The menu self-clamps to the viewport once it knows its own measured
+  // height (useLayoutEffect in FileExplorerContextMenu), so the parent
+  // only has to record the click coords — no hardcoded width/height
+  // constants here.
+  const handleContextMenu = useCallback((e: React.MouseEvent, entry: DirEntry) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedEntry(entry.path);
+    setContextMenu({ x: e.clientX, y: e.clientY, entry });
+  }, []);
+
+  // Handle context menu action.
+  const handleMenuAction = useCallback((action: string) => {
+    if (!contextMenu) return;
+    const entry = contextMenu.entry;
+    setContextMenu(null);
+    switch (action) {
+      case "open":
+        if (entry.isDir) navigateTo(entry.path);
+        else onPreviewFile?.(entry.path, entry.name);
+        break;
+      case "add_to_chat":
+        if (!entry.isDir) onAddToChat?.(entry.path);
+        break;
+      case "preview":
+        if (!entry.isDir) onPreviewFile?.(entry.path, entry.name);
+        break;
+      case "copy_path":
+        navigator.clipboard.writeText(entry.path);
+        break;
+      case "open_in_explorer":
+        openExternalUrl(entry.isDir ? entry.path : entry.path.replace(/[\\/][^\\/]+$/, ""));
+        break;
+      case "open_external":
+        openExternalUrl(entry.path);
+        break;
+    }
+  }, [contextMenu, navigateTo, onAddToChat, onPreviewFile]);
+
+  // Close context menu on Escape.
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setContextMenu(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [contextMenu]);
+
+  const breadcrumbs = useMemo(() => pathToBreadcrumbs(currentPath), [currentPath]);
+
   return (
-    <div className="flex-1 overflow-y-auto">
-      {/* Workspace root indicator */}
-      <div className="px-3 py-2 border-b border-border-primary">
-        <div className="flex items-center gap-1.5 text-xs text-text-muted">
-          <FolderOpen size={12} />
-          <span className="truncate">{rootPath}</span>
+    <div className="flex-1 flex flex-col overflow-hidden computer-tab">
+      {/* Toolbar: back, up, refresh, address bar, view toggle */}
+      <div className="computer-toolbar">
+        <div className="computer-toolbar-left">
+          <button
+            type="button"
+            onClick={navigateBack}
+            disabled={historyStack.length === 0}
+            title="后退"
+            className="computer-nav-btn"
+            aria-label="后退"
+          >
+            <ArrowLeft size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={navigateForward}
+            disabled={forwardStack.length === 0}
+            title="前进"
+            className="computer-nav-btn"
+            aria-label="前进"
+          >
+            <ArrowRight size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={navigateUp}
+            disabled={!currentPath}
+            title="上一级"
+            className="computer-nav-btn"
+            aria-label="上一级"
+          >
+            <ArrowUp size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => currentPath && loadDirectory(currentPath)}
+            disabled={!currentPath || loading}
+            title="刷新"
+            className="computer-nav-btn"
+            aria-label="刷新"
+          >
+            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+          </button>
+        </div>
+
+        {/* Address bar (breadcrumb) */}
+        <div className="computer-addressbar">
+          {breadcrumbs.length === 0 && (
+            <span className="text-text-faint text-[11px]">选择目录…</span>
+          )}
+          {breadcrumbs.map((seg, i) => (
+            <span key={i} className="computer-crumb-group">
+              <button
+                type="button"
+                onClick={() => navigateTo(seg.path)}
+                className="computer-crumb"
+                title={seg.path}
+              >
+                {seg.label}
+              </button>
+              {i < breadcrumbs.length - 1 && (
+                <ChevronRight size={10} className="computer-crumb-sep" />
+              )}
+            </span>
+          ))}
+        </div>
+
+        {/* View mode toggle */}
+        <div className="computer-view-toggle">
+          <button
+            type="button"
+            onClick={() => setViewMode("list")}
+            className={clsx("computer-view-btn", viewMode === "list" && "is-active")}
+            title="列表视图"
+            aria-label="列表视图"
+          >
+            <List size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("detail")}
+            className={clsx("computer-view-btn", viewMode === "detail" && "is-active")}
+            title="详细信息"
+            aria-label="详细信息"
+          >
+            <FileText size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("icons")}
+            className={clsx("computer-view-btn", viewMode === "icons" && "is-active")}
+            title="大图标视图"
+            aria-label="大图标视图"
+          >
+            <LayoutGrid size={13} />
+          </button>
         </div>
       </div>
 
-      {/* File tree */}
-      <div className="px-2 py-2">
+      {/* File listing body */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto computer-body">
         {loading && (
-          <div className="flex items-center gap-2 px-2 py-4 text-xs text-text-muted">
-            <Loader2 size={12} className="animate-spin" />
-            加载中...
+          <div className="flex items-center gap-2 px-3 py-8 justify-center text-xs text-text-muted">
+            <Loader2 size={14} className="animate-spin" />
+            正在加载目录…
           </div>
         )}
         {error && (
-          <div className="flex items-center gap-2 px-2 py-4 text-xs text-red-400">
-            <AlertTriangle size={12} />
-            {error}
+          <div className="flex items-start gap-2 px-3 py-4 text-xs text-error">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+            <span className="break-words [overflow-wrap:anywhere] whitespace-pre-wrap min-w-0 flex-1">{error}</span>
           </div>
         )}
-        {!loading && !error && files.length === 0 && (
-          <div className="px-2 py-4 text-xs text-text-muted text-center">
-            空目录
+        {!loading && !error && entries.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-12 gap-2 text-text-muted">
+            <FolderOpen size={28} className="opacity-40" />
+            <span className="text-xs">空目录</span>
           </div>
         )}
-        {files.map((file) => (
-          <FileTreeItem
-            key={file.path}
-            file={file}
-            expanded={expandedDirs.has(file.path)}
-            onToggle={toggleDir}
-            onAddToChat={onAddToChat}
-          />
-        ))}
+
+        {/* ── List View (compact rows) ───────────────────── */}
+        {!loading && !error && viewMode === "list" && entries.length > 0 && (
+          <div className="computer-list-view">
+            {entries.map((entry) => (
+              <div
+                key={entry.path}
+                onClick={() => handleEntryClick(entry)}
+                onDoubleClick={() => handleEntryDoubleClick(entry)}
+                onContextMenu={(e) => handleContextMenu(e, entry)}
+                className={clsx(
+                  "computer-list-row",
+                  selectedEntry === entry.path && "is-selected",
+                )}
+              >
+                <span className="computer-list-icon">
+                  {entry.isDir ? (
+                    <Folder size={13} className="text-accent" />
+                  ) : (
+                    <FileTypeIcon name={entry.name} size={13} />
+                  )}
+                </span>
+                <span className="computer-list-name truncate">{entry.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Detail View (columns: name, size, date) ────── */}
+        {!loading && !error && viewMode === "detail" && entries.length > 0 && (
+          <div className="computer-detail-view">
+            {/* Header */}
+            <div className="computer-detail-header">
+              <span className="computer-detail-col-name">名称</span>
+              <span className="computer-detail-col-size">大小</span>
+              <span className="computer-detail-col-date">修改日期</span>
+            </div>
+            {entries.map((entry) => (
+              <div
+                key={entry.path}
+                onClick={() => handleEntryClick(entry)}
+                onDoubleClick={() => handleEntryDoubleClick(entry)}
+                onContextMenu={(e) => handleContextMenu(e, entry)}
+                className={clsx(
+                  "computer-detail-row",
+                  selectedEntry === entry.path && "is-selected",
+                )}
+              >
+                <span className="computer-detail-col-name">
+                  <span className="computer-list-icon">
+                    {entry.isDir ? (
+                      <Folder size={13} className="text-accent" />
+                    ) : (
+                      <FileTypeIcon name={entry.name} size={13} />
+                    )}
+                  </span>
+                  <span className="truncate">{entry.name}</span>
+                </span>
+                <span className="computer-detail-col-size">
+                  {entry.isDir ? "—" : formatBytes(entry.size)}
+                </span>
+                <span className="computer-detail-col-date">
+                  {formatModifiedDate(entry.modifiedMs)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Icons View (large icon grid) ──────────────── */}
+        {!loading && !error && viewMode === "icons" && entries.length > 0 && (
+          <div className="computer-icons-view">
+            {entries.map((entry) => (
+              <div
+                key={entry.path}
+                onClick={() => handleEntryClick(entry)}
+                onDoubleClick={() => handleEntryDoubleClick(entry)}
+                onContextMenu={(e) => handleContextMenu(e, entry)}
+                className={clsx(
+                  "computer-icon-tile",
+                  selectedEntry === entry.path && "is-selected",
+                )}
+                title={entry.path}
+              >
+                <span className="computer-icon-img">
+                  {entry.isDir ? (
+                    <Folder size={32} className="text-accent" />
+                  ) : (
+                    <FileTypeIcon name={entry.name} size={32} />
+                  )}
+                </span>
+                <span className="computer-icon-label">{entry.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Status bar */}
+      <div className="computer-statusbar">
+        <span>{entries.length} 项</span>
+        {currentPath && (
+          <>
+            <span className="cs-spacer" />
+            <span className="truncate text-text-faint" title={currentPath}>{currentPath}</span>
+          </>
+        )}
+      </div>
+
+      {/* Context menu (portal to body to escape overflow clipping) */}
+      {contextMenu && createPortal(
+        <FileExplorerContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          entry={contextMenu.entry}
+          onAction={handleMenuAction}
+          onClose={() => setContextMenu(null)}
+        />,
+        document.body,
+      )}
     </div>
   );
 }
 
-// ── File Tree Item Component ──────────────────────────────
+// ── File Explorer Context Menu ──────────────────────────────
 
-function FileTreeItem({
-  file,
-  expanded,
-  onToggle,
-  onAddToChat,
-}: {
-  file: FileNode;
-  expanded: boolean;
-  onToggle: (path: string) => void;
-  onAddToChat?: (path: string) => void;
-}) {
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
-
-  const handleClick = () => {
-    if (file.isDir) {
-      onToggle(file.path);
-    }
-  };
-
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY });
-  };
-
-  const handleAction = (action: string) => {
-    setContextMenu(null);
-    switch (action) {
-      case "add_to_chat":
-        onAddToChat?.(file.path);
-        break;
-      case "copy_path":
-        navigator.clipboard.writeText(file.path);
-        break;
-      case "open_in_terminal":
-        // Open the directory in the system file explorer.
-        openExternalUrl(file.path);
-        break;
-      case "preview":
-        // Open the file with the default system application.
-        openExternalUrl(file.path);
-        break;
-    }
-  };
-
-  return (
-    <>
-      <div
-        onClick={handleClick}
-        onContextMenu={handleContextMenu}
-        className={clsx(
-          "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs cursor-pointer transition-colors",
-          "hover:bg-bg-hover text-text-primary",
-          file.isDir && "font-medium"
-        )}
-      >
-        {file.isDir ? (
-          expanded ? (
-            <ChevronDown size={12} className="text-text-muted shrink-0" />
-          ) : (
-            <ChevronRight size={12} className="text-text-muted shrink-0" />
-          )
-        ) : (
-          <File size={12} className="text-text-muted shrink-0" />
-        )}
-        <span className="truncate">{file.name}</span>
-      </div>
-
-      {/* Context Menu */}
-      {contextMenu && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={() => setContextMenu(null)}
-          onAction={handleAction}
-          isDir={file.isDir}
-        />
-      )}
-    </>
-  );
-}
-
-// ── Context Menu Component ──────────────────────────────
-
-function ContextMenu({
+function FileExplorerContextMenu({
   x,
   y,
-  onClose,
+  entry,
   onAction,
-  isDir,
+  onClose,
 }: {
   x: number;
   y: number;
-  onClose: () => void;
+  entry: DirEntry;
   onAction: (action: string) => void;
-  isDir: boolean;
+  onClose: () => void;
 }) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+
+  // 2026-07-17: previously the parent hardcoded menuH=200 to clamp the
+  // menu inside the viewport — but the menu actually grows with item
+  // count (file menu has 6 items, dir menu has 3; dividers add more
+  // visual height). In short windows a 6-item menu could overflow the
+  // bottom edge. Self-measure and self-clamp on first paint instead.
+  // useLayoutEffect avoids a visible jump: the menu paints once at the
+  // clamped position, not at (x, y) then again at the clamped spot.
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const margin = 8;
+    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+    setPos({
+      left: Math.max(margin, Math.min(x, maxLeft)),
+      top: Math.max(margin, Math.min(y, maxTop)),
+    });
+  }, [x, y]);
+
+  // Close on click-outside and Escape.
   useEffect(() => {
-    const handleClick = () => onClose();
-    document.addEventListener("click", handleClick);
-    return () => document.removeEventListener("click", handleClick);
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".file-explorer-menu")) {
+        onClose();
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
   }, [onClose]);
 
-  const items = isDir
-    ? [
-        { action: "open_in_terminal", label: "在终端中打开", icon: Terminal },
-        { action: "copy_path", label: "复制路径", icon: Copy },
-      ]
-    : [
-        { action: "add_to_chat", label: "加入对话", icon: FileText },
-        { action: "preview", label: "预览", icon: Eye },
-        { action: "copy_path", label: "复制路径", icon: Copy },
-      ];
+  const fileItems = [
+    { action: "open", label: "打开", icon: FileText, divider: false },
+    { action: "preview", label: "预览", icon: Eye, divider: false },
+    { action: "add_to_chat", label: "加入对话", icon: Copy, divider: true },
+    { action: "copy_path", label: "复制路径", icon: Copy, divider: false },
+    { action: "open_in_explorer", label: "在资源管理器中打开", icon: FolderOpen, divider: true },
+    { action: "open_external", label: "用默认程序打开", icon: ExternalLink, divider: false },
+  ];
+
+  const dirItems = [
+    { action: "open", label: "打开", icon: FolderOpen, divider: false },
+    { action: "copy_path", label: "复制路径", icon: Copy, divider: true },
+    { action: "open_in_explorer", label: "在资源管理器中打开", icon: FolderOpen, divider: false },
+  ];
+
+  const items = entry.isDir ? dirItems : fileItems;
 
   return (
     <div
-      className="fixed z-50 bg-bg-card border border-border-primary rounded-lg shadow-lg py-1 min-w-[160px]"
-      style={{ left: x, top: y }}
+      ref={menuRef}
+      className="file-explorer-menu fixed z-[70] rounded-lg border border-border-primary shadow-xl py-1 min-w-[180px]"
+      style={{
+        left: pos.left,
+        top: pos.top,
+        background: "var(--color-bg-card)",
+      }}
     >
-      {items.map((item) => (
-        <button
-          key={item.action}
-          onClick={() => onAction(item.action)}
-          className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover transition-colors"
-        >
-          <item.icon size={12} />
-          {item.label}
-        </button>
+      {items.map((item, i) => (
+        <div key={item.action}>
+          {item.divider && i > 0 && <div className="file-explorer-menu-divider" />}
+          <button
+            type="button"
+            onClick={() => onAction(item.action)}
+            className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-text-primary hover:bg-bg-hover transition-colors text-left"
+          >
+            <item.icon size={13} className="shrink-0 text-text-muted" />
+            {item.label}
+          </button>
+        </div>
       ))}
     </div>
   );

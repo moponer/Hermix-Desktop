@@ -247,6 +247,7 @@ pub fn run() {
             commands::read_artifact_file,
             commands::read_artifact_file_bytes,
             commands::artifact_path_exists,
+            commands::list_directory,
             commands::restart_sidecar,
             commands::render_office_preview,
             commands::get_runtime_info,
