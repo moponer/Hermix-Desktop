@@ -96,6 +96,7 @@ pub async fn auto_compress_if_over_threshold<F>(
         let pre_snap = guard.breaker_snapshot(
             total_tokens as u64,
             threshold as u64,
+            max_c as u64,
             None,
         );
         drop(guard);
@@ -228,6 +229,7 @@ pub async fn auto_compress_if_over_threshold<F>(
             let mut snap = guard.breaker_snapshot(
                 used_after as u64,
                 threshold as u64,
+                max_c as u64,
                 failure_reason,
             );
             // Pin the post-state so the banner shows the *post-attempt*

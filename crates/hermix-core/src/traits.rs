@@ -598,6 +598,7 @@ pub trait CompressionEngine: CoreContextEngine {
         &mut self,
         current_tokens: u64,
         threshold_tokens: u64,
+        max_tokens: u64,
         failure_reason: Option<String>,
     ) -> CompressionEngineSnapshot;
 
@@ -617,6 +618,7 @@ pub struct CompressionEngineSnapshot {
     pub state: CompressionEngineState,
     pub current_tokens: u64,
     pub threshold_tokens: u64,
+    pub max_tokens: u64,
     pub failure_reason: Option<String>,
 }
 

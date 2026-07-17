@@ -91,4 +91,9 @@ describe("CompactionStatusBanner", () => {
     renderBanner("closed", { unit: undefined });
     expect(screen.getByText(/当前用量:120k \/ 160k tokens/)).toBeInTheDocument();
   });
+
+  it("prefers maxText denominator so banner matches the progress bar", () => {
+    renderBanner("pressure", { maxText: "205k", maxTokens: 205_000 });
+    expect(screen.getByText(/当前用量:120k \/ 205k tokens/)).toBeInTheDocument();
+  });
 });

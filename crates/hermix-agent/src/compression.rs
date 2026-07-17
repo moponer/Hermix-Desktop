@@ -868,6 +868,9 @@ pub struct BreakerSnapshot {
     /// Token budget at which compression fires
     /// (`context_length * threshold_percent`). `0` when unknown.
     pub threshold_tokens: u64,
+    /// Total context window (`context_length`). Used by the front-end
+    /// progress bar and banner so the same denominator is shown everywhere.
+    pub max_tokens: u64,
     /// Display unit for `used_tokens` / `threshold_tokens`. Always
     /// `"tokens"` (Day 3 renamed the underlying budget from chars to
     /// tokens). The field is a `String` so future i18n can swap in a
@@ -899,6 +902,7 @@ impl Default for BreakerSnapshot {
             last_savings_ratio: None,
             used_tokens: 0,
             threshold_tokens: 0,
+            max_tokens: 0,
             unit: default_unit(),
             last_failure_reason: None,
             last_changed_at_unix_ms: None,
@@ -1150,6 +1154,7 @@ impl ContextCompressor {
         &mut self,
         used_tokens: u64,
         threshold_tokens: u64,
+        max_tokens: u64,
         last_failure_reason: Option<String>,
     ) -> BreakerSnapshot {
         let state = self.breaker_state();
@@ -1178,6 +1183,7 @@ impl ContextCompressor {
             last_savings_ratio,
             used_tokens,
             threshold_tokens,
+            max_tokens,
             unit: default_unit(),
             last_failure_reason,
             last_changed_at_unix_ms: self.last_state_change_unix_ms,
@@ -2283,9 +2289,10 @@ impl CompressionEngine for ContextCompressor {
         &mut self,
         current_tokens: u64,
         threshold_tokens: u64,
+        max_tokens: u64,
         failure_reason: Option<String>,
     ) -> CompressionEngineSnapshot {
-        let snap = self.breaker_snapshot(current_tokens, threshold_tokens, failure_reason);
+        let snap = self.breaker_snapshot(current_tokens, threshold_tokens, max_tokens, failure_reason);
         CompressionEngineSnapshot {
             state: match snap.state {
                 BreakerState::Closed => CompressionEngineState::Closed,
@@ -2294,6 +2301,7 @@ impl CompressionEngine for ContextCompressor {
             },
             current_tokens: snap.used_tokens,
             threshold_tokens: snap.threshold_tokens,
+            max_tokens: snap.max_tokens,
             failure_reason: snap.last_failure_reason,
         }
     }
@@ -3492,7 +3500,7 @@ mod tests {
             60,
         );
         compressor.record_compression_outcome(false);
-        let snap = compressor.breaker_snapshot(0, 0, None);
+        let snap = compressor.breaker_snapshot(0, 0, 0, None);
         let json = serde_json::to_string(&snap).expect("serialise");
         // State must be one of the documented snake_case tags.
         assert!(

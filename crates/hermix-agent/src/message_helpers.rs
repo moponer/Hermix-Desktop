@@ -58,6 +58,7 @@ pub fn emit_compaction_status(
             },
             used_tokens: snapshot.current_tokens,
             threshold_tokens: snapshot.threshold_tokens,
+            max_tokens: snapshot.max_tokens,
             last_failure_reason: snapshot.failure_reason.clone(),
             ..Default::default()
         };

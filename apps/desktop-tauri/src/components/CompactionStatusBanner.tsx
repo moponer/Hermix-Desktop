@@ -23,17 +23,21 @@ export interface CompactionStatus {
   /** Used tokens / threshold, both formatted (e.g. "145k / 160k"). */
   usedText?: string;
   thresholdText?: string;
+  /** Formatted max context window (e.g. "205k"). When present, the banner
+   * footer shows `used / max` so it matches the ChatView progress bar. */
+  maxText?: string;
   /** Raw numeric values so the banner can detect pressure even when
    * the backend snapshot reports `closed` (pre-compression state). */
   usedTokens?: number;
   thresholdTokens?: number;
+  maxTokens?: number;
   /**
    * Unit suffix for `usedText` / `thresholdText`. Day 3 the Rust backend
    * renamed the underlying budget from chars to tokens; the UI mirrors
    * that rename. Default: `"tokens"`.
    */
   unit?: string;
-  /** Percent of threshold currently consumed (0–100). */
+  /** Percent of max context window currently consumed (0–100). */
   percent?: number;
   /** Number of consecutive compaction failures, when state involves a breaker. */
   consecutiveFailures?: number;
@@ -103,9 +107,12 @@ export function CompactionStatusBanner({ status, onDismiss }: CompactionStatusBa
   if (!copy) return null;
   const Icon = copy.icon;
   const unit = status.unit ?? "tokens";
+  // Show the same denominator as the ChatView progress bar (max context
+  // window) so the two indicators never disagree. Falls back to the
+  // threshold denominator for older snapshots that don't carry max_tokens.
   const usedLabel =
-    status.usedText && status.thresholdText
-      ? `${status.usedText} / ${status.thresholdText} ${unit}${status.percent !== undefined ? ` (${Math.round(status.percent)}%)` : ""}`
+    status.usedText && (status.maxText ?? status.thresholdText)
+      ? `${status.usedText} / ${status.maxText ?? status.thresholdText} ${unit}${status.percent !== undefined ? ` (${Math.round(status.percent)}%)` : ""}`
       : null;
   return (
     <div className={`mb-2 px-3 py-2.5 rounded-xl border text-[13px] flex items-start gap-2.5 ${copy.tone}`}>

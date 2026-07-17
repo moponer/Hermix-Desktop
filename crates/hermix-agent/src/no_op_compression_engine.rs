@@ -81,12 +81,14 @@ impl CompressionEngine for NoOpCompressionEngine {
         &mut self,
         current_tokens: u64,
         threshold_tokens: u64,
+        max_tokens: u64,
         failure_reason: Option<String>,
     ) -> CompressionEngineSnapshot {
         CompressionEngineSnapshot {
             state: CompressionEngineState::Closed,
             current_tokens,
             threshold_tokens,
+            max_tokens,
             failure_reason,
         }
     }

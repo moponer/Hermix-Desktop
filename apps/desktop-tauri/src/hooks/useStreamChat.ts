@@ -1227,6 +1227,7 @@ export function useStreamChat() {
                     typeof v === "number" && Number.isFinite(v) ? v : undefined;
                   const usedTokens = toNumber(snap.used_tokens);
                   const thresholdTokens = toNumber(snap.threshold_tokens);
+                  const maxTokens = toNumber(snap.max_tokens);
                   // Mirror the server's `format_token_count` so the
                   // banner reads "145k / 160k" (the same string the
                   // status chip in StreamingBubble would render).
@@ -1239,10 +1240,14 @@ export function useStreamChat() {
                     typeof snap.unit === "string" && snap.unit.length > 0
                       ? (snap.unit as string)
                       : "tokens";
+                  // Use the same denominator as the ChatView progress bar
+                  // (max context window) so banner and bar never disagree.
                   const percent =
-                    usedTokens !== undefined && thresholdTokens && thresholdTokens > 0
-                      ? Math.min(100, (usedTokens / thresholdTokens) * 100)
-                      : undefined;
+                    usedTokens !== undefined && maxTokens && maxTokens > 0
+                      ? Math.min(100, (usedTokens / maxTokens) * 100)
+                      : usedTokens !== undefined && thresholdTokens && thresholdTokens > 0
+                        ? Math.min(100, (usedTokens / thresholdTokens) * 100)
+                        : undefined;
                   const lastFailureReason =
                     typeof snap.last_failure_reason === "string"
                       ? (snap.last_failure_reason as string)
@@ -1255,8 +1260,10 @@ export function useStreamChat() {
                     state,
                     usedText: usedTokens !== undefined ? fmt(usedTokens) : undefined,
                     thresholdText: thresholdTokens !== undefined ? fmt(thresholdTokens) : undefined,
+                    maxText: maxTokens !== undefined ? fmt(maxTokens) : undefined,
                     usedTokens,
                     thresholdTokens,
+                    maxTokens,
                     unit,
                     percent,
                     consecutiveFailures:
