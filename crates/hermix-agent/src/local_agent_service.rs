@@ -740,14 +740,15 @@ impl LocalAgentService {
                 } else {
                     // N-08: extract the summary model BEFORE moving the
                     // compressor into the agent loop (with_compressor
-                    // consumes it). Fall back to "default" when no
-                    // override is set — the aux client picks its own
-                    // model, and this label is just for log clarity.
+                    // consumes it). When no `compaction.summary_model`
+                    // override is set, pass `None` so the health check
+                    // pings the auxiliary client's own default model
+                    // (e.g. `MiniMax-M3`) instead of the literal "default",
+                    // which would be sent to the provider as a (invalid) model id.
                     let check_model = compressor
                         .config()
                         .summary_model_override
-                        .clone()
-                        .unwrap_or_else(|| "default".into());
+                        .clone();
                     agent = agent.with_compressor(compressor);
                     tracing::info!(
                         "Advanced context compressor wired (aux providers: {:?}, breaker threshold={}, cooldown={}s)",
@@ -776,7 +777,7 @@ impl LocalAgentService {
                         tokio::spawn(async move {
                             match crate::compression_health::startup_compression_llm_health_check(
                                 &*check_aux,
-                                &check_model,
+                                check_model.as_deref(),
                                 30_000,
                             )
                             .await

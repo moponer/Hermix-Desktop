@@ -13,7 +13,7 @@
 //! use hermix_intelligence::auxiliary::AuxiliaryClient;
 //!
 //! # async fn doc(aux: &AuxiliaryClient, model: &str) {
-//! match startup_compression_llm_health_check(aux, model, 30_000).await {
+//! match startup_compression_llm_health_check(aux, Some(model), 30_000).await {
 //!     Ok(report) => tracing::info!(
 //!         provider = %report.provider,
 //!         model    = %report.model,
@@ -125,18 +125,26 @@ impl std::error::Error for CompressionHealthError {}
 
 /// Sentinel prompt that exercises the full model path while being
 /// cheap enough to fire at startup without budget concerns.
-fn ping_request(model: &str) -> AuxiliaryRequest {
-    AuxiliaryRequest::new(
+fn ping_request(model: Option<&str>) -> AuxiliaryRequest {
+    let mut req = AuxiliaryRequest::new(
         AuxiliaryTask::Custom("health-check".into()),
         vec![
             Message::system("Reply with a single short sentence."),
             Message::user("ping"),
         ],
     )
-    .with_model(model.to_string())
     .with_temperature(0.0)
     .with_max_tokens(8)
-    .with_timeout(Duration::from_millis(15_000))
+    .with_timeout(Duration::from_millis(15_000));
+    // When `model` is `None` (no `compaction.summary_model` override), omit the
+    // model entirely so the auxiliary client falls back to the selected
+    // candidate's own default model (e.g. `MiniMax-M3`). Passing a literal
+    // "default" would reach the provider as the model id and trigger a
+    // model-not-found error even though the key itself is valid.
+    if let Some(m) = model.filter(|s| !s.is_empty()) {
+        req = req.with_model(m.to_string());
+    }
+    req
 }
 
 /// Issue a single tiny request through the auxiliary chain and time it.
@@ -170,7 +178,7 @@ fn ping_request(model: &str) -> AuxiliaryRequest {
 )]
 pub async fn startup_compression_llm_health_check(
     aux: &AuxiliaryClient,
-    model: &str,
+    model: Option<&str>,
     max_latency_ms: u64,
 ) -> Result<CompressionHealthReport, CompressionHealthError> {
     if aux.chain_len() == 0 {
@@ -203,7 +211,7 @@ pub async fn startup_compression_llm_health_check(
     if response_chars < MIN_HEALTH_RESPONSE_CHARS {
         span.record("outcome", "empty_response");
         return Err(CompressionHealthError::EmptyResponse {
-            model: model.to_string(),
+            model: model.unwrap_or("").to_string(),
             raw_chars: response_chars,
         });
     }
@@ -219,7 +227,7 @@ pub async fn startup_compression_llm_health_check(
     span.record("outcome", "ok");
     Ok(CompressionHealthReport {
         provider,
-        model: model.to_string(),
+        model: model.unwrap_or("").to_string(),
         latency_ms,
         response_chars,
     })
@@ -249,7 +257,7 @@ mod tests {
             .config(AuxiliaryConfig::default())
             .build();
         assert_eq!(aux.chain_len(), 0);
-        let err = startup_compression_llm_health_check(&aux, "test-model", 1_000)
+        let err = startup_compression_llm_health_check(&aux, Some("test-model"), 1_000)
             .await
             .unwrap_err();
         match err {
@@ -320,11 +328,28 @@ mod tests {
     /// the expected fields.
     #[test]
     fn ping_request_has_correct_shape() {
-        let r = ping_request("gpt-4o-mini");
+        let r = ping_request(Some("gpt-4o-mini"));
         assert_eq!(r.model.as_deref(), Some("gpt-4o-mini"));
         assert_eq!(r.temperature, Some(0.0));
         assert_eq!(r.max_tokens, Some(8));
         assert_eq!(r.messages.len(), 2);
         assert!(r.messages[0].content.as_deref().unwrap().contains("single"));
+    }
+
+    #[test]
+    fn ping_request_with_none_model_omits_model() {
+        // Regression: a `None` model must NOT be coerced to the literal
+        // "default" — that string would be forwarded to the provider as an
+        // (invalid) model id. `AuxiliaryClient::call` then falls back to the
+        // candidate's own default model.
+        let r = ping_request(None);
+        assert_eq!(r.model, None);
+        assert_eq!(r.max_tokens, Some(8));
+    }
+
+    #[test]
+    fn ping_request_with_empty_model_omits_model() {
+        let r = ping_request(Some(""));
+        assert_eq!(r.model, None);
     }
 }

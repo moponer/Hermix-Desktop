@@ -194,13 +194,18 @@ fn build_auxiliary_client_inner(
         &mut summary,
         "KIMI_API_KEY",
         "kimi",
-        "https://api.moonshot.ai/v1",
+        // Match `build_provider`'s kimi/moonshot default (`https://api.moonshot.cn/v1`).
+        "https://api.moonshot.cn/v1",
         default_models::KIMI,
     );
 
     // MiniMax — config.yaml first, env var second
     if let Some(key) = resolve_key(gateway, "minimax", "MINIMAX_API_KEY") {
-        let base_url = resolve_base_url(gateway, "minimax", "MINIMAX_BASE_URL", "https://api.minimax.io/v1");
+        // NOTE: must match `build_provider`'s minimax default in agent_builder.rs
+        // (`https://api.minimax.chat/v1`). The `.io` host rejects keys issued for
+        // the `.chat` console with 401, which is exactly the "chat works but the
+        // compression health check fails with invalid api key" symptom.
+        let base_url = resolve_base_url(gateway, "minimax", "MINIMAX_BASE_URL", "https://api.minimax.chat/v1");
         let provider: Arc<dyn LlmProvider> = Arc::new(GenericProvider::new(
             base_url,
             &key,
