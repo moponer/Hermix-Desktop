@@ -104,8 +104,17 @@ fn has_section(body: &str, heading: &str) -> bool {
     })
 }
 
+/// Like [`has_section`] but matches *any* of several candidate headings.
+/// Used to support both English and Chinese section titles so the health
+/// gate works for the product's Chinese-language skills (e.g. `## When to
+/// Activate` and `## 何时激活` are treated identically).
+fn has_any_section(body: &str, headings: &[&str]) -> bool {
+    headings.iter().any(|h| has_section(body, h))
+}
+
 /// Trigger-word patterns that indicate a description tells the LLM
-/// *when* to activate the skill.
+/// *when* to activate the skill. Covers both English and Chinese so the
+/// product's Chinese-language skills get full description credit.
 const TRIGGER_PHRASES: &[&str] = &[
     "use when",
     "use this when",
@@ -116,6 +125,14 @@ const TRIGGER_PHRASES: &[&str] = &[
     "relevant when",
     "use in",
     "use case",
+    // Chinese
+    "用于",
+    "适用",
+    "当你",
+    "使用时",
+    "激活时",
+    "以下场景",
+    "在以下情况",
 ];
 
 /// Check if the description contains a trigger phrase.
@@ -216,35 +233,83 @@ pub fn score_skill_md(path: &std::path::Path, content: &str) -> HealthBreakdown 
         }
     };
 
-    // --- 3. ## When to Activate (0.15) ---
-    b.when_to_activate = if has_section(body, "When to Activate") { 1.0 } else { 0.0 };
+    // --- 3. ## When to Activate (0.15) --- (English + Chinese aliases)
+    b.when_to_activate = if has_any_section(
+        body,
+        &[
+            "When to Activate",
+            "何时激活",
+            "适用场景",
+            "使用场景",
+            "激活时机",
+            "触发条件",
+            "激活条件",
+        ],
+    ) {
+        1.0
+    } else {
+        0.0
+    };
 
     // --- 4. ## Core Concepts or ## Instructions (0.10) ---
-    b.core_concepts = if has_section(body, "Core Concepts")
-        || has_section(body, "Instructions")
-    {
+    b.core_concepts = if has_any_section(
+        body,
+        &[
+            "Core Concepts",
+            "Instructions",
+            "核心概念",
+            "核心方法",
+            "核心实践",
+            "核心框架",
+            "核心原则",
+            "指令",
+            "原则",
+            "执行步骤",
+        ],
+    ) {
         1.0
     } else {
         0.0
     };
 
     // --- 5. ## Practical Guidance or ## Examples (0.10) ---
-    b.practical_guidance = if has_section(body, "Practical Guidance")
-        || has_section(body, "Examples")
-    {
+    b.practical_guidance = if has_any_section(
+        body,
+        &[
+            "Practical Guidance",
+            "Examples",
+            "实践指南",
+            "示例",
+            "例子",
+            "实践",
+            "实战",
+        ],
+    ) {
         1.0
     } else {
         0.0
     };
 
     // --- 6. ## Gotchas (0.05) ---
-    b.gotchas = if has_section(body, "Gotchas") { 1.0 } else { 0.0 };
+    b.gotchas = if has_any_section(body, &["Gotchas", "注意事项", "常见错误", "避坑", "陷阱"]) {
+        1.0
+    } else {
+        0.0
+    };
 
     // --- 7. ## Integration (0.05) ---
-    b.integration = if has_section(body, "Integration") { 1.0 } else { 0.0 };
+    b.integration = if has_any_section(body, &["Integration", "集成", "整合", "衔接"]) {
+        1.0
+    } else {
+        0.0
+    };
 
     // --- 8. ## References (0.05) ---
-    b.references = if has_section(body, "References") { 1.0 } else { 0.0 };
+    b.references = if has_any_section(body, &["References", "参考", "参考资料", "引用", "来源"]) {
+        1.0
+    } else {
+        0.0
+    };
 
     // --- 9. Body line budget (0.05) ---
     let line_count = body.lines().count().max(1);
@@ -448,5 +513,50 @@ mod tests {
         assert_eq!(report.total, 2);
         assert_eq!(report.flagged, 1); // bad-skill should be flagged
         assert!(report.avg_composite > 0.0);
+    }
+
+    // --- Bilingual (Chinese) support ---
+
+    #[test]
+    fn chinese_section_aliases_score_full() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_skill(
+            tmp.path(),
+            "---\nname: foo\ndescription: 用于协助用户起草或润色各类文本内容\nversion: 1.0.0\ntags: [x]\n---\n\
+             # 标题\n\n## 何时激活\n\n起草或润色时。\n\n## 核心概念\n\n先定读者。\n\n\
+             ## 实践指南\n\n```bash\necho hi\n```\n\n## 注意事项\n\n别替用户做判断。\n\n\
+             ## 集成\n\n与摘要任务衔接。\n\n## 参考\n\n- ctx.rs\n\n## 其它\n\n补充。",
+        );
+        let content = std::fs::read_to_string(&path).unwrap();
+        let b = score_skill_md(&path, &content);
+        assert!((b.when_to_activate - 1.0).abs() < f32::EPSILON);
+        assert!((b.core_concepts - 1.0).abs() < f32::EPSILON);
+        assert!((b.practical_guidance - 1.0).abs() < f32::EPSILON);
+        assert!((b.gotchas - 1.0).abs() < f32::EPSILON);
+        assert!((b.integration - 1.0).abs() < f32::EPSILON);
+        assert!((b.references - 1.0).abs() < f32::EPSILON);
+        // Chinese trigger phrase → full description credit
+        assert!((b.frontmatter_description - 1.0).abs() < f32::EPSILON);
+        // All dims present (+ version/tags/code/section bonuses) → ≥ 0.9
+        assert!(
+            b.composite() >= 0.9,
+            "chinese skill should score ≥ 0.9, got {} breakdown={:?}",
+            b.composite(),
+            b
+        );
+    }
+
+    #[test]
+    fn chinese_trigger_phrase_gives_full_description_credit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_skill(
+            tmp.path(),
+            "---\nname: foo\ndescription: 用于协助用户重构代码\n---\n## 适用场景\n\n重构时。",
+        );
+        let content = std::fs::read_to_string(&path).unwrap();
+        let b = score_skill_md(&path, &content);
+        assert!((b.frontmatter_description - 1.0).abs() < f32::EPSILON);
+        // `## 适用场景` is a Chinese alias for When to Activate
+        assert!((b.when_to_activate - 1.0).abs() < f32::EPSILON);
     }
 }

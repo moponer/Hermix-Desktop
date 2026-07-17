@@ -2,7 +2,7 @@
 name: "code-review"
 display_name: "代码审查"
 category: "software-development"
-description: "提交前的静态安全扫描、代码质量检查、测试覆盖率验证。"
+description: "用于：提交前的静态安全扫描、代码质量检查、测试覆盖率验证。"
 version: "0.1.0"
 author: "Hermes Desktop"
 source: "builtin"
@@ -60,3 +60,23 @@ tags: ["software-development", "builtin"]
 - Clippy (Rust)
 - ESLint (JavaScript)
 - SonarQube (多语言)
+
+## 实践指南
+1. 先读目标文件 / 代码块，理解意图
+2. 按检查清单（安全→性能→可维护性）逐项过
+3. 问题分级（严重 / 中等 / 建议），给文件:行号与修复建议
+4. 能修的给修复代码，不能修的标风险
+
+## 注意事项
+- 安全项（注入 / XSS / 泄露）必须拦，不能"建议"
+- 别只报问题不接修复，也别过度苛责风格
+- 测试覆盖低要提示，但不阻断合理 PR
+
+## 集成
+- 与 `debugging-methodology` 配合：审查发现的 bug 走调试流程
+- 与 `tdd-practice` 衔接：测试覆盖是审查项
+- 可接入 CI 做卡点
+
+## 参考
+- OWASP Top 10
+- 各语言 linter / SAST 官方规则集

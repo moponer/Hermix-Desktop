@@ -2,7 +2,7 @@
 name: "writing-assistant"
 display_name: "写作助手"
 category: "productivity"
-description: "文章写作、文案、邮件、报告、演讲稿 — 不同场景的语气、结构与节奏建议。"
+description: "用于：文章写作、文案、邮件、报告、演讲稿 — 不同场景的语气、结构与节奏建议。"
 version: "0.1.0"
 author: "Hermes Desktop"
 source: "builtin"
@@ -36,3 +36,22 @@ tags: ["productivity", "builtin", "writing"]
 ## 不做的事
 - 不替用户做价值判断（不写道歉信、不写裁员通知等敏感场景的具体话术）
 - 不堆砌华丽辞藻 — 清晰的表达永远比"看起来高级"更重要
+
+## 实践指南
+- 动笔前先定读者与目的（谁读、读完做什么）
+- 一句主旨：整篇只服务一个核心观点
+- 结构先行：大纲 → 血肉 → 头尾
+- 按场景给三档语气建议（正式 / 半正式 / 口语）
+
+## 注意事项
+- 不替用户做价值判断（敏感场景不给具体话术）
+- 不堆砌华丽辞藻，清晰优先
+- 中英文混排标点统一（中文全角、英文半角）
+
+## 集成
+- 与 `web-novel` 衔接：通用润色可承接小说成稿
+- 与 `summary` / `report-generation` 配合：先大纲再正文
+
+## 参考
+-  Strunk & White《The Elements of Style》
+- 各团队 README / 风格指南

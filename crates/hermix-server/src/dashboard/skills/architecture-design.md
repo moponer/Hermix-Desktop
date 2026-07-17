@@ -2,7 +2,7 @@
 name: "architecture-design"
 display_name: "系统架构设计"
 category: "software-development"
-description: "单体 vs 微服务、领域驱动设计(DDD)、高可用与高扩展方案设计方法论。"
+description: "用于：单体 vs 微服务、领域驱动设计（DDD）、高可用与高扩展方案设计的方法论。"
 version: "0.1.0"
 author: "Hermes Desktop"
 source: "builtin"
@@ -33,4 +33,30 @@ tags: ["software-development", "builtin"]
 3. 定义服务边界
 4. 设计数据模型
 5. 规划部署架构
+
+## 何时激活
+- 新系统从 0 设计，或老系统要重构时
+- 在单体 / 微服务之间纠结时
+- 面对高并发、高可用、扩容需求时
+
+## 实践指南
+1. 先画边界上下文（Bounded Context），再定服务
+2. 能单体就别急着微服务（分布式是成本）
+3. 用异步 / 事件解耦热点路径
+4. 容量与故障要预先设计（限流 / 降级 / 熔断）
+
+## 注意事项
+- 避免过度设计（YAGNI）：先简单后演进
+- 微服务不是银弹，运维成本陡增
+- 数据一致性优先选最终一致，慎用水分布式事务
+
+## 集成
+- 与 `database-design` 配合：存储是架构落地
+- 与 `api-design` 衔接：服务间靠接口通信
+- 与 `devops-practice` 衔接：部署拓扑是架构输出
+
+## 参考
+- 《企业应用架构模式》（Martin Fowler）
+- 《领域驱动设计》（Eric Evans）
+- 《设计数据密集型应用》（Martin Kleppmann）
 

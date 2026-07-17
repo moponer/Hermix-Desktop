@@ -2,7 +2,7 @@
 name: "debugging-methodology"
 display_name: "系统化调试"
 category: "software-development"
-description: "4 阶段根因调查方法论：复现、隔离、分析、修复。"
+description: "用于：4 阶段根因调查方法论 — 复现、隔离、分析、修复。"
 version: "0.1.0"
 author: "Hermes Desktop"
 source: "builtin"
@@ -64,3 +64,22 @@ tags: ["software-development", "builtin"]
 ### 修复方案
 [修复代码]
 ```
+
+## 实践指南
+1. 先稳定复现，复现不了不修（可能是偶发 / 环境）
+2. 二分法隔离范围，别一上来读全部代码
+3. 预期 vs 实际差异是根因线索
+4. 修最小、补测试防回归
+
+## 注意事项
+- 别靠"猜"改代码，先有假设再验证
+- 别顺手重构无关代码，保持 diff 聚焦
+- 修完跑测试，确认没引入新问题
+
+## 集成
+- 与 `tdd-practice` 配合：先用失败测试锁定再修
+- 与 `code-review` 衔接：修完进审查
+
+## 参考
+- 《调试九法》（David Agans）
+- 各语言调试器 / 日志最佳实践

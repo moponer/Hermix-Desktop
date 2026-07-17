@@ -1,12 +1,27 @@
 ---
 name: "office-cli"
+display_name: "OfficeCLI 文档处理"
 category: "office"
-description: "OfficeCLI — AI 智能体的 Office 命令行套件。创建、读取、编辑 Word/Excel/PPT 文件。"
+description: "用于：AI 智能体创建、读取、编辑 Word/Excel/PPT 文件。OfficeCLI 是 Hermix Desktop 内置的 Office 命令行套件，无需安装 Office。"
+version: "0.1.0"
+author: "Hermes Desktop"
+source: "builtin"
+security_level: "safe"
+tags: ["office", "builtin"]
 ---
 
 # officecli
 
 AI-friendly CLI for .docx, .xlsx, .pptx. Single binary, no dependencies, no Office installation needed.
+
+## 何时激活
+
+当智能体需要**创建、读取或编辑** Office 文档（.docx / .xlsx / .pptx）时启用本技能，并调用内置 `office_cli` 工具执行。典型场景：
+
+- 生成报告、合同、简历等 Word 文档
+- 生成或更新表格、预算、数据透视表等 Excel 文档
+- 制作演示文稿、幻灯片
+- 在预览界面渲染或改写已有 Office 文档
 
 ## Install
 
@@ -20,7 +35,7 @@ If not found, the binary is at `<app_data>/binaries/officecli-x86_64-pc-windows-
 
 ---
 
-## Strategy
+## 核心概念
 
 **L1 (read) → L2 (DOM edit) → L3 (raw XML)**. Always prefer higher layers. Add `--json` for structured output.
 
@@ -53,7 +68,7 @@ officecli close report.docx      # save and release
 
 ---
 
-## Quick Start
+## 实践指南
 
 **PPT:**
 ```bash
@@ -154,7 +169,7 @@ officecli raw-set <file> <part> --xpath "..." --action replace --xml '<w:p>...</
 
 ---
 
-## Common Pitfalls
+## 注意事项
 
 | Pitfall | Correct Approach |
 |---------|-----------------|
@@ -172,3 +187,15 @@ officecli raw-set <file> <part> --xpath "..." --action replace --xml '<w:p>...</
 - `--index` is **0-based**: `--index 0` = first position
 - After modifications, verify with `validate` and/or `view issues`
 - **When unsure**, run `officecli help <format> <element>` instead of guessing
+
+## 集成
+
+- 后端通过内置工具 `office_cli` 执行所有命令（在 `register_builtins.rs` 注册，`essential::ESSENTIAL_TOOLSETS["office"]` 依赖）。
+- 桌面端预览：后端 `render_office_preview` 命令 shell out 到 `officecli` 二进制；前端 `RightSidebar.tsx` / `SpreadsheetView.tsx` 渲染 docx/xlsx/pptx 预览。
+- LLM 调用方式：本技能向模型描述可用命令，模型生成 `office_cli` 工具调用参数（命令 + 文件路径 + `--prop`）。
+
+## 参考
+
+- 命令行帮助（最权威的属性名/取值参考）：`officecli help`、`officecli help docx`、`officecli help docx paragraph`
+- OpenXML 规范与文档结构见 `officecli` 自带 help 输出
+- 二进制位置：`<app_data>/binaries/officecli-x86_64-pc-windows-msvc.exe`（随 Hermix Desktop 捆绑）

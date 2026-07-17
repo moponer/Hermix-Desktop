@@ -577,10 +577,15 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         "web-novel",
         include_str!("skills/web-novel.md"),
     ),
-    // office-cli: removed 2026-06-22 — the binary is no longer bundled
-    // and the built-in tool registration has been removed from
-    // register_builtins.rs. Keeping the SKILL.md only confuses the LLM
-    // into calling a non-existent tool.
+    // office-cli: re-enabled 2026-07-02 (P1.8) — the `office_cli` builtin
+    // tool was re-registered in register_builtins.rs and the desktop preview
+    // (render_office_preview) shells out to the bundled `officecli` binary,
+    // so this skill is live again. See hermix-tools register_builtins.rs.
+    (
+        "office",
+        "office-cli",
+        include_str!("skills/office/office-cli/SKILL.md"),
+    ),
 ];
 
 /// Materialise the bundled builtin skills into `skills_dir`. Returns the
@@ -638,7 +643,7 @@ mod tests {
     fn seed_builtin_skills_writes_all_skills() {
         let dir = tempdir().unwrap();
         let count = seed_builtin_skills(dir.path()).unwrap();
-        assert_eq!(count, 16, "should seed exactly 16 skills");
+        assert_eq!(count, 17, "should seed exactly 17 skills");
         // Verify some exist
         assert!(
             dir.path().join("software-development").join("architecture-design").join("SKILL.md").exists(),
@@ -647,6 +652,10 @@ mod tests {
         assert!(
             dir.path().join("finance").join("investment-analysis").join("SKILL.md").exists(),
             "investment-analysis SKILL.md should exist"
+        );
+        assert!(
+            dir.path().join("office").join("office-cli").join("SKILL.md").exists(),
+            "office-cli SKILL.md should exist (re-enabled in P1.8)"
         );
         // Idempotent: second call writes 0
         let second = seed_builtin_skills(dir.path()).unwrap();
@@ -693,7 +702,7 @@ mod tests {
         seed_builtin_skills(dir.path()).unwrap();
         let store = hermix_skills::FileSkillStore::new(dir.path().to_path_buf());
         let metas = store.list().await.unwrap();
-        assert_eq!(metas.len(), 16, "list should return all 16 seeded skills");
+        assert_eq!(metas.len(), 17, "list should return all 17 seeded skills");
         // Verify names from each category
         let names: Vec<&str> = metas.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"architecture-design"));
