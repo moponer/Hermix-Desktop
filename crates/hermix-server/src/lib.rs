@@ -3684,15 +3684,22 @@ async fn handle_ws_stream_send(
         tracing::warn!(
             session = %session_id,
             text_len = request.text.len(),
-            "active_stream: duplicate (session_id, text) already running; rejecting"
+            "active_stream: duplicate (session_id, text) already running; settling as deduped"
         );
+        // 2026-07-17: 之前这个分支返回 `StreamEvent::Error`(code=
+        // "duplicate_stream")，桌面端把它渲染成红色的「发送失败」横幅——
+        // 这是误导：消息并没有失败，它正在被处理。这里改为与上方
+        // `check_recent_send` 去重路径一致，发一个合成的 `Done`
+        // (finish_reason: "deduped")，让客户端干净地落定这条重复请求，
+        // 而原本在跑的 agent 不受影响。去重锁依然生效（重复发送被丢弃），
+        // 只是不再伪装成「失败」。
         let envelope = WsEnvelope {
             version: 1,
             request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
             trace_id: trace_id.to_string(),
-            event: StreamEvent::Error {
-                code: "duplicate_stream".to_string(),
-                message: "This message is already being processed. Please wait for the current response to complete.".to_string(),
+            event: StreamEvent::Done {
+                content: String::new(),
+                finish_reason: Some("deduped".to_string()),
             },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {
