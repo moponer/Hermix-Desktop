@@ -189,6 +189,18 @@ pub async fn auto_compress_if_over_threshold<F>(
                 turns_removed: 0,
                 tool_results_pruned: 0,
                 deduplication_count: 0,
+                // Phase A+B (2026-07-17): propagate the per-pass
+                // counters through the trait surface. After
+                // `CompressionEngineMetrics` grew these fields (and
+                // `ContextCompressor::last_metrics` was taught to
+                // copy them from its own `last_metrics`), the real
+                // numbers flow here instead of zero. Plugins that
+                // don't track them still get zero (the field is
+                // `Default::default()`).
+                user_dedup_count: engine_metrics.user_dedup_count as usize,
+                pin_count: engine_metrics.pin_count as usize,
+                dropped_count: engine_metrics.dropped_count as usize,
+                trigger_reason: engine_metrics.trigger_reason.clone(),
                 summary_api_calls: 0,
                 summary_errors: engine_metrics.summary_errors as u32,
                 anti_thrashing_triggered: false,

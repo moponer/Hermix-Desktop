@@ -492,6 +492,18 @@ pub struct CompressionMetrics {
     pub tool_results_pruned: usize,
     /// Number of duplicate tool results deduplicated.
     pub deduplication_count: usize,
+    /// Phase A2 (2026-07-17): number of user-text adjacent dedups
+    /// (Pass 0 in `prune_old_tool_results`). 0 means none.
+    pub user_dedup_count: usize,
+    /// Phase A2 (2026-07-17): number of messages preserved by pin
+    /// filter (skipped every compression stage).
+    pub pin_count: usize,
+    /// Phase B6 (2026-07-17): number of messages dropped by
+    /// `TokenScorer` (score below `drop_score_threshold`).
+    pub dropped_count: usize,
+    /// Phase A4 (2026-07-17): what triggered this compression —
+    /// `"threshold"`, `"explicit"`, etc. Empty means unknown.
+    pub trigger_reason: String,
     /// Number of summary API calls made.
     pub summary_api_calls: u32,
     /// Number of summary API errors.
@@ -661,6 +673,19 @@ pub struct CompressorConfig {
     pub summary_tokens_ceiling: u64,
     /// Characters per token approximation ratio.
     pub chars_per_token: usize,
+    /// Phase A2 (2026-07-17): roles that should be excluded from all
+    /// compression stages. Matched case-sensitively against
+    /// `role_label(role)` (`"system"` / `"user"` / `"assistant"` /
+    /// `"tool"`). Empty by default — opt-in.
+    pub pin_roles: Vec<String>,
+    /// Phase A2 (2026-07-17): case-insensitive substrings. A message
+    /// is pinned if its content (or any of its tool-call args)
+    /// contains any of these substrings. Empty by default — opt-in.
+    pub pin_keywords: Vec<String>,
+    /// Phase B6 (2026-07-17): score threshold for the pre-summary
+    /// drop pass. Messages scoring strictly below this value are
+    /// removed from context (unless pinned). Set to 0.0 to disable.
+    pub drop_score_threshold: f64,
 }
 
 impl Default for CompressorConfig {
@@ -679,6 +704,9 @@ impl Default for CompressorConfig {
             min_summary_tokens: 2_000,
             summary_tokens_ceiling: 12_000,
             chars_per_token: 4,
+            pin_roles: Vec::new(),
+            pin_keywords: Vec::new(),
+            drop_score_threshold: 0.30,
         }
     }
 }
@@ -750,6 +778,18 @@ pub struct ContextCompressor {
     ineffective_compression_count: u32,
     /// Metrics from the most recent compression operation.
     last_metrics: CompressionMetrics,
+    /// Phase A1 (2026-07-17): number of adjacent user-text dedups
+    /// in the most recent compress() call (Pass 0).
+    last_user_dedup_count: usize,
+    /// Phase A2 (2026-07-17): number of messages preserved by pin
+    /// filter in the most recent compress() call.
+    last_pin_count: usize,
+    /// Phase A4 (2026-07-17): trigger reason for the most recent
+    /// compress() call (`"threshold"`, `"explicit"`, …).
+    last_trigger_reason: String,
+    /// Phase A4 (2026-07-17): structured CompressionReport from the
+    /// most recent compress() call.
+    last_compression_report: Option<crate::compression_pipeline::CompressionReport>,
     /// 2026-06-26 (A): the raw `turns_to_summarize` slice from the
     /// most recent compression. The compressor folds this into a
     /// handoff summary and the in-memory conversation then drops it
@@ -949,6 +989,11 @@ impl ContextCompressor {
             failure_cooldown_until: None,
             ineffective_compression_count: 0,
             last_metrics: CompressionMetrics::default(),
+            // Phase A (2026-07-17):
+            last_user_dedup_count: 0,
+            last_pin_count: 0,
+            last_trigger_reason: String::new(),
+            last_compression_report: None,
             last_archived_turns: Vec::new(),
             // Day 4: circuit breaker starts closed (no failures yet).
             consecutive_llm_failures: 0,
@@ -1356,11 +1401,19 @@ impl ContextCompressor {
     ///   summary replacement + screenshot stripping + argument
     ///   truncation). This is the historical "pruned" counter the
     ///   breaker and logs already consumed.
+    ///
+    /// 2026-07-17 (Phase A2): if `pin` is `Some`, messages that
+    /// match the pin filter are preserved verbatim — every pass
+    /// below short-circuits on pinned indices. Phase A1 user-text
+    /// dedup runs *before* this method (see
+    /// `compression_pipeline::dedup_adjacent_user`) and is also
+    /// pin-aware.
     pub fn prune_old_tool_results(
         &self,
         messages: &[Message],
         protect_tail_count: usize,
         protect_tail_tokens: Option<u64>,
+        pin: Option<&crate::compression_pipeline::PinConfig>,
     ) -> (Vec<Message>, usize, usize) {
         if messages.is_empty() {
             return (Vec::new(), 0, 0);
@@ -1370,6 +1423,16 @@ impl ContextCompressor {
         let mut result: Vec<Message> = messages.to_vec();
         let mut pruned = 0;
         let mut deduped = 0;
+
+        // Phase A2 (2026-07-17): pin filter. Build a `bool` slice
+        // once so per-iteration checks stay O(1). When `pin` is
+        // `None`, every index is "not pinned" and the existing
+        // behavior is preserved bit-for-bit.
+        let pinned: Vec<bool> = match pin {
+            Some(p) => result.iter().map(|m| p.is_pinned(m)).collect(),
+            None => vec![false; n],
+        };
+        let is_pinned = |i: usize| -> bool { pinned.get(i).copied().unwrap_or(false) };
 
         let prune_boundary = if let Some(budget) = protect_tail_tokens.filter(|b| *b > 0) {
             let mut accumulated: u64 = 0;
@@ -1393,6 +1456,9 @@ impl ContextCompressor {
         // Pass 1: Deduplicate identical tool results (MD5 hash).
         let mut content_hashes: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for i in (0..prune_boundary).rev() {
+            if is_pinned(i) {
+                continue;
+            }
             let content = result[i].content.as_deref().unwrap_or("");
             if result[i].role != MessageRole::Tool || content.len() < 200 {
                 continue;
@@ -1427,8 +1493,8 @@ impl ContextCompressor {
             }
         }
 
-        for msg in result.iter_mut().take(prune_boundary) {
-            if msg.role != MessageRole::Tool {
+        for (i, msg) in result.iter_mut().take(prune_boundary).enumerate() {
+            if is_pinned(i) || msg.role != MessageRole::Tool {
                 continue;
             }
             let content = msg.content.as_deref().unwrap_or("");
@@ -1457,8 +1523,8 @@ impl ContextCompressor {
 
         // Pass 3: Truncate large tool_call arguments in assistant messages
         // outside the protected tail.
-        for msg in result.iter_mut().take(prune_boundary) {
-            if msg.role != MessageRole::Assistant {
+        for (i, msg) in result.iter_mut().take(prune_boundary).enumerate() {
+            if is_pinned(i) || msg.role != MessageRole::Assistant {
                 continue;
             }
             if let Some(ref mut tcs) = msg.tool_calls {
@@ -1474,8 +1540,8 @@ impl ContextCompressor {
         // Pass 4: Strip old screenshots/images from tool results.
         // Replace base64-encoded image data with a placeholder to prevent
         // re-shipping multi-MB blobs across compression passes.
-        for msg in result.iter_mut().take(prune_boundary) {
-            if msg.role != MessageRole::Tool {
+        for (i, msg) in result.iter_mut().take(prune_boundary).enumerate() {
+            if is_pinned(i) || msg.role != MessageRole::Tool {
                 continue;
             }
             if let Some(ref mut content) = msg.content {
@@ -1904,18 +1970,11 @@ Write only the summary body. Do not include any preamble or prefix."
         // vector stays clean.
         let messages = crate::flush_memories::strip_flush_sentinels(messages);
 
-        let n_messages = messages.len();
-        let min_for_compress = self.config.protect_first_n + 3 + 1;
-        if n_messages <= min_for_compress {
-            if !self.config.quiet_mode {
-                tracing::warn!(
-                    "Cannot compress: only {} messages (need > {})",
-                    n_messages,
-                    min_for_compress,
-                );
-            }
-            return messages;
-        }
+        // 2026-07-17: `n_messages` and the min_for_compress gate
+        // are now re-bound AFTER the pre-summary passes (Phase 0,
+        // 3.5, A1, 1, 1.5) below — those passes shrink the slice,
+        // so the original length-capture point was off by
+        // however many messages were reduced.
 
         let display_tokens = current_tokens
             .or(Some(self.last_prompt_tokens))
@@ -1934,11 +1993,32 @@ Write only the summary body. Do not include any preamble or prefix."
         // an additional layer of compression without API cost.
         let messages = Self::context_collapse(&messages, self.config.protect_last_n, 0.90);
 
+        // Phase A2 (2026-07-17): build pin config once per compress()
+        // call so every pass below sees a consistent view.
+        let pin_cfg = crate::compression_pipeline::PinConfig::from_compressor_config(&self.config);
+
+        // Phase A1 (2026-07-17): Pass 0 — adjacent user-text dedup.
+        // Runs before Phase 1 so the tool dedup pass operates on
+        // the post-user-dedup slice. Pinned messages are exempt.
+        let user_messages_for_dedup = messages.clone();
+        let (messages, user_dedup_count) =
+            crate::compression_pipeline::dedup_adjacent_user(messages);
+        self.last_user_dedup_count = user_dedup_count;
+        if user_dedup_count > 0 && !self.config.quiet_mode {
+            tracing::info!(
+                "Pre-compression: Pass 0 deduped {} adjacent user message(s)",
+                user_dedup_count,
+            );
+        }
+        // Quiet the unused-variable lint when min_tail forces a no-op above.
+        let _ = user_messages_for_dedup;
+
         // Phase 1: prune old tool results.
-        let (messages, dedup_count, pruned_count) = self.prune_old_tool_results(
+        let (mut messages, dedup_count, pruned_count) = self.prune_old_tool_results(
             &messages,
             self.config.protect_last_n,
             Some(self.tail_token_budget),
+            pin_cfg.as_ref(),
         );
         if pruned_count > 0 && !self.config.quiet_mode {
             tracing::info!(
@@ -1947,6 +2027,67 @@ Write only the summary body. Do not include any preamble or prefix."
                 dedup_count,
             );
         }
+
+        // Compute pin count once for the report. Pinned messages
+        // survive every pass above (Pass 0 user dedup, Pass 1
+        // tool dedup, Pass 2 tool summary, Pass 3 args, Pass 4
+        // screenshots) and Phase 1.5 below.
+        self.last_pin_count = pin_cfg
+            .as_ref()
+            .map(|p| messages.iter().filter(|m| p.is_pinned(m)).count())
+            .unwrap_or(0);
+
+        // Phase 1.5 (2026-07-17, Phase B6): score-based drop.
+        // Messages whose TokenScorer score is strictly below
+        // `drop_score_threshold` are removed from context entirely
+        // (unless pinned). Disabled when threshold <= 0.0.
+        let drop_threshold = self.config.drop_score_threshold;
+        let dropped_count: usize = if drop_threshold > 0.0 {
+            let scorer = crate::compression_pipeline::TokenScorer::new();
+            let (kept, dropped) = crate::compression_pipeline::drop_low_score(
+                messages,
+                &scorer,
+                pin_cfg.as_ref(),
+                drop_threshold,
+            );
+            messages = kept;
+            if dropped > 0 && !self.config.quiet_mode {
+                tracing::info!(
+                    "Pre-compression: dropped {} low-score message(s) below threshold {}",
+                    dropped,
+                    drop_threshold,
+                );
+            }
+            dropped
+        } else {
+            0
+        };
+
+        // 2026-07-17: re-bind `n_messages` after every reduction
+        // pass (Phase 0 snip, Phase 3.5 collapse, Phase A1 user
+        // dedup, Phase 1 tool prune, Phase 1.5 score drop). The
+        // old value was captured before these passes, so using it
+        // as the tail-loop upper bound would index past the end of
+        // the now-shorter `messages` slice.
+        let n_messages = messages.len();
+        let min_for_compress = self.config.protect_first_n + 3 + 1;
+        if n_messages <= min_for_compress {
+            if !self.config.quiet_mode {
+                tracing::warn!(
+                    "Cannot compress: only {} messages (need > {})",
+                    n_messages,
+                    min_for_compress,
+                );
+            }
+            return messages;
+        }
+
+        // Trigger reason: this is the auto-compression path
+        // triggered by the agent loop when context pressure crosses
+        // the threshold. Explicit (user-initiated) compress calls
+        // would set a different value here, but today every caller
+        // goes through `auto_compress_if_over_threshold`.
+        self.last_trigger_reason = "threshold".to_string();
 
         // Phase 2: determine boundaries.
         let compress_start = self.align_boundary_forward(&messages, self.config.protect_first_n);
@@ -2140,6 +2281,11 @@ Write only the summary body. Do not include any preamble or prefix."
             // messages that were replaced with the
             // `[Duplicate tool output]` marker (MD5 dedup pass).
             deduplication_count: dedup_count,
+            // Phase A+B (2026-07-17):
+            user_dedup_count: self.last_user_dedup_count,
+            pin_count: self.last_pin_count,
+            dropped_count,
+            trigger_reason: self.last_trigger_reason.clone(),
             summary_api_calls: 1,
             summary_errors: if summary_generated { 0 } else { 1 },
             anti_thrashing_triggered: anti_thrashing,
@@ -2155,6 +2301,33 @@ Write only the summary body. Do not include any preamble or prefix."
             );
             tracing::info!("Compression #{} complete: {}", self.compression_count, self.last_metrics);
         }
+
+        // Phase A4 (2026-07-17): emit the structured
+        // CompressionReport so dashboards and trace logs see the
+        // full pipeline breakdown (pin / dedup / prune / drop /
+        // per-role counts).
+        let report = crate::compression_pipeline::CompressionReport {
+            pre_tokens: old_estimate,
+            post_tokens: new_estimate,
+            pre_count: n_messages,
+            post_count: compressed.len(),
+            pin_count: self.last_pin_count,
+            dedup_count: dedup_count.saturating_add(self.last_user_dedup_count),
+            pruned_count,
+            dropped_count,
+            summary_tokens: Some(estimate_messages_tokens(&compressed)),
+            trigger_reason: if self.last_trigger_reason.is_empty() {
+                "auto".into()
+            } else {
+                self.last_trigger_reason.clone()
+            },
+            per_role_pre: crate::compression_pipeline::CompressionReport::compute_per_role(&messages),
+            per_role_post: crate::compression_pipeline::CompressionReport::compute_per_role(&compressed),
+        };
+        if !self.config.quiet_mode {
+            tracing::info!("{}", report.format_line());
+        }
+        self.last_compression_report = Some(report);
 
         // 2026-06-26 (A): stash the raw `turns_to_summarize` slice so
         // the agent loop can hand it to
@@ -2282,6 +2455,17 @@ impl CompressionEngine for ContextCompressor {
             tokens_saved: self.last_metrics.tokens_saved,
             summary_errors: self.last_metrics.summary_errors as u64,
             compression_count: self.compression_count,
+            // Phase A+B (2026-07-17): propagate the per-pass
+            // counters through the engine-agnostic trait surface
+            // so `compression_ops::auto_compress_if_over_threshold`
+            // can persist them instead of hard-coding zero. The
+            // `tracing::info!` line emitted inside `compress()`
+            // already had them; this closes the loop for the
+            // dashboard / `compression_summary_history` write.
+            user_dedup_count: self.last_metrics.user_dedup_count as u64,
+            pin_count: self.last_metrics.pin_count as u64,
+            dropped_count: self.last_metrics.dropped_count as u64,
+            trigger_reason: self.last_metrics.trigger_reason.clone(),
         }
     }
 
@@ -2782,7 +2966,7 @@ mod tests {
             messages.push(msg(MessageRole::User, &format!("t{i}")));
         }
 
-        let (out, _dedup, pruned) = compressor.prune_old_tool_results(&messages, 20, None);
+        let (out, _dedup, pruned) = compressor.prune_old_tool_results(&messages, 20, None, None);
         assert!(pruned >= 1);
         // Smart summary replaces oversized output (e.g. "[ALREADY EXECUTED] [shell]  (500 chars)")
         let first_tool_content = out[3].content.as_deref().unwrap_or("");
@@ -3113,6 +3297,203 @@ mod tests {
             })
             .expect("static fallback banner missing");
         assert!(banner.contains(SUMMARY_PREFIX));
+    }
+
+    // ---------- Phase A+B integration (2026-07-17) ----------
+
+    #[tokio::test]
+    async fn compress_pipeline_runs_user_dedup_pin_and_score_drop() {
+        // Configuration that exercises every new pass:
+        //  - pin_keywords: any message containing "NEVER COMPRESS"
+        //    is preserved verbatim.
+        //  - drop_score_threshold = 0.40 so low-score assistants
+        //    at low index get dropped.
+        let provider = CannedSummaryProvider::new("summary text");
+        let cfg = CompressorConfig {
+            context_length: 20_000,
+            threshold_percent: 0.5,
+            protect_first_n: 2,
+            protect_last_n: 5,
+            pin_keywords: vec!["NEVER COMPRESS".into()],
+            drop_score_threshold: 0.40,
+            ..quiet_config()
+        };
+        let mut compressor = ContextCompressor::new(cfg, aux_with_provider(provider.clone()));
+
+        let mut messages = vec![
+            msg(MessageRole::System, "system rules"),
+            msg(MessageRole::User, "kickoff"),
+        ];
+        // 30 user/assistant turns to push over the threshold.
+        for i in 0..30 {
+            messages.push(msg(
+                if i % 2 == 0 {
+                    MessageRole::User
+                } else {
+                    MessageRole::Assistant
+                },
+                &format!("turn {i}: {}", "x".repeat(800)),
+            ));
+        }
+        // Pin sentinel: a system message in the body that must
+        // survive every pass.
+        messages.push(msg(
+            MessageRole::System,
+            "NEVER COMPRESS this critical safety rule",
+        ));
+        // Pass 0 user-text dedup target: two adjacent identical
+        // user messages in the tail.
+        messages.push(msg(MessageRole::User, "the same tail message"));
+        messages.push(msg(MessageRole::User, "the same tail message"));
+        // Two final turns to keep protect_last_n honest.
+        messages.push(msg(MessageRole::Assistant, "tail a"));
+        messages.push(msg(MessageRole::User, "tail b"));
+
+        let _out = compressor.compress(messages, Some(80_000)).await;
+
+        // Pass 0 user dedup was counted.
+        assert!(
+            compressor.last_user_dedup_count >= 1,
+            "Pass 0 should have deduped at least one user message (got {})",
+            compressor.last_user_dedup_count,
+        );
+
+        // Pin filter saw at least the "NEVER COMPRESS" sentinel.
+        assert!(
+            compressor.last_pin_count >= 1,
+            "pin filter should have matched at least one message (got {})",
+            compressor.last_pin_count,
+        );
+
+        // CompressionReport was populated.
+        let report = compressor
+            .last_compression_report
+            .as_ref()
+            .expect("CompressionReport missing — compress() must populate it");
+        assert_eq!(report.trigger_reason, "threshold");
+        assert!(report.pre_count > 0);
+        assert!(report.dedup_count >= 1, "report.dedup_count={}", report.dedup_count);
+        assert!(report.pin_count >= 1, "report.pin_count={}", report.pin_count);
+    }
+
+    /// 2026-07-17 (Phase A+B limitation close-out): the engine-agnostic
+    /// `CompressionEngine::last_metrics()` must propagate the new
+    /// per-pass counters (`user_dedup_count` / `pin_count` /
+    /// `dropped_count` / `trigger_reason`) so the persistence path
+    /// in `compression_ops::auto_compress_if_over_threshold` no
+    /// longer has to hard-code them to zero. Before this fix the
+    /// trait snapshot was a 3-field struct (`tokens_saved` /
+    /// `summary_errors` / `compression_count`) and the translator
+    /// in `compression_ops.rs` left the new fields at their
+    /// `Default` values, losing the real per-pass numbers.
+    #[tokio::test]
+    async fn engine_trait_last_metrics_propagates_phase_ab_counters() {
+        use hermix_core::CompressionEngine;
+
+        let provider = CannedSummaryProvider::new("summary text");
+        let cfg = CompressorConfig {
+            context_length: 20_000,
+            threshold_percent: 0.5,
+            protect_first_n: 2,
+            protect_last_n: 5,
+            pin_keywords: vec!["NEVER COMPRESS".into()],
+            drop_score_threshold: 0.40,
+            ..quiet_config()
+        };
+        let mut compressor = ContextCompressor::new(cfg, aux_with_provider(provider));
+
+        // Build a conversation with one pin sentinel, two adjacent
+        // identical user messages (Pass 0 dedup target), and a long
+        // middle so the threshold pass actually fires.
+        let mut messages = vec![
+            msg(MessageRole::System, "system rules"),
+            msg(MessageRole::User, "kickoff"),
+        ];
+        for i in 0..30 {
+            messages.push(msg(
+                if i % 2 == 0 { MessageRole::User } else { MessageRole::Assistant },
+                &format!("turn {i}: {}", "x".repeat(800)),
+            ));
+        }
+        messages.push(msg(MessageRole::System, "NEVER COMPRESS this critical safety rule"));
+        messages.push(msg(MessageRole::User, "the same tail message"));
+        messages.push(msg(MessageRole::User, "the same tail message"));
+        messages.push(msg(MessageRole::Assistant, "tail a"));
+        messages.push(msg(MessageRole::User, "tail b"));
+
+        // Pre-flight: the engine metrics are zero before compress().
+        let pre = <ContextCompressor as CompressionEngine>::last_metrics(&compressor);
+        assert_eq!(pre.user_dedup_count, 0, "fresh engine should start at 0");
+        assert_eq!(pre.pin_count, 0, "fresh engine should start at 0");
+        assert_eq!(pre.dropped_count, 0, "fresh engine should start at 0");
+        assert!(pre.trigger_reason.is_empty(), "fresh engine has no trigger");
+
+        let _out = compressor.compress(messages, Some(80_000)).await;
+
+        // Post-flight: every Phase A+B field must now be populated
+        // (the underlying `last_metrics` was already populated by
+        // `compress()`; this asserts the **trait projection** carries
+        // it across the boundary).
+        let post = <ContextCompressor as CompressionEngine>::last_metrics(&compressor);
+        assert_eq!(
+            post.user_dedup_count, compressor.last_metrics.user_dedup_count as u64,
+            "trait surface must propagate user_dedup_count (got {} vs {})",
+            post.user_dedup_count, compressor.last_metrics.user_dedup_count,
+        );
+        assert!(
+            post.user_dedup_count >= 1,
+            "Pass 0 should have deduped >= 1 user message (got {})",
+            post.user_dedup_count,
+        );
+
+        assert_eq!(
+            post.pin_count, compressor.last_metrics.pin_count as u64,
+            "trait surface must propagate pin_count (got {} vs {})",
+            post.pin_count, compressor.last_metrics.pin_count,
+        );
+        assert!(
+            post.pin_count >= 1,
+            "pin filter should have matched >= 1 message (got {})",
+            post.pin_count,
+        );
+
+        // dropped_count can be zero on small corpora (score > 0.40 for
+        // everything); when it is zero the propagation is still
+        // observable, so we only assert equality here.
+        assert_eq!(
+            post.dropped_count, compressor.last_metrics.dropped_count as u64,
+            "trait surface must propagate dropped_count (got {} vs {})",
+            post.dropped_count, compressor.last_metrics.dropped_count,
+        );
+
+        assert_eq!(
+            post.trigger_reason, compressor.last_metrics.trigger_reason,
+            "trait surface must propagate trigger_reason (got {:?} vs {:?})",
+            post.trigger_reason, compressor.last_metrics.trigger_reason,
+        );
+        assert_eq!(
+            post.trigger_reason, "threshold",
+            "auto-compress over the threshold must record trigger_reason='threshold' (got {:?})",
+            post.trigger_reason,
+        );
+
+        // Pre-existing fields must keep their values too (guard against
+        // regression of the existing 3-field path).
+        assert_eq!(post.tokens_saved, compressor.last_metrics.tokens_saved);
+        assert_eq!(
+            post.summary_errors,
+            compressor.last_metrics.summary_errors as u64,
+        );
+        assert_eq!(post.compression_count, compressor.compression_count);
+    }
+
+    #[test]
+    fn compressor_default_config_has_no_pins() {
+        let cfg = CompressorConfig::default();
+        assert!(cfg.pin_roles.is_empty());
+        assert!(cfg.pin_keywords.is_empty());
+        // drop_score_threshold defaults to 0.30 (Phase B6).
+        assert!((cfg.drop_score_threshold - 0.30).abs() < f64::EPSILON);
     }
 
     // ---------- redact_sensitive_text ----------
@@ -3549,7 +3930,7 @@ mod tests {
             messages.push(msg(MessageRole::User, &format!("tail {i}")));
         }
 
-        let (out, dedup, pruned) = compressor.prune_old_tool_results(&messages, 20, None);
+        let (out, dedup, pruned) = compressor.prune_old_tool_results(&messages, 20, None, None);
         assert!(dedup >= 1, "expected at least one dedup, got {dedup}");
         assert!(pruned >= dedup, "pruned includes dedup, got pruned={pruned}");
         // At least one message should now carry the duplicate marker.

@@ -28,6 +28,7 @@ pub mod consciousness;
 pub mod compression;
 pub mod compression_health;
 pub mod compression_ops;
+pub mod compression_pipeline;
 pub mod context;
 pub mod context_files;
 pub mod context_pressure;

@@ -638,4 +638,19 @@ pub struct CompressionEngineMetrics {
     pub tokens_saved: u64,
     pub summary_errors: u64,
     pub compression_count: u64,
+    /// 2026-07-17 (Phase A1): number of adjacent user-text dedups
+    /// in the most recent compress() call (Pass 0). 0 means none.
+    pub user_dedup_count: u64,
+    /// 2026-07-17 (Phase A2): number of messages preserved by
+    /// the pin filter in the most recent compress() call.
+    pub pin_count: u64,
+    /// 2026-07-17 (Phase B6): number of messages dropped by
+    /// `TokenScorer` because the score was below the configured
+    /// `drop_score_threshold`.
+    pub dropped_count: u64,
+    /// 2026-07-17 (Phase A4): what triggered the compression —
+    /// `"threshold"`, `"explicit"`, etc. Empty means unknown.
+    /// Boxed String keeps the struct layout-compatible for
+    /// existing fields even when serde renames this on the wire.
+    pub trigger_reason: String,
 }
