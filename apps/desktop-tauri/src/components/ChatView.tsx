@@ -353,7 +353,7 @@ import {
 import { useExpertCutoff } from "../hooks/useExpertCutoff";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
-import { getSessionArchiveRefs, getAvailableTools, updateSessionMetadata, apiUrl, type ArchiveRef, type ToolDescriptor } from "../api";
+import { getSessionArchiveRefs, getAvailableTools, updateSessionMetadata, apiUrl, getModelList, saveModelList, type ArchiveRef, type ToolDescriptor } from "../api";
 import { ArchiveRefsGraph } from "./ArchiveRefsGraph";
 import type { Session } from "../types";
 import type { ChatOverrides } from "../hooks/useStreamChat";
@@ -473,56 +473,87 @@ function useModelSelector() {
     };
     window.addEventListener("storage", onStorage);
 
-    // Initial sync from backend. The single source of truth for "which
-    // models does this user have access to" is the hermix server's
-    // config.yaml — localStorage is just a cache. On first mount (or
-    // after a wipe) we ask the backend what model it's running with and
-    // seed the cache with that entry. This is NOT a fallback — it's the
-    // normal bootstrap path. Without it, the model picker is empty
-    // until the user manually opens Settings and clicks "获取模型".
+    // Reconcile the model list from *every* source and UNION them by id.
+    // The key fix for "switcher only shows the default / flickers between
+    // default and configured" (2026-07-17): `localStorage` is volatile and
+    // can be wiped between launches, so we no longer trust it as the only
+    // source. The backend (`GET /api/model/list`) is now the durable,
+    // authoritative copy; localStorage + `model_cache` + live custom
+    // providers fill in whatever the backend hasn't persisted yet. Because
+    // we UNION (never replace), a configured model can never be dropped —
+    // whichever source remembers it wins.
     let cancelled = false;
-    if (config.enabled.length === 0) {
-      // Fetch default model + all custom provider models from backend.
-      // This ensures the model picker shows ALL configured models,
-      // not just the active one — fixes "新建对话只有一个模型".
-      const defaultModelPromise = fetch(apiUrl("/api/model/info"))
-        .then((r) => (r.ok ? r.json() : null))
-        .then((info: { model?: string; provider?: string } | null) => {
-          if (cancelled || !info?.model || !info?.provider) return null;
-          return { providerId: info.provider, modelId: info.model };
-        })
-        .catch(() => null as { providerId: string; modelId: string } | null);
+    const reconcile = async () => {
+      try {
+        const [backend, customProviders] = await Promise.all([
+          getModelList(),
+          fetch(apiUrl("/api/custom-providers"))
+            .then((r) => (r.ok ? r.json() : null))
+            .then((providers: { id: string; models: string[] }[] | null) => {
+              const out: { providerId: string; modelId: string }[] = [];
+              for (const p of providers || []) {
+                for (const mid of p.models || []) out.push({ providerId: p.id, modelId: mid });
+              }
+              return out;
+            })
+            .catch(() => [] as { providerId: string; modelId: string }[]),
+        ]);
+        if (cancelled) return;
 
-      const customProvidersPromise = fetch(apiUrl("/api/custom-providers"))
-        .then((r) => (r.ok ? r.json() : null))
-        .then((providers: { id: string; models: string[] }[] | null) => {
-          if (cancelled || !providers) return [] as { providerId: string; modelId: string }[];
-          const out: { providerId: string; modelId: string }[] = [];
-          for (const p of providers) {
-            for (const mid of p.models || []) {
-              out.push({ providerId: p.id, modelId: mid });
+        // Re-read localStorage fresh (Settings may have updated it since mount).
+        let local: ModelConfigData = { enabled: [], defaultModel: "" };
+        try {
+          const raw = storage.getItem(MODEL_CONFIG_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw) as ModelConfigData;
+            if (parsed && Array.isArray(parsed.enabled)) local = parsed;
+          }
+        } catch {}
+
+        const union = new Map<string, { providerId: string; modelId: string }>();
+        const add = (p: string, m: string) => {
+          if (!p || !m) return;
+          union.set(`${p}:${m}`, { providerId: p, modelId: m });
+        };
+        // 1) localStorage enabled (user's explicit list) — highest priority
+        for (const e of local.enabled) add(e.providerId, e.modelId);
+        // 2) model_cache (every model ever fetched) — recovers builtin models
+        try {
+          const cacheRaw = storage.getItem(STORAGE_KEYS.modelCache);
+          if (cacheRaw) {
+            const cache = JSON.parse(cacheRaw) as Record<string, string[]>;
+            for (const [pid, mids] of Object.entries(cache)) {
+              for (const mid of mids || []) add(pid, mid);
             }
           }
-          return out;
-        })
-        .catch(() => [] as { providerId: string; modelId: string }[]);
+        } catch {}
+        // 3) backend persisted selector (authoritative across restarts)
+        for (const e of backend?.models || []) add(e.provider_id, e.model_id);
+        // 4) custom providers (queried live)
+        for (const e of customProviders) add(e.providerId, e.modelId);
 
-      Promise.all([defaultModelPromise, customProvidersPromise]).then(([def, custom]) => {
-        if (cancelled) return;
-        const enabled: { providerId: string; modelId: string }[] = [...custom];
-        // Add default model if not already in the list
-        let defaultId = "";
-        if (def) {
-          defaultId = `${def.providerId}:${def.modelId}`;
-          if (!enabled.some((m) => m.providerId === def!.providerId && m.modelId === def!.modelId)) {
-            enabled.push(def);
-          }
+        // Default candidate: explicit localStorage default > backend default.
+        const defaultCandidate =
+          local.defaultModel ||
+          backend?.default_model ||
+          "";
+        // Ensure the default model itself is present in the list even when
+        // nothing else was configured (e.g. a fresh install with only the
+        // top-level `model: provider:x` set in config.yaml).
+        if (defaultCandidate && !union.has(defaultCandidate)) {
+          const parts = defaultCandidate.split(":", 2);
+          if (parts[0] && parts[1]) union.set(defaultCandidate, { providerId: parts[0], modelId: parts[1] });
         }
-        // Prefer the default model from config.yaml; if none picks the first available.
-        const fallbackId = enabled.length > 0 ? `${enabled[0].providerId}:${enabled[0].modelId}` : "";
-        const next: ModelConfigData = { enabled, defaultModel: defaultId || fallbackId };
+
+        const enabled = Array.from(union.values());
+        // Default: explicit localStorage default > backend default > first available.
+        const defaultModel =
+          local.defaultModel ||
+          backend?.default_model ||
+          (enabled.length > 0 ? `${enabled[0].providerId}:${enabled[0].modelId}` : "");
+        const next: ModelConfigData = { enabled, defaultModel };
         storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(next));
-        // Also seed the model_cache so availableExtras can show extras
+        // Keep model_cache in sync so `availableExtras` stays consistent.
         try {
           const cache: Record<string, string[]> = {};
           for (const m of enabled) {
@@ -532,10 +563,16 @@ function useModelSelector() {
           storage.setItem(STORAGE_KEYS.modelCache, JSON.stringify(cache));
         } catch {}
         setConfig(next);
-        setSelectedModel((prev) => prev || defaultId || fallbackId);
-        window.dispatchEvent(new CustomEvent(MODEL_CONFIG_CHANGED_EVENT));
-      });
-    }
+        setSelectedModel((prev) => prev || defaultModel);
+        // Persist the union back so the backend stays the superset and the
+        // switcher is stable even after a full localStorage wipe.
+        saveModelList(
+          enabled.map((e) => ({ provider_id: e.providerId, model_id: e.modelId })),
+          defaultModel || null,
+        );
+      } catch {}
+    };
+    reconcile();
 
     return () => {
       cancelled = true;
@@ -2264,13 +2301,15 @@ the banner is a no-op. Day 2 will plumb the WS event. */}
 <CompactionStatusBanner status={compactionStatus} />
 
 {/* Context usage indicator — shows current context window usage
-as a small bar with token count and percentage. Turns amber
-at ≥85% and red at ≥95% of the compression threshold. */}
+as a small bar with token count and percentage. The percentage is
+computed against `maxTokens` (the model's context window) so the
+bar, text, and percent all say the same thing. Turns amber at ≥85%
+and red at ≥95% of the window. */}
 {contextUsage && contextUsage.maxTokens > 0 ? (
   <div className="mb-2 flex items-center gap-2 px-1 text-[11px] text-text-secondary">
     {(() => {
       const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);
-      const pct = Math.min(100, contextUsage.percent);
+      const pct = Math.min(100, (contextUsage.usedTokens / contextUsage.maxTokens) * 100);
       const color = pct >= 95 ? "bg-rose-500" : pct >= 85 ? "bg-amber-500" : "bg-emerald-500";
       const textColor = pct >= 95 ? "text-rose-600 dark:text-rose-400" : pct >= 85 ? "text-amber-600 dark:text-amber-400" : "";
       // 2026-07-14: derive the live cache-hit rate from the most

@@ -23,7 +23,8 @@ pub mod streaming;
 // Re-export key types for convenience
 pub use config::{
     AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CheapModelRouteConfig,
-    CompactionConfig, GatewayConfig, LlmProviderConfig, McpServerEntry, ProfileConfig,
+    CompactionConfig, GatewayConfig, LlmProviderConfig, McpServerEntry, ModelSelectorConfig,
+    ModelSelectorEntry, ProfileConfig,
     ProxyConfig, SkillsSettings, SmartModelRoutingConfig, TerminalBackendType,
     TerminalConfig, ToolCapabilityConfig, ToolsSettings,
 };

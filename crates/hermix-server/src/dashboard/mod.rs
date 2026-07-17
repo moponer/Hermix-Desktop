@@ -57,6 +57,12 @@ pub fn router() -> Router<HttpServerState> {
         .route("/api/config/auto-correct", post(config::auto_correct_config))
         // Model info
         .route("/api/model/info", get(config::get_model_info))
+        // Model selector list (durable, backend-persisted) — fixes the
+        // switcher "forgetting" configured models when localStorage is wiped.
+        .route(
+            "/api/model/list",
+            get(config::get_model_list).put(config::update_model_list),
+        )
         // Env
         .route(
             "/api/env",

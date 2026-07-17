@@ -143,8 +143,27 @@ export function useCurrentModel(): CurrentModel {
  * `useCurrentModel` consumers in this tab. Call this from
  * `SettingsView` saves so the "后端设置" tab updates immediately
  * without a hard reload.
+ *
+ * 2026-07-17: also mirror the config to the backend (`PUT /api/model/list`)
+ * so the chat model switcher is stable across restarts even if
+ * `localStorage` is wiped (the volatility was the root cause of the
+ * "switcher forgets configured models / only shows the default" bug).
+ * The backend call is fire-and-forget — a failure here must never break
+ * the local write or the in-tab event broadcast.
  */
 export function writeModelConfigAndNotify(cfg: ModelConfigData): void {
   storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(cfg));
   window.dispatchEvent(new CustomEvent(MODEL_CONFIG_CHANGED_EVENT));
+  // Persist to backend (authoritative, durable). Imported lazily to keep
+  // this shared util free of a hard dependency on the API module graph.
+  // Frontend `ModelConfigData.enabled` uses camelCase; the backend
+  // `ModelSelectorEntry` uses snake_case — map here.
+  import("../api")
+    .then((m) =>
+      m.saveModelList(
+        cfg.enabled.map((e) => ({ provider_id: e.providerId, model_id: e.modelId })),
+        cfg.defaultModel || null,
+      ),
+    )
+    .catch(() => {});
 }

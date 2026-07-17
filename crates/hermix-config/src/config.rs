@@ -132,6 +132,18 @@ pub struct GatewayConfig {
     /// Override for the hermes home directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home_dir: Option<String>,
+
+    /// Durable copy of the desktop model-selector state (the full list of
+    /// user-enabled models + the chosen default). The desktop UI keeps an
+    /// immediate copy in `localStorage`, but `localStorage` is volatile
+    /// (cleared on some Tauri storage evictions / dev HMR), which previously
+    /// caused the chat model switcher to "forget" configured models and fall
+    /// back to showing only the backend default. Persisting here makes the
+    /// backend the authoritative source of truth so the switcher is stable
+    /// across restarts. `None` (default) means "no explicit selector state" —
+    /// callers fall back to `model` + `llm_providers[].model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_selector: Option<ModelSelectorConfig>,
 }
 
 impl Default for GatewayConfig {
@@ -164,6 +176,7 @@ impl Default for GatewayConfig {
             agent: AgentLoopBehaviorConfig::default(),
             autonomous_mode: true,
             home_dir: None,
+            model_selector: None,
         }
     }
 }
@@ -471,6 +484,35 @@ pub struct LlmProviderConfig {
     /// `None` (default) means "no estimate available — show real 0%".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_hit_rate_estimate: Option<f64>,
+}
+
+// ---------------------------------------------------------------------------
+// ModelSelectorConfig — durable copy of the desktop model switcher state
+// ---------------------------------------------------------------------------
+
+/// A single user-enabled model in the chat model switcher.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelSelectorEntry {
+    /// Provider id, e.g. `"openai"`, `"siliconflow"`, `"custom-agnes"`.
+    pub provider_id: String,
+    /// Model id within the provider, e.g. `"gpt-4o"`, `"Qwen/Qwen2.5-7B"`.
+    pub model_id: String,
+}
+
+/// Durable, backend-persisted mirror of the desktop model-selector UI state.
+///
+/// See `GatewayConfig::model_selector` for why this exists: `localStorage`
+/// is volatile, so the chat switcher can "forget" configured models after a
+/// restart. This lets `GET /api/model/list` serve the full enabled list as
+/// the authoritative source of truth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ModelSelectorConfig {
+    /// All models the user has enabled in the switcher.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enabled: Vec<ModelSelectorEntry>,
+    /// The chosen default `"provider:model"` (mirrors `GatewayConfig::model`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

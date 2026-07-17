@@ -23,6 +23,10 @@ export interface CompactionStatus {
   /** Used tokens / threshold, both formatted (e.g. "145k / 160k"). */
   usedText?: string;
   thresholdText?: string;
+  /** Raw numeric values so the banner can detect pressure even when
+   * the backend snapshot reports `closed` (pre-compression state). */
+  usedTokens?: number;
+  thresholdTokens?: number;
   /**
    * Unit suffix for `usedText` / `thresholdText`. Day 3 the Rust backend
    * renamed the underlying budget from chars to tokens; the UI mirrors
@@ -83,7 +87,19 @@ const STATE_COPY: Record<
 
 export function CompactionStatusBanner({ status, onDismiss }: CompactionStatusBannerProps) {
   if (!status) return null;
-  const copy = STATE_COPY[status.state];
+
+  // UI-level state promotion: even if the backend breaker hasn't tripped,
+  // crossing the compression threshold means the user is in a pressure
+  // situation and should see the pressure copy instead of "normal".
+  const isOverThreshold =
+    status.state === "closed" &&
+    typeof status.usedTokens === "number" &&
+    typeof status.thresholdTokens === "number" &&
+    status.thresholdTokens > 0 &&
+    status.usedTokens >= status.thresholdTokens;
+
+  const effectiveState = isOverThreshold ? "pressure" : status.state;
+  const copy = STATE_COPY[effectiveState];
   if (!copy) return null;
   const Icon = copy.icon;
   const unit = status.unit ?? "tokens";

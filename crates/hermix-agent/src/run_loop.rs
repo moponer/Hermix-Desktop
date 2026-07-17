@@ -447,8 +447,8 @@ impl AgentLoop {
         // render a persistent context-usage bar. We send it through
         // the on_chunk callback (same path as status/compaction events).
         if let Some(on_c) = on_chunk {
-            let percent = if threshold > 0 {
-                (total_tokens as f64 / threshold as f64) * 100.0
+            let percent = if max_tokens > 0 {
+                ((total_tokens as f64 / max_tokens as f64) * 100.0).min(100.0)
             } else {
                 0.0
             };

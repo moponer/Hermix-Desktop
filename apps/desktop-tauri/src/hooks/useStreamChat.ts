@@ -1239,6 +1239,8 @@ export function useStreamChat() {
                     state,
                     usedText: usedTokens !== undefined ? fmt(usedTokens) : undefined,
                     thresholdText: thresholdTokens !== undefined ? fmt(thresholdTokens) : undefined,
+                    usedTokens,
+                    thresholdTokens,
                     unit,
                     percent,
                     consecutiveFailures:

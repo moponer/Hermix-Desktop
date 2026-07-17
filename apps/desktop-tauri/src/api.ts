@@ -708,6 +708,49 @@ export const getModelInfo = async (): Promise<ModelInfo | null> => {
   }
 };
 
+/** A single user-enabled model in the chat switcher. Mirrors
+ *  `hermix_config::ModelSelectorEntry` on the backend. */
+export interface ModelListEntry {
+  provider_id: string;
+  model_id: string;
+}
+
+/** Response from `GET /api/model/list` — the durable, backend-persisted
+ *  enabled-model list (source of truth across restarts). */
+export interface ModelListResponse {
+  models: ModelListEntry[];
+  default_model: string | null;
+}
+
+/** Fetch the authoritative enabled-model list from the backend. Returns
+ *  `null` on any error so callers can fall back to localStorage. */
+export const getModelList = async (): Promise<ModelListResponse | null> => {
+  try {
+    return await fetchJSON<ModelListResponse>("/api/model/list");
+  } catch {
+    return null;
+  }
+};
+
+/** Persist the full enabled-model list to the backend (config.yaml). This
+ *  makes the chat model switcher stable across restarts even if
+ *  `localStorage` is wiped. Fire-and-forget — failures are logged, never
+ *  thrown, because the localStorage copy still works for the current session. */
+export const saveModelList = async (
+  models: ModelListEntry[],
+  defaultModel: string | null,
+): Promise<void> => {
+  try {
+    await fetchJSON("/api/model/list", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ models, default_model: defaultModel }),
+    });
+  } catch (e) {
+    console.warn("saveModelList failed:", e);
+  }
+};
+
 export const getSkills = async (): Promise<SkillInfo[]> =>
   fetchJSON("/api/skills");
 

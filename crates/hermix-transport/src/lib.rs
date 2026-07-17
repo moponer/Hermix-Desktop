@@ -365,7 +365,7 @@ pub enum StreamEvent {
         max_tokens: u64,
         /// Threshold at which auto-compression triggers.
         threshold_tokens: u64,
-        /// Percentage of threshold consumed (0.0–100.0).
+        /// Percentage of `max_tokens` currently consumed (0.0–100.0).
         percent: f64,
     },
     /// Compaction pipeline status snapshot. Emitted when the

@@ -189,3 +189,110 @@ pub async fn get_model_info(State(state): State<HttpServerState>) -> Json<ModelI
         }),
     }
 }
+
+/// Response for `GET /api/model/list`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelListResponse {
+    /// Every model the user has enabled in the chat switcher.
+    pub models: Vec<hermix_config::ModelSelectorEntry>,
+    /// The chosen default `"provider:model"`, if any.
+    pub default_model: Option<String>,
+}
+
+/// Request body for `PUT /api/model/list`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ModelListRequest {
+    /// Full enabled-model list (replaces the persisted set).
+    pub models: Vec<hermix_config::ModelSelectorEntry>,
+    /// Chosen default `"provider:model"`.
+    #[serde(default)]
+    pub default_model: Option<String>,
+}
+
+/// GET /api/model/list — return the authoritative enabled-model list.
+///
+/// The desktop model switcher keeps an immediate copy in `localStorage`,
+/// but `localStorage` is volatile (some Tauri storage evictions / dev HMR
+/// wipe it), which used to make the switcher "forget" configured models and
+/// fall back to showing only the backend default. This endpoint serves the
+/// durable, backend-persisted copy (`GatewayConfig::model_selector`) as the
+/// source of truth. When that is absent we fall back to building the list
+/// from each `llm_providers[*].model` so the switcher is never empty.
+pub async fn get_model_list(State(state): State<HttpServerState>) -> Json<ModelListResponse> {
+    let cfg: hermix_config::GatewayConfig = state
+        .agent_service
+        .current_config_value()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_else(|| state.config.as_ref().clone());
+
+    if let Some(sel) = &cfg.model_selector {
+        if !sel.enabled.is_empty() || sel.default_model.is_some() {
+            return Json(ModelListResponse {
+                models: sel.enabled.clone(),
+                default_model: sel.default_model.clone(),
+            });
+        }
+    }
+
+    // Fallback: builtin provider defaults.
+    let mut models = Vec::new();
+    for (pid, pc) in &cfg.llm_providers {
+        if let Some(m) = &pc.model {
+            if !m.trim().is_empty() {
+                models.push(hermix_config::ModelSelectorEntry {
+                    provider_id: pid.clone(),
+                    model_id: m.clone(),
+                });
+            }
+        }
+    }
+    Json(ModelListResponse {
+        models,
+        default_model: cfg.model.clone(),
+    })
+}
+
+/// PUT /api/model/list — persist the full enabled-model list.
+///
+/// Writes `GatewayConfig::model_selector` to `config.yaml` and pushes the
+/// updated config to the live agent service, so the model switcher is stable
+/// across app restarts even if `localStorage` is wiped.
+pub async fn update_model_list(
+    State(state): State<HttpServerState>,
+    Json(body): Json<ModelListRequest>,
+) -> Result<Json<OkResponse>, HttpError> {
+    let mut cfg: hermix_config::GatewayConfig = state
+        .agent_service
+        .current_config_value()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_else(|| state.config.as_ref().clone());
+
+    // Keep `model` (the legacy single default) in sync with the selector
+    // default so other readers of `config.model` don't drift.
+    if let Some(def) = &body.default_model {
+        if !def.trim().is_empty() {
+            cfg.model = Some(def.clone());
+        }
+    }
+
+    cfg.model_selector = Some(hermix_config::ModelSelectorConfig {
+        enabled: body.models,
+        default_model: body.default_model,
+    });
+
+    let config_path = state.hermix_home.join("config.yaml");
+    if let Err(e) = hermix_config::save_config_yaml(&config_path, &cfg) {
+        return Err(HttpError {
+            status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            message: format!("failed to persist model list: {e}"),
+        });
+    }
+    let cfg_value =
+        serde_json::to_value(&cfg).map_err(|e| HttpError {
+            status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            message: format!("failed to serialize config: {e}"),
+        })?;
+    state.agent_service.set_config(cfg_value);
+
+    Ok(Json(OkResponse { ok: true }))
+}

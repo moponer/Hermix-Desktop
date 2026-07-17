@@ -722,7 +722,7 @@ pub struct ContextUsagePayload {
     pub used_tokens: u64,
     pub max_tokens: u64,
     pub threshold_tokens: u64,
-    /// Percent of `threshold_tokens` currently consumed (0–100+).
+    /// Percent of `max_tokens` currently consumed (0–100).
     pub percent: f64,
 }
 
