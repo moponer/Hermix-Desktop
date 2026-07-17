@@ -285,6 +285,12 @@ pub struct AnalyticsDailyEntry {
     pub reasoning_tokens: u64,
     pub estimated_cost: f64,
     pub actual_cost: f64,
+    /// 2026-07-16 (Phase 5): when the provider reports 0 cache reads
+    /// but is *known* to support caching, this holds the estimated hit
+    /// rate (from provider config `cache_hit_rate_estimate`). `None`
+    /// means "use the real `cache_read_tokens` value" (which may be 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cache_hit_rate: Option<f64>,
     pub sessions: u32,
 }
 
@@ -300,6 +306,10 @@ pub struct AnalyticsModelEntry {
     pub reasoning_tokens: u64,
     pub estimated_cost: f64,
     pub sessions: u32,
+    /// 2026-07-16 (Phase 5): estimated cache hit rate when the
+    /// provider under-reports cache usage. `None` ⇒ use real data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cache_hit_rate: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -315,6 +325,10 @@ pub struct AnalyticsTotals {
     pub total_estimated_cost: f64,
     pub total_actual_cost: f64,
     pub total_sessions: u32,
+    /// 2026-07-16 (Phase 5): estimated overall cache hit rate when
+    /// the active providers under-report cache usage. `None` ⇒ real.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cache_hit_rate: Option<f64>,
     /// 2026-07-14 (Phase 3 / E4): compression telemetry.
     /// `total_compactions` = number of compression child sessions
     /// spawned in the window; `total_archived_turns` = the preserved
@@ -368,6 +382,57 @@ pub struct AnalyticsResponse {
 pub struct AnalyticsSkillsResponse {
     pub summary: AnalyticsSkillsSummary,
     pub top_skills: Vec<AnalyticsSkillEntry>,
+}
+
+/// 2026-07-16 (Phase 1): structured error body returned by
+/// `GET /api/analytics/usage` when the underlying aggregation fails
+/// (DB unavailable, query error, …). Replaces the old behaviour of
+/// swallowing the error into an all-zero `200 OK` response, so the
+/// frontend can show the real cause instead of "you used 0 tokens".
+#[derive(Debug, Serialize)]
+pub struct AnalyticsErrorResponse {
+    /// Short machine-readable tag, e.g. "aggregate_usage_failed".
+    pub error: String,
+    /// Human-readable underlying cause (the `AgentError` string).
+    pub cause: String,
+}
+
+/// 2026-07-16 (Phase 2): diagnostic payload for `GET /api/analytics/debug`.
+/// Surfaces the DB path, per-table existence/row-count/sample, and the
+/// applied migration list so a user can pinpoint where the stats
+/// pipeline is broken without poking at SQLite manually.
+#[derive(Debug, Serialize)]
+pub struct AnalyticsDebugResponse {
+    pub db_path: String,
+    pub tables: AnalyticsDebugTables,
+    pub migrations: Vec<AnalyticsDebugMigration>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalyticsDebugTables {
+    pub sessions: AnalyticsDebugTable,
+    pub messages: AnalyticsDebugTable,
+    pub token_usage: AnalyticsDebugTable,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalyticsDebugTable {
+    pub exists: bool,
+    /// Row count, or `None` if the table could not be queried.
+    pub row_count: Option<u64>,
+    /// Up to 3 recent sample rows (as pretty JSON), empty if none.
+    pub sample: Vec<serde_json::Value>,
+    /// Error string if the table query failed (otherwise `None`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AnalyticsDebugMigration {
+    pub id: String,
+    pub applied_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 // ── Common ──────────────────────────────────────────────────────────

@@ -192,6 +192,18 @@ export interface ChatMessage {
    */
   reasoningExpanded?: boolean;
   /**
+   * 2026-07-16: Wall-clock time the LLM spent on this turn, in
+   * milliseconds. Populated by the front-end at the `Done` event
+   * (useStreamChat measures `Date.now() - sendStartedAt`); NOT
+   * persisted server-side, so it's only present for messages that
+   * were streamed live in the current session. Reloaded history
+   * gracefully falls back to "已完成" without a duration.
+   *
+   * The "ProcessTimeline" header reads this to render
+   * "已完成 10s" / "已完成 1m 23s" instead of the bare "已完成".
+   */
+  durationMs?: number;
+  /**
    * Unified timeline steps — chronological sequence of reasoning /
    * tools / text chunks. When present, the renderer uses this instead
    * of the fixed 3-section layout so multi-iteration agent loops

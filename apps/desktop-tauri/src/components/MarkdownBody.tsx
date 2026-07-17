@@ -227,6 +227,14 @@ export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
             if (match) return <CodeBlock language={match[1]} code={codeString} />;
             return <code {...props}>{children}</code>;
           },
+          // 2026-07-16 v3: LLM 输出里的 `- [ ]` / `- [x]` 任务标记
+          // 完全不渲染任何 marker。普通无序列表本来就有 disc 圆点，
+          // 在文本里再画方框/勾选字符是冗余噪音（主人反馈）。直接
+          // 返回 null，让 <li> 的默认 disc marker 承担列表语义即可。
+          input({ type, ...props }) {
+            if (type === "checkbox") return null;
+            return <input type={type} {...props} />;
+          },
         }}
       >
         {content}

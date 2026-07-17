@@ -1142,6 +1142,17 @@
 .msg-bubble-user:hover {
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
+.msg-user-column {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: fit-content;
+  max-width: 80%;
+  margin-left: auto;
+}
+.msg-bubble-user {
+  max-width: 100%;
+}
 
 /* ── Assistant streaming bubble ──
    Outer flex: avatar on the left, body column on the right.
@@ -1459,6 +1470,11 @@
   filter: brightness(1.15);
 }
 
+/* ── Markdown task list marker (LLM output `- [ ]` / `- [x]`)
+   2026-07-16 v3: 不渲染任何 marker。普通无序列表已有 disc 圆点，
+   任务标记的符号与圆点重复，主人要求去掉。input handler 直接
+   返回 null（见 MarkdownBody.tsx），此处不再保留任何样式。 */
+
 /* ── Preview pane ──
    Scoped strictly inside .preview-pane so SyntaxHighlighter's injected
    global <style> rules and markdown-rendered elements (<h1>, <strong>, …)
@@ -1646,7 +1662,67 @@
   font-size: 11px;
 }
 
-/* ── Task block (compact inline style) ── */
+/* ── Stream error banner ─────────────────────────────────────────
+   A quiet inline alert above the composer: short title + actionable
+   detail, no raw provider URL, and no large warning emoji. */
+.stream-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-warning) 8%, var(--color-bg-secondary));
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.stream-error-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--color-warning);
+}
+.stream-error-content {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.stream-error-title {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.stream-error-detail {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+.stream-error-dismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -3px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+.stream-error-dismiss:hover,
+.stream-error-dismiss:focus-visible {
+  color: var(--color-text-primary);
+  outline: none;
+}
+
+
 .tasks-block {
   overflow: visible;
   padding: 6px 10px;
@@ -2082,9 +2158,9 @@
   background: transparent;
   transition: none;
   overflow: visible;
-  padding-left: 18px;
+  padding-left: 0;
 }
-.tw-msg:hover { border: 0; box-shadow: none; }
+.tw-msg:hover { border: 0; box-shadow: none; background: transparent; }
 .tw-msg--run, .tw-msg--err, .tw-msg--ok { border: 0; background: transparent; position: static; }
 
 /* ── Consecutive tool calls (same agent): visually grouped ───────
@@ -2104,24 +2180,27 @@
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 4px 6px;
+  padding: 4px 0;
   border: 0;
   background: transparent;
   text-align: left;
   line-height: 1.4;
   cursor: pointer;
   min-height: 0;
-  border-radius: var(--radius-md);
-  transition: background var(--duration-fast) ease;
+  border-radius: 0;
+  transition: color var(--duration-fast) ease;
 }
-.tw-msg-row:hover { background: var(--color-bg-hover); }
-.tw-msg-row[data-open="true"] {
-  background: var(--color-bg-tertiary);
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+.tw-msg-row:hover,
+.tw-msg-row[data-open="true"],
+.tw-msg-row:focus-visible {
+  background: transparent;
+}
+.tw-msg-row:focus-visible {
+  outline: none;
+  color: var(--color-text-primary);
 }
 .tw-msg-row[data-open="true"] + .tw-msg-body {
-  background: var(--color-bg-tertiary);
+  background: transparent;
   border-top: none;
 }
 
@@ -2134,15 +2213,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: var(--radius-sm);
+  width: 16px;
+  height: 16px;
+  border-radius: 0;
   flex-shrink: 0;
   margin-right: 6px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.10);
+  box-shadow: none;
+  background: transparent !important;
 }
 .tw-msg-icon-svg {
-  color: #ffffff !important;
+  color: inherit !important;
   display: block;
 }
 
@@ -2180,9 +2260,16 @@
 .tw-msg-row[data-state="run"] .tw-msg-icon { color: var(--color-accent); }
 .tw-msg-row[data-state="ok"]  .tw-msg-icon { color: var(--color-text-muted); }
 .tw-msg-row[data-state="err"] .tw-msg-icon { color: var(--color-error); }
-.tw-msg-icon-svg { color: inherit; }
-
-/* Left cluster wrapper — fills available space, truncates. */
+.tw-msg-row:hover .tw-msg-verb,
+.tw-msg-row:focus-visible .tw-msg-verb,
+.tw-msg-row:hover .tw-msg-primary,
+.tw-msg-row:focus-visible .tw-msg-primary {
+  color: var(--color-text-primary);
+}
+.tw-msg-row:hover .tw-msg-icon-tile,
+.tw-msg-row:focus-visible .tw-msg-icon-tile {
+  filter: saturate(0.8) brightness(0.8);
+}
 .tw-msg-main {
   display: flex;
   align-items: center;
@@ -2449,9 +2536,10 @@
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
-.tw-msg-row:hover .tw-msg-chev {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-secondary);
+.tw-msg-row:hover .tw-msg-chev,
+.tw-msg-row:focus-visible .tw-msg-chev {
+  background: transparent;
+  color: var(--color-text-primary);
 }
 
 /* Body (tool result panel) — animated container, no decorative
@@ -3034,12 +3122,12 @@
 .reasoning-body {
   background: var(--color-bg-secondary);
   border-left: 2px solid var(--color-border-secondary);
-  /* 防止长 token(URL / base64 / 代码行 / 文件哈希)横向溢出气泡;
-     限制高度,超长思考内部滚动,避免撑爆整页布局 (修复「思考过程溢出」) */
+  /* 防止长 token(URL / base64 / 代码行 / 文件哈希)横向溢出气泡。思考内容
+     最终会被外层 ProcessTimeline 整体折叠，因此这里不再设置内部滚动。 */
   word-break: break-word;
   overflow-wrap: anywhere;
-  max-height: 340px;
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
   /* 2026-07-16: MarkdownBody 处理格式化，不需要 pre-wrap */
   margin-top: 4px;
   padding: 8px 12px;
@@ -3091,13 +3179,13 @@
 .tl-iterations {
   display: flex;
   flex-direction: column;
-  gap: 24px;                     /* 轮次间距 — 唯一的视觉分隔 */
+  gap: 14px;                     /* 轮次间距 — 唯一的视觉分隔 (2026-07-16: 从 24 砍到 14, 长对话不再被切碎) */
 }
 
 .tl-iteration {
   display: flex;
   flex-direction: column;
-  gap: 8px;                      /* 轮内元素间距 — reasoning/tools/text */
+  gap: 6px;                      /* 轮内元素间距 — reasoning/tools/text (从 8 降到 6, 更紧凑) */
 }
 
 /* 单轮消息不需要底部间距 */
@@ -3128,23 +3216,168 @@
   border-top: 1px solid var(--color-border-subtle);
 }
 
-/* ── 5a-0b. Reasoning Block — 轮内折叠 ──
-   折叠时只占一行 header，像呼吸点；
-   展开时露出左边轨的思考内容，像页边注释。 */
+/* ── 5a-0b. Process Timeline (2026-07-16) — the ONE foldable block ──
+   取代旧版每个 thinking/tools 各自折叠的"碎片感"。
+   一个 message 整个过程（所有 reasoning + 所有 tool 调用）共用一个
+   折叠头"处理中… / 已完成 N 个工具 ▼"。展开时按时间顺序流式显示
+   每个 reasoning 段和每个 tool 行；折叠时压缩到一行小 chip。
+   结论（text）渲染在折叠块之外，扫一眼就看到。 */
+.tl-process-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 跟周围 text step 视觉上一致:无背景无边框,只是组织性容器 */
+}
+
+/* 折叠头复用 .reasoning-header 的"小一行 + chevron + label"风格，
+   不画新外观,让用户一眼就认出"可折叠"的语义。 */
+.tl-process-header {
+  align-self: flex-start;       /* 不占满整行,像 chip */
+  opacity: 0.85;
+}
+
+.tl-process-header:hover {
+  opacity: 1;
+}
+
+.tl-process-spinner {
+  animation: tl-process-spin 0.9s linear infinite;
+  color: var(--color-text-faint);
+}
+
+.tl-process-check {
+  color: var(--color-text-success, #5a9a6e);
+}
+
+.tl-process-pulse {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent, #d4a85f);
+  margin-left: 4px;
+  animation: tl-process-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes tl-process-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes tl-process-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1; }
+}
+
+.tl-process-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 折叠内容是 process 步骤的有序流 */
+}
+
+/* ── 5a-0b-old. Reasoning Block (legacy) — kept for back-compat ── */
 .tl-reasoning {
   /* gap 由父 .tl-iteration 管理，这里无需额外 margin */
 }
 
-/* ── 5a-0c. Tools Block — 轮内折叠 ── */
+/* ── 5a-0b1. Reasoning Row (2026-07-16 v3) — normal message prose ──
+   流式时 reasoning 段和正文混在一起流出，视觉上就是一段普通
+   消息文本。过程与结论的区别由外层 ProcessTimeline 的折叠头
+   表达，行内不再额外使用斜体、左轨或 chip。 */
+.tl-reasoning-row {
+  font-style: normal;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-body, 14px);
+  line-height: 1.72;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  /* 过程最终由外层 ProcessTimeline 整体折叠，这里不做二次滚动。 */
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+}
+
+.tl-reasoning-row :is(p, li, td, th, blockquote) {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.tl-reasoning-row :is(h1, h2, h3, h4) {
+  margin-top: 0.5em;
+  margin-bottom: 0.3em;
+  font-size: 0.95em;
+}
+
+.tl-reasoning-row pre {
+  font-size: 12px;
+}
+.tl-reasoning-row .prose :is(em, blockquote) {
+  font-style: normal;
+}
+
+/* Copy affordance — always reserves one quiet line below the message,
+   but only reveals the label on hover/focus. This keeps the action tied
+   to its own message without putting it in the global metadata header. */
+.message-copy-row {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+.msg-copyable:hover .message-copy-row,
+.message-copy-row:focus-within {
+  opacity: 1;
+}
+.message-copy-row--user {
+  justify-content: flex-end;
+}
+.message-copy-row--assistant {
+  justify-content: flex-start;
+}
+.message-copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-faint);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.message-copy-button:hover,
+.message-copy-button:focus-visible {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  outline: none;
+}
+.message-copy-button:active {
+  background: var(--color-bg-tertiary);
+}
+
+/* ── 5a-0c. Tools Block — 2026-07-16 v2: 流式时视觉接近正文 ──
+   流式时 tool 行（"查看文件: lib.rs"）应该像 prose 一样自然
+   流出来,而不是被一个明显 chip 框起来。每个 tool 仍是 ToolGroupCard
+   但去掉 --flat 时的额外 margin-top,跟 reasoning 段紧密相连。 */
 .tl-tools {
   /* gap 由父 .tl-iteration 管理 */
+}
+
+.tl-tools--flat {
+  margin-top: 0;                        /* 跟 reasoning 段无间距 */
 }
 
 .tl-tools-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;                     /* 工具卡片之间紧凑排列 */
-  margin-top: 4px;
+  gap: 1px;                             /* 工具行之间极紧凑,跟 prose 行距一致 */
+  margin-top: 0;
 }
 
 /* ── 5a-1. 主回复 vs 工具调用 视觉区分 ──
@@ -3155,15 +3388,15 @@
            tool       bg = --color-chat-tool-bg (rgba(30,41,59,0.6))
    兄弟间隔由父 .tl-iteration flex-column 维持. */
 .chat-tool-call {
-  border-radius: var(--radius-lg);
-  transition: background var(--duration-fast) ease;
+  border-radius: 0;
+  transition: color var(--duration-fast) ease;
 }
 .chat-tool-call--assistant {
   background: var(--color-chat-assistant-bg, #ffffff);
 }
 .chat-tool-call--tool {
-  background: var(--color-chat-tool-bg, #fafafa);
-  margin-left: 20px;
+  background: transparent;
+  margin-left: 0;
   padding-left: 0;
 }
 
@@ -3226,8 +3459,10 @@
 .dark .tw-msg-row {
   color: var(--color-text-primary);
 }
-.dark .tw-msg-row:hover {
-  background: var(--color-bg-hover);
+.dark .tw-msg-row:hover,
+.dark .tw-msg-row[data-open="true"],
+.dark .tw-msg-row:focus-visible {
+  background: transparent;
 }
 .dark .tw-msg-main {
   color: var(--color-text-primary);
@@ -3416,7 +3651,7 @@
   color: var(--color-text-primary);
 }
 .dark .chat-tool-call--tool {
-  background: var(--color-chat-tool-bg);
+  background: transparent;
   color: var(--color-text-primary);
 }
 
@@ -3475,7 +3710,7 @@
   color: var(--color-text-primary);
 }
 [data-theme="dark"] .chat-tool-call--tool {
-  background: var(--color-chat-tool-bg);
+  background: transparent;
   color: var(--color-text-primary);
 }
 [data-theme="dark"] .msg-bubble-body {

@@ -2027,19 +2027,21 @@ const clearPendingImages = useCallback(() => {
                 tells the user "last attempt failed, here's why"
                 instead of the mascot silently absorbing the error. */}
             {streamError && (
-              <div className="mt-3 w-full px-3 py-2.5 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 text-[13px] text-amber-700 dark:text-amber-300 flex items-start gap-2.5">
-                <span className="shrink-0 mt-0.5">⚠️</span>
-                <span className="flex-1 min-w-0 break-words leading-snug">
-                  {streamError.length > 120
-                    ? streamError.slice(0, 120) + "…"
-                    : streamError}
-                </span>
+              <div className="stream-error-banner mt-3" role="alert">
+                <span className="stream-error-icon" aria-hidden="true"><AlertTriangle size={14} /></span>
+                <div className="stream-error-content">
+                  <span className="stream-error-title">发送失败</span>
+                  <span className="stream-error-detail">
+                    {streamError.length > 160 ? streamError.slice(0, 160) + "…" : streamError}
+                  </span>
+                </div>
                 <button
                   onClick={onClearStreamError}
-                  className="shrink-0 ml-1 p-0.5 rounded-md hover:bg-amber-200/50 dark:hover:bg-amber-700/30 transition-colors text-amber-500 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-200"
+                  className="stream-error-dismiss"
                   title="关闭"
                   type="button"
-                 aria-label="关闭">
+                  aria-label="关闭错误提示"
+                >
                   <X size={14} />
                 </button>
               </div>
@@ -2235,18 +2237,21 @@ const clearPendingImages = useCallback(() => {
               or a new message is sent.  Compact, dismissable, and
               clearly separated from the conversation history. */}
           {streamError && (
-            <div className="mb-2 px-3 py-2.5 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/50 text-[13px] text-amber-700 dark:text-amber-300 flex items-start gap-2.5">
-              <span className="shrink-0 mt-0.5">⚠️</span>
-              <span className="flex-1 min-w-0 break-words leading-snug">
-                {streamError.length > 120
-                  ? streamError.slice(0, 120) + "…"
-                  : streamError}
-              </span>
+            <div className="stream-error-banner" role="alert">
+              <span className="stream-error-icon" aria-hidden="true"><AlertTriangle size={14} /></span>
+              <div className="stream-error-content">
+                <span className="stream-error-title">发送失败</span>
+                <span className="stream-error-detail">
+                  {streamError.length > 160 ? streamError.slice(0, 160) + "…" : streamError}
+                </span>
+              </div>
               <button
                 onClick={onClearStreamError}
-                className="shrink-0 ml-1 p-0.5 rounded-md hover:bg-amber-200/50 dark:hover:bg-amber-700/30 transition-colors text-amber-500 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-200"
+                className="stream-error-dismiss"
                 title="关闭"
-               aria-label="关闭">
+                type="button"
+                aria-label="关闭错误提示"
+              >
                 <X size={14} />
               </button>
             </div>

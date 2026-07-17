@@ -461,6 +461,16 @@ pub struct LlmProviderConfig {
     /// can also be set by hand in `config.yaml`.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub model_contexts: HashMap<String, u64>,
+
+    /// Estimated prompt-cache hit rate (0.0–1.0) for this provider, used
+    /// by the analytics dashboard when the provider does NOT report
+    /// `cache_read_tokens` in its usage payload (e.g. MiniMax). The
+    /// dashboard shows this as an *estimate* (with a "(估算)" label)
+    /// rather than a hard 0%, so the cache-hit card isn't silently
+    /// wrong for providers that cache but don't expose the metric.
+    /// `None` (default) means "no estimate available — show real 0%".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_rate_estimate: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------

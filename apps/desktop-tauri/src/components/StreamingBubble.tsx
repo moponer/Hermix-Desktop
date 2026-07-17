@@ -41,14 +41,14 @@
  * layout.
  */
 
-import { Brain, ChevronDown, ChevronRight, Clock } from "lucide-react";
-import { memo, useDeferredValue, useMemo, useState, useId } from "react";
-import { Check, Copy, AlertTriangle, XCircle } from "lucide-react";
+import { Clock } from "lucide-react";
+import { memo, useDeferredValue, useMemo } from "react";
+import { AlertTriangle, XCircle } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { InlineThinkingDot } from "./InlineThinkingDot";
 import { MarkdownBody } from "./MarkdownBody";
-import { parseContent, groupTimeline } from "./messageParser";
-import { ToolTimelineSection } from "./MessageBubble";
+import { parseContent } from "./messageParser";
+import { ProcessTimeline, MessageCopyAction } from "./MessageBubble";
 import type { StreamPhase } from "../hooks/useStreamChat";
 import type { ExecutionTimelineEvent, TimelineStep } from "../types";
 
@@ -62,7 +62,9 @@ interface StreamingBubbleProps {
    *  Shown as a muted chip in the meta line, NOT as message text. */
   statusText?: string | null;
   /**
-   * Whether to render the avatar + meta line (time / status / copy).
+   * Whether to render the avatar + meta line (time / status).
+   * The copy action is rendered below the streamed message body so the
+   * live bubble and settled bubble keep the same spatial structure.
    * Must come from the same `shouldShowAssistantHeader` logic that
    * `<MemoMessageBubble showHeader={...} />` uses — otherwise the
    * streaming→settled transition would *add or remove* the header
@@ -135,41 +137,19 @@ function endsAtParagraphBoundary(text: string): boolean {
 const NOOP = () => {};
 
 /**
- * Streaming reasoning block — expanded during streaming, auto-collapses
- * when the stream ends. Each instance manages its own expand/collapse
- * state so multiple reasoning steps (one per iteration) can coexist.
+ * Streaming reasoning row — always-expanded process prose.
+ * 2026-07-16: replaced the per-row "已深度思考中… ▼" fold. The whole
+ * process timeline is now wrapped in a single ProcessTimeline block
+ * (one fold, not N folds), so this row just renders the content.
+ * Kept exported in case future code paths reuse it; the live bubble
+ * currently delegates to MessageBubble's <ProcessTimeline> directly.
  */
-function StreamingReasoningBlock({ content, isStreaming }: { content: string; isStreaming: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  const bodyId = useId();
-
+export function StreamingReasoningBlock({ content }: { content: string; isStreaming: boolean }) {
   const clean = content.replace(/<\/?think>/gi, "").trim();
   if (!clean) return null;
-
   return (
-    <div className="tl-reasoning">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        aria-expanded={expanded}
-        aria-controls={expanded ? bodyId : undefined}
-        className="reasoning-header"
-      >
-        {expanded ? (
-          <ChevronDown size={12} className="reasoning-chevron reasoning-chevron-open" />
-        ) : (
-          <ChevronRight size={12} className="reasoning-chevron" />
-        )}
-        <Brain size={11} />
-        <span className="reasoning-label">已深度思考{isStreaming ? "中…" : ""}</span>
-      </button>
-      {expanded && (
-        <div
-          id={bodyId}
-          className="reasoning-body"
-        >
-          <MarkdownBody content={clean} onPathClick={() => {}} />
-        </div>
-      )}
+    <div className="tl-reasoning-row">
+      <MarkdownBody content={clean} onPathClick={() => {}} />
     </div>
   );
 }
@@ -186,19 +166,6 @@ function StreamingBubbleImpl({
 }: StreamingBubbleProps) {
   const deferred = useDeferredValue(text);
   const effectivePhase = phase ?? "streaming";
-  const [copied, setCopied] = useState(false);
-  const copyMessage = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard may be unavailable (non-secure context / denied permission).
-      setCopied(false);
-    }
-  };
-
-  const isStreaming = effectivePhase === "streaming" || effectivePhase === "connecting" || effectivePhase === "slow";
 
   const status = STATUS_MAP[effectivePhase];
 
@@ -250,18 +217,14 @@ function StreamingBubbleImpl({
     // We mirror MessageBubble's pattern: header→flex with avatar
     // column; no header→just a left padding matching the avatar
     // column width.
-    <div className={showHeader ? "flex gap-2.5 h-enter items-start" : "h-enter"}>
+    <div className={showHeader ? "flex gap-2.5 h-enter items-start msg-copyable" : "h-enter msg-copyable"}>
       {showHeader && (
         <Avatar role="assistant" size={22} className="shrink-0 mt-0.5" />
       )}
       <div className={showHeader ? "flex-1 min-w-0" : "pl-[30px]"}>
-        {/* Meta line: time + status + copy button.
-            v12 (2026-06-17): completed/idle 状态不再渲染任何 chip,
-            "已完成" / "刚刚" 这种废话标签直接消失. 仅保留进行态和失败态.
-            v18 (2026-06-17): 整个 meta 行受 `showHeader` 控制 — 同一个
-            agent loop 内的多轮 streaming 只在第一轮显示, 后续轮沿用
-            第一个 assistant 的 header, 避免"刚刚 + 头像 + 名称"重复
-            出现. */}
+        {/* Meta line: time + status. Copy is deliberately rendered
+            below the message body, matching the settled assistant bubble
+            and keeping the action attached to the content it copies. */}
         {showHeader && (
           <div className="flex items-center gap-2 mb-1.5 text-text-faint">
             {STREAMING_PHASES.has(effectivePhase) && (
@@ -279,67 +242,64 @@ function StreamingBubbleImpl({
                 后端瞬态英文 statusText（"Still waiting for the model…"）属冗余
                 且破坏中文 UI 一致性，故流式态抑制、仅非流式态展示。 */}
             {statusText && !STREAMING_PHASES.has(effectivePhase) && (
-              <span className="h-tiny text-text-faint italic max-w-[240px] truncate">
+              <span className="h-tiny text-text-faint max-w-[240px] truncate">
                 {statusText}
               </span>
             )}
-            <button
-              onClick={copyMessage}
-              disabled={!text}
-              className="ml-auto p-0.5 rounded text-text-faint hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              title="复制消息"
-            >
-              {copied ? <Check size={11} /> : <Copy size={11} />}
-            </button>
           </div>
         )}
 
-        {/* Unified timeline steps — renders reasoning / tools / text
-            in chronological order, matching the settled MessageBubble.
-            2026-07-16: iteration-based grouping for visual cohesion. */}
-        <div className="tl-iterations">
-          {effectiveSteps.map((step, i) => {
-            if (step.kind === "reasoning") {
-              return (
-                <div key={`step-${i}`} className="tl-iteration">
-                  <StreamingReasoningBlock
-                    content={step.content}
-                    isStreaming={isStreaming}
-                  />
-                </div>
-              );
-            }
-            if (step.kind === "tools") {
-              const groups = groupTimeline(step.events);
-              if (groups.length === 0) return null;
-              return (
-                <div key={`step-${i}`} className="tl-iteration">
-                  <ToolTimelineSection
-                    groups={groups}
-                    isStreaming={isStreaming}
-                    onPathClick={onPathClick}
-                  />
-                </div>
-              );
-            }
-            // step.kind === "text" — pure prose, no card wrapper
-            const parsed = parseContent(step.content);
-            return (
-              <div key={`step-${i}`} className="tl-iteration">
-                <div className="tl-text-step">
-                  {parsed.body && (
-                    <div className="tl-text-inner">
-                      <MarkdownBody
-                        content={parsed.body}
-                        onPathClick={onPathClick ?? NOOP}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        {/* Process timeline (single foldable block) + final text prose.
+            2026-07-16: mirrors MessageBubble's new layout — every
+            reasoning/tool step goes inside one ProcessTimeline fold,
+            and text steps render as continuous prose below the fold.
+            This matches the WorkBuddy reference UI: one "处理中… /
+            已完成" header per turn, with the conclusion visible without
+            a click. */}
+        {(() => {
+          const processSteps = effectiveSteps.filter(
+            (s) => s.kind === "reasoning" || s.kind === "tools",
+          );
+          const textSteps = effectiveSteps.filter((s) => s.kind === "text");
+          // Live: there's always at least one tool in-flight or about
+          // to fire, otherwise the stream would be settled already.
+          const hasRunningTool = isStreamingPhase && processSteps.some(
+            (s) => s.kind === "tools" && s.events.some(
+              (e) => e.type === "tool_start" || e.type === "tool_stdout",
+            ),
+          );
+          return (
+            <div className="tl-iterations">
+              <ProcessTimeline
+                processSteps={processSteps}
+                isStreaming={isStreamingPhase}
+                hasRunningTool={hasRunningTool}
+                /* durationMs is only displayed when the turn settles
+                   (i.e. isStreaming=false), so during the live stream
+                   we deliberately don't compute it. App.tsx stamps the
+                   duration on the message at the Done event; the
+                   settled MessageBubble picks it up on re-render. */
+                onPathClick={onPathClick}
+              />
+              {textSteps.map((step, i) => {
+                if (step.kind !== "text") return null;
+                const parsed = parseContent(step.content);
+                return (
+                  <div key={`text-${i}`} className="tl-iteration tl-text-step">
+                    {parsed.body && (
+                      <div className="tl-text-inner">
+                        <MarkdownBody
+                          content={parsed.body}
+                          onPathClick={onPathClick ?? NOOP}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         {/* Gap dot at the end of the last text step */}
         {showGapDot && (
@@ -378,6 +338,11 @@ function StreamingBubbleImpl({
             />
           </div>
         )}
+
+        <MessageCopyAction
+          content={text}
+          className="message-copy-row message-copy-row--assistant"
+        />
       </div>
     </div>
   );

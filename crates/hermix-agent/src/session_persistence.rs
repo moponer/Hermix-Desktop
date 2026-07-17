@@ -2633,7 +2633,7 @@ impl SessionPersistence {
                  ORDER BY session_count DESC",
             )
             .map_err(|e| AgentError::Io(format!("Failed to prepare by_model: {e}")))?;
-        let by_model: Vec<ModelUsageRow> = stmt
+        let mut by_model: Vec<ModelUsageRow> = stmt
             .query_map(rusqlite::params![cutoff_str], |row| {
                 Ok(ModelUsageRow {
                     model: row.get(0)?,
@@ -2675,7 +2675,18 @@ impl SessionPersistence {
 
         // 5) P1-3: token totals. SUM with COALESCE so a NULL `estimated_cost`
         //    doesn't propagate and break the f64 aggregator.
-        let (total_input, total_output, total_cache_read, total_cache_creation, total_reasoning, total_cost): (i64, i64, i64, i64, i64, f64) = conn
+        // Bind the token-total query result directly as mutable vars so the
+        // Phase 3 legacy fallback (`estimate_usage_from_messages`) can mutate
+        // them in place. No dead `= 0` initialiser — that just trips
+        // `unused_assignments` since the tuple is overwritten immediately.
+        let (
+            mut total_input,
+            mut total_output,
+            total_cache_read,
+            total_cache_creation,
+            total_reasoning,
+            mut total_cost,
+        ): (i64, i64, i64, i64, i64, f64) = conn
             .query_row(
                 "SELECT
                     COALESCE(SUM(prompt_tokens), 0),
@@ -2803,6 +2814,31 @@ impl SessionPersistence {
         // but only 3 this week isn't papered over by ancient noise.
         let by_tool = self.aggregate_tools(&conn, &cutoff_str)?;
 
+        // 7b) 2026-07-16 (Phase 4): per-skill usage. Grouped by target
+        // skill name parsed from `skill_view` / `skill_manage` calls.
+        let skills = self.aggregate_skills(&conn, &cutoff_str)?;
+
+        // 7c) 2026-07-16 (Phase 3): legacy fallback. If `token_usage`
+        // has no rows in the window but there ARE sessions/messages,
+        // the pre-2026-06-27 install never wrote usage — estimate from
+        // message content so the dashboard isn't a wall of zeros.
+        // We mutate the already-computed aggregates in place: only
+        // fill when the real totals are empty, so modern installs
+        // (which DO have token_usage) are untouched.
+        let has_real_tokens = total_input > 0 || total_output > 0
+            || by_model.iter().any(|m| m.input_tokens > 0 || m.output_tokens > 0);
+        if !has_real_tokens && (total_sessions > 0 || total_messages > 0) {
+            self.estimate_usage_from_messages(
+                &conn,
+                &cutoff_str,
+                &mut by_model,
+                &mut daily,
+                &mut total_input,
+                &mut total_output,
+                &mut total_cost,
+            );
+        }
+
         // 8) Phase 3 (E4): compression telemetry. Each compression
         //    spawns a child session (`parent_session_id` set), so
         //    counting those within the window gives "compressions
@@ -2847,6 +2883,7 @@ impl SessionPersistence {
             total_estimated_cost: total_cost,
             daily,
             by_tool,
+            skills,
         })
     }
 
@@ -2953,6 +2990,225 @@ impl SessionPersistence {
         out.sort_by(|a, b| b.call_count.cmp(&a.call_count));
         Ok(out)
     }
+
+    /// 2026-07-16 (Phase 4): aggregate skill usage from `messages.tool_calls`.
+    /// Counts `skill_view` calls (a "view/load") and `skill_manage` calls
+    /// (an edit/create/delete) per *target* skill — the target name comes
+    /// from the call's `arguments.name`, so the dashboard shows
+    /// "code-review was used 47 times", not "skill_manage ran 47 times".
+    fn aggregate_skills(
+        &self,
+        conn: &rusqlite::Connection,
+        cutoff_str: &str,
+    ) -> Result<SkillUsageAggregate, AgentError> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT tool_calls, created_at
+                 FROM messages
+                 WHERE role = 'assistant'
+                   AND tool_calls IS NOT NULL
+                   AND tool_calls != ''
+                   AND created_at >= ?1",
+            )
+            .map_err(|e| AgentError::Io(format!("Failed to prepare skills query: {e}")))?;
+
+        use std::collections::{HashMap, HashSet};
+        let mut views: HashMap<String, u64> = HashMap::new();
+        let mut manages: HashMap<String, u64> = HashMap::new();
+        let mut last_used: HashMap<String, String> = HashMap::new();
+
+        let mut rows = stmt
+            .query(rusqlite::params![cutoff_str])
+            .map_err(|e| AgentError::Io(format!("Failed to query skill rows: {e}")))?;
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| AgentError::Io(format!("Failed to step skill rows: {e}")))?
+        {
+            let tool_calls_json: String = row.get(0).unwrap_or_default();
+            let created_at: String = row.get(1).unwrap_or_default();
+            let parsed: serde_json::Value = match serde_json::from_str(&tool_calls_json) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let arr = match parsed.as_array() {
+                Some(a) => a,
+                None => continue,
+            };
+            for tc in arr {
+                let name = tc
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .or_else(|| {
+                        tc.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                    });
+                let name = match name {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let is_view = name == "skill_view";
+                let is_manage = name == "skill_manage";
+                if !is_view && !is_manage {
+                    continue;
+                }
+                // `arguments` is a JSON *string* (flattened FunctionCall).
+                let args_str = tc
+                    .get("arguments")
+                    .and_then(|a| a.as_str())
+                    .or_else(|| {
+                        tc.get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|a| a.as_str())
+                    })
+                    .unwrap_or("");
+                let args: serde_json::Value =
+                    serde_json::from_str(args_str).unwrap_or(serde_json::Value::Null);
+                let skill = args
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("unknown")
+                    .to_string();
+                if is_view {
+                    *views.entry(skill.clone()).or_insert(0) += 1;
+                } else {
+                    *manages.entry(skill.clone()).or_insert(0) += 1;
+                }
+                let slot = last_used.entry(skill).or_insert_with(String::new);
+                if created_at > *slot {
+                    *slot = created_at.clone();
+                }
+            }
+        }
+        drop(rows);
+
+        let mut all_skills: HashSet<String> = HashSet::new();
+        all_skills.extend(views.keys().cloned());
+        all_skills.extend(manages.keys().cloned());
+        let distinct = all_skills.len() as u64;
+        let mut entries: Vec<SkillUsageRow> = all_skills
+            .into_iter()
+            .map(|skill| SkillUsageRow {
+                skill: skill.clone(),
+                view_count: *views.get(&skill).unwrap_or(&0),
+                manage_count: *manages.get(&skill).unwrap_or(&0),
+                last_used_at: last_used.get(&skill).cloned(),
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            (b.view_count + b.manage_count).cmp(&(a.view_count + a.manage_count))
+        });
+        entries.truncate(10);
+
+        Ok(SkillUsageAggregate {
+            entries,
+            total_views: views.values().sum(),
+            total_manages: manages.values().sum(),
+            distinct_skills: distinct,
+        })
+    }
+
+    /// 2026-07-16 (Phase 3): legacy fallback for installs that predate the
+    /// `token_usage` migration. When the real `token_usage` table is empty
+    /// in the window but sessions/messages exist, estimate token counts from
+    /// message content so the dashboard isn't a wall of zeros. Heuristic:
+    /// ASCII ≈ 0.25 token/char (~4 chars/token); non-ASCII (CJK) ≈ 1.5
+    /// tokens/char. Accumulates into the per-model and per-day buckets passed
+    /// in by reference, and into the running totals.
+    fn estimate_usage_from_messages(
+        &self,
+        conn: &rusqlite::Connection,
+        cutoff_str: &str,
+        by_model: &mut Vec<ModelUsageRow>,
+        daily: &mut Vec<DailyUsageRow>,
+        total_input: &mut i64,
+        total_output: &mut i64,
+        _total_cost: &mut f64,
+    ) {
+        let mut stmt = match conn.prepare(
+            "SELECT m.content, m.role, COALESCE(s.model, '(unknown)'), substr(m.created_at, 1, 10)
+             FROM messages m
+             LEFT JOIN sessions s ON s.id = m.session_id
+             WHERE m.created_at >= ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let mut rows = match stmt.query(rusqlite::params![cutoff_str]) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+
+        use std::collections::HashMap;
+        let mut model_input: HashMap<String, u64> = HashMap::new();
+        let mut model_output: HashMap<String, u64> = HashMap::new();
+        let mut day_input: HashMap<String, u64> = HashMap::new();
+        let mut day_output: HashMap<String, u64> = HashMap::new();
+
+        while let Ok(Some(row)) = rows.next() {
+            let content: String = row.get(0).unwrap_or_default();
+            let role: String = row.get(1).unwrap_or_default();
+            let model: String = row.get(2).unwrap_or_else(|_| "(unknown)".to_string());
+            let day: String = row.get(3).unwrap_or_default();
+            let est = estimate_tokens(&content);
+            if role == "assistant" {
+                *model_output.entry(model.clone()).or_insert(0) += est;
+                *day_output.entry(day.clone()).or_insert(0) += est;
+                *total_output += est as i64;
+            } else {
+                *model_input.entry(model.clone()).or_insert(0) += est;
+                *day_input.entry(day.clone()).or_insert(0) += est;
+                *total_input += est as i64;
+            }
+        }
+        drop(rows);
+
+        // Merge per-model estimates (rows already exist from the real
+        // `by_model` query, just with 0 tokens — add the estimate on top).
+        for (model, inp) in model_input {
+            let out = model_output.get(&model).copied().unwrap_or(0);
+            if let Some(slot) = by_model.iter_mut().find(|m| m.model == model) {
+                slot.input_tokens += inp;
+                slot.output_tokens += out;
+            } else {
+                by_model.push(ModelUsageRow {
+                    model,
+                    sessions: 0,
+                    message_count: 0,
+                    input_tokens: inp,
+                    output_tokens: out,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
+                    reasoning_tokens: 0,
+                    estimated_cost: 0.0,
+                });
+            }
+        }
+        for (day, inp) in day_input {
+            let out = day_output.get(&day).copied().unwrap_or(0);
+            if let Some(slot) = daily.iter_mut().find(|d| d.day == day) {
+                slot.input_tokens += inp;
+                slot.output_tokens += out;
+            }
+        }
+    }
+}
+
+/// 2026-07-16 (Phase 3): token-count heuristic used by the legacy
+/// fallback. ASCII text is ~4 chars/token (0.25 token/char); CJK and
+/// other non-ASCII scripts run ~1.5 tokens/char. Crude but enough to
+/// keep the dashboard from showing a hard 0 for pre-migration installs.
+fn estimate_tokens(s: &str) -> u64 {
+    let mut tokens: f64 = 0.0;
+    for ch in s.chars() {
+        if ch.is_ascii() {
+            tokens += 0.25;
+        } else {
+            tokens += 1.5;
+        }
+    }
+    tokens.ceil() as u64
 }
 
 /// v1 (2026-06-22): PLAN_UI_ENHANCEMENT §6.1 — 真实聚合结果
@@ -3000,6 +3256,8 @@ pub struct UsageAggregate {
     /// P1-3: per-tool call counts parsed from `messages.tool_calls`.
     /// Sorted by `call_count` descending so the frontend can `slice(0, 10)`.
     pub by_tool: Vec<ToolUsageRow>,
+    /// 2026-07-16 (Phase 4): per-skill usage (grouped by target skill name).
+    pub skills: SkillUsageAggregate,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -3057,6 +3315,29 @@ pub struct ToolUsageRow {
     pub call_count: u64,
     pub session_count: u32,
     pub daily_avg: f64,
+}
+
+/// 2026-07-16 (Phase 4): per-skill usage derived from `messages.tool_calls`
+/// where `name` is `skill_view` (a "load"/view) or `skill_manage` (an
+/// edit/create/delete). The skill name comes from the call's `arguments.name`.
+/// Unlike `by_tool` (which counts the `skill_manage` *tool* once per call),
+/// this groups by the *target skill* so the dashboard shows "code-review was
+/// used 47 times", not "skill_manage ran 47 times".
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkillUsageRow {
+    pub skill: String,
+    pub view_count: u64,
+    pub manage_count: u64,
+    pub last_used_at: Option<String>,
+}
+
+/// Aggregate of all skill usage within the window.
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct SkillUsageAggregate {
+    pub entries: Vec<SkillUsageRow>,
+    pub total_views: u64,
+    pub total_manages: u64,
+    pub distinct_skills: u64,
 }
 
 #[cfg(test)]

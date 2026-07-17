@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractMemoryUpdates } from "./messageParser";
+import { extractMemoryUpdates, extractMemoryRecalls, parseContent } from "./messageParser";
 import type { ExecutionTimelineEvent } from "../types";
 
 function memEvent(over: Partial<ExecutionTimelineEvent>): ExecutionTimelineEvent {
@@ -67,6 +67,23 @@ describe("extractMemoryUpdates", () => {
   });
 });
 
+describe("parseContent", () => {
+  it("keeps ordinary markdown checklists in the answer body", () => {
+    const parsed = parseContent(
+      "分析结果：\n\n- [ ] 检查数据库\n- [ ] 核对统计数据\n\n这些只是说明中的检查项。",
+    );
+    expect(parsed.tasks).toEqual([]);
+    expect(parsed.body).toContain("- [ ] 检查数据库");
+    expect(parsed.body).toContain("- [ ] 核对统计数据");
+  });
+
+  it("does not infer a task plan from numbered or bulleted prose", () => {
+    const parsed = parseContent("1. 先定位问题\n2. 再核对数据\n3. 最后给出结论");
+    expect(parsed.tasks).toEqual([]);
+    expect(parsed.body).toContain("1. 先定位问题");
+  });
+});
+
 function recallEvent(over: Partial<ExecutionTimelineEvent>): ExecutionTimelineEvent {
   return {
     type: "memory_recall",
@@ -75,8 +92,6 @@ function recallEvent(over: Partial<ExecutionTimelineEvent>): ExecutionTimelineEv
     ...over,
   } as ExecutionTimelineEvent;
 }
-
-import { extractMemoryRecalls } from "./messageParser";
 
 describe("extractMemoryRecalls", () => {
   it("returns [] when there are no events", () => {

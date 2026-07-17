@@ -1276,6 +1276,9 @@ export interface AnalyticsDailyEntry {
   estimated_cost: number;
   actual_cost: number;
   sessions: number;
+  /** Phase 5: estimated cache hit rate (0..100) when the provider
+   *  under-reports cache reads; `undefined` means use real data. */
+  estimated_cache_hit_rate?: number;
 }
 
 export interface AnalyticsModelEntry {
@@ -1287,6 +1290,8 @@ export interface AnalyticsModelEntry {
   reasoning_tokens: number;
   estimated_cost: number;
   sessions: number;
+  /** Phase 5: estimated cache hit rate (0..100) when real cache reads are 0. */
+  estimated_cache_hit_rate?: number;
 }
 
 export interface AnalyticsTotals {
@@ -1300,6 +1305,9 @@ export interface AnalyticsTotals {
   total_sessions: number;
   total_compactions: number;
   total_archived_turns: number;
+  /** Phase 5: estimated overall cache hit rate (0..100) when real cache
+   *  reads are 0; `undefined` means use the real `total_cache_read`. */
+  estimated_cache_hit_rate?: number;
 }
 
 export interface AnalyticsSkillEntry {
@@ -1339,6 +1347,39 @@ export interface AnalyticsResponse {
 
 export const getAnalytics = async (days = 30): Promise<AnalyticsResponse> =>
   fetchJSON(`/api/analytics/usage?days=${days}`);
+
+// ── Analytics debug (Phase 2) ───────────────────────────────
+// Diagnostic view of the stats DB: existence / row counts / sample
+// rows / applied migrations. Lets the user pinpoint a broken pipeline
+// without opening SQLite by hand.
+
+export interface AnalyticsDebugTable {
+  exists: boolean;
+  row_count: number | null;
+  sample: unknown[];
+  error?: string;
+}
+
+export interface AnalyticsDebugTables {
+  sessions: AnalyticsDebugTable;
+  messages: AnalyticsDebugTable;
+  token_usage: AnalyticsDebugTable;
+}
+
+export interface AnalyticsDebugMigration {
+  id: string;
+  applied_at: string | null;
+  status?: string;
+}
+
+export interface AnalyticsDebugResponse {
+  db_path: string;
+  tables: AnalyticsDebugTables;
+  migrations: AnalyticsDebugMigration[];
+}
+
+export const getAnalyticsDebug = async (): Promise<AnalyticsDebugResponse> =>
+  fetchJSON(`/api/analytics/debug`);
 
 // ── Expert catalog ──────────────────────────────────────────
 // Mirrors `hermix_skills::ExpertEntry` in

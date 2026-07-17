@@ -119,6 +119,12 @@ function localizeStreamError(err: string): string {
   if (/Connection\s*closed/i.test(extracted)) {
     return "连接已断开，请重新发送消息。";
   }
+  // Browser fetch / HTTP request failures often contain the provider URL,
+  // which is not useful in the composer and makes the banner look like a
+  // raw log line. Reduce these to a short actionable message.
+  if (/(HTTP\s+request\s+failed|Failed\s+to\s+fetch|NetworkError|network\s+error|error\s+sending\s+request)/i.test(extracted)) {
+    return "网络请求失败，请检查网络连接或稍后重试。";
+  }
   // Fallback: return the extracted message (already normalized)
   return extracted || err;
 }
@@ -1938,7 +1944,7 @@ return {
           onPrefetch: (info) => {
             setPrefetchIntent(info);
           },
-          onDone: (text, stopReason) => {
+          onDone: (text, stopReason, durationMs) => {
             setPrefetchIntent(null);
             setStreamPhase(null);
             // 2026-07-09: Multi-turn agent loop fix.
@@ -1982,6 +1988,12 @@ return {
                           ...m,
                           content: needsFallbackText ? text : m.content,
                           stopReason,
+                          // 2026-07-16: Wall-clock time the LLM took
+                          // for this turn. Only set if we got a value
+                          // (live stream always does; reloaded history
+                          // never does, so we leave it undefined and
+                          // the renderer shows "已完成" without a time).
+                          ...(durationMs !== undefined ? { durationMs } : {}),
                         }
                       : m
                   ),

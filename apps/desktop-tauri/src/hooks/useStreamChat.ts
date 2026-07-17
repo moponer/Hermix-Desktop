@@ -249,7 +249,7 @@ interface StreamCallbacks {
     choices: string[];
     sessionId: string;
   }) => Promise<{ answer: string }>;
-  onDone?: (fullText: string, stopReason?: string) => void;
+  onDone?: (fullText: string, stopReason?: string, durationMs?: number) => void;
   onError?: (error: string) => void;
   /**
    * Live reasoning text from the LLM (`<think>...</think>` block),
@@ -393,6 +393,13 @@ export function useStreamChat() {
   // instead of creating fresh local variables each time.
   const doneRef = useRef(false);
   const sentToServerRef = useRef(false);
+  // 2026-07-16: Per-send wall-clock start. Captured at the moment the
+  // user fires `send()` (i.e. the assistant turn begins). Read at
+  // `onDone` to compute `durationMs` and pass it on to App.tsx, where
+  // it's stamped onto the assistant message. Reloaded history has no
+  // value here (this ref is per-session, lost on reload) — those
+  // messages render without a duration by design.
+  const sendStartedAtRef = useRef<number | null>(null);
   // Holds the per-send `callbacks.onPrefetch` closure so the WS
   // message handler (line 407) can fire it without prop-drilling the
   // whole `callbacks` object through closures. Ref (not state) because
@@ -433,6 +440,13 @@ export function useStreamChat() {
         pendingRejectRef.current = reject;
         pendingCallbacksRef.current = callbacks;
         sendSettledRef.current = false;
+        // 2026-07-16: Mark the start of this assistant turn so `onDone`
+        // can compute how long the LLM took. Set BEFORE dedup so a
+        // deduped call doesn't pollute the timing of the next real
+        // send. (A deduped call resolves immediately without firing
+        // the WS, so this ref would be overwritten on the next real
+        // send anyway — but explicit reset keeps the invariant local.)
+        sendStartedAtRef.current = Date.now();
 
         // ── Client-side message dedup (runs BEFORE setStreamingSessionId) ──
         // 2026-07-08 (HH) root-cause fix: the previous code did `return;`
@@ -659,7 +673,15 @@ export function useStreamChat() {
             // been nulled (e.g. on a second settle call).
             (pendingRejectRef.current ?? reject)(new Error(err));
           } else {
-            callbacks.onDone?.(cleanText, stopReason);
+            // 2026-07-16: Measure how long this assistant turn took
+            // (Date.now() at send() → Date.now() at Done). Sent to
+            // App.tsx so it can stamp the duration onto the message.
+            // Clamp at 0 to defend against clock skew (send before
+            // now() somehow — should not happen but cheap to guard).
+            const durationMs = sendStartedAtRef.current !== null
+              ? Math.max(0, Date.now() - sendStartedAtRef.current)
+              : undefined;
+            callbacks.onDone?.(cleanText, stopReason, durationMs);
             (pendingResolveRef.current ?? resolve)(cleanText);
           }
           // Clean up per-send refs so a stale cancel() call
@@ -667,6 +689,7 @@ export function useStreamChat() {
           pendingResolveRef.current = null;
           pendingRejectRef.current = null;
           pendingCallbacksRef.current = null;
+          sendStartedAtRef.current = null;
           sendSettledRef.current = true;
           settleRef.current = null;
         };

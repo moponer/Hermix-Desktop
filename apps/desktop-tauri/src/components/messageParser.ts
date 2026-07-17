@@ -126,13 +126,10 @@ export function parseContent(content: string): ParsedContent {
   working = working.replace(ORPHAN_CLOSE_RE, "");
   working = working.replace(BARE_MINIMAX_LITERAL_RE, "$1");
 
-  // Extract checkbox tasks before trimming.
+  // Checklists remain ordinary Markdown in the assistant answer. A real
+  // executable task plan is rendered only from the explicit `todo.*` event
+  // stream (`TodoListCard`), never inferred from text formatting.
   const tasks: ParsedTask[] = [];
-  const CHECKBOX_RE = /^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+(.+?)[ \t]*$/gm;
-  working = working.replace(CHECKBOX_RE, (_m, mark: string, text: string) => {
-    tasks.push({ done: mark.toLowerCase() === "x", text: text.trim() });
-    return "";
-  });
 
   // Collapse runs of empty lines left behind by stripped blocks.
   working = working.replace(/\n{3,}/g, "\n\n").trim();

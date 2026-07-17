@@ -83,38 +83,13 @@ The Tirith pre-check engine **blocks** tool calls whose arguments match any of t
 "#;
 
 const PLAN_BEFORE_EXECUTE_GUIDANCE: &str = "\
-# Plan before you execute (mandatory)
+# Action planning
 
-Before calling ANY tool in response to a user request, you MUST first output a brief execution plan (max 3 lines). \
-The plan must state:
-1. **Target deliverable** — exactly what you will deliver to the user (e.g. \"a complete internal safety-month notice with 3 attachments\")
-2. **Tool(s) to call** — by name and what each does toward the deliverable
-3. **Expected outcome** — what you expect to get back from each tool and how it contributes to the deliverable
+Use a short plan only when the user explicitly asks for a plan, or asks you to carry out a genuinely multi-step action. A read-only analysis, diagnosis, explanation, or ordinary question does not need a plan just because tools are required.
 
-After the plan, proceed to make the actual tool call(s) in the same response.
+For an action task, keep planning to one or two natural-language sentences in the reasoning flow: state the concrete outcome, the next evidence-gathering or execution step, and what will confirm success. Do not emit a standalone `Plan` section, a generic numbered checklist, or placeholder steps in the final answer. Do not announce a plan and then pause; make the first relevant tool call in the same turn.
 
-## Rules
-- **One plan per user request**, not per tool call. If a request needs 3 tool calls, write one plan that covers all 3.
-- **Max 3 lines.** Bullet points or a short numbered list are preferred.
-- **If the user's request is trivial** (e.g. \"hello\", \"what time is it\", a yes/no question), you may skip the plan.
-- **If a tool fails**, produce a revised plan before calling an alternative tool — do not blindly retry the same call.
-- **Keep the deliverable in focus** — every tool call must be justified as necessary for the stated deliverable. If you find yourself calling tools that don't contribute to it, you've lost the plan.
-
-## Example
-```
-User: 根据 G:\\通知.pdf 起草一份方案
-
-Plan:
-最终输出：一份企业内部安全生产月通知活动方案（含活动主题、时间节点、实施步骤）
-1. read_pdf → 读取通知.pdf 获取原文要求
-2. 提取关键时间节点和责任分工
-3. 组合起草 → 输出完整通知方案
-
-Response: [tool call to read_pdf]
-```
-
-This is a compulsory discipline for all tool-using agents. It reduces wasted turns, \
-helps you converge faster, and lets the user see your reasoning before execution.";
+Use one coherent plan per user request. If a tool fails, briefly state the new route before trying a genuinely different route. Every tool call must contribute directly to the requested outcome.";
 
 const EXPLORE_EFFICIENCY_GUIDANCE: &str = "\
 # Exploration efficiency (mandatory when analyzing/reading code or files)
@@ -380,9 +355,9 @@ const TODO_GUIDANCE: &str = "\
 The `todo` tool lets you track a multi-step plan and show the user live progress.
 
 ## When to use it
-- The user's request has **2+ steps** (e.g. 'build X with tests and docs', 'investigate then fix then verify').
-- Any task where you'll call the same tool shape more than once.
-- Long-running work where the user benefits from seeing what's done / pending.
+- Only when the user explicitly asks for a plan, checklist, task tracking, or a multi-step deliverable whose progress they need to see.
+- Do not create tasks for a read-only analysis, explanation, diagnosis, review, or ordinary question, even if several tools are needed.
+- Do not infer task intent from the number of tool calls. If the user did not ask to track work, keep progress in the normal process narrative.
 
 ## How to drive it
 1. At the **start**, `create` one task per step (give each a clear `title` and a `priority`).
@@ -419,12 +394,9 @@ The orchestration engine gives you first-class Task objects to track work units.
 Use these tools to manage tasks throughout a conversation:
 
 ## When to use task tools
-- **Multi-step work**: When the user's request involves 3+ distinct steps, create
-  a parent task and subtasks to track progress.
-- **Complex deliverables**: When producing files, reports, or code changes,
-  create a task to track the deliverable lifecycle.
-- **User visibility**: Tasks appear in the frontend task panel, giving the user
-  real-time progress feedback.
+- **Only with explicit user intent**: the user asks to plan, track, implement, or deliver a multi-step work item and progress visibility is useful.
+- Do not create first-class tasks for a read-only analysis, diagnosis, explanation, review, or short answer merely because the work is technically complex.
+- A task title must describe the user's requested outcome, not the agent's internal investigation steps.
 
 ## How to decompose large tasks (铁律 T)
 1. **Create a parent task**: `task_create(title='Implement feature X', mode='craft')`
@@ -590,7 +562,21 @@ pub fn collect_directions(
         dirs.push(SystemDir::new(
             "think.short",
             DirRoute::Subsequent,
-            "## Thinking\nUse the configured reasoning block before your reply. Max 6 lines. Close before visible text.",
+            "## Thinking\nBefore your visible reply, ALWAYS emit a `<think>…</think>` block. \
+The user CAN see this block (it renders as a collapsible \"已深度思考\" section), \
+so it must read like a real engineer's working log, not a one-line summary.\n\n\
+Required structure (don't be terse — the user wants to SEE your process):\n\
+1. **Parse the request**: what's actually being asked? what constraints/decisions are at stake?\n\
+2. **Plan**: break into ordered steps; for each step say WHY (which file, which decision it unblocks).\n\
+3. **Decide what to do first**: which tool/read/write, and what you expect to learn/change.\n\
+4. **After each tool result**: in the NEXT think block, briefly evaluate what came back and \
+what changes to the plan (don't blindly continue).\n\n\
+Hard rules:\n\
+- Always close `</think>` before any visible text — the first character after `</think>` is the first character of your reply.\n\
+- Do NOT quote the user's words inside the think block.\n\
+- If you genuinely have nothing to reason about, still emit `<think></think>`.\n\
+- Use only `<think>…</think>` — never `<thinking>` or any other variant.\n\
+- The think block is for reasoning, not for the reply. Reply starts after `</think>`.",
         ));
     }
     // Tool selection discipline.
@@ -618,7 +604,7 @@ pub fn collect_directions(
         dirs.push(SystemDir::new(
             "plan.short",
             DirRoute::Subsequent,
-            "## Plan discipline\nBefore calling tools, briefly state which tool(s) you will use and what you expect to get back. Max 3 lines. One plan per user request. Every call must serve the stated deliverable; skip unrelated busywork (e.g. listing dirs to 'recon', fetching file size/timestamp that don't affect the analysis).",
+            "## Plan discipline\nOnly action-oriented multi-step requests need a short plan. Read-only analysis and diagnosis do not need a visible plan merely because tools are used. Keep it to one or two natural sentences in the reasoning flow; do not emit a standalone Plan section or a generic checklist in the final answer. Every call must serve the requested outcome.",
         ));
     }
     // Exploration-efficiency discipline — fixes the "recon-then-act" anti-pattern

@@ -1,33 +1,83 @@
 import { useState, useEffect, useMemo } from "react";
-import { BarChart3, TrendingUp, Cpu, DollarSign, Zap, Wrench, Database, Percent, Archive } from "lucide-react";
-import { getAnalytics, type AnalyticsResponse } from "../api";
+import { BarChart3, TrendingUp, Cpu, DollarSign, Zap, Wrench, Database, Percent, Archive, AlertTriangle, Bug } from "lucide-react";
+import {
+  getAnalytics,
+  getAnalyticsDebug,
+  type AnalyticsResponse,
+  type AnalyticsDebugResponse,
+} from "../api";
 
 // Cache hit rate proxy: of all prompt tokens (freshly-written `input`
 // + cache-served `cache_read`), what fraction came from the cache.
-// Providers that don't report cache stats (MiniMax today) yield 0 —
-// which is honestly "no cache hits observed". Defined at module scope
-// so both `AnalyticsView` and the `DailyCurve` helper can use it.
+// `effectiveHitRate` below prefers this real ratio, but falls back to
+// a backend-provided estimate when the provider under-reports cache
+// reads (Phase 5), and returns `null` when there is no token data at
+// all so the UI can show "—" instead of a misleading 0%.
 function cacheHitRate(cacheRead: number, input: number): number {
   const denom = cacheRead + input;
   return denom > 0 ? (cacheRead / denom) * 100 : 0;
+}
+
+/**
+ * Effective cache-hit rate (0..100) for a totals/model/daily entry.
+ *  • real data present  → real cache_read / (cache_read + input) ratio.
+ *  • no real cache reads → backend `estimated` fraction (0..1) × 100.
+ *  • no token data at all → `null` (caller shows "—").
+ */
+function effectiveHitRate(
+  cacheRead: number,
+  input: number,
+  estimated?: number,
+): number | null {
+  if (cacheRead > 0 || input > 0) {
+    return cacheHitRate(cacheRead, input);
+  }
+  if (estimated != null) return estimated * 100;
+  return null;
 }
 
 function hitRateColor(pct: number): string {
   return pct >= 80 ? "text-green-400" : pct >= 50 ? "text-amber-400" : "text-zinc-400";
 }
 
+function hitRateLabel(pct: number | null): string {
+  return pct == null ? "—" : `${pct.toFixed(1)}%`;
+}
+
 export function AnalyticsView() {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [days, setDays] = useState(30);
   const [loading, setLoading] = useState(true);
+  // Phase 1: surface the real backend error instead of a generic
+  // "无法加载统计数据". `null` means "loaded fine (or no data)".
+  const [lastError, setLastError] = useState<string | null>(null);
+
+  // Phase 2: diagnostic panel state.
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debug, setDebug] = useState<AnalyticsDebugResponse | null>(null);
+  const [debugLoading, setDebugLoading] = useState(false);
+  const [debugError, setDebugError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
+    setLastError(null);
     getAnalytics(days)
       .then(setData)
-      .catch(() => setData(null))
+      .catch((e: unknown) => {
+        setData(null);
+        setLastError(extractErrorCause(e));
+      })
       .finally(() => setLoading(false));
   }, [days]);
+
+  const loadDebug = () => {
+    setDebugLoading(true);
+    setDebugError(null);
+    getAnalyticsDebug()
+      .then(setDebug)
+      .catch((e: unknown) => setDebugError(extractErrorCause(e)))
+      .finally(() => setDebugLoading(false));
+  };
 
   if (loading) {
     return (
@@ -37,10 +87,59 @@ export function AnalyticsView() {
     );
   }
 
+  // Phase 1: a real backend error — show it loudly so the user can act.
+  if (lastError) {
+    return (
+      <div className="h-full overflow-auto p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="w-5 h-5 text-accent" />
+            <h2 className="text-lg font-semibold">使用统计</h2>
+          </div>
+          <select
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
+            className="px-3 py-1.5 rounded-lg bg-bg-secondary border border-border-primary text-sm"
+          >
+            <option value={7}>近 7 天</option>
+            <option value={30}>近 30 天</option>
+            <option value={90}>近 90 天</option>
+          </select>
+        </div>
+        <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-red-300">统计数据加载失败</div>
+              <div className="mt-1 text-xs text-red-200/80 break-words whitespace-pre-wrap font-mono">
+                {lastError}
+              </div>
+              <button
+                onClick={() => setDebugOpen(true)}
+                className="mt-3 inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-bg-secondary border border-border-primary hover:border-red-500/40"
+              >
+                <Bug className="w-3.5 h-3.5" /> 打开诊断面板
+              </button>
+            </div>
+          </div>
+        </div>
+        {debugOpen && (
+          <DebugPanel
+            debug={debug}
+            loading={debugLoading}
+            error={debugError}
+            onClose={() => setDebugOpen(false)}
+            onReload={loadDebug}
+          />
+        )}
+      </div>
+    );
+  }
+
   if (!data) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-text-faint">无法加载统计数据</div>
+        <div className="text-text-faint">暂无统计数据</div>
       </div>
     );
   }
@@ -59,11 +158,18 @@ export function AnalyticsView() {
   // token usage (P1-3, 2026-06-27). Before that date the totals came
   // back as zeros and the user got a useless "you used 0 tokens" panel.
   // Detect by inspecting the totals vs session count — if there are
-  // sessions but no tokens, it's a legacy install.
+  // sessions but no tokens, it's a legacy install (now back-filled by
+  // the message-content estimate, so this is rarely true anymore).
   const hasRealTokens = totals.total_sessions === 0
     || totals.total_input > 0
     || totals.total_output > 0
     || daily.some((d) => d.input_tokens > 0 || d.output_tokens > 0);
+
+  const totalsHit = effectiveHitRate(
+    totals.total_cache_read,
+    totals.total_input,
+    totals.estimated_cache_hit_rate,
+  );
 
   return (
     <div className="h-full overflow-auto p-4 space-y-6">
@@ -78,15 +184,27 @@ export function AnalyticsView() {
             </span>
           )}
         </div>
-        <select
-          value={days}
-          onChange={(e) => setDays(Number(e.target.value))}
-          className="px-3 py-1.5 rounded-lg bg-bg-secondary border border-border-primary text-sm"
-        >
-          <option value={7}>近 7 天</option>
-          <option value={30}>近 30 天</option>
-          <option value={90}>近 90 天</option>
-        </select>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              setDebugOpen(true);
+              if (!debug) loadDebug();
+            }}
+            title="诊断统计数据库"
+            className="p-1.5 rounded-lg bg-bg-secondary border border-border-primary hover:border-accent/50"
+          >
+            <Bug className="w-4 h-4 text-text-secondary" />
+          </button>
+          <select
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
+            className="px-3 py-1.5 rounded-lg bg-bg-secondary border border-border-primary text-sm"
+          >
+            <option value={7}>近 7 天</option>
+            <option value={30}>近 30 天</option>
+            <option value={90}>近 90 天</option>
+          </select>
+        </div>
       </div>
 
       {/* Totals Cards */}
@@ -124,8 +242,8 @@ export function AnalyticsView() {
         <StatCard
           icon={<Percent className="w-4 h-4" />}
           label="缓存命中率"
-          value={`${cacheHitRate(totals.total_cache_read, totals.total_input).toFixed(1)}%`}
-          color={hitRateColor(cacheHitRate(totals.total_cache_read, totals.total_input))}
+          value={hitRateLabel(totalsHit)}
+          color={totalsHit == null ? "text-text-faint" : hitRateColor(totalsHit)}
         />
       </div>
 
@@ -141,19 +259,29 @@ export function AnalyticsView() {
         <div className="bg-bg-secondary rounded-xl p-4 border border-border-primary">
           <h3 className="text-sm font-medium mb-3">模型使用</h3>
           <div className="space-y-2">
-            {by_model.map((m) => (
-              <div key={m.model} className="flex items-center justify-between text-sm">
-                <span className="text-text-secondary truncate max-w-[200px]">{m.model}</span>
-                <div className="flex items-center gap-4">
-                  <span className="text-text-faint">{formatNumber(m.input_tokens + m.output_tokens)} tok</span>
-                  <span className="text-text-faint">{m.sessions} 次</span>
-                  <span className={hitRateColor(cacheHitRate(m.cache_read_tokens, m.input_tokens))}>
-                    {cacheHitRate(m.cache_read_tokens, m.input_tokens).toFixed(0)}% 命中
-                  </span>
-                  <span className="text-accent">{formatCost(m.estimated_cost)}</span>
+            {by_model.map((m) => {
+              const hit = effectiveHitRate(
+                m.cache_read_tokens,
+                m.input_tokens,
+                m.estimated_cache_hit_rate,
+              );
+              const estNote = m.estimated_cache_hit_rate != null && m.cache_read_tokens === 0
+                ? " (估算)"
+                : "";
+              return (
+                <div key={m.model} className="flex items-center justify-between text-sm">
+                  <span className="text-text-secondary truncate max-w-[200px]">{m.model}</span>
+                  <div className="flex items-center gap-4">
+                    <span className="text-text-faint">{formatNumber(m.input_tokens + m.output_tokens)} tok</span>
+                    <span className="text-text-faint">{m.sessions} 次</span>
+                    <span className={hit == null ? "text-text-faint" : hitRateColor(hit)}>
+                      {hitRateLabel(hit)}{estNote}
+                    </span>
+                    <span className="text-accent">{formatCost(m.estimated_cost)}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -231,6 +359,119 @@ export function AnalyticsView() {
       {by_model.length === 0 && by_tool.length === 0 && skills.top_skills.length === 0 && (
         <div className="text-center text-text-faint py-8">
           暂无使用数据。开始对话后这里会显示统计信息。
+        </div>
+      )}
+
+      {/* Phase 2: diagnostic panel (toggled from the header bug button
+          or the error banner). */}
+      {debugOpen && (
+        <DebugPanel
+          debug={debug}
+          loading={debugLoading}
+          error={debugError}
+          onClose={() => setDebugOpen(false)}
+          onReload={loadDebug}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Pull a human-readable cause out of a failed `fetchJSON`. The backend
+ *  returns `AnalyticsErrorResponse { error, cause }` on 500; otherwise
+ *  we show the raw status text. */
+function extractErrorCause(e: unknown): string {
+  if (e instanceof Error) {
+    try {
+      const parsed = JSON.parse(e.message) as { error?: string; cause?: string };
+      if (parsed.cause) return `${parsed.error ?? "error"}: ${parsed.cause}`;
+      if (parsed.error) return parsed.error;
+    } catch {
+      // not JSON — fall through
+    }
+    return e.message;
+  }
+  return String(e);
+}
+
+/** Phase 2: one-shot diagnostic of the stats DB. */
+function DebugPanel({
+  debug,
+  loading,
+  error,
+  onClose,
+  onReload,
+}: {
+  debug: AnalyticsDebugResponse | null;
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+  onReload: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-border-primary bg-bg-secondary p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bug className="w-4 h-4 text-text-secondary" />
+          <h3 className="text-sm font-medium">统计诊断</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onReload}
+            className="text-xs px-2.5 py-1 rounded-lg border border-border-primary hover:border-accent/50"
+          >
+            刷新
+          </button>
+          <button
+            onClick={onClose}
+            className="text-xs px-2.5 py-1 rounded-lg border border-border-primary hover:border-accent/50"
+          >
+            关闭
+          </button>
+        </div>
+      </div>
+      {loading && <div className="text-xs text-text-faint">读取数据库...</div>}
+      {error && (
+        <div className="text-xs text-red-300 font-mono break-words whitespace-pre-wrap">{error}</div>
+      )}
+      {debug && (
+        <div className="space-y-3">
+          <div className="text-xs text-text-faint break-all">
+            <span className="text-text-secondary">DB:</span> {debug.db_path}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {(["sessions", "messages", "token_usage"] as const).map((name) => {
+              const t = debug.tables[name];
+              return (
+                <div key={name} className="rounded-lg border border-border-primary p-2.5 text-xs">
+                  <div className="font-medium text-text-secondary mb-1">{name}</div>
+                  <div className="text-text-faint">
+                    存在: {t.exists ? "是" : "否"} · 行数: {t.row_count ?? "—"}
+                  </div>
+                  {t.error && <div className="text-red-300 mt-1 break-words">{t.error}</div>}
+                  {t.sample.length > 0 && (
+                    <pre className="mt-1.5 max-h-40 overflow-auto text-[10px] text-text-faint whitespace-pre-wrap">
+                      {JSON.stringify(t.sample, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="text-xs">
+            <div className="font-medium text-text-secondary mb-1">迁移 (schema_migrations)</div>
+            {debug.migrations.length === 0 ? (
+              <div className="text-text-faint">无记录</div>
+            ) : (
+              <div className="space-y-0.5 font-mono text-text-faint">
+                {debug.migrations.map((m) => (
+                  <div key={m.id}>
+                    {m.id} · {m.applied_at ?? "—"} · {m.status ?? "ok"}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -365,7 +606,8 @@ function DailyCurve({ daily }: { daily: import("../api").AnalyticsDailyEntry[] }
           {/* cache hit-rate line — 0..100% scale mapped to full height.
               Distinct from the session line (amber dots): this is the
               accent-coloured polyline so the user sees "cache saved X%
-              of input" trending over time. */}
+              of input" trending over time. Uses the estimated rate as a
+              fallback when a day reported 0 real cache reads. */}
           <polyline
             fill="none"
             stroke="currentColor"
@@ -374,9 +616,13 @@ function DailyCurve({ daily }: { daily: import("../api").AnalyticsDailyEntry[] }
             strokeDasharray="3,2"
             points={daily
               .map((d, i) => {
-                const hr = cacheHitRate(d.cache_read_tokens, d.input_tokens);
+                const hr = effectiveHitRate(
+                  d.cache_read_tokens,
+                  d.input_tokens,
+                  d.estimated_cache_hit_rate,
+                );
                 const x = i * barWidth + barWidth / 2;
-                const y = innerH - (hr / 100) * innerH;
+                const y = innerH - ((hr ?? 0) / 100) * innerH;
                 return `${x},${y}`;
               })
               .join(" ")}

@@ -1,7 +1,7 @@
 import React from "react";
 import {
-  ChevronDown, ChevronRight, ListTodo, Terminal, Globe, Wrench,
-  AlertCircle, AlertTriangle, CheckCircle2, Circle, Loader2, Copy, Check,
+  ChevronDown, ChevronRight, Terminal, Globe, Wrench,
+  AlertCircle, AlertTriangle, CheckCircle2, Loader2, Copy, Check,
   ShieldCheck, ShieldAlert, HelpCircle, X, Sparkles, Brain,
   FileText, FilePlus, ArrowRight,
   CheckCheck, Search, FolderOpen, Edit3, Trash2, Eye,
@@ -38,7 +38,9 @@ export { ThoughtStreamCard };
 // 2026-07-10: Exported for reuse in StreamingBubble — both the live
 // streaming bubble and the settled MessageBubble render the tool
 // timeline from the same component so visuals stay identical.
-export { ToolTimelineSection };
+// 2026-07-16: ProcessTimeline added for the same reason — the single
+// foldable block is the canonical process surface in both renderers.
+export { ToolTimelineSection, ProcessTimeline };
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -177,10 +179,53 @@ export function PrefetchIntentChip({ intent, confidence }: PrefetchIntentChipPro
   );
 }
 
+// ── Message copy action ──────────────────────────────────────────
+// Keep copy affordances attached to the message they act on. The
+// action row reserves its small footprint and fades in on hover/focus,
+// so it does not jump into the metadata header or move the message when
+// the user discovers it.
+export function MessageCopyAction({
+  content,
+  className,
+}: {
+  content: string;
+  className: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copyMessage = async () => {
+    if (!content.trim()) return;
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  if (!content.trim()) return null;
+
+  return (
+    <div className={className}>
+      <button
+        type="button"
+        onClick={copyMessage}
+        className="message-copy-button"
+        title="复制消息"
+        aria-label="复制消息"
+      >
+        {copied ? <Check size={12} /> : <Copy size={12} />}
+        <span>{copied ? "已复制" : "复制"}</span>
+      </button>
+    </div>
+  );
+}
+
 // ── User message ─────────────────────────────────────────────────
 function UserMessage({ message }: { message: ChatMessage }) {
   return (
-    <div className="flex justify-end h-enter items-start mt-5">
+    <div className="msg-user-column h-enter mt-5 msg-copyable">
       <div className="msg-bubble-user whitespace-pre-wrap break-words">
         {message.images && message.images.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: message.content ? 6 : 0 }}>
@@ -197,6 +242,10 @@ function UserMessage({ message }: { message: ChatMessage }) {
         )}
         {message.content}
       </div>
+      <MessageCopyAction
+        content={message.content}
+        className="message-copy-row message-copy-row--user"
+      />
     </div>
   );
 }
@@ -338,83 +387,195 @@ function ToolGroupCard({
   );
 }
 
+// ── Process Timeline (the ONE foldable block) ───────────────────
+//
+// 2026-07-16 v2: 流式阶段不渲染折叠头，让 reasoning / tool 和正文
+// 看起来一样 — 用户看到的是"LLM 实时在写"（不区分 thinking 还是
+// reply），只有关键转换发生（最终正文出现 / stream 结束）时，前
+// 面所有过程才整体折叠成一个"已完成 N 个工具"chip。
+//
+// 流式时（isStreaming=true）：
+//   · 无折叠头
+//   · 过程内容（reasoning + tools）直接平铺在文本流里，
+//     视觉上和正文一样（thinking 是浅灰斜体、tool 是普通一行）
+//
+// 结束后（isStreaming=false）：
+//   ┌─  ✓ 已完成 N 个工具 ▼  ← 在 body 之上插入折叠 chip
+//   └─  body 默认折叠，点击展开看完整过程
+//
+// 关键不变量：折叠只在"过程"和"结论"之间发生，不在"流式中"发生。
+// 这跟 WorkBuddy 参考 UI 一致——流式时是一段连续叙事，结束后才
+// 把"过程"压缩成可展开的历史。
+
 /**
- * Collapsible section that renders all tool groups from the
- * assistant's execution_timeline. Collapsed by default (like
- * ReasoningBlock), but auto-expands when there are running tools.
+ * Single foldable block that wraps every reasoning + tool step from
+ * the agent loop. While streaming, renders the content inline (no
+ * fold UI) so the user sees a continuous narrative. When the turn
+ * ends, prepends a "已完成 ▼" chip and collapses the body.
  */
-function ToolTimelineSection({
-  groups,
+function ProcessTimeline({
+  processSteps,
   isStreaming,
+  hasRunningTool: _hasRunningTool,
+  durationMs,
   onPathClick,
 }: {
-  groups: import("./messageParser").ToolGroup[];
+  processSteps: TimelineStep[];
   isStreaming?: boolean;
+  hasRunningTool: boolean;
+  /** Wall-clock time the LLM took for this turn (ms). `undefined` =
+   *  no data — reloaded history never has it, so the header just says
+   *  "已完成" without a duration. Live streams always have it. */
+  durationMs?: number;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
 }) {
-  const hasRunning = groups.some((g) => g.status === "running");
-  const [expanded, setExpanded] = useState(isStreaming ?? false);
+  // Streaming → always expanded (no fold UI shown at all).
+  // Settled  → default collapsed; user can click to expand.
+  const [userOverride, setUserOverride] = useState<boolean | null>(null);
+  const expanded = isStreaming ? true : (userOverride ?? false);
 
-  // Auto-expand when tools are running during streaming
+  // When a new turn starts (live → settled → live again), drop the
+  // user's manual override so the auto-collapse default kicks in.
   useEffect(() => {
-    if (hasRunning) setExpanded(true);
-  }, [hasRunning]);
+    if (!isStreaming) setUserOverride(null);
+  }, [isStreaming]);
 
-  // Auto-collapse when streaming ends and all tools are done
-  useEffect(() => {
-    if (!isStreaming && !hasRunning && expanded) {
-      const t = setTimeout(() => setExpanded(false), 100);
-      return () => clearTimeout(t);
-    }
-    return undefined;
-  }, [isStreaming, hasRunning]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (processSteps.length === 0) return null;
 
-  const doneCount = groups.filter((g) => g.status === "done").length;
-  const errorCount = groups.filter((g) => g.status === "error").length;
-  const runningCount = groups.filter((g) => g.status === "running").length;
+  const totalTools = processSteps.reduce(
+    (acc, s) => acc + (s.kind === "tools" ? s.events.length : 0),
+    0,
+  );
 
-  const summary = runningCount > 0
-    ? `执行中 ${runningCount}/${groups.length}`
-    : errorCount > 0
-      ? `完成 ${doneCount}/${groups.length}（${errorCount} 失败）`
-      : `已完成 ${groups.length}`;
+  // Header label: only used when settled (isStreaming=false). Live
+  // renders no header — the content flows inline like prose.
+  //   "已完成"                    ← no timing data
+  //   "已完成 7s"                 ← < 1 minute
+  //   "已完成 1m 23s"             ← ≥ 1 minute (s always shown, never 0-padded)
+  //   "已完成 5 个工具 7s"        ← when tools ran (count + duration)
+  const durationPart = formatDuration(durationMs);
+  const settledLabel = totalTools > 0
+    ? (durationPart ? `已完成 ${totalTools} 个工具 ${durationPart}` : `已完成 ${totalTools} 个工具`)
+    : (durationPart ? `已完成 ${durationPart}` : "已完成");
 
   return (
-    <div className="tl-tools">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="reasoning-header"
-      >
-        {expanded ? (
-          <ChevronDown size={12} className="reasoning-chevron reasoning-chevron-open" />
-        ) : (
-          <ChevronRight size={12} className="reasoning-chevron" />
-        )}
-        <Wrench size={11} />
-        <span className="reasoning-label">工具调用</span>
-        <span className="reasoning-count">{summary}</span>
-      </button>
+    <div className="tl-process-timeline">
+      {/* Fold header: ONLY visible when the turn has settled.
+          During streaming the content flows inline so the user
+          perceives a single continuous narrative, not a stack
+          of chips. */}
+      {!isStreaming && (
+        <button
+          onClick={() => setUserOverride((v) => v ?? true ? false : true)}
+          className="reasoning-header tl-process-header"
+          aria-expanded={expanded}
+        >
+          {expanded ? (
+            <ChevronDown size={12} className="reasoning-chevron reasoning-chevron-open" />
+          ) : (
+            <ChevronRight size={12} className="reasoning-chevron" />
+          )}
+          <CheckCircle2 size={11} className="tl-process-check" />
+          <span className="reasoning-label">{settledLabel}</span>
+        </button>
+      )}
       {expanded && (
-        <div className="tl-tools-list">
-          {groups.map((g) => (
-            <ToolGroupCard key={g.key} group={g} onPathClick={onPathClick} />
-          ))}
+        <div className="tl-process-body">
+          {processSteps.map((step, i) => {
+            if (step.kind === "reasoning") {
+              return <ReasoningBlock key={`ps-${i}`} content={step.content} />;
+            }
+            if (step.kind !== "tools") return null;
+            const groups = groupTimeline(step.events);
+            if (groups.length === 0) return null;
+            return (
+              <ToolTimelineSection
+                key={`ps-${i}`}
+                groups={groups}
+                onPathClick={onPathClick}
+              />
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
+/**
+ * Render a millisecond duration as a compact "Xs" / "Xm Ys" string,
+ * or empty string when input is missing / non-positive.
+ *
+ *   formatDuration(undefined) → ""
+ *   formatDuration(0)         → ""
+ *   formatDuration(800)       → "1s"   (rounds to nearest second)
+ *   formatDuration(7000)      → "7s"
+ *   formatDuration(65000)     → "1m 5s"
+ *   formatDuration(3723000)   → "62m 3s"
+ *
+ * Pure function — no React / no i18n. Cheap to call on every render.
+ */
+function formatDuration(ms: number | undefined): string {
+  if (ms === undefined || !Number.isFinite(ms) || ms <= 0) return "";
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return s === 0 ? `${m}m` : `${m}m ${s}s`;
+}
+
+/**
+ * Flat tool list (no outer fold — the parent ProcessTimeline owns
+ * the fold). Renders each tool call as a single row, preserving the
+ * per-tool inline expansion for full stdout / structured output.
+ *
+ * 2026-07-16: replaced the old "工具调用 [已完成 X] ▼" outer fold
+ * with a flat list, so the timeline reads as a narrative instead of
+ * a stack of chips. Each ToolGroupCard still has its own inline
+ * "click to expand" affordance for full output.
+ */
+function ToolTimelineSection({
+  groups,
+  isStreaming: _isStreaming,
+  onPathClick,
+}: {
+  groups: import("./messageParser").ToolGroup[];
+  isStreaming?: boolean;
+  onPathClick?: (path: string, e: React.MouseEvent) => void;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <div className="tl-tools tl-tools--flat">
+      <div className="tl-tools-list">
+        {groups.map((g) => (
+          <ToolGroupCard key={g.key} group={g} onPathClick={onPathClick} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Unified Timeline Renderer ─────────────────────────────────────
-// Renders the assistant's response as a chronological sequence of
-// reasoning / tools / text steps, replacing the old fixed 3-section
-// layout. Each step is rendered in order so the user can follow each
-// iteration of the agent loop as a cohesive unit:
+// Renders the assistant's response as TWO regions:
 //
-//   [reasoning 1] → [tools 1] → [reasoning 2] → [tools 2] → [text]
+//   ┌────────────────────────────────────────────────────────────┐
+//   │ ProcessTimeline (one foldable block)                       │
+//   │   process steps  = reasoning + tools (in chronological     │
+//   │                     order, all the agent-loop scaffolding) │
+//   │   header         = "处理中…" (live) / "已完成 N 个工具"   │
+//   │                     (settled, collapsed by default)       │
+//   ├────────────────────────────────────────────────────────────┤
+//   │ Final text (one or more text steps, rendered as continuous │
+//   │   prose — no fold, no card wrapper)                        │
+//   └────────────────────────────────────────────────────────────┘
 //
-// File changes, tasks, and thinking-dots are handled as special cases
-// after the main step list.
+// 2026-07-16: replaces the previous iteration-based grouping. The
+// fold is now at the OUTER level, not per-step. Multiple text steps
+// (LLM can interleave paragraphs) are merged into a single prose
+// flow at the bottom of the bubble — same as before.
+//
+// File changes / memory updates / memory recalls / tool-calls
+// fallback / thinking dots remain as trailing meta blocks.
 
 function UnifiedTimelineRenderer({
   steps,
@@ -425,7 +586,7 @@ function UnifiedTimelineRenderer({
   memoryRecalls,
   toolCalls,
   hasRunningTool,
-  parsedTasks,
+  durationMs,
 }: {
   steps: TimelineStep[];
   isStreaming?: boolean;
@@ -435,26 +596,25 @@ function UnifiedTimelineRenderer({
   memoryRecalls: MemoryRecallEntry[];
   toolCalls: NonNullable<ChatMessage["tool_calls"]>;
   hasRunningTool: boolean;
-  parsedTasks: ReturnType<typeof parseContent>["tasks"];
+  /** Forwarded to ProcessTimeline for the "已完成 10s" header chip. */
+  durationMs?: number;
 }) {
   const hasTools = toolCalls.length > 0;
   const hasAnyToolStep = steps.some((s) => s.kind === "tools");
   const hasAnyTextStep = steps.some((s) => s.kind === "text");
   const hasAnyReasoningStep = steps.some((s) => s.kind === "reasoning");
 
-  // Precompute the index of the first text step that has tasks,
-  // so we don't call findIndex (with parseContent inside) on every
-  // render of every step.
-  const firstTextWithTasksIdx = useMemo(() => {
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      if (step.kind === "text") {
-        const parsed = parseContent(step.content);
-        if (parsed.tasks.length > 0) return i;
-      }
-    }
-    return -1;
-  }, [steps]);
+  // Split steps into "process" (reasoning + tools) and "text" (final
+  // reply). Process goes inside the single foldable ProcessTimeline;
+  // text renders as continuous prose below the fold.
+  const processSteps = useMemo(
+    () => steps.filter((s) => s.kind === "reasoning" || s.kind === "tools"),
+    [steps],
+  );
+  const textSteps = useMemo(
+    () => steps.filter((s) => s.kind === "text"),
+    [steps],
+  );
 
   // If all steps are empty (no reasoning, no tools, no text), render
   // the streaming placeholder (ThinkingDots) or nothing.
@@ -471,99 +631,55 @@ function UnifiedTimelineRenderer({
     return null;
   }
 
-  // ── Iteration grouping ──────────────────────────────────────────────
-  // 2026-07-16: Group steps into "iterations" so the visual output reads
-  // as a cohesive sequence of rounds rather than a flat interleaving of
-  // reasoning / tools / text blocks. Each iteration is visually grouped
-  // with consistent internal spacing and a subtle gap between iterations.
-  //
-  // Iteration boundary: a "reasoning" or "tools" step that follows a
-  // "text" step marks the start of a new iteration. This preserves the
-  // chronological flow: [think₁ → tools₁ → text₁] · [think₂ → tools₂ → text₂].
-  //
-  // Within each iteration, consecutive text steps are merged into one
-  // prose flow — no card wrapper, no background, no hard 20px breaks.
-  const iterations = useMemo(() => {
-    const iters: { step: TimelineStep; globalIdx: number }[][] = [];
-    let current: { step: TimelineStep; globalIdx: number }[] = [];
-    let lastKind: string | null = null;
-
-    for (let gi = 0; gi < steps.length; gi++) {
-      const step = steps[gi];
-      // Start a new iteration when reasoning/tools appear after text.
-      // This means: [think, tools, text, think, tools, text] → two iterations.
-      if ((step.kind === "reasoning" || step.kind === "tools") && lastKind === "text") {
-        if (current.length > 0) iters.push(current);
-        current = [];
-      }
-      current.push({ step, globalIdx: gi });
-      lastKind = step.kind;
-    }
-    if (current.length > 0) iters.push(current);
-    return iters;
-  }, [steps]);
-
   return (
     <div className="tl-iterations">
-      {iterations.map((iter, iterIdx) => (
-        <div key={`iter-${iterIdx}`} className="tl-iteration">
-          {iter.map(({ step, globalIdx }) => {
-            if (step.kind === "reasoning") {
-              return <ReasoningBlock key={`step-${globalIdx}`} content={step.content} />;
-            }
-            if (step.kind === "tools") {
-              const groups = groupTimeline(step.events);
-              if (groups.length === 0) return null;
-              return (
-                <ToolTimelineSection
-                  key={`step-${globalIdx}`}
-                  groups={groups}
-                  isStreaming={isStreaming}
-                  onPathClick={onPathClick}
+      {/* The single foldable process block — wraps every reasoning
+          step and every tool call from the agent loop. */}
+      <ProcessTimeline
+        processSteps={processSteps}
+        isStreaming={isStreaming}
+        hasRunningTool={hasRunningTool}
+        durationMs={durationMs}
+        onPathClick={onPathClick}
+      />
+
+      {/* Final text reply — renders outside the fold so the
+          conclusion is always visible without a click. */}
+      {textSteps.map((step, i) => {
+        if (step.kind !== "text") return null;
+        const parsed = parseContent(step.content);
+        const isLastText = i === textSteps.length - 1;
+        return (
+          <div key={`text-${i}`} className="tl-iteration tl-text-step">
+            {parsed.body && (
+              <div className="tl-text-inner">
+                <MarkdownBody
+                  content={parsed.body}
+                  onPathClick={onPathClick ?? (() => {})}
                 />
-              );
-            }
-            // step.kind === "text" — pure prose, no card wrapper
-            const parsed = parseContent(step.content);
-            return (
-              <div key={`step-${globalIdx}`} className="tl-text-step">
-                {/* Tasks (only on the first text step that has them) */}
-                {parsed.tasks.length > 0 && globalIdx === firstTextWithTasksIdx && (
-                  <div className="tl-text-inner">
-                    <TaskListBlock tasks={parsed.tasks} />
-                  </div>
-                )}
-                {parsed.body && (
-                  <div className="tl-text-inner">
-                    <MarkdownBody
-                      content={parsed.body}
-                      onPathClick={onPathClick ?? (() => {})}
-                    />
-                  </div>
-                )}
-                {/* File changes (only on the very last text step overall) */}
-                {globalIdx === steps.length - 1 && fileChanges.length > 0 && (
-                  <div className="tl-text-inner tl-text-inner--meta">
-                    <FileChangeBlock changes={fileChanges} onPathClick={onPathClick} />
-                  </div>
-                )}
-                {/* Memory updates (only on the last text step) */}
-                {globalIdx === steps.length - 1 && memoryUpdates.length > 0 && (
-                  <div className="tl-text-inner tl-text-inner--meta">
-                    <MemoryUpdateBlock updates={memoryUpdates} />
-                  </div>
-                )}
-                {/* Memory recalls */}
-                {globalIdx === steps.length - 1 && memoryRecalls.length > 0 && (
-                  <div className="tl-text-inner tl-text-inner--meta">
-                    <MemoryRecallBlock recalls={memoryRecalls} />
-                  </div>
-                )}
               </div>
-            );
-          })}
-        </div>
-      ))}
+            )}
+            {/* File changes (only on the very last text step) */}
+            {isLastText && fileChanges.length > 0 && (
+              <div className="tl-text-inner tl-text-inner--meta">
+                <FileChangeBlock changes={fileChanges} onPathClick={onPathClick} />
+              </div>
+            )}
+            {/* Memory updates (only on the last text step) */}
+            {isLastText && memoryUpdates.length > 0 && (
+              <div className="tl-text-inner tl-text-inner--meta">
+                <MemoryUpdateBlock updates={memoryUpdates} />
+              </div>
+            )}
+            {/* Memory recalls */}
+            {isLastText && memoryRecalls.length > 0 && (
+              <div className="tl-text-inner tl-text-inner--meta">
+                <MemoryRecallBlock recalls={memoryRecalls} />
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       {/* Legacy fallback: running tool calls without timeline events.
           Only shown when there are tool_calls but no tool steps
@@ -584,7 +700,7 @@ function UnifiedTimelineRenderer({
 
       {/* All tools done, body still empty → waiting for final text.
           Only fire for the LIVE streaming message. */}
-      {hasAnyToolStep && !hasRunningTool && !hasAnyTextStep && parsedTasks.length === 0 && isStreaming && (
+      {hasAnyToolStep && !hasRunningTool && !hasAnyTextStep && isStreaming && (
         <div className="tl-iteration">
           <ThinkingDots label="等待回复" />
         </div>
@@ -601,11 +717,9 @@ function AssistantMessage({
   workspaceRoot?: string | null;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
   /**
-   * Whether to render the avatar + name + time + model + stop chip +
-   * copy button. We hide these on continuation messages within the
-   * same turn so a single user question → N assistant outputs (with
-   * interleaved tool calls) reads as one cohesive response, not as
-   * a chatty multi-avatar thread. The body content is unchanged.
+   * Whether to render the avatar + name + time + model + stop chip.
+   * The copy action is rendered below the message body, even though
+   * `showHeader` still controls the single per-turn identity header.
    */
   showHeader?: boolean;
   /**
@@ -626,7 +740,6 @@ function AssistantMessage({
    */
   expertCutoffAt?: number | null;
 }) {
-  const parsed = useMemo(() => parseContent(message.content), [message.content]);
   const fileChanges = useMemo(
     () => extractFileChanges(message.execution_timeline),
     [message.execution_timeline],
@@ -646,7 +759,6 @@ function AssistantMessage({
     () => toolCalls.some((tc) => tc.status === "running" || !tc.status),
     [toolCalls],
   );
-  const [copied, setCopied] = useState(false);
 
   // Inline path preview was retired 2026-06-22 in favour of routing
   // every path click through ChatView's `onPathClick` → RightSidebar.
@@ -655,41 +767,26 @@ function AssistantMessage({
   // the "产物栏/阅读界面在同一栏" mental model the user expects.
   // Now path clicks always open / switch the right sidebar's preview.
 
-  const copyMessage = async () => {
-    await navigator.clipboard.writeText(message.content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
+  // Now path clicks always open / switch the right sidebar's preview.
 
   return (
     // Outer wrapper: with header we use the avatar+column flex; without
     // header we keep the left margin (so body text aligns with the first
     // assistant message) but skip the avatar column and the header row.
-    <div className={showHeader ? "flex gap-2.5 h-enter items-start" : "h-enter"}>
+    <div className={showHeader ? "flex gap-2.5 h-enter items-start msg-copyable" : "h-enter msg-copyable"}>
       {showHeader && (
         <Avatar role="assistant" size={22} className="shrink-0 mt-0.5" />
       )}
       <div className={showHeader ? "flex-1 min-w-0" : "pl-[30px]"}>
-        {/* Header: time · model · stop chip · copy.
-            Hidden on continuation assistant messages so a single
-            user turn reads as one cohesive response, not as a
-            chatty multi-avatar thread.
-            The "Hermix" name is intentionally NOT shown — the avatar
-            is the model's identity. The meta line (time / model / stop
-            chip) lives alongside, separated by ·  dots. */}
+        {/* Header: time · model · stop chip. Copy belongs below the
+            assistant message, not in this metadata line, so the action
+            remains spatially attached to the content it copies. */}
         {showHeader && (
           <div className="flex items-center gap-2 mb-1.5 text-text-faint">
             <span className="h-tiny tabular-nums">{formatRelativeTime(message.timestamp)}</span>
             {message.model && <span className="h-tiny opacity-60">·</span>}
             {message.model && <span className="h-tiny">{message.model}</span>}
             {message.stopReason && <StopReasonChip reason={message.stopReason} meta={message.stopReasonMeta} />}
-            <button
-              onClick={copyMessage}
-              className="ml-auto p-0.5 rounded text-text-faint hover:text-text-primary hover:bg-bg-hover transition-colors"
-              title="复制消息"
-            >
-              {copied ? <Check size={11} /> : <Copy size={11} />}
-            </button>
           </div>
         )}
 
@@ -711,7 +808,7 @@ function AssistantMessage({
           memoryRecalls={memoryRecalls}
           toolCalls={toolCalls}
           hasRunningTool={hasRunningTool}
-          parsedTasks={parsed.tasks}
+          durationMs={message.durationMs}
         />
 
         {/* Backend badge (outside card so it reads as meta, not part of answer) */}
@@ -720,6 +817,11 @@ function AssistantMessage({
             {message.execution_backend === "sandbox" ? "沙箱执行" : "本地执行"}
           </div>
         )}
+
+        <MessageCopyAction
+          content={message.content}
+          className="message-copy-row message-copy-row--assistant"
+        />
       </div>
 
       {/* Inline path popover retired 2026-06-22 — see comment above
@@ -928,37 +1030,6 @@ function MemoryRecallBlock({ recalls }: { recalls: MemoryRecallEntry[] }) {
           </div>
         );
       })}
-    </div>
-  );
-}
-
-// ── Task list ────────────────────────────────────────────────────
-function TaskListBlock({ tasks }: { tasks: Array<{ done: boolean; text: string }> }) {
-  const done = tasks.filter((t) => t.done).length;
-  const total = tasks.length;
-  const pct = total === 0 ? 0 : Math.round((done / total) * 100);
-  return (
-    <div className="tasks-block">
-      <div className="tasks-progress">
-        <div className="tasks-progress-bar" style={{ width: `${pct}%` }} />
-      </div>
-      <div className="tasks-header">
-        <ListTodo size={12} />
-        <span>任务列表</span>
-        <span className="tasks-header-count">{done}/{total} · {pct}%</span>
-      </div>
-      <div className="tasks-list">
-        {tasks.map((t, i) => (
-          <div key={i} className={`task-row ${t.done ? "done" : ""}`}>
-            {t.done ? (
-              <CheckCircle2 size={15} className="text-success mt-0.5 shrink-0" />
-            ) : (
-              <Circle size={15} className="text-text-faint mt-0.5 shrink-0" />
-            )}
-            <span className="task-text">{t.text}</span>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
@@ -2382,43 +2453,29 @@ function ClarifyComposer({
   );
 }
 
+// ── Reasoning Row ────────────────────────────────────────────────
+//
+// 2026-07-16: reasoning is now ALWAYS shown as flat prose inside the
+// surrounding ProcessTimeline collapse block (no per-row folding).
+// The whole "已完成 10s ▼" fold replaces the per-row "已深度思考 ▼"
+// header — the user only needs ONE fold to read the full process.
+//
+// Visual treatment: same typography as the final prose. The surrounding
+// ProcessTimeline and the final fold label already communicate that this
+// is process content, so the row itself should not add an italic signal.
+
 /**
- * Collapsible reasoning/thinking block for MessageBubble (post-stream).
- * Always mounts collapsed — the user can click to expand and inspect
- * the LLM's  monologue.
- *
- * Mirrors StreamingBubble's fold block UI (.reasoning-header /
- * .reasoning-chevron / .reasoning-bullets from components.css) but
- * defaults to collapsed since the stream has already settled.
+ * Always-expanded reasoning row. Renders the LLM's process text with the
+ * same typography as the final prose.
+ * Empty content returns null (no header to mount).
  */
 function ReasoningBlock({ content }: { content: string }) {
-  const [expanded, setExpanded] = useState(false);
   const clean = content.replace(/<\/?think>/gi, "").trim();
-  // Split on double-newlines to get bullet points; if no split, treat as one blob.
-  const bullets = clean.split(/\n\n+/).filter((b) => b.trim().length > 0);
+  if (!clean) return null;
 
   return (
-    <div className="tl-reasoning">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="reasoning-header"
-      >
-        {expanded ? (
-          <ChevronDown size={12} className="reasoning-chevron reasoning-chevron-open" />
-        ) : (
-          <ChevronRight size={12} className="reasoning-chevron" />
-        )}
-        <Brain size={11} />
-        <span className="reasoning-label">已深度思考</span>
-        {bullets.length > 1 && (
-          <span className="reasoning-count">{bullets.length} 条</span>
-        )}
-      </button>
-      {expanded && (
-        <div className="reasoning-body">
-          <MarkdownBody content={clean} onPathClick={() => {}} />
-        </div>
-      )}
+    <div className="tl-reasoning-row">
+      <MarkdownBody content={clean} onPathClick={() => {}} />
     </div>
   );
 }

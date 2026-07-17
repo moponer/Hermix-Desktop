@@ -83,6 +83,11 @@ pub fn router() -> Router<HttpServerState> {
         )
         // Analytics
         .route("/api/analytics/usage", get(analytics::get_usage))
+        // Phase 2: diagnostic view of the stats DB (existence / row
+        // counts / sample rows / applied migrations) so a user can
+        // pinpoint where the pipeline is broken without poking at
+        // SQLite by hand.
+        .route("/api/analytics/debug", get(analytics::get_debug))
         // Dashboard plugins & themes (local bundles under `dashboard-plugins/` + API)
         .route(
             "/api/dashboard/plugins",
