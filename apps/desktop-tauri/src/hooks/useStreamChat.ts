@@ -130,7 +130,7 @@ interface StreamCallbacks {
   onPhaseChange?: (phase: StreamPhase) => void;
   onChunk?: (text: string) => void;
   onToolStart?: (info: { toolCallId: string; tool: string; content?: string }) => void;
-  onToolComplete?: (info: { toolCallId: string; tool: string; content?: string }) => void;
+  onToolComplete?: (info: { toolCallId: string; tool: string; content?: string; denialKind?: string }) => void;
   /**
    * A live chunk of tool output (stdout/stderr). `chunkIndex` /
    * `chunkTotal` let the front-end detect partial flushes and reorder
@@ -368,6 +368,15 @@ export function useStreamChat() {
   const pendingRejectRef = useRef<((error: Error) => void) | null>(null);
   const pendingCallbacksRef = useRef<StreamCallbacks | null>(null);
   const disarmTimeoutsRef = useRef<(() => void) | null>(null);
+  // 2026-07-18 (storage-analyzer stale_stream bug fix): while a tool is
+  // executing on the server (between `tool_start` and `tool_complete`),
+  // suspend the STALE_STREAM_TIMEOUT countdown. spawn_blocking tools like
+  // storage_analyzer can take 60-90s on big trees without emitting any
+  // WS event — without this guard, the 90s idle-watchdog would
+  // prematurely settle as "stale_stream" and disconnect the WS even
+  // though the server is still working. IDLE_TIMEOUT_MS (300s) remains
+  // the ultimate safety net for a truly hung agent loop.
+  const toolRunningRef = useRef(false);
   // Tracks whether the current send's promise has already been settled.
   // We use a ref (not a local var) so cancel() can read it across
   // closure boundaries without needing access to `send`'s internals.
@@ -588,8 +597,16 @@ export function useStreamChat() {
         // stream as "partial" so the user sees the interrupted result
         // instead of staring at a frozen "thinking..." UI. The 300s
         // timeout remains as the ultimate safety net.
+        //
+        // 2026-07-18 (storage_analyzer 81s regression): bumped STALE to
+        // 300s so spawn_blocking tools (storage_analyzer walks C:\
+        // which can take 60-90s) get the same 5-min buffer as IDLE.
+        // Combined with `toolRunningRef` suspending the timer between
+        // tool_start/tool_complete (so the watchdog doesn't fire mid-execution),
+        // the only way STALE triggers now is: agent silently dies, NO
+        // tool in flight, NO text for 5 minutes — which is a real hang.
         const IDLE_TIMEOUT_MS = 300_000;
-        const STALE_STREAM_TIMEOUT_MS = 90_000;
+        const STALE_STREAM_TIMEOUT_MS = 300_000;
         let staleStreamTimer: ReturnType<typeof setTimeout> | null = null;
 
         const armTimeouts = () => {
@@ -611,12 +628,21 @@ export function useStreamChat() {
             }
           }, IDLE_TIMEOUT_MS);
         };
-        // Reset the STALE timer (90s). Unlike the IDLE timer, this does
-        // NOT reset on every WS event — it only resets when a text chunk
-        // arrives. This way, tool execution pauses don't trigger it, but
-        // a truly hung agent loop (no text for 90s) will.
+        // Reset the STALE timer (300s). Suspended while a tool is in
+        // flight (toolRunningRef.current === true), so spawn_blocking
+        // tools that emit no WS events during execution (storage_analyzer
+        // walking C:\, 60-90s) don't get falsely settled as stale_stream.
+        // The timer is re-armed by `tool_complete` (which flips the ref
+        // back to false) and by every text/thinking event afterwards.
         const resetStaleTimer = () => {
           if (staleStreamTimer !== null) clearTimeout(staleStreamTimer);
+          if (toolRunningRef.current) {
+            // Tool is mid-execution on the server — don't restart the
+            // watchdog. Either tool_complete will re-arm it, or the
+            // longer IDLE timeout (300s) will catch a true hang.
+            staleStreamTimer = null;
+            return;
+          }
           staleStreamTimer = setTimeout(() => {
             if (!doneRef.current) {
               // Don't override the phase if already in a settled state.
@@ -642,6 +668,9 @@ export function useStreamChat() {
             clearTimeout(slowHintTimer);
             slowHintTimer = null;
           }
+          // Clear the tool-in-flight flag so the next send() starts
+          // with a clean stale-stream watchdog state.
+          toolRunningRef.current = false;
         };
         disarmTimeoutsRef.current = disarmTimeouts;
 
@@ -846,6 +875,7 @@ export function useStreamChat() {
                 const tool = data?.tool || data?.event?.tool || "tool";
                 const toolCallId =
                   data?.tool_call_id || data?.event?.tool_call_id || `legacy-${tool}`;
+                toolRunningRef.current = true;
                 callbacks.onToolStart?.({ toolCallId, tool, content: evtContent });
                 return;
               }
@@ -854,7 +884,19 @@ export function useStreamChat() {
                 const tool = data?.tool || data?.event?.tool || "tool";
                 const toolCallId =
                   data?.tool_call_id || data?.event?.tool_call_id || `legacy-${tool}`;
-                callbacks.onToolComplete?.({ toolCallId, tool, content: evtContent });
+                // 2026-07-18 (A+C product fix): a user-facing denial
+                // (user拒绝 / 超时 / 连接中断) carries `denial_kind`.
+                // Forward it so App.tsx can show a "this call was
+                // blocked" banner that matches the agent's injected
+                // "tell the user" note. `"policy"` is a silent gate
+                // and is intentionally ignored here.
+                const denialKind =
+                  data?.denial_kind || data?.event?.denial_kind || undefined;
+                // Flip toolRunningRef back to false BEFORE resetStaleTimer
+                // so the watchdog gets re-armed for a fresh STALE window.
+                toolRunningRef.current = false;
+                resetStaleTimer();
+                callbacks.onToolComplete?.({ toolCallId, tool, content: evtContent, denialKind });
                 return;
               }
 

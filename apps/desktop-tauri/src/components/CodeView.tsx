@@ -114,6 +114,7 @@ function toRefractorLang(lang: string): string | null {
     bash: "bash",
     css: "css",
     scss: "scss",
+    less: "css",       // fallback: less highlights similarly to CSS
     sql: "sql",
     json: "json",
     yaml: "yaml",
@@ -122,6 +123,14 @@ function toRefractorLang(lang: string): string | null {
     xml: "markup",
     html: "markup",
     vue: "markup",
+    svelte: "markup",
+    ini: "toml",       // fallback: INI highlights similarly to TOML
+    conf: "toml",
+    env: "toml",
+    swift: "c",        // fallback: Swift highlights reasonably with C grammar
+    lua: "c",          // fallback: Lua highlights reasonably with C grammar
+    ino: "cpp",
+    powershell: "bash", // fallback: PS1 highlights similarly to bash
   };
   return map[lang] ?? null;
 }
@@ -206,8 +215,18 @@ function highlightToReact(source: string, language: string | null): React.ReactN
   if (!refractorLang) return source;
 
   try {
-    const tree = highlight(source, refractorLang);
-    return toJsxRuntime(tree, {
+    const result = highlight(source, refractorLang);
+    // refractor 3.x returns an Array<Element | Text> (indexed by 0,1,2…),
+    // NOT a HAST Root node.  hast-util-to-jsx-runtime requires a Root
+    // ({ type: "root", children: […] }) — without the wrapper it silently
+    // returns null/empty, which is why the preview panel showed plain text
+    // with no syntax highlighting.  Wrapping fixes the issue.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tree = {
+      type: "root" as const,
+      children: Array.isArray(result) ? result : [result],
+    };
+    return toJsxRuntime(tree as any, {
       Fragment,
       jsx,
       jsxs,

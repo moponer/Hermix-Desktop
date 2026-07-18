@@ -343,7 +343,9 @@ function SubtaskRow({
   busy: boolean;
   onSetStatus: (status: api.GroupChatSubtaskStatus) => void;
 }) {
-  const tone = agent ? agentHsl(agent.id) : "hsl(220, 10%, 50%)";
+  // `tone` is always a numeric hue (never a malformed string) after the
+  // agentHsl remap above; used as `hsl(${tone}, …)` in the avatar style.
+  const tone = agentHsl(agent?.id ?? "unknown");
 
   return (
     <div
@@ -541,8 +543,8 @@ const STATUS_CONFIG: Record<
   { label: string; bg: string; text: string; icon: typeof Clock }
 > = {
   // Task statuses
-  pending: { label: "待开始", bg: "hsla(220, 10%, 50%, 0.15)", text: "hsl(220, 10%, 40%)", icon: Clock },
-  decomposing: { label: "分解中", bg: "hsla(220, 60%, 50%, 0.15)", text: "hsl(220, 60%, 40%)", icon: Loader2 },
+  pending: { label: "待开始", bg: "hsla(220, 0%, 50%, 0.15)", text: "hsl(220, 0%, 40%)", icon: Clock },
+  decomposing: { label: "分解中", bg: "hsla(220, 0%, 50%, 0.15)", text: "hsl(220, 0%, 40%)", icon: Loader2 },
   executing: { label: "执行中", bg: "hsla(200, 70%, 50%, 0.15)", text: "hsl(200, 70%, 38%)", icon: Loader2 },
   aggregating: { label: "汇总中", bg: "hsla(200, 70%, 50%, 0.15)", text: "hsl(200, 70%, 38%)", icon: Loader2 },
   awaiting_approval: { label: "待审批", bg: "hsla(43, 96%, 56%, 0.20)", text: "hsl(43, 96%, 32%)", icon: AlertCircle },
@@ -597,13 +599,19 @@ function OverrideButton({
 }
 
 /** Compute a stable hue from an agent id. Mirrors the logic in
- *  GroupChatView so the panel avatars match the chat avatars. */
+ *  GroupChatView so the panel avatars match the chat avatars.
+ *  Iron law: NO blue/indigo/violet/purple. `h % 360` could yield 220
+ *  (blue) / 268 (violet), so map to a fixed safe palette (orange / amber
+ *  / green / teal / cyan / rose / magenta / red) — same set as the
+ *  groupchat agentHue. Guarantees no agent ever renders in a banned
+ *  blue/violet hue. */
 function agentHsl(agentId: string): number {
   let h = 0;
   for (let i = 0; i < agentId.length; i++) {
     h = (h * 31 + agentId.charCodeAt(i)) & 0xffff;
   }
-  return h % 360;
+  const SAFE_HUES = [28, 43, 150, 175, 195, 340, 320, 0];
+  return SAFE_HUES[Math.abs(h) % SAFE_HUES.length];
 }
 
 // ── Timeline row ────────────────────────────────────────

@@ -411,6 +411,11 @@
 .preview-pane .preview-body {
   position: relative;
   box-shadow: inset 0 8px 12px -8px rgba(0, 0, 0, 0.18);
+  animation: preview-body-in 220ms ease-out;
+}
+@keyframes preview-body-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .preview-pane .preview-body::before {
   content: "";
@@ -1006,4 +1011,69 @@
   height: 1px;
   margin: 4px 8px;
   background: var(--color-border-subtle);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Preview Modal — entrance animation + enhanced visuals
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Modal entrance — scales from 0.97 + slight opacity for a premium
+   "pop into focus" effect. 240ms matches the Tailwind animate class
+   in App.tsx's ArtifactPreviewModal. */
+@keyframes artifact-modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* ── Enhanced preview header actions ──────────────────────── */
+.preview-pane .head-action {
+  position: relative;
+  overflow: hidden;
+}
+.preview-pane .head-action::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  pointer-events: none;
+}
+.preview-pane .head-action:active::after {
+  opacity: 0.08;
+}
+
+/* ── Preview body inner glow for code ──────────────────────── */
+.preview-pane .preview-pane-inner {
+  animation: preview-content-in 300ms ease-out;
+}
+@keyframes preview-content-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ── Error state styling — softer, more premium ────────────── */
+.preview-pane .preview-body .text-error {
+  padding: 24px 28px;
+  background: color-mix(in srgb, var(--color-error) 5%, transparent);
+  border-radius: 8px;
+  margin: 16px;
+  border: 1px solid color-mix(in srgb, var(--color-error) 15%, transparent);
+}
+
+/* ── Binary file placeholder — premium center card ─────────── */
+.preview-pane .preview-body > .text-text-muted {
+  padding: 32px;
+  text-align: center;
+  background: color-mix(in srgb, var(--color-bg-tertiary) 50%, transparent);
+  border-radius: 10px;
+  margin: 24px;
+  border: 1px dashed color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
 }

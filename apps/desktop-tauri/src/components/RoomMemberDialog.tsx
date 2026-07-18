@@ -622,8 +622,8 @@ function MemberList({
                   <span
                     className="inline-flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider px-1 py-px rounded shrink-0"
                     style={{
-                      background: "hsla(220, 70%, 55%, 0.12)",
-                      color: "hsl(220, 70%, 40%)",
+                      background: "hsla(220, 0%, 55%, 0.12)",
+                      color: "hsl(220, 0%, 40%)",
                     }}
                     title={`本房间别名 · 原始名：${agent.name}`}
                   >
@@ -757,10 +757,15 @@ function truncateModelId(s: string): string {
 
 function AgentAvatar({ agent, size }: { agent: AgentPersona; size: number }) {
   const letter = agent.avatar || agent.name[0] || "?";
-  // Stable hash → HSL hue (single solid color, no gradient per project rule)
+  // Stable hash → HSL hue (single solid color, no gradient per project rule).
+  // Iron law: NO blue/indigo/violet/purple. `h % 360` could yield 220
+  // (blue) / 268 (violet), so map to a fixed safe palette (orange / amber /
+  // green / teal / cyan / rose / magenta / red) — same set as TaskPanel's
+  // agentHsl and the groupchat agentHue.
   let h = 0;
   for (let i = 0; i < agent.id.length; i++) h = (h * 31 + agent.id.charCodeAt(i)) >>> 0;
-  const hue = h % 360;
+  const SAFE_HUES = [28, 43, 150, 175, 195, 340, 320, 0];
+  const hue = SAFE_HUES[Math.abs(h) % SAFE_HUES.length];
   const bg = `hsl(${hue}, 55%, 55%, 0.35)`;
   const text = `hsl(${hue}, 60%, 35%)`;
   const ring = `hsl(${hue}, 60%, 55%)`;

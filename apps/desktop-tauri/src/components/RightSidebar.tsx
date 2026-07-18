@@ -197,13 +197,17 @@ function detectLanguage(name: string): string | null {
     rs: "rust", py: "python", go: "go", java: "java", kt: "kotlin",
     c: "c", cpp: "cpp", cxx: "cpp", h: "c", hpp: "cpp",
     rb: "ruby", php: "php", sh: "bash", bash: "bash",
-    css: "css", html: "html", vue: "html",
-    sql: "sql", json: "json", yaml: "yaml", yml: "yaml", toml: "ini", xml: "xml",
-    md: "markdown", txt: "text", csv: "text",
+    css: "css", scss: "scss", less: "less",
+    html: "markup", vue: "markup", svelte: "markup",
+    sql: "sql", json: "json", yaml: "yaml", yml: "yaml", toml: "toml", xml: "markup",
+    md: "markdown", mdx: "markdown", txt: "text", csv: "text",
+    ini: "ini", conf: "ini", env: "ini",
+    swift: "swift", lua: "lua", ino: "ino",
+    ps1: "powershell",
   };
   // Treat markdown as plain text (no syntax highlighting effects)
   const lang = map[ext] ?? null;
-  if (lang === "markdown") return null;
+  if (lang === "markdown" || lang === "text") return null;
   return lang;
 }
 
@@ -542,10 +546,49 @@ export function PreviewPanel({
           <div className="preview-head-spacer" />
 
           <div className="preview-head-actions">
-            {/* Note (主人 2026-06-22): 移除全屏切换 — modal 框体大小已经
-                固定且合适，主人明确说"不要有最大化功能，就这么大就
-                可以了"。如果以后要在 modal 内部再加 maximize 入口，
-                重新引入 `Maximize2` import 即可。 */}
+            {/* Copy file content to clipboard — only for text/code files */}
+            {(previewState.status === "text" || previewState.status === "markdown") && (
+              <button
+                type="button"
+                onClick={() => {
+                  const content = previewState.status === "text"
+                    ? previewState.content
+                    : previewState.status === "markdown"
+                      ? previewState.content
+                      : "";
+                  if (content) {
+                    navigator.clipboard.writeText(content);
+                  }
+                }}
+                title="复制内容"
+                className="head-action"
+                aria-label="复制内容"
+              >
+                <Copy size={13} />
+              </button>
+            )}
+            {/* Open the file with the system's default application */}
+            <button
+              type="button"
+              onClick={() => {
+                if (artifact) openExternalUrl(resolvedPath ?? artifact.path);
+              }}
+              title="用默认程序打开"
+              className="head-action"
+              aria-label="用默认程序打开"
+            >
+              <ExternalLink size={13} />
+            </button>
+            {/* Open the containing directory in the system file explorer */}
+            <button
+              type="button"
+              onClick={openContainingDir}
+              title="在资源管理器中打开"
+              className="head-action"
+              aria-label="在资源管理器中打开"
+            >
+              <FolderOpen size={13} />
+            </button>
           </div>
         </div>
       </div>

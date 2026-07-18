@@ -120,11 +120,16 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
           <span className="h-tiny">{"\u00b7"} {isPending ? "等待你的决定" : "已决定"}</span>
         </div>
 
-        {/* Card surface */}
+        {/* Card surface — `data-pending-approval-id` lets the global
+            PendingApprovalToast scroll this exact card into view when
+            the user clicks the bottom-right reminder bubble. Only set
+            while the user can still decide; once resolved the toast
+            count drops to 0 so the attribute is also irrelevant. */}
         <div
           className="msg-card approval-card"
           data-resolved={resolved ?? undefined}
           data-pending-risk={isPending ? riskKey : undefined}
+          data-pending-approval-id={isPending ? request.requestId : undefined}
         >
           {/* Line 1: Tool pill + Risk badge + Status */}
           <div className="approval-pills">

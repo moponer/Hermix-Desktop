@@ -1,19 +1,275 @@
-/* ── InlineApprovalCard — countdown pill ─────────────────────────
-   Two visual states, sharing the same DOM shape so the layout
-   never shifts when the urgency flips:
-     • neutral (>= 30s remaining)  :  gray text + soft gray
-                                       background, Timer icon
-     • danger  (<= 30s remaining)  :  red text + error-soft
-                                       background, Timer icon
-                                       pulses (1Hz) to mirror the
-                                       cadence of the per-second
-                                       re-render.
-   30s is the threshold (NOT 60s / 5s / etc) because that's the
-   point at which a quick read-or-skip judgment feels appropriate
-   — half a minute of remaining time is the human attention
-   boundary for "decide now or wait for the next request". */
+/* ════════════════════════════════════════════════════════════════════
+   inline-approval-card.css — InlineApprovalCard + InlineClarifyCard
+   ──────────────────────────────────────────────────────────────────
+   2026-07-18 主人反馈：「请求的按钮不够突出啊，差点没看见」
+   (Round 19 反馈消息 #10)。根因排查：
+     · InlineApprovalCard.tsx 引用的 80% CSS 类名(.approval-avatar /
+       .approval-pills / .approval-line2 / .approval-tool-pill /
+       .approval-pill-pending|dangerous|caution|safe 等)从未在项目
+       CSS 里定义 — 组件裸奔,浏览器默认样式接管,按钮变成 12px
+       灰色纯文字。
+     · 早先 .approval-btn 用 `padding: 3px 12px; font-size: 11.5px;
+       background: transparent`,即使 class 命中也无视觉重量。
+   本文件重做：
+     · 补全所有缺失的类
+     · 按钮高度从 ~22px 拉到 32px、字号 12.5px、加粗
+     · 主按钮(允许/发送)用 accent 实色,反按钮(拒绝)用 error-soft
+       浅红底 + 红字,两者对比 + 体积都拉满,主人一眼能看到
+     · countdown 时间低于 30s 触发 danger 态(原有逻辑)
+     · 右下角 PendingApprovalToast 用了页面全局 fixed 定位,样式同
+       文件下方的 §4。
+   ════════════════════════════════════════════════════════════════════ */
 
-/* ── Neutral state ────────────────────────────────────────────── */
+/* ── §1. Card header avatar — 28×28 tinted square (warning color) ── */
+.approval-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md, 8px);
+  flex-shrink: 0;
+  background: var(--color-warning-soft, rgba(217, 119, 6, 0.12));
+  color: var(--color-warning, #d97706);
+}
+
+/* ── §2. Pill row (line 1: tool pill + risk badge + status pill) ── */
+.approval-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-height: 22px;
+}
+
+/* Tool name pill — monospace, neutral gray */
+.approval-tool-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 7px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: var(--color-bg-tertiary, #ededee);
+  color: var(--color-text-primary, #0f0f12);
+  max-width: 100%;
+  overflow: hidden;
+  line-height: 1.35;
+}
+.dark .approval-tool-pill {
+  background: var(--color-bg-tertiary, #2e2e34);
+  color: var(--color-text-primary, #e4e4e7);
+}
+.approval-tool-pill .font-mono {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-weight: 500;
+  font-size: 11px;
+}
+
+/* Generic pill (status indicator at right) */
+.approval-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.approval-pill svg { flex-shrink: 0; }
+
+.approval-pill-pending {
+  color: var(--color-text-secondary, #4a4a50);
+  background: var(--color-bg-secondary, #fafafa);
+  border: 1px solid var(--color-border-subtle, #ececef);
+}
+.dark .approval-pill-pending {
+  color: var(--color-text-secondary, #c8c8cc);
+  border-color: var(--color-border-subtle, #2c2c32);
+}
+
+.approval-pill-approved {
+  color: var(--color-success, #16a34a);
+  background: color-mix(in srgb, var(--color-success, #16a34a) 12%, transparent);
+}
+.approval-pill-denied {
+  color: var(--color-error, #dc2626);
+  background: color-mix(in srgb, var(--color-error, #dc2626) 12%, transparent);
+}
+.approval-pill-expired {
+  color: var(--color-text-muted, #777);
+  background: var(--color-bg-tertiary, #ededee);
+}
+.dark .approval-pill-expired {
+  background: var(--color-bg-tertiary, #2e2e34);
+}
+
+/* Risk-level badge (高危/中危/低危) */
+.approval-pill-dangerous {
+  color: var(--color-error, #dc2626);
+  background: color-mix(in srgb, var(--color-error, #dc2626) 12%, transparent);
+}
+.approval-pill-caution {
+  color: var(--color-warning, #d97706);
+  background: color-mix(in srgb, var(--color-warning, #d97706) 12%, transparent);
+}
+.approval-pill-safe {
+  color: var(--color-success, #16a34a);
+  background: color-mix(in srgb, var(--color-success, #16a34a) 12%, transparent);
+}
+
+/* ── §3. Line 2 — args text + action buttons ─────────────────────── */
+.approval-line2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.approval-args-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 11px;
+  color: var(--color-text-muted, #777);
+  background: var(--color-bg-secondary, #fafafa);
+  border: 1px solid var(--color-border-subtle, #ececef);
+  padding: 4px 8px;
+  border-radius: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 360px;
+  line-height: 1.45;
+}
+.dark .approval-args-text {
+  background: var(--color-bg-secondary, #232328);
+  border-color: var(--color-border-subtle, #2c2c32);
+}
+
+.approval-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.approval-resolved-footer {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--color-border-subtle, #ececef);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.dark .approval-resolved-footer {
+  border-top-color: var(--color-border-subtle, #2c2c32);
+}
+
+/* ── §3a. Action buttons — BIG & high-contrast ─────────────────────
+   之前 .approval-btn 是 `padding: 3px 12px / font-size: 11.5px /
+   background: transparent` 的幽灵按钮 — 12.5px 灰字,鼠标不在上面
+   完全看不见。这是 2026-07-18 主人踩坑反馈「差点没看见」的根因。
+
+   新设计:
+   · 高度 32px,字号 12.5px-13px,字重 600
+   · 主按钮(.approval-btn-approve): accent 实色背景,前景用
+     --color-accent-on-text(浅色),对深色按钮 = 白字,清晰
+   · 拒绝按钮(.approval-btn-danger): 双段渐变 — 浅红底(error-soft)
+     + 红字,hover 加深,但默认已经够醒目
+   · 二级按钮(.approval-btn-secondary): 用于 Clarify 卡片选项,
+     灰底 + 边,hover 才填深
+   · 全部带 :active scale 反馈,让主人按下去时手感到位
+
+   设计意图:权限确认是一个**带边界感的操作**——主人要么允许要么
+   拒绝,这种二元选择必须给到两个同样大、同样亮的按钮,让"红色按钮"
+   本身作为视觉警示,而不是靠 hover 才看到。 */
+.approval-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 32px;
+  min-width: 78px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.005em;
+  font-family: inherit;
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background var(--duration-fast, 120ms) ease,
+    border-color var(--duration-fast, 120ms) ease,
+    color var(--duration-fast, 120ms) ease,
+    transform var(--duration-fast, 120ms) ease,
+    box-shadow var(--duration-fast, 120ms) ease;
+}
+.approval-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.approval-btn:focus-visible {
+  outline: 2px solid var(--color-accent, #475569);
+  outline-offset: 2px;
+}
+.approval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Primary action — solid accent fill, on-accent text */
+.approval-btn-approve {
+  background: var(--color-btn-primary-bg, #475569);
+  border-color: var(--color-btn-primary-bg, #475569);
+  color: var(--color-btn-primary-text, #ffffff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08),
+              0 0 0 0 color-mix(in srgb, var(--color-accent, #475569) 30%, transparent);
+}
+.approval-btn-approve:hover:not(:disabled) {
+  background: var(--color-btn-primary-hover, #334155);
+  border-color: var(--color-btn-primary-hover, #334155);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.10),
+              0 0 0 4px color-mix(in srgb, var(--color-accent, #475569) 18%, transparent);
+}
+
+/* Danger action — soft red wash but always present, even pre-hover */
+.approval-btn-danger {
+  background: color-mix(in srgb, var(--color-error, #dc2626) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-error, #dc2626) 26%, transparent);
+  color: var(--color-error, #dc2626);
+}
+.approval-btn-danger:hover:not(:disabled) {
+  background: var(--color-error, #dc2626);
+  border-color: var(--color-error, #dc2626);
+  color: #ffffff;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error, #dc2626) 16%, transparent);
+}
+
+/* Secondary — outlined, used by Clarify choice buttons */
+.approval-btn-secondary {
+  background: var(--color-bg-primary, #ffffff);
+  border-color: var(--color-border-primary, #e4e4e7);
+  color: var(--color-text-primary, #0f0f12);
+  font-weight: 500;
+}
+.approval-btn-secondary:hover:not(:disabled) {
+  background: var(--color-bg-hover, #f0f0f2);
+  border-color: var(--color-border-secondary, #d4d4d8);
+}
+.dark .approval-btn-secondary {
+  background: var(--color-bg-primary, #1c1c20);
+  border-color: var(--color-border-primary, #2e2e32);
+}
+
+/* ── §4. Countdown pill — neutral vs danger ───────────────────────
+   保留之前 inline-approval-card.css 的样式,只是把命名空间放进
+   这一节里方便查。本节独立类,以 §4 命名跟 §1-§3 排序。 */
+
+/* Neutral state */
 .approval-pill-countdown {
   display: inline-flex;
   align-items: center;
@@ -21,40 +277,272 @@
   font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0.01em;
-  color: var(--color-text-tertiary, #6a6a6a);
+  color: var(--color-text-secondary, #4a4a50);
   background: var(--color-bg-tertiary, #ededee);
   border: 1px solid var(--color-border-subtle, #ececef);
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: 999px;
-  font-variant-numeric: tabular-nums;   /* digits don't shift width as the seconds tick over */
+  font-variant-numeric: tabular-nums;
+}
+.dark .approval-pill-countdown {
+  color: var(--color-text-secondary, #c8c8cc);
+  border-color: var(--color-border-subtle, #2c2c32);
 }
 
-/* ── Danger state (≤30s remaining) ───────────────────────────── */
+/* Danger state (<=30s) */
 .approval-pill-countdown--danger {
   color: var(--color-error, #dc2626);
-  background: var(--color-error-soft, rgba(220, 38, 38, 0.10));
+  background: color-mix(in srgb, var(--color-error, #dc2626) 12%, transparent);
   border-color: transparent;
   font-weight: 600;
 }
-
 .approval-pill-countdown--danger .approval-countdown-icon {
   animation: h-approval-countdown-pulse 1s ease-in-out infinite;
 }
 
 @keyframes h-approval-countdown-pulse {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.25);
-    opacity: 0.6;
-  }
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.25); opacity: 0.6; }
 }
 
-/* ── Reduced motion ───────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .approval-pill-countdown--danger .approval-countdown-icon {
     animation: none;
   }
+}
+
+/* ── §5. Pending approval toast (右下角浮动气泡) ──────────────────
+   设计目的: 即使主人正在看别处 / 聊天列表滚走了,这个悬浮气泡会一
+   直挂在那里,提醒 "Hermix 在等你的决定"。点击会:
+     · 切到有 pending 卡的 session
+     · 滚动并高亮(2s 黄色 ring 闪烁)第一张未决定的请求卡
+
+   实现细节:
+     · position: fixed bottom-right 24px (跟 macOS / Windows 11 的
+       通知中心同一象限,主人眼熟)
+     · 不用 portal — 它已经是 app-shell root,fixed 即可
+     · z-index: 80 (高于 popover 50 / modal 60,低于 stream-error
+       banner 这类需要盖在 toast 上的元素)
+     · 进入用 translateY 40 → 0 配合 opacity 0 → 1,200ms cubic-bezier
+     · 多卡时折叠成 "+N" 提示,点开 popover 展开
+     · 单卡超过 30s 倒计时后:toast 边框变红、轻微 pulse 提示紧迫
+
+   滚动 + 高亮 行为:
+     · 由 PendingApprovalToast 内点击回调触发,App.tsx 注入一个
+       `pendingApprovalAnchor` state(取最旧未决 requestId 对应的
+       消息 DOM `[data-approval-id]`),scrollIntoView + 加 class
+       `is-highlighted`,2s 后清除。                       */
+.pending-approval-toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 80;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px 9px 11px;
+  border-radius: 999px;
+  background: var(--color-bg-elevated, #ffffff);
+  border: 1px solid var(--color-border-primary, #e4e4e7);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.10),
+    0 1px 3px rgba(0, 0, 0, 0.06),
+    0 0 0 0 color-mix(in srgb, var(--color-warning, #d97706) 35%, transparent);
+  color: var(--color-text-primary, #0f0f12);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  user-select: none;
+  animation: pending-toast-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition:
+    box-shadow var(--duration-base, 150ms) ease,
+    transform var(--duration-base, 150ms) ease;
+}
+.pending-approval-toast:hover {
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.14),
+    0 2px 4px rgba(0, 0, 0, 0.08),
+    0 0 0 4px color-mix(in srgb, var(--color-warning, #d97706) 14%, transparent);
+  transform: translateY(-1px);
+}
+.pending-approval-toast:active {
+  transform: translateY(0);
+}
+.pending-approval-toast:focus-visible {
+  outline: 2px solid var(--color-accent, #475569);
+  outline-offset: 2px;
+}
+
+/* Urgent (>30s lapsed on tightest pending) — switch to red ring + pulse */
+.pending-approval-toast[data-urgent="true"] {
+  border-color: color-mix(in srgb, var(--color-error, #dc2626) 40%, transparent);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.10),
+    0 1px 3px rgba(0, 0, 0, 0.06),
+    0 0 0 4px color-mix(in srgb, var(--color-error, #dc2626) 16%, transparent);
+  animation: pending-toast-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both,
+             pending-toast-pulse 1.6s ease-in-out 220ms infinite;
+}
+
+@keyframes pending-toast-enter {
+  from { opacity: 0; transform: translateY(40px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pending-toast-pulse {
+  0%, 100% { box-shadow: 0 4px 14px rgba(0,0,0,0.10), 0 1px 3px rgba(0,0,0,0.06), 0 0 0 4px color-mix(in srgb, var(--color-error, #dc2626) 16%, transparent); }
+  50%      { box-shadow: 0 4px 14px rgba(0,0,0,0.10), 0 1px 3px rgba(0,0,0,0.06), 0 0 0 8px color-mix(in srgb, var(--color-error, #dc2626) 6%, transparent); }
+}
+
+.pending-approval-toast-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--color-warning-soft, rgba(217, 119, 6, 0.12));
+  color: var(--color-warning, #d97706);
+  flex-shrink: 0;
+}
+.pending-approval-toast[data-urgent="true"] .pending-approval-toast-icon {
+  background: color-mix(in srgb, var(--color-error, #dc2626) 14%, transparent);
+  color: var(--color-error, #dc2626);
+}
+
+.pending-approval-toast-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+.pending-approval-toast-count {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-warning, #d97706);
+}
+.pending-approval-toast[data-urgent="true"] .pending-approval-toast-count {
+  color: var(--color-error, #dc2626);
+}
+
+.pending-approval-toast-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-faint, #999);
+  cursor: pointer;
+  transition: background var(--duration-fast, 120ms) ease, color var(--duration-fast, 120ms) ease;
+}
+.pending-approval-toast-close:hover {
+  background: var(--color-bg-hover, #f0f0f2);
+  color: var(--color-text-primary, #0f0f12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pending-approval-toast,
+  .pending-approval-toast[data-urgent="true"] {
+    animation: pending-toast-enter 220ms ease-out both;
+  }
+  .pending-approval-toast[data-urgent="true"] {
+    animation: pending-toast-enter 220ms ease-out both;
+  }
+}
+
+/* ── §6. Highlight ring (clicking the toast scrolls and flashes) ── */
+.approval-card.is-highlighted,
+.msg-card.approval-card.is-highlighted {
+  animation: approval-highlight-flash 2.4s ease-out;
+  border-radius: var(--radius-md, 8px);
+}
+@keyframes approval-highlight-flash {
+  0%   { box-shadow: 0 0 0 0    color-mix(in srgb, var(--color-warning, #d97706) 60%, transparent); }
+  20%  { box-shadow: 0 0 0 6px  color-mix(in srgb, var(--color-warning, #d97706) 50%, transparent); }
+  100% { box-shadow: 0 0 0 0    color-mix(in srgb, var(--color-warning, #d97706) 0%,  transparent); }
+}
+
+/* ── §7. Denial banner (A+C product fix) ───────────────────────────
+   2026-07-18: top-center banner shown when a tool call is *denied*
+   (user拒绝 / 超时 / 连接中断). Mirrors the agent's injected
+   "tell the user" system note with a visible cue. Uses the
+   warning/error tokens only — no blue/indigo/violet per the
+   project's colour rule. */
+.denial-banner {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-error, #dc2626) 45%, transparent);
+  border-left: 3px solid var(--color-error, #dc2626);
+  background: color-mix(in srgb, var(--color-error, #dc2626) 10%, var(--color-bg-elevated, #ffffff));
+  color: var(--color-text-primary, #0f0f12);
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  animation: denial-banner-enter 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.denial-banner__icon {
+  flex: 0 0 auto;
+  font-size: 15px;
+  color: var(--color-error, #dc2626);
+}
+.denial-banner__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.denial-banner__title {
+  font-weight: 600;
+}
+.denial-banner__title code {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 12px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-error, #dc2626) 14%, transparent);
+}
+.denial-banner__sub {
+  margin-top: 2px;
+  color: var(--color-text-secondary, #555);
+  font-size: 12px;
+}
+.denial-banner__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-faint, #999);
+  cursor: pointer;
+  transition: background var(--duration-fast, 120ms) ease, color var(--duration-fast, 120ms) ease;
+}
+.denial-banner__close:hover {
+  background: color-mix(in srgb, var(--color-error, #dc2626) 12%, transparent);
+  color: var(--color-error, #dc2626);
+}
+@keyframes denial-banner-enter {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .denial-banner { animation: none; }
 }
