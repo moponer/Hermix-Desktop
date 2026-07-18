@@ -209,6 +209,22 @@ pub struct AgentLoop {
     /// user can open the archive file at a specific node anchor.
     /// See `crates/hermix-agent/src/archive.rs` (v2: 2026-06-21).
     last_archive_refs: std::sync::Mutex<Vec<ArchiveRef>>,
+    /// P1 (2026-07-18): background-spawned compression bookkeeping.
+    /// When `Some`, the agent loop has fired a `tokio::spawn` to
+    /// compress a snapshot of `ctx.messages` and is waiting for it
+    /// to finish — the agent loop is *not* blocking on the LLM
+    /// summary call. On every `do_pre_turn_setup` we poll this
+    /// handle; when the spawn is ready, the result is rolled into
+    /// `ctx.messages` and the slot cleared. When we re-trigger the
+    /// spawn path and a previous spawn is still in flight, we drop
+    /// the old slot (the spawned task keeps running in the
+    /// background but its outcome is discarded — see
+    /// `CompressionInFlight` design notes in `types.rs`).
+    ///
+    /// `std::sync::Mutex` because the slot is only ever touched from
+    /// the single-threaded agent loop body — no contention, so we
+    /// avoid the `Send`/`Sync` tax of `tokio::sync::Mutex` here.
+    compression_in_flight: std::sync::Mutex<Option<types::CompressionInFlight>>,
     /// Phase 18 (memory recall gating): `false` until the first full
     /// memory recall completes. Once `true`, subsequent `memory_prefetch`
     /// calls use a smaller limit to avoid re-injecting the same memory
@@ -650,6 +666,7 @@ impl AgentLoop {
             prompt_cache: std::sync::Mutex::new(crate::agent_helpers::PromptCache::default()),
             context_epoch: std::sync::atomic::AtomicU64::new(0),
             embedding_provider: None,
+            compression_in_flight: std::sync::Mutex::new(None),
         }
     }
 
@@ -698,6 +715,7 @@ impl AgentLoop {
             prompt_cache: std::sync::Mutex::new(crate::agent_helpers::PromptCache::default()),
             context_epoch: std::sync::atomic::AtomicU64::new(0),
             embedding_provider: None,
+            compression_in_flight: std::sync::Mutex::new(None),
         }
     }
 
@@ -1352,6 +1370,223 @@ impl AgentLoop {
         .await
     }
 
+    /// P1 (2026-07-18): background-spawned streaming compression
+    /// entry point. Replaces the synchronous
+    /// `auto_compress_if_over_threshold` call from the preflight and
+    /// `do_pre_turn_setup` paths when pressure is moderate
+    /// (50%–85%). **Never blocks the agent loop on the LLM
+    /// summary call**: the heavy work runs in a `tokio::spawn` task
+    /// and the result is rolled in by
+    /// [`poll_in_flight_compression`] on the next turn.
+    ///
+    /// Decision matrix:
+    /// - pressure < 50% — no-op (return immediately).
+    /// - pressure >= 50% and compressor wired and slot empty —
+    ///   `tokio::spawn` a full compress; the agent loop body
+    ///   returns immediately.
+    /// - pressure >= 85% (red line) — fall through to the
+    ///   synchronous fast-compress path so the pressure drops
+    ///   before the next LLM call. Cancels any in-flight spawn
+    ///   by overwriting the slot with `None`.
+    /// - pressure >= 50% and slot already populated — do not
+    ///   double-spawn. Fall through to the synchronous fast path
+    ///   only if we're at the red line; otherwise just return so
+    ///   the existing spawn can finish on its own.
+    pub(crate) async fn maybe_spawn_compression(&self, ctx: &mut ContextManager) {
+        let total_tokens = ctx.total_tokens();
+        let max_c = ctx.max_context_tokens().max(1);
+        let pressure = total_tokens as f64 / max_c as f64;
+        let threshold = ctx.pressure_threshold_tokens();
+        let Some(compressor) = self.compression.as_ref() else {
+            // No compressor wired — fall through to the legacy
+            // character-based fallback. This preserves the historical
+            // contract for `LocalAgentService::spawn_agent_loop`
+            // callers that don't construct an LLM compressor.
+            if total_tokens > threshold {
+                self.auto_compress_if_over_threshold(ctx).await;
+            }
+            return;
+        };
+        if total_tokens <= threshold {
+            return;
+        }
+
+        // High-pressure red line — synchronous fast compress.
+        // The synchronous path uses `compress_fast` which skips the
+        // LLM summary call, so we never block the agent loop on an
+        // LLM round-trip even in the synchronous fallback.
+        if pressure >= crate::compression_ops::HIGH_PRESSURE_RED_LINE_RATIO {
+            tracing::warn!(
+                pressure_pct = (pressure * 100.0) as u32,
+                "high-pressure red line — cancelling any in-flight spawn, running sync fast compress"
+            );
+            // Cancel any in-flight spawn: drop the JoinHandle. The
+            // spawn task itself continues to run (its outcome is
+            // simply discarded by the next poll). The synchronous
+            // path below takes the compressor lock.
+            if let Ok(mut slot) = self.compression_in_flight.lock() {
+                *slot = None;
+            }
+            self.auto_compress_if_over_threshold(ctx).await;
+            return;
+        }
+
+        // Moderate pressure — try to spawn. If a previous spawn is
+        // still in flight, do nothing; the next
+        // `poll_in_flight_compression` will roll it in.
+        if !crate::compression_ops::in_flight_slot_is_empty(&self.compression_in_flight) {
+            tracing::debug!(
+                pressure_pct = (pressure * 100.0) as u32,
+                "moderate pressure with in-flight spawn — skipping spawn, will poll next turn"
+            );
+            return;
+        }
+        let mut snapshot_messages = ctx.get_messages().to_vec();
+        let snapshot_len = snapshot_messages.len();
+        let snapshot_tokens = total_tokens;
+        // Resolve the memory pre-compress note *here* on the main
+        // loop body so the spawn task doesn't have to borrow
+        // `self`. Mirrors the synchronous path in
+        // `auto_compress_if_over_threshold` exactly.
+        if let Some(note) = self.memory_pre_compress_note(&snapshot_messages) {
+            snapshot_messages.push(Message::system(note));
+        }
+        let handle = crate::compression_ops::trigger_spawn_compression(
+            &self.config,
+            compressor.clone(),
+            snapshot_messages,
+            snapshot_len,
+            snapshot_tokens,
+            max_c,
+            pressure,
+            threshold as u64,
+        );
+        crate::compression_ops::install_in_flight(
+            &self.compression_in_flight,
+            crate::agent_loop::CompressionInFlight {
+                handle,
+                snapshot_len,
+                snapshot_tokens,
+                started_at: std::time::Instant::now(),
+                max_context_tokens: max_c,
+            },
+        );
+        tracing::info!(
+            pressure_pct = (pressure * 100.0) as u32,
+            snapshot_len,
+            snapshot_tokens,
+            "spawned background compression — agent loop will not block on LLM summary"
+        );
+    }
+
+    /// P1 (2026-07-18): poll the in-flight background compression
+    /// (if any) and roll the outcome into `ctx` when the spawn has
+    /// finished. Called at the top of every `do_pre_turn_setup` so
+    /// the agent loop sees the compressed state by the time it
+    /// builds the next LLM request.
+    ///
+    /// `wait_for_finish` controls whether we await the join handle
+    /// with a timeout. The high-pressure red-line path
+    /// ([`maybe_spawn_compression`]) sets it to `true` after
+    /// cancelling the spawn, but in practice the high-pressure path
+    /// just cancels and runs sync fast — `wait_for_finish = false`
+    /// is the safe default.
+    pub(crate) async fn poll_in_flight_compression(
+        &self,
+        ctx: &mut ContextManager,
+        wait_for_finish: bool,
+    ) -> bool {
+        // The spawn task built a fully self-contained
+        // [`crate::agent_loop::CompressionOutcome`] (including
+        // summary / archived turns / engine metrics / post-snap).
+        // The apply path inside `try_collect_in_flight` splices the
+        // messages; this method forwards the rest of the outcome
+        // into the agent loop's persistence-bound slots.
+        //
+        // We do this by re-locking the compressor: the spawn task
+        // already wrote the engine-side fields, and the apply path
+        // is on the same thread as the agent loop body, so a brief
+        // `try_lock` is enough.
+        let applied = crate::compression_ops::try_collect_in_flight(
+            &self.compression_in_flight,
+            ctx,
+            &self.last_archive_refs,
+            wait_for_finish,
+        )
+        .await;
+        if applied {
+            self.refresh_post_compression_slots_from_outcome();
+            self.emit_post_compression_status();
+        }
+        applied
+    }
+
+    /// P1 (2026-07-18): copy the engine-side compression state
+    /// (summary / archived turns / metrics) into the agent loop's
+    /// persistence-bound slots so `finalize_agent_result` can
+    /// forward them to `local_agent_service`. The spawn task
+    /// already wrote the engine fields; this method just snapshots
+    /// them out into the `&Mutex` slots the persistence layer
+    /// reads. `try_lock` is fine because the agent loop is
+    /// single-threaded — the spawn task has finished and dropped
+    /// its `tokio::sync::MutexGuard` by the time we get here.
+    fn refresh_post_compression_slots_from_outcome(&self) {
+        let Some(compressor) = self.compression.as_ref() else {
+            return;
+        };
+        let guard = match compressor.try_lock() {
+            Ok(g) => g,
+            Err(_) => {
+                tracing::debug!(
+                    "refresh_post_compression_slots_from_outcome: \
+                     compressor busy, deferring slot refresh"
+                );
+                return;
+            }
+        };
+        if let Some(prev) = guard.previous_summary() {
+            if let Ok(mut slot) = self.latest_compressed_summary.lock() {
+                *slot = Some(prev.to_string());
+            }
+        }
+        let archived = guard.last_archived_turns().to_vec();
+        if !archived.is_empty() {
+            if let Ok(mut slot) = self.latest_compression_archived_turns.lock() {
+                *slot = Some(archived);
+            }
+        }
+        if let Ok(mut slot) = self.latest_compression_metrics.lock() {
+            let engine_metrics = guard.last_metrics();
+            *slot = Some(crate::compression_ops::translate_engine_metrics(
+                &engine_metrics,
+                engine_metrics.trigger_reason.clone(),
+            ));
+        }
+    }
+
+    /// P1 (2026-07-18): emit the `CompactionStatusBanner` post-snap
+    /// the spawn task produced. The synchronous path emits it inline
+    /// in `auto_compress_if_over_threshold`; the spawn path emits it
+    /// here on the next `do_pre_turn_setup` when the outcome lands.
+    /// The snapshot is already constructed and stored on the engine
+    /// by the spawn task; we just forward it through the callback.
+    fn emit_post_compression_status(&self) {
+        let Some(compressor) = self.compression.as_ref() else {
+            return;
+        };
+        let mut guard = match compressor.try_lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        // `breaker_snapshot` rebuilds from live engine state — the
+        // metrics we passed in at spawn time are reflected here
+        // because the spawn task already ran `record_outcome` on
+        // the same engine.
+        let tokens_saved = guard.last_metrics().tokens_saved;
+        let snap = guard.breaker_snapshot(tokens_saved, 0, 0, None);
+        crate::message_helpers::emit_compaction_status(&self.callbacks, &snap);
+    }
+
     pub(crate) fn emit_status(&self, event_type: &str, message: &str) {
         crate::message_helpers::emit_status(&self.config, &self.callbacks, event_type, message)
     }
@@ -1626,7 +1861,16 @@ impl AgentLoop {
         }
 
         if self.config.preflight_context_compress {
-            self.auto_compress_if_over_threshold(&mut ctx).await;
+            // P1 (2026-07-18): background-spawned compression.
+            // `maybe_spawn_compression` decides between spawn (no
+            // block), sync fast (>=85% red line), or no-op (under
+            // threshold). The preflight path used to block on the
+            // LLM summary call here; with P1 the worst case is the
+            // synchronous fast-compress fallback, which itself
+            // skips the LLM. After this call the next turn's
+            // `do_pre_turn_setup` will poll the in-flight handle
+            // and roll the result in.
+            self.maybe_spawn_compression(&mut ctx).await;
         }
 
         PreparedRun {
@@ -1736,7 +1980,7 @@ impl AgentLoop {
     pub(crate) async fn resolve_pre_dispatch(
         &self,
         tool_calls: &[ToolCall],
-    ) -> HashMap<String, Result<(), String>> {
+    ) -> HashMap<String, Result<(), crate::tool_dispatch::ToolDenial>> {
         crate::tool_dispatch::resolve_pre_dispatch(
             self.callbacks.on_pre_tool_dispatch.as_ref().map(|b| b.as_ref()),
             tool_calls,
@@ -5367,9 +5611,13 @@ let u = UsageStats {
         let decisions = agent.resolve_pre_dispatch(&tcs).await;
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert!(decisions.get("a").unwrap().is_ok());
+        let b_err = decisions.get("b").unwrap().as_ref().err().unwrap();
         assert_eq!(
-            decisions.get("b").unwrap().as_ref().err().unwrap(),
-            "blocked by test"
+            b_err,
+            &crate::tool_dispatch::ToolDenial {
+                kind: crate::tool_dispatch::DenialKind::Policy,
+                reason: "blocked by test".to_string(),
+            }
         );
     }
 
@@ -5377,7 +5625,8 @@ let u = UsageStats {
     pub(crate) async fn resolve_pre_dispatch_await_approval_blocks_then_resolves() {
         let callbacks = AgentCallbacks {
             on_pre_tool_dispatch: Some(Box::new(|_tc: &ToolCall| {
-                let (_tx, rx) = tokio::sync::oneshot::channel::<bool>();
+                let (_tx, rx) =
+                    tokio::sync::oneshot::channel::<hermix_core::ApprovalOutcome>();
                 ToolDispatchDecision::AwaitApproval(rx)
             })),
             ..Default::default()
@@ -5396,10 +5645,15 @@ let u = UsageStats {
             },
         }];
         // Drop the spawned sender right away → receiver yields Err, hook
-        // converts that into "Approval channel closed" denial.
+        // converts that into a ChannelClosed denial.
         let decisions = agent.resolve_pre_dispatch(&tcs).await;
         let err = decisions.get("x").unwrap().as_ref().err().unwrap();
-        assert!(err.contains("closed"), "unexpected err: {err}");
+        assert!(
+            err.reason.contains("closed"),
+            "unexpected err: {}",
+            err.reason
+        );
+        assert_eq!(err.kind, crate::tool_dispatch::DenialKind::ChannelClosed);
     }
 
     // -----------------------------------------------------------------------

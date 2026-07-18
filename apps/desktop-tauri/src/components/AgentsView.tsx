@@ -35,14 +35,10 @@ export type AgentsTab = "my" | "builtin";
 
 interface AgentsViewProps {
   initialTab?: AgentsTab;
-  activeSessionId?: string | null;
-  onAfterHire?: () => void;
 }
 
 export function AgentsView({
   initialTab = "my",
-  activeSessionId = null,
-  onAfterHire,
 }: AgentsViewProps = {}) {
   const [tab, setTab] = useState<AgentsTab>(initialTab);
   const [agents, setAgents] = useState<AgentPersona[]>(loadAgentsLocal);
@@ -123,17 +119,6 @@ export function AgentsView({
   const handleEdit = (id: string) => {
     setEditingId(id);
     setMode("create");
-  };
-
-  const handleUse = (id: string) => {
-    // Increment usage + stamp lastUsedAt
-    const updated = agents.map((a) =>
-      a.id === id ? { ...a, usageCount: a.usageCount + 1, lastUsedAt: Date.now() } : a
-    );
-    setAgents(updated);
-    const agent = updated.find((a) => a.id === id);
-    if (agent) saveAgentAsync(agent);
-    onAfterHire?.();
   };
 
   const handleTest = (id: string) => {
@@ -272,7 +257,6 @@ export function AgentsView({
                           onEdit={() => handleEdit(agent.id)}
                           onDelete={() => handleDelete(agent.id)}
                           onTest={() => handleTest(agent.id)}
-                          onUse={() => handleUse(agent.id)}
                         />
                       ))}
                     </div>
@@ -307,12 +291,7 @@ export function AgentsView({
           </>
         )}
 
-        {tab === "builtin" && (
-          <BuiltInExpertsTab
-            activeSessionId={activeSessionId}
-            onAfterHire={onAfterHire}
-          />
-        )}
+        {tab === "builtin" && <BuiltInExpertsTab />}
       </div>
 
       {/* Test dialog */}

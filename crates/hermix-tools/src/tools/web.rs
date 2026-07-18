@@ -1,4 +1,9 @@
-//! Web tools: web_search (Exa) and web_extract (Firecrawl)
+//! Web tools: web_search and web_extract
+//!
+//! All backends are **keyless by design** — they work out of the box
+//! without any API key. Multi-engine fallback: DuckDuckGo → Baidu → Bing.
+//!
+//! `web_extract` uses SimpleExtractBackend (keyless reqwest HTML fetch).
 
 use std::sync::Arc;
 
@@ -15,7 +20,7 @@ use crate::ToolRegistry;
 // Backend traits (injectable by the caller)
 // ---------------------------------------------------------------------------
 
-/// Backend for web search operations (e.g. Exa API).
+/// Backend for web search operations.
 #[async_trait]
 pub trait WebSearchBackend: Send + Sync {
     /// Search the web and return results as JSON string.
@@ -25,6 +30,17 @@ pub trait WebSearchBackend: Send + Sync {
         num_results: usize,
         category: Option<&str>,
     ) -> Result<String, ToolError>;
+
+    /// Search with domain filtering. Default implementation ignores domains.
+    async fn search_with_domains(
+        &self,
+        query: &str,
+        num_results: usize,
+        category: Option<&str>,
+        _allowed_domains: Option<Vec<String>>,
+    ) -> Result<String, ToolError> {
+        self.search(query, num_results, category).await
+    }
 }
 
 /// Backend for web extraction operations (e.g. Firecrawl API).
@@ -64,7 +80,23 @@ impl ToolHandler for WebSearchHandler {
 
         let category = params.get("category").and_then(|v| v.as_str());
 
-        self.backend.search(query, num_results, category).await
+        // Extract optional domain filter
+        let allowed_domains = params
+            .get("allowed_domains")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            });
+
+        if allowed_domains.is_some() {
+            self.backend
+                .search_with_domains(query, num_results, category, allowed_domains)
+                .await
+        } else {
+            self.backend.search(query, num_results, category).await
+        }
     }
 
     fn schema(&self) -> ToolSchema {
@@ -89,10 +121,15 @@ impl ToolHandler for WebSearchHandler {
             "description": "Optional category filter (e.g. 'research paper', 'news', 'github')",
             "enum": ["research paper", "news", "github", "tweet", "movie", "song", "personal site", "pdf"]
         }));
+        props.insert("allowed_domains".into(), json!({
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional list of domains to restrict search results to (e.g. ['rust-lang.org', 'docs.rs'])"
+        }));
 
         tool_schema(
             "web_search",
-            "Search the web using Exa API. Returns relevant results with titles, URLs, and snippets.",
+            "Search the web. Returns relevant results with titles, URLs, and snippets. Supports domain filtering.",
             JsonSchema::object(props, vec!["query".into()]),
         )
     }
@@ -196,20 +233,13 @@ impl ToolHandler for WebExtractHandler {
 
 /// Register both `web_search` and `web_extract` with the registry.
 ///
-/// Backends are constructed locally with the keyless defaults
-/// (`BaiduHtmlSearchBackend` — no API key, Baidu HTML scraper; and
-/// `SimpleExtractBackend` — keyless reqwest HTML fetch with SSRF
-/// pre-check inside `WebExtractHandler`). Operators that need Exa or
-/// Firecrawl backends can call these constructors directly elsewhere
-/// and re-register under the same `web_search` / `web_extract` keys
-/// before this `register` is called.
-///
-/// P1.3 migration: previously inline in `register_builtins.rs::register_builtin_tools`.
+/// Backends are keyless — no API key required. Uses multi-engine fallback:
+/// DuckDuckGo → Baidu → Bing.
 pub fn register(registry: &ToolRegistry) {
-    // web_search
+    // web_search — multi-engine keyless backend
     {
         let search = Arc::new(WebSearchHandler::new(Box::new(
-            crate::backends::web::BaiduHtmlSearchBackend::new(),
+            crate::backends::web::MultiEngineSearchBackend::new(),
         )));
         let schema = search.schema();
         registry.register_with_risk(
@@ -220,7 +250,7 @@ pub fn register(registry: &ToolRegistry) {
             Arc::new(|| true),
             vec![],
             false,
-            "Search the web using a keyless backend (Baidu HTML scraper). Returns results with titles, URLs and snippets.",
+            "Search the web (keyless, multi-engine: DuckDuckGo → Baidu → Bing). Returns results with titles, URLs, and snippets. Supports domain filtering.",
             "🔍",
             None,
             RiskLevel::Safe,

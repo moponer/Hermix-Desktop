@@ -92,6 +92,14 @@ pub fn register(registry: &ToolRegistry) {
     register_one("cua_ui_focus", "🎯", CoreRisk::Dangerous, Arc::new(CuaUiFocusHandler::new()));
     register_one("cua_ui_invoke", "⚙️", CoreRisk::Dangerous, Arc::new(CuaUiInvokeHandler::new()));
     register_one("cua_ocr_recognize", "🔤", CoreRisk::Safe, Arc::new(CuaOcrRecognizeHandler::new()));
+    // Phase 3 mouse handlers (2026-07-18 audit fix): these three were
+    // previously defined in `all_handlers()` factory but never wired into
+    // `register()`, so the LLM could not actually invoke them despite
+    // the 17/17 "CUA tests pass" green light (tests only verified the
+    // struct, not the live registry entry).
+    register_one("cua_scroll", "🔄", CoreRisk::Dangerous, Arc::new(CuaScrollHandler::new()));
+    register_one("cua_double_click", "🖱️", CoreRisk::Dangerous, Arc::new(CuaDoubleClickHandler::new()));
+    register_one("cua_move_cursor", "↔️", CoreRisk::Safe, Arc::new(CuaMoveCursorHandler::new()));
 }
 
 // ---------------------------------------------------------------------------
@@ -1617,7 +1625,234 @@ pub fn all_handlers() -> Vec<Arc<dyn ToolHandler>> {
         Arc::new(CuaUiInvokeHandler::new()),
         // Phase 2-D: OCR
         Arc::new(CuaOcrRecognizeHandler::new()),
+        // Phase 3: scroll, double-click, move-cursor
+        Arc::new(CuaScrollHandler::new()),
+        Arc::new(CuaDoubleClickHandler::new()),
+        Arc::new(CuaMoveCursorHandler::new()),
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: Mouse scroll
+// ---------------------------------------------------------------------------
+
+/// Scroll the mouse wheel at `(x, y)`.
+pub struct CuaScrollHandler;
+
+impl CuaScrollHandler {
+    pub fn new() -> Self { Self }
+}
+
+impl Default for CuaScrollHandler {
+    fn default() -> Self { Self::new() }
+}
+
+#[async_trait]
+impl ToolHandler for CuaScrollHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let x = params
+            .get("x")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| ToolError::InvalidParams("missing 'x' coordinate".into()))?;
+        let y = params
+            .get("y")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| ToolError::InvalidParams("missing 'y' coordinate".into()))?;
+        if x < 0 || y < 0 {
+            return Err(ToolError::InvalidParams(format!(
+                "coordinates must be non-negative (got x={x}, y={y})"
+            )));
+        }
+        if x > i32::MAX as i64 || y > i32::MAX as i64 {
+            return Err(ToolError::InvalidParams(format!(
+                "coordinates overflow i32 (got x={x}, y={y})"
+            )));
+        }
+        let delta = params
+            .get("delta")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| ToolError::InvalidParams("missing 'delta' parameter".into()))?;
+        if delta == 0 {
+            return Err(ToolError::InvalidParams("delta must not be zero".into()));
+        }
+        if delta < -100 || delta > 100 {
+            return Err(ToolError::InvalidParams(format!(
+                "delta must be between -100 and 100 (got {delta})"
+            )));
+        }
+        let session_id = extract_session_id(&params);
+        let safety = &*SAFETY;
+        let trace = &*TRACE;
+        run_blocking(move || action::scroll(safety, trace, &session_id, x as i32, y as i32, delta as i32))
+            .await?;
+
+        Ok(json!({
+            "tool": "cua_scroll",
+            "x": x, "y": y, "delta": delta,
+            "ok": true,
+        })
+        .to_string())
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "x".into(),
+            json!({"type": "integer", "description": "X coordinate (pixels from top-left of primary display)."}),
+        );
+        props.insert(
+            "y".into(),
+            json!({"type": "integer", "description": "Y coordinate (pixels from top-left of primary display)."}),
+        );
+        props.insert(
+            "delta".into(),
+            json!({
+                "type": "integer",
+                "description": "Scroll amount in clicks. Positive = scroll up, negative = scroll down. Each click is 120 units. Range: -100 to 100."
+            }),
+        );
+        tool_schema(
+            "cua_scroll",
+            "Scroll the mouse wheel at (x, y). Positive delta scrolls up, negative scrolls down.",
+            JsonSchema::object(props, vec!["x".into(), "y".into(), "delta".into()]),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: Double click
+// ---------------------------------------------------------------------------
+
+/// Double-click at `(x, y)` with the left mouse button.
+pub struct CuaDoubleClickHandler;
+
+impl CuaDoubleClickHandler {
+    pub fn new() -> Self { Self }
+}
+
+impl Default for CuaDoubleClickHandler {
+    fn default() -> Self { Self::new() }
+}
+
+#[async_trait]
+impl ToolHandler for CuaDoubleClickHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let x = params
+            .get("x")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| ToolError::InvalidParams("missing 'x' coordinate".into()))?;
+        let y = params
+            .get("y")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| ToolError::InvalidParams("missing 'y' coordinate".into()))?;
+        if x < 0 || y < 0 {
+            return Err(ToolError::InvalidParams(format!(
+                "coordinates must be non-negative (got x={x}, y={y})"
+            )));
+        }
+        if x > i32::MAX as i64 || y > i32::MAX as i64 {
+            return Err(ToolError::InvalidParams(format!(
+                "coordinates overflow i32 (got x={x}, y={y})"
+            )));
+        }
+        let session_id = extract_session_id(&params);
+        let safety = &*SAFETY;
+        let trace = &*TRACE;
+        run_blocking(move || action::double_click(safety, trace, &session_id, x as i32, y as i32))
+            .await?;
+
+        Ok(json!({
+            "tool": "cua_double_click",
+            "x": x, "y": y,
+            "ok": true,
+        })
+        .to_string())
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "x".into(),
+            json!({"type": "integer", "description": "X coordinate (pixels from top-left of primary display)."}),
+        );
+        props.insert(
+            "y".into(),
+            json!({"type": "integer", "description": "Y coordinate (pixels from top-left of primary display)."}),
+        );
+        tool_schema(
+            "cua_double_click",
+            "Double-click at (x, y) with the left mouse button. Useful for opening files, selecting words, etc.",
+            JsonSchema::object(props, vec!["x".into(), "y".into()]),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: Move cursor
+// ---------------------------------------------------------------------------
+
+/// Move the mouse cursor to `(x, y)` without clicking.
+pub struct CuaMoveCursorHandler;
+
+impl CuaMoveCursorHandler {
+    pub fn new() -> Self { Self }
+}
+
+impl Default for CuaMoveCursorHandler {
+    fn default() -> Self { Self::new() }
+}
+
+#[async_trait]
+impl ToolHandler for CuaMoveCursorHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let x = params
+            .get("x")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| ToolError::InvalidParams("missing 'x' coordinate".into()))?;
+        let y = params
+            .get("y")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| ToolError::InvalidParams("missing 'y' coordinate".into()))?;
+        if x < 0 || y < 0 {
+            return Err(ToolError::InvalidParams(format!(
+                "coordinates must be non-negative (got x={x}, y={y})"
+            )));
+        }
+        if x > i32::MAX as i64 || y > i32::MAX as i64 {
+            return Err(ToolError::InvalidParams(format!(
+                "coordinates overflow i32 (got x={x}, y={y})"
+            )));
+        }
+        let session_id = extract_session_id(&params);
+        let safety = &*SAFETY;
+        let trace = &*TRACE;
+        run_blocking(move || action::move_cursor(safety, trace, &session_id, x as i32, y as i32))
+            .await?;
+
+        Ok(json!({
+            "tool": "cua_move_cursor",
+            "x": x, "y": y,
+            "ok": true,
+        })
+        .to_string())
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "x".into(),
+            json!({"type": "integer", "description": "X coordinate (pixels from top-left of primary display)."}),
+        );
+        props.insert(
+            "y".into(),
+            json!({"type": "integer", "description": "Y coordinate (pixels from top-left of primary display)."}),
+        );
+        tool_schema(
+            "cua_move_cursor",
+            "Move the mouse cursor to (x, y) without clicking. Useful for hover effects and positioning.",
+            JsonSchema::object(props, vec!["x".into(), "y".into()]),
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1640,6 +1875,9 @@ mod tests {
         assert_eq!(CuaLeftClickHandler::new().schema().name, "cua_left_click");
         assert_eq!(CuaTypeTextHandler::new().schema().name, "cua_type_text");
         assert_eq!(CuaPressKeyHandler::new().schema().name, "cua_press_key");
+        assert_eq!(CuaScrollHandler::new().schema().name, "cua_scroll");
+        assert_eq!(CuaDoubleClickHandler::new().schema().name, "cua_double_click");
+        assert_eq!(CuaMoveCursorHandler::new().schema().name, "cua_move_cursor");
     }
 
     #[test]
@@ -1700,7 +1938,7 @@ mod tests {
 
     #[test]
     fn all_handlers_returns_correct_count() {
-        assert_eq!(all_handlers().len(), 14);
+        assert_eq!(all_handlers().len(), 17);
     }
 
     #[test]

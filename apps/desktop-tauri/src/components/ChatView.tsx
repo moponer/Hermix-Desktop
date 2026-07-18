@@ -339,6 +339,7 @@ import {
 } from "../utils/imageCompressor";
 import { PolishButton } from "./PolishButton";
 import { PopoverShell, PopoverBody } from "./PopoverShell";
+import { InlineExpertPanel } from "./InlineExpertPanel";
 import { usePopover } from "../hooks/usePopover";
 import {
   usePermissionLevel,
@@ -2482,7 +2483,7 @@ function Composer(p: ComposerProps) {
   const [draggingFiles, setDraggingFiles] = useState(false);
   const dragCounter = useRef(0);
   const [modelOpen, setModelOpen, modelContainerRef, modelTriggerRef, modelToggle] = usePopover();
-  const [expertOpen, setExpertOpen, expertContainerRef, expertTriggerRef, expertToggle] = usePopover();
+  const [expertPanelOpen, setExpertPanelOpen] = useState(false);
   const [permOpen, setPermOpen, permContainerRef, permTriggerRef, permToggle] = usePopover();
 
   // Model picker provider-collapse state (2026-06-26): each provider gets
@@ -2655,6 +2656,19 @@ function Composer(p: ComposerProps) {
         </div>
       )}
 
+      {/* Inline expert selector panel — replaces the old popover+jump flow */}
+      {expertPanelOpen && (
+        <InlineExpertPanel
+          currentExpertId={p.expert?.id ?? null}
+          onSelect={(id) => {
+            p.setExpert(id);
+            setExpertPanelOpen(false);
+          }}
+          onClose={() => setExpertPanelOpen(false)}
+          onOpenFullCatalog={p.onOpenExperts}
+        />
+      )}
+
       {/* Textarea — sit on the gray container, no own border/background. */}
       <textarea
         ref={p.textareaRef}
@@ -2714,16 +2728,17 @@ function Composer(p: ComposerProps) {
         <div className="flex items-center gap-0.5 min-w-0 shrink-0">
           <div className="relative">
             <button
-              ref={expertTriggerRef as React.RefObject<HTMLButtonElement>}
-              onClick={expertToggle}
+              onClick={() => setExpertPanelOpen((v) => !v)}
               className={`flex items-center shrink-0 text-[12.5px] transition-colors rounded-md ${
                 toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[140px]"
               } ${
                 p.expert
                   ? "text-[#185FA5] hover:bg-[#E6F1FB]/70 font-medium"
+                  : expertPanelOpen
+                  ? "bg-bg-hover text-text-primary"
                   : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
               }`}
-              title={p.expert ? `已雇佣：${p.expert.name}` : "雇佣专家"}
+              title={p.expert ? `已雇佣：${p.expert.name}` : "选择专家"}
             >
               <Sparkles size={12} className={p.expert ? "text-[#185FA5]" : "text-text-muted"} />
               <span
@@ -2741,38 +2756,6 @@ function Composer(p: ComposerProps) {
                 </span>
               )}
             </button>
-            {expertOpen && (
-              <PopoverShell containerRef={expertContainerRef} triggerRef={expertTriggerRef} width="sm" align="left" side="top">
-                {p.recentExperts.length > 0 ? (
-                  <>
-                    <PopoverBody maxHeight="max-h-52">
-                      {p.recentExperts.slice(0, 5).map((e) => (
-                        <button
-                          key={e.id}
-                          onClick={() => { p.setExpert(e.id); setExpertOpen(false); }}
-                          className={`flex items-center gap-2.5 w-full px-2.5 py-2.5 text-left rounded-lg hover:bg-bg-hover transition-colors ${
-                            p.expert?.id === e.id ? "bg-accent/10" : ""
-                          }`}
-                        >
-                          <div className="w-7 h-7 rounded-lg bg-accent/20 text-accent flex items-center justify-center text-[12px] font-medium shrink-0">
-                            {e.avatar || e.name.slice(0,2)}
-                          </div>
-                          <span className="text-[13px] text-text-primary truncate flex-1">{e.name}</span>
-                          {p.expert?.id === e.id && <Check size={14} className="text-accent shrink-0" />}
-                        </button>
-                      ))}
-                    </PopoverBody>
-                    <div className="mx-2.5 my-1 border-t border-border-primary" />
-                  </>
-                ) : null}
-                <button
-                  onClick={() => { p.onOpenExperts?.(); setExpertOpen(false); }}
-                  className="flex items-center justify-center w-full px-2.5 py-2 text-[11px] text-accent hover:bg-bg-hover rounded-md transition-colors"
-                >
-                  召唤专家
-                </button>
-              </PopoverShell>
-            )}
           </div>
 
           {/* Workspace chip — v4 (2026-07-08)：

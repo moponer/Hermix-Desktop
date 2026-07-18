@@ -2,7 +2,7 @@
    Agent Card v3 — 参考图风格:大圆形头像 + 名字/角色 + 描述 + chips + 行动按钮
    ════════════════════════════════════════════════════════════════ */
 
-import { MessageSquare, Play, Edit3, Trash2 } from "lucide-react";
+import { Play, Edit3, Trash2 } from "lucide-react";
 import type { AgentPersona } from "./types";
 
 interface AgentCardProps {
@@ -10,10 +10,9 @@ interface AgentCardProps {
   onEdit: () => void;
   onDelete: () => void;
   onTest: () => void;
-  onUse: () => void;
 }
 
-export function AgentCard({ agent, onEdit, onDelete, onTest, onUse }: AgentCardProps) {
+export function AgentCard({ agent, onEdit, onDelete, onTest }: AgentCardProps) {
   const visibleSkills = agent.skills.slice(0, 3);
   // 右上小标签:按使用次数分级
   const label =
@@ -76,20 +75,13 @@ export function AgentCard({ agent, onEdit, onDelete, onTest, onUse }: AgentCardP
       {/* Actions — no border-top, just gap */}
       <div className="flex items-center gap-1.5 mt-2.5">
         <button
-          onClick={onUse}
-          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11.5px] font-medium transition-all hover:opacity-90"
-          style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
-        >
-          <MessageSquare size={11} />
-          在对话中使用
-        </button>
-        <button
           onClick={onTest}
           title="快速测试"
-          className="p-1.5 rounded-lg hover:bg-bg-hover"
-          style={{ color: "var(--color-btn-ghost-text)" }}
-         aria-label="快速测试">
+          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11.5px] font-medium transition-all hover:opacity-90"
+          style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
+        >
           <Play size={11} />
+          测试
         </button>
         <button
           onClick={onEdit}

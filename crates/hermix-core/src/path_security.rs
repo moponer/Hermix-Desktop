@@ -80,6 +80,50 @@ pub fn forbidden_win32_prefix(s: &str) -> Option<&'static str> {
     }
 }
 
+/// Detect shell metacharacters that could be used for command chaining
+/// or injection. Returns `Some(description)` if the command contains
+/// potentially dangerous shell operators.
+///
+/// This is a defense-in-depth layer — the approval system catches known
+/// dangerous patterns, but this catches generic shell injection vectors
+/// that might not be in the pattern list.
+pub fn detect_shell_metacharacters(command: &str) -> Option<&'static str> {
+    // Command chaining operators
+    if command.contains("&&") {
+        return Some("command chaining via &&");
+    }
+    if command.contains("||") {
+        return Some("command chaining via ||");
+    }
+    // Command separator (not inside quotes — simplified check)
+    if command.contains(';') && !command.contains("'\";'\"'") {
+        return Some("command separator via ;");
+    }
+    // Pipe to shell (already caught by approval patterns, but defense-in-depth)
+    if command.contains("|") {
+        // Check for pipe-to-shell patterns like `... | sh` or `... | bash`
+        let lower = command.to_lowercase();
+        if lower.contains("| sh") || lower.contains("| bash")
+            || lower.contains("| powershell") || lower.contains("| cmd")
+            || lower.contains("| /bin/") {
+            return Some("pipe to shell interpreter");
+        }
+    }
+    // Backtick command substitution
+    if command.contains('`') {
+        return Some("command substitution via backticks");
+    }
+    // $() command substitution (simplified — doesn't handle escaped parens)
+    if command.contains("$(") {
+        return Some("command substitution via $()");
+    }
+    // Process substitution (bash-specific)
+    if command.contains("<(") || command.contains(">(") {
+        return Some("process substitution");
+    }
+    None
+}
+
 /// Cheap `..` component check. Returns true if any path component
 /// is exactly `..` (i.e. the path tries to escape its parent).
 ///

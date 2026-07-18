@@ -25,6 +25,12 @@ pub mod dispatch;
 pub mod essential;
 pub mod register_builtins;
 pub mod registry;
+// `sandbox` module removed 2026-07-18 — 491 lines of dead code with zero
+// external callers and zero integration into `ApprovalEngine`. The full
+// sandbox/approval wiring will be rebuilt the next time a tool actually
+// needs it; until then, removing the half-fabricated scaffold prevents
+// future drift between declared interface and runtime behavior.
+
 pub mod tool_meta;
 pub mod tools;
 pub mod toolset;
@@ -46,7 +52,8 @@ pub use dispatch::{dispatch_single, dispatch_tools, DispatchedResult};
 
 // Re-export approval types
 pub use approval::{
-    check_approval, ApprovalDecision, ApprovalManager, UserAllowlist, UserAllowlistEntry,
+    check_approval, ApprovalDecision, ApprovalManager, TerminalApprovalContext, UserAllowlist,
+    UserAllowlistEntry,
 };
 
 // Re-export credential guard

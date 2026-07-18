@@ -76,6 +76,7 @@ impl From<DispatchedResult> for ToolResult {
             tool_call_id: dr.tool_call_id,
             content: dr.content,
             is_error: dr.is_error,
+            denial_kind: None,
         }
     }
 }
@@ -171,10 +172,25 @@ pub async fn dispatch_tools(
             // Wait for a permit before doing real work. The permit
             // is held for the duration of the task and released on
             // drop (i.e. on completion, including panic).
-            let _permit = semaphore
-                .acquire_owned()
-                .await
-                .expect("semaphore closed unexpectedly");
+            let _permit = match semaphore.acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    // Semaphore was closed — return an error result
+                    // instead of panicking.
+                    return DispatchedResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.function.name.clone(),
+                        content: serde_json::json!({
+                            "error": "tool dispatch semaphore closed unexpectedly",
+                            "tool": call.function.name,
+                        })
+                        .to_string(),
+                        is_error: true,
+                        duration_ms: 0,
+                        task_id: None,
+                    };
+                }
+            };
             let start = Instant::now();
             // Bridge tools (`tool_search` / `tool_describe` / `tool_call`)
             // are intentionally NOT registered in the registry — they are
@@ -280,6 +296,7 @@ pub async fn dispatch_tools(
                     tool_call_id: dr.tool_call_id,
                     content,
                     is_error: dr.is_error,
+                    denial_kind: None,
                 });
             }
             Ok(Some(Err(join_err))) => {
@@ -349,6 +366,7 @@ pub async fn dispatch_single(
         tool_call_id: call.id,
         content,
         is_error,
+        denial_kind: None,
     }
 }
 

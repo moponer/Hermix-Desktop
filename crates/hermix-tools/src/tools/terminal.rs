@@ -6,12 +6,12 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 use hermix_core::{
-    path_security::{forbidden_win32_prefix, strip_win32_long_path},
-    tool_schema, CommandOutput, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema,
-    traits::RiskLevel,
+    path_security::{forbidden_win32_prefix, detect_shell_metacharacters, strip_win32_long_path},
+    tool_schema, ApprovalOutcome, CommandOutput, JsonSchema, TerminalBackend, ToolError,
+    ToolHandler, ToolSchema, traits::RiskLevel,
 };
 
-use crate::approval::{ApprovalDecision, ApprovalManager};
+use crate::approval::{ApprovalDecision, ApprovalManager, TerminalApprovalContext};
 use crate::ToolRegistry;
 
 // ---------------------------------------------------------------------------
@@ -24,12 +24,24 @@ use crate::ToolRegistry;
 /// tools (and the agent service) so per-turn workspace updates propagate
 /// here too. Test-only callers without a registry workspace can pass
 /// `Arc::new(RwLock::new(None))`.
+///
+/// Pass the registry's shared `terminal_approval_ctx` handle
+/// (`registry.terminal_approval_ctx_handle()`) so `LocalAgentService`
+/// can wire the WS approval hook per turn without re-registering the
+/// tool. The handle starts as `default()` (both fields `None`); the
+/// tool gracefully falls back to the legacy `HERMIX_CONFIRM=1` text
+/// flow while it's still `None` (unit tests, headless callers).
 pub fn register(
     registry: &ToolRegistry,
     backend: Arc<dyn TerminalBackend>,
     terminal_workspace: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
+    terminal_approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
 ) {
-    let handler = Arc::new(TerminalHandler::new(backend, terminal_workspace));
+    let handler = Arc::new(TerminalHandler::new(
+        backend,
+        terminal_workspace,
+        terminal_approval_ctx,
+    ));
     let schema = handler.schema();
     registry.register_with_risk(
         "terminal",
@@ -39,7 +51,7 @@ pub fn register(
         Arc::new(|| true),
         vec![],
         true,
-        "Execute a shell command in a sandboxed process. Per-command risk is decided by an internal ApprovalManager; this tool-level risk is Caution (commands may have side effects).",
+        "Execute a shell command on the user's system. You have full access to the filesystem (including C:\\ and other drives). Per-command risk is decided by an internal ApprovalManager; this tool-level risk is Caution (commands may have side effects). If a command is blocked by security policy, the error message will tell you how to retry with HERMIX_CONFIRM=1 prefix.",
         "💻",
         None,
         RiskLevel::Caution,
@@ -61,6 +73,13 @@ pub struct TerminalHandler {
     /// default `current_dir` for the spawned process — so terminal
     /// commands always run in the user's "工作区", not the server CWD.
     default_workspace: std::sync::Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
+    /// Per-request approval hook (2026-07-17). When populated,
+    /// `RequiresConfirmation` is surfaced as a `request_approval` event
+    /// on the active WS channel (so the desktop's `InlineApprovalCard`
+    /// renders instead of bouncing the user through LLM text). When
+    /// empty (default `TerminalApprovalContext`), the legacy
+    /// "reply `HERMIX_CONFIRM=1`" flow runs — backward-compatible.
+    approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
 }
 
 impl TerminalHandler {
@@ -69,14 +88,22 @@ impl TerminalHandler {
     /// update the per-turn workspace without holding a direct reference to
     /// this handler. Tests that don't care about workspace semantics can
     /// pass `Arc::new(RwLock::new(None))`.
+    ///
+    /// Pass a shared `terminal_approval_ctx` handle from
+    /// [`ToolRegistry::terminal_approval_ctx_handle`] so the agent
+    /// service can swap the WS approval hook per request without
+    /// re-registering the tool. Tests / headless callers can pass
+    /// `Arc::new(Mutex::new(TerminalApprovalContext::default()))`.
     pub fn new(
         backend: std::sync::Arc<dyn TerminalBackend>,
         terminal_workspace: std::sync::Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
+        terminal_approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
     ) -> Self {
         Self {
             backend,
             approval: ApprovalManager::new(),
             default_workspace: terminal_workspace,
+            approval_ctx: terminal_approval_ctx,
         }
     }
 
@@ -87,7 +114,123 @@ impl TerminalHandler {
             *guard = workspace;
         }
     }
+
+    /// 2026-07-17 — When the agent service wired a `TerminalApprovalContext`
+    /// for this turn (it captures the active WS `ApprovalRegistry` + the
+    /// `on_event` channel), emit a `request_approval` event on the WS
+    /// stream and `.await` the user's `approved` / `denied` click via
+    /// the registry's oneshot receiver.
+    ///
+    /// Returns:
+    /// - `Some(ApprovalOutcome::Approved)` — user approved; caller
+    ///   should fall through and execute. We also `approve_for_session`
+    ///   so the same command string is implicit-allow for the rest of
+    ///   the session (mirrors the user clicking "Allow for this
+    ///   session" in the InlineApprovalCard).
+    /// - `Some(other)` — user denied / timed out / channel closed;
+    ///   caller should error out.
+    /// - `None`        — no WS context wired (default state); caller
+    ///   falls back to the legacy `HERMIX_CONFIRM=1` text flow so
+    ///   headless / unit-test callers keep working.
+    async fn request_ws_approval(&self, effective_cmd: &str) -> Option<ApprovalOutcome> {
+        // Snapshot the context so we don't hold the mutex across
+        // `.await` (the requester/on_event clones are cheap; the
+        // Mutex guard would block any `set_terminal_approval_ctx`
+        // call from the agent service during the await).
+        let (session_id, requester, on_event) = {
+            let ctx = match self.approval_ctx.lock() {
+                Ok(g) => g,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "approval_ctx lock poisoned; falling back to text flow"
+                    );
+                    return None;
+                }
+            };
+            if !ctx.is_wired() {
+                return None;
+            }
+            (
+                ctx.session_id.clone(),
+                ctx.requester(),
+                ctx.on_event(),
+            )
+        };
+        let requester = requester?; // unreachable (is_wired checked) but makes the match arms tidy
+        let on_event = on_event?;
+
+        // Build a unique request id. The terminal tool can fire many
+        // approvals back-to-back in a single turn, so monotonic
+        // counter is safer than `Uuid::new_v4()` for human-readable
+        // WS logs (and it's zero-allocation).
+        let request_id = format!(
+            "terminal-{}",
+            NEXT_REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+
+        // Register the pending decision BEFORE emitting so the
+        // registry can't lose a race against a too-fast click.
+        let rx = requester(session_id.clone(), request_id.clone());
+
+        // Push the `request_approval` envelope. Shape matches
+        // `decide_pre_tool_dispatch`'s dangerous-tool payload so the
+        // frontend's existing `InlineApprovalCard` and
+        // `useStreamChat.onApprovalRequest` handle it unchanged.
+        on_event(json!({
+            "event": "request_approval",
+            "request_id": request_id,
+            "tool": "terminal",
+            "arguments": {
+                "command": effective_cmd,
+            },
+            "risk": "caution",
+        }));
+
+        // Wait for the user's click. The dangerous-tool approval
+        // path uses a 60s timeout that auto-denies; we don't enforce
+        // it here because `ApprovalRegistry::register` already does
+        // (it sets up its own 5-minute `DEFAULT_APPROVAL_TIMEOUT`).
+        match rx.await {
+            Ok(ApprovalOutcome::Approved) => {
+                // Persist the approval to the in-session bypass so
+                // a follow-up call with the same command string
+                // skips the prompt (matches "Allow for this session"
+                // semantics — `decide_pre_tool_dispatch` consults
+                // `session_bypass` for the same shortcut).
+                self.approval
+                    .approve_for_session(effective_cmd);
+                Some(ApprovalOutcome::Approved)
+            }
+            Ok(other) => {
+                // Any non-approved outcome (user denied, timed out,
+                // or channel closed) is reported back as a denial so
+                // the caller's `!matches!(.., Approved)` check below
+                // rejects the command.
+                Some(other)
+            }
+            Err(_canceled) => {
+                // The oneshot was dropped without sending — happens
+                // when the agent service tore down the registry mid-
+                // prompt (session ended, WS closed). Treat as a
+                // channel-closed denial.
+                tracing::warn!(
+                    command = %effective_cmd,
+                    request_id = %request_id,
+                    "approval oneshot canceled before user response"
+                );
+                Some(ApprovalOutcome::ChannelClosed)
+            }
+        }
+    }
 }
+
+/// Monotonic counter for terminal approval request ids (one per
+/// process). Keeps log lines short and stable so a human reading
+/// "terminal-42 approved" / "terminal-43 denied" can correlate
+/// the WS envelope with the tool trace.
+static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
 
 #[async_trait]
 impl ToolHandler for TerminalHandler {
@@ -138,6 +281,60 @@ impl ToolHandler for TerminalHandler {
             )));
         }
 
+        // Defense-in-depth: detect shell metacharacters that could be
+        // used for command chaining or injection. This catches generic
+        // injection vectors that might not be in the approval pattern
+        // list. Commands with metacharacters require explicit user
+        // confirmation (cannot be bypassed with HERMIX_CONFIRM=1).
+        if let Some(metachar_desc) = detect_shell_metacharacters(command) {
+            tracing::warn!(
+                command,
+                metachar_desc,
+                "terminal command contains shell metacharacters"
+            );
+            // Always require confirmation for metacharacter commands,
+            // even with HERMIX_CONFIRM=1 marker. This prevents the
+            // marker from being used to bypass this safety check.
+            if let Some(decision) = self
+                .request_ws_approval(&format!(
+                    "{} (contains {})", command, metachar_desc
+                ))
+                .await
+            {
+                if !matches!(decision, ApprovalOutcome::Approved) {
+                    let reason = match decision {
+                        ApprovalOutcome::DeniedByUser => "denied by user",
+                        ApprovalOutcome::TimedOut { timeout_secs } => {
+                            &format!("approval timed out after {timeout_secs}s")
+                        }
+                        ApprovalOutcome::ChannelClosed => "connection closed before response",
+                        ApprovalOutcome::Approved => unreachable!(),
+                    };
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "Command {reason}: {}",
+                        command
+                    )));
+                }
+            } else {
+                // No WS context — require HERMIX_CONFIRM=1 for metachar commands
+                if command.strip_prefix("HERMIX_CONFIRM=1 ").is_none() {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "Command contains shell metacharacters ({}): {}\n\n\
+                         This command requires explicit user confirmation.\n\
+                         Tell the user what this command does and ask for permission. \
+                         If they approve, retry with:\n  HERMIX_CONFIRM=1 {}",
+                        metachar_desc, command, command
+                    )));
+                }
+                // HERMIX_CONFIRM=1 is present — proceed with metachar command
+                tracing::info!(
+                    command = %command,
+                    metachar_desc,
+                    "metachar command confirmed by user via HERMIX_CONFIRM marker"
+                );
+            }
+        }
+
         // Check for the user-override marker. When the LLM confirms
         // with the user and retries with HERMIX_CONFIRM=1, we skip the
         // confirmation-pattern check to allow the command through.
@@ -159,7 +356,40 @@ impl ToolHandler for TerminalHandler {
                         command = %effective_cmd,
                         "command confirmed by user via HERMIX_CONFIRM marker"
                     );
+                } else if let Some(decision) = self
+                    .request_ws_approval(effective_cmd)
+                    .await
+                {
+                    // 2026-07-18: WS path. The agent service wired
+                    // `TerminalApprovalContext` for this turn; we emit
+                    // a `request_approval` event and `.await` the
+                    // user's verdict. `Approved` ⇒ fall through and
+                    // execute. Any other outcome (user denied, timed
+                    // out, channel closed) ⇒ error out below so the
+                    // LLM can reformulate.
+                    if !matches!(decision, ApprovalOutcome::Approved) {
+                        let reason = match decision {
+                            ApprovalOutcome::DeniedByUser => "denied by user",
+                            ApprovalOutcome::TimedOut { timeout_secs } => {
+                                &format!("approval timed out after {timeout_secs}s")
+                            }
+                            ApprovalOutcome::ChannelClosed => "connection closed before response",
+                            ApprovalOutcome::Approved => unreachable!(),
+                        };
+                        return Err(ToolError::ExecutionFailed(format!(
+                            "Command {reason}: {}",
+                            effective_cmd
+                        )));
+                    }
+                    tracing::info!(
+                        command = %effective_cmd,
+                        "command confirmed by user via WS approval card"
+                    );
                 } else {
+                    // No WS context wired (headless test, CLI run,
+                    // or unit test that bypassed the agent service):
+                    // fall back to the legacy text flow so the LLM
+                    // can still bounce the user through `HERMIX_CONFIRM=1`.
                     return Err(ToolError::ExecutionFailed(format!(
                         "Command requires user confirmation: {}\n\n\
                          Tell the user what this command does and ask for permission. \
@@ -489,6 +719,9 @@ mod tests {
         let handler = TerminalHandler::new(
             backend,
             std::sync::Arc::new(std::sync::RwLock::new(None)),
+            std::sync::Arc::new(std::sync::Mutex::new(
+                TerminalApprovalContext::default(),
+            )),
         );
         let schema = handler.schema();
         assert_eq!(schema.name, "terminal");
@@ -500,6 +733,9 @@ mod tests {
         let handler = TerminalHandler::new(
             backend,
             std::sync::Arc::new(std::sync::RwLock::new(None)),
+            std::sync::Arc::new(std::sync::Mutex::new(
+                TerminalApprovalContext::default(),
+            )),
         );
         let result = handler
             .execute(json!({"command": "echo hello"}))
@@ -590,6 +826,9 @@ mod tests {
         let handler = TerminalHandler::new(
             std::sync::Arc::new(PanicBackend),
             std::sync::Arc::new(std::sync::RwLock::new(None)),
+            std::sync::Arc::new(std::sync::Mutex::new(
+                TerminalApprovalContext::default(),
+            )),
         );
         let err = handler
             .execute(json!({"command": "ls -la \\\\?\\D:\\qcc"}))
@@ -608,7 +847,13 @@ mod tests {
         let (backend, captured) = make_mock();
         let ws_handle: std::sync::Arc<std::sync::RwLock<Option<std::path::PathBuf>>> =
             std::sync::Arc::new(std::sync::RwLock::new(None));
-        let handler = TerminalHandler::new(backend, ws_handle.clone());
+        let handler = TerminalHandler::new(
+            backend,
+            ws_handle.clone(),
+            std::sync::Arc::new(std::sync::Mutex::new(
+                TerminalApprovalContext::default(),
+            )),
+        );
 
         // No workdir param, no default → backend sees None.
         handler
@@ -645,6 +890,228 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(captured.lock().unwrap().clone(), None);
+    }
+
+    // ---------- WS approval path (2026-07-17, "Caution tool needs UI prompts") ----------
+
+    /// Helper: build a `TerminalApprovalContext` plus a registry of
+    /// pending oneshot senders so the test can resolve the user's
+    /// "click" from outside the handler. Returns `(ctx, sender_registry,
+    /// captured_event)`. The test calls `pop_pending()` to fetch the
+    /// sender and `tx.send(decision)` to settle the request.
+    fn wire_approval_ctx() -> (
+        std::sync::Arc<std::sync::Mutex<TerminalApprovalContext>>,
+        std::sync::Arc<
+            std::sync::Mutex<
+                std::collections::HashMap<String, tokio::sync::oneshot::Sender<ApprovalOutcome>>,
+            >,
+        >,
+        std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>,
+    ) {
+        let reg: std::sync::Arc<
+            std::sync::Mutex<
+                std::collections::HashMap<String, tokio::sync::oneshot::Sender<ApprovalOutcome>>,
+            >,
+        > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let reg_clone = reg.clone();
+
+        let requester: std::sync::Arc<
+            dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<ApprovalOutcome>
+                + Send
+                + Sync,
+        > = std::sync::Arc::new(move |_sid: String, rid: String| {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            reg_clone.lock().unwrap().insert(rid, tx);
+            rx
+        });
+
+        let captured_event: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let captured_event_clone = captured_event.clone();
+        let on_event: std::sync::Arc<dyn Fn(serde_json::Value) + Send + Sync> =
+            std::sync::Arc::new(move |v: serde_json::Value| {
+                *captured_event_clone.lock().unwrap() = Some(v);
+            });
+
+        let ctx = TerminalApprovalContext {
+            session_id: "sess-test".to_string(),
+            requester: Some(requester),
+            on_event: Some(on_event),
+        };
+
+        (
+            std::sync::Arc::new(std::sync::Mutex::new(ctx)),
+            reg,
+            captured_event,
+        )
+    }
+
+    #[tokio::test]
+    async fn ws_path_approved_falls_through_and_emits_event() {
+        // Wire the WS context with a fake ApprovalRegistry-style
+        // oneshot map so we can settle the request from outside.
+        let (approval_ctx, reg, captured_event) = wire_approval_ctx();
+
+        let (backend, _cap) = make_mock();
+        let handler = TerminalHandler::new(
+            backend,
+            std::sync::Arc::new(std::sync::RwLock::new(None)),
+            approval_ctx,
+        );
+
+        // Spawn the "user clicks Approve" task; it polls for the
+        // pending request and resolves with `true`.
+        let reg_for_task = reg.clone();
+        let approver = tokio::spawn(async move {
+            for _ in 0..100 {
+                if let Some((_rid, tx)) =
+                    reg_for_task.lock().unwrap().drain().next()
+                {
+                    let _ = tx.send(ApprovalOutcome::Approved);
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            panic!("approval request was never registered");
+        });
+
+        // `sudo` matches the `(?i)\bsudo\b` CONFIRM pattern.
+        let result = handler
+            .execute(json!({"command": "sudo apt install ripgrep"}))
+            .await;
+        approver.await.unwrap();
+
+        // Fall-through: the mock backend returned success, so the
+        // execute call must succeed (no error, no `HERMIX_CONFIRM=1`
+        // bounce).
+        result.expect("WS-approved command must execute, not error");
+
+        // The on_event closure saw the request_approval envelope.
+        let event = captured_event
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("on_event must have fired");
+        assert_eq!(event["event"], "request_approval");
+        assert_eq!(event["tool"], "terminal");
+        assert_eq!(event["risk"], "caution");
+        assert_eq!(event["arguments"]["command"], "sudo apt install ripgrep");
+        assert_eq!(event["risk"], "caution");
+        let rid = event["request_id"]
+            .as_str()
+            .expect("request_id must be a string");
+        assert!(
+            rid.starts_with("terminal-"),
+            "request_id should be prefixed with 'terminal-' (got {rid})"
+        );
+    }
+
+    #[tokio::test]
+    async fn ws_path_denied_returns_user_denial_error() {
+        let (approval_ctx, reg, captured_event) = wire_approval_ctx();
+        let (backend, _cap) = make_mock();
+        let handler = TerminalHandler::new(
+            backend,
+            std::sync::Arc::new(std::sync::RwLock::new(None)),
+            approval_ctx,
+        );
+
+        // Spawn the "user clicks Deny" task.
+        let reg_for_task = reg.clone();
+        let denier = tokio::spawn(async move {
+            for _ in 0..100 {
+                if let Some((_rid, tx)) =
+                    reg_for_task.lock().unwrap().drain().next()
+                {
+                    let _ = tx.send(ApprovalOutcome::DeniedByUser);
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            panic!("approval request was never registered");
+        });
+
+        // Use `taskkill /f` which matches the Windows CONFIRM pattern
+        // so we don't depend on Linux-only `sudo`.
+        let result = handler
+            .execute(json!({"command": "taskkill /f /im foo.exe"}))
+            .await;
+        denier.await.unwrap();
+
+        let err = result.expect_err(
+            "WS-denied command must error out, not execute",
+        );
+        let msg = format!("{err:?}").to_lowercase();
+        assert!(
+            msg.contains("denied by user"),
+            "error must say 'denied by user', got: {msg}",
+        );
+        // The on_event still fired (the frontend needs to know the
+        // card was rendered before the user denied it).
+        assert!(
+            captured_event.lock().unwrap().is_some(),
+            "on_event must have fired even when user denied",
+        );
+    }
+
+    #[tokio::test]
+    async fn fallback_to_text_flow_when_ws_ctx_unwired() {
+        // No approval_ctx wired: tool must fall back to the legacy
+        // `HERMIX_CONFIRM=1` text-bounce flow. This is the
+        // backward-compat path for headless callers / unit tests.
+        let (backend, _cap) = make_mock();
+        let handler = TerminalHandler::new(
+            backend,
+            std::sync::Arc::new(std::sync::RwLock::new(None)),
+            std::sync::Arc::new(std::sync::Mutex::new(
+                TerminalApprovalContext::default(),
+            )),
+        );
+
+        let result = handler
+            .execute(json!({"command": "sudo apt install ripgrep"}))
+            .await;
+        let err = result.expect_err(
+            "without WS context, RequiresConfirmation must error",
+        );
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("Command requires user confirmation"),
+            "fallback message must instruct LLM to ask user (got: {msg})",
+        );
+        assert!(
+            msg.contains("HERMIX_CONFIRM=1"),
+            "fallback message must mention HERMIX_CONFIRM=1 marker (got: {msg})",
+        );
+    }
+
+    #[tokio::test]
+    async fn hermix_confirm_marker_skips_ws_path() {
+        // Even with WS wired, the `HERMIX_CONFIRM=1` prefix must
+        // short-circuit straight to execution (LLM-bounced approval
+        // path stays valid for backward compat).
+        let (approval_ctx, reg, _captured_event) = wire_approval_ctx();
+        let (backend, _cap) = make_mock();
+        let handler = TerminalHandler::new(
+            backend,
+            std::sync::Arc::new(std::sync::RwLock::new(None)),
+            approval_ctx,
+        );
+
+        let result = handler
+            .execute(json!({
+                "command": "HERMIX_CONFIRM=1 sudo apt install ripgrep"
+            }))
+            .await;
+        result.expect(
+            "HERMIX_CONFIRM=1 marker must let the command through without prompting",
+        );
+        // No pending approval should have been registered — the
+        // marker means the user already said yes.
+        assert!(
+            reg.lock().unwrap().is_empty(),
+            "HERMIX_CONFIRM=1 must skip the WS request entirely",
+        );
     }
 
     #[test]

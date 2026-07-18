@@ -16,6 +16,7 @@ use serde_json::Value;
 use tracing::{instrument, warn};
 
 use crate::SessionStamper;
+use crate::approval::TerminalApprovalContext;
 
 // ---------------------------------------------------------------------------
 // ToolEntry
@@ -152,6 +153,15 @@ pub struct ToolRegistryInner {
     /// active workspace here before each turn. Cheap (RwLock + Arc), no
     /// extra coupling between the two crates beyond this single handle.
     pub terminal_workspace: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
+    /// Shared handle to the terminal tool's per-request approval hook
+    /// (2026-07-17, "Caution tool needs UI prompts"). The `TerminalHandler`
+    /// clones this on construction; `LocalAgentService::send_message`
+    /// writes a fresh `TerminalApprovalContext` (capturing the active WS
+    /// `ApprovalRegistry` + `on_event`) on every turn so the terminal
+    /// tool's `RequiresConfirmation` branch can emit a `request_approval`
+    /// event instead of bouncing the user through text. `None` in both
+    /// fields ⇒ fallback to the legacy `HERMIX_CONFIRM=1` text flow.
+    pub terminal_approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
 }
 
 /// Thread-safe wrapper around `ToolRegistryInner`.
@@ -168,6 +178,9 @@ impl ToolRegistry {
                 tools: HashMap::new(),
                 global_max_result_size_chars: 50_000,
                 terminal_workspace: Arc::new(std::sync::RwLock::new(None)),
+                terminal_approval_ctx: Arc::new(std::sync::Mutex::new(
+                    TerminalApprovalContext::default(),
+                )),
             })),
         }
     }
@@ -179,6 +192,9 @@ impl ToolRegistry {
                 tools: HashMap::new(),
                 global_max_result_size_chars: max,
                 terminal_workspace: Arc::new(std::sync::RwLock::new(None)),
+                terminal_approval_ctx: Arc::new(std::sync::Mutex::new(
+                    TerminalApprovalContext::default(),
+                )),
             })),
         }
     }
@@ -200,6 +216,53 @@ impl ToolRegistry {
         } else {
             tracing::warn!("terminal_workspace lock poisoned; ignoring update");
         }
+    }
+
+    /// Get a clone of the shared terminal-approval-context handle.
+    /// `register_builtin_tools` (and the per-tool `register` call)
+    /// clone this into `TerminalHandler` so the agent service can
+    /// swap the underlying context per request without re-registering
+    /// the tool.
+    pub fn terminal_approval_ctx_handle(&self) -> Arc<std::sync::Mutex<TerminalApprovalContext>> {
+        self.inner
+            .read()
+            .expect("registry rwlock not poisoned")
+            .terminal_approval_ctx
+            .clone()
+    }
+
+    /// Set the per-request terminal approval hook. Called by
+    /// `LocalAgentService::send_message` with the `ApprovalRegistry`
+    /// closure + `on_event` from `effective_overrides`. Pass the same
+    /// value back through [`Self::clear_terminal_approval_ctx`] after
+    /// the turn completes so cross-session leaks are impossible
+    /// (every send_message captures a fresh `ApprovalRegistry`
+    /// anyway, but the explicit clear makes the lifecycle obvious in
+    /// stack traces).
+    pub fn set_terminal_approval_ctx(&self, ctx: TerminalApprovalContext) {
+        match self
+            .inner
+            .read()
+            .expect("registry rwlock not poisoned")
+            .terminal_approval_ctx
+            .lock()
+        {
+            Ok(mut guard) => *guard = ctx,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "terminal_approval_ctx lock poisoned; ignoring update"
+                );
+            }
+        }
+    }
+
+    /// Reset the terminal approval context to `default()` (both fields
+    /// `None`). Called at the end of `send_message` so a dropped
+    /// session never leaves a stale `Arc<dyn Fn>` pointing at a dead
+    /// WS handle.
+    pub fn clear_terminal_approval_ctx(&self) {
+        self.set_terminal_approval_ctx(TerminalApprovalContext::default());
     }
 
     /// Register a new tool.

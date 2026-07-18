@@ -158,18 +158,44 @@ pub fn redact_prompt_injection(text: &str) -> String {
 
 /// Truncate the summary to the hard ceiling, preferring to cut at a
 /// paragraph or sentence boundary so the tail stays coherent.
+///
+/// Uses character-based counting to avoid panicking on multi-byte
+/// UTF-8 characters (e.g. CJK). The old byte-based slicing would
+/// panic if `max_chars` fell in the middle of a multi-byte character.
 pub fn truncate_summary_at_boundary(text: &str, max_chars: usize) -> String {
-    if text.len() <= max_chars {
+    // Find the byte position corresponding to max_chars characters
+    let max_bytes = text
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+
+    if max_bytes >= text.len() {
         return text.to_string();
     }
-    let cut = &text[..max_chars];
+
+    let cut = &text[..max_bytes];
     // Walk back to the nearest paragraph break, then to a sentence break,
     // then to a line break, then to a word break. Whichever is closest wins.
+    // Use char_indices-based search to stay on character boundaries.
     let boundary = ["\n\n", ". ", "\n", " "]
         .iter()
-        .filter_map(|needle| cut.rfind(needle))
+        .filter_map(|needle| {
+            cut.rfind(needle).and_then(|byte_pos| {
+                // Ensure the boundary is at a char boundary
+                if cut.is_char_boundary(byte_pos) {
+                    Some(byte_pos)
+                } else {
+                    // Walk back to the nearest char boundary
+                    cut[..byte_pos]
+                        .char_indices()
+                        .last()
+                        .map(|(i, _)| i)
+                }
+            })
+        })
         .max()
-        .unwrap_or(max_chars);
+        .unwrap_or(max_bytes);
     let keep = &cut[..boundary];
     let suffix = if keep.trim_end().is_empty() {
         ""
@@ -799,6 +825,21 @@ pub struct ContextCompressor {
     /// `SessionPersistence::archive_compressed_turns` so a future
     /// cross-session recall path can recover it.
     last_archived_turns: Vec<Message>,
+    /// Messages dropped by Phase 1.5 (`drop_low_score`). Stashed
+    /// here so Phase 4 can extend `last_archived_turns` with them —
+    /// making the previously-lossy drop path lossless. Reset every
+    /// `compress()` call (either refilled in Phase 1.5 or cleared
+    /// when `drop_score_threshold <= 0.0`).
+    last_dropped_turns: Vec<Message>,
+    /// 2026-07-18 (P1): when true, `compress()` skips the LLM
+    /// summary call and falls back to the static marker. Set by
+    /// [`Self::compress_fast`] for the moderate-pressure path
+    /// (50–85%) so the agent loop doesn't block a full turn on an
+    /// LLM round-trip. `compress_fast` resets it to `false` in its
+    /// own frame after `compress` returns (including early-return
+    /// paths — `compress_fast` awaits `compress` and runs the
+    /// reset unconditionally afterwards).
+    fast_mode: bool,
 
     // ---- Circuit breaker (Day 4) ----
     /// Consecutive hard LLM failures (auxiliary call errored, not just
@@ -995,6 +1036,8 @@ impl ContextCompressor {
             last_trigger_reason: String::new(),
             last_compression_report: None,
             last_archived_turns: Vec::new(),
+            last_dropped_turns: Vec::new(),
+            fast_mode: false,
             // Day 4: circuit breaker starts closed (no failures yet).
             consecutive_llm_failures: 0,
             breaker_threshold: DEFAULT_BREAKER_THRESHOLD,
@@ -1044,6 +1087,16 @@ impl ContextCompressor {
         &self.last_archived_turns
     }
 
+    /// Messages dropped by Phase 1.5's `drop_low_score`. These are
+    /// already folded into [`Self::last_archived_turns`] by the
+    /// end of `compress()` (so the agent loop's single archive
+    /// path picks them up). Exposed separately for diagnostics /
+    /// dashboards that want to distinguish "summarised turns"
+    /// from "silently dropped turns".
+    pub fn last_dropped_turns(&self) -> &[Message] {
+        &self.last_dropped_turns
+    }
+
     /// Reset per-session state (call on /new or /reset).
     pub fn reset_session_state(&mut self) {
         self.compression_count = 0;
@@ -1053,6 +1106,8 @@ impl ContextCompressor {
         self.ineffective_compression_count = 0;
         self.last_metrics = CompressionMetrics::default();
         self.last_archived_turns.clear();
+        self.last_dropped_turns.clear();
+        self.fast_mode = false;
         // Day 4: also reset the breaker — a /new session starts with a
         // clean slate, not inheriting the previous session's failed LLM
         // attempts. This is conservative: if the underlying provider
@@ -1343,6 +1398,7 @@ impl ContextCompressor {
         messages: &[Message],
         protect_recent: usize,
         compress_threshold: f64,
+        context_length: Option<u64>,
     ) -> Vec<Message> {
         if messages.len() <= protect_recent {
             return messages.to_vec();
@@ -1354,8 +1410,9 @@ impl ContextCompressor {
             .map(|m| estimate_message_tokens(m) as u64)
             .sum();
 
-        // If under threshold, return as-is
-        let estimated_context = 200_000u64; // Default context window
+        // Use provided context_length or fall back to default (128K)
+        let estimated_context = context_length
+            .unwrap_or(hermix_intelligence::model_metadata::DEFAULT_FALLBACK_CONTEXT as u64);
         if (total_tokens as f64 / estimated_context as f64) < compress_threshold {
             return messages.to_vec();
         }
@@ -1917,6 +1974,29 @@ Write only the summary body. Do not include any preamble or prefix."
     ///
     /// `current_tokens` is used purely for logging — pass `None` to fall
     /// back to the last tracked `prompt_tokens` value.
+    /// 2026-07-18 (P1): fast-mode compression — runs every pass
+    /// (archive / dedup / score-drop / boundary) but skips the
+    /// LLM summary call, replacing it with the static fallback
+    /// marker. Used by `auto_compress_if_over_threshold` when
+    /// pressure is moderate (50–85%) so the agent loop doesn't
+    /// block a turn on an LLM round-trip.
+    ///
+    /// `fast_mode` is set to `true` for the duration of the inner
+    /// [`Self::compress`] call and reset to `false` afterwards —
+    /// including early-return paths inside `compress`, because
+    /// this wrapper awaits `compress` and runs the reset
+    /// unconditionally in its own frame.
+    pub async fn compress_fast(
+        &mut self,
+        messages: Vec<Message>,
+        current_tokens: Option<u64>,
+    ) -> Vec<Message> {
+        self.fast_mode = true;
+        let result = self.compress(messages, current_tokens).await;
+        self.fast_mode = false;
+        result
+    }
+
     pub async fn compress(
         &mut self,
         messages: Vec<Message>,
@@ -1991,7 +2071,12 @@ Write only the summary body. Do not include any preamble or prefix."
         // Phase 3.5: Context Collapse (read-time projection).
         // This is applied to the messages before Phase 1 to provide
         // an additional layer of compression without API cost.
-        let messages = Self::context_collapse(&messages, self.config.protect_last_n, 0.90);
+        let messages = Self::context_collapse(
+            &messages,
+            self.config.protect_last_n,
+            0.90,
+            Some(self.config.context_length),
+        );
 
         // Phase A2 (2026-07-17): build pin config once per compress()
         // call so every pass below sees a consistent view.
@@ -2039,29 +2124,56 @@ Write only the summary body. Do not include any preamble or prefix."
 
         // Phase 1.5 (2026-07-17, Phase B6): score-based drop.
         // Messages whose TokenScorer score is strictly below
-        // `drop_score_threshold` are removed from context entirely
-        // (unless pinned). Disabled when threshold <= 0.0.
+        // `drop_score_threshold` are removed from context — but
+        // **returned** (not destroyed) so they can be archived
+        // alongside the LLM-summarised slice. Protective
+        // heuristics (pin / tail window / instructional /
+        // referenced tool) override the score. Disabled when
+        // threshold <= 0.0.
         let drop_threshold = self.config.drop_score_threshold;
-        let dropped_count: usize = if drop_threshold > 0.0 {
-            let scorer = crate::compression_pipeline::TokenScorer::new();
+        let mut dropped_count: usize = 0;
+        if drop_threshold > 0.0 {
+            // Build the scorer with awareness of the current task
+            // (most recent user message) so the query_relevance
+            // dimension can rescue task-critical-but-low-frequency
+            // messages that pure recency/freq would starve.
+            let scorer = crate::compression_pipeline::TokenScorer::for_query(&messages);
+            // min_keep = head + tail + 3 middle messages the
+            // summariser can actually compress. Drop must never
+            // shrink the list below this floor — otherwise
+            // `n_messages <= min_for_compress` (or
+            // `compress_start >= compress_end`) trips and the whole
+            // pass becomes a no-op with no CompressionReport. If
+            // breaching the floor is unavoidable, the highest-
+            // scoring candidates are rescued back into the kept set.
+            let min_keep = self.config.protect_first_n + self.config.protect_last_n + 3;
             let (kept, dropped) = crate::compression_pipeline::drop_low_score(
                 messages,
                 &scorer,
                 pin_cfg.as_ref(),
                 drop_threshold,
+                self.config.protect_last_n,
+                min_keep,
             );
+            dropped_count = dropped.len();
             messages = kept;
-            if dropped > 0 && !self.config.quiet_mode {
+            // Lossless: stash dropped messages so Phase 4's archive
+            // path picks them up alongside `turns_to_summarize`.
+            // Previously these were dropped in Phase 1.5 (before the
+            // boundary cut) and were therefore in neither
+            // `turns_to_summarize` nor the compressed tail — i.e.
+            // permanently lost.
+            self.last_dropped_turns = dropped;
+            if dropped_count > 0 && !self.config.quiet_mode {
                 tracing::info!(
-                    "Pre-compression: dropped {} low-score message(s) below threshold {}",
-                    dropped,
+                    "Pre-compression: dropped {} low-score message(s) below threshold {} (archived, not destroyed)",
+                    dropped_count,
                     drop_threshold,
                 );
             }
-            dropped
         } else {
-            0
-        };
+            self.last_dropped_turns.clear();
+        }
 
         // 2026-07-17: re-bind `n_messages` after every reduction
         // pass (Phase 0 snip, Phase 3.5 collapse, Phase A1 user
@@ -2115,13 +2227,28 @@ Write only the summary body. Do not include any preamble or prefix."
         }
 
         // Phase 3: generate structured summary.
-        let (summary_opt, summary_generated): (Option<String>, bool) = match self.generate_summary(&turns_to_summarize).await {
-            Ok(s) => (s, true),
-            Err(err) => {
-                if !self.config.quiet_mode {
-                    tracing::warn!("Summary generation error (using fallback): {err}");
+        // 2026-07-18 (P1): fast_mode skips the LLM call entirely
+        // and uses the static fallback. The original turns are
+        // already archived (Phase 0 / `last_archived_turns` +
+        // `last_dropped_turns`), so nothing is lost — the LLM
+        // just doesn't get a semantic handoff for the removed slice.
+        let (summary_opt, summary_generated): (Option<String>, bool) = if self.fast_mode {
+            if !self.config.quiet_mode {
+                tracing::info!(
+                    "Fast-mode compression: skipping LLM summary, using static fallback ({} turns archived)",
+                    turns_to_summarize.len(),
+                );
+            }
+            (None, false)
+        } else {
+            match self.generate_summary(&turns_to_summarize).await {
+                Ok(s) => (s, true),
+                Err(err) => {
+                    if !self.config.quiet_mode {
+                        tracing::warn!("Summary generation error (using fallback): {err}");
+                    }
+                    (None, false)
                 }
-                (None, false)
             }
         };
 
@@ -2305,7 +2432,17 @@ Write only the summary body. Do not include any preamble or prefix."
         // Phase A4 (2026-07-17): emit the structured
         // CompressionReport so dashboards and trace logs see the
         // full pipeline breakdown (pin / dedup / prune / drop /
-        // per-role counts).
+        // per-role counts). 2026-07-18: also derive
+        // compression_ratio + estimated_quality_loss and emit a
+        // warning when the pass looks risky (mirrors Headroom's
+        // `on_compression_complete` alert).
+        let (compression_ratio, estimated_quality_loss) =
+            crate::compression_pipeline::CompressionReport::derive_metrics(
+                old_estimate,
+                new_estimate,
+                n_messages,
+                dropped_count,
+            );
         let report = crate::compression_pipeline::CompressionReport {
             pre_tokens: old_estimate,
             post_tokens: new_estimate,
@@ -2316,6 +2453,8 @@ Write only the summary body. Do not include any preamble or prefix."
             pruned_count,
             dropped_count,
             summary_tokens: Some(estimate_messages_tokens(&compressed)),
+            compression_ratio,
+            estimated_quality_loss,
             trigger_reason: if self.last_trigger_reason.is_empty() {
                 "auto".into()
             } else {
@@ -2327,6 +2466,7 @@ Write only the summary body. Do not include any preamble or prefix."
         if !self.config.quiet_mode {
             tracing::info!("{}", report.format_line());
         }
+        report.emit_warn_if_concerning();
         self.last_compression_report = Some(report);
 
         // 2026-06-26 (A): stash the raw `turns_to_summarize` slice so
@@ -2337,6 +2477,11 @@ Write only the summary body. Do not include any preamble or prefix."
         // handoff summary is all that's left, and it's lossy by
         // design.
         self.last_archived_turns = turns_to_summarize.clone();
+        // Fold in the Phase 1.5 dropped messages so the agent loop's
+        // single archive path persists them too. Previously these
+        // were lost (dropped before the boundary cut, so in neither
+        // the summarised slice nor the compressed tail).
+        self.last_archived_turns.extend(self.last_dropped_turns.clone());
 
         // Post-compression restoration: inject guidance about recently
         // accessed files to help the model recover context.
@@ -2422,6 +2567,12 @@ impl CoreContextEngine for ContextCompressor {
 
     async fn compress(&mut self, messages: Vec<Message>) -> Vec<Message> {
         self.compress(messages, None).await
+    }
+
+    // 2026-07-18 (P1): override the fast path so the
+    // moderate-pressure route skips the LLM summary round-trip.
+    async fn compress_fast(&mut self, messages: Vec<Message>) -> Vec<Message> {
+        self.compress_fast(messages, None).await
     }
 
     fn on_session_reset(&mut self) {
@@ -3485,6 +3636,116 @@ mod tests {
             compressor.last_metrics.summary_errors as u64,
         );
         assert_eq!(post.compression_count, compressor.compression_count);
+    }
+
+    // ---------- P1: fast-mode compression (2026-07-18) ----------
+
+    #[tokio::test]
+    async fn compress_fast_skips_llm_summary_call() {
+        // Fast mode must not invoke the LLM summariser at all —
+        // the moderate-pressure path exists precisely to avoid
+        // blocking a turn on an LLM round-trip. It still runs
+        // archive + dedup + drop and inserts the static fallback
+        // marker, so the list shrinks and nothing is lost.
+        let provider = CannedSummaryProvider::new("summary text");
+        let cfg = CompressorConfig {
+            context_length: 20_000,
+            threshold_percent: 0.5,
+            protect_first_n: 2,
+            protect_last_n: 5,
+            drop_score_threshold: 0.40,
+            ..quiet_config()
+        };
+        let mut compressor = ContextCompressor::new(cfg, aux_with_provider(provider.clone()));
+
+        let mut messages = vec![
+            msg(MessageRole::System, "system rules"),
+            msg(MessageRole::User, "kickoff"),
+        ];
+        for i in 0..30 {
+            messages.push(msg(
+                if i % 2 == 0 { MessageRole::User } else { MessageRole::Assistant },
+                &format!("turn {i}: {}", "x".repeat(800)),
+            ));
+        }
+        messages.push(msg(MessageRole::User, "tail b"));
+
+        let original_len = messages.len();
+        let out = compressor.compress_fast(messages, Some(80_000)).await;
+
+        // LLM never invoked — the whole point of fast mode.
+        assert_eq!(
+            provider.call_count(),
+            0,
+            "fast mode must not call the LLM summariser"
+        );
+        // Still compressed (archive + static fallback shrinks the list).
+        assert!(
+            out.len() < original_len,
+            "fast mode must still shrink the list ({} -> {})",
+            original_len,
+            out.len()
+        );
+        // Static fallback marker is present (Phase 3 used the
+        // fallback path, not a real summary).
+        assert!(
+            out.iter()
+                .any(|m| m.content.as_deref().unwrap_or("").contains(SUMMARY_PREFIX)),
+            "fast mode must insert the static fallback marker"
+        );
+        // Archive was populated (Phase 0 stashed turns_to_summarize
+        // + dropped turns into last_archived_turns).
+        assert!(
+            !compressor.last_archived_turns().is_empty(),
+            "fast mode must still archive the removed turns"
+        );
+        // fast_mode flag reset after the call (no state leak into
+        // the next compress()).
+        assert!(!compressor.fast_mode, "fast_mode must be reset after compress_fast");
+    }
+
+    #[tokio::test]
+    async fn compress_fast_then_compress_uses_llm_again() {
+        // After a fast-mode pass, a normal compress() must still
+        // call the LLM — verifies fast_mode doesn't leak across
+        // calls.
+        let provider = CannedSummaryProvider::new("summary text");
+        let cfg = CompressorConfig {
+            context_length: 20_000,
+            threshold_percent: 0.5,
+            protect_first_n: 2,
+            protect_last_n: 5,
+            ..quiet_config()
+        };
+        let mut compressor = ContextCompressor::new(cfg, aux_with_provider(provider.clone()));
+
+        let build_messages = || {
+            let mut messages = vec![
+                msg(MessageRole::System, "system rules"),
+                msg(MessageRole::User, "kickoff"),
+            ];
+            for i in 0..30 {
+                messages.push(msg(
+                    if i % 2 == 0 { MessageRole::User } else { MessageRole::Assistant },
+                    &format!("turn {i}: {}", "x".repeat(800)),
+                ));
+            }
+            messages.push(msg(MessageRole::User, "tail b"));
+            messages
+        };
+
+        // First pass: fast — no LLM.
+        let _ = compressor.compress_fast(build_messages(), Some(80_000)).await;
+        assert_eq!(provider.call_count(), 0);
+
+        // Second pass: normal — LLM is called.
+        let _ = compressor.compress(build_messages(), Some(80_000)).await;
+        assert!(
+            provider.call_count() >= 1,
+            "normal compress after fast must call the LLM (got {})",
+            provider.call_count()
+        );
+        assert!(!compressor.fast_mode);
     }
 
     #[test]

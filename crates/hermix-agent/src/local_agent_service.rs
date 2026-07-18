@@ -15,7 +15,7 @@ use hermix_core::traits::{AgentOverrides, AgentReply, AgentService, PermissionLe
 // the trait, not on the concrete `MemoryRouter` struct.
 use hermix_focus::MemoryLayer;
 use hermix_core::types::ExecutionTimelineEvent;
-use hermix_core::{AgentError, LlmProvider, Message, MessageRole, StreamChunk, StreamDelta, ToolCall};
+use hermix_core::{AgentError, ApprovalOutcome, LlmProvider, Message, MessageRole, StreamChunk, StreamDelta, ToolCall};
 use hermix_tools::{TirithAction, TirithSecurity, ToolRegistry};
 use serde_json::Value;
 
@@ -226,7 +226,7 @@ impl LocalAgentService {
     /// priority order, and fall back to `None` (the caller surfaces a
     /// "no LLM provider configured" error) instead of inventing a model.
     fn fallback_model(&self) -> Option<String> {
-        let cfg = self.config.lock().unwrap();
+        let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
         // Priority 1: openrouter (cheap and routing many models)
         if cfg.llm_providers.contains_key("openrouter") {
             return Some("openrouter:deepseek/deepseek-chat-v3-0324".to_string());
@@ -345,7 +345,7 @@ impl LocalAgentService {
     /// new key is saved, so the next chat picks up the change
     /// without requiring a desktop-app restart.
     pub fn set_config(&self, new: GatewayConfig) {
-        *self.config.lock().unwrap() = new;
+        *self.config.lock().unwrap_or_else(|e| e.into_inner()) = new;
     }
 
     /// Snapshot the current config (cheap clone). Used by
@@ -353,7 +353,7 @@ impl LocalAgentService {
     /// *current* live state rather than the (possibly stale)
     /// `state.config` snapshot.
     pub fn current_config(&self) -> GatewayConfig {
-        self.config.lock().unwrap().clone()
+        self.config.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Builder: attach a [`ConsciousnessTracker`] so the agent loop
@@ -367,7 +367,7 @@ impl LocalAgentService {
     fn resolve_provider(&self, effective_model: &str) -> Result<Arc<dyn LlmProvider>, AgentError> {
         // Snapshot the config under the lock so we don't hold the
         // mutex across the (potentially slow) provider factory call.
-        let cfg = self.config.lock().unwrap().clone();
+        let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if let Some(factory) = &self.provider_factory {
             return Ok(factory(&cfg, effective_model));
         }
@@ -435,7 +435,7 @@ impl LocalAgentService {
     /// client before the first user turn — instead of letting every
     /// message fall through the silent-stub hole.
     pub fn probe_default_provider(&self) -> Result<Arc<dyn LlmProvider>, AgentError> {
-        let model = match self.config.lock().unwrap().model.clone() {
+        let model = match self.config.lock().unwrap_or_else(|e| e.into_inner()).model.clone() {
             Some(m) => m,
             None => self.fallback_model().ok_or_else(|| {
                 AgentError::Config(
@@ -530,7 +530,7 @@ impl LocalAgentService {
 
     /// O3.2: Gateway pre-compression safety net — early diagnostic.
     /// Estimates the token count of a loaded session and emits a warning
-    /// when it exceeds 85% of the nominal context window (200K tokens).
+    /// when it exceeds 85% of the model's context window.
     /// The actual compression is handled by the agent loop at the 50%
     /// threshold; this is a canary that alerts the operator BEFORE the
     /// session reaches the point where every turn triggers compaction
@@ -541,7 +541,12 @@ impl LocalAgentService {
             .iter()
             .map(|m| m.content.as_deref().unwrap_or("").len() as u64 / 4)
             .sum();
-        let threshold_tokens: u64 = (200_000_f64 * 0.85) as u64; // 170K
+        // Resolve the model's context window from metadata instead of
+        // hardcoding 200K. Falls back to DEFAULT_FALLBACK_CONTEXT (128K)
+        // for unknown models.
+        let model_name = self.config.lock().unwrap_or_else(|e| e.into_inner()).model.clone().unwrap_or_default();
+        let context_window = hermix_intelligence::model_metadata::get_model_context_length(&model_name) as u64;
+        let threshold_tokens: u64 = (context_window as f64 * 0.85) as u64;
         if est_tokens > threshold_tokens && messages.len() > 13 {
             tracing::warn!(
                 target: "hermix.gateway",
@@ -670,7 +675,7 @@ impl LocalAgentService {
         // as the main conversation provider. Without this, a user who
         // configured their key only in config.yaml (not as an env var)
         // would see 401 errors from the compression health check.
-        let gw_snapshot = self.config.lock().unwrap().clone();
+        let gw_snapshot = self.config.lock().unwrap_or_else(|e| e.into_inner()).clone();
         match crate::auxiliary_builder::build_auxiliary_client_with_config(
             hermix_intelligence::auxiliary::AuxiliaryConfig::default(),
             &gw_snapshot,
@@ -842,10 +847,11 @@ impl LocalAgentService {
         }
         config.workspace = Self::resolve_workspace(overrides.workspace.as_deref())
             .map(|p| p.to_string_lossy().to_string());
-        // Set TERMINAL_CWD so file tools can resolve relative paths
-        if let Some(ref ws) = config.workspace {
-            std::env::set_var("TERMINAL_CWD", ws);
-        }
+        // NOTE: TERMINAL_CWD is set via ToolRegistry::set_terminal_workspace
+        // in the caller (send_message / send_message_stream), NOT via
+        // std::env::set_var. The env::set_var path was removed because it is
+        // unsafe in multi-threaded async contexts (data race on concurrent
+        // sessions with different workspaces).
         config.permission = overrides.permission;
         let allowed = overrides
             .tools
@@ -900,7 +906,11 @@ impl LocalAgentService {
         tool_registry: &ToolRegistry,
         tirith: Option<&TirithSecurity>,
         approval_requester: Option<
-            &Arc<dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<bool> + Send + Sync>,
+            &Arc<
+                dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<ApprovalOutcome>
+                    + Send
+                    + Sync,
+            >,
         >,
         on_event: Option<&Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
         pre_approval_checker: Option<
@@ -1149,6 +1159,26 @@ impl AgentService for LocalAgentService {
             );
         }
 
+        // 2026-07-17 (Phase A "Caution tool needs UI prompts"):
+        // wire the per-request approval hook so the terminal tool's
+        // `RequiresConfirmation` branch emits a `request_approval`
+        // event on the active WS channel instead of bouncing the
+        // user through "reply `HERMIX_CONFIRM=1`" text. We pass
+        // through whatever the caller wired into
+        // `AgentOverrides::approval_requester` / `on_event`; headless
+        // callers and tests that left both `None` keep the legacy
+        // text flow (the tool sees `is_wired() == false` and falls
+        // back). Cleared again in the cleanup closure below so a
+        // dropped session can't leave a stale `Arc<dyn Fn>` pointing
+        // at a dead WS handle.
+        self.tool_registry.set_terminal_approval_ctx(
+            hermix_tools::TerminalApprovalContext {
+                session_id: session_id.to_string(),
+                requester: effective_overrides.approval_requester.clone(),
+                on_event: effective_overrides.on_event.clone(),
+            },
+        );
+
         // P2-S1: stamp the active session onto the `todo` tool so its
         // WS todo events are filtered per-session by the server's WS
         // forwarder. The `TodoHandler` is a process-wide singleton; this
@@ -1315,6 +1345,12 @@ impl AgentService for LocalAgentService {
             })
             .unwrap_or_default();
 
+        // 2026-07-17: clear the per-request terminal approval hook
+        // so a dropped session can't leave a stale `Arc<dyn Fn>`
+        // pointing at a dead WS handle. Cheap (Mutex write, single
+        // Arc drop). See `set_terminal_approval_ctx` above.
+        self.tool_registry.clear_terminal_approval_ctx();
+
         Ok(AgentReply {
             text: reply_text,
             message_count: messages.len(),
@@ -1340,34 +1376,20 @@ impl AgentService for LocalAgentService {
         overrides: AgentOverrides,
         on_chunk: Arc<dyn Fn(StreamChunk) + Send + Sync>,
     ) -> Result<AgentReply, AgentError> {
-        // 2026-07-08 DIAG: every entry to send_message_stream — print directly to stderr
-        // so we can count even if tracing filter blocks info-level. Owner was right:
-        // 10 calls seen in log with no obvious frontend source. Pin down what's calling us.
-        let _diag_call_id = format!(
-            "{}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0),
-            std::process::id()
-        );
-        eprintln!(
-            "[!!!SEND_MSG_STREAM_ENTRY!!!] call_id={} session_id={} text_len={} text_preview={:?}",
-            _diag_call_id,
+        tracing::debug!(
             session_id,
-            text.len(),
-            &text.chars().take(40).collect::<String>()
+            text_len = text.len(),
+            "send_message_stream entry"
         );
         // Load existing session messages
         let mut messages = self
             .session_persistence
             .load_session(session_id)
             .unwrap_or_default();
-        eprintln!(
-            "[!!!SEND_MSG_STREAM_LOADED!!!] call_id={} session_id={} loaded_messages_len={}",
-            _diag_call_id,
+        tracing::debug!(
             session_id,
-            messages.len()
+            loaded_messages_len = messages.len(),
+            "send_message_stream messages loaded"
         );
 
         // O3.2: Gateway pre-compression safety net (stream path).
@@ -1456,6 +1478,26 @@ impl AgentService for LocalAgentService {
                 Some(std::path::PathBuf::from(ws)),
             );
         }
+
+        // 2026-07-17 (Phase A "Caution tool needs UI prompts"):
+        // wire the per-request approval hook so the terminal tool's
+        // `RequiresConfirmation` branch emits a `request_approval`
+        // event on the active WS channel instead of bouncing the
+        // user through "reply `HERMIX_CONFIRM=1`" text. We pass
+        // through whatever the caller wired into
+        // `AgentOverrides::approval_requester` / `on_event`; headless
+        // callers and tests that left both `None` keep the legacy
+        // text flow (the tool sees `is_wired() == false` and falls
+        // back). Cleared again in the cleanup closure below so a
+        // dropped session can't leave a stale `Arc<dyn Fn>` pointing
+        // at a dead WS handle.
+        self.tool_registry.set_terminal_approval_ctx(
+            hermix_tools::TerminalApprovalContext {
+                session_id: session_id.to_string(),
+                requester: effective_overrides.approval_requester.clone(),
+                on_event: effective_overrides.on_event.clone(),
+            },
+        );
 
         // P2-S1: stamp the active session onto the `todo` tool so its
         // WS todo events are filtered per-session by the server's WS
@@ -1664,7 +1706,7 @@ impl AgentService for LocalAgentService {
                     t.set_active_tools(t.recent(0).len() as u32 + 1);
                 }
             })),
-            on_tool_complete: Some(Box::new(move |tool_call_id, tool_name, output| {
+            on_tool_complete: Some(Box::new(move |tool_call_id, tool_name, output, denial_kind| {
                 // Pre-cloned at the call-site (see `tl_for_tool_complete`).
                 let timeline_buffer = tl_for_tool_complete.clone();
                 // file_change events are synthetic — `agent_loop.rs`
@@ -1800,6 +1842,7 @@ impl AgentService for LocalAgentService {
                             "tool_call_id": tool_call_id,
                             "tool": tool_name,
                             "content": output,
+                            "denial_kind": if denial_kind.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(denial_kind.to_string()) },
                         })),
                     }),
                     finish_reason: None,
@@ -2114,6 +2157,12 @@ impl AgentService for LocalAgentService {
             }
         }
 
+        // 2026-07-17: clear the per-request terminal approval hook
+        // so a dropped session can't leave a stale `Arc<dyn Fn>`
+        // pointing at a dead WS handle. Cheap (Mutex write, single
+        // Arc drop). See `set_terminal_approval_ctx` above.
+        self.tool_registry.clear_terminal_approval_ctx();
+
         Ok(AgentReply {
             text: reply_text,
             message_count: messages.len(),
@@ -2239,7 +2288,7 @@ impl AgentService for LocalAgentService {
                     providers = cfg.llm_providers.len(),
                     "AgentService::set_config: replacing live config (called by /api/config/auto-correct)"
                 );
-                *self.config.lock().unwrap() = cfg;
+                *self.config.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
             }
             Err(e) => {
                 tracing::warn!(
@@ -2261,7 +2310,7 @@ impl AgentService for LocalAgentService {
     /// are written to their respective tables inside one DB
     /// transaction by `save_session_atomic`.
     fn current_config_value(&self) -> Option<serde_json::Value> {
-        serde_json::to_value(self.config.lock().unwrap().clone()).ok()
+        serde_json::to_value(self.config.lock().unwrap_or_else(|e| e.into_inner()).clone()).ok()
     }
 }
 
@@ -2800,22 +2849,29 @@ mod override_tests {
 
     /// Capture-on-call closure factory for `approval_requester`.
     /// Returns the `Arc<dyn Fn>` plus a registry of pending
-    /// `(session_id|request_id) → oneshot::Sender<bool>` so the
-    /// test can resolve the approval from outside.
+    /// `(session_id|request_id) → oneshot::Sender<ApprovalOutcome>` so
+    /// the test can resolve the approval from outside.
     fn capturing_approval_requester(
     ) -> (
-        Arc<dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<bool> + Send + Sync>,
-        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+        Arc<
+            dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<ApprovalOutcome>
+                + Send
+                + Sync,
+        >,
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ApprovalOutcome>>>>,
     ) {
-        let reg: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>> =
+        let reg: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ApprovalOutcome>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let reg_clone = reg.clone();
-        let f: Arc<dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<bool> + Send + Sync> =
-            Arc::new(move |sid: String, rid: String| {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                reg_clone.lock().unwrap().insert(format!("{}|{}", sid, rid), tx);
-                rx
-            });
+        let f: Arc<
+            dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<ApprovalOutcome>
+                + Send
+                + Sync,
+        > = Arc::new(move |sid: String, rid: String| {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            reg_clone.lock().unwrap().insert(format!("{}|{}", sid, rid), tx);
+            rx
+        });
         (f, reg)
     }
 
@@ -3379,8 +3435,8 @@ mod override_tests {
             .unwrap()
             .remove("sess-1|tc1")
             .expect("sender should be registered");
-        sender.send(true).unwrap();
-        assert_eq!(rx.await.unwrap(), true);
+        sender.send(ApprovalOutcome::Approved).unwrap();
+        assert_eq!(rx.await.unwrap(), ApprovalOutcome::Approved);
     }
 
     #[tokio::test]
@@ -3410,8 +3466,8 @@ mod override_tests {
             .unwrap()
             .remove("sess-1|tc1")
             .expect("sender should be registered");
-        sender.send(false).unwrap();
-        assert_eq!(rx.await.unwrap(), false);
+        sender.send(ApprovalOutcome::DeniedByUser).unwrap();
+        assert_eq!(rx.await.unwrap(), ApprovalOutcome::DeniedByUser);
     }
 
     #[tokio::test]

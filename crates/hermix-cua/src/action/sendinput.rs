@@ -26,8 +26,11 @@ use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
     MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
-    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, VIRTUAL_KEY,
+    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, VIRTUAL_KEY,
 };
+
+/// WHEEL_DELTA constant — one click of the mouse wheel.
+const WHEEL_DELTA: i32 = 120;
 use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
 use crate::action::MouseButton;
@@ -297,6 +300,101 @@ fn name_to_vk(name: &str) -> CuaResult<VIRTUAL_KEY> {
         }
     };
     Ok(VIRTUAL_KEY(vk as u16))
+}
+
+/// Scroll the mouse wheel at `(x, y)` by `delta` clicks.
+///
+/// Positive `delta` scrolls up, negative scrolls down.
+/// Each click is `WHEEL_DELTA` (120) units. So `delta = 3`
+/// scrolls up 3 clicks (360 units).
+pub fn scroll(x: i32, y: i32, delta: i32) -> CuaResult<()> {
+    // Move cursor to position first
+    unsafe {
+        if SetCursorPos(x, y).is_err() {
+            return Err(CuaError::SendInput(format!(
+                "SetCursorPos({x}, {y}) failed"
+            )));
+        }
+    }
+
+    // mouseData for wheel is in units of WHEEL_DELTA (120)
+    // Positive = up, Negative = down
+    // mouseData is u32 but we need to pass signed values
+    let wheel_delta = (delta * WHEEL_DELTA) as i32 as u32;
+
+    let mut input: INPUT = unsafe { std::mem::zeroed() };
+    input.r#type = INPUT_MOUSE;
+    input.Anonymous.mi = windows::Win32::UI::Input::KeyboardAndMouse::MOUSEINPUT {
+        dx: 0,
+        dy: 0,
+        mouseData: wheel_delta,
+        dwFlags: MOUSEEVENTF_WHEEL,
+        time: 0,
+        dwExtraInfo: 0,
+    };
+
+    unsafe {
+        let sent = SendInput(
+            std::slice::from_mut(&mut input),
+            std::mem::size_of::<INPUT>() as i32,
+        );
+        if sent != 1 {
+            return Err(CuaError::SendInput(format!(
+                "SendInput returned {sent} (expected 1)"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Double-click at `(x, y)` with the left mouse button.
+///
+/// This moves the cursor and sends two quick click sequences.
+pub fn double_click(x: i32, y: i32) -> CuaResult<()> {
+    // Move cursor first
+    unsafe {
+        if SetCursorPos(x, y).is_err() {
+            return Err(CuaError::SendInput(format!(
+                "SetCursorPos({x}, {y}) failed"
+            )));
+        }
+    }
+
+    // Send two click sequences (DOWN/UP/DOWN/UP)
+    let mut inputs = [
+        mouse_input(MOUSEEVENTF_LEFTDOWN),
+        mouse_input(MOUSEEVENTF_LEFTUP),
+        mouse_input(MOUSEEVENTF_LEFTDOWN),
+        mouse_input(MOUSEEVENTF_LEFTUP),
+    ];
+
+    unsafe {
+        let sent = SendInput(
+            &mut inputs,
+            std::mem::size_of::<INPUT>() as i32,
+        );
+        if sent != 4 {
+            return Err(CuaError::SendInput(format!(
+                "SendInput returned {sent} (expected 4)"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Move the mouse cursor to `(x, y)` without clicking.
+///
+/// This is useful for hover effects and positioning before
+/// other operations.
+pub fn move_cursor(x: i32, y: i32) -> CuaResult<()> {
+    unsafe {
+        if SetCursorPos(x, y).is_err() {
+            return Err(CuaError::SendInput(format!(
+                "SetCursorPos({x}, {y}) failed"
+            )));
+        }
+    }
+    Ok(())
 }
 
 // Pull in POINT so `SendInput`'s MOUSEINPUT coordinate system

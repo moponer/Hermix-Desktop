@@ -28,6 +28,7 @@ import type { NavPage, Session, ChatMessage, ApprovalDecision, TimelineStep, Exe
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
 import { storage, STORAGE_KEYS, KNOWN_KEYS, sessionKey } from "./utils/storageCompat";
+import { PendingApprovalToast } from "./components/PendingApprovalToast";
 
 // 2026-07-12: Welcome-state draft workspace. Read at App-level so
 // both `handleNewChat` (新建对话 button) and `handleSendMessage`
@@ -643,6 +644,53 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     Map<string, (decision: ApprovalDecision) => void>
   >(new Map());
   /**
+   * 2026-07-18 主人反馈"请求的按钮不够突出啊，差点没看见,而且
+   * 我认为需要一个提醒机制,比如右下角的气泡提醒等待你确认"。
+   * 这里把 Map.size 镜像成 state,触发 `<PendingApprovalToast>` 重
+   * 渲染。**不在 ref 上直接 render** 是因为 useRef 变化不引起
+   * 重渲染——所以 mutate 完后必须 `setPendingApprovalCount(size)`。
+   * 这是 React 18 useRef + useState 同步的标准做法,开销 = 一次
+   * number 比较 + 一次 setState。
+   */
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  /**
+   * 2026-07-18 (A+C product fix): short-lived top banner shown when a
+   * tool call is *denied* (user拒绝 / 超时 / 连接中断). Mirrors the
+   * agent's injected "tell the user" system note with a visible cue
+   * so the user isn't left guessing why a call didn't run. Auto-
+   * dismisses after 30s; a new denial replaces the current one.
+   * `"policy"` denials are silent gates and never reach here.
+   */
+  const [denialBanner, setDenialBanner] = useState<{ kind: string; tool: string } | null>(null);
+  const denialBannerTimerRef = useRef<number | null>(null);
+  const showDenialBanner = useCallback((kind: string, tool: string) => {
+    setDenialBanner({ kind, tool });
+    if (denialBannerTimerRef.current !== null) {
+      window.clearTimeout(denialBannerTimerRef.current);
+    }
+    denialBannerTimerRef.current = window.setTimeout(() => {
+      setDenialBanner(null);
+      denialBannerTimerRef.current = null;
+    }, 30_000);
+  }, []);
+  const dismissDenialBanner = useCallback(() => {
+    if (denialBannerTimerRef.current !== null) {
+      window.clearTimeout(denialBannerTimerRef.current);
+      denialBannerTimerRef.current = null;
+    }
+    setDenialBanner(null);
+  }, []);
+  /**
+   * Mirror for `handleActivateToast` to find the FIRST pending
+   * request's `sessionId` without iterating `sessions` every render.
+   * Entries are added in the same order as the agent loop pushes
+   * `RequestApproval` events, so iteration order is insertion order
+   * (JS Map guarantees that). We trim the entry on resolution.
+   */
+  const pendingApprovalSessionsRef = useRef<Map<string, string>>(
+    new Map(),
+  );
+  /**
    * Tracks running tool messages by their stable WS `tool_call_id`
    * so that `onToolChunk` / `onToolComplete` can find the right inline
    * card (by message `id`) even when multiple tools run concurrently.
@@ -1060,6 +1108,12 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
       if (resolver) {
         resolver(decision);
         approvalResolversRef.current.delete(requestId);
+        // 2026-07-18: mirror the resolver map size to the toast state.
+        // Only the live branch deletes — the stale branch below keeps
+        // the entry gone (it was already removed when the agent loop
+        // timed out / cleaned up) so no decrement there.
+        pendingApprovalSessionsRef.current.delete(requestId);
+        setPendingApprovalCount(approvalResolversRef.current.size);
         setSessions((prev) =>
           prev.map((s) => ({
             ...s,
@@ -1128,6 +1182,60 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
     },
     [resolveApproval],
   );
+
+  /**
+   * 2026-07-18: Activate the bottom-right `PendingApprovalToast` —
+   * switch to the session that owns the oldest pending request,
+   * ensure the chat pane is visible, and scroll the matching inline
+   * approval card into view + pulse it briefly so the eye lands there.
+   *
+   * Why this is non-trivial: approvals can land in any session, and
+   * `ChatView` only mounts the *active* session's messages. If we
+   * just called `scrollIntoView` while the user is on the Settings
+   * page, nothing happens because the card isn't in the DOM yet.
+   * So we (a) flip page first, (b) flip activeSessionId if needed,
+   * (c) schedule the scroll one rAF + a safety delay, then (d) drop
+   * the highlight class back off after 2.4s.
+   */
+  const handleActivateToast = useCallback(() => {
+    const firstEntry = pendingApprovalSessionsRef.current.entries().next();
+    if (firstEntry.done) return; // no pending → toast shouldn't render
+    const [firstReqId, firstSessionId] = firstEntry.value;
+
+    // 1. Make sure the chat pane is showing. The user may be on
+    //    Automations / Settings / Persona — without this jump the
+    //    scroll target isn't mounted and the bubble is a dead link.
+    if (page !== "chat") setPage("chat");
+
+    // 2. Switch to the session the request lives in.
+    if (firstSessionId !== activeSessionId) setActiveSessionId(firstSessionId);
+
+    // 3. After React commits (active session → messages render →
+    //    InlineApprovalCard mounts with data-pending-approval-id),
+    //    scroll into view + flash. Two RAFs ensures ChatView has
+    //    rendered before the querySelector runs. The setTimeout
+    //    fallback handles the edge where the session list itself
+    //    is mid-transition.
+    //
+    //    Request IDs are agent-issued UUIDs, so they're safe inside a
+    //    CSS attribute selector *without* CSS.escape() — they only
+    //    contain `[0-9a-f-]`. Wrapping anyway as a belt-and-braces
+    //    guard if the upstream format ever changes.
+    const safeId =
+      typeof CSS !== "undefined" && typeof CSS.escape === "function"
+        ? CSS.escape(firstReqId)
+        : firstReqId.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+    const scrollToCard = () => {
+      const el = document.querySelector(
+        `[data-pending-approval-id="${safeId}"]`,
+      ) as HTMLElement | null;
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("is-highlighted");
+      window.setTimeout(() => el.classList.remove("is-highlighted"), 2400);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(scrollToCard));
+  }, [page, activeSessionId, setPage]);
 
   /**
    * User answered a pending clarify card. Resolves the matching
@@ -1427,6 +1535,11 @@ streamPhaseRef.current = null;
 
     return new Promise<{ decision: ApprovalDecision }>((resolve) => {
       approvalResolversRef.current.set(req.requestId, (decision) => resolve({ decision }));
+      // 2026-07-18: sync to PendingApprovalToast state + record which
+      // session this request lives in so the toast's activate action
+      // can flip to the right session without iterating `sessions`.
+      pendingApprovalSessionsRef.current.set(req.requestId, sessionId);
+      setPendingApprovalCount(approvalResolversRef.current.size);
     });
     };
 
@@ -1595,7 +1708,14 @@ streamPhaseRef.current = null;
               };
             }));
           },
-          onToolComplete: ({ toolCallId, content }) => {
+          onToolComplete: ({ toolCallId, tool, content, denialKind }) => {
+            // 2026-07-18 (A+C product fix): a user-facing denial
+            // (user拒绝 / 超时 / 连接中断) surfaces a top banner that
+            // mirrors the agent's injected "tell the user" note.
+            // `"policy"` is a silent hardline gate — skip it.
+            if (denialKind && denialKind !== "policy") {
+              showDenialBanner(denialKind, tool);
+            }
             // 2026-07-10: Append a `tool_complete` event to the
             // assistant's execution_timeline. No separate tool message,
             // no needsNewAssistantRef — all text stays in the same
@@ -2068,6 +2188,12 @@ return {
             // would leak forever.
             approvalResolversRef.current.forEach((resolver) => resolver("denied"));
             approvalResolversRef.current.clear();
+            // 2026-07-18: clear the toast trackers too — every pending
+            // approval just got force-denied by the cleanup, so the
+            // bubble has nothing to remind about. Without this the
+            // bottom-right bubble would stick around after stream end.
+            pendingApprovalSessionsRef.current.clear();
+            setPendingApprovalCount(0);
             // Same deal for clarify — the agent stopped mid-question
             // (cancel, ws close) so we drop any pending resolver with
             // an empty answer; the server's tool call will time out
@@ -2237,6 +2363,50 @@ return {
       <TitleBar
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
       />
+      {/*
+        2026-07-18: bottom-right reminder for pending approval requests.
+        `position: fixed` lives entirely on the toast side — it floats
+        above every pane below it via the toast's own `z-index`. We
+        intentionally mount it BEFORE <div className="app-body"> so
+        any future shell-wide modals can z-stack above it if needed.
+      */}
+      <PendingApprovalToast
+        count={pendingApprovalCount}
+        urgent={false}
+        onActivate={handleActivateToast}
+        onDismiss={() => { /* UI-only dismissal; state stays in toast */ }}
+      />
+      {denialBanner && (() => {
+        const sub =
+          denialBanner.kind === "user_denied"
+            ? "你明确拒绝了该操作，未执行。"
+            : denialBanner.kind === "timed_out"
+              ? "确认超时（你在限定时间内没有做出决定），未执行。"
+              : denialBanner.kind === "channel_closed"
+                ? "连接中断（WS 断开 / 服务端重启 / 会话重载），请求丢失。"
+                : "未执行。";
+        return (
+          <div
+            className="denial-banner"
+            role="status"
+            aria-live="polite"
+            onClick={dismissDenialBanner}
+          >
+            <span className="denial-banner__icon">!</span>
+            <div className="denial-banner__body">
+              <div className="denial-banner__title">
+                工具 <code>{denialBanner.tool}</code> 的调用被拒绝
+              </div>
+              <div className="denial-banner__sub">{sub}</div>
+            </div>
+            <button
+              className="denial-banner__close"
+              aria-label="关闭"
+              onClick={(e) => { e.stopPropagation(); dismissDenialBanner(); }}
+            >×</button>
+          </div>
+        );
+      })()}
       <div
         className="app-body"
         data-left-open={sidebarOpen ? "true" : "false"}
@@ -2352,48 +2522,9 @@ contextUsage={contextUsage}
           {page === "search" && <SearchView sessions={sessions} onSelectSession={handleSelectSession} />}
           {page === "plugins" && <PluginsView />}
           {page === "automation" && <AutomationView />}
-          {page === "agents" && (
-            <AgentsView
-              activeSessionId={activeSessionId}
-              onAfterHire={async () => {
-                if (!activeSessionId) {
-                  try {
-                    const session = await api.createSession("新建对话");
-                    setSessions((prev) => [session, ...prev]);
-                    setActiveSessionId(session.id);
-                  } catch { /* fall through */ }
-                }
-                // Same UX as the dedicated "experts" page: hiring
-                // a builtin expert should land the user back in the
-                // chat composer with the expert already adopted.
-                // Without this, setExpert() updates the sidebar
-                // chip but the user is still staring at the agent
-                // catalog wondering why the click "did nothing".
-                setPage("chat");
-              }}
-            />
-          )}
+          {page === "agents" && <AgentsView />}
           {page === "groupchat" && <GroupChatView initialRoomId={selectedRoomId} />}
-          {page === "experts" && (
-            <AgentsView
-              initialTab="builtin"
-              activeSessionId={activeSessionId}
-              onAfterHire={async () => {
-                // Same UX as the old ExpertsView.onBack: ensure there's an
-                // active session, then jump back to the chat.
-                if (!activeSessionId) {
-                  try {
-                    const session = await api.createSession("新建对话");
-                    setSessions((prev) => [session, ...prev]);
-                    setActiveSessionId(session.id);
-                  } catch {
-                    /* fall through */
-                  }
-                }
-                setPage("chat");
-              }}
-            />
-          )}
+          {page === "experts" && <AgentsView initialTab="builtin" />}
           {page === "analytics" && <AnalyticsView />}
           {page === "settings" && <SettingsView />}
         </main>
@@ -2526,7 +2657,8 @@ function ArtifactPreviewModal({
                    rounded-2xl overflow-hidden
                    border border-[color:var(--color-border-subtle)]
                    outline outline-2 outline-[color:color-mix(in_srgb,var(--color-text-primary)_6%,transparent)]
-                   outline-offset-[-2px]"
+                   outline-offset-[-2px]
+                   animate-[artifact-modal-in_240ms_ease-out]"
         style={{
           background: "var(--color-bg-primary)",
           color: "var(--color-text-primary)",

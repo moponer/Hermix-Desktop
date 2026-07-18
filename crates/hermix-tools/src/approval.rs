@@ -35,6 +35,7 @@
 //! Missing or corrupt files are non-fatal — the agent starts with an
 //! empty allowlist and a warning is logged.
 
+use hermix_core::ApprovalOutcome;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -185,6 +186,80 @@ static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 
 // ---------------------------------------------------------------------------
+// TerminalApprovalContext (2026-07-17, "Caution tool needs UI prompts")
+// ---------------------------------------------------------------------------
+
+/// Per-request hook the `terminal` tool uses to surface a
+/// `RequiresConfirmation` decision as a `request_approval` event on the
+/// same WS channel the agent streams on, instead of bouncing the
+/// "please reply `HERMIX_CONFIRM=1`" text through the LLM.
+///
+/// Set by `LocalAgentService::send_message` on every turn (the closure
+/// captures the active WS `ApprovalRegistry` + `on_event`), and read by
+/// `TerminalHandler::execute` when `ApprovalManager::check_approval`
+/// returns `RequiresConfirmation`. When both fields are `None`
+/// (unit tests, headless callers, CLI runs without a UI), the tool
+/// falls back to the legacy text-based flow — backward-compatible.
+///
+/// The closure captures the same `Arc`s the dangerous-tool approval
+/// path uses (see `local_agent_service::decide_pre_tool_dispatch`),
+/// so the frontend can reuse the existing `InlineApprovalCard` without
+/// any client-side change.
+#[derive(Default, Clone)]
+pub struct TerminalApprovalContext {
+    /// Session id forwarded to the `requester` closure. The terminal
+    /// tool itself doesn't know its session id (the dispatcher is the
+    /// agent service), so the caller writes it here when wiring the
+    /// per-request hook. Empty string = "no WS session".
+    pub session_id: String,
+    /// `(session_id, request_id) -> oneshot::Receiver<ApprovalOutcome>`.
+    /// The tool builds the `request_id`, calls this to register the
+    /// pending decision, then `.await`s the receiver for the user's
+    /// verdict. `ApprovalOutcome` distinguishes `Approved` from
+    /// `DeniedByUser` / `TimedOut` / `ChannelClosed` so the tool can
+    /// emit an accurate reply (A+C product fix, 2026-07-18). None →
+    /// fallback to text flow.
+    pub requester: Option<
+        std::sync::Arc<
+            dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<ApprovalOutcome>
+                + Send
+                + Sync,
+        >,
+    >,
+    /// Emits a JSON envelope on the active WS stream. Used to push
+    /// `{"event":"request_approval",...}` so the desktop UI renders
+    /// the approval card. None → fallback to text flow.
+    pub on_event: Option<std::sync::Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
+}
+
+impl TerminalApprovalContext {
+    /// True when all three fields are populated — only then will the
+    /// tool emit the WS event; otherwise the legacy "tell the user to
+    /// reply `HERMIX_CONFIRM=1`" path runs.
+    pub fn is_wired(&self) -> bool {
+        !self.session_id.is_empty() && self.requester.is_some() && self.on_event.is_some()
+    }
+
+    /// Helper for the tool side: clone the requester Arc (or `None`).
+    pub fn requester(
+        &self,
+    ) -> Option<
+        std::sync::Arc<
+            dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<ApprovalOutcome>
+                + Send
+                + Sync,
+        >,
+    > {
+        self.requester.clone()
+    }
+
+    /// Helper for the tool side: clone the on_event Arc (or `None`).
+    pub fn on_event(&self) -> Option<std::sync::Arc<dyn Fn(serde_json::Value) + Send + Sync>> {
+        self.on_event.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ApprovalManager
 // ---------------------------------------------------------------------------
 
@@ -219,7 +294,13 @@ pub struct ApprovalManager {
     /// pattern-based and survives forever; session approvals are
     /// exact-match commands and survive across restarts but can be
     /// wiped by `clear_session_approvals()` (e.g. on `/new`).
-    session_approved: std::collections::HashSet<String>,
+    ///
+    /// 2026-07-17: wrapped in `Mutex` so `approve_for_session` can
+    /// be called from a `&self` context — the terminal tool's
+    /// WS-approval path needs to persist "this exact command was
+    /// approved for this session" without holding a `&mut self` on
+    /// the handler (the dispatcher calls us through `&self`).
+    session_approved: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl ApprovalManager {
@@ -231,8 +312,19 @@ impl ApprovalManager {
             denied_patterns: Vec::new(),
             confirm_patterns: Vec::new(),
             user_allowlist: None,
-            session_approved: std::collections::HashSet::new(),
+            session_approved: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// Normalize a command string for consistent matching.
+    /// Trims whitespace, collapses runs of internal whitespace to a
+    /// single space, and strips trailing newlines.
+    fn normalize_command(command: &str) -> String {
+        command
+            .trim()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// Attach a user allowlist. Returns `self` for builder-style use.
@@ -301,16 +393,14 @@ impl ApprovalManager {
     ///   pattern but is not in the allowlist.
     /// - `Approved` if no patterns match (implicit allowlist).
     pub fn check_approval(&self, command: &str) -> ApprovalDecision {
-        // 0. Session-level approval — if this exact command was approved
-        //    in the current session, skip re-prompting. Does NOT override
-        //    Denied decisions (catastrophic patterns stay catastrophic).
-        if self.session_approved.contains(command) {
-            return ApprovalDecision::Approved;
-        }
-
         // 1. Denied patterns — built-in then custom. NEVER overridden
-        //    by the user allowlist (catastrophic operations stay
-        //    catastrophic regardless of "always allow" preferences).
+        //    by the user allowlist OR session approvals (catastrophic
+        //    operations stay catastrophic regardless of "always allow"
+        //    or session-level shortcuts).
+        //
+        //    This MUST run before the session-approved check to prevent
+        //    a scenario where `rm -rf /` is accidentally added to
+        //    session_approved (e.g. via a bug) and bypasses the denial.
         for re in DENIED_PATTERNS.iter() {
             if re.is_match(command) {
                 return ApprovalDecision::Denied;
@@ -321,6 +411,20 @@ impl ApprovalManager {
                 return ApprovalDecision::Denied;
             }
         }
+
+        // 2. Session-level approval — if this exact command was approved
+        //    in the current session, skip re-prompting. This only runs
+        //    AFTER denied patterns are checked, so catastrophic commands
+        //    are always rejected. Uses normalized form for matching.
+        let normalized = Self::normalize_command(command);
+        if let Ok(set) = self.session_approved.lock() {
+            if set.contains(&normalized) {
+                return ApprovalDecision::Approved;
+            }
+        }
+        // Poisoned mutex is treated as "no session approval" — fall
+        // through to pattern check. Better to re-prompt than to crash
+        // a turn.
 
         // 2. Confirm patterns — built-in then custom. If a confirm
         //    pattern matched, the allowlist gets a chance to
@@ -369,8 +473,15 @@ impl ApprovalManager {
     ///
     /// Use [`Self::approve_for_session_with_persist`] when you also
     /// want the approval to survive a process restart.
-    pub fn approve_for_session(&mut self, command: &str) {
-        self.session_approved.insert(command.to_string());
+    ///
+    /// 2026-07-17: `&self` (was `&mut self`) so the terminal tool's
+    /// WS-approval path can persist the per-session approval without
+    /// requiring `&mut self` on the handler. Backed by `Mutex` internally.
+    pub fn approve_for_session(&self, command: &str) {
+        let normalized = Self::normalize_command(command);
+        if let Ok(mut set) = self.session_approved.lock() {
+            set.insert(normalized);
+        }
     }
 
     /// Like [`Self::approve_for_session`] but also writes the in-memory
@@ -381,22 +492,38 @@ impl ApprovalManager {
     /// `path` is typically `$HERMIX_HOME/session_approvals.json`; pass
     /// `None` to skip persistence and behave like
     /// [`Self::approve_for_session`].
+    ///
+    /// 2026-07-17: `&self` for the same reason as `approve_for_session`.
     pub fn approve_for_session_with_persist(
-        &mut self,
+        &self,
         command: &str,
         persist_path: Option<&Path>,
     ) -> std::io::Result<()> {
-        self.session_approved.insert(command.to_string());
+        // Snapshot under the lock, then drop the guard before
+        // touching disk so a slow IO doesn't block readers of the
+        // same HashSet (the WS-approval path may be racing the
+        // normal request flow).
+        let normalized = Self::normalize_command(command);
+        let snapshot: std::collections::HashSet<String> = {
+            let mut set = self
+                .session_approved
+                .lock()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            set.insert(normalized);
+            set.clone()
+        };
         if let Some(path) = persist_path {
-            persist_session_approvals(path, &self.session_approved)?;
+            persist_session_approvals(path, &snapshot)?;
         }
         Ok(())
     }
 
     /// Clear all session-level approvals (call on session reset).
     /// Also wipes the on-disk file if `persist_path` is `Some`.
-    pub fn clear_session_approvals(&mut self, persist_path: Option<&Path>) {
-        self.session_approved.clear();
+    pub fn clear_session_approvals(&self, persist_path: Option<&Path>) {
+        if let Ok(mut set) = self.session_approved.lock() {
+            set.clear();
+        }
         if let Some(path) = persist_path {
             // Best-effort: a missing file is fine; only log other errors.
             match std::fs::remove_file(path) {
@@ -413,18 +540,29 @@ impl ApprovalManager {
 
     /// Check if a command was previously approved in this session.
     pub fn is_approved_in_session(&self, command: &str) -> bool {
-        self.session_approved.contains(command)
+        self.session_approved
+            .lock()
+            .map(|s| s.contains(command))
+            .unwrap_or(false)
     }
 
     /// Borrow the current session-approved set (read-only).
-    pub fn session_approvals(&self) -> &std::collections::HashSet<String> {
-        &self.session_approved
+    pub fn session_approvals(&self) -> std::collections::HashSet<String> {
+        self.session_approved
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default()
     }
 
     /// Restore a previously-persisted session-approval set.
     /// Replaces the current in-memory set (does not merge).
-    pub fn restore_session_approvals(&mut self, set: std::collections::HashSet<String>) {
-        self.session_approved = set;
+    ///
+    /// 2026-07-17: `&self` (was `&mut self`) for the same Mutex
+    /// reason as the other session-approval methods.
+    pub fn restore_session_approvals(&self, set: std::collections::HashSet<String>) {
+        if let Ok(mut current) = self.session_approved.lock() {
+            *current = set;
+        }
     }
 }
 
@@ -494,7 +632,18 @@ pub fn persist_session_approvals(
     std::fs::write(&tmp, &bytes)?;
     #[cfg(windows)]
     {
-        let _ = std::fs::remove_file(path);
+        // On Windows, remove_file before rename is needed because
+        // rename fails if target exists. Ignore NotFound errors (file
+        // doesn't exist yet) but log other errors for diagnostics.
+        if let Err(e) = std::fs::remove_file(path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "failed to remove file before rename (Windows)"
+                );
+            }
+        }
     }
     std::fs::rename(&tmp, path)?;
     Ok(())
@@ -696,7 +845,15 @@ impl UserAllowlist {
         // Windows-only.
         #[cfg(windows)]
         {
-            let _ = std::fs::remove_file(path);
+            if let Err(e) = std::fs::remove_file(path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "failed to remove file before rename (Windows)"
+                    );
+                }
+            }
         }
         std::fs::rename(&tmp, path)?;
         Ok(())
@@ -1446,7 +1603,7 @@ mod tests {
         assert!(loaded.contains("apt install foo"));
 
         // Fresh manager sees the same session approvals.
-        let mut m2 = ApprovalManager::new();
+        let m2 = ApprovalManager::new();
         m2.restore_session_approvals(loaded);
         assert!(m2.is_approved_in_session("systemctl restart nginx"));
         assert_eq!(
@@ -1463,7 +1620,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("session_approvals.json");
 
-        let mut m = ApprovalManager::new();
+        let m = ApprovalManager::new();
         m.approve_for_session_with_persist("cmd", Some(&path)).unwrap();
         assert!(path.exists());
 

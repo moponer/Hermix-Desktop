@@ -181,6 +181,77 @@ impl Default for GatewayConfig {
     }
 }
 
+impl GatewayConfig {
+    /// Validate the configuration and return any warnings/errors.
+    /// Called at startup and by the config update endpoint.
+    pub fn validate(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        // Validate max_turns
+        if self.max_turns == 0 {
+            warnings.push("max_turns is 0 — agent will be unable to complete any task".to_string());
+        } else if self.max_turns > 1000 {
+            warnings.push(format!(
+                "max_turns is {} (very high) — consider lowering to prevent unbounded loops",
+                self.max_turns
+            ));
+        }
+
+        // Validate temperature
+        for (name, provider) in &self.llm_providers {
+            if let Some(temp) = provider.temperature {
+                if temp.is_nan() || temp.is_infinite() {
+                    warnings.push(format!(
+                        "provider '{}' has invalid temperature: {:?}",
+                        name, temp
+                    ));
+                } else if temp < 0.0 || temp > 2.0 {
+                    warnings.push(format!(
+                        "provider '{}' temperature {} is outside recommended range [0.0, 2.0]",
+                        name, temp
+                    ));
+                }
+            }
+        }
+
+        // Validate compaction config
+        if let Some(threshold) = self.compaction.threshold_percent {
+            if threshold <= 0.0 || threshold >= 1.0 {
+                warnings.push(format!(
+                    "compaction.threshold_percent {} is outside valid range (0.0, 1.0)",
+                    threshold
+                ));
+            }
+        }
+        if let Some(pressure) = self.compaction.pressure_threshold_percent {
+            if pressure <= 0.0 || pressure >= 1.0 {
+                warnings.push(format!(
+                    "compaction.pressure_threshold_percent {} is outside valid range (0.0, 1.0)",
+                    pressure
+                ));
+            }
+        }
+
+        // Validate MCP server entries
+        for (i, server) in self.mcp_servers.iter().enumerate() {
+            if server.name.trim().is_empty() {
+                warnings.push(format!(
+                    "mcp_servers[{}] has empty name — connection will likely fail",
+                    i
+                ));
+            }
+            if server.command.is_none() && server.url.is_none() {
+                warnings.push(format!(
+                    "mcp_servers[{}] '{}' has neither command nor url",
+                    i, server.name
+                ));
+            }
+        }
+
+        warnings
+    }
+}
+
 fn default_autonomous_mode() -> bool {
     true
 }
