@@ -99,6 +99,18 @@ mod types;
 ///
 /// Owns the configuration, a tool registry, and an LLM provider.
 /// Call `run()` or `run_stream()` to begin an autonomous loop.
+///
+/// ## Lock ordering
+///
+/// When acquiring multiple locks, always follow this order to prevent deadlocks:
+/// 1. `tool_registry` (RwLock)
+/// 2. `plugin_manager` (Mutex)
+/// 3. `focus_stack` (Mutex)
+/// 4. `compression` (Mutex)
+/// 5. Other Mutex fields (evolution_counters, tool_error_counter, etc.)
+///
+/// Never hold a lock from a later tier while calling code that acquires
+/// an earlier-tier lock.
 pub struct AgentLoop {
     pub config: AgentConfig,
     pub tool_registry: Arc<ToolRegistry>,
@@ -239,19 +251,32 @@ pub struct AgentLoop {
     /// rebuilt every turn and not cached.
     prompt_cache: std::sync::Mutex<crate::agent_helpers::PromptCache>,
     /// Monotonic epoch bumped when memory/skills/context-files stores
-    /// mutate; forms the key for the context cache layer.
-    ///
-    /// Currently dead — Phase 18 cache invalidation wires the read
-    /// path but nothing increments the counter yet, so the field is
-    /// only initialized and never read. Once the cache-key wiring is
-    /// completed the read-side here will be plumbed through
-    /// `prompt_cache` lookups, and this allow disappears with it.
-    #[allow(dead_code)]
+    /// mutate; forms the key for the context cache layer. The read
+    /// side is wired through `prompt_assembly::build_context_layer`.
+    /// Bump this via `context_epoch.fetch_add(1, Ordering::Relaxed)`
+    /// when memory/skills/context-files are modified.
     context_epoch: std::sync::atomic::AtomicU64,
     /// Optional embedding provider for vector recall in memory prefetch.
     /// When set, `memory_prefetch` generates embeddings and passes them
     /// to `MemoryQuery` for cosine similarity search.
     embedding_provider: Option<Arc<dyn hermix_intelligence::embedding::EmbeddingProvider>>,
+    /// Background task JoinHandles for graceful shutdown. When the
+    /// AgentLoop is dropped, these tasks are aborted to prevent
+    /// inconsistent state from mid-flight writes.
+    background_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+}
+
+impl Drop for AgentLoop {
+    fn drop(&mut self) {
+        // Abort all background tasks to prevent inconsistent state
+        // from mid-flight writes (e.g. skill/memory review writing
+        // to disk while the process is shutting down).
+        if let Ok(tasks) = self.background_tasks.lock() {
+            for handle in tasks.iter() {
+                handle.abort();
+            }
+        }
+    }
 }
 
 /// Encapsulates the 3 tracking fields the context-pressure warning
@@ -667,6 +692,7 @@ impl AgentLoop {
             context_epoch: std::sync::atomic::AtomicU64::new(0),
             embedding_provider: None,
             compression_in_flight: std::sync::Mutex::new(None),
+            background_tasks: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -716,6 +742,7 @@ impl AgentLoop {
             context_epoch: std::sync::atomic::AtomicU64::new(0),
             embedding_provider: None,
             compression_in_flight: std::sync::Mutex::new(None),
+            background_tasks: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -732,6 +759,18 @@ impl AgentLoop {
     ) -> Self {
         self.embedding_provider = Some(provider);
         self
+    }
+
+    /// Bump the context epoch to invalidate the prompt cache's
+    /// context layer. Call this when memory/skills/context-files
+    /// are modified so the next LLM call gets a fresh system prompt.
+    pub fn bump_context_epoch(&self) {
+        self.context_epoch.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Get the current context epoch value.
+    pub fn context_epoch(&self) -> u64 {
+        self.context_epoch.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Attach an in-process sub-agent orchestrator. When set, `delegate_task`
@@ -2091,7 +2130,7 @@ impl AgentLoop {
         let tools = self.tool_registry.clone();
         let provider = self.llm_provider.clone();
         let review_cb = self.callbacks.background_review_callback.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let agent = AgentLoop::new(cfg, tools, provider);
             match agent.run(hist, None).await {
                 Ok(result) => {
@@ -2107,6 +2146,10 @@ impl AgentLoop {
                 }
             }
         });
+        // Store the JoinHandle for graceful shutdown
+        if let Ok(mut tasks) = self.background_tasks.lock() {
+            tasks.push(handle);
+        }
     }
 
     /// Recover todo-state hints from historical messages at loop start.

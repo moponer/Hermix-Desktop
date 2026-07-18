@@ -283,6 +283,9 @@ pub async fn dispatch_tools(
                         continue;
                     }
                 };
+                // Note: dispatch_async in registry.rs handles per-tool
+                // truncation. This secondary truncation enforces the
+                // batch-level budget. Both are kept for defense-in-depth.
                 let mut content = dr.content;
                 if content.chars().count() > budget.max_result_size_chars {
                     let head = truncate_chars(&content, budget.max_result_size_chars);
@@ -332,21 +335,40 @@ pub async fn dispatch_tools(
 }
 
 /// Dispatch a single tool call through the registry (convenience wrapper).
+/// Includes a per-call timeout to prevent hanging.
 pub async fn dispatch_single(
     call: ToolCall,
     registry: Arc<ToolRegistry>,
     max_result_size_chars: usize,
 ) -> ToolResult {
     let start = Instant::now();
-    let result = registry
-        .dispatch_async(
+    let per_call_timeout = Duration::from_secs(60); // Same as dispatch_tools default
+    let result = match tokio::time::timeout(
+        per_call_timeout,
+        registry.dispatch_async(
             &call.function.name,
             call.function
                 .arguments
                 .parse()
                 .unwrap_or(serde_json::Value::Null),
-        )
-        .await;
+        ),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            return ToolResult {
+                tool_call_id: call.id,
+                content: serde_json::json!({
+                    "error": format!("tool '{}' timed out after {}s", call.function.name, per_call_timeout.as_secs()),
+                    "tool": call.function.name,
+                })
+                .to_string(),
+                is_error: true,
+                denial_kind: Some("TimedOut".to_string()),
+            };
+        }
+    };
     let _duration_ms = start.elapsed().as_millis() as u64;
 
     let is_error = is_error_json(&result);

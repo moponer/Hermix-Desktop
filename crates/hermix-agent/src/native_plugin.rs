@@ -9,6 +9,24 @@
 //! via the C ABI. The host wraps each `ToolInstance` into a
 //! `NativeToolAdapter` implementing `ToolHandler` and registers it
 //! into the `ToolRegistry`.
+//!
+//! ## Trust Model (M13)
+//!
+//! **WARNING**: Native plugins run with full host process privileges.
+//! A plugin can:
+//! - Read/write any file on the filesystem
+//! - Make network connections
+//! - Access environment variables (including secrets)
+//! - Execute arbitrary code
+//! - Crash the host process
+//!
+//! The ABI version check ensures API compatibility but does NOT
+//! guarantee safety. Only load plugins from trusted sources.
+//!
+//! Future improvements:
+//! - Plugin signing/verification
+//! - Per-plugin sandbox (via OS-level isolation)
+//! - Permission declarations in plugin.yaml
 
 use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};

@@ -231,6 +231,19 @@ impl GatewayConfig {
                 ));
             }
         }
+        // Cross-field validation: summary_target_ratio should be < threshold_percent
+        if let (Some(target), Some(threshold)) = (
+            self.compaction.summary_target_ratio,
+            self.compaction.threshold_percent,
+        ) {
+            if target >= threshold {
+                warnings.push(format!(
+                    "compaction.summary_target_ratio ({}) >= threshold_percent ({}) — \
+                     summary would be larger than the trigger threshold",
+                    target, threshold
+                ));
+            }
+        }
 
         // Validate MCP server entries
         for (i, server) in self.mcp_servers.iter().enumerate() {

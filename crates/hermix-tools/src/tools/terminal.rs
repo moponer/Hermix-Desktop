@@ -417,6 +417,21 @@ impl ToolHandler for TerminalHandler {
                     .and_then(|g| g.as_ref().map(|p| strip_win32_long_path(&p.to_string_lossy())))
             });
 
+        // Validate workdir for path traversal attempts
+        if let Some(ref wd) = workdir {
+            if hermix_core::path_security::has_traversal_component(wd) {
+                tracing::warn!(
+                    workdir = %wd,
+                    "terminal workdir contains traversal component (..)"
+                );
+                return Err(ToolError::InvalidParams(format!(
+                    "workdir '{}' contains path traversal (..). \
+                     Use an absolute path or a relative path without '..' components.",
+                    wd
+                )));
+            }
+        }
+
         let background = params
             .get("background")
             .and_then(|v| v.as_bool())
@@ -496,6 +511,7 @@ impl TerminalHandler {
 
 /// Format command output for display.
 fn format_command_output(output: &CommandOutput) -> String {
+    const MAX_OUTPUT_CHARS: usize = 100_000; // 100K chars safety limit
     let mut result = String::new();
     if !output.stdout.is_empty() {
         result.push_str(&output.stdout);
@@ -505,6 +521,16 @@ fn format_command_output(output: &CommandOutput) -> String {
             result.push_str("\n--- STDERR ---\n");
         }
         result.push_str(&output.stderr);
+    }
+    // Safety truncation to prevent unbounded memory allocation
+    if result.chars().count() > MAX_OUTPUT_CHARS {
+        let truncated: String = result.chars().take(MAX_OUTPUT_CHARS).collect();
+        result = format!(
+            "{}\n\n[... output truncated at {} chars, {} total ...]",
+            truncated,
+            MAX_OUTPUT_CHARS,
+            result.chars().count()
+        );
     }
     if output.exit_code != 0 {
         result.push_str(&format!("\n[exit code: {}]", output.exit_code));

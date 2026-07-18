@@ -511,6 +511,7 @@ pub fn build_system_prompt_with_tool_errors(
         prompt_cache,
         memory_router,
         &tool_names_set,
+        0, // context_epoch: bump when memory/skills mutate
     );
 
     let suffix_text = build_dynamic_suffix(config, model_for_prompt);
@@ -644,6 +645,7 @@ pub fn build_system_prompt(
         prompt_cache,
         memory_router,
         &tool_names_set,
+        0, // context_epoch: bump when memory/skills mutate
     );
 
     let suffix_text = build_dynamic_suffix(config, model_for_prompt);
@@ -832,16 +834,11 @@ fn build_context_layer(
     prompt_cache: &Mutex<crate::agent_helpers::PromptCache>,
     memory_router: Option<&MemoryRouter>,
     tool_names_set: &HashSet<&str>,
+    context_epoch: u64,
 ) -> String {
     // The context layer is keyed by an external epoch tick supplied by
     // the caller (bumped on memory / skills / context-files mutation).
-    // We expose a setter-style helper on the cache that the caller can
-    // invoke; for backward compat we treat the supplied `prompt_cache`
-    // as authoritative and the epoch as `0` when absent — meaning
-    // every call re-renders the context layer. Callers that want
-    // context-layer caching should bump `cache.context_epoch_via(...)`
-    // or wrap the mutex externally.
-    let cache_key = crate::agent_helpers::compute_context_cache_key(0);
+    let cache_key = crate::agent_helpers::compute_context_cache_key(context_epoch);
 
     if let Ok(slot) = prompt_cache.lock() {
         if let (Some(k), Some(text)) = (

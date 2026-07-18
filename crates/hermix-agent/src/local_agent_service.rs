@@ -1052,6 +1052,11 @@ impl LocalAgentService {
 
 #[async_trait]
 impl AgentService for LocalAgentService {
+    // TODO(L8): send_message and send_message_stream share ~300 lines of
+    // duplicated setup code (session loading, gateway safety net, image
+    // handling, model resolution, etc.). Consider extracting a shared
+    // `prepare_and_run` helper that both methods call with a
+    // streaming/non-streaming mode flag.
     #[instrument(
         name = "send_message",
         level = "info",
