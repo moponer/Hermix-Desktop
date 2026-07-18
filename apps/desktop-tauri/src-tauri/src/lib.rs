@@ -12,37 +12,115 @@ use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 use tauri::Manager;
 
+/// Built-in skills shipped *inside the binary* (via `include_str!`), not as
+/// loose resource files. On first launch we materialize each under
+/// `HERMIX_HOME/skills/<rel>/SKILL.md` if it is missing, so a fresh install
+/// always has them — no `tauri.conf.json` resource entries, no separate sync
+/// step, single source of truth right here in this crate.
+///
+/// To add a built-in skill: drop its `SKILL.md` under
+/// `builtin-skills/<group>/<name>/` and add one line to `BUILTIN_SKILLS`
+/// below. Nothing else to wire up.
+const STORAGE_ANALYZER_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/storage-analyzer/SKILL.md"
+));
+const PONYTAIL_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/ponytail/SKILL.md"
+));
+
+const BUILTIN_SKILLS: &[(&str, &str)] = &[
+    ("hermix/storage-analyzer", STORAGE_ANALYZER_SKILL),
+    ("hermix/ponytail", PONYTAIL_SKILL),
+];
+
+/// Write built-in skills into `skills_dir` on first launch. Skips any skill
+/// whose target already exists, so user customizations are never clobbered.
+fn ensure_builtin_skills(skills_dir: &std::path::Path) {
+    let mut wrote = 0u32;
+    for (rel, content) in BUILTIN_SKILLS {
+        let target = skills_dir.join(rel).join("SKILL.md");
+        if target.exists() {
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("[Hermix] failed to create builtin-skill dir {}: {e}", parent.display());
+                continue;
+            }
+        }
+        match std::fs::write(&target, content) {
+            Ok(()) => wrote += 1,
+            Err(e) => eprintln!("[Hermix] failed to write builtin skill {rel}: {e}"),
+        }
+    }
+    if wrote > 0 {
+        println!("[Hermix] wrote {wrote} built-in skills to {}", skills_dir.display());
+    }
+}
+
 /// Ensure bundled skills (packaged via `tauri.conf.json` → `resources`)
 /// are present under the user's `HERMIX_HOME/skills/` directory on first
 /// launch. Only copies files that do not already exist — subsequent runs
 /// are no-ops.
+///
+/// Every subdirectory of `resources/skills/<group>/` is a skill group; each
+/// group is extracted to `HERMIX_HOME/skills/<group>/` exactly once (skipped
+/// if the target group already exists, so user modifications are never
+/// clobbered). This keeps the bundling data-driven: drop a skill under
+/// `resources/skills/<group>/<skill>/` and list it in `tauri.conf.json`
+/// `resources` — no Rust change required.
 fn ensure_bundled_skills(resource_dir: &std::path::Path, skills_dir: &std::path::Path) {
-    let bundled_root = resource_dir.join("resources/skills/modelscope-dev");
+    let bundled_root = resource_dir.join("resources/skills");
     if !bundled_root.exists() {
         // No bundled skills at this resource path — the binary may not
         // have been packaged (e.g. dev build, non-Windows). Silent no-op.
         return;
     }
-    let target = skills_dir.join("modelscope-dev");
-    if target.exists() {
-        // Already extracted on a prior launch; skip to avoid
-        // overwriting any user modifications.
-        return;
-    }
-    if let Err(e) = std::fs::create_dir_all(&target) {
-        eprintln!("[Hermix] failed to create bundled-skills dir: {e}");
-        return;
-    }
-    match copy_dir_recursively(&bundled_root, &target) {
-        Ok(copied) => {
-            println!(
-                "[Hermix] bundled {copied} bundled skill files to {}",
-                target.display()
-            );
-        }
+    let mut total_copied = 0u32;
+    let mut had_error = false;
+    for entry in match std::fs::read_dir(&bundled_root) {
+        Ok(e) => e,
         Err(e) => {
-            eprintln!("[Hermix] failed to copy bundled skills: {e}");
+            eprintln!("[Hermix] cannot read bundled-skills dir: {e}");
+            return;
         }
+    } {
+        let group = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if !group.path().is_dir() {
+            continue;
+        }
+        let group_name = group.file_name().to_string_lossy().into_owned();
+        let target = skills_dir.join(&group_name);
+        if target.exists() {
+            // Already extracted on a prior launch; skip this group to avoid
+            // overwriting any user modifications.
+            continue;
+        }
+        if let Err(e) = std::fs::create_dir_all(&target) {
+            eprintln!("[Hermix] failed to create bundled-skills dir {group_name}: {e}");
+            had_error = true;
+            continue;
+        }
+        match copy_dir_recursively(&group.path(), &target) {
+            Ok(copied) => total_copied += copied,
+            Err(e) => {
+                eprintln!("[Hermix] failed to copy bundled skills group {group_name}: {e}");
+                had_error = true;
+            }
+        }
+    }
+    if total_copied > 0 {
+        println!(
+            "[Hermix] extracted {total_copied} bundled skill files to {}",
+            skills_dir.display()
+        );
+    } else if !had_error {
+        // Nothing new to extract (all groups already present) — normal no-op.
     }
 }
 
@@ -163,12 +241,17 @@ pub fn run() {
                 }
             };
 
-            // 1b. Extract bundled skills to HERMIX_HOME/skills/ on first run.
+            // 1b. Materialize built-in skills into HERMIX_HOME/skills/ on first
+            //     run. These ship *inside the binary* (include_str!), so no
+            //     resource-dir lookup is required — they work even in dev
+            //     builds. Bundled (marketplace) skills still come from the
+            //     Tauri resource dir below.
+            let skills_dir = hermix_home.join("skills");
+            ensure_builtin_skills(&skills_dir);
             if let Ok(resource_dir) = app.path().resource_dir() {
-                let skills_dir = hermix_home.join("skills");
                 ensure_bundled_skills(&resource_dir, &skills_dir);
             } else {
-                eprintln!("[Hermix] cannot resolve resource_dir — bundled skills will not be extracted");
+                eprintln!("[Hermix] cannot resolve resource_dir — bundled (marketplace) skills will not be extracted");
             }
 
             let sidecar = Arc::new(Mutex::new(HermixSidecar::new()));

@@ -197,29 +197,74 @@ fn is_already_a_dedup_marker(msg: &Message) -> bool {
 // TokenScorer — 4-dim heuristic
 // ---------------------------------------------------------------------------
 
-/// 4-dim heuristic scorer. **Not** an embedding model.
+/// 5-dim heuristic scorer. **Not** an embedding model.
 ///
-/// Dimensions:
-/// - `recency(0.35)` — position-based; later messages score higher.
+/// Designed after the Headroom article's `TokenScorer`, but without
+/// an embedding model (single Rust binary, no 80-420 MB ONNX deps).
+/// `semantic_centrality` is approximated by **query_relevance** —
+/// keyword overlap with the most recent user message (the "current
+/// task"). This catches "task-critical but low-frequency / old"
+/// messages that pure recency/freq would otherwise starve and drop.
+///
+/// Dimensions (weights sum to 1.0):
+/// - `recency(0.25)` — position-based; later messages score higher.
 ///   We have no per-message timestamp (`Message::execution_timeline`
 ///   carries *events* during a turn, not the turn's own wall clock),
 ///   so recency is approximated by message index.
-/// - `role_position(0.30)` — `system=1.0`, `tool=0.7`,
+/// - `role_position(0.25)` — `system=1.0`, `tool=0.7`,
 ///   `user=0.5`, `assistant=0.4`. Reflects that system messages
 ///   carry rules the LLM must keep following.
 /// - `frequency(0.15)` — same `tool_call_id` referenced by ≥ 1
 ///   other message → bump. Catches "important tool result that
 ///   downstream turns keep referring to".
-/// - `instructional_marker(0.20)` — content matches imperative
+/// - `instructional_marker(0.15)` — content matches imperative
 ///   patterns (`!`-commands, `run …`, `git …`, file paths ending
 ///   in action verbs, `请`, `不要`, `must`, `never`). Hits a
 ///   1.0 if the message looks like an instruction to the agent.
+/// - `query_relevance(0.20)` — keyword overlap (CJK bigram +
+///   latin word) with the most recent `User` message. Zero when
+///   no query is set (e.g. `TokenScorer::new()` in tests).
 #[derive(Debug, Clone)]
-pub struct TokenScorer;
+pub struct TokenScorer {
+    /// Keywords extracted from the most recent user message.
+    /// Empty when built via `new()` (no task awareness) — score
+    /// then degenerates to the 4-dim heuristic.
+    query_keywords: Vec<String>,
+}
 
 impl TokenScorer {
+    /// Build a scorer with no task awareness. `query_relevance`
+    /// will always be 0. Use [`Self::for_query`] in production
+    /// to seed the scorer with the current user task.
     pub fn new() -> Self {
-        Self
+        Self {
+            query_keywords: Vec::new(),
+        }
+    }
+
+    /// Build a scorer aware of the current task: extracts keywords
+    /// (CJK bigrams + latin words ≥ 2 chars, minus stopwords) from
+    /// the most recent `User` message in `messages`.
+    ///
+    /// This is the no-embedding proxy for Headroom's
+    /// `semantic_centrality = cosine_similarity(embed(task), embed(block))`.
+    /// Keyword overlap is a cruder signal but costs nothing and
+    /// never increases binary size.
+    pub fn for_query(messages: &[Message]) -> Self {
+        let query = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::User)
+            .and_then(|m| m.content.as_deref())
+            .unwrap_or("");
+        Self {
+            query_keywords: extract_keywords(query),
+        }
+    }
+
+    /// Expose the query keyword set (for diagnostics / tests).
+    pub fn query_keywords(&self) -> &[String] {
+        &self.query_keywords
     }
 
     /// Score a single message in the context of the full message
@@ -227,6 +272,23 @@ impl TokenScorer {
     pub fn score(&self, msg: &Message, all: &[Message], idx: usize) -> f64 {
         let n = all.len().max(1);
         // recency: linear ramp from 0.0 (oldest) to 1.0 (newest).
+        //
+        // P2 note (2026-07-18): `idx` is the position within the
+        // `messages` slice passed to *this* compress() call. It is
+        // a correct recency proxy inside a single pass (messages
+        // arrive in chronological order, so larger idx == newer).
+        // It does NOT survive cross-call reordering: if the agent
+        // loop injects a recalled memory into the middle of history
+        // between compress() calls, that message's idx no longer
+        // reflects its true age. We accept this because (a) each
+        // compress() pass makes independent drop decisions — no
+        // cross-call consistency is needed — and (b) the
+        // `query_relevance` dimension (P0) rescues task-critical
+        // messages that recency would otherwise starve. Adding a
+        // stable `turn_seq` field to `Message` would fix it
+        // rigorously but requires DB schema + frontend + every
+        // construction site to change — deferred until a real
+        // cross-call ordering need appears.
         let recency = idx as f64 / (n.saturating_sub(1).max(1)) as f64;
         // role_position: per-role base score.
         let role_pos = match msg.role {
@@ -257,8 +319,28 @@ impl TokenScorer {
             let c = msg.content.as_deref().unwrap_or("");
             looks_like_instruction(c) as i32 as f64
         };
+        // query_relevance: fraction of current-task keywords that
+        // appear in this message's content (or tool-call args).
+        // Reuses `msg_content_lowercase` so tool-call arguments
+        // are searched too — a tool result echoing a query term
+        // counts as on-task.
+        let query_relevance = if self.query_keywords.is_empty() {
+            0.0
+        } else {
+            let hay = msg_content_lowercase(msg);
+            let hits = self
+                .query_keywords
+                .iter()
+                .filter(|kw| !kw.is_empty() && hay.contains(kw.as_str()))
+                .count();
+            (hits as f64 / self.query_keywords.len() as f64).min(1.0)
+        };
 
-        let score = 0.35 * recency + 0.30 * role_pos + 0.15 * frequency + 0.20 * instructional;
+        let score = 0.25 * recency
+            + 0.25 * role_pos
+            + 0.15 * frequency
+            + 0.15 * instructional
+            + 0.20 * query_relevance;
         score.clamp(0.0, 1.0)
     }
 }
@@ -289,37 +371,161 @@ fn looks_like_instruction(content: &str) -> bool {
     patterns.iter().any(|p| lower.contains(p))
 }
 
-/// Drop messages with score strictly below `threshold`. Pinned
-/// messages are never dropped regardless of score.
+// ---------------------------------------------------------------------------
+// Keyword extraction — no-embedding proxy for semantic_centrality
+// ---------------------------------------------------------------------------
+
+/// Is `c` a CJK ideograph (Unified Ideographs basic + Ext A)?
+fn is_cjk(c: char) -> bool {
+    matches!(c, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}')
+}
+
+/// Trivial English stopwords. Kept short on purpose — we're
+/// scoring surface overlap, not doing NLP; over-aggressive
+/// stopword removal would nuke short queries.
+fn is_stopword(w: &str) -> bool {
+    matches!(
+        w,
+        "the" | "a" | "an" | "and" | "or" | "but" | "if" | "to" | "of"
+            | "in" | "on" | "for" | "is" | "it" | "this" | "that"
+            | "with" | "as" | "be" | "are" | "was" | "were" | "do"
+            | "does" | "i" | "you" | "he" | "she" | "we" | "they"
+    )
+}
+
+/// Extract keywords from `text`: latin words (≥ 2 chars, minus
+/// stopwords) + CJK bigrams. Lowercased. Deduplicated.
 ///
-/// Returns `(kept, dropped_count)`. Drops are silent in terms of
-/// content (no marker inserted) — the breaker / CompressionReport
-/// counts them so the dashboard can surface them.
+/// This is the no-embedding stand-in for `embed(current_task)` —
+/// instead of a dense vector we get a bag of surface tokens, and
+/// `query_relevance` in [`TokenScorer`] measures substring overlap
+/// against each message. Cruder than cosine similarity but costs
+/// nothing and never grows the binary.
+fn extract_keywords(text: &str) -> Vec<String> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    let lower = text.to_lowercase();
+    let mut kws: Vec<String> = Vec::new();
+    // Latin / numeric words: split on non-alphanumeric.
+    for word in lower.split(|c: char| !c.is_alphanumeric()) {
+        if word.len() >= 2 && !is_stopword(word) {
+            kws.push(word.to_string());
+        }
+    }
+    // CJK bigrams: contiguous CJK chars, sliding window of 2.
+    let cjk_chars: Vec<char> = lower.chars().filter(|&c| is_cjk(c)).collect();
+    for pair in cjk_chars.windows(2) {
+        kws.push(pair.iter().collect());
+    }
+    kws.sort();
+    kws.dedup();
+    kws
+}
+
+/// Drop messages with score strictly below `threshold`.
+///
+/// **Protective heuristics** — a message is NEVER dropped when any
+/// of these hold (regardless of score):
+/// - it is pinned (`pin.is_pinned`)
+/// - it is within the last `protect_last_n` messages (recent
+///   context the LLM is actively building on)
+/// - it looks like an instruction (`looks_like_instruction`) or is
+///   a `System` message
+/// - its `tool_call_id` is referenced by ≥ 2 messages in the list
+///   (a tool result downstream turns keep referring to)
+///
+/// **min_keep floor:** even when all of the above allow a drop,
+/// the function never lets `kept.len()` fall below `min_keep`.
+/// If dropping every eligible candidate would breach the floor,
+/// the highest-scoring candidates are rescued back into the kept
+/// set. This prevents an aggressive `threshold` from starving the
+/// downstream LLM summariser (which needs `> protect_first_n + 3`
+/// messages to run at all — see `min_for_compress` in
+/// `compression.rs`). Callers should pass `protect_first_n + 3 + 1`.
+///
+/// **Lossless by design:** dropped messages are *returned* (not
+/// silently destroyed) so the caller can archive them alongside
+/// the LLM-summarised turns.
+///
+/// Returns `(kept, dropped_messages)`.
 pub fn drop_low_score(
     messages: Vec<Message>,
     scorer: &TokenScorer,
     pin: Option<&PinConfig>,
     threshold: f64,
-) -> (Vec<Message>, usize) {
+    protect_last_n: usize,
+    min_keep: usize,
+) -> (Vec<Message>, Vec<Message>) {
     if messages.is_empty() {
-        return (messages, 0);
+        return (messages, Vec::new());
     }
     // Capture an immutable snapshot of the message list so we can
     // score each message against the full context (recency,
     // frequency) while still moving each message out by ownership.
     let all = messages.clone();
-    let mut out = Vec::with_capacity(messages.len());
-    let mut dropped = 0usize;
-    for (idx, msg) in messages.into_iter().enumerate() {
-        let is_pin = pin.map(|p| p.is_pinned(&msg)).unwrap_or(false);
-        let score = scorer.score(&msg, &all, idx);
-        if !is_pin && score < threshold {
-            dropped += 1;
-            continue;
+    let n = all.len();
+
+    // Phase 1: classify each message. `keep[i]` = true means
+    // "survives every pass". Candidates for dropping land in
+    // `drop_candidates` with their score, so Phase 2 can rescue
+    // the highest-scoring ones if the min_keep floor is breached.
+    let mut keep = vec![false; n];
+    let mut drop_candidates: Vec<(usize, f64)> = Vec::new();
+    for (idx, msg) in all.iter().enumerate() {
+        let is_pin = pin.map(|p| p.is_pinned(msg)).unwrap_or(false);
+        let in_tail_window = idx + protect_last_n >= n;
+        let is_instructional = msg.role == MessageRole::System
+            || msg
+                .content
+                .as_deref()
+                .map(looks_like_instruction)
+                .unwrap_or(false);
+        let is_referenced_tool = msg
+            .tool_call_id
+            .as_deref()
+            .map(|tcid| {
+                all.iter()
+                    .filter(|m| m.tool_call_id.as_deref() == Some(tcid))
+                    .count()
+                    >= 2
+            })
+            .unwrap_or(false);
+        let score = scorer.score(msg, &all, idx);
+
+        if is_pin || in_tail_window || is_instructional || is_referenced_tool || score >= threshold
+        {
+            keep[idx] = true;
+        } else {
+            drop_candidates.push((idx, score));
         }
-        out.push(msg);
     }
-    (out, dropped)
+
+    // Phase 2: enforce the min_keep floor. If dropping every
+    // candidate would leave fewer than `min_keep` messages,
+    // rescue the highest-scoring candidates back into the kept
+    // set. Sorted descending by score so the "least bad" drops
+    // are the ones we keep.
+    let kept_without_rescue = n - drop_candidates.len();
+    if kept_without_rescue < min_keep && !drop_candidates.is_empty() {
+        let rescue_count = (min_keep - kept_without_rescue).min(drop_candidates.len());
+        drop_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        for &(idx, _score) in drop_candidates.iter().take(rescue_count) {
+            keep[idx] = true;
+        }
+    }
+
+    // Phase 3: partition by the final keep flags.
+    let mut kept = Vec::with_capacity(n);
+    let mut dropped: Vec<Message> = Vec::new();
+    for (idx, msg) in messages.into_iter().enumerate() {
+        if keep[idx] {
+            kept.push(msg);
+        } else {
+            dropped.push(msg);
+        }
+    }
+    (kept, dropped)
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +555,16 @@ pub struct CompressionReport {
     pub dropped_count: usize,
     /// Final summary token count (if a summary was generated).
     pub summary_tokens: Option<u64>,
+    /// `post_tokens / pre_tokens`. 1.0 = no compression, 0.1 = 90%
+    /// reduction. Below 0.1 is considered aggressive and may
+    /// surface as a quality-risk warning.
+    pub compression_ratio: f64,
+    /// Heuristic `0..=1` estimate of information loss. Driven by
+    /// `dropped_count / pre_count` (silent drops are lossier than
+    /// LLM-summarised turns) plus an over-compression penalty when
+    /// `compression_ratio < 0.1`. Above 0.15 is considered
+    /// concerning — the caller should emit a `tracing::warn`.
+    pub estimated_quality_loss: f64,
     /// What triggered compression: "threshold" / "explicit" / etc.
     pub trigger_reason: String,
     /// Breakdown of pre-count by role for quick inspection.
@@ -366,14 +582,69 @@ impl CompressionReport {
         m
     }
 
+    /// Derive `(compression_ratio, estimated_quality_loss)` from
+    /// the pre/post token + message counts. Used at construction
+    /// time so the two derived fields stay in sync with the raw
+    /// counters.
+    pub fn derive_metrics(
+        pre_tokens: u64,
+        post_tokens: u64,
+        pre_count: usize,
+        dropped_count: usize,
+    ) -> (f64, f64) {
+        let compression_ratio = if pre_tokens > 0 {
+            post_tokens as f64 / pre_tokens as f64
+        } else {
+            1.0
+        };
+        let drop_ratio = if pre_count > 0 {
+            dropped_count as f64 / pre_count as f64
+        } else {
+            0.0
+        };
+        // Silent drops are lossier than LLM-summarised turns
+        // (summarised turns at least keep a handoff summary).
+        // Weight them at 0.5×, then add a flat penalty when
+        // compression is so aggressive the model is likely starved.
+        let over_compress = if compression_ratio < 0.1 { 0.15 } else { 0.0 };
+        let estimated_quality_loss = (drop_ratio * 0.5 + over_compress).clamp(0.0, 1.0);
+        (compression_ratio, estimated_quality_loss)
+    }
+
+    /// True when this pass looks risky — either estimated quality
+    /// loss is above 0.15 or the ratio is below 0.1 (90%+
+    /// reduction). Callers should emit a warning when this fires.
+    pub fn is_concerning(&self) -> bool {
+        self.estimated_quality_loss > 0.15 || self.compression_ratio < 0.1
+    }
+
+    /// Emit a `tracing::warn` when this pass is concerning. Mirrors
+    /// Headroom's `on_compression_complete` alert callback (which
+    /// the article lists as a best practice the original project
+    /// was missing).
+    pub fn emit_warn_if_concerning(&self) {
+        if self.is_concerning() {
+            tracing::warn!(
+                target: "hermix_agent.compression",
+                "compression quality risk: ratio={:.3} estimated_quality_loss={:.3} dropped={}/{} (over-compression may degrade model adherence)",
+                self.compression_ratio,
+                self.estimated_quality_loss,
+                self.dropped_count,
+                self.pre_count,
+            );
+        }
+    }
+
     /// Render as a single-line tracing message.
     pub fn format_line(&self) -> String {
         format!(
-            "compression report: pre={}msg/{}tok post={}msg/{}tok pin={} dedup={} pruned={} dropped={} summary_tokens={:?} trigger={} per_role_pre={:?} per_role_post={:?}",
+            "compression report: pre={}msg/{}tok post={}msg/{}tok ratio={:.3} q_loss={:.3} pin={} dedup={} pruned={} dropped={} summary_tokens={:?} trigger={} per_role_pre={:?} per_role_post={:?}",
             self.pre_count,
             self.pre_tokens,
             self.post_count,
             self.post_tokens,
+            self.compression_ratio,
+            self.estimated_quality_loss,
             self.pin_count,
             self.dedup_count,
             self.pruned_count,
@@ -650,12 +921,16 @@ mod tests {
         let sys = m_system("rules that must survive");
         let filler = m_assistant("ok");
         let msgs = vec![sys.clone(), filler.clone()];
-        let (out, dropped) = drop_low_score(msgs, &s, Some(&pin), 0.99);
+        // protect_last_n=0 so the tail-window guard doesn't save
+        // the filler; we're isolating the pin guard here.
+        let (out, dropped) = drop_low_score(msgs, &s, Some(&pin), 0.99, 0, 0);
         assert!(out.iter().any(|m| m.role == MessageRole::System));
-        // Filler at index 1 has recency=1.0 but role_position=0.4
-        // and instructional=0 → score = 0.35*1.0 + 0.30*0.4 = 0.47
+        // Filler at index 1: recency=1.0, role_position=0.4,
+        // instructional=0 → score = 0.25*1.0 + 0.25*0.4 = 0.35
         // < 0.99, so it should be dropped.
-        assert_eq!(dropped, 1, "low-score assistant dropped");
+        assert_eq!(dropped.len(), 1, "low-score assistant dropped");
+        // Lossless: the dropped message is returned, not destroyed.
+        assert_eq!(dropped[0].role, MessageRole::Assistant);
     }
 
     #[test]
@@ -663,9 +938,83 @@ mod tests {
         let s = TokenScorer::new();
         let filler = m_assistant("ok");
         let msgs = vec![filler];
-        let (out, dropped) = drop_low_score(msgs, &s, None, 0.5);
+        let (out, dropped) = drop_low_score(msgs, &s, None, 0.5, 0, 0);
         assert!(out.is_empty());
-        assert_eq!(dropped, 1);
+        assert_eq!(dropped.len(), 1);
+    }
+
+    #[test]
+    fn drop_low_score_protects_tail_window() {
+        // Even a low-score assistant in the last `protect_last_n`
+        // messages must survive — it's context the LLM is actively
+        // building on.
+        let s = TokenScorer::new();
+        let filler = m_assistant("ok");
+        let msgs = vec![filler];
+        let (out, dropped) = drop_low_score(msgs, &s, None, 0.99, 3, 0);
+        assert!(out.iter().any(|m| m.role == MessageRole::Assistant));
+        assert!(dropped.is_empty(), "tail-window message must not drop");
+    }
+
+    #[test]
+    fn drop_low_score_protects_instructional() {
+        // An imperative user message survives even at idx 0 with a
+        // punishing threshold, because `looks_like_instruction`
+        // matches "please run".
+        let s = TokenScorer::new();
+        let cmd = m_user("Please run the tests now");
+        let msgs = vec![cmd];
+        let (out, dropped) = drop_low_score(msgs, &s, None, 0.99, 0, 0);
+        assert_eq!(out.len(), 1);
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn drop_low_score_protects_referenced_tool() {
+        // A tool result whose `tool_call_id` is referenced by ≥ 2
+        // messages is kept even under a punishing threshold.
+        let s = TokenScorer::new();
+        let a_first = m_tool("c1", "first call");
+        let c = m_tool("c1", "second call"); // same tool_call_id
+        let msgs = vec![a_first, c];
+        // threshold 0.99, protect_last_n=0 → only the referenced-tool
+        // guard can save them.
+        let (out, dropped) = drop_low_score(msgs, &s, None, 0.99, 0, 0);
+        assert_eq!(out.len(), 2, "referenced tool results must survive");
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn drop_low_score_returns_dropped_for_archive() {
+        // The dropped vec is owned by the caller so it can be
+        // archived — verifies the lossless contract end-to-end.
+        let s = TokenScorer::new();
+        let filler = m_assistant("ok");
+        let msgs = vec![filler.clone()];
+        let (out, dropped) = drop_low_score(msgs, &s, None, 0.5, 0, 0);
+        assert!(out.is_empty());
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(dropped[0].content.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn drop_low_score_respects_min_keep_floor() {
+        // 5 low-score assistants, threshold 0.99 would drop all 5,
+        // but min_keep=4 rescues the 4 highest-scoring (latest)
+        // back. Verify the floor is honoured: the summariser must
+        // never be starved by an aggressive threshold.
+        let s = TokenScorer::new();
+        let msgs = vec![
+            m_assistant("a"), // idx 0, lowest recency
+            m_assistant("b"),
+            m_assistant("c"),
+            m_assistant("d"),
+            m_assistant("e"), // idx 4, highest recency
+        ];
+        // min_keep=4 → at most 1 may be dropped.
+        let (kept, dropped) = drop_low_score(msgs, &s, None, 0.99, 0, 4);
+        assert!(kept.len() >= 4, "min_keep floor breached: kept={}", kept.len());
+        assert!(dropped.len() <= 1, "dropped={}", dropped.len());
     }
 
     // ---------- CompressionReport ----------
@@ -682,6 +1031,8 @@ mod tests {
             pruned_count: 1,
             dropped_count: 2,
             summary_tokens: Some(200),
+            compression_ratio: 0.4,
+            estimated_quality_loss: 0.3,
             trigger_reason: "threshold".into(),
             per_role_pre: [("user".into(), 5), ("assistant".into(), 5)]
                 .into_iter()
@@ -697,6 +1048,8 @@ mod tests {
         assert!(line.contains("dedup=1"));
         assert!(line.contains("pruned=1"));
         assert!(line.contains("dropped=2"));
+        assert!(line.contains("ratio=0.400"));
+        assert!(line.contains("q_loss=0.300"));
         assert!(line.contains("trigger=threshold"));
     }
 
@@ -708,5 +1061,105 @@ mod tests {
         assert_eq!(r.get("assistant").copied(), Some(1));
         assert_eq!(r.get("tool").copied(), Some(1));
         assert!(r.get("system").is_none());
+    }
+
+    // ---------- query_relevance (no-embedding semantic proxy) ----------
+
+    #[test]
+    fn scorer_query_relevance_boosts_on_task_messages() {
+        // The most recent user message sets the "current task".
+        // An old message that overlaps the task keywords should
+        // outscore an old message that doesn't — even though both
+        // have the same recency / role.
+        let msgs = vec![
+            m_assistant("earlier note about the auth module"),
+            m_assistant("earlier note about cooking recipes"),
+            m_user("fix the auth module bug"),
+        ];
+        let s = TokenScorer::for_query(&msgs);
+        // on_task at idx 0, off_task at idx 1. recency differs, so
+        // compare against a same-index baseline: build two scorers
+        // each with one assistant at idx 0 and the same query.
+        let on_task = s.score(&msgs[0], &msgs, 0);
+        let off_msgs = vec![
+            m_assistant("earlier note about cooking recipes"),
+            m_assistant("earlier note about the auth module"),
+            m_user("fix the auth module bug"),
+        ];
+        let s2 = TokenScorer::for_query(&off_msgs);
+        let off_task = s2.score(&off_msgs[0], &off_msgs, 0);
+        assert!(
+            on_task > off_task,
+            "on-task ({on_task:.3}) should beat off-task ({off_task:.3})"
+        );
+    }
+
+    #[test]
+    fn scorer_for_query_extracts_cjk_bigrams() {
+        // Chinese query: bigrams like "授权", "模块" should be
+        // extracted and matched against history.
+        let on_msgs = vec![
+            m_assistant("之前讨论了授权模块的设计"),
+            m_user("修复授权模块的 bug"),
+        ];
+        let s = TokenScorer::for_query(&on_msgs);
+        assert!(
+            !s.query_keywords().is_empty(),
+            "CJK query must yield keywords"
+        );
+        let on_task = s.score(&on_msgs[0], &on_msgs, 0);
+        let off_msgs = vec![
+            m_assistant("今天天气不错适合散步"),
+            m_user("修复授权模块的 bug"),
+        ];
+        let s2 = TokenScorer::for_query(&off_msgs);
+        let off_task = s2.score(&off_msgs[0], &off_msgs, 0);
+        assert!(
+            on_task > off_task,
+            "CJK on-task ({on_task:.3}) should beat off-task ({off_task:.3})"
+        );
+    }
+
+    #[test]
+    fn scorer_new_has_no_query_keywords() {
+        let s = TokenScorer::new();
+        assert!(s.query_keywords().is_empty());
+    }
+
+    // ---------- derive_metrics / is_concerning ----------
+
+    #[test]
+    fn derive_metrics_computes_ratio_and_loss() {
+        // 400 post / 1000 pre → ratio 0.4. 2 dropped / 10 pre →
+        // drop_ratio 0.2, ×0.5 = 0.1. ratio ≥ 0.1 → no over-compress
+        // penalty. quality_loss = 0.1.
+        let (ratio, loss) = CompressionReport::derive_metrics(1000, 400, 10, 2);
+        assert!((ratio - 0.4).abs() < 1e-9, "ratio={ratio}");
+        assert!((loss - 0.1).abs() < 1e-9, "loss={loss}");
+    }
+
+    #[test]
+    fn derive_metrics_aggressive_ratio_adds_penalty() {
+        // ratio 0.05 (< 0.1) → over-compress penalty 0.15.
+        // drop_ratio 0 (nothing dropped) → 0. loss = 0.15.
+        let (ratio, loss) = CompressionReport::derive_metrics(10000, 500, 10, 0);
+        assert!((ratio - 0.05).abs() < 1e-9);
+        assert!((loss - 0.15).abs() < 1e-9, "loss={loss}");
+    }
+
+    #[test]
+    fn is_concerning_flags_aggressive_pass() {
+        let mut r = CompressionReport::default();
+        r.compression_ratio = 0.05;
+        r.estimated_quality_loss = 0.16;
+        assert!(r.is_concerning());
+    }
+
+    #[test]
+    fn is_concerning_passes_benign_pass() {
+        let mut r = CompressionReport::default();
+        r.compression_ratio = 0.5;
+        r.estimated_quality_loss = 0.05;
+        assert!(!r.is_concerning());
     }
 }

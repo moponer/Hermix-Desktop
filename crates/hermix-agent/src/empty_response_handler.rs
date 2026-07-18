@@ -105,12 +105,64 @@ pub struct EmptyResponseOutput {
     pub new_post_tool_nudge_count: u32,
 }
 
+/// Detect if the LLM's visible text looks like it's giving up due to
+/// perceived permission/sandbox restrictions.
+///
+/// The LLM may produce visible text like "I don't have permission" or
+/// "I'm in a sandbox and can't access X" without actually trying the
+/// command. This is a false give-up — the system is NOT a sandbox and
+/// the LLM has full filesystem access.
+fn looks_like_permission_giveup(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    // English patterns
+    const EN_PATTERNS: &[&str] = &[
+        "no permission",
+        "don't have permission",
+        "do not have permission",
+        "don't have access",
+        "do not have access",
+        "cannot access",
+        "can't access",
+        "not allowed to",
+        "permission denied",
+        "access denied",
+        "in a sandbox",
+        "in the sandbox",
+        "sandboxed",
+        "restricted environment",
+        "i am unable to access",
+        "i'm unable to access",
+        "i cannot execute",
+        "i can't execute",
+        "outside my sandbox",
+    ];
+    // Chinese patterns
+    const ZH_PATTERNS: &[&str] = &[
+        "没有权限",
+        "无权限",
+        "无法访问",
+        "无法读取",
+        "无法执行",
+        "不能访问",
+        "不能读取",
+        "沙盒",
+        "沙箱",
+        "受限环境",
+        "权限不足",
+        "访问被拒",
+        "不允许",
+    ];
+    EN_PATTERNS.iter().any(|p| lower.contains(p))
+        || ZH_PATTERNS.iter().any(|p| text.contains(*p))
+}
+
 /// Single authority for "what should the loop do when the LLM produces
 /// no tool calls this turn".
 ///
 /// Priority order:
 /// 1. Codex ack continuation (protocol need)
 /// 2. Post-tool nudge (push LLM to produce visible text after tools — one time only)
+/// 2b. Permission-give-up nudge (LLM claims it lacks permissions — push it to try alternatives)
 /// 3. Autonomous pre-tool nudge (push LLM to start working — one time only)
 /// 4. Finalize (default — trust the LLM's stop signal)
 pub fn decide_empty_response(
@@ -190,6 +242,53 @@ pub fn decide_empty_response(
             max = MAX_POST_TOOL_NUDGES,
             total_turns = input.total_turns,
             "post_tool_nudge: injecting system nudge to push LLM for visible output"
+        );
+        return EmptyResponseOutput {
+            action: EmptyResponseAction::ContinueWithSystemNudge(nudge),
+            new_codex_ack_continuations: input.codex_ack_continuations,
+            new_autonomous_nudge_count: input.autonomous_nudge_count,
+            new_post_tool_nudge_count: input.post_tool_nudge_count + 1,
+        };
+    }
+
+    // 2b. Permission-give-up nudge — when the LLM produces visible text
+    //     that looks like it's giving up due to perceived permission/sandbox
+    //     restrictions. The system is NOT a sandbox — the LLM has full
+    //     filesystem access. Push it to try alternative approaches.
+    //
+    //     This fires AFTER the post-tool nudge (section 2) because the
+    //     post-tool nudge has a `!assistant_has_visible_text` guard —
+    //     when the LLM says "I don't have permission" (which IS visible
+    //     text), section 2 is skipped. Without this section, the LLM
+    //     would fall through to Finalize, abandoning the task.
+    //
+    //     Reuses post_tool_nudge_count so the total nudges (both
+    //     no-visible-text and permission-giveup) are capped at
+    //     MAX_POST_TOOL_NUDGES.
+    if input.history_includes_tool
+        && input.has_tool_schemas
+        && (input.max_turns == 0 || input.total_turns < input.max_turns)
+        && input.post_tool_nudge_count < MAX_POST_TOOL_NUDGES
+        && (input.assistant_has_visible_text)(input.assistant_msg)
+        && looks_like_permission_giveup(
+            input.assistant_msg.content.as_deref().unwrap_or(""),
+        )
+    {
+        let nudge = "You are NOT in a sandbox — you have full filesystem access on the user's system. \
+             The C:\\ drive and all directories (except C:\\Windows\\System32, SysWOW64, WinSxS, assembly) \
+             are fully accessible.\n\n\
+             If a command was blocked by security policy, the error message tells you to retry with \
+             HERMIX_CONFIRM=1 prefix. For example: HERMIX_CONFIRM=1 dir C:\\Users\n\n\
+             Do NOT give up or claim you lack permissions. Try:\n\
+             1. Retry the command with HERMIX_CONFIRM=1 prefix\n\
+             2. Use read_file tool with an absolute path (e.g. C:\\Users\\...)\n\
+             3. Use list_files or search_content tools\n\
+             4. Try a different approach to accomplish the task\n\n\
+             Resume immediately with a tool call.".to_string();
+        tracing::info!(
+            nudge_count = input.post_tool_nudge_count + 1,
+            total_turns = input.total_turns,
+            "permission_giveup_nudge: LLM appears to give up due to perceived permissions"
         );
         return EmptyResponseOutput {
             action: EmptyResponseAction::ContinueWithSystemNudge(nudge),
@@ -547,5 +646,114 @@ mod tests {
             out.action,
             EmptyResponseAction::ContinueWithUserMsg(_)
         ));
+    }
+
+    // ---- Permission-give-up nudge tests (section 2b) ----
+
+    #[test]
+    fn permission_giveup_nudge_fires_on_english_permission_text() {
+        // When the LLM says "I don't have permission" after tool execution,
+        // the permission-give-up nudge should fire — NOT finalize.
+        let m = make_assistant_msg(
+            Some("I don't have permission to access the C: drive in this sandbox."),
+            false,
+        );
+        let input = base_input(&m); // history_includes_tool=true
+        let out = decide_empty_response(input);
+        match &out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
+                assert!(
+                    text.contains("NOT in a sandbox"),
+                    "nudge should correct the sandbox misconception, got: {text}"
+                );
+                assert!(
+                    text.contains("HERMIX_CONFIRM=1"),
+                    "nudge should mention HERMIX_CONFIRM=1, got: {text}"
+                );
+            }
+            other => panic!("expected ContinueWithSystemNudge, got {:?}", other),
+        }
+        assert_eq!(out.new_post_tool_nudge_count, 1);
+    }
+
+    #[test]
+    fn permission_giveup_nudge_fires_on_chinese_permission_text() {
+        let m = make_assistant_msg(
+            Some("抱歉，我在沙盒中没有权限访问C盘的文件。"),
+            false,
+        );
+        let input = base_input(&m);
+        let out = decide_empty_response(input);
+        match &out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
+                assert!(
+                    text.contains("NOT in a sandbox"),
+                    "nudge should fire for Chinese permission give-up text"
+                );
+            }
+            other => panic!("expected ContinueWithSystemNudge, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn permission_giveup_nudge_does_not_fire_on_normal_text() {
+        // Normal visible text after tools should still finalize.
+        let m = make_assistant_msg(
+            Some("扫描完成，C盘共有20个目录。"),
+            false,
+        );
+        let input = base_input(&m);
+        let out = decide_empty_response(input);
+        assert_eq!(
+            out.action,
+            EmptyResponseAction::Finalize,
+            "normal text should finalize, not trigger permission nudge"
+        );
+    }
+
+    #[test]
+    fn permission_giveup_nudge_respects_max_count() {
+        let m = make_assistant_msg(
+            Some("I don't have permission to access this."),
+            false,
+        );
+        let mut input = base_input(&m);
+        input.post_tool_nudge_count = MAX_POST_TOOL_NUDGES;
+        let out = decide_empty_response(input);
+        assert_eq!(
+            out.action,
+            EmptyResponseAction::Finalize,
+            "should finalize after MAX_POST_TOOL_NUDGES"
+        );
+    }
+
+    #[test]
+    fn permission_giveup_nudge_does_not_fire_without_tool_history() {
+        // Without tool history, the permission nudge should not fire.
+        let m = make_assistant_msg(
+            Some("I don't have permission to access this."),
+            false,
+        );
+        let mut input = base_input(&m);
+        input.history_includes_tool = false;
+        let out = decide_empty_response(input);
+        // Falls through to autonomous nudge or finalize, not permission nudge
+        assert!(
+            !matches!(out.action, EmptyResponseAction::ContinueWithSystemNudge(t) if t.contains("NOT in a sandbox")),
+            "permission nudge should not fire without tool history"
+        );
+    }
+
+    #[test]
+    fn permission_giveup_detects_various_phrases() {
+        // Test the detector directly
+        assert!(looks_like_permission_giveup("I cannot access the file system"));
+        assert!(looks_like_permission_giveup("Permission denied by system"));
+        assert!(looks_like_permission_giveup("I'm in a sandbox"));
+        assert!(looks_like_permission_giveup("无法访问C盘"));
+        assert!(looks_like_permission_giveup("我没有权限"));
+        assert!(looks_like_permission_giveup("权限不足，无法继续"));
+        assert!(!looks_like_permission_giveup("Scan complete, 20 files found"));
+        assert!(!looks_like_permission_giveup("任务已完成"));
     }
 }

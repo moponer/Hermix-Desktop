@@ -216,6 +216,20 @@ impl SkillLoader {
                 }
             }
 
+            // --- CJK (Chinese) trigger fallback ---
+            // The English-oriented tokenizer above keeps a Chinese
+            // sentence (no whitespace) as one long token, so it
+            // never matches the short description words.
+            // `cjk_bigram_hit` adds a curated bigram-overlap check
+            // against the skill's tags/name so Chinese queries fire.
+            // See the helper for the false-positive bounding.
+            if cjk_bigram_hit(&msg_lower, &name_lower, &tags_lower) {
+                matched_tokens = matched_tokens.max(1);
+                if matched_on.is_empty() {
+                    matched_on = "cjk".to_string();
+                }
+            }
+
             let keyword_score = matched_tokens as f32 / msg_tokens.len() as f32;
             let fuzzy_score = description_fuzzy_score(&msg_tokens, &desc_lower);
             let score = keyword_score.max(fuzzy_score);
@@ -525,6 +539,98 @@ pub fn description_fuzzy_score(message_tokens: &[&str], description_lower: &str)
     exact_score.max(weighted_score)
 }
 
+// ---------------------------------------------------------------------------
+// CJK (Chinese) trigger fallback
+// ---------------------------------------------------------------------------
+
+/// True if `s` contains any CJK ideograph (BMP Unified + Ext A).
+/// Good enough for trigger-phrase routing; we don't need full
+/// Unicode script detection.
+fn has_cjk(s: &str) -> bool {
+    s.chars().any(|c| {
+        ('\u{4E00}'..='\u{9FFF}').contains(&c) || ('\u{3400}'..='\u{4DBF}').contains(&c)
+    })
+}
+
+/// Extract 2-character CJK bigrams from `s`. Only runs of CJK
+/// characters are bigrammed; ASCII/whitespace are skipped. This is
+/// the classic cheap Chinese IR trick: it makes word-order
+/// independent ("清理磁盘" vs "磁盘清理" both surface the 清理/磁盘
+/// bigrams) and survives natural phrasing ("帮我清理一下电脑磁盘"
+/// still contains the 清理/磁盘 bigrams).
+fn cjk_bigrams(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if has_cjk(&chars[i].to_string()) {
+            let start = i;
+            let mut end = i + 1;
+            while end < chars.len() && has_cjk(&chars[end].to_string()) {
+                end += 1;
+            }
+            let run: Vec<char> = chars[start..end].to_vec();
+            for w in run.windows(2) {
+                out.push(w.iter().collect());
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Returns true if the user message's CJK bigrams overlap the
+/// skill's curated CJK trigger `tags`/`name` by at least 2 distinct
+/// bigrams.
+///
+/// We match against the skill's *tags* and *name* (hand-authored by
+/// the skill author), NOT the whole description prose — this bounds
+/// the false-positive surface to the tag vocabulary. The ≥2-bigram
+/// threshold suppresses single-common-word false positives (e.g.
+/// "分析一下这个项目" shares only the 分析 bigram with the
+/// storage-analyzer skill, which is below the threshold and would
+/// otherwise light it up).
+fn cjk_bigram_hit(msg_lower: &str, name_lower: &str, tags_lower: &[String]) -> bool {
+    if !has_cjk(msg_lower) {
+        return false;
+    }
+    let msg_bigrams = cjk_bigrams(msg_lower);
+    let mut consider: Vec<String> = tags_lower.to_vec();
+    if has_cjk(name_lower) {
+        consider.push(name_lower.to_string());
+    }
+    // Curated-tag substring match: the message contains a full trigger
+    // phrase (e.g. "c盘", "清理磁盘"). This catches cases where
+    // bigrams alone fall short — a single-CJK-char tail like "C盘"
+    // yields no bigram, and a short phrase may share only one bigram
+    // with a tag.
+    for t in &consider {
+        if has_cjk(t) && msg_lower.contains(t) {
+            return true;
+        }
+    }
+    // Otherwise require ≥2 shared bigrams to suppress single-common-
+    // word false positives (e.g. "分析一下这个项目" shares only the
+    // 分析 bigram with the storage skill).
+    if msg_bigrams.len() < 2 {
+        return false;
+    }
+    let mut shared: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for t in &consider {
+        if !has_cjk(t) {
+            continue;
+        }
+        for bg in cjk_bigrams(t) {
+            if msg_bigrams.contains(&bg) {
+                shared.insert(bg);
+            }
+        }
+    }
+    shared.len() >= 2
+}
+
 
 
 #[cfg(test)]
@@ -713,6 +819,89 @@ mod tests {
 
         let matches = loader.match_message("anything");
         assert!(matches.is_empty());
+    }
+
+    // --- CJK (Chinese) keyword auto-routing ---
+
+    /// Build a temp skills dir with two skills that carry Chinese
+    /// trigger tags: a storage-analyzer-like skill (磁盘/缓存/存储
+    /// triggers) and a ponytail-like skill (懒人/最简/写代码 triggers).
+    fn setup_cjk_test_skills() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills = [
+            (
+                "storage-analyzer",
+                "Windows read-only storage analysis assistant",
+                vec!["清理磁盘", "磁盘清理", "C盘", "空间不够", "清缓存", "存储分析"],
+                "# Storage Analyzer\n\nScan disk usage and classify junk.",
+            ),
+            (
+                "ponytail",
+                "Force the laziest solution that works",
+                vec!["懒人模式", "最简方案", "少写代码", "最小实现", "过度工程"],
+                "# Ponytail\n\nWrite the minimal code that works.",
+            ),
+        ];
+        for (name, desc, tags, body) in &skills {
+            let skill_dir = tmp.path().join(name);
+            fs::create_dir_all(&skill_dir).unwrap();
+            let tags_inline = tags.join(", ");
+            let content = format!(
+                "---\nname: {name}\ndescription: {desc}\ntags: [{tags_inline}]\n---\n{body}"
+            );
+            fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+        }
+        tmp
+    }
+
+    #[test]
+    fn cjk_match_storage_chinese_query() {
+        let tmp = setup_cjk_test_skills();
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+
+        // Natural phrasing with extra filler words still fires.
+        let matches = loader.match_message("帮我清理一下C盘");
+        assert!(!matches.is_empty(), "Chinese storage query should match");
+        let names: Vec<&str> = matches.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"storage-analyzer"), "got: {names:?}");
+    }
+
+    #[test]
+    fn cjk_match_ponytail_chinese_query() {
+        let tmp = setup_cjk_test_skills();
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+
+        let matches = loader.match_message("用最简方案写这段代码");
+        assert!(!matches.is_empty(), "Chinese ponytail query should match");
+        let names: Vec<&str> = matches.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"ponytail"), "got: {names:?}");
+    }
+
+    #[test]
+    fn cjk_no_false_positive_on_common_words() {
+        let tmp = setup_cjk_test_skills();
+        let mut loader = SkillLoader::with_dir(tmp.path());
+        loader.scan();
+
+        // "分析一下这个项目" only shares the single 分析 bigram with
+        // the storage skill (below the ≥2 threshold) → must NOT fire.
+        let matches = loader.match_message("分析一下这个项目");
+        let names: Vec<&str> = matches.iter().map(|m| m.name.as_str()).collect();
+        assert!(
+            !names.contains(&"storage-analyzer"),
+            "common-word query must not false-trigger storage: {names:?}"
+        );
+
+        // "帮我存储这个文件" — 存储 appears inside 存储分析 but as a
+        // single bigram, below threshold → must NOT fire.
+        let matches2 = loader.match_message("帮我存储这个文件");
+        let names2: Vec<&str> = matches2.iter().map(|m| m.name.as_str()).collect();
+        assert!(
+            !names2.contains(&"storage-analyzer"),
+            "store-file query must not false-trigger storage: {names2:?}"
+        );
     }
 
     // --- P2-T2: fuzzy matching helpers ---

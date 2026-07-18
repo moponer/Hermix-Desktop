@@ -42,6 +42,8 @@ pub mod session_stamper;
 pub mod skill_commands;
 pub mod skill_utils;
 pub mod skills;
+pub mod storage_analyzer;
+pub mod storage_clean;
 // pub mod slack; // Untracked, broken - removed until fixed
 pub mod terminal;
 pub mod todo;
@@ -94,6 +96,8 @@ pub fn register_all(
 ) {
     // P1.2 per-tool migration (completed 2026-07-01):
     disk_cleanup::register(registry);
+    storage_analyzer::register(registry);
+    storage_clean::register(registry);
     vision::register(registry);
     security_guidance::register(registry);
     platforms::register(registry);
@@ -157,8 +161,17 @@ pub fn register_all(
     // P1.3: terminal tool. The workspace handle is owned by the
     // registry (set by `LocalAgentService` per-turn from
     // `AgentOverrides::workspace`) so the terminal tool sees the
-    // same cwd the desktop UI picker picked.
-    terminal::register(registry, terminal_backend, registry.terminal_workspace_handle());
+    // same cwd the desktop UI picker picked. The approval-ctx
+    // handle is also owned by the registry; `LocalAgentService`
+    // writes a fresh `TerminalApprovalContext` per turn so the
+    // terminal's `RequiresConfirmation` path can emit
+    // `request_approval` events on the active WS channel (2026-07-17).
+    terminal::register(
+        registry,
+        terminal_backend,
+        registry.terminal_workspace_handle(),
+        registry.terminal_approval_ctx_handle(),
+    );
     // P1.3: web tools (keyless local backends: Baidu HTML scraper +
     // reqwest HTML fetch).
     web::register(registry);

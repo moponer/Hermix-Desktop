@@ -95,6 +95,7 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "office",
     "browser",
     "cua",
+    "storage",
 ];
 
 /// Re-enable the essential toolsets on a [`ToolRegistry`]. Idempotent;
@@ -141,6 +142,7 @@ mod tests {
                 "office",
                 "browser",
                 "cua",
+                "storage",
             ],
             "ESSENTIAL_TOOLSETS changed — update the tests in \
              hermix_tools::essential and any UI copy that lists \

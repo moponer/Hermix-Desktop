@@ -20,6 +20,8 @@ pub mod scheduler;
 pub mod meta;
 pub mod yanluo;
 pub mod runtime;
+pub mod agent_contract;
+pub mod handoff;
 
 pub use manager::GroupChatManager;
 pub use persistence::RoomPersistence;
@@ -44,3 +46,8 @@ pub use yanluo::{
     run_detectors, decide_penalty,
 };
 pub use runtime::{TaskEngineRuntime, RoomRuntime, RoomEvent};
+pub use agent_contract::{
+    RoomAgentContract, LeaderDecision, SubtaskAssignment, HandoffDirective,
+    parse_leader_decision, build_leader_decision_prompt,
+};
+pub use handoff::{ResolvedHandoff, HandoffKind, resolve_handoff};

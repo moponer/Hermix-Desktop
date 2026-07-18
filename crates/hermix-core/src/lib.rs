@@ -4,6 +4,7 @@
 //! used across the hermes-agent-rust workspace.
 
 pub mod acui;
+pub mod approval;
 pub mod errors;
 pub mod tool_call_parser;
 pub mod tool_call_sanitizer;
@@ -72,6 +73,9 @@ pub use acui::{AcuiDirective, AcuiHide, AcuiPosition, AcuiShow, AcuiState, AcuiU
 
 // Re-export ParseMode from traits
 pub use traits::ParseMode;
+
+// Re-export ApprovalOutcome taxonomy (2026-07-18 A+C product fix)
+pub use approval::ApprovalOutcome;
 
 // Re-export PermissionMode and RiskLevel from traits
 pub use traits::{PermissionMode, RiskLevel};

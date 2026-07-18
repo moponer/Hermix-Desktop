@@ -815,14 +815,63 @@ pub async fn send_message(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let user_resp = msg_to_response(&user_msg);
 
+    // ── 2026-07 refactor: unified runtime path ──────────────
+    // When the task engine is available, trigger the runtime's
+    // scheduler-based dispatch in the background. Agent responses
+    // are delivered via WS events (RoomEvent::MessageSaved,
+    // AgentThinkingChunk, DispatchFailed, Handoff, …) which the
+    // WS handler forwards to connected clients.
+    //
+    // This REST endpoint is the *primary* entry point for a group-chat
+    // user message (the WS `GroupChat*` commands do NOT re-trigger
+    // TaskCreated). We spawn the runtime dispatch so the HTTP handler
+    // never blocks on LLM calls; agent responses arrive out-of-band via
+    // the WS events listed above.
+    if let Some(te) = state.task_engine.as_ref() {
+        let te = te.clone();
+        let room_id_owned = room_id.clone();
+        let content_owned = content.clone();
+        tokio::spawn(async move {
+            let node_id = format!("user-{}", uuid::Uuid::new_v4());
+            let event = hermix_gateway::groupchat::scheduler::SchedulerEvent::TaskCreated {
+                room_id: room_id_owned.clone(),
+                node_id,
+                description: content_owned.chars().take(80).collect(),
+                spec: content_owned,
+                assigned_agent: "__leader__".to_string(),
+            };
+            // M10: the previous `let _ = te.apply(...)` swallowed the
+            // result with no signal. `apply` returns the scheduler events
+            // it produced (empty Vec ⇒ the event was not accepted, e.g.
+            // the room no longer exists). Surface that so a failed
+            // background dispatch is observable instead of silently
+            // leaving the room stuck.
+            let produced = te.apply(&room_id_owned, event).await;
+            if produced.is_empty() {
+                tracing::error!(
+                    room_id = %room_id_owned,
+                    "groupchat runtime dispatch (TaskCreated) produced no events after REST send_message — room may be missing or scheduler rejected the event"
+                );
+            } else {
+                tracing::debug!(
+                    room_id = %room_id_owned,
+                    n_events = produced.len(),
+                    "groupchat runtime dispatch (TaskCreated) accepted"
+                );
+            }
+        });
+
+        return Ok(Json(SendMessageResponse {
+            user_message: user_resp,
+            agent_messages: Vec::new(),
+        }));
+    }
+
+    // ── Fallback: no runtime → legacy synchronous dispatch ──
+    // Used when task_engine is None (test environment / legacy
+    // build).保留了旧的 Leader→子任务→汇总 编排逻辑。
     let mut agent_responses = Vec::new();
 
-    // ── Dispatch agents with a 90-second time budget ─────
-    // Without a timeout, invalid LLM keys or rate limits could
-    // freeze the HTTP response for minutes (exponential-backoff
-    // retries in the agent loop).  We isolate the dispatch in a
-    // timeout and always reply with whatever we collected (even
-    // just the user message + a system hint).
     let room_name = manager
         .get_room(&room_id).await.ok().flatten()
         .map(|r| r.name)
@@ -838,10 +887,6 @@ pub async fn send_message(
     ).await;
 
     // ── Fleet failure → surface a system message ─────────
-    // When every agent dispatch failed silently (no LLM provider,
-    // invalid credentials, connection errors, etc.), the frontend
-    // would show an empty response — no feedback at all.  Insert a
-    // system-level hint so the user knows *why* nobody replied.
     if agent_responses.is_empty() {
         tracing::warn!(room = %room_id, "groupchat send_message: all dispatch failed, inserting system hint");
         let hint = if manager.dispatcher().is_none() {
@@ -1357,8 +1402,8 @@ pub async fn update_subtask(
     // for the rank hook after the write commits.
     let old_status = updated.status;
 
-    updated.status = req.status.parse()
-        .unwrap_or(hermix_gateway::groupchat::persistence::SubTaskStatus::Pending);
+    updated.status = req.status.parse::<hermix_gateway::groupchat::persistence::SubTaskStatus>()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
     if let Some(r) = req.result { updated.result = Some(r); }
     // Stamp started_at on the running transition (only first time).
     if updated.status == hermix_gateway::groupchat::persistence::SubTaskStatus::Running

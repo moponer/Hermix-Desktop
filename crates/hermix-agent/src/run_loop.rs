@@ -97,6 +97,15 @@ impl AgentLoop {
             )));
         }
 
+        // --- P1 (2026-07-18): poll any background-spawned compression ---
+        // Non-blocking probe: if a previous spawn finished while the
+        // agent loop was processing the last turn, roll the result
+        // into `ctx` *before* anything else reads `ctx` (memory
+        // recall, skill injection, LLM call). This is the only point
+        // in the loop where the in-flight handle is reliably polled
+        // every turn.
+        let _ = self.poll_in_flight_compression(ctx, false).await;
+
         // --- `/steer` pre-API drain ---
         self.pre_api_apply_pending_steer(ctx);
 
@@ -374,7 +383,12 @@ impl AgentLoop {
                     .get(&tc.id)
                     .cloned()
                     .unwrap_or_else(|| format!("legacy-{}", tc.function.name));
-                cb(&tool_call_id, &tc.function.name, &res.content);
+                cb(
+                    &tool_call_id,
+                    &tc.function.name,
+                    &res.content,
+                    res.denial_kind.as_deref().unwrap_or(""),
+                );
             }
         }
 
@@ -395,7 +409,7 @@ impl AgentLoop {
                         "file_path": change.path,
                         "file_summary": change.summary,
                     }).to_string();
-                    cb(&synth_id, &synth_name, &payload);
+                    cb(&synth_id, &synth_name, &payload, "");
                 }
             }
         }
@@ -416,6 +430,16 @@ impl AgentLoop {
 
         for result in results {
             push_tool_result(ctx, tool_calls, &result.tool_call_id, &result.content);
+            // 2026-07-18: if the result is a *denial* (user拒绝 /
+            // 超时 / 连接中断), inject the structured "tell the user"
+            // system note right after the tool_result so the LLM's
+            // next turn obeys it instead of going quiet or silently
+            // retrying.
+            crate::tool_result_processor::inject_denial_note_if_needed(
+                ctx,
+                tool_calls,
+                &result,
+            );
         }
         self.post_tool_apply_pending_steer(ctx);
         // 2026-07-09: Removed execute_code turn-counter deduction hack.
@@ -994,7 +1018,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 ));
             }
             let tool_start = Instant::now();
-            tracing::debug!(phase = %LoopPhase::ToolExecution, turn = total_turns, tools = tool_calls.len(), "run: executing tool calls");
+            tracing::info!(phase = %LoopPhase::ToolExecution, turn = total_turns, tools = tool_calls.len(), "run: executing tool calls");
 self.notify_phase(&LoopPhase::ToolExecution, total_turns);
             let results = self
                 .execute_tool_calls(

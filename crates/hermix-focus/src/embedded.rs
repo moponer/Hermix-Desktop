@@ -188,10 +188,10 @@ impl EmbeddedMemoryBackend {
         // 已存在的 CREATE TABLE / ALTER TABLE 仍然全部跑（向后兼容），
         // 但新增的 schema 块（janitor、recall_audit、session_snapshots）
         // 用 version 守卫，避免每次 open() 跑 14 个 SQL。
-        // - 新装 DB：user_version=0 → 全部 migration 顺序执行 → 5
-        // - 已有 DB（user_version=4）：只跑 v5（WAL + synchronous=NORMAL）
-        // - 最新 DB（user_version=5）：啥都不跑（极快）
-        const CURRENT_SCHEMA_VERSION: i64 = 5;
+        // - 新装 DB：user_version=0 → 全部 migration 顺序执行 → 6
+        // - 已有 DB（user_version=4）：只跑 v5 → v6（reflections 表）
+        // - 最新 DB（user_version=6）：啥都不跑（极快）
+        const CURRENT_SCHEMA_VERSION: i64 = 6;
         let current_version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap_or(0);
@@ -481,9 +481,11 @@ impl EmbeddedMemoryBackend {
             conn.execute_batch("PRAGMA synchronous = NORMAL")?;
             let _ = conn.execute_batch("PRAGMA user_version = 5");
         } else {
-            // Already at v5: defensive re-set of `synchronous` (it
-            // is per-connection, not persisted in the DB header) so
-            // we don't depend on whoever opened it last.
+            // current_version >= 5: defensive re-set of `synchronous`
+            // (it is per-connection, not persisted in the DB header)
+            // so we don't depend on whoever opened it last.
+            // (WAL mode itself persists in the DB header so we don't
+            // need to re-enable it here.)
             conn.execute_batch("PRAGMA synchronous = NORMAL")?;
         }
         // v6 (2026-07-14): `reflections` table for E (memory
@@ -501,6 +503,12 @@ impl EmbeddedMemoryBackend {
         // cheap LIKE scan is fine) but we DO index by session and
         // by created_at so "most recent N for this session" is a
         // single index lookup.
+        //
+        // NOTE: gate stays `current_version < 6` even after bumping
+        // CURRENT_SCHEMA_VERSION to 6 — this block IS the v6
+        // migration, and we want it to run on every DB that hasn't
+        // already executed it. Re-runs are no-ops because the
+        // CREATE TABLE / INDEX statements are all idempotent.
         if current_version < 6 {
             conn.execute_batch(
                 r#"
@@ -2521,7 +2529,11 @@ mod tests {
         drop(conn);
 
         assert_eq!(mode, "wal", "journal_mode must be WAL after migrate()");
-        assert_eq!(version, 5, "user_version must be 5 after migrate()");
+        // 2026-07-18: bumped from 5 → 6 when the v6 reflections migration
+        // (2026-07-14) was promoted from "gated CREATE TABLE IF NOT EXISTS"
+        // into a version-tracked migration. CURRENT_SCHEMA_VERSION was
+        // bumped in lockstep; this assertion follows.
+        assert_eq!(version, 6, "user_version must be 6 after migrate()");
         assert_eq!(sync_mode, 1, "synchronous must be NORMAL (1), not FULL (2) or OFF (0)");
     }
 
@@ -2551,10 +2563,13 @@ mod tests {
         drop(conn);
 
         assert_eq!(mode, "wal", "second open must keep WAL");
-        assert_eq!(version, 5, "second open must keep user_version=5");
+        // 2026-07-18: v6 (reflections table) is now part of the schema
+        // trail, so a "fresh DB then reopen" sequence settles at
+        // user_version=6 (not 5). See CURRENT_SCHEMA_VERSION comment.
+        assert_eq!(version, 6, "second open must keep user_version=6");
         assert_eq!(
             sync_mode, 1,
-            "synchronous must be re-asserted to NORMAL even when already v5"
+            "synchronous must be re-asserted to NORMAL even when already at head"
         );
     }
 

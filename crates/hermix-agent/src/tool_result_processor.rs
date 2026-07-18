@@ -95,6 +95,60 @@ pub fn push_tool_result(
     ctx.add_message(Message::tool_result(tool_call_id, &filtered, tool_name));
 }
 
+/// 2026-07-18 (A+C product fix): when a tool call was **denied** (not
+/// merely failed on execution) — user拒绝 / 超时 / 连接中断 — inject a
+/// structured `system` note right after the `tool_result` so the LLM's
+/// next turn is forced to (1) tell the user the call was blocked, (2)
+/// explain why the tool was needed, and (3) ask how to proceed instead
+/// of silently retrying or going quiet. Policy denials
+/// (`denial_kind == "policy"`) are intentionally skipped — the LLM
+/// already knows the policy gate fired from the `reason` string and a
+/// second note would be noise.
+///
+/// No-op for normal results (`denial_kind == None`) and execution
+/// errors (those are real failures, not refusals).
+pub fn inject_denial_note_if_needed(
+    ctx: &mut ContextManager,
+    tool_calls: &[ToolCall],
+    result: &ToolResult,
+) {
+    let Some(kind_str) = result.denial_kind.as_deref() else {
+        return;
+    };
+    let kind = crate::tool_dispatch::DenialKind::from_str(kind_str);
+    // Policy denials (Tirith/hardline) are silent-by-design: the LLM
+    // already knows the gate fired from the `reason` string, and a
+    // second note would be noise.
+    if !kind.requires_user_notice() {
+        return;
+    }
+    let tool_name = tool_calls
+        .iter()
+        .find(|tc| tc.id == result.tool_call_id)
+        .map(|tc| tc.function.name.as_str())
+        .unwrap_or("<unknown>");
+
+    let kind_label = match kind {
+        crate::tool_dispatch::DenialKind::UserDenied => "用户明确拒绝了该工具调用",
+        crate::tool_dispatch::DenialKind::TimedOut => "确认超时（你在限定时间内没有做出决定）",
+        crate::tool_dispatch::DenialKind::ChannelClosed => {
+            "连接中断（WS 断开 / 服务端重启 / 会话重载），请求丢失"
+        }
+        crate::tool_dispatch::DenialKind::Policy => "策略拦截", // unreachable after the guard above
+    };
+
+    let note = format!(
+        "[SYSTEM — 工具调用被拒绝]\n\
+         工具 `{tool_name}` 的调用未能执行。拒绝原因：{kind_label}。\n\
+         你的【下一段回复必须】做到以下三点，不得遗漏：\n\
+         1. 用中文明确告诉用户：刚才这个 `{tool_name}` 工具调用被拒绝，没有执行。\n\
+         2. 简要说明你原本打算用这个工具做什么、为什么需要它。\n\
+         3. 主动询问用户下一步：是否换用替代工具、调整请求描述，还是结束当前任务。\n\
+         【严禁】在用户未授权的情况下，自作主张地用其它工具重试同样的操作——用户的拒绝决定必须被尊重。",
+    );
+    ctx.add_message(Message::system(note));
+}
+
 /// v34 (2026-07-09): push a `tool_result` message that exists **only**
 /// in the in-memory context — it is never persisted to the DB.
 /// Used by the replay path where the tool wasn't actually re-executed;
@@ -132,4 +186,114 @@ pub fn push_ephemeral_tool_result(
     let mut msg = Message::tool_result(tool_call_id, &cached_content, tool_name);
     msg.ephemeral = true;
     ctx.add_message(msg);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::ContextManager;
+    use hermix_core::{FunctionCall, MessageRole, ToolCall};
+
+    /// Fresh, empty context.
+    fn make_ctx() -> ContextManager {
+        ContextManager::new(200_000)
+    }
+
+    /// A `terminal` tool call with no `command` arg (so the RTK
+    /// terminal filter is a no-op and content passes through unchanged).
+    fn make_tool_call(id: &str) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            function: FunctionCall {
+                name: "terminal".to_string(),
+                arguments: "{}".to_string(),
+            },
+        }
+    }
+
+    /// Mimic the real call site: push the `tool_result` (as
+    /// `push_tool_result_from_struct` does), then run the denial-note
+    /// injection. `kind == None` produces a normal success result.
+    fn run_inject(kind: Option<&str>) -> ContextManager {
+        let mut ctx = make_ctx();
+        let tc = make_tool_call("call_1");
+        let result = match kind {
+            Some(k) => ToolResult::denied("call_1", "blocked", k),
+            None => ToolResult::ok("call_1", "ok output"),
+        };
+        push_tool_result_from_struct(&mut ctx, &[tc.clone()], &result);
+        inject_denial_note_if_needed(&mut ctx, &[tc], &result);
+        ctx
+    }
+
+    fn count_system_notes(ctx: &ContextManager) -> usize {
+        ctx.get_messages()
+            .iter()
+            .filter(|m| m.role == MessageRole::System)
+            .count()
+    }
+
+    fn last_message_is_denial_note(ctx: &ContextManager) -> bool {
+        ctx.get_messages()
+            .last()
+            .map(|m| {
+                m.role == MessageRole::System
+                    && m.content
+                        .as_deref()
+                        .unwrap_or("")
+                        .contains("[SYSTEM — 工具调用被拒绝]")
+            })
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn no_note_for_normal_success() {
+        let ctx = run_inject(None);
+        assert_eq!(
+            count_system_notes(&ctx),
+            0,
+            "normal success must not inject a system note"
+        );
+    }
+
+    #[test]
+    fn no_note_for_policy_denial() {
+        let ctx = run_inject(Some("policy"));
+        assert_eq!(
+            count_system_notes(&ctx),
+            0,
+            "policy denials are silent-by-design (no user-facing note)"
+        );
+    }
+
+    #[test]
+    fn injects_note_for_user_denied() {
+        let ctx = run_inject(Some("user_denied"));
+        assert_eq!(count_system_notes(&ctx), 1);
+        assert!(last_message_is_denial_note(&ctx));
+    }
+
+    #[test]
+    fn injects_note_for_timed_out() {
+        let ctx = run_inject(Some("timed_out"));
+        assert_eq!(count_system_notes(&ctx), 1);
+        assert!(last_message_is_denial_note(&ctx));
+    }
+
+    #[test]
+    fn injects_note_for_channel_closed() {
+        let ctx = run_inject(Some("channel_closed"));
+        assert_eq!(count_system_notes(&ctx), 1);
+        assert!(last_message_is_denial_note(&ctx));
+    }
+
+    #[test]
+    fn unknown_kind_falls_back_to_user_notice() {
+        // `DenialKind::from_str` maps unknown strings to `ChannelClosed`,
+        // which requires a user-facing note — so forward-compat denial
+        // kinds still surface to the LLM rather than going silent.
+        let ctx = run_inject(Some("some_future_kind"));
+        assert_eq!(count_system_notes(&ctx), 1);
+        assert!(last_message_is_denial_note(&ctx));
+    }
 }

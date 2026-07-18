@@ -1,3 +1,4 @@
+use super::agent_contract::{parse_leader_decision, LeaderDecision};
 use super::persistence::*;
 
 /// Result of leader's secondary decision: should we publish a
@@ -47,14 +48,6 @@ pub struct PlannedSubtask {
     pub context: Option<String>,
     /// If true, must wait for `wait_for` subtasks to complete first.
     pub wait_for: Vec<usize>,
-}
-
-/// Result of leader's aggregation.
-#[derive(Debug, Clone)]
-pub struct AggregatedResult {
-    pub report: String,
-    pub summary: String,
-    pub subtask_results: Vec<(String, String)>, // (subtask_desc, result)
 }
 
 impl LeaderOrchestrator {
@@ -224,6 +217,88 @@ impl LeaderOrchestrator {
             }
         }
         None
+    }
+
+    /// Parse the leader's structured decision from its JSON reply.
+    ///
+    /// This is the **primary** path after the 2026-07 refactor — the leader
+    /// is asked to emit a `LeaderDecision` JSON (see
+    /// [`super::agent_contract::build_leader_decision_prompt`]). On success
+    /// the caller gets analysis + subtasks + announcement + handoff in one
+    /// shot, eliminating the fragile regex-based `parse_task_plan`.
+    ///
+    /// On parse failure the caller should fall back to [`parse_task_plan`]
+    /// (legacy) and surface a `SoftError` so the user knows the structured
+    /// path failed.
+    pub fn parse_decision(raw: &str) -> Result<LeaderDecision, String> {
+        parse_leader_decision(raw)
+    }
+
+    /// Convert a parsed `LeaderDecision` into the legacy `TaskPlan` shape so
+    /// the existing `runtime.rs` dispatch path can consume it without changes.
+    ///
+    /// This adapter bridges the new structured output to the old scheduler,
+    /// letting us roll out the structured prompt incrementally.
+    pub fn decision_to_task_plan(decision: &LeaderDecision) -> TaskPlan {
+        // Build a map from subtask id → index so we can resolve
+        // `depends_on` string references into `wait_for` indices.
+        let id_to_index: std::collections::HashMap<&str, usize> = decision
+            .subtasks
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.id.as_deref().unwrap_or(""), i))
+            .filter(|(id, _)| !id.is_empty())
+            .collect();
+
+        let subtasks: Vec<PlannedSubtask> = decision
+            .subtasks
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let wait_for: Vec<usize> = s
+                    .depends_on
+                    .iter()
+                    .filter_map(|dep| {
+                        let resolved = id_to_index
+                            .get(dep.as_str())
+                            .copied()
+                            .or_else(|| {
+                                let fallback = format!("subtask-{}", dep);
+                                id_to_index.get(fallback.as_str()).copied()
+                            });
+                        match resolved {
+                            // Self-referential dependency is ignored.
+                            Some(idx) if idx != i => Some(idx),
+                            Some(_) => None,
+                            // M6: a reference to an id that isn't a real
+                            // subtask used to be silently dropped by
+                            // `filter_map`. Log it so the dependency graph
+                            // isn't silently corrupted.
+                            None => {
+                                tracing::warn!(
+                                    subtask_id = s.id.as_deref().unwrap_or("?"),
+                                    missing_dep = dep,
+                                    "leader decision references unknown subtask id in depends_on; \
+                                     dropping dependency (M6)"
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .collect();
+                PlannedSubtask {
+                    description: s.description.clone(),
+                    assigned_to: s.assigned_to.clone(),
+                    context: s.context.clone(),
+                    wait_for,
+                }
+            })
+            .collect();
+        let reasoning = decision.analysis.clone();
+        TaskPlan {
+            subtasks,
+            reasoning,
+        }
     }
 
     /// Parse leader's task decomposition from LLM response into a TaskPlan.

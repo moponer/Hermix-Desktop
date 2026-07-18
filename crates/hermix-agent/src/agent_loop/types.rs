@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use hermix_core::ToolSchema;
+use hermix_core::{Message, ToolSchema};
 
 use crate::context::ContextManager;
 use crate::context_pressure::ContextPressureMonitor;
@@ -135,6 +135,71 @@ pub(crate) struct LoopState {
     /// token compare; no embedding). On a recall hit we replace
     /// it with the new top-k.
     pub(crate) last_recall_keys: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Background-spawned compression bookkeeping (P1, 2026-07-18)
+// ---------------------------------------------------------------------------
+
+/// Outcome of one background-spawned compression attempt.
+///
+/// Produced by the `tokio::spawn`-ed compressor task and consumed by
+/// `apply_compression_result` when the agent loop's next
+/// `do_pre_turn_setup` polls the in-flight handle. The struct holds
+/// everything we need to roll the compressed state forward without
+/// having to take `compressor.lock().await` again on the apply side.
+///
+/// `compressed_base` is the snapshot the compressor produced (typically
+/// `[kept_head, summary_msg]`). `new_messages_since_snapshot` is left
+/// empty here — the agent loop splices them in at apply time so the
+/// compressor never has to know what the live `ctx` looks like after
+/// it started.
+pub(crate) struct CompressionOutcome {
+    /// Compressed version of the *snapshot* slice (i.e. everything that
+    /// existed in `ctx.messages` at trigger time). When applied we
+    /// splice in messages added after the trigger point.
+    pub compressed_base: Vec<Message>,
+    /// Archive refs the spawn task produced when calling
+    /// `archive_context_section` on the snapshot. The apply path
+    /// forwards these to `self.last_archive_refs` so the frontend
+    /// "see archived context" affordance lights up. Empty when the
+    /// archive pass found nothing to unload.
+    pub archive_refs: Vec<crate::archive::ArchiveRef>,
+    /// True when the spawn task completed without panicking and the
+    /// LLM summary call (if any) returned successfully. Currently
+    /// only logged; the apply path re-locks the compressor to read
+    /// the persisted summary / metrics directly so we don't have to
+    /// mirror them through this struct.
+    pub success: bool,
+}
+
+/// In-flight bookkeeping for one background compression.
+///
+/// Lives on the `AgentLoop` (`compression_in_flight: Mutex<Option<Self>>`)
+/// so the agent loop's main path can poll it on every turn setup and
+/// roll the result in without re-locking the compressor. We hold the
+/// `JoinHandle` rather than a `tokio::sync::oneshot::Receiver` because
+/// the spawn task itself owns the result; `JoinHandle` lets us await
+/// it with a timeout.
+pub(crate) struct CompressionInFlight {
+    /// The spawn task. Awaitable with a timeout; on success returns
+    /// the `CompressionOutcome`.
+    pub handle: tokio::task::JoinHandle<CompressionOutcome>,
+    /// `ctx.messages.len()` at trigger time — the apply path uses this
+    /// to know which messages in the live `ctx` were *added after* the
+    /// spawn fired and must be preserved verbatim.
+    pub snapshot_len: usize,
+    /// Total tokens at trigger time, used by the apply path to
+    /// recompute `total_tokens_saved` after the merge.
+    pub snapshot_tokens: usize,
+    /// Wall-clock instant when the spawn fired; the apply path can
+    /// use it to log "compression finished after X ms" without
+    /// tracking latency separately.
+    pub started_at: std::time::Instant,
+    /// Snapshot of `ctx.max_context_tokens` at trigger time so the
+    /// apply path can recompute pressure ratios without re-reading
+    /// the context (which would require holding `ctx` by `&`).
+    pub max_context_tokens: usize,
 }
 
 // ---------------------------------------------------------------------------

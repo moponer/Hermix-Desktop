@@ -8,6 +8,7 @@ use serde_json::Value;
 use crate::errors::{AgentError, GatewayError, ToolError};
 use crate::tool_schema::ToolSchema;
 use crate::types::{CommandOutput, LlmResponse, Message, Skill, SkillMeta, StreamChunk};
+use crate::ApprovalOutcome;
 
 // ---------------------------------------------------------------------------
 // LlmProvider
@@ -357,11 +358,16 @@ pub struct AgentOverrides {
     #[serde(default)]
     pub skills: Option<Vec<String>>,
     /// Callback to register an approval request with the WS handler.
-    /// Arguments: `(session_id, request_id)` → `oneshot::Receiver<bool>`.
-    /// The receiver resolves when the client sends an `ApprovalResponse`.
+    /// Arguments: `(session_id, request_id)` →
+    /// `oneshot::Receiver<ApprovalOutcome>`. The receiver resolves when
+    /// the client sends an `ApprovalResponse`, the registry timeout
+    /// fires, or the connection drops — each surfaced as a distinct
+    /// `ApprovalOutcome` variant so the agent can tell "user denied"
+    /// apart from "timed out" / "channel closed" (A+C product fix,
+    /// 2026-07-18).
     #[serde(skip)]
     pub approval_requester:
-        Option<Arc<dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<bool> + Send + Sync>>,
+        Option<Arc<dyn Fn(String, String) -> tokio::sync::oneshot::Receiver<ApprovalOutcome> + Send + Sync>>,
     /// Callback to send a non-text event (e.g. `RequestApproval`) to the WS client.
     /// The argument is a `serde_json::Value` representing the event payload
     /// (without the `WsEnvelope` wrapper — the caller adds version/trace_id).
@@ -539,6 +545,27 @@ pub trait CoreContextEngine: Send + Sync {
     /// Takes the full message list and returns a compressed version.
     /// The implementation decides what to keep, summarize, or drop.
     async fn compress(&mut self, messages: Vec<Message>) -> Vec<Message>;
+
+    /// Compress without blocking on the LLM summariser.
+    ///
+    /// Used when context pressure is moderate (e.g. 50–85% of the
+    /// window) and blocking one turn on an LLM summary call is not
+    /// yet justified. The fast path still runs the archive + dedup
+    /// + score-drop passes, but replaces the LLM summary with a
+    /// static fallback marker — the original turns are archived to
+    /// disk first, so nothing is lost, the LLM just doesn't get a
+    /// semantic handoff for the removed turns.
+    ///
+    /// When pressure crosses the high-water mark (e.g. >= 85%) the
+    /// caller should switch back to [`Self::compress`] so the LLM
+    /// gets a real summary before the window is at risk of
+    /// overflowing.
+    ///
+    /// Default falls back to [`Self::compress`] for engines that
+    /// don't distinguish (e.g. `NoOpCompressionEngine`).
+    async fn compress_fast(&mut self, messages: Vec<Message>) -> Vec<Message> {
+        self.compress(messages).await
+    }
 
     /// Notify the engine about session reset (/new, /reset).
     /// Implementations should clear per-session state.

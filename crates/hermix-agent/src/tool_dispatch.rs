@@ -35,7 +35,7 @@
 use std::collections::{HashMap, HashSet};
 
 use hermix_config::env_compat;
-use hermix_core::ToolCall;
+use hermix_core::{ApprovalOutcome, ToolCall};
 
 use crate::agent_helpers::{ToolDispatchDecision, ToolRegistry};
 
@@ -175,7 +175,7 @@ pub(crate) fn denial_repick_hint(tool_name: &str, raw_args: &str) -> &'static st
 pub(crate) async fn resolve_pre_dispatch(
     on_pre_tool_dispatch: Option<&(dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync)>,
     tool_calls: &[ToolCall],
-) -> HashMap<String, Result<(), String>> {
+) -> HashMap<String, Result<(), ToolDenial>> {
     let Some(hook) = on_pre_tool_dispatch else {
         return HashMap::new();
     };
@@ -184,19 +184,113 @@ pub(crate) async fn resolve_pre_dispatch(
         let id = tc.id.clone();
         let outcome = match hook(tc) {
             ToolDispatchDecision::Allow => Ok(()),
-            ToolDispatchDecision::Deny { reason } => Err(reason),
+            ToolDispatchDecision::Deny { reason } => Err(ToolDenial {
+                kind: DenialKind::Policy,
+                reason,
+            }),
             ToolDispatchDecision::AwaitApproval(rx) => match rx.await {
-                Ok(true) => Ok(()),
-                Ok(false) => Err(format!(
-                    "User denied the tool call.{hint}",
-                    hint = denial_repick_hint(&tc.function.name, &tc.function.arguments),
-                )),
-                Err(_) => Err("Approval channel closed before response.".to_string()),
+                Ok(ApprovalOutcome::Approved) => Ok(()),
+                Ok(ApprovalOutcome::DeniedByUser) => Err(ToolDenial {
+                    kind: DenialKind::UserDenied,
+                    reason: format!(
+                        "User denied the tool call.{}",
+                        denial_repick_hint(&tc.function.name, &tc.function.arguments),
+                    ),
+                }),
+                Ok(ApprovalOutcome::TimedOut { timeout_secs }) => Err(ToolDenial {
+                    kind: DenialKind::TimedOut,
+                    reason: format!(
+                        "The {timeout_secs}-second approval window expired before a decision \
+                         was made, so the tool was not executed (the agent defaulted to \
+                         deny).{hint}",
+                        hint = denial_repick_hint(&tc.function.name, &tc.function.arguments),
+                    ),
+                }),
+                Ok(ApprovalOutcome::ChannelClosed) => Err(ToolDenial {
+                    kind: DenialKind::ChannelClosed,
+                    reason: "Approval channel closed before a response arrived (the \
+                             connection dropped, the server restarted, or the session was \
+                             reloaded). The tool was not executed."
+                        .to_string(),
+                }),
+                Err(_) => Err(ToolDenial {
+                    kind: DenialKind::ChannelClosed,
+                    reason: "Approval channel closed before a response arrived (the \
+                             connection dropped, the server restarted, or the session was \
+                             reloaded). The tool was not executed."
+                        .to_string(),
+                }),
             },
         };
         decisions.insert(id, outcome);
     }
     decisions
+}
+
+/// Why a tool call was not dispatched. Carried through the
+/// `resolve_pre_dispatch` map and consumed by the tool-result processor
+/// to (a) build an accurate `tool_result` reason and (b) decide whether
+/// a structured denial system note should be injected into the context
+/// (see [`crate::tool_result_processor::push_tool_result`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DenialKind {
+    /// A policy gate (hardline blocklist, Tirith, risk level) blocked
+    /// the call before it ever reached the user.
+    Policy,
+    /// The user explicitly clicked "拒绝".
+    UserDenied,
+    /// The registry's default-deny timer fired before a decision.
+    TimedOut,
+    /// The sender side dropped (WS/connection/server/session loss).
+    ChannelClosed,
+}
+
+impl DenialKind {
+    /// Stable, lowercase, snake_case identifier mirrored by the
+    /// `ToolResult::denial_kind` field and the frontend banner's
+    /// outcome codes. Additive only.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            DenialKind::Policy => "policy",
+            DenialKind::UserDenied => "user_denied",
+            DenialKind::TimedOut => "timed_out",
+            DenialKind::ChannelClosed => "channel_closed",
+        }
+    }
+
+    /// Map the persisted `ToolResult::denial_kind` string back to the
+    /// enum. Unknown strings fall back to `ChannelClosed` (the safest
+    /// "something went wrong, no deliberate user intent" category) so
+    /// the "tell the user" note still fires for forward-compat values.
+    pub(crate) fn from_str(s: &str) -> Self {
+        match s {
+            "policy" => DenialKind::Policy,
+            "user_denied" => DenialKind::UserDenied,
+            "timed_out" => DenialKind::TimedOut,
+            "channel_closed" => DenialKind::ChannelClosed,
+            _ => DenialKind::ChannelClosed,
+        }
+    }
+
+    /// True for the user-facing denials that require the "tell the user
+    /// what happened + ask how to proceed" system note. Policy denials
+    /// (Tirith/hardline) are silent-by-design — the LLM already knows
+    /// the policy blocked it from the `reason`.
+    pub(crate) fn requires_user_notice(&self) -> bool {
+        matches!(
+            self,
+            DenialKind::UserDenied | DenialKind::TimedOut | DenialKind::ChannelClosed
+        )
+    }
+}
+
+/// A structured, non-policy tool-call denial. `kind` drives the
+/// user-facing message phrasing; `reason` is what lands in the LLM's
+/// `tool_result` (and therefore in the model context).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolDenial {
+    pub kind: DenialKind,
+    pub reason: String,
 }
 
 /// Max delegation nesting depth, env-overridable. Default 4 when the
@@ -237,7 +331,16 @@ pub(crate) fn cap_delegates(max_concurrent_delegates: u32, tool_calls: &mut Vec<
 
 #[cfg(test)]
 mod tests {
-    use hermix_core::{FunctionCall, ToolCall};
+    use tokio::sync::oneshot;
+
+    use hermix_core::{ApprovalOutcome, FunctionCall, ToolCall};
+
+    use crate::agent_helpers::ToolDispatchDecision;
+
+    // Pull in the parent module's `DenialKind`, `ToolDenial`, and
+    // `resolve_pre_dispatch` so the denial-mapping tests below can call
+    // and assert on them directly.
+    use super::*;
 
     /// Stable, canonical key for cross-turn tool-call deduplication.
     ///
@@ -291,5 +394,87 @@ mod tests {
             tool_call_dedup_key(&f),
             "different URLs must produce distinct dedup keys"
         );
+    }
+
+    // ---- DenialKind / ToolDenial taxonomy (A+C product fix) ---------
+
+    #[test]
+    fn denial_kind_strings_and_labels_are_stable() {
+        assert_eq!(DenialKind::Policy.as_str(), "policy");
+        assert_eq!(DenialKind::UserDenied.as_str(), "user_denied");
+        assert_eq!(DenialKind::TimedOut.as_str(), "timed_out");
+        assert_eq!(DenialKind::ChannelClosed.as_str(), "channel_closed");
+    }
+
+    #[test]
+    fn only_policy_denial_skips_user_notice() {
+        assert!(!DenialKind::Policy.requires_user_notice());
+        assert!(DenialKind::UserDenied.requires_user_notice());
+        assert!(DenialKind::TimedOut.requires_user_notice());
+        assert!(DenialKind::ChannelClosed.requires_user_notice());
+    }
+
+    // ---- resolve_pre_dispatch: ApprovalOutcome → ToolDenial --------
+
+    /// Build a hook that, on each call, returns a fresh
+    /// `AwaitApproval` wrapping a pre-resolved receiver carrying
+    /// `outcome`. Constructing a new receiver per call sidesteps the
+    /// fact that `oneshot::Receiver` is not `Clone` (so we can't clone
+    /// a `ToolDispatchDecision` cheaply) — fine for these single-call
+    /// tests.
+    fn hook_awaiting(
+        outcome: ApprovalOutcome,
+    ) -> Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync> {
+        Box::new(move |_tc| {
+            ToolDispatchDecision::AwaitApproval(pre_resolved_rx(outcome.clone()))
+        })
+    }
+
+    fn pre_resolved_rx(outcome: ApprovalOutcome) -> oneshot::Receiver<ApprovalOutcome> {
+        let (tx, rx) = oneshot::channel();
+        let _ = tx.send(outcome);
+        rx
+    }
+
+    #[tokio::test]
+    async fn awaited_approval_denied_maps_to_user_denied() {
+        let tc = tc("storage_clean", r#"{"paths":["/tmp/x"]}"#);
+        let map = resolve_pre_dispatch(Some(&hook_awaiting(ApprovalOutcome::DeniedByUser)), &[tc]).await;
+        let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
+        assert_eq!(err.kind, DenialKind::UserDenied);
+        assert!(err.reason.contains("User denied the tool call"));
+    }
+
+    #[tokio::test]
+    async fn awaited_approval_timed_out_maps_to_timed_out() {
+        let tc = tc("storage_clean", r#"{"paths":["/tmp/x"]}"#);
+        let map = resolve_pre_dispatch(
+            Some(&hook_awaiting(ApprovalOutcome::TimedOut { timeout_secs: 300 })),
+            &[tc],
+        )
+        .await;
+        let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
+        assert_eq!(err.kind, DenialKind::TimedOut);
+        assert!(err.reason.contains("approval window expired"));
+    }
+
+    #[tokio::test]
+    async fn awaited_approval_channel_closed_maps_to_channel_closed() {
+        let tc = tc("storage_clean", r#"{"paths":["/tmp/x"]}"#);
+        let map = resolve_pre_dispatch(
+            Some(&hook_awaiting(ApprovalOutcome::ChannelClosed)),
+            &[tc],
+        )
+        .await;
+        let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
+        assert_eq!(err.kind, DenialKind::ChannelClosed);
+        assert!(err.reason.contains("Approval channel closed"));
+    }
+
+    #[tokio::test]
+    async fn awaited_approval_approved_maps_to_ok() {
+        let tc = tc("storage_clean", r#"{"paths":["/tmp/x"]}"#);
+        let map = resolve_pre_dispatch(Some(&hook_awaiting(ApprovalOutcome::Approved)), &[tc]).await;
+        assert!(map.get("call-storage_clean").unwrap().is_ok());
     }
 }

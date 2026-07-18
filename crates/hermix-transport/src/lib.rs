@@ -329,6 +329,16 @@ pub enum StreamEvent {
         tool_call_id: String,
         tool: String,
         content: String,
+        /// Set when the tool call was *denied* (user拒绝 / 超时 /
+        /// 连接中断) rather than executed. `"policy"` means a
+        /// hardline/Tirith gate blocked it (the LLM already knows
+        /// from the `reason`); `"user_denied"` / `"timed_out"` /
+        /// `"channel_closed"` are user-facing denials the frontend
+        /// should surface as a "this call was blocked" banner so the
+        /// agent's "tell the user + ask how to proceed" note is
+        /// matched by a visible cue. `None` for a normal success.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        denial_kind: Option<String>,
     },
     /// A live chunk of tool output (stdout / stderr). Replaces the
     /// old ad-hoc `[tool: x] y (n/m)` text wrap. Carries enough
@@ -546,6 +556,31 @@ pub enum StreamEvent {
     /// All agents in the room have finished.
     GroupChatDone {
         room_id: String,
+    },
+    /// Dispatch to an agent failed (2026-07 refactor). Previously
+    /// these failures were silently swallowed; now they surface so
+    /// the user sees *why* nobody replied. The frontend renders this
+    /// as an inline error card with a retry button.
+    GroupChatDispatchFailed {
+        room_id: String,
+        agent_id: String,
+        agent_name: String,
+        reason: String,
+        /// Whether this was the leader (affects UI severity).
+        is_leader: bool,
+    },
+    /// Leader handed off control to a specialist agent (openai-agents-python
+    /// Handoff pattern). The frontend renders a centered separator like
+    /// "已转交 XX 接管" so the user understands the conversation
+    /// changed hands.
+    GroupChatHandoff {
+        room_id: String,
+        from_agent_id: String,
+        to_agent_id: String,
+        to_agent_name: String,
+        reason: String,
+        /// "transfer" (permanent) or "delegate" (temporary).
+        kind: String,
     },
     // ── Task engine events (S5 wire-up) ────────────────────
     /// A task node entered a new phase (planning/executing/review/...).
@@ -909,7 +944,7 @@ pub fn ws_schema_json() -> serde_json::Value {
                     { "type": "object", "required": ["type", "content"], "properties": { "type": { "const": "text" }, "content": { "type": "string" } } },
                     { "type": "object", "required": ["type", "content"], "properties": { "type": { "const": "thinking" }, "content": { "type": "string" } } },
                     { "type": "object", "required": ["type", "tool", "content"], "properties": { "type": { "const": "tool_start" }, "tool": { "type": "string" }, "content": { "type": "string" } } },
-                    { "type": "object", "required": ["type", "tool", "content"], "properties": { "type": { "const": "tool_complete" }, "tool": { "type": "string" }, "content": { "type": "string" } } },
+                    { "type": "object", "required": ["type", "tool", "content"], "properties": { "type": { "const": "tool_complete" }, "tool": { "type": "string" }, "content": { "type": "string" }, "denial_kind": { "type": ["string", "null"] } } },
                     { "type": "object", "required": ["type", "content"], "properties": { "type": { "const": "status" }, "content": { "type": "string" } } },
                     { "type": "object", "required": ["type", "content"], "properties": { "type": { "const": "activity" }, "content": { "type": "string" } } },
                     { "type": "object", "required": ["type", "request_id", "tool", "arguments", "risk"], "properties": { "type": { "const": "request_approval" }, "request_id": { "type": "string" }, "tool": { "type": "string" }, "arguments": { "type": "object" }, "risk": { "type": "string" }, "reason": { "type": ["string", "null"] }, "choices": { "type": "array", "items": { "type": "string", "enum": ["once", "session", "always", "deny"] } } } },

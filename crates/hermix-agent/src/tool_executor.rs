@@ -112,8 +112,12 @@ impl AgentLoop {
                     continue;
                 }
                 // Honor the pre-dispatch hook before the orchestrator spends work on it.
-                if let Some(Err(reason)) = pre_dispatch.get(&tc.id) {
-                    orchestrated.push(ToolResult::err(&tc.id, reason.clone()));
+                if let Some(Err(denial)) = pre_dispatch.get(&tc.id) {
+                    orchestrated.push(ToolResult::denied(
+                        &tc.id,
+                        denial.reason.clone(),
+                        denial.kind.as_str(),
+                    ));
                     continue;
                 }
                 // M1.6.2: push a focus-stack frame BEFORE delegating.
@@ -259,8 +263,12 @@ impl AgentLoop {
                 continue;
             }
             // Honor pre-dispatch decisions (Allow/Deny/AwaitApproval).
-            if let Some(Err(reason)) = pre_dispatch.get(&tc.id) {
-                orchestrated.push(ToolResult::err(&tc.id, reason.clone()));
+            if let Some(Err(denial)) = pre_dispatch.get(&tc.id) {
+                orchestrated.push(ToolResult::denied(
+                    &tc.id,
+                    denial.reason.clone(),
+                    denial.kind.as_str(),
+                ));
                 continue;
             }
             let tool_call_id = tc.id.clone();
@@ -346,8 +354,12 @@ impl AgentLoop {
             join_set.spawn(async move {
                 // Honor the pre-dispatch hook: skip handler invocation entirely
                 // when the user (or upstream policy) denied this tool call.
-                if let Some(Err(reason)) = pre_decision.as_ref() {
-                    return ToolResult::err(&tool_call_id, reason.clone());
+                if let Some(Err(denial)) = pre_decision.as_ref() {
+                    return ToolResult::denied(
+                        &tool_call_id,
+                        denial.reason.clone(),
+                        denial.kind.as_str(),
+                    );
                 }
                 // A5: per-call timeout around the handler. If a tool
                 // hangs (e.g. a `terminal` command waiting for stdin
@@ -600,6 +612,7 @@ impl AgentLoop {
                     tool_call_id: r.tool_call_id,
                     content: sanitised,
                     is_error: r.is_error,
+                    denial_kind: None,
                 }
             })
             .collect()

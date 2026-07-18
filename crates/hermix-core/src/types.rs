@@ -386,6 +386,19 @@ pub struct ToolResult {
     pub content: String,
     #[serde(default)]
     pub is_error: bool,
+    /// 2026-07-18 (A+C product fix): when a tool call was *denied*
+    /// rather than failed-on-execution, this carries the structured
+    /// `DenialKind` **snake_case wire value** (`user_denied` / `timed_out`
+    /// / `channel_closed` / `policy`). `None` for normal successes and
+    /// genuine execution errors. (The `DenialKind` enum variants are
+    /// PascalCase, but `as_str()` serializes them to snake_case for the
+    /// wire.) `skip_serializing_if` keeps the field invisible to the
+    /// persisted `tool_result` rows and the provider API (both ignore
+    /// it), so this is purely an in-process signal that the
+    /// `tool_result_processor` uses to inject the "tell the user what
+    /// happened" system note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denial_kind: Option<String>,
 }
 
 impl ToolResult {
@@ -395,6 +408,7 @@ impl ToolResult {
             tool_call_id: tool_call_id.into(),
             content: content.into(),
             is_error: false,
+            denial_kind: None,
         }
     }
 
@@ -404,6 +418,24 @@ impl ToolResult {
             tool_call_id: tool_call_id.into(),
             content: content.into(),
             is_error: true,
+            denial_kind: None,
+        }
+    }
+
+    /// Create a *denial* tool result — the call never executed because
+    /// the user refused, the timeout fired, or the channel dropped.
+    /// `kind` names the structured reason so the result processor can
+    /// phrase the user-facing note correctly.
+    pub fn denied(
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+        kind: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
+            is_error: true,
+            denial_kind: Some(kind.into()),
         }
     }
 }

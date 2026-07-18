@@ -365,7 +365,7 @@ pub async fn dispatch_single(
                 })
                 .to_string(),
                 is_error: true,
-                denial_kind: Some("TimedOut".to_string()),
+                denial_kind: None,
             };
         }
     };

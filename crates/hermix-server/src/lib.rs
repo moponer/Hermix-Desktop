@@ -32,7 +32,7 @@ use std::sync::Mutex;
 
 use base64::Engine as _;
 
-use axum::body::Body;
+use axum::body::{Bytes, Body};
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::http::header;
@@ -46,7 +46,10 @@ use futures::StreamExt;
 use hermix_config::GatewayConfig;
 use hermix_agent::python_alignment::ThinkBlockParser;
 use hermix_agent::ArchiveRef;
-use hermix_core::{traits::{PermissionLevel, RiskLevel}, AgentError, Message, MessageRole, StreamChunk};
+use hermix_core::{
+    traits::{PermissionLevel, RiskLevel},
+    AgentError, ApprovalOutcome, Message, MessageRole, StreamChunk,
+};
 use hermix_tools::approval::UserAllowlist;
 use hermix_tools::ToolRegistry;
 use regex::Regex;
@@ -122,7 +125,7 @@ pub fn compute_approval_deadline_ms() -> i64 {
 /// message on the same WebSocket, which looks up and completes the channel.
 #[derive(Clone)]
 pub struct ApprovalRegistry {
-    inner: Arc<std::sync::Mutex<HashMap<String, HashMap<String, oneshot::Sender<bool>>>>>,
+    inner: Arc<std::sync::Mutex<HashMap<String, HashMap<String, oneshot::Sender<ApprovalOutcome>>>>>,
     default_timeout: Duration,
 }
 
@@ -156,14 +159,16 @@ impl ApprovalRegistry {
 
     /// Create a new pending approval and return a receiver that resolves when
     /// the client sends an [`ApprovalResponse`]. If the sender side is dropped
-    /// without resolution, the receiver yields `false` (deny by default).
-    /// If the configured timeout elapses first, the receiver yields
-    /// `false` (deny) and a `tracing::warn!` is logged.
+    /// without resolution, the receiver yields `ApprovalOutcome::ChannelClosed`
+    /// (deny by default — the agent distinguishes this from a deliberate user
+    /// denial). If the configured timeout elapses first, the receiver yields
+    /// `ApprovalOutcome::TimedOut { timeout_secs }` and a `tracing::warn!` is
+    /// logged.
     pub fn request_approval(
         &self,
         session_id: &str,
         request_id: &str,
-    ) -> oneshot::Receiver<bool> {
+    ) -> oneshot::Receiver<ApprovalOutcome> {
         let (tx, rx) = oneshot::channel();
         // Store the sender first, then release the lock before
         // spawning the timeout task -- keeps the critical section
@@ -177,7 +182,7 @@ impl ApprovalRegistry {
                 .insert(request_id.to_string(), tx);
         }
         // Spawn a timer that, on expiry, takes the sender back
-        // out of the registry and sends `false`. If a real
+        // out of the registry and sends `TimedOut`. If a real
         // `resolve` happens first, the entry will already be
         // gone by the time we wake up and the take is a no-op.
         let to = self.default_timeout;
@@ -200,7 +205,9 @@ impl ApprovalRegistry {
                         timeout_secs = to.as_secs(),
                         "approval request timed out (default deny)"
                     );
-                    let _ = tx.send(false);
+                    let _ = tx.send(ApprovalOutcome::TimedOut {
+                        timeout_secs: to.as_secs(),
+                    });
                 }
                 // else: a real resolve beat us to it -- no-op.
             });
@@ -208,17 +215,23 @@ impl ApprovalRegistry {
         rx
     }
 
-    /// Resolve a pending approval request. Returns `true` if the sender was
-    /// found and resolved, `false` if the request had already been resolved
-    /// (e.g. by a prior `resolve` call, or by the timeout task firing
-    /// first) or was never registered.
-    pub fn resolve(&self, session_id: &str, request_id: &str, decision: bool) -> bool {
+    /// Resolve a pending approval request from a structured
+    /// [`ApprovalOutcome`]. Returns `true` if the sender was found and
+    /// resolved, `false` if the request had already been resolved (e.g. by a
+    /// prior `resolve` call, or by the timeout task firing first) or was
+    /// never registered.
+    ///
+    /// The WS handler is the only caller — it maps the client-sent
+    /// `ApprovalResponse { decision: bool }` into `DeniedByUser` /
+    /// `Approved` here, keeping the enum construction server-side so the
+    /// agent crate stays decoupled from the wire format.
+    pub fn resolve(&self, session_id: &str, request_id: &str, outcome: ApprovalOutcome) -> bool {
         let mut sessions: std::sync::MutexGuard<
-            HashMap<String, HashMap<String, oneshot::Sender<bool>>>,
+            HashMap<String, HashMap<String, oneshot::Sender<ApprovalOutcome>>>,
         > = self.inner.lock().unwrap();
         if let Some(session) = sessions.get_mut(session_id) {
             if let Some(tx) = session.remove(request_id) {
-                let _ = tx.send(decision);
+                let _ = tx.send(outcome);
                 return true;
             }
         }
@@ -264,24 +277,24 @@ mod approval_registry_tests {
     async fn request_returns_receiver_resolve_true_yields_true() {
         let reg = ApprovalRegistry::new();
         let rx = reg.request_approval("sess-a", "req-1");
-        assert!(reg.resolve("sess-a", "req-1", true));
-        assert_eq!(rx.await.unwrap(), true);
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved));
+        assert_eq!(rx.await.unwrap(), hermix_core::ApprovalOutcome::Approved);
     }
 
     #[tokio::test]
     async fn request_returns_receiver_resolve_false_yields_false() {
         let reg = ApprovalRegistry::new();
         let rx = reg.request_approval("sess-a", "req-1");
-        assert!(reg.resolve("sess-a", "req-1", false));
-        assert_eq!(rx.await.unwrap(), false);
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::DeniedByUser));
+        assert_eq!(rx.await.unwrap(), hermix_core::ApprovalOutcome::DeniedByUser);
     }
 
     #[tokio::test]
     async fn resolve_unknown_request_returns_false() {
         let reg = ApprovalRegistry::new();
         // No request was ever registered.
-        assert!(!reg.resolve("sess-a", "nope", true));
-        assert!(!reg.resolve("nonexistent-session", "req-1", true));
+        assert!(!reg.resolve("sess-a", "nope", hermix_core::ApprovalOutcome::Approved));
+        assert!(!reg.resolve("nonexistent-session", "req-1", hermix_core::ApprovalOutcome::Approved));
     }
 
     #[tokio::test]
@@ -294,12 +307,12 @@ mod approval_registry_tests {
         // *different* in-flight tool call.
         let reg = ApprovalRegistry::new();
         let rx = reg.request_approval("sess-a", "req-1");
-        assert!(reg.resolve("sess-a", "req-1", true));
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved));
         assert!(
-            !reg.resolve("sess-a", "req-1", false),
+            !reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::DeniedByUser),
             "second resolve should report no sender"
         );
-        assert_eq!(rx.await.unwrap(), true, "first decision wins");
+        assert_eq!(rx.await.unwrap(), hermix_core::ApprovalOutcome::Approved, "first decision wins");
     }
 
     #[tokio::test]
@@ -310,15 +323,15 @@ mod approval_registry_tests {
 
         // Resolve only req-1 with `true`; req-2 must still be
         // pending and answerable.
-        assert!(reg.resolve("sess-a", "req-1", true));
-        assert_eq!(rx1.await.unwrap(), true);
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved));
+        assert_eq!(rx1.await.unwrap(), hermix_core::ApprovalOutcome::Approved);
 
         // Drop rx2 without resolving (sender still in the
         // registry) — this is the "user closed the dialog
         // without deciding" case. The next resolve should
         // still find req-2's sender and forward a deny.
         drop(rx2);
-        assert!(reg.resolve("sess-a", "req-2", false));
+        assert!(reg.resolve("sess-a", "req-2", hermix_core::ApprovalOutcome::DeniedByUser));
     }
 
     #[tokio::test]
@@ -329,12 +342,12 @@ mod approval_registry_tests {
 
         // Resolve only sess-a's req-1. sess-b's req-1 must
         // remain pending.
-        assert!(reg.resolve("sess-a", "req-1", true));
-        assert_eq!(rx_a.await.unwrap(), true);
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved));
+        assert_eq!(rx_a.await.unwrap(), hermix_core::ApprovalOutcome::Approved);
 
         // And sess-b's req-1 can still be resolved.
-        assert!(reg.resolve("sess-b", "req-1", false));
-        assert_eq!(rx_b.await.unwrap(), false);
+        assert!(reg.resolve("sess-b", "req-1", hermix_core::ApprovalOutcome::DeniedByUser));
+        assert_eq!(rx_b.await.unwrap(), hermix_core::ApprovalOutcome::DeniedByUser);
     }
 
     #[tokio::test]
@@ -352,7 +365,7 @@ mod approval_registry_tests {
         let rx = reg.request_approval("sess-a", "req-1");
         drop(rx);
         assert!(
-            reg.resolve("sess-a", "req-1", true),
+            reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved),
             "sender still in registry after rx drop"
         );
     }
@@ -376,7 +389,7 @@ mod approval_registry_tests {
         // alive that holds a clone of the inner Arc, so
         // dropping  alone would let the timer fire
         // (after the default 60s) and call 
-        // -- making rx.await return Ok(false), not Err.
+        // -- making rx.await return Ok(TimedOut), not Err.
         // Disabling the timeout isolates the sender-drop
         // semantics this test cares about.
         let reg = ApprovalRegistry::with_timeout(std::time::Duration::ZERO);
@@ -422,7 +435,11 @@ mod approval_registry_tests {
         // Wait long enough for the timer to fire.
         std::thread::sleep(std::time::Duration::from_millis(150));
         let result = rx.await;
-        assert_eq!(result, Ok(false), "timeout must default-deny");
+        assert_eq!(
+            result,
+            Ok(hermix_core::ApprovalOutcome::TimedOut { timeout_secs: 0 }),
+            "timeout must default-deny with TimedOut outcome"
+        );
     }
 
     #[tokio::test]
@@ -433,8 +450,8 @@ mod approval_registry_tests {
         // entry already gone).
         let reg = ApprovalRegistry::with_timeout(std::time::Duration::from_millis(200));
         let rx = reg.request_approval("sess-a", "req-1");
-        assert!(reg.resolve("sess-a", "req-1", true));
-        assert_eq!(rx.await, Ok(true));
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved));
+        assert_eq!(rx.await, Ok(hermix_core::ApprovalOutcome::Approved));
         // Wait past the original timeout to ensure the
         // late-arriving timer task is a no-op and doesn't
         // poison any future test (e.g. by panicking in a
@@ -455,7 +472,7 @@ mod approval_registry_tests {
         std::thread::sleep(std::time::Duration::from_millis(100));
         let _ = rx.await; // consume
         assert!(
-            !reg.resolve("sess-a", "req-1", true),
+            !reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved),
             "resolve after timeout must report no sender"
         );
     }
@@ -474,7 +491,7 @@ mod approval_registry_tests {
         // still serving the request and resolve still
         // works.
         std::thread::sleep(std::time::Duration::from_millis(100));
-        assert!(reg.resolve("sess-a", "req-1", true));
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved));
     }
 
     #[tokio::test]
@@ -486,8 +503,8 @@ mod approval_registry_tests {
         let rx1 = reg.request_approval("sess-a", "req-1");
         let rx2 = reg.request_approval("sess-a", "req-2");
         std::thread::sleep(std::time::Duration::from_millis(150));
-        assert_eq!(rx1.await, Ok(false));
-        assert_eq!(rx2.await, Ok(false));
+        assert_eq!(rx1.await, Ok(hermix_core::ApprovalOutcome::TimedOut { timeout_secs: 0 }));
+        assert_eq!(rx2.await, Ok(hermix_core::ApprovalOutcome::TimedOut { timeout_secs: 0 }));
     }
 
     #[tokio::test]
@@ -541,7 +558,7 @@ mod approval_registry_tests {
         // would have fired.
         let reg = ApprovalRegistry::with_timeout(std::time::Duration::from_millis(50));
         let _rx1 = reg.request_approval("sess-a", "req-1");
-        assert!(reg.resolve("sess-a", "req-1", true));
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved));
         // Wait past the original timeout window.
         std::thread::sleep(std::time::Duration::from_millis(150));
         // A new request on the same key must be served
@@ -549,8 +566,8 @@ mod approval_registry_tests {
         // resolve, the timer found nothing, so no state
         // is leaked).
         let rx2 = reg.request_approval("sess-a", "req-1");
-        assert!(reg.resolve("sess-a", "req-1", false));
-        assert_eq!(rx2.await, Ok(false));
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::DeniedByUser));
+        assert_eq!(rx2.await, Ok(hermix_core::ApprovalOutcome::DeniedByUser));
     }
 
     // -----------------------------------------------------------------
@@ -564,7 +581,7 @@ mod approval_registry_tests {
         let reg = ApprovalRegistry::with_timeout(std::time::Duration::ZERO);
         let _rx = reg.request_approval("sess-a", "req-1");
         assert!(reg.is_pending("sess-a", "req-1"));
-        assert!(reg.resolve("sess-a", "req-1", true));
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved));
         assert!(
             !reg.is_pending("sess-a", "req-1"),
             "resolve must remove the entry"
@@ -3526,6 +3543,23 @@ const DEDUP_WINDOW_SECS: u64 = 30;
 /// Map GC horizon. Entries older than this are evicted on every
 /// insert so the map stays bounded.
 const DEDUP_GC_SECS: u64 = 60;
+/// 2026-07-18: server-side WS heartbeat cadence.
+///
+/// Background: long-running spawn_blocking tools (storage_analyzer
+/// walking C:\, code review, plan generation) produce zero
+/// application frames for many seconds. WebView2 / OS / NAT
+/// middleboxes silently drop idle sockets (60–600s). The forward
+/// loop only detects this on the *next* `socket.send` failure —
+/// during a long tool there is no next send, so the WS dies
+/// invisibly.
+///
+/// We emit a WS-protocol Ping every WS_HEARTBEAT_INTERVAL_SECS.
+/// Pings are auto-ACKed by the browser at the tungstenite layer
+/// (no app message), cost ~2 bytes on the wire, and force every
+/// hop to refresh its idle timer. 15s is well below the shortest
+/// observed idle-timeout (60s for NAT) and well above the per-send
+/// overhead (~5µs).
+const WS_HEARTBEAT_INTERVAL_SECS: u64 = 15;
 
 /// Check whether `(session_id, text)` was sent recently. Returns
 /// `Some(elapsed_secs)` if a duplicate was found within the dedup
@@ -4313,11 +4347,22 @@ async fn handle_ws_stream_send(
                                 .and_then(|t| t.as_str())
                                 .map(String::from)
                                 .unwrap_or_else(|| format!("{}-anon", tool));
+                            // 2026-07-18 (A+C product fix): surface a
+                            // user-facing denial so the front-end can
+                            // show a "this call was blocked" banner
+                            // that matches the agent's injected
+                            // "tell the user" note. `None` for normal
+                            // successes; `"policy"` is a silent gate
+                            // the LLM already knows about.
+                            let denial_kind = extra
+                                .get("denial_kind")
+                                .and_then(|d| d.as_str())
+                                .map(String::from);
                             WsEnvelope {
                                 version: 1,
                                 request_id: request_id.clone(),
                                 trace_id: trace_id_for_stream.clone(),
-                                event: StreamEvent::ToolComplete { tool_call_id, tool, content },
+                                event: StreamEvent::ToolComplete { tool_call_id, tool, content, denial_kind },
                             }
                         }
                         "file_change" => {
@@ -4727,36 +4772,88 @@ async fn handle_ws_stream_send(
         session = %session_id,
         "ws_stream: rx forward loop starting"
     );
+
+    // 2026-07-18: server-side WS heartbeat.
+    //
+    // Background: storage_analyzer (and similar spawn_blocking tools)
+    // can run for many seconds with **zero application-level frames**
+    // on the wire. WebView2 / OS / NAT / antivirus middleboxes have
+    // idle disconnects (60–600s) that close the socket silently from
+    // our side. The forward loop only learns about the disconnect
+    // when the next `socket.send` fails — but during a long tool
+    // there is no next send.
+    //
+    // Fix: drive the forward loop with `tokio::select!` and emit a
+    // WS-protocol Ping every WS_HEARTBEAT_INTERVAL_SECS. Pings are
+    // auto-ACKed by the browser at the tungstenite layer (never reach
+    // the app message stream), cost ~2 bytes on the wire, and force
+    // every hop in the path to refresh its idle timer. If the client
+    // is dead, the heartbeat's `socket.send` fails the same way as a
+    // data send — we hit the existing disconnect cleanup.
+    //
+    // Why a select arm instead of a separate spawned ticker:
+    // - Single owner of `socket` → no `&mut socket` borrowing fight.
+    // - When the rx loop exits, the select drops the heartbeat future
+    //   on the floor automatically — no extra JoinHandle to cancel.
+    // - `biased` keeps events from starving under heavy heartbeat
+    //   cadence (every tick prefers the rx arm first).
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(
+        WS_HEARTBEAT_INTERVAL_SECS,
+    ));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // First tick is immediate — burn it so we don't ping 0s after
+    // connection (the client just got "connected session=..." text,
+    // an immediate extra ping is noise).
+    heartbeat.tick().await;
+
     let mut was_client_disconnect = false;
-    while let Some(event_json) = rx.recv().await {
-        if socket
-            .send(WsMessage::Text(
-                serde_json::to_string(&event_json)
-                    .unwrap_or_default()
-                    .into(),
-            ))
-            .await
-            .is_err()
-        {
-        {
-            // Client disconnected — mark the flag so the agent task
-            // skips its terminal Done/Error event, then abort the
-            // task to stop processing as soon as possible (at the
-            // next .await boundary in send_message_stream).
-            was_client_disconnect = true;
-            ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-            // 2026-07-17: take the handle out of the registry before
-            // aborting; the handle was moved into `active_handles` on
-            // spawn, so we cannot keep a local copy here.
-            if let Some(h) = state.active_handles.lock().unwrap().remove(&active_key) {
-                h.abort();
+    loop {
+        tokio::select! {
+            biased;
+            ev = rx.recv() => {
+                match ev {
+                    Some(event_json) => {
+                        if socket
+                            .send(WsMessage::Text(
+                                serde_json::to_string(&event_json)
+                                    .unwrap_or_default()
+                                    .into(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            was_client_disconnect = true;
+                            ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
+                            if let Some(h) = state.active_handles.lock().unwrap().remove(&active_key) {
+                                h.abort();
+                            }
+                            state.active_sessions.lock().unwrap().remove(&active_key);
+                            break;
+                        }
+                    }
+                    None => {
+                        // rx channel closed — the agent task finished its
+                        // terminal events and there is no more data to send.
+                        // Exit the loop and let the WS close naturally.
+                        break;
+                    }
+                }
             }
-            // Release the session lock since the spawned task may
-            // not reach its cleanup code (abort cancels at the next
-            // .await, which could be deeper in send_message_stream).
-            state.active_sessions.lock().unwrap().remove(&active_key);
-            break;
-        }
+            _ = heartbeat.tick() => {
+                tracing::debug!(
+                    session = %session_id,
+                    "ws_stream: heartbeat ping"
+                );
+                if socket.send(WsMessage::Ping(Bytes::new())).await.is_err() {
+                    was_client_disconnect = true;
+                    ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(h) = state.active_handles.lock().unwrap().remove(&active_key) {
+                        h.abort();
+                    }
+                    state.active_sessions.lock().unwrap().remove(&active_key);
+                    break;
+                }
+            }
         }
     }
     tracing::info!(
@@ -5146,6 +5243,34 @@ fn room_event_to_stream(
         RoomEvent::AgentThinkingCompleted { room_id, agent_id } => {
             Some(StreamEvent::GroupChatAgentDone { room_id, agent_id })
         }
+        RoomEvent::DispatchFailed {
+            room_id,
+            agent_id,
+            agent_name,
+            reason,
+            is_leader,
+        } => Some(StreamEvent::GroupChatDispatchFailed {
+            room_id,
+            agent_id,
+            agent_name,
+            reason,
+            is_leader,
+        }),
+        RoomEvent::Handoff {
+            room_id,
+            from_agent_id,
+            to_agent_id,
+            to_agent_name,
+            reason,
+            kind,
+        } => Some(StreamEvent::GroupChatHandoff {
+            room_id,
+            from_agent_id,
+            to_agent_id,
+            to_agent_name,
+            reason,
+            kind,
+        }),
     }
 }
 
@@ -5460,10 +5585,15 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
                             // resolution: any non-Deny choice approves
                             // the current call.
                             let approved = choice.is_approved();
+                            let outcome = if approved {
+                                hermix_core::ApprovalOutcome::Approved
+                            } else {
+                                hermix_core::ApprovalOutcome::DeniedByUser
+                            };
                             state.approval_registry.resolve(
                                 &session_id,
                                 &request_id,
-                                approved,
+                                outcome,
                             );
                             // The DB stores the decision as a free-form
                             // string, so we persist the canonical 4-state

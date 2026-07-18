@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::oneshot;
 
-use hermix_core::{ToolCall, ToolError, ToolSchema, UsageStats};
+use hermix_core::{ApprovalOutcome, ToolCall, ToolError, ToolSchema, UsageStats};
 
 /// A single tool entry in the registry.
 #[derive(Clone)]
@@ -360,10 +360,13 @@ pub enum ToolDispatchDecision {
     /// Block until the user (or upstream layer) resolves approval through the
     /// supplied `oneshot` receiver.
     ///
-    /// The receiver yields `true` to allow execution, `false` to deny. If the
-    /// sender is dropped before sending, execution is denied with a generic
-    /// "approval channel closed" reason.
-    AwaitApproval(oneshot::Receiver<bool>),
+    /// The receiver yields an [`ApprovalOutcome`]: `Approved` allows
+    /// execution, while `DeniedByUser` / `TimedOut { .. }` /
+    /// `ChannelClosed` deny it. The richer enum (vs. the old `bool`)
+    /// lets `tool_dispatch::resolve_pre_dispatch` build an accurate
+    /// `tool_result` reason and trigger the structured denial system
+    /// note (see `tool_result_processor::push_tool_result`).
+    AwaitApproval(oneshot::Receiver<ApprovalOutcome>),
 }
 
 /// Callbacks invoked during tool execution for progress reporting.
@@ -387,7 +390,11 @@ pub struct AgentCallbacks {
     ///
     /// Same `tool_call_id` as the matching `on_tool_start`. `output`
     /// is the full result string returned by the tool handler.
-    pub on_tool_complete: Option<Box<dyn Fn(&str, &str, &str) + Send + Sync>>,
+    /// `denial_kind` is the `ToolResult::denial_kind` for this call —
+    /// `""` for a normal success, `"policy"` for a hardline gate, and
+    /// `"user_denied"` / `"timed_out"` / `"channel_closed"` for a
+    /// user-facing denial the frontend should surface as a banner.
+    pub on_tool_complete: Option<Box<dyn Fn(&str, &str, &str, &str) + Send + Sync>>,
     /// Called for each stream delta.
     pub on_stream_delta: Option<Box<dyn Fn(&str) + Send + Sync>>,
     /// Called after each completed LLM step (full response assembled).

@@ -503,6 +503,31 @@ pub struct AgentConfig {
     #[serde(default = "default_stream_activity_stall_secs")]
     pub stream_activity_stall_secs: u64,
 
+    /// Hard outer timeout (seconds) for a single streaming LLM completion.
+    ///
+    /// `collect_stream_llm_response` would otherwise block indefinitely
+    /// on `stream.next().await` if the upstream provider opens the
+    /// SSE / chunked connection but never sends any chunk (network
+    /// hang, API outage, silently dropped TCP). The inner
+    /// `silence_watch` only emits activity notices — it does not
+    /// abort the stream — so without this outer timeout the agent
+    /// loop and the UI both hang forever on a dead provider.
+    ///
+    /// When the deadline elapses, the collector assembles whatever
+    /// content / reasoning / tool_calls were accumulated so far,
+    /// stamps `finish_reason = "timeout"`, and returns
+    /// [`StreamCollectOutcome::Complete`]. The agent loop then routes
+    /// through `decide_empty_response` exactly like any other
+    /// thinking-only reply, so a stuck provider degrades into a
+    /// visible post-tool nudge (or finalizes if all nudges are
+    /// exhausted) instead of pinning the UI at "正在思考".
+    ///
+    /// `0` disables the hard timeout (legacy behaviour). The default
+    /// 180 s mirrors the frontend `STALE_STREAM_TIMEOUT_MS` budget
+    /// while leaving room for genuinely long tool-heavy turns.
+    #[serde(default = "default_stream_overall_timeout_secs")]
+    pub stream_overall_timeout_secs: u64,
+
     /// Max tools to surface to the LLM after tool-routing (Phase 7 H1).
     /// `0` or unset means "no routing, send full registry" (legacy default).
     #[serde(default = "default_max_routed_tools")]
@@ -702,6 +727,15 @@ fn default_stream_activity_stall_secs() -> u64 {
     90
 }
 
+/// Default hard outer timeout for a single streaming completion.
+/// 180 s (3 min) gives the agent loop room for a long tool-heavy
+/// turn while still bounding the worst case when a provider silently
+/// drops the connection. Tunable via `stream_overall_timeout_secs`
+/// in `AgentConfig`.
+fn default_stream_overall_timeout_secs() -> u64 {
+    180
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -768,6 +802,7 @@ impl Default for AgentConfig {
             truncated_tool_call_max_retries: default_truncated_tool_call_max_retries(),
             stream_activity_interval_secs: default_stream_activity_interval_secs(),
             stream_activity_stall_secs: default_stream_activity_stall_secs(),
+            stream_overall_timeout_secs: default_stream_overall_timeout_secs(),
             workspace: None,
             permission: None,
             llm_providers: HashMap::new(),

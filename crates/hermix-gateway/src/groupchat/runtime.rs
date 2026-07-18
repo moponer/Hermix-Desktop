@@ -27,8 +27,10 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
+use super::agent_contract::{HandoffDirective, LeaderDecision};
 use super::bus::{RoomBus, SharedMessageBus};
 use super::dispatcher::StreamDelta;
+use super::handoff::{resolve_handoff, HandoffKind};
 use super::leader::LeaderOrchestrator;
 use super::manager::GroupChatManager;
 use super::meta::parse_meta;
@@ -125,6 +127,33 @@ pub enum RoomEvent {
     AgentThinkingCompleted {
         room_id: String,
         agent_id: String,
+    },
+    /// Dispatch to an agent failed (2026-07 refactor). Previously these
+    /// failures were silently swallowed by `warn!(...)` logs; now they
+    /// surface to the frontend so the user sees *why* nobody replied.
+    /// The frontend renders this as an inline error card with a retry
+    /// button.
+    DispatchFailed {
+        room_id: String,
+        agent_id: String,
+        agent_name: String,
+        reason: String,
+        /// Whether this was the leader (affects UI — leader failures are
+        /// more severe and warrant a different banner).
+        is_leader: bool,
+    },
+    /// Leader handed off control to a specialist agent (openai-agents-python
+    /// Handoff pattern). The frontend renders a centered separator like
+    /// "已转交 XX 接管" so the user understands the conversation
+    /// changed hands.
+    Handoff {
+        room_id: String,
+        from_agent_id: String,
+        to_agent_id: String,
+        to_agent_name: String,
+        reason: String,
+        /// "transfer" (permanent) or "delegate" (temporary).
+        kind: String,
     },
 }
 
@@ -335,12 +364,13 @@ impl TaskEngineRuntime {
                         "member"
                     };
 
-                    // Build the system prompt. Leader gets the full team
-                    // context via `LeaderOrchestrator::build_leader_prompt`;
-                    // members run with an empty prompt so the agent's own
-                    // default system_prompt applies (set by add_agent).
+                    // H4: use the structured JSON decision prompt on the
+                    // leader path so announcement / handoff /
+                    // needs_user_confirmation actually populate (the legacy
+                    // markdown prompt only produced regex-parseable output).
                     let system_prompt: String = if agent_id_owned == "__leader__" {
-                        self.manager.build_leader_prompt_for(&room_id_owned)
+                        self.manager
+                            .build_leader_decision_prompt_for(&room_id_owned, &description_owned)
                     } else {
                         String::new()
                     };
@@ -404,25 +434,154 @@ impl TaskEngineRuntime {
                     match stream_outcome {
                         Ok(raw_output) => {
                             if agent_id_owned == "__leader__" {
-                                // Leader path: parse the response into a
-                                // task plan and feed it back to the
-                                // scheduler. The leader's raw text is
-                                // **never** saved as a chat message — it
-                                // is only a thinking trace for the user.
-                                let plan = LeaderOrchestrator::parse_task_plan(&raw_output);
-                                if !plan.subtasks.is_empty() {
-                                    let subtasks: Vec<SubtaskSpec> = plan
-                                        .subtasks
-                                        .iter()
-                                        .enumerate()
-                                        .map(|(i, s)| SubtaskSpec {
-                                            node_id: format!("{}-{}", node_id_owned, i + 1),
-                                            description: s.description.clone(),
-                                            spec: s.context.clone().unwrap_or_default(),
-                                            assigned_agent: s.assigned_to.clone(),
-                                            sort_order: i as u32,
-                                        })
-                                        .collect();
+                                // ── Leader path (2026-07 refactor) ──────
+                                // Parse the structured JSON decision. On
+                                // success we get analysis + subtasks +
+                                // announcement + handoff in one shot; on
+                                // failure we fall back to the legacy regex
+                                // task-plan parser.
+                                let mut parsed_decision: Option<LeaderDecision> = None;
+                                let needs_confirm = match LeaderOrchestrator::parse_decision(&raw_output) {
+                                    Ok(decision) => {
+                                        let confirm = decision.needs_user_confirmation;
+                                        parsed_decision = Some(decision);
+                                        confirm
+                                    }
+                                    Err(parse_err) => {
+                                        tracing::warn!(
+                                            error = %parse_err,
+                                            "leader structured decision parse failed, falling back to regex"
+                                        );
+                                        false
+                                    }
+                                };
+
+                                let (plan, announcement, handoff) = match &parsed_decision {
+                                    Some(decision) => {
+                                        let p = LeaderOrchestrator::decision_to_task_plan(decision);
+                                        (p, decision.announcement.clone(), decision.handoff.clone())
+                                    }
+                                    None => {
+                                        let p = LeaderOrchestrator::parse_task_plan(&raw_output);
+                                        (p, None, None)
+                                    }
+                                };
+
+                                // M5: `needs_user_confirmation` is parsed but
+                                // not yet gated by a user-confirmation round
+                                // trip. Surface it instead of silently
+                                // proceeding so the leader's promise isn't a
+                                // silent no-op. (Full confirmation gate
+                                // deferred — needs an e2e verification
+                                // window, which the user has asked to skip.)
+                                if needs_confirm {
+                                    tracing::warn!(
+                                        room_id = %room_id_owned,
+                                        "leader requested user confirmation (needs_user_confirmation); \
+                                         auto-proceeding — confirmation gate not yet wired"
+                                    );
+                                }
+
+                                // 1. Persist announcement (merged into
+                                //    the same LLM call — saves a round
+                                //    trip vs. the old separate call).
+                                if let Some(ref ann) = announcement {
+                                    if let Err(e) = rt_self
+                                        .manager
+                                        .set_announcement(&room_id_owned, Some(ann))
+                                        .await
+                                    {
+                                        tracing::warn!(error = %e, "leader announcement persist failed");
+                                    }
+                                }
+
+                                // 2. Resolve handoff directive
+                                //    (openai-agents-python Handoff pattern).
+                                let mut handoff_subtask: Option<SubtaskSpec> = None;
+                                let mut handoff_kind: Option<HandoffKind> = None;
+                                if let Some(ref directive) = handoff {
+                                    let room_agents = rt_self
+                                        .manager
+                                        .get_room_agents(&room_id_owned)
+                                        .await
+                                        .unwrap_or_default();
+                                    if let Some(resolved) =
+                                        resolve_handoff(directive, &room_agents)
+                                    {
+                                        let target_name = rt_self.manager.agent_display_name(
+                                            &room_id_owned,
+                                            &resolved.target_agent_id,
+                                        );
+                                        let kind_str = match resolved.kind {
+                                            HandoffKind::Transfer => "transfer",
+                                            HandoffKind::Delegate => "delegate",
+                                        };
+                                        rt_self.publish(
+                                            &room_id_owned,
+                                            RoomEvent::Handoff {
+                                                room_id: room_id_owned.clone(),
+                                                from_agent_id: agent_id_owned.clone(),
+                                                to_agent_id: resolved.target_agent_id.clone(),
+                                                to_agent_name: target_name,
+                                                reason: resolved.reason.clone(),
+                                                kind: kind_str.to_string(),
+                                            },
+                                        );
+                                        // The handoff task text: for Transfer
+                                        // reuse the original task; for
+                                        // Delegate use the delegated task.
+                                        // (M7: Delegate now also synthesizes
+                                        // a subtask so the target actually
+                                        // receives work instead of only a
+                                        // separator being shown.)
+                                        let handoff_task: String = match directive {
+                                            HandoffDirective::Transfer { .. } => {
+                                                description_owned.clone()
+                                            }
+                                            HandoffDirective::Delegate { task, .. } => {
+                                                task.clone()
+                                            }
+                                        };
+                                        handoff_kind = Some(resolved.kind);
+                                        handoff_subtask = Some(SubtaskSpec {
+                                            node_id: format!("{}-handoff", node_id_owned),
+                                            description: handoff_task,
+                                            spec: String::new(),
+                                            assigned_agent: resolved.target_agent_id.clone(),
+                                            sort_order: 0,
+                                        });
+                                    }
+                                }
+
+                                // 3. Convert plan → subtask specs.
+                                let mut subtasks: Vec<SubtaskSpec> = plan
+                                    .subtasks
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, s)| SubtaskSpec {
+                                        node_id: format!("{}-{}", node_id_owned, i + 1),
+                                        description: s.description.clone(),
+                                        spec: s.context.clone().unwrap_or_default(),
+                                        assigned_agent: s.assigned_to.clone(),
+                                        sort_order: i as u32,
+                                    })
+                                    .collect();
+
+                                // L9: a Transfer hands the *whole*
+                                // conversation to the specialist, so the
+                                // planned subtasks must not also dispatch in
+                                // parallel. (Delegate keeps them — the
+                                // agents-as-tools pattern leaves the leader
+                                // in control.)
+                                if handoff_kind == Some(HandoffKind::Transfer) {
+                                    subtasks.clear();
+                                }
+
+                                if let Some(spec) = handoff_subtask {
+                                    subtasks.push(spec);
+                                }
+
+                                if !subtasks.is_empty() {
                                     let sub_events = Box::pin(rt_self.clone().apply(
                                             &room_id_owned,
                                             SchedulerEvent::PlanSubmitted {
@@ -434,39 +593,69 @@ impl TaskEngineRuntime {
                                         .await;
                                     rt_self.publish_all(&room_id_owned, &sub_events);
                                 } else {
-                                    // Leader couldn't decompose the task
-                                    // (no `→ agent` markers in its reply).
-                                    // Surface the failure to the frontend
-                                    // and advance the scheduler so the
-                                    // room doesn't stay stuck in
-                                    // `Planning` forever. We **don't**
-                                    // call `on_agent_output` here because
-                                    // that would save an empty bubble for
-                                    // the leader (which we explicitly
-                                    // forbid) — instead we push a
-                                    // `SchedulerEvent::AgentOutputSubmitted`
-                                    // directly so the review path runs
-                                    // against the live node.
-                                    let err_ev = vec![RoomEvent::SoftError {
-                                        room_id: room_id_owned.clone(),
-                                        code: "leader_parse_task_plan".into(),
-                                        message: "项目总管未能拆解任务，请尝试更明确地描述需求".into(),
-                                    }];
-                                    rt_self.publish_all(&room_id_owned, &err_ev);
-                                    let events = rt_self
-                                        .clone()
-                                        .apply(
-                                            &room_id_owned,
-                                            SchedulerEvent::AgentOutputSubmitted {
-                                                room_id: room_id_owned.clone(),
-                                                node_id: node_id_owned.clone(),
-                                                agent_id: agent_id_owned.clone(),
-                                                success: true,
-                                                output_excerpt: String::new(),
-                                            },
-                                        )
-                                        .await;
-                                    rt_self.publish_all(&room_id_owned, &events);
+                                    // Leader answered directly (no subtasks,
+                                    // no handoff) OR failed to produce a
+                                    // usable response. (H5) Persist the
+                                    // leader's answer as a visible message;
+                                    // only if there is truly nothing do we
+                                    // surface a SoftError (M4) instead of
+                                    // silently advancing and showing blank.
+                                    let direct_answer: Option<String> =
+                                        match &parsed_decision {
+                                            Some(d)
+                                                if !d.analysis.trim().is_empty() =>
+                                            {
+                                                Some(d.analysis.trim().to_string())
+                                            }
+                                            _ => None,
+                                        };
+                                    let answer = direct_answer.or_else(|| {
+                                        if raw_output.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(raw_output.trim().to_string())
+                                        }
+                                    });
+                                    match answer {
+                                        Some(text) => {
+                                            let events = rt_self
+                                                .clone()
+                                                .on_agent_output(
+                                                    &room_id_owned,
+                                                    &node_id_owned,
+                                                    &agent_id_owned,
+                                                    &agent_name_owned,
+                                                    &text,
+                                                    &[],
+                                                )
+                                                .await;
+                                            rt_self.publish_all(&room_id_owned, &events);
+                                        }
+                                        None => {
+                                            rt_self.publish(
+                                                &room_id_owned,
+                                                RoomEvent::SoftError {
+                                                    room_id: room_id_owned.clone(),
+                                                    code: "leader_no_output".into(),
+                                                    message: "项目总管未能生成有效回复，请重试或调整请求。".into(),
+                                                },
+                                            );
+                                            let events = rt_self
+                                                .clone()
+                                                .apply(
+                                                    &room_id_owned,
+                                                    SchedulerEvent::AgentOutputSubmitted {
+                                                        room_id: room_id_owned.clone(),
+                                                        node_id: node_id_owned.clone(),
+                                                        agent_id: agent_id_owned.clone(),
+                                                        success: false,
+                                                        output_excerpt: String::new(),
+                                                    },
+                                                )
+                                                .await;
+                                            rt_self.publish_all(&room_id_owned, &events);
+                                        }
+                                    }
                                 }
                             } else {
                                 // Member path: regular save + advance.
@@ -485,12 +674,19 @@ impl TaskEngineRuntime {
                             }
                         }
                         Err(e) => {
-                            let err_ev = vec![RoomEvent::SoftError {
-                                room_id: room_id_owned.clone(),
-                                code: "actor_dispatch".into(),
-                                message: format!("{}: {}", agent_id_owned, e),
-                            }];
-                            rt_self.publish_all(&room_id_owned, &err_ev);
+                            // Dispatch failed — surface as DispatchFailed
+                            // so the user sees *why* nobody replied
+                            // (2026-07 refactor, was silent SoftError).
+                            rt_self.publish(
+                                &room_id_owned,
+                                RoomEvent::DispatchFailed {
+                                    room_id: room_id_owned.clone(),
+                                    agent_id: agent_id_owned.clone(),
+                                    agent_name: agent_name_owned.clone(),
+                                    reason: e,
+                                    is_leader: agent_id_owned == "__leader__",
+                                },
+                            );
                         }
                     }
                 } else {

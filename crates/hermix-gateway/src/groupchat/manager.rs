@@ -4,6 +4,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use uuid::Uuid;
 
+use super::agent_contract::build_leader_decision_prompt;
 use super::dispatcher::AgentDispatcher;
 use super::idle::IdleChatManager;
 use super::leader::LeaderOrchestrator;
@@ -538,6 +539,31 @@ impl GroupChatManager {
             .map(|a| (a.agent_id.clone(), a.agent_id.clone()))
             .collect();
         LeaderOrchestrator::build_leader_prompt(&agents, &agent_names)
+    }
+
+    /// Build the structured `LeaderDecision` JSON prompt for a specific room.
+    ///
+    /// Replaces the legacy markdown `build_leader_prompt_for` on the leader
+    /// dispatch path so the structured features (announcement / handoff /
+    /// needs_user_confirmation) actually populate. The legacy prompt only
+    /// ever produced `- task → agent` markdown that the regex fallback could
+    /// parse, leaving announcement/handoff dormant (see REVIEW_REPORT H4).
+    pub fn build_leader_decision_prompt_for(
+        &self,
+        room_id: &str,
+        user_message: &str,
+    ) -> String {
+        let agents = self.db.get_agents(room_id).unwrap_or_default();
+        let messages = self.db.get_messages(room_id, 20).unwrap_or_default();
+        let room_context = Self::build_room_context(&messages, 20);
+        let room_name = self
+            .db
+            .get_room(room_id)
+            .ok()
+            .flatten()
+            .map(|r| r.name)
+            .unwrap_or_else(|| room_id.to_string());
+        build_leader_decision_prompt(&room_name, &agents, user_message, &room_context)
     }
 
     // ── Agent Dispatch ──────────────────────────────────────────

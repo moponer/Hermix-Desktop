@@ -246,6 +246,97 @@ pub(crate) async fn collect_stream_llm_response(
     active_model: &str,
     on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
 ) -> Result<StreamCollectOutcome, AgentError> {
+    // 2026-07-18 (Round 29 follow-up): outer hard timeout. The inner
+    // silence_watch only emits "activity" notices — it does not abort
+    // the stream — so a provider that opens the SSE / chunked
+    // connection and then never sends a chunk (network hang, API
+    // outage, silently dropped TCP) used to pin the agent loop and
+    // the UI at "正在思考" forever. We now wrap the entire inner
+    // collection future in `tokio::time::timeout` and, on expiry,
+    // assemble an empty partial reply with `finish_reason =
+    // "timeout"`. `decide_empty_response` then routes the empty
+    // turn through `decide_empty_response` exactly like any other
+    // thinking-only reply, so a stuck provider degrades into a
+    // visible post-tool nudge (or finalizes if all nudges are
+    // exhausted) instead of hanging.
+    //
+    // `stream_overall_timeout_secs == 0` opts out of the watchdog
+    // (legacy behaviour).
+    let overall_secs = config.stream_overall_timeout_secs;
+    let inner_fut = collect_stream_inner(
+        config,
+        oauth,
+        callbacks,
+        llm_provider,
+        primary_credential_pool,
+        interrupt,
+        ctx,
+        tool_schemas,
+        route,
+        active_model,
+        on_chunk,
+    );
+    if overall_secs == 0 {
+        return inner_fut.await;
+    }
+    let dur = std::time::Duration::from_secs(overall_secs);
+    match tokio::time::timeout(dur, inner_fut).await {
+        Ok(outcome) => outcome,
+        Err(_elapsed) => {
+            tracing::warn!(
+                active_model = %active_model,
+                timeout_secs = overall_secs,
+                "streaming LLM completion hit hard timeout — provider not responding, degrading to empty partial reply"
+            );
+            emit_status(
+                config,
+                callbacks,
+                "activity",
+                &format!(
+                    "LLM stream timed out after {overall_secs}s — provider not responding. \
+                     The agent will finalize this turn with an empty reply; retry or check the \
+                     upstream provider if this persists."
+                ),
+            );
+            // Partial state is dropped when the inner future is cancelled
+            // by `tokio::time::timeout`. That's acceptable here: any
+            // content / reasoning / tool_calls that did make it through
+            // arrived via a chunk *before* the deadline, so the agent
+            // loop would have already received them via `on_chunk`.
+            // Anything *after* the deadline is, by definition, not part
+            // of this turn. The empty reply + `finish_reason = "timeout"`
+            // is the single source of truth for "this turn was cut
+            // short by the watchdog".
+            let message = assemble_stream_assistant_message("", "", &[]);
+            Ok(StreamCollectOutcome::Complete(LlmResponse {
+                message,
+                usage: None,
+                model: active_model.to_string(),
+                finish_reason: Some("timeout".to_string()),
+            }))
+        }
+    }
+}
+
+/// Inner streaming-collection body — pre-hard-timeout implementation,
+/// called by [`collect_stream_llm_response`] which adds the outer
+/// watchdog. Kept as a separate function so the inner future can be
+/// `tokio::time::timeout`-wrapped without mutating any of the
+/// per-chunk mutable state.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn collect_stream_inner(
+    config: &AgentConfig,
+    oauth: &OAuthRefresh,
+    callbacks: &AgentCallbacks,
+    llm_provider: &Arc<dyn LlmProvider>,
+    primary_credential_pool: Option<&Arc<CredentialPool>>,
+    interrupt: &InterruptController,
+    ctx: &ContextManager,
+    tool_schemas: &[ToolSchema],
+    route: Option<&TurnRuntimeRoute>,
+    active_model: &str,
+    on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
+) -> Result<StreamCollectOutcome, AgentError> {
     let api_messages = messages_for_api_call(config, ctx);
     let default_extra_body = extra_body_for_api_mode(config, &config.api_mode);
     let (_, active_request_model) = extract_provider_and_model(config, active_model);
@@ -519,8 +610,14 @@ pub(crate) async fn collect_stream_llm_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hermix_core::StreamDelta;
+    use crate::interrupt::InterruptController;
+    use crate::oauth_refresh::OAuthRefresh;
+    use async_stream::stream;
+    use futures::stream::BoxStream;
+    use hermix_core::{AgentError, LlmProvider, LlmResponse, StreamDelta};
+    use std::pin::Pin;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     /// 2026-07-14 (Frontend Audit, "思考被切成两段"): when a single
     /// LLM chunk carries BOTH a `<think>...</think>` span in
@@ -652,5 +749,254 @@ mod tests {
         );
         assert_eq!(collected, "extra-only reasoning");
         assert_eq!(reasoning_content, "extra-only reasoning");
+    }
+
+    // -----------------------------------------------------------------------
+    // 2026-07-18: hard outer timeout tests for `collect_stream_llm_response`.
+    //
+    // Symptom (Round 29): provider opens the SSE connection and then
+    // never sends a chunk (network hang, API outage, silently dropped
+    // TCP). Without the outer timeout the inner `silence_watch` only
+    // emits activity notices — it does not abort — so the agent loop
+    // and the UI both pinned at "正在思考" forever. Fix: wrap the
+    // collection future in `tokio::time::timeout` and, on expiry,
+    // assemble an empty partial reply with `finish_reason = "timeout"`
+    // so `decide_empty_response` can route through the post-tool
+    // nudge or finalize.
+    // -----------------------------------------------------------------------
+
+    /// Mock provider whose `chat_completion_stream` blocks indefinitely
+    /// — never yields a chunk, never returns `None`. Models the "TCP
+    /// open but no data" failure mode that previously hung the agent
+    /// loop.
+    struct HangingProvider;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for HangingProvider {
+        async fn chat_completion(
+            &self,
+            _messages: &[hermix_core::Message],
+            _tools: &[hermix_core::ToolSchema],
+            _max_tokens: Option<u32>,
+            _temperature: Option<f64>,
+            _model: Option<&str>,
+            _extra_body: Option<&serde_json::Value>,
+        ) -> Result<LlmResponse, AgentError> {
+            // Never resolves — same as the hanging stream.
+            std::future::pending::<()>().await;
+            unreachable!()
+        }
+
+        fn chat_completion_stream(
+            &self,
+            _messages: &[hermix_core::Message],
+            _tools: &[hermix_core::ToolSchema],
+            _max_tokens: Option<u32>,
+            _temperature: Option<f64>,
+            _model: Option<&str>,
+            _extra_body: Option<&serde_json::Value>,
+        ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+            // Empty stream that hangs forever — the future yields
+            // nothing and never returns. The outer
+            // `tokio::time::timeout` is what bounds the call.
+            Box::pin(stream! {
+                // Hanging stream — future resolves to `None` only after
+                // a `Pending` that never wakes. The outer
+                // `tokio::time::timeout` is what bounds the call; the
+                // `yield` is dead code that just gives the stream a
+                // concrete `Stream<Item = Result<StreamChunk, _>>`
+                // type so the trait cast works.
+                let _ = std::future::pending::<Result<StreamChunk, AgentError>>().await;
+                #[allow(unreachable_code)]
+                {
+                    yield Ok(StreamChunk {
+                        delta: None,
+                        finish_reason: Some(String::from("unreachable")),
+                        usage: None,
+                    });
+                }
+            })
+        }
+    }
+
+    /// Mock provider that yields a single text chunk then EOF. Models
+    /// the happy path so we can assert the watchdog doesn't fire when
+    /// the provider actually responds.
+    struct QuickProvider;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for QuickProvider {
+        async fn chat_completion(
+            &self,
+            _messages: &[hermix_core::Message],
+            _tools: &[hermix_core::ToolSchema],
+            _max_tokens: Option<u32>,
+            _temperature: Option<f64>,
+            _model: Option<&str>,
+            _extra_body: Option<&serde_json::Value>,
+        ) -> Result<LlmResponse, AgentError> {
+            Ok(LlmResponse {
+                message: hermix_core::Message::assistant(String::from("noop")),
+                usage: None,
+                model: String::from("dummy"),
+                finish_reason: Some(String::from("stop")),
+            })
+        }
+
+        fn chat_completion_stream(
+            &self,
+            _messages: &[hermix_core::Message],
+            _tools: &[hermix_core::ToolSchema],
+            _max_tokens: Option<u32>,
+            _temperature: Option<f64>,
+            _model: Option<&str>,
+            _extra_body: Option<&serde_json::Value>,
+        ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+            Box::pin(stream! {
+                yield Ok(StreamChunk {
+                    delta: Some(StreamDelta {
+                        content: Some(String::from("hi")),
+                        tool_calls: None,
+                        extra: None,
+                    }),
+                    finish_reason: None,
+                    usage: None,
+                });
+                yield Ok(StreamChunk {
+                    delta: None,
+                    finish_reason: Some(String::from("stop")),
+                    usage: None,
+                });
+            })
+        }
+    }
+
+    /// Drive `collect_stream_llm_response` with a fully-defaulted
+    /// scaffold, mutating only the LLM provider and the
+    /// `stream_overall_timeout_secs` config. Returns whatever
+    /// `StreamCollectOutcome` the wrapper surfaces.
+    async fn drive_collect(
+        provider: Arc<dyn LlmProvider>,
+        stream_overall_timeout_secs: u64,
+    ) -> Result<StreamCollectOutcome, AgentError> {
+        let mut config = AgentConfig::default();
+        // Silence the inner activity watchdog so it doesn't bias
+        // timing measurements. The hard timeout is what we're
+        // testing here.
+        config.stream_activity_interval_secs = 0;
+        config.stream_overall_timeout_secs = stream_overall_timeout_secs;
+
+        let oauth = OAuthRefresh::new();
+        let interrupt = InterruptController::new();
+        let ctx = crate::context::ContextManager::new(2048);
+
+        let chunks: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let chunks_ref = chunks.clone();
+        let on_chunk: Box<dyn Fn(StreamChunk) + Send + Sync> = Box::new(move |c: StreamChunk| {
+            if let Some(delta) = c.delta {
+                if let Some(content) = delta.content {
+                    chunks_ref.lock().unwrap().push(content);
+                }
+            }
+        });
+
+        let outcome = crate::stream_collect::collect_stream_llm_response(
+            &config,
+            &oauth,
+            &AgentCallbacks::default(),
+            &provider,
+            None,
+            &interrupt,
+            &ctx,
+            &[],
+            None,
+            "test-model",
+            &*on_chunk,
+        )
+        .await?;
+        // Suppress the unused-variable warning when the normal
+        // path is exercised.
+        let _ = chunks;
+        Ok(outcome)
+    }
+
+    /// Provider hangs forever → outer watchdog fires after
+    /// `stream_overall_timeout_secs` (1 s) and the wrapper returns
+    /// `StreamCollectOutcome::Complete { finish_reason: "timeout" }`
+    /// with an empty assistant message. Without the watchdog this
+    /// test would never return — the agent loop would stay pinned
+    /// at "正在思考" forever (the Round 29 bug).
+    #[tokio::test]
+    async fn hard_timeout_fires_when_provider_never_chunks() {
+        // Test-level wall-clock cap: 10 s is generous compared to the
+        // 1 s inner timeout and would expose a regression where the
+        // watchdog is no longer wired.
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            drive_collect(Arc::new(HangingProvider), 1),
+        )
+        .await
+        .expect("collect_stream_llm_response hung past 10s — hard timeout not wired")
+        .expect("collect_stream_llm_response returned Err");
+
+        match outcome {
+            StreamCollectOutcome::Complete(resp) => {
+                assert_eq!(
+                    resp.finish_reason.as_deref(),
+                    Some("timeout"),
+                    "expected finish_reason=\"timeout\" on hard timeout, got {:?}",
+                    resp.finish_reason
+                );
+                assert!(
+                    resp.message.content.as_deref().unwrap_or("").is_empty(),
+                    "expected empty assistant content on hard timeout, got {:?}",
+                    resp.message.content
+                );
+                assert!(
+                    resp.message
+                        .tool_calls
+                        .as_ref()
+                        .map(|v| v.is_empty())
+                        .unwrap_or(true),
+                    "expected no tool_calls on hard timeout, got {:?}",
+                    resp.message.tool_calls
+                );
+            }
+            other => panic!("expected StreamCollectOutcome::Complete, got {:?}", other),
+        }
+    }
+
+    /// Provider replies normally → outer watchdog does NOT fire;
+    /// the collector returns whatever the inner stream assembled
+    /// (here: finish_reason = "stop", content = "hi"). This guards
+    /// against an over-eager watchdog that would swallow healthy
+    /// long-running streams.
+    #[tokio::test]
+    async fn hard_timeout_does_not_fire_when_provider_chunks_normally() {
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            drive_collect(Arc::new(QuickProvider), 60),
+        )
+        .await
+        .expect("collect_stream_llm_response hung past 10s — false-positive timeout?")
+        .expect("collect_stream_llm_response returned Err");
+
+        match outcome {
+            StreamCollectOutcome::Complete(resp) => {
+                assert_eq!(
+                    resp.finish_reason.as_deref(),
+                    Some("stop"),
+                    "expected finish_reason=\"stop\" on normal completion, got {:?}",
+                    resp.finish_reason
+                );
+                assert_eq!(
+                    resp.message.content.as_deref(),
+                    Some("hi"),
+                    "expected content=\"hi\", got {:?}",
+                    resp.message.content
+                );
+            }
+            other => panic!("expected StreamCollectOutcome::Complete, got {:?}", other),
+        }
     }
 }
