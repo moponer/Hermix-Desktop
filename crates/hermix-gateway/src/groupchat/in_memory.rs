@@ -4,6 +4,8 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use super::persistence::*;
+// `Uuid` import is still used below for room id (RoomPersistence returns
+// its own UUID) — keep it explicit so future readers don't strip it.
 
 /// In-memory implementation of RoomPersistence for development/testing.
 pub struct InMemoryRoomPersistence {
@@ -44,7 +46,7 @@ impl RoomPersistence for InMemoryRoomPersistence {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        let leader_session_id = format!("groupchat-leader-{}", room.id);
+        let leader_session_id = new_session_id();
         // Auto-create the built-in leader (总管) profile so the
         // existing leader-driven send_message flow can find it.
         // The leader row is added to `agents` but its `__leader__`
@@ -98,7 +100,7 @@ impl RoomPersistence for InMemoryRoomPersistence {
             agent_id: agent_id.to_string(),
             room_id: room_id.to_string(),
             role,
-            session_id: format!("groupchat-{}-{}", room_id, agent_id),
+            session_id: new_session_id(),
             model_override: None,
             display_name: None,
         };

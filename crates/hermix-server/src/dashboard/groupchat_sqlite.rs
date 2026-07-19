@@ -244,7 +244,7 @@ impl RoomPersistence for SqliteRoomPersistence {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
-        let leader_session_id = format!("groupchat-leader-{}", room.id);
+        let leader_session_id = hermix_gateway::groupchat::persistence::new_session_id();
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO groupchat_rooms (id, name, agent_ids_json, settings_json, rules_json, announcement, announcement_published_at, created_at, updated_at)
@@ -364,7 +364,7 @@ impl RoomPersistence for SqliteRoomPersistence {
     }
 
     fn add_agent(&self, room_id: &str, agent_id: &str, role: AgentRole) -> Result<AgentRoomProfile, String> {
-        let session_id = format!("groupchat-{}-{}", room_id, agent_id);
+        let session_id = hermix_gateway::groupchat::persistence::new_session_id();
         let profile = AgentRoomProfile {
             agent_id: agent_id.to_string(),
             room_id: room_id.to_string(),

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 // ── Data Models ──────────────────────────────────────────
 
@@ -42,6 +43,23 @@ pub struct GroupChatRoom {
 /// the `groupchat_room_agents` table's `agent_id` column for the leader
 /// row. The room's `agent_ids` list is the user-facing member roster.
 pub const LEADER_AGENT_ID: &str = "__leader__";
+
+// ── Session ID generation (groupchat module) ────────────
+//
+// Replaces the previous `format!("groupchat-leader-{room_id}")` and
+// `format!("groupchat-{room_id}-{agent_id}")` synthetic IDs that were
+// created at room / agent add time but never inserted into the
+// canonical `sessions` table. AgentService then received a session_id
+// that resolved to nothing in `session_search` / `memory_prefetch`.
+//
+// Now we mint plain `Uuid::new_v4()` IDs — the same format used by
+// `hermix_gateway::session::Session::new()`, `hermix_agent::acp::session`,
+// and every other session-creating path in this workspace. Centralised
+// here so the four call sites (room creation, member add, plus their
+// in-memory twin) stay in lock-step.
+pub fn new_session_id() -> String {
+    Uuid::new_v4().to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomSettings {
@@ -644,4 +662,30 @@ pub trait RoomPersistence: Send + Sync {
         text: Option<&str>,
         published_at: Option<DateTime<Utc>>,
     ) -> Result<(), String>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_session_id_returns_uuid_v4_format() {
+        // UUID v4 canonical form: 8-4-4-4-12 hex chars separated by
+        // hyphens. The canonical session format used by `Session::new()`
+        // and every other session-creating path in this workspace.
+        let id = new_session_id();
+        assert_eq!(id.len(), 36, "expected canonical UUID v4 length");
+        assert!(
+            Uuid::parse_str(&id).is_ok(),
+            "new_session_id must produce a parseable UUID, got: {}",
+            id
+        );
+    }
+
+    #[test]
+    fn new_session_id_is_unique_across_calls() {
+        // Smoke check: two consecutive calls produce distinct IDs.
+        // Catches accidental constant seeding or shared-state bugs.
+        assert_ne!(new_session_id(), new_session_id());
+    }
 }
