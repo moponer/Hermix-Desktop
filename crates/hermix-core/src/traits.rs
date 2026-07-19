@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::Notify;
 
 use crate::errors::{AgentError, GatewayError, ToolError};
 use crate::tool_schema::ToolSchema;
@@ -394,6 +395,18 @@ pub struct AgentOverrides {
     /// Payload is a JSON string: `{ intent, confidence, results }`.
     #[serde(skip)]
     pub on_prefetch_intent: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    /// 2026-07-19 (type-B root-cause): Soft-shutdown signal for the
+    /// agent task. The server fires `notify_one()` when the WebSocket
+    /// disconnects mid-turn (or on user retry). The agent loop's
+    /// pre-tool-dispatch resolution races this against the approval
+    /// oneshot via `tokio::select!`, so a stranded `rx.await` wakes
+    /// up as `ChannelClosed` and the loop can self-drain (next
+    /// `collect_stream_llm_response` honors `stream_first_chunk_timeout_secs`)
+    /// instead of dying mid-await with a half-initialized context.
+    /// The server still owns the `JoinHandle` and may `abort()` it
+    /// if the soft drain doesn't finish in time.
+    #[serde(skip)]
+    pub shutdown: Option<Arc<Notify>>,
 }
 
 impl std::fmt::Debug for AgentOverrides {

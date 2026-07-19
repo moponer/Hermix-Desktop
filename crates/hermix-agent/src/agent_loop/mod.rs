@@ -2023,6 +2023,7 @@ impl AgentLoop {
         crate::tool_dispatch::resolve_pre_dispatch(
             self.callbacks.on_pre_tool_dispatch.as_ref().map(|b| b.as_ref()),
             tool_calls,
+            self.callbacks.shutdown.as_ref(),
         )
         .await
     }

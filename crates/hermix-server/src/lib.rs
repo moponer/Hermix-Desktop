@@ -532,9 +532,9 @@ mod approval_registry_tests {
         // user-visible "I clicked allow but the agent said
         // denied" race; see the doc-comment on
         // `DEFAULT_APPROVAL_TIMEOUT` for the full story.
-        assert_eq!(DEFAULT_APPROVAL_TIMEOUT, std::time::Duration::from_secs(300));
+        assert_eq!(DEFAULT_APPROVAL_TIMEOUT, std::time::Duration::from_secs(30));
         let reg = ApprovalRegistry::new();
-        assert_eq!(reg.default_timeout(), std::time::Duration::from_secs(300));
+        assert_eq!(reg.default_timeout(), std::time::Duration::from_secs(30));
     }
 
     /// `compute_approval_deadline_ms` returns wall-clock "now"
@@ -3200,6 +3200,12 @@ async fn send_message(
         on_event: None,
         pre_approval_checker: None,
         on_prefetch_intent: None,
+        // 2026-07-19 type-B: non-streaming HTTP path doesn't own a WS
+        // socket, so there is no soft-shutdown signal to wake any
+        // approval `rx.await`. Leave None — it falls back to plain
+        // `rx.await` (which here has no race because this path
+        // doesn't abort a task).
+        shutdown: None,
     };
 
     // Call agent service
@@ -3507,6 +3513,10 @@ async fn handle_ws(mut socket: WebSocket, state: HttpServerState, session_id: St
                     on_event: None,
                     pre_approval_checker: None,
                     on_prefetch_intent: None,
+                    // 2026-07-19 type-B: see sibling `/api/sessions/.../messages`
+                    // initializer; no WS → no shutdown token → falls back to
+                    // plain `rx.await`.
+                    shutdown: None,
                 };
 
                 // Call agent service
@@ -3680,6 +3690,17 @@ async fn handle_ws_stream_send(
         &request.text.chars().take(40).collect::<String>(),
         trace_id
     );
+
+    // 2026-07-19 (type-B root-cause): soft-shutdown `Notify` for the
+    // agent task. Cloned into `AgentOverrides::shutdown` so the agent
+    // loop's `resolve_pre_dispatch` can race the approval oneshot
+    // against it. We then `notify_one()` here when the WS is observed
+    // disconnected (heartbeat ping fail or socket.send fail) — letting
+    // the task self-drain via `stream_first_chunk_timeout_secs=30s`
+    // instead of `JoinHandle::abort()` killing it mid-`rx.await`. The
+    // stale-handle override above (user-retry path) still hard-aborts
+    // because the user explicitly wants to cancel.
+    let shutdown_notify: Arc<tokio::sync::Notify> = Arc::new(tokio::sync::Notify::new());
 
     // 2026-07-17: user-retry recovery. The key is
     // `dedup_key(session_id, text)` — the same collision domain used by
@@ -4188,6 +4209,12 @@ async fn handle_ws_stream_send(
                 }
             }))
         },
+        // 2026-07-19 (type-B root-cause): forward the WS-side
+        // soft-shutdown `Notify` so the agent loop can race it
+        // against the approval oneshot (see
+        // `tool_dispatch::resolve_pre_dispatch` and the `Notify` arm
+        // of the inner `tokio::select!`).
+        shutdown: Some(shutdown_notify.clone()),
     };
 
     let tx_clone = tx.clone();
@@ -4874,9 +4901,21 @@ async fn handle_ws_stream_send(
                         {
                             was_client_disconnect = true;
                             ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                            if let Some(h) = state.active_handles.lock().unwrap().remove(&active_key) {
-                                h.abort();
-                            }
+                            // 2026-07-19 (type-B root-cause): soft-drain
+                            // instead of hard-abort. Notify the agent
+                            // task so any in-flight approval wait wakes
+                            // up as `ChannelClosed` (via
+                            // `tool_dispatch::resolve_pre_dispatch`'s
+                            // `tokio::select!`); the agent then writes
+                            // the denial note, falls into the next LLM
+                            // call, and `stream_first_chunk_timeout_secs=30s`
+                            // brings the turn to a clean Done. The
+                            // JoinHandle stays in `active_handles` until
+                            // the agent task self-removes it (line 4721
+                            // area) — `active_sessions` is freed
+                            // immediately so the user can retry.
+                            shutdown_notify.notify_one();
+                            state.active_handles.lock().unwrap().remove(&active_key);
                             state.active_sessions.lock().unwrap().remove(&active_key);
                             break;
                         }
@@ -4897,9 +4936,13 @@ async fn handle_ws_stream_send(
                 if socket.send(WsMessage::Ping(Bytes::new())).await.is_err() {
                     was_client_disconnect = true;
                     ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                    if let Some(h) = state.active_handles.lock().unwrap().remove(&active_key) {
-                        h.abort();
-                    }
+                    // 2026-07-19 (type-B root-cause): same soft-drain
+                    // pattern as the rx.send-fail arm above. The
+                    // heartbeat ping failed → the WS path is dead even
+                    // though we can't yet read a close frame, so we
+                    // must let the agent task know.
+                    shutdown_notify.notify_one();
+                    state.active_handles.lock().unwrap().remove(&active_key);
                     state.active_sessions.lock().unwrap().remove(&active_key);
                     break;
                 }

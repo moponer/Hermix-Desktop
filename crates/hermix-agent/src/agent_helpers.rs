@@ -39,7 +39,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Notify};
 
 use hermix_core::{ApprovalOutcome, ToolCall, ToolError, ToolSchema, UsageStats};
 
@@ -419,6 +419,15 @@ pub struct AgentCallbacks {
     /// Payload is a JSON string containing `{ intent, confidence, results }`
     /// in the same shape as `StreamEvent::PrefetchIntent`.
     pub on_prefetch_intent: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    /// 2026-07-19 (type-B root-cause): forwarded from
+    /// `AgentOverrides::shutdown` by `LocalAgentService`. When the
+    /// server marks the WebSocket as disconnected, it fires
+    /// `notify_one()` on this `Arc<Notify>`, and the pre-tool
+    /// dispatch path races it against the approval oneshot so the
+    /// agent loop never dies mid-`rx.await` with a half-initialized
+    /// context. See `traits::AgentOverrides::shutdown` for the
+    /// cross-crate contract.
+    pub shutdown: Option<Arc<Notify>>,
     /// M5: Called when the agent emits an ACUI (Agent-Controlled UI)
     /// directive. The payload is a JSON-serialized `AcuiDirective`
     /// (tag = `"op"`, snake_case).

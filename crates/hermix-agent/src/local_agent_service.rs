@@ -2119,6 +2119,15 @@ impl AgentService for LocalAgentService {
                 }))
             },
             on_prefetch_intent: effective_overrides.on_prefetch_intent.clone(),
+            // 2026-07-19 (type-B root-cause): forward the
+            // server-side soft-shutdown `Notify` into the agent's
+            // callbacks so `resolve_pre_dispatch` can race it
+            // against the approval oneshot. Without this the
+            // agent task parks in `rx.await` until the server
+            // `abort()`s it, losing the chance to write a denial
+            // note into the context and self-drain via
+            // `stream_first_chunk_timeout_secs`.
+            shutdown: effective_overrides.shutdown.clone(),
             ..Default::default()
         };
 
@@ -2651,6 +2660,7 @@ mod override_tests {
             pre_approval_checker: None,
             skills: None,
             on_prefetch_intent: None,
+            shutdown: None,
         };
         let (cfg, allowed) = LocalAgentService::apply_overrides(base, &overrides);
         assert_eq!(
@@ -2680,6 +2690,7 @@ mod override_tests {
             pre_approval_checker: None,
             skills: None,
             on_prefetch_intent: None,
+            shutdown: None,
         };
         let (_cfg, allowed) = LocalAgentService::apply_overrides(base, &overrides);
         let allowed = allowed.expect("allowed set should be Some");

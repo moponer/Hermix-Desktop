@@ -33,6 +33,7 @@
 //! pure-function helpers that don't read `self`-internal state.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use hermix_config::env_compat;
 use hermix_core::{ApprovalOutcome, ToolCall};
@@ -172,9 +173,21 @@ pub(crate) fn denial_repick_hint(tool_name: &str, raw_args: &str) -> &'static st
 /// the upstream layer (e.g. `LocalAgentService`) sends a verdict. The
 /// returned map is keyed by `ToolCall::id` and consumed by both the
 /// orchestrated `delegate_task` path and the `JoinSet` path.
+///
+/// 2026-07-19 (type-B root-cause): when `shutdown` is `Some`, the
+/// `AwaitApproval` arm races the oneshot against `Notify::notified()`
+/// so a server-side WebSocket disconnect unblocks the agent task as
+/// `ApprovalOutcome::ChannelClosed` instead of stranding it in a bare
+/// `rx.await` until the registry timeout fires (or, if the server
+/// aborts the task first, until `drop` wakes the receiver with
+/// `Err(_)`). The denial note is then written to the context, the
+/// next `collect_stream_llm_response` runs, and `stream_first_chunk_timeout_secs`
+/// brings the whole turn to a clean `Done` within ~30s of the
+/// disconnect.
 pub(crate) async fn resolve_pre_dispatch(
     on_pre_tool_dispatch: Option<&(dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync)>,
     tool_calls: &[ToolCall],
+    shutdown: Option<&Arc<tokio::sync::Notify>>,
 ) -> HashMap<String, Result<(), ToolDenial>> {
     let Some(hook) = on_pre_tool_dispatch else {
         return HashMap::new();
@@ -188,38 +201,58 @@ pub(crate) async fn resolve_pre_dispatch(
                 kind: DenialKind::Policy,
                 reason,
             }),
-            ToolDispatchDecision::AwaitApproval(rx) => match rx.await {
-                Ok(ApprovalOutcome::Approved) => Ok(()),
-                Ok(ApprovalOutcome::DeniedByUser) => Err(ToolDenial {
-                    kind: DenialKind::UserDenied,
-                    reason: format!(
-                        "User denied the tool call.{}",
-                        denial_repick_hint(&tc.function.name, &tc.function.arguments),
-                    ),
-                }),
-                Ok(ApprovalOutcome::TimedOut { timeout_secs }) => Err(ToolDenial {
-                    kind: DenialKind::TimedOut,
-                    reason: format!(
-                        "The {timeout_secs}-second approval window expired before a decision \
-                         was made, so the tool was not executed (the agent defaulted to \
-                         deny).{hint}",
-                        hint = denial_repick_hint(&tc.function.name, &tc.function.arguments),
-                    ),
-                }),
-                Ok(ApprovalOutcome::ChannelClosed) => Err(ToolDenial {
-                    kind: DenialKind::ChannelClosed,
-                    reason: "Approval channel closed before a response arrived (the \
-                             connection dropped, the server restarted, or the session was \
-                             reloaded). The tool was not executed."
-                        .to_string(),
-                }),
-                Err(_) => Err(ToolDenial {
-                    kind: DenialKind::ChannelClosed,
-                    reason: "Approval channel closed before a response arrived (the \
-                             connection dropped, the server restarted, or the session was \
-                             reloaded). The tool was not executed."
-                        .to_string(),
-                }),
+            ToolDispatchDecision::AwaitApproval(rx) => {
+                // Race: registry timeout (30s default) vs server-side
+                // WebSocket-disconnect soft-shutdown. Without this race,
+                // a stale-click + disconnect leaves the agent task
+                // parked here until the server `abort()`s it (which
+                // also kills any chance of writing the denial note to
+                // the context before exit).
+                let resolved = match shutdown {
+                    Some(notify) => {
+                        let notified = notify.notified();
+                        tokio::pin!(notified);
+                        tokio::select! {
+                            biased;
+                            _ = notified => Ok(ApprovalOutcome::ChannelClosed),
+                            res = rx => res,
+                        }
+                    }
+                    None => rx.await,
+                };
+                match resolved {
+                    Ok(ApprovalOutcome::Approved) => Ok(()),
+                    Ok(ApprovalOutcome::DeniedByUser) => Err(ToolDenial {
+                        kind: DenialKind::UserDenied,
+                        reason: format!(
+                            "User denied the tool call.{}",
+                            denial_repick_hint(&tc.function.name, &tc.function.arguments),
+                        ),
+                    }),
+                    Ok(ApprovalOutcome::TimedOut { timeout_secs }) => Err(ToolDenial {
+                        kind: DenialKind::TimedOut,
+                        reason: format!(
+                            "The {timeout_secs}-second approval window expired before a decision \
+                             was made, so the tool was not executed (the agent defaulted to \
+                             deny).{hint}",
+                            hint = denial_repick_hint(&tc.function.name, &tc.function.arguments),
+                        ),
+                    }),
+                    Ok(ApprovalOutcome::ChannelClosed) => Err(ToolDenial {
+                        kind: DenialKind::ChannelClosed,
+                        reason: "Approval channel closed before a response arrived (the \
+                                 connection dropped, the server restarted, or the session was \
+                                 reloaded). The tool was not executed."
+                            .to_string(),
+                    }),
+                    Err(_) => Err(ToolDenial {
+                        kind: DenialKind::ChannelClosed,
+                        reason: "Approval channel closed before a response arrived (the \
+                                 connection dropped, the server restarted, or the session was \
+                                 reloaded). The tool was not executed."
+                            .to_string(),
+                    }),
+                }
             },
         };
         decisions.insert(id, outcome);
@@ -331,7 +364,7 @@ pub(crate) fn cap_delegates(max_concurrent_delegates: u32, tool_calls: &mut Vec<
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::oneshot;
+    use tokio::sync::{oneshot, Notify};
 
     use hermix_core::{ApprovalOutcome, FunctionCall, ToolCall};
 
@@ -439,7 +472,12 @@ mod tests {
     #[tokio::test]
     async fn awaited_approval_denied_maps_to_user_denied() {
         let tc = tc("storage_clean", r#"{"paths":["/tmp/x"]}"#);
-        let map = resolve_pre_dispatch(Some(&hook_awaiting(ApprovalOutcome::DeniedByUser)), &[tc]).await;
+        let map = resolve_pre_dispatch(
+            Some(&hook_awaiting(ApprovalOutcome::DeniedByUser)),
+            &[tc],
+            None,
+        )
+        .await;
         let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
         assert_eq!(err.kind, DenialKind::UserDenied);
         assert!(err.reason.contains("User denied the tool call"));
@@ -451,6 +489,7 @@ mod tests {
         let map = resolve_pre_dispatch(
             Some(&hook_awaiting(ApprovalOutcome::TimedOut { timeout_secs: 300 })),
             &[tc],
+            None,
         )
         .await;
         let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
@@ -464,6 +503,7 @@ mod tests {
         let map = resolve_pre_dispatch(
             Some(&hook_awaiting(ApprovalOutcome::ChannelClosed)),
             &[tc],
+            None,
         )
         .await;
         let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
@@ -474,7 +514,46 @@ mod tests {
     #[tokio::test]
     async fn awaited_approval_approved_maps_to_ok() {
         let tc = tc("storage_clean", r#"{"paths":["/tmp/x"]}"#);
-        let map = resolve_pre_dispatch(Some(&hook_awaiting(ApprovalOutcome::Approved)), &[tc]).await;
+        let map = resolve_pre_dispatch(
+            Some(&hook_awaiting(ApprovalOutcome::Approved)),
+            &[tc],
+            None,
+        )
+        .await;
         assert!(map.get("call-storage_clean").unwrap().is_ok());
+    }
+
+    /// 2026-07-19 (type-B root-cause): when the server fires the
+    /// shutdown `Notify` mid-await, the agent loop should see
+    /// `ChannelClosed` instead of stranding on the bare `rx.await`.
+    /// The pre-resolved receiver here is irrelevant — the `Notify`
+    /// arm wins via `biased` selection before the receiver ever
+    /// gets a chance to fire.
+    #[tokio::test]
+    async fn shutdown_notify_unblocks_await_approval_as_channel_closed() {
+        let tc = tc("storage_clean", r#"{"paths":["/tmp/x"]}"#);
+        // Shared between hook (notify_one on each call) and the
+        // outer `resolve_pre_dispatch` call (which registers the
+        // select! waiter). Pre-arming inside the hook keeps the
+        // test deterministic across the call ordering below.
+        let notify = Arc::new(Notify::new());
+        let hook: Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync> =
+            Box::new({
+                let notify = notify.clone();
+                move |_tc| {
+                    let (tx, rx) = oneshot::channel::<ApprovalOutcome>();
+                    drop(tx);
+                    notify.notify_one();
+                    ToolDispatchDecision::AwaitApproval(rx)
+                }
+            });
+        let map =
+            resolve_pre_dispatch(Some(&hook), &[tc], Some(&notify)).await;
+        let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
+        assert_eq!(
+            err.kind,
+            DenialKind::ChannelClosed,
+            "shutdown Notify must short-circuit the approval wait as ChannelClosed",
+        );
     }
 }
