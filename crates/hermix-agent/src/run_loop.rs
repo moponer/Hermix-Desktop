@@ -586,7 +586,60 @@ let mut post_tool_nudge_count: u32 = 0;
         // LoopState owns total_turns; aliased here for hot-path readability.
         let mut total_turns: u32 = state.total_turns;
 
+        // 2026-07-19: armed by `do_post_tool_iteration` once a turn
+        // finishes tool execution; checked at the top of the next
+        // iteration of this loop. Mirrors the run_stream() watchdog.
+        let mut transition_started_at: Option<Instant> = None;
+
         loop {
+            // 2026-07-19: turn transition watchdog (issue: tool approved
+            // → next turn never starts). Records the timestamp right
+            // after `do_post_tool_iteration` returns. If the next
+            // iteration of this loop has not crossed the next
+            // checkpoint within `turn_transition_deadline_secs` (the
+            // pre-turn setup tracing line below), the loop is
+            // considered stalled and we emit a terminal Done so the
+            // WS client recovers — instead of the user being stuck on
+            // the "正在思考…" indicator.
+            if let (Some(start), false) = (
+                transition_started_at,
+                self.config.turn_transition_deadline_secs == 0,
+            ) {
+                let elapsed = start.elapsed();
+                let deadline = std::time::Duration::from_secs(self.config.turn_transition_deadline_secs);
+                if elapsed > deadline {
+                    tracing::warn!(
+                        target: "hermix.agent",
+                        turn = total_turns,
+                        elapsed_secs = elapsed.as_secs(),
+                        deadline_secs = self.config.turn_transition_deadline_secs,
+                        "turn_transition_stall (run): no progress since post-tool-iteration; \
+                         emitting Done to recover WS client"
+                    );
+                    self.persist_session_terminal(
+                        &ctx,
+                        session_id,
+                        total_turns,
+                        review_memory_at_end,
+                    );
+                    return Ok(self.finalize_agent_result(
+                        &ctx,
+                        total_turns,
+                        &tool_errors,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
+                        session_started_hooks_fired,
+                        persist_user_idx,
+                        true,
+                        false,
+                        Some("turn_transition_stall".to_string()),
+                    ));
+                }
+            }
+            // Reset the tracker: this iteration crossed the pre-turn
+            // checkpoint, so any prior stall has cleared.
+            transition_started_at = None;
+
             tracing::debug!(phase = %LoopPhase::PreTurnSetup, turn = total_turns, "run: pre-turn setup");
 self.notify_phase(&LoopPhase::PreTurnSetup, total_turns);
             // O1.1: shared pre-turn setup (was ~100 lines of duplication
@@ -1067,6 +1120,12 @@ self.notify_phase(&LoopPhase::PostToolExec, total_turns);
                 None, // no stream_needs_break in non-stream mode
                 None, // no on_chunk in non-stream mode
             ).await;
+            // 2026-07-19: arm the turn-transition watchdog. Mirrors
+            // the run_stream() side. The next loop iteration's
+            // top-of-loop check will fire if we don't reach the
+            // pre-turn-setup checkpoint within
+            // `turn_transition_deadline_secs` of now.
+            transition_started_at = Some(Instant::now());
 
             // 2026-07-08 (HH), revised 2026-07-09: replay convergence guard.
             // If this turn consisted ENTIRELY of replayed tool calls, the
@@ -1253,7 +1312,65 @@ self.notify_phase(&LoopPhase::Init, 0);
         // timings live on `state.timings` (mutated in place).
         let mut total_turns: u32 = state.total_turns;
 
+        // 2026-07-19: armed by `do_post_tool_iteration` once a turn
+        // finishes tool execution; checked at the top of the next
+        // iteration of this loop. See watchdog block below.
+        let mut transition_started_at: Option<Instant> = None;
+
         loop {
+            // 2026-07-19: turn transition watchdog (issue: tool approved
+            // → next turn never starts). Records the timestamp right
+            // after `do_post_tool_iteration` returns. If the next
+            // iteration of this loop has not crossed the next
+            // checkpoint within `turn_transition_deadline_secs` (the
+            // pre-turn setup tracing line below), the loop is
+            // considered stalled and we emit a terminal Done so the
+            // WS client recovers — instead of the user being stuck on
+            // the "正在思考…" indicator.
+            if let (Some(start), false) = (
+                transition_started_at,
+                self.config.turn_transition_deadline_secs == 0,
+            ) {
+                let elapsed = start.elapsed();
+                let deadline = std::time::Duration::from_secs(self.config.turn_transition_deadline_secs);
+                if elapsed > deadline {
+                    tracing::warn!(
+                        target: "hermix.agent",
+                        turn = total_turns,
+                        elapsed_secs = elapsed.as_secs(),
+                        deadline_secs = self.config.turn_transition_deadline_secs,
+                        "turn_transition_stall: no progress since post-tool-iteration; \
+                         emitting Done to recover WS client"
+                    );
+                    self.persist_session_terminal(
+                        &ctx,
+                        session_id,
+                        total_turns,
+                        review_memory_at_end,
+                    );
+                    let mut fr = last_finish_reason.clone();
+                    if fr.is_none() {
+                        fr = Some("turn_transition_stall".to_string());
+                    }
+                    return Ok(self.finalize_agent_result(
+                        &ctx,
+                        total_turns,
+                        &tool_errors,
+                        state.cost_guard.accumulated_usage.clone(),
+                        state.cost_guard.session_cost_usd,
+                        session_started_hooks_fired,
+                        persist_user_idx,
+                        true,
+                        false,
+                        fr,
+                    ));
+                }
+            }
+            // Reset the tracker: this iteration crossed the pre-turn
+            // checkpoint, so any prior stall has cleared. The next
+            // post-tool-iteration will set it again.
+            transition_started_at = None;
+
             tracing::debug!(phase = %LoopPhase::PreTurnSetup, turn = total_turns, "run_stream: pre-turn setup");
 self.notify_phase(&LoopPhase::PreTurnSetup, total_turns);
             // O1.1: shared pre-turn setup (was ~90 lines of duplication
@@ -1884,6 +2001,11 @@ self.notify_phase(&LoopPhase::PostToolExec, total_turns);
                 Some(&stream_needs_break), // stream-specific
                 Some(on_chunk.as_ref()),   // stream-specific
             ).await;
+            // 2026-07-19: arm the turn-transition watchdog. The next
+            // loop iteration's top-of-loop check will fire if we
+            // don't reach the pre-turn-setup checkpoint within
+            // `turn_transition_deadline_secs` of now.
+            transition_started_at = Some(Instant::now());
 
             // 2026-07-09: Removed replay advisory injection.
             // The LLM has full context — no need for system-level

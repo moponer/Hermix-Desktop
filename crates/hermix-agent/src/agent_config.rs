@@ -555,6 +555,33 @@ pub struct AgentConfig {
     #[serde(default = "default_stream_first_chunk_timeout_secs")]
     pub stream_first_chunk_timeout_secs: u64,
 
+    /// 2026-07-19: hard deadline (seconds) for the gap between the end
+    /// of one LLM turn's tool-execution bookkeeping and the start of
+    /// the next turn's stream-collection call. Watched by the
+    /// `run`/`run_stream` main loops via `last_progress_at`. If the
+    /// main loop has not crossed a progress checkpoint within this
+    /// window, it logs a `turn_transition_stall` warning and emits a
+    /// terminal `Done` event so the WS client recovers (rather than
+    /// the user being stuck on the "正在思考…" indicator).
+    ///
+    /// Root cause that motivated this setting: the `b35998b` SSE
+    /// first-chunk watchdog (above) only fixes "no chunk after the
+    /// TCP open". It does **not** cover the second class of stall
+    /// observed in production on 2026-07-19 — turn 1 finishes with
+    /// `finish_reason="tool_calls"`, the user clicks "允许", the tool
+    /// executes and `do_post_tool_iteration` returns, but turn 2
+    /// never starts. The watchdog covers the *gap* between
+    /// `do_post_tool_iteration` and the next `do_pre_turn_setup`.
+    ///
+    /// 90 s is wide enough to absorb a benign stall (e.g. an SQLite
+    /// write under contention, a slow `auto_compress_if_over_threshold`
+    /// spawn), but short enough that the user sees recovery before
+    /// the outer `stream_overall_timeout_secs` (180 s) would have
+    /// tripped on a stale stream anyway. `0` opts out (legacy
+    /// behaviour — no watchdog).
+    #[serde(default = "default_turn_transition_deadline_secs")]
+    pub turn_transition_deadline_secs: u64,
+
     /// Max tools to surface to the LLM after tool-routing (Phase 7 H1).
     /// `0` or unset means "no routing, send full registry" (legacy default).
     #[serde(default = "default_max_routed_tools")]
@@ -772,6 +799,13 @@ fn default_stream_first_chunk_timeout_secs() -> u64 {
     30
 }
 
+/// Default watchdog (seconds) for the gap between the end of one
+/// turn's tool-execution bookkeeping and the start of the next turn's
+/// pre-turn setup. See [`AgentConfig::turn_transition_deadline_secs`].
+fn default_turn_transition_deadline_secs() -> u64 {
+    90
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -840,6 +874,7 @@ impl Default for AgentConfig {
             stream_activity_stall_secs: default_stream_activity_stall_secs(),
             stream_overall_timeout_secs: default_stream_overall_timeout_secs(),
             stream_first_chunk_timeout_secs: default_stream_first_chunk_timeout_secs(),
+            turn_transition_deadline_secs: default_turn_transition_deadline_secs(),
             workspace: None,
             permission: None,
             llm_providers: HashMap::new(),
@@ -932,5 +967,42 @@ mod tests {
         assert!((back.memory_min_salience - 0.30).abs() < 1e-5);
         assert_eq!(back.memory_recall_limit_subsequent, 5);
         assert_eq!(back.memory_recall_limit_first, 50);
+    }
+
+    // 2026-07-19: pin the turn-transition watchdog default + the
+    // "0 = opt-out" contract. Both run_stream() and run() consult
+    // this field at the top of every main-loop iteration; if the
+    // default drifts the WS recovery latency changes silently.
+    #[test]
+    fn turn_transition_deadline_default_is_90_seconds() {
+        let c = AgentConfig::default();
+        assert_eq!(c.turn_transition_deadline_secs, 90);
+    }
+
+    #[test]
+    fn turn_transition_deadline_zero_opt_out_roundtrips() {
+        let mut c = AgentConfig::default();
+        c.turn_transition_deadline_secs = 0;
+        let json = serde_json::to_string(&c).unwrap();
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.turn_transition_deadline_secs, 0,
+            "0 must round-trip as 0 (the watchdog opt-out value)"
+        );
+    }
+
+    #[test]
+    fn old_config_without_turn_transition_field_uses_default() {
+        // Mirrors m2_old_config_without_new_fields_uses_defaults but
+        // for the new field. If the serde default ever regresses the
+        // watchdog would silently disable itself on existing
+        // user-saved configs.
+        let c = AgentConfig::default();
+        let mut v: serde_json::Value = serde_json::to_value(&c).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("turn_transition_deadline_secs");
+        let back: AgentConfig = serde_json::from_value(v).unwrap();
+        assert_eq!(back.turn_transition_deadline_secs, 90);
     }
 }
