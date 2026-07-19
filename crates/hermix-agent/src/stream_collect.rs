@@ -403,62 +403,179 @@ pub(crate) async fn collect_stream_inner(
     let mut tool_call_sanitizer = ToolCallSanitizer::new();
 
     let activity_secs = config.stream_activity_interval_secs;
+    // 2026-07-19: tight tripwire for the "SSE opened but no chunk ever
+    // arrives" hang that pins the agent loop and the UI at
+    // "正在思考…" until the 180 s outer watchdog fires. Once the
+    // first chunk has arrived, this deadline is ignored (the
+    // post-first-chunk stall path is still covered by
+    // `stream_activity_stall_secs` notices and the outer timeout).
+    let first_chunk_deadline =
+        config.stream_first_chunk_timeout_secs.max(1);
+    let collect_started = std::time::Instant::now();
+    let mut first_chunk_arrived = false;
 
     if activity_secs == 0 {
-        while let Some(chunk_result) = stream.next().await {
-            if interrupt.take_interrupt_graceful().is_some() {
-                let (flush_content, flush_reasoning) = think_parser.flush();
-                if !flush_content.is_empty() {
-                    content.push_str(&flush_content);
+        // `activity_secs == 0` is the "silence activity notices"
+        // sentinel used by tests and bytelemetry-hungry operators.
+        // 2026-07-19: even in that mode we still need to enforce the
+        // first-chunk deadline — otherwise an SSE-open / no-chunk
+        // hang pins the UI until the 180 s outer watchdog fires.
+        const IDLE_ARM_MAX: Duration = Duration::from_secs(86_400);
+        let first_chunk_deadline_dur = Duration::from_secs(first_chunk_deadline);
+        let mut idle = Box::pin(sleep(first_chunk_deadline_dur));
+        let mut stall_notice_sent = false;
+        loop {
+            tokio::select! {
+                biased;
+                chunk_opt = stream.next() => {
+                    match chunk_opt {
+                        None => break,
+                        Some(chunk_result) => {
+                            if !first_chunk_arrived {
+                                first_chunk_arrived = true;
+                            }
+                            if interrupt.take_interrupt_graceful().is_some() {
+                                let (flush_content, flush_reasoning) = think_parser.flush();
+                                if !flush_content.is_empty() {
+                                    content.push_str(&flush_content);
+                                }
+                                if !flush_reasoning.is_empty() {
+                                    reasoning_content.push_str(&flush_reasoning);
+                                }
+                                tool_call_sanitizer.flush();
+                                let message = assemble_stream_assistant_message(
+                                    &content,
+                                    &reasoning_content,
+                                    &tool_calls,
+                                );
+                                return Ok(StreamCollectOutcome::Interrupted(LlmResponse {
+                                    message,
+                                    usage: last_usage.clone(),
+                                    model: active_model.to_string(),
+                                    finish_reason: Some("interrupted".to_string()),
+                                }));
+                            }
+                            let chunk = chunk_result?;
+                            apply_stream_collect_chunk(
+                                callbacks,
+                                chunk,
+                                &mut content,
+                                &mut raw_content,
+                                &mut reasoning_content,
+                                &mut think_parser,
+                                &mut tool_call_sanitizer,
+                                &mut tool_calls,
+                                &mut last_usage,
+                                &mut finish_reason,
+                                on_chunk,
+                            );
+                        }
+                    }
                 }
-                if !flush_reasoning.is_empty() {
-                    reasoning_content.push_str(&flush_reasoning);
+                _ = idle.as_mut() => {
+                    // After first chunk, idle becomes effectively
+                    // unbounded (no activity notices to fire).
+                    if first_chunk_arrived {
+                        if !stall_notice_sent {
+                            emit_status(
+                                config,
+                                callbacks,
+                                "activity",
+                                "Still no model output — the stream may be stuck.",
+                            );
+                            stall_notice_sent = true;
+                            idle.as_mut()
+                                .reset(tokio::time::Instant::now() + IDLE_ARM_MAX);
+                        } else {
+                            idle.as_mut()
+                                .reset(tokio::time::Instant::now() + IDLE_ARM_MAX);
+                        }
+                        continue;
+                    }
+                    // Pre-first-chunk: enforce the deadline.
+                    let elapsed = collect_started.elapsed();
+                    if elapsed >= first_chunk_deadline_dur {
+                        tracing::warn!(
+                            elapsed_secs = elapsed.as_secs(),
+                            first_chunk_deadline_secs = first_chunk_deadline,
+                            active_model = %active_model,
+                            "no first chunk arrived within first_chunk_deadline — \
+                             aborting stream early to recover from upstream hang"
+                        );
+                        emit_status(
+                            config,
+                            callbacks,
+                            "activity",
+                            &format!(
+                                "No model output after {first_chunk_deadline}s — \
+                                 the stream appears hung; retrying or check the \
+                                 upstream provider."
+                            ),
+                        );
+                        finish_reason = Some("no_first_chunk".to_string());
+                        break;
+                    }
+                    idle.as_mut()
+                        .reset(tokio::time::Instant::now() + first_chunk_deadline_dur);
                 }
-                tool_call_sanitizer.flush();
-                let message = assemble_stream_assistant_message(
-                    &content,
-                    &reasoning_content,
-                    &tool_calls,
-                );
-                return Ok(StreamCollectOutcome::Interrupted(LlmResponse {
-                    message,
-                    usage: last_usage.clone(),
-                    model: active_model.to_string(),
-                    finish_reason: Some("interrupted".to_string()),
-                }));
             }
-            let chunk = chunk_result?;
-            apply_stream_collect_chunk(
-                callbacks,
-                chunk,
-                &mut content,
-                &mut raw_content,
-                &mut reasoning_content,
-                &mut think_parser,
-                &mut tool_call_sanitizer,
-                &mut tool_calls,
-                &mut last_usage,
-                &mut finish_reason,
-                on_chunk,
-            );
         }
+        // If we broke out due to no_first_chunk, `first_chunk_arrived`
+        // is still false and `stream.next()` had never resolved.
+        // `content` / `reasoning_content` / `tool_calls` are empty —
+        // fall through to the assembly code below which will return
+        // an empty assistant message with our stamped
+        // `finish_reason`.
     } else {
         const IDLE_ARM_MAX: Duration = Duration::from_secs(86_400);
         let first_dur = Duration::from_secs(activity_secs);
         let stall_secs = config.stream_activity_stall_secs;
         let stall_dur = Duration::from_secs(stall_secs);
+        let first_chunk_deadline_dur = Duration::from_secs(first_chunk_deadline);
 
         'silence_watch: loop {
-            let mut idle = Box::pin(sleep(first_dur));
+            // 2026-07-19: when no chunk has arrived yet, the idle
+            // arm is bounded by the time remaining until the
+            // first-chunk deadline (capped at 1ms so it doesn't
+            // degenerate to a busy-loop). Once the first chunk
+            // arrives, this override is dropped and we fall back
+            // to the legacy activity cadence (`first_dur`).
+            //
+            // Note: `first_dur == 0` (the test "silence activity
+            // notices" sentinel) used to short-circuit the
+            // deadline tripwire because `min(0, remaining)` = 0.
+            // We now treat `first_dur == 0` as "trust the deadline
+            // first, fall back to 24h" — i.e. **off** the
+            // activity notices but **on** the deadline.
+            let initial_idle = if !first_chunk_arrived {
+                let elapsed = collect_started.elapsed();
+                let remaining = first_chunk_deadline_dur
+                    .saturating_sub(elapsed)
+                    .max(Duration::from_millis(1));
+                if first_dur.is_zero() {
+                    remaining
+                } else {
+                    first_dur.min(remaining)
+                }
+            } else if first_dur.is_zero() {
+                Duration::from_secs(86_400)
+            } else {
+                first_dur
+            };
+            let mut idle = Box::pin(sleep(initial_idle));
             let mut warm_notice_sent = false;
             let mut stall_notice_sent = false;
             loop {
                 tokio::select! {
                     biased;
                     chunk_opt = stream.next() => {
+                        eprintln!("DEBUG stream.next() arm fired");
                         match chunk_opt {
                             None => break 'silence_watch,
                             Some(chunk_result) => {
+                                if !first_chunk_arrived {
+                                    first_chunk_arrived = true;
+                                }
                                 if interrupt.take_interrupt_graceful().is_some() {
                                     let message = assemble_stream_assistant_message(
                                         &content,
@@ -491,6 +608,49 @@ pub(crate) async fn collect_stream_inner(
                         }
                     }
                     _ = idle.as_mut() => {
+                        // 2026-07-19: the first-chunk deadline arm.
+                        // We idle-limited by `remaining` above, so
+                        // waking up here means we hit the deadline
+                        // before any chunk arrived. Break out with a
+                        // dedicated finish_reason so downstream can
+                        // distinguish "provider never replied at all"
+                        // from "outer watchdog timed out mid-stream".
+                        if !first_chunk_arrived {
+                            let elapsed = collect_started.elapsed();
+                            if elapsed >= first_chunk_deadline_dur {
+                                tracing::warn!(
+                                    elapsed_secs = elapsed.as_secs(),
+                                    first_chunk_deadline_secs = first_chunk_deadline,
+                                    active_model = %active_model,
+                                    "no first chunk arrived within first_chunk_deadline — \
+                                     aborting stream early to recover from upstream hang"
+                                );
+                                emit_status(
+                                    config,
+                                    callbacks,
+                                    "activity",
+                                    &format!(
+                                        "No model output after {first_chunk_deadline}s — \
+                                         the stream appears hung; retrying or check the \
+                                         upstream provider."
+                                    ),
+                                );
+                                finish_reason = Some("no_first_chunk".to_string());
+                                break 'silence_watch;
+                            }
+                            // First chunk has still not arrived but
+                            // we haven't reached the deadline yet —
+                            // re-arm idle with the *remaining* time
+                            // so we keep tightening toward the
+                            // deadline without losing the warm/stall
+                            // cadence if the activity_secs is shorter.
+                            let elapsed = collect_started.elapsed();
+                            let remaining = first_chunk_deadline_dur
+                                .saturating_sub(elapsed)
+                                .max(Duration::from_millis(1));
+                            idle.as_mut().reset(tokio::time::Instant::now() + remaining);
+                            continue;
+                        }
                         if !warm_notice_sent {
                             emit_status(
                                 config,
@@ -875,9 +1035,29 @@ mod tests {
     /// scaffold, mutating only the LLM provider and the
     /// `stream_overall_timeout_secs` config. Returns whatever
     /// `StreamCollectOutcome` the wrapper surfaces.
+    ///
+    /// The first-chunk deadline is set well above the overall
+    /// timeout so the existing `hard_timeout_*` tests still exercise
+    /// the outer watchdog path (the tighter "no_first_chunk" arm
+    /// is covered by `first_chunk_timeout_*` tests below).
     async fn drive_collect(
         provider: Arc<dyn LlmProvider>,
         stream_overall_timeout_secs: u64,
+    ) -> Result<StreamCollectOutcome, AgentError> {
+        // Give the first-chunk deadline 1 s of slack over the
+        // overall timeout so the outer watchdog wins first.
+        let first_chunk =
+            stream_overall_timeout_secs.saturating_add(1).max(120);
+        drive_collect_with(provider, stream_overall_timeout_secs, first_chunk).await
+    }
+
+    /// 2026-07-19: same as [`drive_collect`] but lets the caller
+    /// also override `stream_first_chunk_timeout_secs` for tests
+    /// that need to observe the new first-chunk tripwire directly.
+    async fn drive_collect_with(
+        provider: Arc<dyn LlmProvider>,
+        stream_overall_timeout_secs: u64,
+        stream_first_chunk_timeout_secs: u64,
     ) -> Result<StreamCollectOutcome, AgentError> {
         let mut config = AgentConfig::default();
         // Silence the inner activity watchdog so it doesn't bias
@@ -885,6 +1065,7 @@ mod tests {
         // testing here.
         config.stream_activity_interval_secs = 0;
         config.stream_overall_timeout_secs = stream_overall_timeout_secs;
+        config.stream_first_chunk_timeout_secs = stream_first_chunk_timeout_secs;
 
         let oauth = OAuthRefresh::new();
         let interrupt = InterruptController::new();
@@ -997,6 +1178,96 @@ mod tests {
                 );
             }
             other => panic!("expected StreamCollectOutcome::Complete, got {:?}", other),
+        }
+    }
+
+    /// 2026-07-19: round 29 follow-up. When the provider opens the
+    /// streaming connection but never sends the **first** chunk,
+    /// the new `stream_first_chunk_timeout_secs` tripwire aborts
+    /// the inner collect early with `finish_reason="no_first_chunk"`.
+    /// This turns the "approval+hang forever" symptom (Round 29)
+    /// into a 1 s recovery for test instrumentation, well inside
+    /// the 180 s outer watchdog, so the agent loop reaches
+    /// `decide_empty_response` quickly enough to nudge / finalise
+    /// instead of pinning the UI at "正在思考".
+    #[tokio::test]
+    async fn first_chunk_timeout_fires_when_no_chunk_arrives() {
+        // Outer timeout generous (10s) — if the first-chunk tripwire
+        // were missing, the test would either hang past the
+        // wall-clock cap below or fire on the outer timeout instead.
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            drive_collect_with(
+                Arc::new(HangingProvider),
+                /* stream_overall_timeout_secs = */ 10,
+                /* stream_first_chunk_timeout_secs = */ 1,
+            ),
+        )
+        .await
+        .expect("collect_stream_llm_response hung past 10s — neither watchdog fired")
+        .expect("collect_stream_llm_response returned Err");
+
+        match outcome {
+            StreamCollectOutcome::Complete(resp) => {
+                assert_eq!(
+                    resp.finish_reason.as_deref(),
+                    Some("no_first_chunk"),
+                    "expected finish_reason=\"no_first_chunk\", got {:?}",
+                    resp.finish_reason
+                );
+                assert!(
+                    resp.message.content.as_deref().unwrap_or("").is_empty(),
+                    "expected empty content on first-chunk timeout, got {:?}",
+                    resp.message.content
+                );
+            }
+            other => panic!(
+                "expected StreamCollectOutcome::Complete, got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// 2026-07-19: once the first chunk has arrived, the
+    /// first-chunk deadline is no longer applicable; the
+    /// stream continues normally and the provider's `stop`
+    /// finish_reason is honoured.
+    #[tokio::test]
+    async fn first_chunk_timeout_is_noop_after_first_chunk() {
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            drive_collect_with(
+                Arc::new(QuickProvider),
+                /* stream_overall_timeout_secs = */ 10,
+                /* stream_first_chunk_timeout_secs = */ 1,
+            ),
+        )
+        .await
+        .expect("collect_stream_llm_response hung past 5s — false-positive first-chunk timeout?")
+        .expect("collect_stream_llm_response returned Err");
+
+        match outcome {
+            StreamCollectOutcome::Complete(resp) => {
+                // QuickProvider sends a chunk almost immediately,
+                // so the first-chunk deadline never trips — the
+                // provider's own `stop` finish_reason is preserved.
+                assert_eq!(
+                    resp.finish_reason.as_deref(),
+                    Some("stop"),
+                    "expected finish_reason=\"stop\", got {:?}",
+                    resp.finish_reason
+                );
+                assert_eq!(
+                    resp.message.content.as_deref(),
+                    Some("hi"),
+                    "expected content=\"hi\", got {:?}",
+                    resp.message.content
+                );
+            }
+            other => panic!(
+                "expected StreamCollectOutcome::Complete, got {:?}",
+                other
+            ),
         }
     }
 }

@@ -528,6 +528,33 @@ pub struct AgentConfig {
     #[serde(default = "default_stream_overall_timeout_secs")]
     pub stream_overall_timeout_secs: u64,
 
+    /// 2026-07-19: hard deadline (seconds) for the **first chunk** of a
+    /// streaming completion to arrive.
+    ///
+    /// Background: providers like minimax/MiniMax-M3 and similar
+    /// occasionally open the SSE / chunked connection successfully but
+    /// never push the first chunk (TCP keepalive on but no payload).
+    /// The previous `silence_watch` only emitted "still waiting"
+    /// notices — it didn't *abort* — so the agent loop and the
+    /// "正在思考…" indicator both stayed pinned until the outer
+    /// `stream_overall_timeout_secs` (default 180s) fired.
+    ///
+    /// This setting adds a tighter, **first-chunk-only** deadline: if
+    /// no chunk has arrived within `stream_first_chunk_timeout_secs`,
+    /// `collect_stream_inner` returns early with
+    /// `finish_reason = "no_first_chunk"`. Subsequent chunks are not
+    /// gated by this — once the stream is producing data, normal
+    /// `silence_watch` + `stream_activity_stall_secs` notice logic
+    /// takes over.
+    ///
+    /// Default 30 s is enough for slow providers (network hitches,
+    /// cold caches) but bounded enough that an Open SSE / no-data
+    /// hang gets surfaced to `decide_empty_response` within 30 s
+    /// instead of the full 180 s outer watchdog. `0` opts out (legacy
+    /// behaviour — only the outer hard timeout applies).
+    #[serde(default = "default_stream_first_chunk_timeout_secs")]
+    pub stream_first_chunk_timeout_secs: u64,
+
     /// Max tools to surface to the LLM after tool-routing (Phase 7 H1).
     /// `0` or unset means "no routing, send full registry" (legacy default).
     #[serde(default = "default_max_routed_tools")]
@@ -736,6 +763,15 @@ fn default_stream_overall_timeout_secs() -> u64 {
     180
 }
 
+/// Default deadline (seconds) for the *first chunk* of a streaming
+/// completion to arrive. Acts as a tighter tripwire than the
+/// 180 s `stream_overall_timeout_secs` for providers that open the
+/// SSE connection but never push data — see
+/// [`AgentConfig::stream_first_chunk_timeout_secs`].
+fn default_stream_first_chunk_timeout_secs() -> u64 {
+    30
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -803,6 +839,7 @@ impl Default for AgentConfig {
             stream_activity_interval_secs: default_stream_activity_interval_secs(),
             stream_activity_stall_secs: default_stream_activity_stall_secs(),
             stream_overall_timeout_secs: default_stream_overall_timeout_secs(),
+            stream_first_chunk_timeout_secs: default_stream_first_chunk_timeout_secs(),
             workspace: None,
             permission: None,
             llm_providers: HashMap::new(),

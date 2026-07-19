@@ -33,6 +33,7 @@ fn arb_tool_result() -> impl Strategy<Value = ToolResult> {
                 tool_call_id: id,
                 content,
                 is_error,
+                denial_kind: None,
             }
         })
 }
