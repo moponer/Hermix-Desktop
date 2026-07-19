@@ -12,6 +12,10 @@ use tracing_subscriber::Registry;
 #[cfg(feature = "otlp")]
 mod otlp;
 
+mod run_trace;
+
+pub use run_trace::{RunTrace, RunTraceRecorder, TraceEvent, TraceEventKind};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelemetryConfig {
     pub level: String,
