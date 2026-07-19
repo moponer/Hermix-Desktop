@@ -4,6 +4,7 @@
 //! used across the hermes-agent-rust workspace.
 
 pub mod acui;
+pub mod agentspec;
 pub mod approval;
 pub mod errors;
 pub mod tool_call_parser;
@@ -79,6 +80,9 @@ pub use approval::ApprovalOutcome;
 
 // Re-export PermissionMode and RiskLevel from traits
 pub use traits::{PermissionMode, RiskLevel};
+
+// Re-export the shared agent-spec data model (Groupchat 未来④ Agent 抽象统一, 2026-07-19)
+pub use agentspec::{spec_from_contract_parts, AgentSpecData};
 
 // Re-export text utilities
 pub use text_utils::{format_token_count, is_error_json, truncate_chars};
