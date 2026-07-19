@@ -95,7 +95,20 @@ pub const HTTP_PLATFORM: &str = "http";
 /// enough to read a command and make a decision, short
 /// enough that a stuck UI still resolves. The frontend
 /// shows a countdown so the user always knows the budget.
-pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+///
+/// 2026-07-19: lowered 300s → 30s after type-B recurrence
+/// showed that 5 minutes of "● ● ● 正在思考" felt permanent to
+/// the user. With 30s the agent loop gets an auto-deny within
+/// the user's mental "this is broken" budget, the agent
+/// proceeds to the next turn (where it then triggers
+/// `tool_result_processor::push_tool_result` with the structured
+/// "tell the user" denial note), and the frontend settles
+/// with `finish_reason="agent_error"` instead of pinning the
+/// UI for 5 minutes straight. Pair this with the
+/// `turn_transition_deadline_secs` watchdog (also 30s) for
+/// one consistent mental model: "30s without progress = the
+/// agent loop is going to recover or settle".
+pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Compute the wall-clock deadline (Unix milliseconds) for a fresh
 /// approval request. Centralized so the WS envelope and the persisted
@@ -508,8 +521,11 @@ mod approval_registry_tests {
     }
 
     #[tokio::test]
-    async fn default_timeout_constant_is_300_seconds() {
-        // Pin the upstream-mirrored default. If anyone ever
+    async fn default_timeout_constant_is_30_seconds() {
+        // 2026-07-19: lowered 300s → 30s after type-B recurrence.
+        // Pin the value so accidental drift does not silently
+        // re-introduce the 5-minute user-facing freeze.
+        // If anyone ever
         // bumps this, the WS UI countdown logic and the
         // upstream-parity docs need to follow. Bumped from
         // 60s → 300s on 2026-06-14 — the 60s window produced a
