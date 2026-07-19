@@ -4658,6 +4658,30 @@ async fn handle_ws_stream_send(
     let ws_disconnected_clone = ws_disconnected.clone();
     let active_key_clone = active_key.clone();
 
+    // 2026-07-19: surface a prior compression-quota warning (set by the
+    // one-shot startup health check if it hit a 429 / quota error) as a
+    // persistent `CompactionStatus` banner. Without this the user only
+    // sees the quota error in the backend log and never learns why
+    // long-context compression is silently degraded. `take_*` consumes
+    // it at most once, so we don't nag on every message.
+    if let Some(warn) = agent_service.take_compression_quota_warning() {
+        let _ = tx.try_send(WsEnvelope {
+            version: 1,
+            request_id: request.request_id.clone(),
+            trace_id: trace_id.to_string(),
+            event: StreamEvent::CompactionStatus {
+                snapshot: serde_json::json!({
+                    "state": "quota_exhausted",
+                    "last_failure_reason": warn,
+                    "last_changed_at_unix_ms": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                }),
+            },
+        });
+    }
+
     let agent_handle = tokio::spawn(async move {
         let result = agent_service
             .send_message_stream(&session_id_clone, &request_text, overrides, on_chunk)
@@ -4732,14 +4756,24 @@ async fn handle_ws_stream_send(
                 }
             }
             Err(e) => {
+                // 2026-07-19: keep the raw error in the log (for debugging)
+                // but send the user a classified, actionable message so
+                // quota / auth failures aren't a mystery. The original
+                // `e.to_string()` survives in the WARN below.
+                tracing::warn!(
+                    session = %session_id_clone,
+                    error = %e,
+                    "agent task failed; classifying for user-facing message"
+                );
+                let (code, message) = user_facing_agent_error(&e);
                 let _ = tx
                     .send(WsEnvelope {
                         version: 1,
                         request_id: request_id_owned.clone(),
                         trace_id: trace_id_owned.clone(),
                         event: StreamEvent::Error {
-                            code: "agent_error".to_string(),
-                            message: redact_sensitive(&e.to_string()),
+                            code,
+                            message: redact_sensitive(&message),
                         },
                     })
                     .await;
@@ -6093,6 +6127,45 @@ fn redact_sensitive(input: &str) -> String {
         }
     }
     out
+}
+
+/// 2026-07-19: turn a raw `AgentError` from the agent loop into a
+/// user-facing `(code, message)` pair.
+///
+/// Quota / rate-limit failures (HTTP 429 or a provider-specific
+/// "用量上限" / "Token Plan" message) get a clear, actionable Chinese
+/// message instead of the raw provider JSON — which buries "用量上限"
+/// inside a `request_id`-laden blob the user can't parse and leaves
+/// them wondering why the message silently produced no reply. Auth
+/// failures get a config-focused hint. Everything else falls back to
+/// `e.to_string()` so we never lose diagnostic detail.
+fn user_facing_agent_error(e: &AgentError) -> (String, String) {
+    let s = e.to_string();
+    let lower = s.to_lowercase();
+    if lower.contains("429")
+        || lower.contains("too many requests")
+        || lower.contains("rate_limit")
+        || lower.contains("rate limit")
+        || lower.contains("用量上限")
+        || lower.contains("token plan")
+        || lower.contains("quota")
+    {
+        (
+            "quota_exhausted".to_string(),
+            "Token Plan 用量已达上限,请升级套餐或购买积分后重试。".to_string(),
+        )
+    } else if lower.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("authentication")
+        || lower.contains("invalid api key")
+    {
+        (
+            "auth_error".to_string(),
+            "API 密钥无效或已过期,请检查模型提供商配置。".to_string(),
+        )
+    } else {
+        ("agent_error".to_string(), s)
+    }
 }
 
 // ---------------------------------------------------------------------------

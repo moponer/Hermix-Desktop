@@ -1262,7 +1262,8 @@ export function useStreamChat() {
                     rawState === "half_open" ||
                     rawState === "closed" ||
                     rawState === "fallback" ||
-                    rawState === "pressure"
+                    rawState === "pressure" ||
+                    rawState === "quota_exhausted"
                       ? (rawState as import("../components/CompactionStatusBanner").CompactionState)
                       : "closed";
                   const toNumber = (v: unknown): number | undefined =>
@@ -1396,11 +1397,26 @@ export function useStreamChat() {
                 const text = (typeof evtContent === "string" && evtContent.length > 0)
                   ? evtContent
                   : fullText;
+                // 2026-07-19: a `done` whose finish_reason is one of
+                // the watchdog / timeout signals is *not* a clean
+                // completion. The server gave up because nothing
+                // useful happened (e.g. `turn_transition_stall`,
+                // `no_first_chunk`, `stream_overall_timeout`). Map
+                // these to the existing `timeout` phase so the user
+                // sees "对话超时" / a retry button instead of the
+                // misleading "对话已完成" with empty assistant text.
+                const isWatchdogOrTimeout =
+                  reason === "turn_transition_stall" ||
+                  reason === "no_first_chunk" ||
+                  reason === "stream_overall_timeout";
+                const phase: StreamPhase = isWatchdogOrTimeout
+                  ? "timeout"
+                  : "completed";
                 settle(
                   text,
                   undefined,
                   reason,
-                  "completed",
+                  phase,
                 );
                 return;
               }

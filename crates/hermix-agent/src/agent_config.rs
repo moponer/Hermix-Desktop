@@ -803,7 +803,12 @@ fn default_stream_first_chunk_timeout_secs() -> u64 {
 /// turn's tool-execution bookkeeping and the start of the next turn's
 /// pre-turn setup. See [`AgentConfig::turn_transition_deadline_secs`].
 fn default_turn_transition_deadline_secs() -> u64 {
-    90
+    // 2026-07-19: lowered from 90s to 30s after the type-B recurrence —
+    // 90s felt like a hang to the user (UI spins the whole time), and
+    // 30s matches `stream_first_chunk_timeout_secs` so the user gets a
+    // single "30s without progress = something is wrong" mental model
+    // for both the start of a turn and the hand-off between turns.
+    30
 }
 
 impl Default for AgentConfig {
@@ -973,10 +978,13 @@ mod tests {
     // "0 = opt-out" contract. Both run_stream() and run() consult
     // this field at the top of every main-loop iteration; if the
     // default drifts the WS recovery latency changes silently.
+    // Default lowered 90s → 30s after type-B recurrence so the user
+    // gets one "30s without progress = something's wrong" mental
+    // model that matches `stream_first_chunk_timeout_secs`.
     #[test]
-    fn turn_transition_deadline_default_is_90_seconds() {
+    fn turn_transition_deadline_default_is_30_seconds() {
         let c = AgentConfig::default();
-        assert_eq!(c.turn_transition_deadline_secs, 90);
+        assert_eq!(c.turn_transition_deadline_secs, 30);
     }
 
     #[test]
@@ -1003,6 +1011,6 @@ mod tests {
             .unwrap()
             .remove("turn_transition_deadline_secs");
         let back: AgentConfig = serde_json::from_value(v).unwrap();
-        assert_eq!(back.turn_transition_deadline_secs, 90);
+        assert_eq!(back.turn_transition_deadline_secs, 30);
     }
 }

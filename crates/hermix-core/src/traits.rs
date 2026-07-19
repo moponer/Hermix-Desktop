@@ -517,6 +517,17 @@ pub trait AgentService: Send + Sync {
     fn current_config_value(&self) -> Option<Value> {
         None
     }
+
+    /// 2026-07-19: consume a previously-stored compression-quota warning
+    /// (set by a one-shot startup health check when it hit a 429 / quota
+    /// error). Returns `Some(msg)` at most once before being repopulated
+    /// by the next health check (e.g. after a process restart). The
+    /// default impl returns `None` for services that don't maintain a
+    /// compression health-gate; only the local in-process service
+    /// (`LocalAgentService`) actually populates the slot.
+    fn take_compression_quota_warning(&self) -> Option<String> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -212,9 +212,33 @@ pub struct LocalAgentService {
     /// when the aux API key was invalid. The check only needs to run
     /// once per process lifetime; subsequent calls are pure noise.
     compression_health_checked: std::sync::atomic::AtomicBool,
+    /// 2026-07-19: when the one-shot compression LLM health check fails
+    /// with a quota / 429 error, store a user-facing warning here. The
+    /// NEXT `send_message_stream` surfaces it via a `StreamEvent::
+    /// CompactionStatus` (quota_exhausted) so the user learns their
+    /// Token Plan is exhausted instead of only seeing a backend WARN log
+    /// and wondering why long-context compression is silently degraded.
+    /// `take_compression_quota_warning` consumes it at most once.
+    compression_quota_warning: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 pub type ProviderFactory = Arc<dyn Fn(&GatewayConfig, &str) -> Arc<dyn LlmProvider> + Send + Sync>;
+
+/// 2026-07-19: returns true when an LLM error string indicates a quota /
+/// rate-limit exhaustion — HTTP 429 or a provider-specific "用量上限" /
+/// "Token Plan" message. Used to decide whether the one-shot compression
+/// health check failure should be surfaced to the user as a quota warning
+/// (instead of staying buried in a backend WARN log).
+fn is_quota_exhausted_error(s: &str) -> bool {
+    let lower = s.to_lowercase();
+    lower.contains("429")
+        || lower.contains("too many requests")
+        || lower.contains("rate_limit")
+        || lower.contains("rate limit")
+        || lower.contains("用量上限")
+        || lower.contains("token plan")
+        || lower.contains("quota")
+}
 
 impl LocalAgentService {
     /// Pick a sensible default model when neither the request nor
@@ -292,6 +316,20 @@ impl LocalAgentService {
         None
     }
 
+    /// 2026-07-19: consume a previously-stored compression-quota warning
+    /// (set by the one-shot startup health check when it hit a 429 / quota
+    /// error). Returns `Some(msg)` at most once; the server emits it as a
+    /// `StreamEvent::CompactionStatus` (quota_exhausted) so the user learns
+    /// their Token Plan is exhausted instead of only seeing a backend WARN
+    /// log. After the first `take` the slot is `None` until a future health
+    /// check (e.g. after a process restart) repopulates it.
+    pub fn take_compression_quota_warning(&self) -> Option<String> {
+        match self.compression_quota_warning.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(_) => None,
+        }
+    }
+
     /// Create a new `LocalAgentService`.
     pub fn new(
         config: Arc<GatewayConfig>,
@@ -312,6 +350,7 @@ impl LocalAgentService {
             consciousness_tracker: None,
             memory_router,
             compression_health_checked: std::sync::atomic::AtomicBool::new(false),
+            compression_quota_warning: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -337,6 +376,7 @@ impl LocalAgentService {
             consciousness_tracker: None,
             memory_router,
             compression_health_checked: std::sync::atomic::AtomicBool::new(false),
+            compression_quota_warning: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -779,6 +819,11 @@ impl LocalAgentService {
                         .swap(true, std::sync::atomic::Ordering::SeqCst);
                     if !already_checked {
                         let check_aux = aux.clone();
+                        // 2026-07-19: clone the warning slot so the
+                        // background health-check task can record a quota
+                        // exhaustion without borrowing `self` into the
+                        // `async move` closure.
+                        let warn_slot = self.compression_quota_warning.clone();
                         tokio::spawn(async move {
                             match crate::compression_health::startup_compression_llm_health_check(
                                 &*check_aux,
@@ -793,11 +838,30 @@ impl LocalAgentService {
                                     latency  = report.latency_ms,
                                     "compression LLM health check passed"
                                 ),
-                                Err(e) => tracing::warn!(
-                                    error = %e,
-                                    "compression LLM health check failed; \
-                                     first real compression will surface the same error"
-                                ),
+                                Err(e) => {
+                                    // 2026-07-19: if the check failed because
+                                    // the Token Plan quota is exhausted (429),
+                                    // remember it so the NEXT message can warn
+                                    // the user via a `CompactionStatus` banner.
+                                    // Without this the quota error stays buried
+                                    // in this WARN log and the user never
+                                    // learns why long-context compression is
+                                    // silently degraded.
+                                    let err_str = e.to_string();
+                                    if is_quota_exhausted_error(&err_str) {
+                                        if let Ok(mut guard) = warn_slot.lock() {
+                                            *guard = Some(
+                                                "Token Plan 用量已达上限,压缩模型无法调用,长对话将不会自动压缩。请升级套餐或购买积分。"
+                                                    .to_string(),
+                                            );
+                                        }
+                                    }
+                                    tracing::warn!(
+                                        error = %e,
+                                        "compression LLM health check failed; \
+                                         first real compression will surface the same error"
+                                    );
+                                }
                             }
                         });
                     }
@@ -1052,6 +1116,18 @@ impl LocalAgentService {
 
 #[async_trait]
 impl AgentService for LocalAgentService {
+    /// 2026-07-19: override the default `take_compression_quota_warning`
+    /// (returns `None`) by delegating to the inherent method we already
+    /// defined on `LocalAgentService`. See
+    /// `LocalAgentService::take_compression_quota_warning` for the
+    /// rationale (consume-at-most-once after a startup-time 429 health
+    /// check). This lets `Arc<dyn AgentService>` callers (i.e. the
+    /// server) still surface the quota warning as a
+    /// `CompactionStatus` banner.
+    fn take_compression_quota_warning(&self) -> Option<String> {
+        LocalAgentService::take_compression_quota_warning(self)
+    }
+
     // TODO(L8): send_message and send_message_stream share ~300 lines of
     // duplicated setup code (session loading, gateway safety net, image
     // handling, model resolution, etc.). Consider extracting a shared

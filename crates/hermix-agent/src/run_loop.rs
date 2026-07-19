@@ -84,6 +84,21 @@ impl AgentLoop {
         persist_user_idx: Option<usize>,
         finish_reason: Option<&str>,
     ) -> Result<PreTurnAction, AgentError> {
+        // 2026-07-19 (type-B diagnostic): INFO log every pre-turn setup
+        // entry so a future hang between turns shows up in stdout.
+        // Without this, the only signal between `PostToolExec` and the
+        // `PreTurnSetup` phase is a `tracing::debug!` that the default
+        // log level never emits — and the user sees an unexplained
+        // "● ● ● 正在思考" forever. Pair this with the matching
+        // "post-tool finished" INFO at the end of
+        // `do_post_tool_iteration` and you can pinpoint the hang to
+        // exactly one frame.
+        tracing::info!(
+            turn    = state.total_turns + 1,
+            session = session_id,
+            "do_pre_turn_setup: entering"
+        );
+
         // --- Graceful interrupt ---
         if self.interrupt.take_interrupt_graceful().is_some() {
             return Ok(PreTurnAction::Stop(self.graceful_interrupt_result(
@@ -427,6 +442,23 @@ impl AgentLoop {
         // LLM's natural reasoning. The tool results themselves already
         // contain execution status. Cost guard warnings go to the UI,
         // not into the LLM's context.
+
+        // 2026-07-19 (type-B diagnostic): emit an INFO log *before* the
+        // post-tool writeback loop consumes `results` via `into_iter()`
+        // — the count + error count would otherwise be unavailable.
+        // Pair this with the `do_pre_turn_setup: entering` INFO at the
+        // top of the next phase: if you see this INFO but never see
+        // the pre-turn-setup INFO, the hang is in this body
+        // (writeback / hooks / cost guard / `auto_compress`). If you
+        // see the pre-turn-setup INFO but no `llm_response_received`
+        // for the next turn, the hang is in `do_pre_turn_setup` or
+        // `collect_stream_llm_response`.
+        tracing::info!(
+            turn    = state.total_turns,
+            results = results.len(),
+            errors  = results.iter().filter(|r| r.is_error).count(),
+            "do_post_tool_iteration: post-tool results accepted, entering writeback & auto-compress"
+        );
 
         for result in results {
             push_tool_result(ctx, tool_calls, &result.tool_call_id, &result.content);
