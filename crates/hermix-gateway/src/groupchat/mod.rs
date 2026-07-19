@@ -4,6 +4,7 @@
 //! collaborate under a designated leader (总管) to complete user tasks.
 
 pub mod persistence;
+pub mod tool_policy_eval;
 pub mod manager;
 pub mod leader;
 pub mod in_memory;
