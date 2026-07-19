@@ -5653,6 +5653,23 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
                 if let Ok(ws_msg) = serde_json::from_str::<WsClientMessage>(&text) {
                     match ws_msg {
                         WsClientMessage::ApprovalResponse { request_id, decision } => {
+                            // 2026-07-19: INFO-level receipt log. The
+                            // previous `debug!` (line 5753 below) was
+                            // invisible at the default log level, so
+                            // when the user's click "disappeared" and
+                            // the registry timed out at 30s, we had
+                            // no way to distinguish "click never left
+                            // the client" from "click arrived but
+                            // server mis-routed it". Now the
+                            // receipt is loud enough to grep and
+                            // pairs naturally with the WARN
+                            // `approval request timed out`.
+                            tracing::info!(
+                                session = %session_id,
+                                request_id = %request_id,
+                                decision = %decision,
+                                "ws_stream: received approval_response",
+                            );
                             // Parse the 4-state decision. Unknown /
                             // empty values log and downgrade to
                             // `Deny` (fail-closed — never auto-

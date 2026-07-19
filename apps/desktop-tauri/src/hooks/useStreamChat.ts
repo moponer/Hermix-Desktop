@@ -1115,24 +1115,48 @@ export function useStreamChat() {
                       // accidentally re-resolve a different
                       // pending request.
                       if (resp.decision === "expired") return;
+                      // 2026-07-19: stale-click bug fix.
+                      // The closure-captured `ws` was the WS that
+                      // delivered `request_approval`, which may have
+                      // been replaced by a reconnect by the time the
+                      // user clicks (especially after the 30-second
+                      // approval window). Always use `wsRef.current`
+                      // (the live WS) and refuse to send if it's not
+                      // OPEN — otherwise the click is silently
+                      // discarded, the server times out at 30s, and
+                      // the user sees "已允许" + "approval timed out"
+                      // simultaneously. Log loudly so we can grep
+                      // it if the bug recurs.
+                      const liveWs = wsRef.current;
+                      if (!liveWs || liveWs.readyState !== WebSocket.OPEN) {
+                        diagWarn(
+                          `[approval] wsRef.current not OPEN (state=${liveWs?.readyState}) — click for ${requestId} dropped; user must retry`,
+                        );
+                        return;
+                      }
                       try {
                         // Server expects "approved" or "denied" (exact match
                         // against `decision == "approved"` in lib.rs:1225).
                         const decision = resp.decision === "approved" ? "approved" : "denied";
-                        ws.send(
+                        liveWs.send(
                           JSON.stringify({
                             type: "approval_response",
                             request_id: requestId,
                             decision,
                           }),
                         );
-                      } catch {
-                        // socket already closed
+                      } catch (e) {
+                        diagWarn(
+                          `[approval] liveWs.send threw for ${requestId}: ${String(e)}`,
+                        );
                       }
                     })
                     .catch(() => {
+                      // Same hardening on the deny path.
+                      const liveWs = wsRef.current;
+                      if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
                       try {
-                        ws.send(
+                        liveWs.send(
                           JSON.stringify({
                             type: "approval_response",
                             request_id: requestId,
@@ -1159,21 +1183,28 @@ export function useStreamChat() {
                   callbacks
                     .onClarifyRequest({ requestId, question, choices, sessionId })
                     .then((resp) => {
+                      // 2026-07-19: stale-click hardening — same as
+                      // approval_response above. Use wsRef.current so
+                      // a reconnect between `clarify_request` arrival
+                      // and the user's answer doesn't silently drop
+                      // the reply.
+                      const liveWs = wsRef.current;
+                      if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
                       try {
-                        ws.send(
+                        liveWs.send(
                           JSON.stringify({
                             type: "clarify_response",
                             request_id: requestId,
                             answer: resp.answer ?? "",
                           }),
                         );
-                      } catch {
-                        // socket already closed
-                      }
+                      } catch {}
                     })
                     .catch(() => {
+                      const liveWs = wsRef.current;
+                      if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
                       try {
-                        ws.send(
+                        liveWs.send(
                           JSON.stringify({
                             type: "clarify_response",
                             request_id: requestId,
