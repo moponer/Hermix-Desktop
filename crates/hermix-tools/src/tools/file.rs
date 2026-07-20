@@ -1,6 +1,8 @@
 //! File tools: read, write, patch, and search
 
 use async_trait::async_trait;
+use base64::engine::general_purpose;
+use base64::Engine;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
@@ -91,6 +93,21 @@ pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBacke
         RiskLevel::Caution,
         /* override_existing = */ false,
     );
+    // read_image — free local multimodal image reader
+    registry.register_with_risk(
+        "read_image",
+        "file",
+        ReadImageHandler::new().schema(),
+        Arc::new(ReadImageHandler::new()),
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Read a local image file so the LLM can SEE it natively — free, no API key.",
+        "🖼️",
+        None,
+        RiskLevel::Safe,
+        /* override_existing = */ false,
+    );
 }
 
 /// Resolve a path to an absolute string for display in LLM-visible tool
@@ -166,7 +183,7 @@ impl ToolHandler for ReadFileHandler {
         self.backend
             .read_file(path, offset, limit)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+            .map_err(|e| ToolError::from_message(e.to_string()))
             .map(|content| {
                 // Prefix the content with an absolute-path header so the LLM
                 // (and the front-end artifact extractor) can unambiguously
@@ -241,7 +258,7 @@ impl ToolHandler for WriteFileHandler {
         self.backend
             .write_file(path, content)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+            .map_err(|e| ToolError::from_message(e.to_string()))?;
 
         // Always report the absolute path so the LLM and front-end can
         // refer back to it without re-deriving. `to_absolute_path` falls back
@@ -490,10 +507,171 @@ impl ToolHandler for SearchFilesHandler {
     }
 }
 
+// ---------------------------------------------------------------------------
+// read_image — read a local image file and return base64 data
+// for LLM multimodal injection (free, local, no API key).
+// ---------------------------------------------------------------------------
+
+/// Detect MIME type from file extension.
+fn mime_from_ext(path: &str) -> &'static str {
+    let p = path.to_lowercase();
+    if p.ends_with(".png") { "image/png" }
+    else if p.ends_with(".jpg") || p.ends_with(".jpeg") { "image/jpeg" }
+    else if p.ends_with(".gif") { "image/gif" }
+    else if p.ends_with(".webp") { "image/webp" }
+    else if p.ends_with(".bmp") { "image/bmp" }
+    else { "application/octet-stream" }
+}
+
+pub struct ReadImageHandler;
+
+impl ReadImageHandler {
+    pub fn new() -> Self { Self }
+}
+
+impl Default for ReadImageHandler {
+    fn default() -> Self { Self::new() }
+}
+
+#[async_trait]
+impl ToolHandler for ReadImageHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let path = params
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams(
+                "missing 'path' — pass a local image file path (.png/.jpg/.gif/.webp)".into(),
+            ))?;
+        if path.is_empty() {
+            return Err(ToolError::InvalidParams("'path' must be non-empty".into()));
+        }
+
+        let bytes = std::fs::read(path).map_err(|e| {
+            ToolError::from_message(format!("cannot read image file '{path}': {e}"))
+        })?;
+
+        // Reject obviously non-image files (> 50 MB) to avoid base64-ing
+        // huge binaries by mistake.
+        if bytes.len() > 50 * 1024 * 1024 {
+            return Err(ToolError::ExecutionFailed(format!(
+                "file '{path}' is {} bytes — too large for image reading \
+                 (max 50 MB). Use read_file for large files.",
+                bytes.len()
+            )));
+        }
+
+        let mime = mime_from_ext(path);
+        let b64 = general_purpose::STANDARD.encode(&bytes);
+
+        Ok(json!({
+            "tool": "read_image",
+            "ok": true,
+            "path": path,
+            "mime_type": mime,
+            "size_bytes": bytes.len(),
+            "_image_data": b64,
+        })
+        .to_string())
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "path".into(),
+            json!({
+                "type": "string",
+                "description": "Local image file path (PNG/JPEG/GIF/WEBP/BMP). Reads the file so the LLM can SEE it via native multimodal vision — free, offline, no API key."
+            }),
+        );
+        tool_schema(
+            "read_image",
+            "Read a local image file so the LLM can SEE it using its native multimodal vision ability.\n\
+             \n\
+             Pass a `path` to any image file on disk. The tool reads the file, encodes it, \
+             and injects it into the conversation so the LLM sees the actual pixels — just like \
+             when you paste/drop an image into chat.\n\
+             \n\
+             ## What this does\n\
+             - Reads the image file from disk\n\
+             - Sends it to the LLM as multimodal content (the LLM 'sees' the picture)\n\
+             - Free, local, no API key needed — uses the same multimodal pipeline as pasted images\n\
+             \n\
+             ## Supported formats\n\
+             PNG, JPEG, GIF, WEBP, BMP (auto-detected from extension)\n\
+             \n\
+             ## Use cases\n\
+             - Licence plates / ID cards / documents in photos\n\
+             - Screenshots, diagrams, charts\n\
+             - Any visual content you want the LLM to analyse\n\
+             \n\
+             ## Cost: FREE — no external API calls",
+            JsonSchema::object(props, vec!["path".into()]),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use hermix_core::{AgentError, CommandOutput};
+
+    #[test]
+    fn read_image_returns_base64_for_png() {
+        use serde_json::{json, Value};
+        // Minimal valid 1x1 PNG (red pixel) — decodes to 67 bytes.
+        let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        let bytes = base64::engine::general_purpose::STANDARD.decode(png_b64).unwrap();
+        let p = std::env::temp_dir().join("read_image_test_1x1.png");
+        std::fs::write(&p, &bytes).unwrap();
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let out: Value = rt
+            .block_on(async {
+                let s = ReadImageHandler::new()
+                    .execute(json!({ "path": p.to_str().unwrap() }))
+                    .await
+                    .unwrap();
+                serde_json::from_str(&s).unwrap()
+            });
+
+        assert_eq!(out["ok"], true);
+        assert_eq!(out["mime_type"], "image/png");
+        assert!(out["_image_data"].as_str().unwrap().len() > 0);
+        // The base64 we get back must round-trip the original file bytes.
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(out["_image_data"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(decoded, bytes);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    #[ignore]
+    fn read_image_reads_real_car_plate_image() {
+        use serde_json::{json, Value};
+        let p = std::env::temp_dir().join("test_car_plate.png");
+        assert!(p.exists(), "generate the test image first (see audit notes)");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let out: Value = rt
+            .block_on(async {
+                let s = ReadImageHandler::new()
+                    .execute(json!({ "path": p.to_str().unwrap() }))
+                    .await
+                    .unwrap();
+                serde_json::from_str(&s).unwrap()
+            });
+        assert_eq!(out["ok"], true);
+        assert_eq!(out["mime_type"], "image/png");
+        let b64 = out["_image_data"].as_str().unwrap();
+        assert!(b64.len() > 1000, "real image should produce a large base64 blob");
+        println!("CAR_PLATE_IMAGE_BASE64_LEN={}", b64.len());
+    }
 
     struct MockBackend;
     #[async_trait]

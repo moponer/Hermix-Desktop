@@ -27,15 +27,94 @@ const RISK_BADGE: Record<string, { label: string; cls: string }> = {
   safe: { label: "低危", cls: "approval-pill approval-pill-safe" },
 };
 
-function shortArgs(args: unknown): string {
-  if (args == null) return "";
-  if (typeof args === "string") return args.slice(0, 120);
-  try {
-    const s = JSON.stringify(args);
-    return s.slice(0, 120) + (s.length > 120 ? "…" : "");
-  } catch {
-    return String(args).slice(0, 120);
+/**
+ * Generate a human-readable Chinese description of what the tool wants to do.
+ * This replaces the raw JSON display with a clear action description.
+ */
+function describeToolAction(tool: string, args: unknown): string {
+  if (args == null || typeof args !== "object") return "";
+  const a = args as Record<string, unknown>;
+  const t = tool.toLowerCase();
+
+  // storage_clean: 清理临时文件
+  if (t === "storage_clean") {
+    const paths = Array.isArray(a.paths) ? a.paths : [];
+    const mode = typeof a.mode === "string" ? a.mode : "trash";
+    const modeText = mode === "trash" ? "移回收站" : "永久删除";
+    if (paths.length === 0) return `${modeText}文件`;
+    if (paths.length === 1) {
+      const p = String(paths[0]);
+      const name = p.split(/[/\\]/).pop() || p;
+      return `${modeText} "${name}"`;
+    }
+    return `${modeText} ${paths.length} 个文件/文件夹`;
   }
+
+  // terminal: 执行命令
+  if (t === "terminal" || t.includes("exec")) {
+    const cmd = typeof a.command === "string" ? a.command : "";
+    if (cmd) {
+      const display = cmd.length > 60 ? cmd.slice(0, 57) + "…" : cmd;
+      return `执行命令: ${display}`;
+    }
+    return "执行终端命令";
+  }
+
+  // write_file / patch: 写入文件
+  if (t === "write_file" || t === "patch") {
+    const path = typeof a.path === "string" ? a.path : "";
+    if (path) {
+      const name = path.split(/[/\\]/).pop() || path;
+      return t === "patch" ? `修改文件 "${name}"` : `写入文件 "${name}"`;
+    }
+    return t === "patch" ? "修改文件" : "写入文件";
+  }
+
+  // read_file: 读取文件
+  if (t === "read_file") {
+    const path = typeof a.path === "string" ? a.path : "";
+    if (path) {
+      const name = path.split(/[/\\]/).pop() || path;
+      return `读取文件 "${name}"`;
+    }
+    return "读取文件";
+  }
+
+  // web_search / web_extract: 网络请求
+  if (t === "web_search") {
+    const query = typeof a.query === "string" ? a.query : "";
+    return query ? `搜索: ${query.slice(0, 40)}` : "网络搜索";
+  }
+  if (t === "web_extract") {
+    const url = typeof a.url === "string" ? a.url : "";
+    return url ? `提取网页内容` : "提取网页";
+  }
+
+  // browser: 浏览器操作
+  if (t.includes("browser")) {
+    const action = typeof a.action === "string" ? a.action : "";
+    return action ? `浏览器操作: ${action}` : "浏览器操作";
+  }
+
+  // cua_*: 桌面操作
+  if (t.startsWith("cua_")) {
+    const action = t.replace("cua_", "").replace(/_/g, " ");
+    return `桌面操作: ${action}`;
+  }
+
+  // memory: 记忆操作
+  if (t === "memory") {
+    const action = typeof a.action === "string" ? a.action : "";
+    return action ? `记忆操作: ${action}` : "记忆操作";
+  }
+
+  // skills: 技能操作
+  if (t === "skills" || t === "skill_manage") {
+    return "技能管理操作";
+  }
+
+  // Default: show tool name
+  return `执行 ${tool}`;
 }
 
 function toolIcon(tool: string) {
@@ -97,7 +176,7 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
   const badge = RISK_BADGE[riskKey] ?? RISK_BADGE.dangerous;
   const Icon = toolIcon(request.tool);
   const isPending = !resolved;
-  const argsText = shortArgs(request.args);
+  const argsText = describeToolAction(request.tool, request.args);
   // Live countdown against the *server-emitted* deadline. `null` is
   // the "no countdown" sentinel — the card falls back to the
   // status-only pill in that case (pre-2026-06-14 servers, or

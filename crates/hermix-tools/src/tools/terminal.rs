@@ -445,7 +445,7 @@ impl ToolHandler for TerminalHandler {
             .await
         {
             Ok(output) => Ok(format_command_output(&output)),
-            Err(e) => Err(ToolError::ExecutionFailed(e.to_string())),
+            Err(e) => Err(ToolError::from_message(e.to_string())),
         }
     }
 

@@ -42,7 +42,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::Utc;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use hermix_config::GatewayConfig;
 use hermix_agent::python_alignment::ThinkBlockParser;
 use hermix_agent::ArchiveRef;
@@ -1939,6 +1939,13 @@ pub fn router(state: HttpServerState) -> Router {
         )
         .route("/v1/sessions/search", get(search_sessions))
         .route("/v1/sessions/{session_id}/lineage", get(get_session_lineage))
+        // Approval response REST fallback — when WebSocket delivery
+        // fails (Tauri WebView2 can lose buffered messages on connection
+        // reset), the frontend sends the approval via HTTP as a backup.
+        .route(
+            "/v1/sessions/{session_id}/approval",
+            post(approve_via_rest),
+        )
         // v1 (2026-07-07): todo (task list) HTTP endpoints. The LLM
         // goes through the `todo` tool over WS; the desktop TodoPanel
         // hits these endpoints for hydration (GET) and manual
@@ -3275,6 +3282,110 @@ async fn restore_session(
     })))
 }
 
+/// POST /v1/sessions/{session_id}/approval
+/// REST fallback for approval responses when WebSocket delivery fails.
+/// The frontend sends the approval via HTTP when `ws.send()` returns true
+/// but the server doesn't receive the message (Tauri WebView2 WebSocket
+/// can lose buffered messages on connection reset).
+///
+/// Request body: `{ "request_id": "...", "decision": "approved" | "denied" }`
+async fn approve_via_rest(
+    State(state): State<HttpServerState>,
+    Path(session_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, HttpError> {
+    let request_id = body
+        .get("request_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| HttpError {
+            status: StatusCode::BAD_REQUEST,
+            message: "missing request_id".into(),
+        })?;
+
+    let decision = body
+        .get("decision")
+        .and_then(|v| v.as_str())
+        .unwrap_or("approved");
+
+    let choice = hermix_transport::ApprovalChoice::from_decision_str(decision);
+    let choice = match choice {
+        Some(c) => c,
+        None => hermix_transport::ApprovalChoice::Deny,
+    };
+
+    let approved = choice.is_approved();
+    let outcome = if approved {
+        hermix_core::ApprovalOutcome::Approved
+    } else {
+        hermix_core::ApprovalOutcome::DeniedByUser
+    };
+
+    let matched = state
+        .approval_registry
+        .resolve(&session_id, request_id, outcome);
+
+    tracing::info!(
+        session_id = %session_id,
+        request_id = %request_id,
+        decision = %decision,
+        matched,
+        "REST approval: {}",
+        if matched { "hit" } else { "miss — no pending entry" }
+    );
+
+    // Persist the decision to the session timeline
+    let decision_str = match choice {
+        hermix_transport::ApprovalChoice::Once => "once",
+        hermix_transport::ApprovalChoice::Session => "session",
+        hermix_transport::ApprovalChoice::Always => "always",
+        hermix_transport::ApprovalChoice::Deny => "deny",
+    };
+    let _ = state
+        .session_persistence
+        .resolve_approval_message(&session_id, request_id, decision_str);
+
+    // Record side effects for session/always choices. P6 (2026-07-20):
+    // resource-scope approvals (P6 direction 1, `risk: "resource"`)
+    // carry path/command-prefix grants — handled by the dedicated
+    // resource-side-effect path that persists to GatewayConfig. The
+    // existing command-only path remains as a fallback for the
+    // Dangerous-tier terminal approvals that don't carry a path.
+    //
+    // Only record on the **first** successful resolve. Duplicate
+    // responses (matched=false from the resolve call above) would
+    // otherwise re-grant the same path / re-add the same allowlist
+    // regex. `grant_path` / `grant_command` are idempotent, but
+    // `UserAllowlist::add_literal` and `session_bypass` push are
+    // not — so the matched gate is the cheapest place to dedupe.
+    if matched
+        && matches!(
+            choice,
+            hermix_transport::ApprovalChoice::Session
+                | hermix_transport::ApprovalChoice::Always
+        )
+    {
+        // Try the resource path first — for non-resource approvals
+        // (legacy terminal danger), `lookup_pending_resource` returns
+        // `(None, None)` and the function returns early without
+        // touching the profile. The regular command-side-effect then
+        // runs as the fallback.
+        record_resource_approval_side_effect(&state, &session_id, request_id, choice);
+        if let Ok(Some(cmd)) =
+            lookup_pending_command(&state, &session_id, request_id)
+        {
+            record_approval_side_effect(&state, &session_id, &cmd, choice);
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "session_id": session_id,
+        "request_id": request_id,
+        "matched": matched,
+        "decision": decision_str,
+    })))
+}
+
 /// `GET /v1/sessions/{session_id}/lineage` — return the parent→ancestor
 /// chain (upward) and immediate children (downward) for session lineage
 /// browsing in the frontend tree view.
@@ -3669,7 +3780,8 @@ fn check_recent_send(state: &HttpServerState, session_id: &str, text: &str) -> O
 /// Extracted so the `WsClientMessage::Send` path and the legacy
 /// `SendMessageRequest` / plain-text path share the same logic.
 async fn handle_ws_stream_send(
-    socket: &mut WebSocket,
+    sender: &mut futures::stream::SplitSink<WebSocket, WsMessage>,
+    receiver: &mut futures::stream::SplitStream<WebSocket>,
     state: &HttpServerState,
     session_id: &str,
     trace_id: &str,
@@ -3757,7 +3869,7 @@ async fn handle_ws_stream_send(
             },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {
-            let _ = socket.send(WsMessage::Text(json.into())).await;
+            let _ = sender.send(WsMessage::Text(json.into())).await;
         }
         return;
     }
@@ -3799,7 +3911,7 @@ async fn handle_ws_stream_send(
             },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {
-            let _ = socket.send(WsMessage::Text(json.into())).await;
+            let _ = sender.send(WsMessage::Text(json.into())).await;
         }
         return;
     }
@@ -4890,7 +5002,7 @@ async fn handle_ws_stream_send(
             ev = rx.recv() => {
                 match ev {
                     Some(event_json) => {
-                        if socket
+                        if sender
                             .send(WsMessage::Text(
                                 serde_json::to_string(&event_json)
                                     .unwrap_or_default()
@@ -4933,7 +5045,7 @@ async fn handle_ws_stream_send(
                     session = %session_id,
                     "ws_stream: heartbeat ping"
                 );
-                if socket.send(WsMessage::Ping(Bytes::new())).await.is_err() {
+                if sender.send(WsMessage::Ping(Bytes::new())).await.is_err() {
                     was_client_disconnect = true;
                     ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                     // 2026-07-19 (type-B root-cause): same soft-drain
@@ -4945,6 +5057,191 @@ async fn handle_ws_stream_send(
                     state.active_handles.lock().unwrap().remove(&active_key);
                     state.active_sessions.lock().unwrap().remove(&active_key);
                     break;
+                }
+            }
+            // 2026-07-20: read incoming WS messages during streaming.
+            // Before this arm was added, the select! loop only forwarded
+            // agent events TO the client and sent heartbeats — it never
+            // read FROM the socket. This meant `approval_response` and
+            // `clarify_response` messages sent by the user during
+            // streaming sat unread in the WS receive buffer until the
+            // agent finished and handle_ws_stream_send returned. By then
+            // the 30s ApprovalRegistry timeout had already fired
+            // (default-deny), and the user's click was a no-op.
+            //
+            // Now we read from the socket concurrently. ApprovalResponse
+            // and ClarifyResponse are processed immediately (resolving
+            // the oneshot in ApprovalRegistry / ClarifyDispatcher so
+            // the agent's AwaitApproval unblocks within milliseconds).
+            // Other messages (Send, etc.) are logged and dropped — the
+            // frontend's streaming guard already prevents sending a new
+            // message while a stream is in flight, and the dedup
+            // mechanism would reject duplicates anyway.
+            msg = receiver.next() => {
+                match msg {
+                    Some(Ok(WsMessage::Text(text))) => {
+                        if let Ok(ws_msg) = serde_json::from_str::<hermix_transport::WsClientMessage>(&text) {
+                            match ws_msg {
+                                WsClientMessage::ApprovalResponse { request_id, decision } => {
+                                    tracing::info!(
+                                        session = %session_id,
+                                        request_id = %request_id,
+                                        decision = %decision,
+                                        "ws_stream_send: received approval_response during streaming"
+                                    );
+                                    let choice = hermix_transport::ApprovalChoice::from_decision_str(&decision);
+                                    let choice = match choice {
+                                        Some(c) => c,
+                                        None => {
+                                            tracing::warn!(
+                                                session = %session_id,
+                                                request_id = %request_id,
+                                                decision = %decision,
+                                                "unknown approval decision during streaming; downgrading to Deny"
+                                            );
+                                            hermix_transport::ApprovalChoice::Deny
+                                        }
+                                    };
+                                    let approved = choice.is_approved();
+                                    let outcome = if approved {
+                                        hermix_core::ApprovalOutcome::Approved
+                                    } else {
+                                        hermix_core::ApprovalOutcome::DeniedByUser
+                                    };
+                                    let matched = state.approval_registry.resolve(
+                                        session_id,
+                                        &request_id,
+                                        outcome,
+                                    );
+                                    tracing::info!(
+                                        session = %session_id,
+                                        request_id = %request_id,
+                                        matched,
+                                        "approval_response (streaming) resolve: {}",
+                                        if matched { "hit" } else { "miss — no pending entry" },
+                                    );
+                                    // Persist the decision (same as handle_ws_stream's path).
+                                    let decision_str = match choice {
+                                        hermix_transport::ApprovalChoice::Once => "once",
+                                        hermix_transport::ApprovalChoice::Session => "session",
+                                        hermix_transport::ApprovalChoice::Always => "always",
+                                        hermix_transport::ApprovalChoice::Deny => "deny",
+                                    };
+                                    if let Err(e) = state
+                                        .session_persistence
+                                        .resolve_approval_message(session_id, &request_id, decision_str)
+                                    {
+                                        tracing::warn!(
+                                            error = %e,
+                                            request_id = %request_id,
+                                            "failed to persist approval decision (streaming path)"
+                                        );
+                                    }
+                                    // Record side effects for session/always choices. P6
+                                    // (2026-07-20): resource-scope approvals go
+                                    // through the dedicated path that updates
+                                    // GatewayConfig.permission_profile; the
+                                    // command-based path remains as fallback for
+                                    // legacy terminal Danger approvals. Only
+                                    // record on the first successful resolve —
+                                    // a duplicate response would re-grant the
+                                    // same path / re-add the same allowlist
+                                    // regex otherwise.
+                                    if matched
+                                        && matches!(
+                                            choice,
+                                            hermix_transport::ApprovalChoice::Session
+                                                | hermix_transport::ApprovalChoice::Always
+                                        )
+                                    {
+                                        record_resource_approval_side_effect(
+                                            &state,
+                                            session_id,
+                                            &request_id,
+                                            choice,
+                                        );
+                                        if let Ok(Some(cmd)) = lookup_pending_command(
+                                            &state,
+                                            session_id,
+                                            &request_id,
+                                        ) {
+                                            record_approval_side_effect(
+                                                &state,
+                                                session_id,
+                                                &cmd,
+                                                choice,
+                                            );
+                                        }
+                                    }
+                                }
+                                WsClientMessage::ClarifyResponse { request_id, answer } => {
+                                    tracing::info!(
+                                        session = %session_id,
+                                        request_id = %request_id,
+                                        "ws_stream_send: received clarify_response during streaming"
+                                    );
+                                    if let Err(e) = state
+                                        .clarify_dispatcher
+                                        .respond_by_id(&request_id, answer)
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            error = %e,
+                                            request_id = %request_id,
+                                            "clarify_response (streaming) resolve failed"
+                                        );
+                                    }
+                                }
+                                other => {
+                                    // Send messages during streaming are
+                                    // intentionally ignored — the frontend's
+                                    // streaming guard prevents new sends, and
+                                    // the dedup mechanism would reject
+                                    // duplicates. Other message types are
+                                    // similarly dropped (they'll be re-sent
+                                    // if needed after the stream ends).
+                                    tracing::debug!(
+                                        session = %session_id,
+                                        msg_type = ?other,
+                                        "ignoring incoming WS message during streaming"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(WsMessage::Close(_))) => {
+                        was_client_disconnect = true;
+                        ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
+                        shutdown_notify.notify_one();
+                        state.active_handles.lock().unwrap().remove(&active_key);
+                        state.active_sessions.lock().unwrap().remove(&active_key);
+                        break;
+                    }
+                    Some(Ok(_)) => {
+                        // Binary / Pong / Ping — ignore
+                    }
+                    Some(Err(e)) => {
+                        tracing::warn!(
+                            session = %session_id,
+                            error = %e,
+                            "ws_stream_send: socket read error during streaming"
+                        );
+                        was_client_disconnect = true;
+                        ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
+                        shutdown_notify.notify_one();
+                        state.active_handles.lock().unwrap().remove(&active_key);
+                        state.active_sessions.lock().unwrap().remove(&active_key);
+                        break;
+                    }
+                    None => {
+                        // Stream ended (socket closed)
+                        was_client_disconnect = true;
+                        ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
+                        shutdown_notify.notify_one();
+                        state.active_handles.lock().unwrap().remove(&active_key);
+                        state.active_sessions.lock().unwrap().remove(&active_key);
+                        break;
+                    }
                 }
             }
         }
@@ -5517,6 +5814,13 @@ fn todo_change_to_stream(
 
 /// Streaming WebSocket handler.
 async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session_id: String) {
+    // 2026-07-20: split the WebSocket into sender/receiver halves so that
+    // handle_ws_stream_send can simultaneously forward agent events TO the
+    // client AND read approval_response/clarify_response FROM the client.
+    // Before this split, the select! loop in handle_ws_stream_send only
+    // wrote to the socket — it never read from it — so approval clicks
+    // sat unread in the WS buffer until the 30s timeout fired.
+    let (mut sender, mut receiver) = socket.split();
     let trace_id_base = hermix_transport::new_trace_id();
     let connected = WsEnvelope {
         version: 1,
@@ -5526,7 +5830,7 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
             session_id: session_id.clone(),
         },
     };
-    let _ = socket
+    let _ = sender
         .send(WsMessage::Text(
             serde_json::to_string(&connected).unwrap_or_default().into(),
         ))
@@ -5631,14 +5935,14 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
                 items: wire_items,
             },
         };
-        let _ = socket
+        let _ = sender
             .send(WsMessage::Text(
                 serde_json::to_string(&hydrate).unwrap_or_default().into(),
             ))
             .await;
     }
 
-    while let Some(Ok(msg)) = socket.next().await {
+    while let Some(Ok(msg)) = receiver.next().await {
         match msg {
             WsMessage::Text(text) => {
                 let trace_id = trace_id_base.clone();
@@ -5700,10 +6004,27 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
                             } else {
                                 hermix_core::ApprovalOutcome::DeniedByUser
                             };
-                            state.approval_registry.resolve(
+                            let matched = state.approval_registry.resolve(
                                 &session_id,
                                 &request_id,
                                 outcome,
+                            );
+                            // 2026-07-19: matched/miss diagnostic.
+                            // `matched=false` means the request_id was
+                            // not found in the pending approvals map —
+                            // either the entry was already timed out,
+                            // the (session, request_id) key never
+                            // existed, or this is a duplicate resolve.
+                            // Paired with the `received` log above and
+                            // the `timed out (default deny)` WARN in
+                            // ApprovalRegistry, this one line tells us
+                            // whether the click reached the right slot.
+                            tracing::info!(
+                                session = %session_id,
+                                request_id = %request_id,
+                                matched = matched,
+                                "approval_response resolve: {}",
+                                if matched { "hit" } else { "miss — no pending entry" },
                             );
                             // The DB stores the decision as a free-form
                             // string, so we persist the canonical 4-state
@@ -5742,11 +6063,28 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
                             // request and the response (it shouldn't —
                             // the registry keeps the request alive), we
                             // skip the side effect and log.
-                            if matches!(
-                                choice,
-                                hermix_transport::ApprovalChoice::Session
-                                    | hermix_transport::ApprovalChoice::Always
-                            ) {
+                            //
+                            // Only record on the first successful
+                            // resolve — duplicate responses would
+                            // otherwise re-grant the same path /
+                            // re-add the same allowlist regex (P6 fix
+                            // 2026-07-20).
+                            if matched
+                                && matches!(
+                                    choice,
+                                    hermix_transport::ApprovalChoice::Session
+                                        | hermix_transport::ApprovalChoice::Always
+                                )
+                            {
+                                // P6 (2026-07-20): resource-scope path
+                                // first, command-path as fallback for
+                                // legacy Danger-tier terminal approvals.
+                                record_resource_approval_side_effect(
+                                    &state,
+                                    &session_id,
+                                    &request_id,
+                                    choice,
+                                );
                                 if let Ok(Some(cmd)) = lookup_pending_command(
                                     &state,
                                     &session_id,
@@ -5829,7 +6167,8 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
                             // Fall through to the send handling below.
                             // We use a helper to avoid code duplication.
                             handle_ws_stream_send(
-                                &mut socket,
+                                &mut sender,
+                                &mut receiver,
                                 &state,
                                 &session_id,
                                 &trace_id,
@@ -5937,7 +6276,7 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
                                             new_tier: Some(snapshot.tier),
                                         },
                                     };
-                                    let _ = socket
+                                    let _ = sender
                                         .send(WsMessage::Text(
                                             serde_json::to_string(&event).unwrap_or_default().into(),
                                         ))
@@ -6021,7 +6360,8 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
                     skills: None,
                 });
                 handle_ws_stream_send(
-                    &mut socket,
+                    &mut sender,
+                    &mut receiver,
                     &state,
                     &session_id,
                     &trace_id,
@@ -6041,20 +6381,26 @@ async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session
 /// resolved / evicted, `Err` on a DB error. Used by the
 /// 4-state `session` / `always` side-effect handlers below to
 /// know which command to add to the bypass / persistent list.
+///
+/// P6 (2026-07-20): for resource-scope approvals (file/terminal
+/// outside the declared permission profile), also extracts the
+/// `path` argument so the `Always` choice can persist the path to
+/// `config.yaml::permission_profile.granted_paths`. Returns `None`
+/// for both fields when the row doesn't exist or isn't a resource
+/// approval.
+///
+/// IMPORTANT (2026-07-20): both call sites invoke this helper
+/// **after** `approval_registry.resolve()`, which removes the
+/// pending row. The earlier `is_pending` guard therefore always
+/// returned `false` and silently dropped every Session/Always
+/// grant. We now rely on the persisted `messages.extra` row
+/// alone — the registry state is irrelevant for resource
+/// extraction because the data lives in SQLite.
 fn lookup_pending_command(
     state: &HttpServerState,
     session_id: &str,
     request_id: &str,
 ) -> Result<Option<String>, String> {
-    // Cheap in-memory check: the live `ApprovalRegistry` still
-    // holds the sender until the timer fires or the row is
-    // resolved. A missing row means the user already responded
-    // (a duplicate `ApprovalResponse`) or the 60s timer fired.
-    // We only proceed if the row is **still pending** so we
-    // never re-record an already-decided approval.
-    if !state.approval_registry.is_pending(session_id, request_id) {
-        return Ok(None);
-    }
     // Pull the original arguments from the persisted approval
     // message so we can extract the `command` field.
     let needle = format!("%\"request_id\":\"{}\"%", request_id);
@@ -6087,6 +6433,60 @@ fn lookup_pending_command(
         .and_then(|c| c.as_str())
         .map(|s| s.to_string());
     Ok(command)
+}
+
+/// P6 (2026-07-20): lookup variant for **resource-scope** approvals
+/// (P6 direction 1, `risk: "resource"`). Returns `(path, command)`
+/// extracted from the same persisted approval row. Either field may
+/// be `None` depending on what the original tool call used. Caller
+/// (typically `record_approval_side_effect_for_resource`) decides
+/// what to persist based on which fields are populated.
+///
+/// IMPORTANT (2026-07-20): like [`lookup_pending_command`], this is
+/// called after `approval_registry.resolve()`, so the previous
+/// `is_pending` guard would always short-circuit to `(None, None)`
+/// and silently discard every Session/Always grant. The persisted
+/// `messages.extra` row is the source of truth for the resource
+/// arguments — registry state is irrelevant.
+fn lookup_pending_resource(
+    state: &HttpServerState,
+    session_id: &str,
+    request_id: &str,
+) -> Result<(Option<String>, Option<String>), String> {
+    let needle = format!("%\"request_id\":\"{}\"%", request_id);
+    let conn = rusqlite::Connection::open(&state.session_persistence.db_path())
+        .map_err(|e| format!("open sessions db: {e}"))?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT extra FROM messages
+             WHERE session_id = ?1 AND role = 'approval' AND extra LIKE ?2
+             LIMIT 1",
+        )
+        .map_err(|e| format!("prepare: {e}"))?;
+    let extra: Option<String> = match stmt.query_row(
+        rusqlite::params![session_id, needle],
+        |row| row.get::<_, Option<String>>(0),
+    ) {
+        Ok(s) => s,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok((None, None)),
+        Err(e) => return Err(format!("query: {e}")),
+    };
+    let Some(extra) = extra else {
+        return Ok((None, None));
+    };
+    let v: serde_json::Value = serde_json::from_str(&extra)
+        .map_err(|e| format!("parse extra: {e}"))?;
+    let arguments = v.get("arguments");
+    let path = arguments
+        .and_then(|a| a.get("path"))
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string());
+    let command = arguments
+        .and_then(|a| a.get("command"))
+        .or_else(|| arguments.and_then(|a| a.get("cmd")))
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+    Ok((path, command))
 }
 
 /// Persist the 4-state side effect of a `Session` / `Always`
@@ -6186,6 +6586,120 @@ fn record_approval_side_effect(
         _ => {
             // `Once` / `Deny` don't need a side effect — the
             // registry's resolve is the whole story for them.
+        }
+    }
+}
+
+/// P6 (2026-07-20): resource-scope side effect. Used when the
+/// approval request carries `risk: "resource"` (P6 direction 1),
+/// meaning the user is authorising access to a specific path or
+/// command prefix the agent requested. `Always` persists the
+/// grant into `GatewayConfig.permission_profile` and writes it
+/// back to `config.yaml`; `Session` keeps the grant in-memory only
+/// (the existing `session_bypass` mechanism is for terminal
+/// commands and doesn't carry paths). `Once` / `Deny` are no-ops.
+fn record_resource_approval_side_effect(
+    state: &HttpServerState,
+    session_id: &str,
+    request_id: &str,
+    choice: hermix_transport::ApprovalChoice,
+) {
+    let (path, command) = match lookup_pending_resource(state, session_id, request_id) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(
+                request_id = %request_id,
+                error = %e,
+                "resource-approval: failed to look up pending row; side effect skipped"
+            );
+            return;
+        }
+    };
+    if path.is_none() && command.is_none() {
+        // Non-resource approval (e.g. the existing Dangerous-tier
+        // terminal approval) — fall through to the regular
+        // command-based side effect path.
+        return;
+    }
+    match choice {
+        hermix_transport::ApprovalChoice::Always => {
+            // 1. Pull a fresh GatewayConfig snapshot (the user may
+            //    have edited it via Settings since startup).
+            let mut cfg: hermix_config::GatewayConfig = state
+                .agent_service
+                .current_config_value()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_else(|| state.config.as_ref().clone());
+            // 2. Apply grants. Mirrors the
+            //    `PendingGrant::from_tool_call` heuristic in
+            //    hermix-core so server- and client-side agree on
+            //    what "grant this resource" means.
+            if let Some(p) = &path {
+                cfg.permission_profile.grant_path(p);
+            }
+            if let Some(c) = &command {
+                cfg.permission_profile.grant_command(c);
+            }
+            // 3. Persist to config.yaml so the grant survives
+            //    server restart. Failure is logged but does not
+            //    abort the request — the in-memory state is
+            //    already pushed to the agent service below.
+            let config_path = state.hermix_home.join("config.yaml");
+            if let Err(e) = hermix_config::save_config_yaml(&config_path, &cfg) {
+                tracing::warn!(
+                    error = %e,
+                    path = %config_path.display(),
+                    "permission_profile: failed to persist config.yaml; \
+                     in-memory state is correct but the change won't survive a restart"
+                );
+            } else {
+                tracing::info!(
+                    path = ?path,
+                    command = ?command,
+                    config = %config_path.display(),
+                    "permission_profile: persisted Always-grant to config.yaml"
+                );
+            }
+            // 4. Push the updated config to the live agent service
+            //    so the next chat's `build_agent_config` picks up
+            //    the new profile without a server restart.
+            match serde_json::to_value(&cfg) {
+                Ok(value) => state.agent_service.set_config(value),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "permission_profile: failed to serialise GatewayConfig for set_config"
+                ),
+            }
+        }
+        hermix_transport::ApprovalChoice::Session => {
+            // In-memory only: live-push to the agent service.
+            // Persisting session-scoped grants to disk would muddy
+            // the "session" semantics — restart should clear them.
+            let mut cfg: hermix_config::GatewayConfig = state
+                .agent_service
+                .current_config_value()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_else(|| state.config.as_ref().clone());
+            if let Some(p) = &path {
+                cfg.permission_profile.grant_path(p);
+            }
+            if let Some(c) = &command {
+                cfg.permission_profile.grant_command(c);
+            }
+            if let Ok(value) = serde_json::to_value(&cfg) {
+                state.agent_service.set_config(value);
+            }
+            tracing::info!(
+                session_id = %session_id,
+                path = ?path,
+                command = ?command,
+                "permission_profile: in-memory Session-grant applied (no persistence)"
+            );
+        }
+        _ => {
+            // `Once` / `Deny` are no-ops at the profile layer; the
+            // agent already has the immediate grant via the
+            // on_pre_tool_approved hook for this turn only.
         }
     }
 }

@@ -21,6 +21,7 @@ pub mod console_decode;
 pub mod text_utils;
 pub mod plugin_abi;
 pub mod runtime;
+pub mod permission_profile;
 
 #[cfg(test)]
 pub mod test_generators;
@@ -86,3 +87,9 @@ pub use agentspec::{spec_from_contract_parts, AgentSpecData};
 
 // Re-export text utilities
 pub use text_utils::{format_token_count, is_error_json, truncate_chars};
+
+// Re-export the declarative permission profile (P6, 2026-07-20) —
+// lives in core so both `hermix-config::GatewayConfig` (for
+// persistence) and `hermix_agent::AgentConfig` (for runtime gating)
+// can embed it without a circular dependency.
+pub use permission_profile::{PendingGrant, PermissionProfile};

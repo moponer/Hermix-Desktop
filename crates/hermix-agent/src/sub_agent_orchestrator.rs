@@ -168,7 +168,6 @@ const EXPLORE_ROLE_TOOLS: &[&str] = &[
     "browser_get_images",
     "browser_vision",
     "browser_console",
-    "vision_analyze",
     "tool_search",
     "tool_describe",
     "tool_call",

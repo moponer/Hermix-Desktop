@@ -2024,6 +2024,7 @@ impl AgentLoop {
             self.callbacks.on_pre_tool_dispatch.as_ref().map(|b| b.as_ref()),
             tool_calls,
             self.callbacks.shutdown.as_ref(),
+            self.callbacks.on_pre_tool_approved.as_ref(),
         )
         .await
     }

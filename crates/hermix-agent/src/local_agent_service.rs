@@ -15,7 +15,7 @@ use hermix_core::traits::{AgentOverrides, AgentReply, AgentService, PermissionLe
 // the trait, not on the concrete `MemoryRouter` struct.
 use hermix_focus::MemoryLayer;
 use hermix_core::types::ExecutionTimelineEvent;
-use hermix_core::{AgentError, ApprovalOutcome, LlmProvider, Message, MessageRole, StreamChunk, StreamDelta, ToolCall};
+use hermix_core::{AgentError, ApprovalOutcome, LlmProvider, Message, MessageRole, PendingGrant, PermissionProfile, StreamChunk, StreamDelta, ToolCall};
 use hermix_tools::{TirithAction, TirithSecurity, ToolRegistry};
 use serde_json::Value;
 
@@ -929,6 +929,50 @@ impl LocalAgentService {
         PermissionLevel::Default
     }
 
+    /// P6 (2026-07-20, direction 1): returns `Some(<resource description>)`
+    /// when `tc` is a resource-bearing tool whose target is outside
+    /// `profile`'s granted scope, else `None`.
+    ///
+    /// Only `file`-family tools (by `path` argument) and `terminal` /
+    /// `code_execution` (by `command` argument) are gated — everything
+    /// else falls through to the normal risk matrix unchanged. The
+    /// description string is surfaced verbatim to the desktop UI's
+    /// approval card so the user knows exactly what they're granting.
+    fn resource_guard(
+        tc: &ToolCall,
+        profile: &PermissionProfile,
+        params: &Value,
+    ) -> Option<String> {
+        let name = tc.function.name.as_str();
+        const FILE_TOOLS: &[&str] = &[
+            "read_file",
+            "write_file",
+            "patch",
+            "read_image",
+            "search_files",
+            "delete_file",
+            "list_directory",
+            "disk_cleanup",
+        ];
+        if FILE_TOOLS.contains(&name) {
+            if let Some(path) = params.get("path").and_then(|v| v.as_str()) {
+                if !profile.allows_path(path) {
+                    return Some(format!("未授权路径: {path}"));
+                }
+            }
+            return None;
+        }
+        if name == "terminal" || name == "code_execution" {
+            if let Some(cmd) = params.get("command").and_then(|v| v.as_str()) {
+                if !profile.allows_command(cmd) {
+                    return Some(format!("未授权命令: {cmd}"));
+                }
+            }
+            return None;
+        }
+        None
+    }
+
     /// Internal: pre-dispatch decision for a tool call.
     ///
     /// Extracted from the `on_pre_tool_dispatch` closure in
@@ -1674,6 +1718,16 @@ impl AgentService for LocalAgentService {
         // for ownership of `status_forwarder`. Each `Arc::clone` is
         // a refcount bump, so this is essentially free.
         let status_forwarder_for_section_gate = status_forwarder.clone();
+        // P6 direction 3: shared Arc to the permission profile so both
+        // `on_pre_tool_dispatch` (read) and `on_pre_tool_approved`
+        // (write) reference the same in-memory state. The Arc is built
+        // inside the `on_pre_tool_dispatch` block below; this binding
+        // is the one the `on_pre_tool_approved` callback clones into
+        // its closure. Placeholder Arc created here so the compiler
+        // sees a single binding reused in both fields.
+        let profile_arc_for_callback: Arc<std::sync::Mutex<PermissionProfile>> = Arc::new(
+            std::sync::Mutex::new(agent_config.permission_profile.clone()),
+        );
         let consciousness_tool_start = self.consciousness_tracker.clone();
         let consciousness_tool_complete = self.consciousness_tracker.clone();
         let consciousness_status = self.consciousness_tracker.clone();
@@ -2105,7 +2159,50 @@ impl AgentService for LocalAgentService {
                 let pre_approval_checker = effective_overrides.pre_approval_checker.clone();
                 let sid = session_id.to_string();
                 let tirith = self.tirith.clone();
+                // P6 direction 1: declarative permission profile. Out-of-scope
+                // resource access prompts the user to grant, instead of
+                // silently hitting `access denied` or fabricating a reply.
+                // The configured `workspace` root is implicitly granted so
+                // normal in-workspace file ops don't prompt on every call.
+                //
+                // Wrap in Arc<Mutex<>> so the `on_pre_tool_approved` callback
+                // (direction 3) can update the same profile after a successful
+                // approval — making "user grants once, then never re-prompts"
+                // work without dragging the profile across closure lifetimes.
+                let profile_arc = profile_arc_for_callback.clone();
+                if let Some(ws) = &agent_config.workspace {
+                    profile_arc.lock().expect("profile_arc poisoned").grant_path(ws);
+                }
+                let profile_arc_for_dispatch = profile_arc.clone();
                 Some(Box::new(move |tc: &ToolCall| {
+                    // P6 gate: check resource-bearing tools against the
+                    // granted scope *before* the normal risk matrix.
+                    let raw_params: Value = serde_json::from_str(&tc.function.arguments)
+                        .unwrap_or(Value::Object(Default::default()));
+                    let guard = profile_arc_for_dispatch
+                        .lock()
+                        .expect("profile_arc poisoned");
+                    if let Some(resource) = Self::resource_guard(tc, &guard, &raw_params) {
+                        drop(guard);
+                        if let (Some(req), Some(on_ev)) =
+                            (approval_requester.as_ref(), on_event.as_ref())
+                        {
+                            let request_id = tc.id.clone();
+                            let rx = req(sid.clone(), request_id.clone());
+                            on_ev(serde_json::json!({
+                                "event": "request_approval",
+                                "request_id": request_id,
+                                "tool": tc.function.name,
+                                "arguments": raw_params,
+                                "risk": "resource",
+                                "resource": resource,
+                            }));
+                            return ToolDispatchDecision::AwaitApproval(rx);
+                        }
+                        // No approval infra (headless / unit tests) → Allow.
+                        return ToolDispatchDecision::Allow;
+                    }
+                    drop(guard);
                     Self::decide_pre_tool_dispatch(
                         tc,
                         permission,
@@ -2116,6 +2213,27 @@ impl AgentService for LocalAgentService {
                         pre_approval_checker.as_ref(),
                         &sid,
                     )
+                }))
+            },
+            // P6 direction 3: when the user approves a tool call, capture
+            // the resource scope (path/command prefix) and grant it on
+            // the shared profile so subsequent calls skip the prompt.
+            // The ToolCall carries its arguments, so we don't need a
+            // separate pending map.
+            on_pre_tool_approved: {
+                let profile_arc = profile_arc_for_callback.clone();
+                Some(Arc::new(move |tc: &ToolCall| {
+                    let raw_params: Value = serde_json::from_str(&tc.function.arguments)
+                        .unwrap_or(Value::Object(Default::default()));
+                    let grant = PendingGrant::from_tool_call(&tc.function.name, &raw_params);
+                    let mut profile = profile_arc.lock().expect("profile_arc poisoned");
+                    grant.apply_to(&mut profile);
+                    tracing::info!(
+                        tool = %tc.function.name,
+                        path = ?grant.path,
+                        command = ?grant.command,
+                        "permission_profile: granted resource from approved tool call"
+                    );
                 }))
             },
             on_prefetch_intent: effective_overrides.on_prefetch_intent.clone(),

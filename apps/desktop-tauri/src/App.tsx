@@ -551,7 +551,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     max: RIGHT_MAX,
     side: "right",
   });
-  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, setContextUsage, usageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat();
+  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, setContextUsage, usageSnapshot, send: sendStream, cancel: cancelStream, wsSendRaw } = useStreamChat();
 
   // Per-send phase tracking. Set by the `onPhaseChange` callback in
   // `handleSendMessage` and scoped to the current `sessionId` so the
@@ -643,6 +643,8 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   const approvalResolversRef = useRef<
     Map<string, (decision: ApprovalDecision) => void>
   >(new Map());
+  // Retry timers for approval responses — cleaned up when approval is resolved
+  const approvalRetryTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
   /**
    * 2026-07-18 主人反馈"请求的按钮不够突出啊，差点没看见,而且
    * 我认为需要一个提醒机制,比如右下角的气泡提醒等待你确认"。
@@ -1108,10 +1110,13 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
       if (resolver) {
         resolver(decision);
         approvalResolversRef.current.delete(requestId);
+        // Clean up retry timer if approval is resolved
+        const retryTimer = approvalRetryTimersRef.current.get(requestId);
+        if (retryTimer) {
+          clearInterval(retryTimer);
+          approvalRetryTimersRef.current.delete(requestId);
+        }
         // 2026-07-18: mirror the resolver map size to the toast state.
-        // Only the live branch deletes — the stale branch below keeps
-        // the entry gone (it was already removed when the agent loop
-        // timed out / cleaned up) so no decrement there.
         pendingApprovalSessionsRef.current.delete(requestId);
         setPendingApprovalCount(approvalResolversRef.current.size);
         setSessions((prev) =>
@@ -1171,16 +1176,73 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
 
   const handleApproveApproval = useCallback(
     (requestId: string) => {
+      const now = Date.now();
+      console.error(`[APPROVAL-CLICK] id=${requestId} t=${now}`);
+
+      // Primary: send via WS
+      const payload = JSON.stringify({
+        type: "approval_response",
+        request_id: requestId,
+        decision: "approved",
+      });
+      const sent = wsSendRaw(payload);
+      console.error(`[APPROVAL-SENT-WS] id=${requestId} sent=${sent} payloadLen=${payload.length}`);
+
+      // Fallback: send via REST API after 1s delay.
+      // Tauri WebView2 WebSocket can lose buffered messages on connection
+      // reset — ws.send() returns true but server never receives the message.
+      // REST bypasses WebSocket entirely and guarantees delivery.
+      // registry.resolve() is idempotent so WS+REST duplicates are harmless.
+      //
+      // 2026-07-20: fixed two bugs:
+      //  1. PORT: was hardcoded to 9518 (wrong); the server listens on 3000
+      //     (api.ts:API_BASE). The old port was never in the Tauri CSP either,
+      //     so the fetch was silently blocked. Using api.apiUrl() guarantees the
+      //     correct host+port and stays in sync if the port ever changes.
+      //  2. SESSION ID: was using activeSessionId (the session currently visible
+      //     in the chat pane), but the approval might belong to a different
+      //     session if the user switched tabs. Now reads the authoritative
+      //     session from pendingApprovalSessionsRef (set when the card was
+      //     created by onApprovalRequest), with activeSessionId as fallback.
+      const restPayload = JSON.stringify({
+        request_id: requestId,
+        decision: "approved",
+      });
+      const restSid =
+        pendingApprovalSessionsRef.current.get(requestId) ?? activeSessionId;
+      if (restSid) {
+        const restUrl = api.apiUrl(`/v1/sessions/${restSid}/approval`);
+        setTimeout(async () => {
+          try {
+            const res = await fetch(restUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: restPayload,
+            });
+            const data = await res.json();
+            console.error(`[APPROVAL-REST] id=${requestId} ok=${data.ok} matched=${data.matched}`);
+          } catch (e) {
+            console.error(`[APPROVAL-REST-FAIL] id=${requestId} error=${String(e)}`);
+          }
+        }, 1000);
+      }
+
+      // Resolve the promise immediately so the UI updates
       resolveApproval(requestId, "approved");
     },
-    [resolveApproval],
+    [activeSessionId, resolveApproval, wsSendRaw],
   );
 
   const handleDenyApproval = useCallback(
     (requestId: string) => {
+      const sent = wsSendRaw(JSON.stringify({ type: "approval_response", request_id: requestId, decision: "denied" }));
+      if (!sent) {
+        resolveApproval(requestId, "denied");
+        return;
+      }
       resolveApproval(requestId, "denied");
     },
-    [resolveApproval],
+    [resolveApproval, wsSendRaw],
   );
 
   /**
@@ -2188,6 +2250,9 @@ return {
             // would leak forever.
             approvalResolversRef.current.forEach((resolver) => resolver("denied"));
             approvalResolversRef.current.clear();
+            // Clean up retry timers
+            approvalRetryTimersRef.current.forEach((timer) => clearInterval(timer));
+            approvalRetryTimersRef.current.clear();
             // 2026-07-18: clear the toast trackers too — every pending
             // approval just got force-denied by the cleanup, so the
             // bubble has nothing to remind about. Without this the

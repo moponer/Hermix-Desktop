@@ -1694,7 +1694,7 @@ mod tests {
         // any tool that doesn't trip a more specific rule.
         // (We can't easily assert *every* tool here, but we
         // can confirm a sampling of the registered built-ins.)
-        let tools = ["read_file", "web_search", "url_safety", "vision"];
+        let tools = ["read_file", "web_search", "url_safety"];
         for tool in tools {
             let r = bundled().check_tool_call(tool, &serde_json::json!({}));
             assert_eq!(

@@ -188,6 +188,7 @@ pub(crate) async fn resolve_pre_dispatch(
     on_pre_tool_dispatch: Option<&(dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync)>,
     tool_calls: &[ToolCall],
     shutdown: Option<&Arc<tokio::sync::Notify>>,
+    on_pre_tool_approved: Option<&Arc<dyn Fn(&ToolCall) + Send + Sync>>,
 ) -> HashMap<String, Result<(), ToolDenial>> {
     let Some(hook) = on_pre_tool_dispatch else {
         return HashMap::new();
@@ -221,7 +222,16 @@ pub(crate) async fn resolve_pre_dispatch(
                     None => rx.await,
                 };
                 match resolved {
-                    Ok(ApprovalOutcome::Approved) => Ok(()),
+                    Ok(ApprovalOutcome::Approved) => {
+                        // P6 direction 3: notify caller that the user
+                        // approved this resource so it can update the
+                        // declarative permission profile (next time the
+                        // same path/command is requested, no prompt).
+                        if let Some(f) = on_pre_tool_approved {
+                            f(tc);
+                        }
+                        Ok(())
+                    }
                     Ok(ApprovalOutcome::DeniedByUser) => Err(ToolDenial {
                         kind: DenialKind::UserDenied,
                         reason: format!(
@@ -476,6 +486,7 @@ mod tests {
             Some(&hook_awaiting(ApprovalOutcome::DeniedByUser)),
             &[tc],
             None,
+            None,
         )
         .await;
         let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
@@ -489,6 +500,7 @@ mod tests {
         let map = resolve_pre_dispatch(
             Some(&hook_awaiting(ApprovalOutcome::TimedOut { timeout_secs: 300 })),
             &[tc],
+            None,
             None,
         )
         .await;
@@ -504,6 +516,7 @@ mod tests {
             Some(&hook_awaiting(ApprovalOutcome::ChannelClosed)),
             &[tc],
             None,
+            None,
         )
         .await;
         let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
@@ -517,6 +530,7 @@ mod tests {
         let map = resolve_pre_dispatch(
             Some(&hook_awaiting(ApprovalOutcome::Approved)),
             &[tc],
+            None,
             None,
         )
         .await;
@@ -548,12 +562,77 @@ mod tests {
                 }
             });
         let map =
-            resolve_pre_dispatch(Some(&hook), &[tc], Some(&notify)).await;
+            resolve_pre_dispatch(Some(&hook), &[tc], Some(&notify), None).await;
         let err = map.get("call-storage_clean").unwrap().as_ref().unwrap_err();
         assert_eq!(
             err.kind,
             DenialKind::ChannelClosed,
             "shutdown Notify must short-circuit the approval wait as ChannelClosed",
+        );
+    }
+
+    /// P6 direction 3: when a tool call's approval resolves to
+    /// `Approved`, the `on_pre_tool_approved` hook fires with the
+    /// original `ToolCall` so the caller can update its permission
+    /// profile.
+    #[tokio::test]
+    async fn awaited_approval_approved_fires_on_pre_tool_approved_hook() {
+        use std::sync::{Arc, Mutex};
+        let tc = tc("read_file", r#"{"path":"C:\\Users\\alice\\x.txt"}"#);
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let dispatch_hook: Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync> =
+            Box::new(|_tc| {
+                ToolDispatchDecision::AwaitApproval(pre_resolved_rx(ApprovalOutcome::Approved))
+            });
+        let approved_hook: Arc<dyn Fn(&ToolCall) + Send + Sync> = {
+            let seen = seen.clone();
+            Arc::new(move |tc: &ToolCall| {
+                seen.lock().unwrap().push(tc.function.name.clone());
+            })
+        };
+        let map = resolve_pre_dispatch(
+            Some(&dispatch_hook),
+            &[tc],
+            None,
+            Some(&approved_hook),
+        )
+        .await;
+        assert!(map.get("call-read_file").unwrap().is_ok());
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            &["read_file".to_string()],
+            "on_pre_tool_approved must fire once with the approved ToolCall"
+        );
+    }
+
+    /// P6 direction 3: the hook must NOT fire on a denied approval.
+    #[tokio::test]
+    async fn denied_approval_does_not_fire_on_pre_tool_approved_hook() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let tc = tc("read_file", r#"{"path":"C:\\Users\\alice\\x.txt"}"#);
+        let count = Arc::new(AtomicUsize::new(0));
+        let dispatch_hook: Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync> =
+            Box::new(|_tc| {
+                ToolDispatchDecision::AwaitApproval(pre_resolved_rx(ApprovalOutcome::DeniedByUser))
+            });
+        let approved_hook: Arc<dyn Fn(&ToolCall) + Send + Sync> = {
+            let count = count.clone();
+            Arc::new(move |_tc: &ToolCall| {
+                count.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+        let map = resolve_pre_dispatch(
+            Some(&dispatch_hook),
+            &[tc],
+            None,
+            Some(&approved_hook),
+        )
+        .await;
+        assert!(map.get("call-read_file").unwrap().is_err());
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            0,
+            "on_pre_tool_approved must not fire on denial"
         );
     }
 }

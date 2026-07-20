@@ -361,6 +361,23 @@ export function useStreamChat() {
       reasoningTokens: number;
     } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  // 2026-07-19 type-B observability + direct-send: send a raw WS text
+  // frame on the live socket. Returns false (no-op) if the socket is
+  // missing or not OPEN, so callers can distinguish "sent" from
+  // "dropped". Used by the approval flow so the click handler can
+  // emit `approval_response` directly (decoupled from the
+  // resolver/Promise round-trip) AND so we can route diagnostics to
+  // the server log (the webview console is invisible in Tauri).
+  const wsSendRaw = useCallback((text: string): boolean => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      ws.send(text);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
   // Refs to hold the per-send promise resolvers + callbacks,
   // so cancel() can settle the promise immediately without waiting
   // for the async WS onclose event.
@@ -1114,6 +1131,8 @@ export function useStreamChat() {
                       // a different code path, might
                       // accidentally re-resolve a different
                       // pending request.
+                      console.error(`[APPROVAL-THEN] firing decision=${resp.decision} id=${requestId} t=${Date.now()} wsState=${wsRef.current?.readyState}`);
+                      wsSendRaw(JSON.stringify({ type: "__diag", tag: "THEN", id: String(requestId), decision: String(resp.decision), ws: wsRef.current?.readyState ?? -1 }));
                       if (resp.decision === "expired") return;
                       // 2026-07-19: stale-click bug fix.
                       // The closure-captured `ws` was the WS that
@@ -1129,6 +1148,8 @@ export function useStreamChat() {
                       // it if the bug recurs.
                       const liveWs = wsRef.current;
                       if (!liveWs || liveWs.readyState !== WebSocket.OPEN) {
+                        console.error(`[APPROVAL-DROP] wsRef not OPEN state=${liveWs?.readyState} id=${requestId} — dropped`);
+                        wsSendRaw(JSON.stringify({ type: "__diag", tag: "DROP", id: String(requestId), state: liveWs?.readyState ?? -1 }));
                         diagWarn(
                           `[approval] wsRef.current not OPEN (state=${liveWs?.readyState}) — click for ${requestId} dropped; user must retry`,
                         );
@@ -1138,14 +1159,17 @@ export function useStreamChat() {
                         // Server expects "approved" or "denied" (exact match
                         // against `decision == "approved"` in lib.rs:1225).
                         const decision = resp.decision === "approved" ? "approved" : "denied";
-                        liveWs.send(
-                          JSON.stringify({
-                            type: "approval_response",
-                            request_id: requestId,
-                            decision,
-                          }),
-                        );
+                        const payload = JSON.stringify({
+                          type: "approval_response",
+                          request_id: requestId,
+                          decision,
+                        });
+                        liveWs.send(payload);
+                        console.error(`[APPROVAL-SENT] ok id=${requestId} decision=${decision} payloadLen=${payload.length}`);
+                        wsSendRaw(JSON.stringify({ type: "__diag", tag: "SENT", id: String(requestId), decision }));
                       } catch (e) {
+                        console.error(`[APPROVAL-ERROR] send threw id=${requestId}: ${String(e)}`);
+                        wsSendRaw(JSON.stringify({ type: "__diag", tag: "ERR", id: String(requestId), err: String(e) }));
                         diagWarn(
                           `[approval] liveWs.send threw for ${requestId}: ${String(e)}`,
                         );
@@ -1606,5 +1630,5 @@ export function useStreamChat() {
     setStreamingSessionId(null);
   }, []);
 
-  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, cancel };
+  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, cancel, wsSendRaw };
 }

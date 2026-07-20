@@ -149,6 +149,51 @@ pub fn inject_denial_note_if_needed(
     ctx.add_message(Message::system(note));
 }
 
+/// 2026-07-20 (sandbox-permission fix P3): when a tool failed with a
+/// `PERMISSION_DENIED` error (filesystem ACL / sandbox virtualization /
+/// missing admin / missing Windows OCR language pack / no interactive desktop
+/// session, tagged `[PERMISSION_DENIED]` by `ToolError::from_message`), inject
+/// a structured `system` note right after the `tool_result` so the LLM's next
+/// turn is forced to (1) tell the user the action was blocked by the runtime,
+/// (2) explain what access it needed, and (3) ask the user to grant that
+/// access in the runtime — instead of silently retrying, treating virtualized
+/// data as real, or fabricating a generic "Windows cleanup checklist" to paper
+/// over the failure.
+///
+/// This enforces the boss philosophy: Hermix runs on a real Windows machine;
+/// we never probe for a sandbox and never downgrade to a generic checklist — we
+/// surface the restriction and hand the "request permission" action back to the
+/// user. No-op for normal results and non-permission errors.
+pub fn inject_permission_note_if_needed(
+    ctx: &mut ContextManager,
+    tool_calls: &[ToolCall],
+    result: &ToolResult,
+) {
+    if !result.is_error {
+        return;
+    }
+    if !result.content.contains("[PERMISSION_DENIED]") {
+        return;
+    }
+    let tool_name = tool_calls
+        .iter()
+        .find(|tc| tc.id == result.tool_call_id)
+        .map(|tc| tc.function.name.as_str())
+        .unwrap_or("<unknown>");
+
+    let note = format!(
+        "[SYSTEM — 运行环境权限/依赖受限]\n\
+         工具 `{tool_name}` 的执行被运行环境的权限或依赖限制拦截（可能是：沙盒文件系统虚拟化、ACL 权限不足、缺少管理员权限、缺少 Windows OCR 语言包、或无交互桌面会话）。\n\
+         你的【下一段回复必须】做到以下四点，不得遗漏：\n\
+         1. 用中文明确告诉用户：刚才 `{tool_name}` 因运行环境限制【没有成功执行】，不要假装成功。\n\
+         2. 说明你原本想做什么、为什么受限（例如：需要写系统目录的权限 / 需要 OCR 语言包 / 需要交互桌面会话）。\n\
+         3. 直接请用户在运行环境（沙盒）放开对应权限、或以管理员身份运行 Hermix 后重试；若是缺少语言包或桌面会话，说明需要安装/开启什么。\n\
+         4. 不要编造\"通用清单\"或把虚拟化视图当成真机数据糊弄用户。\n\
+         【严禁】在权限未放开前反复重试同一操作。",
+    );
+    ctx.add_message(Message::system(note));
+}
+
 /// v34 (2026-07-09): push a `tool_result` message that exists **only**
 /// in the in-memory context — it is never persisted to the DB.
 /// Used by the replay path where the tool wasn't actually re-executed;
@@ -295,5 +340,37 @@ mod tests {
         let ctx = run_inject(Some("some_future_kind"));
         assert_eq!(count_system_notes(&ctx), 1);
         assert!(last_message_is_denial_note(&ctx));
+    }
+
+    #[test]
+    fn injects_note_for_permission_denied() {
+        let mut ctx = make_ctx();
+        let tc = make_tool_call("call_1");
+        let result = ToolResult::err("call_1", "[PERMISSION_DENIED] Access is denied (os error 5)");
+        push_tool_result_from_struct(&mut ctx, &[tc.clone()], &result);
+        inject_permission_note_if_needed(&mut ctx, &[tc], &result);
+        assert_eq!(count_system_notes(&ctx), 1);
+        assert!(
+            ctx.get_messages()
+                .last()
+                .map(|m| {
+                    m.role == MessageRole::System
+                        && m.content
+                            .as_deref()
+                            .unwrap_or("")
+                            .contains("[SYSTEM — 运行环境权限/依赖受限]")
+                })
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn no_note_for_regular_execution_error() {
+        let mut ctx = make_ctx();
+        let tc = make_tool_call("call_1");
+        let result = ToolResult::err("call_1", "No such file or directory (os error 2)");
+        push_tool_result_from_struct(&mut ctx, &[tc.clone()], &result);
+        inject_permission_note_if_needed(&mut ctx, &[tc], &result);
+        assert_eq!(count_system_notes(&ctx), 0);
     }
 }

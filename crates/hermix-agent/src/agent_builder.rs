@@ -97,6 +97,13 @@ pub fn build_agent_config(
             }),
         },
         memory_nudge_interval: config.agent.memory_nudge_interval,
+        // P6 direction 3 (2026-07-20): copy the persisted permission
+        // profile from GatewayConfig into AgentConfig so the runtime
+        // gate sees the same scope the user authorised via the
+        // dashboard "Always Allow" button. Without this copy, the
+        // profile lives only in `config.yaml` and is silently
+        // ignored at session start.
+        permission_profile: config.permission_profile.clone(),
         skill_creation_nudge_interval: config.agent.skill_creation_nudge_interval,
         background_review_enabled: config.agent.background_review_enabled,
         // P0-1: explicit master off-switch from

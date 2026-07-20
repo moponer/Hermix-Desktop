@@ -414,6 +414,12 @@ pub struct AgentCallbacks {
     /// upstream layer (e.g. `LocalAgentService`) resolves the request.
     pub on_pre_tool_dispatch:
         Option<Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync>>,
+    /// P6 direction 3 (2026-07-20): called **after** the user approves
+    /// a tool call (i.e. once the `AwaitApproval` oneshot resolves to
+    /// `Approved`). Lets the caller update its in-memory permission
+    /// profile so the same resource doesn't re-prompt next turn. See
+    /// `tool_dispatch::resolve_pre_dispatch` for the call site.
+    pub on_pre_tool_approved: Option<Arc<dyn Fn(&ToolCall) + Send + Sync>>,
     /// H3: Called when the prefetcher resolves with an intent prediction.
     ///
     /// Payload is a JSON string containing `{ intent, confidence, results }`

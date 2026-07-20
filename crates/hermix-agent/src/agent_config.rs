@@ -19,6 +19,7 @@ use hermix_core::{BudgetConfig, BudgetConfigError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use hermix_core::PermissionProfile;
 use crate::smart_model_routing::{ApiMode, SmartModelRoutingConfig};
 
 // ---------------------------------------------------------------------------
@@ -356,6 +357,16 @@ pub struct AgentConfig {
     /// root. `None` disables the workspace boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+
+    /// P6 (2026-07-20): declarative permission profile. Before dispatching a
+    /// `file`/`terminal` tool, `decide_pre_tool_dispatch` checks the target
+    /// resource against `granted_paths` / `granted_commands`; anything
+    /// outside scope triggers an approval prompt so the user can grant
+    /// access — instead of the agent silently hitting `access denied` and
+    /// fabricating a generic reply. Empty = safe default (everything outside
+    /// an explicit grant is subject to the prompt).
+    #[serde(default)]
+    pub permission_profile: PermissionProfile,
 
     /// Per-turn permission policy. `Default` triggers a `RequestApproval`
     /// stream event before risk-bearing tool calls; `Full` skips the gate.
@@ -881,6 +892,7 @@ impl Default for AgentConfig {
             stream_first_chunk_timeout_secs: default_stream_first_chunk_timeout_secs(),
             turn_transition_deadline_secs: default_turn_transition_deadline_secs(),
             workspace: None,
+            permission_profile: PermissionProfile::default(),
             permission: None,
             llm_providers: HashMap::new(),
             ephemeral_skills: Vec::new(),

@@ -303,7 +303,7 @@ impl DiskCleanupHandler {
             errors: vec![],
         };
         serde_json::to_string_pretty(&report)
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+            .map_err(|e| ToolError::from_message(e.to_string()))
     }
 
     async fn clean(&self, params: &Value) -> Result<String, ToolError> {
@@ -346,7 +346,7 @@ impl DiskCleanupHandler {
                 errors: vec![],
             };
             return serde_json::to_string_pretty(&report)
-                .map_err(|e| ToolError::ExecutionFailed(e.to_string()));
+                .map_err(|e| ToolError::from_message(e.to_string()));
         }
 
         let mut deleted = vec![];
@@ -380,7 +380,7 @@ impl DiskCleanupHandler {
             errors,
         };
         serde_json::to_string_pretty(&report)
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+            .map_err(|e| ToolError::from_message(e.to_string()))
     }
 
     async fn stats(&self) -> Result<String, ToolError> {
@@ -406,7 +406,7 @@ impl DiskCleanupHandler {
             );
         }
         serde_json::to_string_pretty(&out)
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+            .map_err(|e| ToolError::from_message(e.to_string()))
     }
 }
 

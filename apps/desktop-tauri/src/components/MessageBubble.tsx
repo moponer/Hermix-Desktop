@@ -2188,25 +2188,62 @@ function describeToolArgs(tool: string, args: unknown): string {
   if (typeof args !== "object" || Array.isArray(args)) {
     return summarizeArgs(args);
   }
+  const a = args as Record<string, unknown>;
+
+  // storage_clean: 清理临时文件
+  if (tool === "storage_clean") {
+    const paths = Array.isArray(a.paths) ? a.paths : [];
+    const mode = typeof a.mode === "string" ? a.mode : "trash";
+    const modeText = mode === "trash" ? "移回收站" : "永久删除";
+    if (paths.length === 0) return `${modeText}文件`;
+    if (paths.length === 1) {
+      const p = String(paths[0]);
+      const name = p.split(/[/\\]/).pop() || p;
+      return `${modeText} "${name}"`;
+    }
+    return `${modeText} ${paths.length} 个文件/文件夹`;
+  }
+
   // Tool-kind-specific snippets
   if (tool === "computer_use" || tool === "computer") {
-    const a = args as Record<string, unknown>;
     const action = a.action;
     if (action === "key" && typeof a.chord === "string") return `按下 ${a.chord} 键`;
     if (action === "type" && typeof a.text === "string") return `输入文本 "${a.text}"`;
     if (action === "click" && typeof a.x === "number" && typeof a.y === "number") return `点击坐标 (${a.x}, ${a.y})`;
   }
   if (tool === "terminal" || tool === "bash") {
-    const cmd = (args as Record<string, unknown>).command;
-    if (typeof cmd === "string") return `运行命令: ${cmd}`;
+    const cmd = a.command;
+    if (typeof cmd === "string") {
+      const display = cmd.length > 60 ? cmd.slice(0, 57) + "…" : cmd;
+      return `运行命令: ${display}`;
+    }
   }
   if (tool === "write_file" || tool === "patch") {
-    const p = (args as Record<string, unknown>).path;
-    if (typeof p === "string") return `${tool === "patch" ? "修改" : "写入"}文件: ${p}`;
+    const p = a.path;
+    if (typeof p === "string") {
+      const name = p.split(/[/\\]/).pop() || p;
+      return `${tool === "patch" ? "修改文件" : "写入文件"} "${name}"`;
+    }
   }
   if (tool === "read_file") {
-    const p = (args as Record<string, unknown>).path;
-    if (typeof p === "string") return `读取文件: ${p}`;
+    const p = a.path;
+    if (typeof p === "string") {
+      const name = p.split(/[/\\]/).pop() || p;
+      return `读取文件 "${name}"`;
+    }
+  }
+  if (tool === "web_search") {
+    const q = a.query;
+    if (typeof q === "string") return `搜索: ${q.slice(0, 40)}`;
+  }
+  if (tool === "memory") {
+    const action = typeof a.action === "string" ? a.action : "";
+    const target = typeof a.target === "string" ? a.target : "";
+    const targetText = target === "user" ? "用户偏好" : "工作记忆";
+    if (action === "add") return `写入${targetText}`;
+    if (action === "replace") return `编辑${targetText}`;
+    if (action === "remove") return `删除${targetText}`;
+    return `记忆操作: ${action || "未知"}`;
   }
   return summarizeArgs(args);
 }

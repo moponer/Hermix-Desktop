@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use hermix_core::BudgetConfig;
+use hermix_core::{BudgetConfig, PermissionProfile};
 
 use crate::platform::PlatformConfig;
 use crate::session::SessionConfig;
@@ -144,6 +144,16 @@ pub struct GatewayConfig {
     /// callers fall back to `model` + `llm_providers[].model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_selector: Option<ModelSelectorConfig>,
+
+    /// P6 (2026-07-20): declarative permission profile. The agent
+    /// gates resource-bearing tool calls (file/terminal) against this
+    /// scope — anything outside triggers an approval prompt instead
+    /// of silently hitting OS `access denied`. The profile is
+    /// persisted to `config.yaml` so the user's "Always Allow"
+    /// grants survive server restart. See
+    /// `hermix_core::permission_profile::PermissionProfile`.
+    #[serde(default)]
+    pub permission_profile: PermissionProfile,
 }
 
 impl Default for GatewayConfig {
@@ -177,6 +187,7 @@ impl Default for GatewayConfig {
             autonomous_mode: true,
             home_dir: None,
             model_selector: None,
+            permission_profile: PermissionProfile::default(),
         }
     }
 }
