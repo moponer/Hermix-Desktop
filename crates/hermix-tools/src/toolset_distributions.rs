@@ -71,7 +71,6 @@ fn base_weights() -> HashMap<String, f64> {
     w.insert("terminal".into(), 0.9);
     w.insert("file".into(), 1.0);
     w.insert("browser".into(), 0.3);
-    w.insert("vision".into(), 0.5);
     w.insert("image_gen".into(), 0.2);
     w.insert("skills".into(), 0.7);
     w.insert("memory".into(), 0.6);
@@ -99,7 +98,6 @@ fn make_default() -> ToolsetDistribution {
 fn make_image_gen() -> ToolsetDistribution {
     let mut w = base_weights();
     w.insert("image_gen".into(), 1.0);
-    w.insert("vision".into(), 0.9);
     w.insert("terminal".into(), 0.3);
     ToolsetDistribution {
         name: "image_gen".into(),
@@ -128,7 +126,6 @@ fn make_science() -> ToolsetDistribution {
     w.insert("code_execution".into(), 1.0);
     w.insert("web".into(), 0.9);
     w.insert("file".into(), 1.0);
-    w.insert("vision".into(), 0.8);
     w.insert("terminal".into(), 0.7);
     ToolsetDistribution {
         name: "science".into(),
@@ -159,7 +156,6 @@ fn make_safe() -> ToolsetDistribution {
     w.insert("terminal".into(), 0.0);
     w.insert("file".into(), 0.5);
     w.insert("browser".into(), 0.0);
-    w.insert("vision".into(), 0.3);
     w.insert("skills".into(), 0.5);
     w.insert("memory".into(), 0.5);
     w.insert("todo".into(), 0.8);
@@ -179,7 +175,6 @@ fn make_balanced() -> ToolsetDistribution {
         "terminal",
         "file",
         "browser",
-        "vision",
         "skills",
         "memory",
         "todo",
@@ -234,7 +229,6 @@ fn make_creative() -> ToolsetDistribution {
     w.insert("image_gen".into(), 1.0);
     w.insert("tts".into(), 0.8);
     w.insert("voice_mode".into(), 0.7);
-    w.insert("vision".into(), 0.9);
     w.insert("web".into(), 0.9);
     ToolsetDistribution {
         name: "creative".into(),
@@ -262,7 +256,6 @@ fn make_browser_use() -> ToolsetDistribution {
     let mut w = base_weights();
     w.insert("browser".into(), 1.0);
     w.insert("web".into(), 1.0);
-    w.insert("vision".into(), 0.8);
     ToolsetDistribution {
         name: "browser_use".into(),
         description: "完整工具包，强调浏览器".into(),
@@ -273,7 +266,6 @@ fn make_browser_use() -> ToolsetDistribution {
 fn make_browser_only() -> ToolsetDistribution {
     let mut w = HashMap::new();
     w.insert("browser".into(), 1.0);
-    w.insert("vision".into(), 0.8);
     w.insert("web".into(), 0.5);
     ToolsetDistribution {
         name: "browser_only".into(),
@@ -286,7 +278,6 @@ fn make_browser_tasks() -> ToolsetDistribution {
     let mut w = HashMap::new();
     w.insert("browser".into(), 1.0);
     w.insert("web".into(), 1.0);
-    w.insert("vision".into(), 0.9);
     w.insert("file".into(), 0.7);
     w.insert("todo".into(), 0.8);
     ToolsetDistribution {
@@ -317,7 +308,6 @@ fn make_mixed_tasks() -> ToolsetDistribution {
     w.insert("web".into(), 0.9);
     w.insert("file".into(), 1.0);
     w.insert("code_execution".into(), 0.7);
-    w.insert("vision".into(), 0.6);
     w.insert("todo".into(), 0.9);
     w.insert("skills".into(), 0.7);
     w.insert("memory".into(), 0.6);

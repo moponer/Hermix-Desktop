@@ -99,7 +99,6 @@ pub use tools::tool_search::{
 };
 pub use tools::tts::{TextToSpeechHandler, TtsBackend};
 pub use tools::url_safety::{TirithAction, TirithCheckResult, TirithConfig, TirithRule, TirithSecurity, UrlSafetyHandler};
-pub use tools::vision::{VisionAnalyzeHandler, VisionBackend};
 pub use tools::web::{WebExtractBackend, WebExtractHandler, WebSearchBackend, WebSearchHandler};
 
 // Re-export real backend implementations
@@ -119,7 +118,6 @@ pub use backends::messaging::SignalMessagingBackend;
 pub use backends::session_search::SqliteSessionSearchBackend;
 pub use backends::todo::FileTodoBackend;
 pub use backends::tts::MultiTtsBackend;
-pub use backends::vision::OpenAiVisionBackend;
 pub use backends::web::{BaiduHtmlSearchBackend, SimpleExtractBackend};
 
 // Re-export tool metadata types (P6-1)

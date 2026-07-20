@@ -34,8 +34,6 @@ pub const TOOLSET_BROWSER: &[&str] = &[
     "browser_vision",
     "browser_console",
 ];
-/// Vision analysis tools.
-pub const TOOLSET_VISION: &[&str] = &["vision_analyze"];
 /// Image generation tools.
 pub const TOOLSET_IMAGE_GEN: &[&str] = &["image_generate"];
 /// Skills management tools.
@@ -73,7 +71,6 @@ pub static LEGACY_TOOLSET_MAP: LazyLock<HashMap<&'static str, &'static str>> =
         m.insert("terminal_tools", "terminal");
         m.insert("file_tools", "file");
         m.insert("browser_tools", "browser");
-        m.insert("vision_tools", "vision");
         m.insert("skills_tools", "skills");
         m.insert("memory_tools", "memory");
         m.insert("code_execution_tools", "code_execution");
@@ -171,10 +168,6 @@ impl ToolsetManager {
             TOOLSET_BROWSER.iter().map(|s| s.to_string()).collect(),
         ));
         self.register(Toolset::new(
-            "vision",
-            TOOLSET_VISION.iter().map(|s| s.to_string()).collect(),
-        ));
-        self.register(Toolset::new(
             "image_gen",
             TOOLSET_IMAGE_GEN.iter().map(|s| s.to_string()).collect(),
         ));
@@ -236,7 +229,6 @@ impl ToolsetManager {
                 "terminal",
                 "file",
                 "browser",
-                "vision",
                 "skills",
                 "memory",
                 "todo",
@@ -255,7 +247,6 @@ impl ToolsetManager {
                 "terminal",
                 "file",
                 "browser",
-                "vision",
                 "skills",
                 "memory",
                 "todo",

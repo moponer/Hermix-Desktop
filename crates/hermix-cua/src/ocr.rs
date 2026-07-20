@@ -83,6 +83,31 @@ pub fn recognize_from_rgba(
     ))
 }
 
+/// Recognise text from a **local image file** (PNG / JPEG / GIF / WEBP / ...).
+///
+/// The file is read from disk and decoded by `BitmapDecoder`, which
+/// auto-detects the container format, then fed to the OCR engine. This
+/// is the path-based, no-API-key entry point used for images that already
+/// exist on disk (e.g. a folder of scanned documents / licence plates).
+///
+/// # Errors
+///
+/// - `Ocr` — file unreadable, decode failure, or recognition failure
+///   (e.g. no OCR language pack for the user's profile languages).
+pub fn recognize_from_path(path: &str) -> CuaResult<OcrResponse> {
+    #[cfg(windows)]
+    {
+        let bytes = std::fs::read(path)
+            .map_err(|e| CuaError::Ocr(format!("read image file '{path}': {e}")))?;
+        unsafe { recognize_inner(&bytes) }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err(CuaError::Ocr("OCR is Windows-only.".into()))
+    }
+}
+
 // =========================================================================
 // Implementation (Windows-only)
 // =========================================================================

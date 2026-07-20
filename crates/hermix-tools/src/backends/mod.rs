@@ -27,5 +27,4 @@ pub mod threat_scan;
 pub mod todo;
 pub mod tts;
 pub mod video_gen;
-pub mod vision;
 pub mod web;

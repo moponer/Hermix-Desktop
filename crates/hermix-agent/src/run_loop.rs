@@ -462,12 +462,54 @@ impl AgentLoop {
 
         for result in results {
             push_tool_result(ctx, tool_calls, &result.tool_call_id, &result.content);
+
+            // Image injection: if read_image succeeded, extract base64 data
+            // and inject it as multimodal content so the LLM "sees" the image
+            // on the next turn — free, local, no API key.
+            if let Some(tc) = tool_calls.iter().find(|t| t.id == result.tool_call_id) {
+                if tc.function.name == "read_image" && !result.is_error {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(&result.content) {
+                        if let (Some(b64), Some(mime)) = (
+                            parsed.get("_image_data").and_then(|v| v.as_str()),
+                            parsed.get("mime_type").and_then(|v| v.as_str()),
+                        ) {
+                            let img_path = parsed
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("<unknown>");
+                            let hint = format!("[Image loaded from: {img_path}]");
+                            ctx.add_message(Message::user_with_image(
+                                &hint,
+                                b64,
+                                mime,
+                            ));
+                            tracing::info!(
+                                tool_call_id = %result.tool_call_id,
+                                path = img_path,
+                                mime = mime,
+                                b64_len = b64.len(),
+                                "read_image result injected as multimodal content"
+                            );
+                        }
+                    }
+                }
+            }
             // 2026-07-18: if the result is a *denial* (user拒绝 /
             // 超时 / 连接中断), inject the structured "tell the user"
             // system note right after the tool_result so the LLM's
             // next turn obeys it instead of going quiet or silently
             // retrying.
             crate::tool_result_processor::inject_denial_note_if_needed(
+                ctx,
+                tool_calls,
+                &result,
+            );
+            // 2026-07-20 (sandbox-permission fix P3): if the tool failed with
+            // a PERMISSION_DENIED error, inject the "ask the user to grant
+            // access" guidance right after the denial note (the two are
+            // orthogonal — a denial is a user refusal, a permission error is a
+            // runtime restriction).
+            crate::tool_result_processor::inject_permission_note_if_needed(
                 ctx,
                 tool_calls,
                 &result,

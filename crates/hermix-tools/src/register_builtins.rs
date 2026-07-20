@@ -616,7 +616,6 @@ mod tests {
             "url_safety",
             "code_execution",
             "browser",
-            "vision",
             "skills_list",
             "skills_get",
             "skills_install",

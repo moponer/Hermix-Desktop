@@ -55,7 +55,6 @@ pub fn build_tool_preview(
         ("browser_type", "text"),
         ("image_generate", "prompt"),
         ("text_to_speech", "text"),
-        ("vision_analyze", "question"),
         ("mixture_of_agents", "user_prompt"),
         ("skill_view", "name"),
         ("skills_list", "category"),

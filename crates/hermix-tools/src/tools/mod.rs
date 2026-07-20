@@ -56,7 +56,6 @@ pub mod tool_chain;
 pub mod tts;
 pub mod url_safety;
 pub mod video_gen;
-pub mod vision;
 pub mod voice_mode;
 pub mod web;
 
@@ -98,7 +97,6 @@ pub fn register_all(
     disk_cleanup::register(registry);
     storage_analyzer::register(registry);
     storage_clean::register(registry);
-    vision::register(registry);
     security_guidance::register(registry);
     platforms::register(registry);
     cronjob::register(registry);
