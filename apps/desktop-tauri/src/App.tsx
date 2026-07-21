@@ -469,6 +469,18 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   const activeSessionIdRef = useRef(activeSessionId);
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
 
+  // 2026-07-21: 切换会话时（新建对话 / 选择左侧会话）立即把上下文用量
+  // 显示重置为 null，避免上一个会话的后台 stream 事件或残留值污染当前
+  // 会话的 context-usage 进度条。用户报告「新对话进入后/发首句就显示 53k」
+  // 的根因之一就是 contextUsage / usageSnapshot 这两个 state 从不在会话
+  // 切换时被清空——`setContextUsage` 全仓只有 WS 事件与 restoredCtx 两处写入，
+  // 没有任何切换重置。reset 后进度条在新会话首句事件到达前不渲染，到达后
+  // 才显示该会话的真实用量。
+  useEffect(() => {
+    setContextUsage(null);
+    setUsageSnapshot(null);
+  }, [activeSessionId]);
+
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const [rightOpen, setRightOpen] = useState<boolean>(() => {
@@ -552,7 +564,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     max: RIGHT_MAX,
     side: "right",
   });
-  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, setContextUsage, usageSnapshot, send: sendStream, cancel: cancelStream, wsSendRaw } = useStreamChat();
+  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream, wsSendRaw } = useStreamChat();
 
   // Per-send phase tracking. Set by the `onPhaseChange` callback in
   // `handleSendMessage` and scoped to the current `sessionId` so the
