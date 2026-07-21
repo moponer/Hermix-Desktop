@@ -1273,8 +1273,22 @@ impl AgentService for LocalAgentService {
         if effective_overrides.permission.is_none() {
             effective_overrides.permission = Some(Self::default_permission());
         }
-        let (agent_config, allowed_tools) =
+        let (mut agent_config, allowed_tools) =
             Self::apply_overrides(agent_config, &effective_overrides);
+
+        // 2026-07-21 (fix): `apply_overrides` does not propagate the
+        // session id into AgentConfig — it only sets system_prompt,
+        // workspace and permission level. Without this stamp, every
+        // downstream consumer that reads `self.config.session_id`
+        // (memory_prefetch, OnSessionStart hook context, persist_session_terminal,
+        // `do_pre_turn_setup`'s INFO log, etc.) falls back to "" via
+        // `as_deref().unwrap_or("")`. The most visible symptom is the
+        // `do_pre_turn_setup: entering turn=N session=""` line in
+        // stdout that hides the real session from operator log scans.
+        // The bigger correctness impact is on memory_prefetch
+        // (skips per-session cache lookup) and persist_session_terminal
+        // (writes to an empty-string session row, polluting DB).
+        agent_config.session_id = Some(session_id.to_string());
 
         // Wire the resolved workspace to the terminal handler so
         // commands run in the user's workspace, not the server CWD.
@@ -1478,6 +1492,11 @@ impl AgentService for LocalAgentService {
         // 2026-07-21: also clear the per-session permission profile.
         self.tool_registry
             .set_terminal_permission_profile(PermissionProfile::default());
+        // 2026-07-21: clear the code_execution stdout callback and
+        // active call_id so a dropped session can't leave stale
+        // callbacks pointing at a dead WS handle.
+        self.tool_registry.set_code_execution_stdout_cb(None);
+        self.tool_registry.set_code_execution_active_call_id(None);
 
         Ok(AgentReply {
             text: reply_text,
@@ -1596,8 +1615,22 @@ impl AgentService for LocalAgentService {
         if effective_overrides.permission.is_none() {
             effective_overrides.permission = Some(Self::default_permission());
         }
-        let (agent_config, allowed_tools) =
+        let (mut agent_config, allowed_tools) =
             Self::apply_overrides(agent_config, &effective_overrides);
+
+        // 2026-07-21 (fix): `apply_overrides` does not propagate the
+        // session id into AgentConfig — it only sets system_prompt,
+        // workspace and permission level. Without this stamp, every
+        // downstream consumer that reads `self.config.session_id`
+        // (memory_prefetch, OnSessionStart hook context, persist_session_terminal,
+        // `do_pre_turn_setup`'s INFO log, etc.) falls back to "" via
+        // `as_deref().unwrap_or("")`. The most visible symptom is the
+        // `do_pre_turn_setup: entering turn=N session=""` line in
+        // stdout that hides the real session from operator log scans.
+        // The bigger correctness impact is on memory_prefetch
+        // (skips per-session cache lookup) and persist_session_terminal
+        // (writes to an empty-string session row, polluting DB).
+        agent_config.session_id = Some(session_id.to_string());
 
         // Wire the resolved workspace to the terminal handler so
         // commands run in the user's workspace, not the server CWD.
@@ -1769,6 +1802,51 @@ impl AgentService for LocalAgentService {
         // after `run_stream` returns.
         let timeline_buffer: Arc<Mutex<Vec<ExecutionTimelineEvent>>> =
             Arc::new(Mutex::new(Vec::new()));
+        // 2026-07-21: set up the code_execution stdout streaming callback.
+        // `LocalCodeExecutionBackend` calls this for each stdout line it
+        // reads from the child process, so the WS stream receives
+        // `tool_stdout` events in real-time instead of buffering
+        // everything until the process exits.
+        let registry_for_code_exec_stdout = self.tool_registry.clone();
+        let code_exec_stdout_forwarder = on_chunk.clone();
+        let code_exec_timeline_buffer = timeline_buffer.clone();
+        self.tool_registry.set_code_execution_stdout_cb(Some(Box::new(
+            move |line: &str| {
+                let tool_call_id = registry_for_code_exec_stdout
+                    .code_execution_active_call_id()
+                    .unwrap_or_else(|| "code_execution-unknown".to_string());
+                code_exec_stdout_forwarder(StreamChunk {
+                    delta: Some(StreamDelta {
+                        content: None,
+                        tool_calls: None,
+                        extra: Some(serde_json::json!({
+                            "event": "tool_stdout",
+                            "tool_call_id": tool_call_id,
+                            "tool": "code_execution",
+                            "content": line,
+                        })),
+                    }),
+                    finish_reason: None,
+                    usage: None,
+                });
+                {
+                    let mut buf = code_exec_timeline_buffer.lock().unwrap();
+                    buf.push(ExecutionTimelineEvent {
+                        event_type: "tool_stdout".to_string(),
+                        tool: Some("code_execution".to_string()),
+                        content: Some(line.to_string()),
+                        arguments: None,
+                        chunk_index: None,
+                        chunk_total: None,
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                        tool_call_id: Some(tool_call_id),
+                        file_path: None,
+                        change_type: None,
+                        file_summary: None,
+                    });
+                }
+            },
+        )));
         // Hand each `move` closure its own Arc clone so the outer
         // `timeline_buffer` binding survives until the post-stream
         // drain at line 1561. A `move` closure captures by value,
@@ -1777,6 +1855,12 @@ impl AgentService for LocalAgentService {
         let tl_for_tool_start = timeline_buffer.clone();
         let tl_for_tool_complete = timeline_buffer.clone();
         let tl_for_status = timeline_buffer.clone();
+        // 2026-07-21: clone for `on_tool_start` so it can set the
+        // active `code_execution` tool_call_id on the registry.
+        let registry_for_tool_start = self.tool_registry.clone();
+        // 2026-07-21: clone for `on_tool_complete` so it can clear the
+        // active `code_execution` tool_call_id.
+        let registry_for_tool_complete = self.tool_registry.clone();
         let callbacks = AgentCallbacks {
             // Live reasoning bridge: the agent loop calls this for
             // every chunk of `<think>...</think>` text the LLM emits.
@@ -1859,6 +1943,13 @@ impl AgentService for LocalAgentService {
                     );
                     t.set_active_tools(t.recent(0).len() as u32 + 1);
                 }
+                // 2026-07-21: when `code_execution` starts, store the
+                // tool_call_id so the stdout callback can emit `tool_stdout`
+                // events with the correct ID.
+                if tool_name == "code_execution" {
+                    registry_for_tool_start
+                        .set_code_execution_active_call_id(Some(tool_call_id.to_string()));
+                }
             })),
             on_tool_complete: Some(Box::new(move |tool_call_id, tool_name, output, denial_kind| {
                 // Pre-cloned at the call-site (see `tl_for_tool_complete`).
@@ -1922,7 +2013,13 @@ impl AgentService for LocalAgentService {
                     return;
                 }
 
-                if !output.is_empty() {
+                // 2026-07-21: for `code_execution`, stdout was already
+                // streamed line-by-line via the stdout callback during
+                // execution. Skip the bulk tool_stdout replay here so
+                // we don't duplicate every line in the timeline.
+                if tool_name == "code_execution" {
+                    // fall through to tool_complete below
+                } else if !output.is_empty() {
                     const STDOUT_CHUNK_SIZE: usize = 2000;
                     let chars: Vec<char> = output.chars().collect();
                     let total_chunks = chars.len().div_ceil(STDOUT_CHUNK_SIZE).max(1);
@@ -2009,6 +2106,13 @@ impl AgentService for LocalAgentService {
                         Some(format!("tool_complete: {tool_name}")),
                     );
                     t.set_active_tools(0);
+                }
+                // 2026-07-21: when `code_execution` finishes, clear the
+                // active tool_call_id so the stdout callback won't emit
+                // stale events.
+                if tool_name == "code_execution" {
+                    registry_for_tool_complete
+                        .set_code_execution_active_call_id(None);
                 }
             })),
             status_callback: Some(Arc::new(move |kind, message| {
@@ -2401,6 +2505,11 @@ impl AgentService for LocalAgentService {
         // so a dropped session's grants don't leak into the next one.
         self.tool_registry
             .set_terminal_permission_profile(PermissionProfile::default());
+        // 2026-07-21: clear the code_execution stdout callback and
+        // active call_id so a dropped session can't leave stale
+        // callbacks pointing at a dead WS handle.
+        self.tool_registry.set_code_execution_stdout_cb(None);
+        self.tool_registry.set_code_execution_active_call_id(None);
 
         Ok(AgentReply {
             text: reply_text,

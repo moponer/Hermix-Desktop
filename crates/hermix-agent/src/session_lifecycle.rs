@@ -282,9 +282,42 @@ where
         .is_some_and(|tc| tc.iter().any(|t| !t.function.name.is_empty()));
 
     if stream_mode {
+        // 2026-07-21 (diagnostic): the previous single-line
+        // `llm_response_received` only logged `has_tool_calls` (a boolean
+        // derived from "any name non-empty") which is ambiguous when
+        // MiniMax streaming leaves behind placeholder entries with
+        // empty `name` fields. After this addition we can tell at a
+        // glance whether the LLM actually emitted a dispatchable tool
+        // call (named_tool_calls > 0) vs only placeholders
+        // (tool_calls_vec_len > 0 but named_tool_calls == 0) vs none
+        // at all. The next time we see "run suddenly stops mid-stream"
+        // (master: 跑着就停了), this line tells us whether the model
+        // actually returned something we could dispatch or whether it
+        // bounced out via decide_empty_response.
+        let tool_calls_vec_len = response
+            .message
+            .tool_calls
+            .as_ref()
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let named_tool_calls = response
+            .message
+            .tool_calls
+            .as_ref()
+            .map(|v| {
+                v.iter()
+                    .filter(|t| !t.function.name.is_empty())
+                    .map(|t| t.function.name.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let tool_call_names: Vec<&str> = named_tool_calls.clone();
         tracing::info!(
             turn = total_turns,
             has_tool_calls,
+            tool_calls_vec_len,
+            named_tool_calls = tool_calls_vec_len > 0 && named_tool_calls.is_empty(),
+            tool_call_names = ?tool_call_names,
             finish_reason = response.finish_reason.as_deref().unwrap_or(""),
             "llm_response_received"
         );

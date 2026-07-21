@@ -5031,6 +5031,16 @@ async fn handle_ws_stream_send(
     heartbeat.tick().await;
 
     let mut was_client_disconnect = false;
+    // 2026-07-21 (diagnostic): every arm of the rx-forward loop's
+    // `select!` (send-fail, heartbeat-fail, ws close/err/none, rx
+    // none) sets the same `was_client_disconnect` flag and the same
+    // generic exit INFO line — making it impossible to tell from a
+    // post-mortem log whether the stream died because the **client**
+    // closed the socket or because a **single send** hit a transient
+    // ws error. The next "run suddenly stops mid-stream" investigation
+    // (master: 跑着就停了) needs that disambiguation. Track which
+    // arm we exited through and surface it on the EXITED line.
+    let exit_branch: &'static str;
     loop {
         tokio::select! {
             biased;
@@ -5046,6 +5056,7 @@ async fn handle_ws_stream_send(
                             .await
                             .is_err()
                         {
+                            exit_branch = "rx_send_fail";
                             was_client_disconnect = true;
                             ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                             // 2026-07-19 (type-B root-cause): soft-drain
@@ -5068,6 +5079,7 @@ async fn handle_ws_stream_send(
                         }
                     }
                     None => {
+                        exit_branch = "rx_none";
                         // rx channel closed — the agent task finished its
                         // terminal events and there is no more data to send.
                         // Exit the loop and let the WS close naturally.
@@ -5081,6 +5093,7 @@ async fn handle_ws_stream_send(
                     "ws_stream: heartbeat ping"
                 );
                 if sender.send(WsMessage::Ping(Bytes::new())).await.is_err() {
+                    exit_branch = "heartbeat_ping_fail";
                     was_client_disconnect = true;
                     ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                     // 2026-07-19 (type-B root-cause): same soft-drain
@@ -5245,6 +5258,7 @@ async fn handle_ws_stream_send(
                         }
                     }
                     Some(Ok(WsMessage::Close(_))) => {
+                        exit_branch = "ws_close_frame";
                         was_client_disconnect = true;
                         ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                         shutdown_notify.notify_one();
@@ -5261,6 +5275,7 @@ async fn handle_ws_stream_send(
                             error = %e,
                             "ws_stream_send: socket read error during streaming"
                         );
+                        exit_branch = "ws_read_err";
                         was_client_disconnect = true;
                         ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                         shutdown_notify.notify_one();
@@ -5269,6 +5284,7 @@ async fn handle_ws_stream_send(
                         break;
                     }
                     None => {
+                        exit_branch = "ws_read_none";
                         // Stream ended (socket closed)
                         was_client_disconnect = true;
                         ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -5283,6 +5299,7 @@ async fn handle_ws_stream_send(
     }
     tracing::info!(
         session = %session_id,
+        exit_branch,
         was_client_disconnect = was_client_disconnect,
         "ws_stream: rx forward loop EXITED — handle_ws_stream_send returning"
     );
