@@ -51,10 +51,10 @@ fn bridge_tool_registry_keeps_schema_count() {
     ));
     let skill_provider: Arc<dyn hermix_core::SkillProvider> =
         Arc::new(hermix_skills::SkillManager::new(skill_store));
-    hermix_tools::register_builtin_tools(&tools, terminal_backend, skill_provider, None, None, None);
+hermix_tools::register_builtin_tools(&tools, terminal_backend, skill_provider, None, None, None, None);
 
-    let defs = tools.get_definitions();
-    let bridged = bridge_tool_registry(&tools, None);
+let defs = tools.get_definitions();
+let bridged = bridge_tool_registry(&tools, None);
     let bridged_names = bridged.names();
     assert!(
         !defs.is_empty(),
@@ -76,10 +76,10 @@ fn bridge_tool_registry_filters_by_whitelist() {
     ));
     let skill_provider: Arc<dyn hermix_core::SkillProvider> =
         Arc::new(hermix_skills::SkillManager::new(skill_store));
-    hermix_tools::register_builtin_tools(&tools, terminal_backend, skill_provider, None, None, None);
+hermix_tools::register_builtin_tools(&tools, terminal_backend, skill_provider, None, None, None, None);
 
-    let defs = tools.get_definitions();
-    assert!(defs.len() >= 2, "need at least 2 builtin tools for this test");
+let defs = tools.get_definitions();
+assert!(defs.len() >= 2, "need at least 2 builtin tools for this test");
     let allow_names: std::collections::HashSet<String> =
         defs.iter().take(2).map(|s| s.name.clone()).collect();
     let expected_kept: usize = allow_names.len();

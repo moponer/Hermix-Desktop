@@ -678,6 +678,7 @@ mod approval_registry_tests {
             task_service: None,
             automation_service: None,
             automation_engine_scheduler: None,
+            custom_app_manager: None,
         }
     }
 
@@ -1123,6 +1124,9 @@ pub struct HttpServerState {
     /// `build_with_hermes_home`; triggers go through the unified
     /// `agent_service.send_message()` dispatch path (铁律 DD).
     pub automation_engine_scheduler: Option<automation_trigger::AutomationSchedulerHandle>,
+    /// Custom app manager — manages user-facing desktop applications.
+    /// `None` when not initialized (e.g. in test fixtures or CLI mode).
+    pub custom_app_manager: Option<Arc<hermix_plugin::PluginManager>>,
 }
 
 impl HttpServerState {
@@ -1248,6 +1252,20 @@ impl HttpServerState {
             hermix_tools::tools::todo::TodoChange,
         >(hermix_tools::tools::todo::TODO_EVENT_CHANNEL_CAPACITY);
 
+        // 2026-07-21 (custom_apps wiring fix): construct a shared
+        // PluginManager for the custom-app system and clone it into
+        // both `state.custom_app_manager` (HTTP API at /api/custom-apps)
+        // and the LLM tool `custom_app_manager` (registered by
+        // `register_builtin_tools` below). Previously both consumers
+        // were wired to `None`, leaving `/api/custom-apps` stuck at 503
+        // and the LLM tool missing from the registry. Paths mirror
+        // `commands_custom_app.rs`.
+        let custom_app_manager = std::sync::Arc::new(hermix_plugin::PluginManager::new(
+            hermix_config::paths::hermix_home().join("custom-apps"),
+            hermix_config::paths::hermix_home().join("app-shell.exe"),
+            hermix_config::paths::hermix_home().join("esbuild.exe"),
+        ));
+
         hermix_tools::register_builtin_tools(
             &tool_registry,
             terminal_backend,
@@ -1257,8 +1275,8 @@ impl HttpServerState {
             )),
             None,
             Some(todo_event_tx.clone()),
+            Some(custom_app_manager.clone()),
         );
-        // Reconcile the in-process registry's `is_enabled` flags
         // with whatever the user last persisted in
         // `enabled_toolsets.json`. Without this, every restart
         // would silently reset every toggle the user made in
@@ -1517,6 +1535,7 @@ impl HttpServerState {
                 Some(std::sync::Arc::new(hermix_automation::AutomationService::new(repo)))
             },
             automation_engine_scheduler: None,
+            custom_app_manager: Some(custom_app_manager),
         };
         state.register_task_tracker_tools();
 
@@ -1581,6 +1600,20 @@ impl HttpServerState {
             hermix_tools::tools::todo::TodoChange,
         >(hermix_tools::tools::todo::TODO_EVENT_CHANNEL_CAPACITY);
 
+        // 2026-07-21 (custom_apps wiring fix): construct a shared
+        // PluginManager for the custom-app system and clone it into
+        // both `state.custom_app_manager` (HTTP API at /api/custom-apps)
+        // and the LLM tool `custom_app_manager` (registered by
+        // `register_builtin_tools` below). Previously both consumers
+        // were wired to `None`, leaving `/api/custom-apps` stuck at 503
+        // and the LLM tool missing from the registry. Paths mirror
+        // `commands_custom_app.rs`.
+        let custom_app_manager = std::sync::Arc::new(hermix_plugin::PluginManager::new(
+            hermix_config::paths::hermix_home().join("custom-apps"),
+            hermix_config::paths::hermix_home().join("app-shell.exe"),
+            hermix_config::paths::hermix_home().join("esbuild.exe"),
+        ));
+
         hermix_tools::register_builtin_tools(
             &tool_registry,
             terminal_backend,
@@ -1590,6 +1623,7 @@ impl HttpServerState {
             )),
             None,
             Some(todo_event_tx.clone()),
+            Some(custom_app_manager.clone()),
         );
 
         // MCP wiring (mirrors `build_with_hermes_home`). Construct
@@ -1713,6 +1747,7 @@ impl HttpServerState {
                 Some(std::sync::Arc::new(hermix_automation::AutomationService::new(repo)))
             },
             automation_engine_scheduler: None,
+            custom_app_manager: Some(custom_app_manager),
         }; // close Self { ... }
         state.register_task_tracker_tools();
         Ok(state)

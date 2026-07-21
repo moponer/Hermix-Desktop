@@ -9,6 +9,7 @@ import { PluginsView } from "./components/PluginsView";
 import { AgentsView } from "./components/AgentsView";
 import { GroupChatView } from "./components/GroupChatView";
 import { AnalyticsView } from "./components/AnalyticsView";
+import { CustomAppsView } from "./components/CustomAppsView";
 import { RightSidebar, PreviewPanel, type RightTab } from "./components/RightSidebar";
 import { TitleBar } from "./components/TitleBar";
 import { useStreamChat } from "./hooks/useStreamChat";
@@ -2591,6 +2592,7 @@ contextUsage={contextUsage}
           {page === "groupchat" && <GroupChatView initialRoomId={selectedRoomId} />}
           {page === "experts" && <AgentsView initialTab="builtin" />}
           {page === "analytics" && <AnalyticsView />}
+{page === "customapps" && <CustomAppsView />}
           {page === "settings" && <SettingsView />}
         </main>
         </ErrorBoundary>        {/* Right sidebar — grid column 3; 0px when closed (collapsed), full

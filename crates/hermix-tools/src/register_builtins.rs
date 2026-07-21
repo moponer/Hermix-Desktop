@@ -41,6 +41,7 @@ pub fn register_builtin_tools(
     clarify_backend: Option<Arc<dyn ClarifyBackend>>,
     enabled_toolsets: Option<HashSet<String>>,
     todo_event_tx: Option<tokio::sync::broadcast::Sender<crate::tools::todo::TodoChange>>,
+    custom_app_manager: Option<Arc<hermix_plugin::PluginManager>>,
 ) {
     // 1. Browser backend. We construct it here (not inside
     //    `tools::browser::register`) because the allowlist / port /
@@ -87,6 +88,11 @@ pub fn register_builtin_tools(
     // Mark interactive tools that must not run in parallel with others.
     registry.mark_interactive("clarify");
     registry.mark_interactive("delegate_task");
+
+    // Custom app manager — LLM tool for creating user-facing desktop apps.
+    if let Some(mgr) = custom_app_manager {
+        crate::tools::custom_app_manager::register(registry, mgr);
+    }
 
     tracing::info!("Registered {} built-in tools", registry.list_tools().len());
 
@@ -253,6 +259,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let risk = registry
             .risk_level("terminal")
@@ -278,6 +285,7 @@ mod tests {
             &registry,
             Arc::new(NoopTerminal),
             Arc::new(NoopSkills),
+            None,
             None,
             None,
             None,

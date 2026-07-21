@@ -1,5 +1,6 @@
 pub mod browser_cleanup;
 pub mod commands;
+pub mod commands_custom_app;
 pub mod commands_cua;
 pub mod officecli;
 pub mod portable_env;
@@ -29,10 +30,15 @@ const PONYTAIL_SKILL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/builtin-skills/hermix/ponytail/SKILL.md"
 ));
+const CUSTOM_APP_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-skills/hermix/custom-app-development/SKILL.md"
+));
 
 const BUILTIN_SKILLS: &[(&str, &str)] = &[
     ("hermix/storage-analyzer", STORAGE_ANALYZER_SKILL),
     ("hermix/ponytail", PONYTAIL_SKILL),
+    ("hermix/custom-app-development", CUSTOM_APP_SKILL),
 ];
 
 /// Write built-in skills into `skills_dir` on first launch. Skips any skill
@@ -362,6 +368,12 @@ pub fn run() {
             commands_cua::cua_browser_screenshot,
             commands_cua::cua_browser_evaluate,
             commands_cua::cua_browser_click,
+            // Custom app management
+            commands_custom_app::custom_app_init,
+            commands_custom_app::custom_app_list,
+            commands_custom_app::custom_app_package,
+            commands_custom_app::custom_app_run,
+            commands_custom_app::custom_app_open_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running hermix-desktop");

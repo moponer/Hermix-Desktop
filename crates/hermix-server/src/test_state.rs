@@ -106,6 +106,7 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         task_service: None,
         automation_service: None,
         automation_engine_scheduler: None,
+        custom_app_manager: None,
     }
 }
 

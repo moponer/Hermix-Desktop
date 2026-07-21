@@ -2,7 +2,7 @@ import {
   MessageSquarePlus, Search, Sparkles, Clock, Settings,
   Trash2, X, User, ChevronDown, ChevronRight,
   MessageSquare, Bot, Users, Plus, FolderOpen, Briefcase,
-  BarChart3,
+  BarChart3, Boxes,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
@@ -130,6 +130,7 @@ const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: Bot,      label: "专家",    page: "agents" },
   { icon: Users,    label: "群聊",    page: "groupchat" },
   { icon: BarChart3, label: "统计",   page: "analytics" },
+{ icon: Boxes,   label: "应用",    page: "customapps" },
 ];
 
 /* ── Main Sidebar ── */

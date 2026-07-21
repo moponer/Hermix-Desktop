@@ -1,0 +1,18 @@
+[package]
+name = "hermix-plugin"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "Custom app system for user-facing desktop applications with zero-toolchain packaging"
+
+[dependencies]
+hermix-core = { workspace = true }
+hermix-config = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+walkdir = "2"
+base64 = "0.22"

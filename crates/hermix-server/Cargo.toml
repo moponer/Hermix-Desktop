@@ -23,6 +23,7 @@ hermix-core = { workspace = true }
 hermix-transport = { workspace = true }
 hermix-agent = { workspace = true }
 hermix-tools = { workspace = true }
+hermix-plugin = { workspace = true }
 hermix-config = { workspace = true }
 hermix-cron = { workspace = true }
 hermix-gateway = { workspace = true }

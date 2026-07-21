@@ -20,6 +20,7 @@ pub mod clarify;
 pub mod code_execution;
 pub mod cronjob;
 pub mod cua;
+pub mod custom_app_manager;
 pub mod delegation;
 pub mod disk_cleanup;
 pub mod file;
