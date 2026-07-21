@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>自定义应用</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: var(--app-bg, #1a1a2e);
+            color: var(--app-text, #e0e0e0);
+            min-height: 100vh;
+        }
+        #app-loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            color: #a0a0b0;
+            font-size: 14px;
+        }
+        #app-error {
+            display: none;
+            padding: 24px;
+            color: #f44336;
+        }
+        #app-error h2 { margin-bottom: 8px; font-size: 16px; }
+        #app-error p { font-size: 13px; line-height: 1.6; word-break: break-all; }
+        .spinner {
+            width: 24px; height: 24px;
+            border: 3px solid rgba(108, 99, 255, 0.2);
+            border-top-color: #6c63ff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="app-loading">
+        <div class="spinner"></div>
+        <span>加载应用中...</span>
+    </div>
+    <div id="app-error">
+        <h2>应用加载失败</h2>
+        <p id="app-error-msg"></p>
+    </div>
+    <div id="app-root"></div>
+
+    <script type="module">
+        /**
+         * App Loader — 壳的内置前端
+         *
+         * 职责:
+         * 1. 加载 resources/manifest.json
+         * 2. 注入 CSS 变量 (设计系统)
+         * 3. 动态 import resources/ui.bundle.js
+         * 4. 加载 resources/backend.bundle.js 到全局
+         * 5. 渲染 React 组件
+         */
+        async function loadApp() {
+            const loading = document.getElementById("app-loading");
+            const errorDiv = document.getElementById("app-error");
+            const errorMsg = document.getElementById("app-error-msg");
+            const root = document.getElementById("app-root");
+
+            try {
+                // 1. 加载 manifest
+                const manifest = await fetch("resources/manifest.json").then(r => {
+                    if (!r.ok) throw new Error(`manifest.json 加载失败 (${r.status})`);
+                    return r.json();
+                });
+
+                // 2. 应用主题 (CSS 变量)
+                if (manifest.theme) {
+                    for (const [key, value] of Object.entries(manifest.theme)) {
+                        document.documentElement.style.setProperty(key, value);
+                    }
+                }
+                document.title = manifest.name || "自定义应用";
+
+                // 3. 加载 backend bundle (挂载到全局)
+                try {
+                    const backendModule = await import("resources/backend.bundle.js");
+                    window.__APP_BACKEND__ = backendModule;
+                } catch (e) {
+                    console.warn("backend.bundle.js 加载失败 (应用可能不需要后端):", e);
+                    window.__APP_BACKEND__ = { execute: async () => ({ success: false, error: "无后端" }) };
+                }
+
+                // 4. 加载 UI bundle
+                const uiModule = await import("resources/ui.bundle.js");
+                const Component = uiModule.default;
+                if (!Component) throw new Error("ui.bundle.js 未导出默认组件");
+
+                // 5. 渲染
+                loading.style.display = "none";
+                const React = await import("https://esm.sh/react@18.3.1");
+                const ReactDOM = await import("https://esm.sh/react-dom@18.3.1/client");
+
+                // 如果 ui.bundle.js 已经打包了 React (esbuild --bundle), 直接渲染
+                // 否则用 esm.sh 的 React
+                try {
+                    ReactDOM.createRoot(root).render(React.createElement(Component));
+                } catch (e) {
+                    // ui.bundle.js 自己打包了 React，直接调用
+                    // React 可能已经在 bundle 内部，尝试直接 render
+                    root.innerHTML = '<div id="__react_root"></div>';
+                    // 如果 ui bundle 是 self-contained 的, 它可能有自己的 render 逻辑
+                    if (typeof Component === "function") {
+                        // 尝试使用 bundle 内部的 React
+                        const internalReact = window.__APP_REACT__ || React;
+                        const internalReactDOM = window.__APP_REACT_DOM__ || ReactDOM;
+                        internalReactDOM.createRoot(root).render(internalReact.createElement(Component));
+                    }
+                }
+            } catch (e) {
+                loading.style.display = "none";
+                errorDiv.style.display = "block";
+                errorMsg.textContent = e instanceof Error ? `${e.message}\n${e.stack || ""}` : String(e);
+                console.error("[app-loader] 加载失败:", e);
+            }
+        }
+
+        loadApp();
+    </script>
+</body>
+</html>

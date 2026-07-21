@@ -40,6 +40,20 @@ apps/desktop-tauri/src-tauri/gen/
 apps/desktop-tauri/src-tauri/target/
 apps/desktop-tauri/dist/
 
+# Custom App Shell — 独立 Tauri 子项目源码跟踪，编译产物不跟踪
+# 源码: main.rs / Cargo.toml / ui/index.html / tauri.conf.json 全部 commit
+# 产物: cargo build 后 custom-app-shell.exe + WebView2Loader.dll 复制到
+#       apps/desktop-tauri/src-tauri/resources/shell/ (作为 binary asset 跟踪)
+#
+# 双 target dir 注意:
+#   - release profile: 走根 .cargo/config.toml 的 target-dir = "release/target"
+#     (已 gitignore 第 60 行 /release/**)
+#   - debug profile: 用默认 nested target/ (cargo build 不带 --release 时)
+#   - cargo check (无 --release): 也是 debug profile 走 nested target/
+# 所以两个路径都要 ignore
+apps/custom-app-shell/src-tauri/target/
+apps/custom-app-shell/src-tauri/gen/
+
 # Sidecar binaries (officecli tracked, hermix build artifact ignored)
 apps/desktop-tauri/src-tauri/binaries/*
 !apps/desktop-tauri/src-tauri/binaries/officecli-x86_64-pc-windows-msvc.exe
