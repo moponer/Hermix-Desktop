@@ -285,6 +285,37 @@ const GOOGLE_MODEL_OPERATIONAL_GUIDANCE: &str = "# Operational guidance (Google)
 
 const TOOL_FAILURE_GUIDANCE: &str = "Tool failure rule: if a tool fails twice, switch approach or ask the user. Do NOT retry the same call.";
 
+/// Environment awareness + Shell compatibility + tool fallback priority.
+///
+/// Always-on: tells the model what OS/shell it runs on, how to call
+/// PowerShell correctly from a Git Bash layer, and that shell failures
+/// should trigger a switch to structured tools — not more shell retries.
+/// Directly addresses the "C 盘清理" failure mode where the agent
+/// repeatedly tried `powershell -File "path"` (quotes stripped by Git
+/// Bash) and never fell back to `storage_analyzer` / `storage_clean`.
+const ENVIRONMENT_SHELL_GUIDANCE: &str = "\
+# Environment & Shell discipline (Windows — always-on)
+
+## Runtime environment
+You are running on **Windows**. The `terminal` tool dispatches commands through a shell layer (Git Bash on this host). This means:
+- Linux-only commands (`cp`, `ls`, `grep`) may not exist or behave differently. Use Windows equivalents (`copy`, `dir`, `findstr`) or PowerShell.
+- **Quote handling**: Git Bash strips double and single quotes before passing them to PowerShell. `powershell -File \"C:\\path\\script.ps1\"` will fail because the quotes are consumed by Bash. Use `powershell -Command` with inline scripts instead, or `powershell -EncodedCommand <base64>` for complex scripts.
+- **Path format**: Git Bash may translate `/c/Users/...` to `C:/Users/...`. PowerShell expects `C:\\Users\\...` or `C:/Users/...`. Both work in PowerShell, but be aware of the translation layer.
+- **Environment variables**: `$env:TEMP` in PowerShell works, but `$x.p` style variables in inline PowerShell may be interpreted by Bash. Use `powershell -Command` carefully, or `-EncodedCommand` for anything with `$` signs.
+
+## Tool fallback priority (mandatory)
+When a task can be accomplished by a **purpose-built structured tool**, you MUST call that tool directly — not via `terminal`. Structured tools bypass shell compatibility issues entirely and have correct risk classification.
+
+**Decision order for disk/storage tasks:**
+1. `storage_analyzer` (Safe, read-only, no approval) → scan disk usage first
+2. `disk_cleanup` (Caution, dry_run defaults to true) → scan & prune stale files under HERMIX_HOME
+3. `storage_clean` (Dangerous, requires approval) → delete/move-to-recycle specific junk paths
+
+**General rule**: if a `terminal` command fails **twice** with shell-compatibility errors (quote stripping, path format, missing binary, `not recognized as internal command`), STOP retrying via shell. Switch to the matching structured tool. Do NOT write `.bat`/`.ps1` scripts to disk as a workaround — that is a fallback of last resort, not a first strategy.
+
+## Read-only operations never need approval
+Directory listing, file size scanning, disk space queries, and process/service listings are read-only. If you are using a structured tool marked Safe (e.g. `storage_analyzer`), it will never prompt for approval. If you are using `terminal` for a read-only PowerShell command (`Get-ChildItem`, `Get-PSDrive`, `Measure-Object`), the command should not trigger confirmation — do not hesitate to run it.";
+
 const GIT_SAFETY_GUIDANCE: &str = "\
 # Git safety protocol (mandatory)
 
@@ -756,6 +787,15 @@ Hard rules:\n\
         "tool_failure.always",
         DirRoute::Always,
         TOOL_FAILURE_GUIDANCE,
+    ));
+    // Environment & Shell discipline — always-on: tells the model it's
+    // on Windows / Git Bash, how to call PowerShell correctly, and to
+    // switch to structured tools when shell fails. Directly addresses
+    // the "C 盘清理" failure mode.
+    dirs.push(SystemDir::new(
+        "env_shell.always",
+        DirRoute::Always,
+        ENVIRONMENT_SHELL_GUIDANCE,
     ));
     // Git safety protocol: prevent destructive git operations.
     dirs.push(SystemDir::new(

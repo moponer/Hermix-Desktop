@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
-use hermix_core::{traits::{RiskLevel, PermissionMode}, truncate_chars, ToolHandler, ToolSchema};
+use hermix_core::{traits::{RiskLevel, PermissionMode}, PermissionProfile, truncate_chars, ToolHandler, ToolSchema};
 use indexmap::IndexMap;
 use serde_json::Value;
 use tracing::{instrument, warn};
@@ -162,6 +162,13 @@ pub struct ToolRegistryInner {
     /// event instead of bouncing the user through text. `None` in both
     /// fields ⇒ fallback to the legacy `HERMIX_CONFIRM=1` text flow.
     pub terminal_approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
+/// Shared handle to the per-session `PermissionProfile` (2026-07-21).
+/// `LocalAgentService` writes the active profile here before each
+/// turn; `TerminalHandler` reads it to skip its internal
+/// `ApprovalManager` confirmation when the command is already
+/// granted by the profile (so the user doesn't get double-prompted:
+/// once by `resource_guard` and again by `ApprovalManager`).
+pub terminal_permission_profile: Arc<std::sync::Mutex<PermissionProfile>>,
 }
 
 /// Thread-safe wrapper around `ToolRegistryInner`.
@@ -181,6 +188,9 @@ impl ToolRegistry {
                 terminal_approval_ctx: Arc::new(std::sync::Mutex::new(
                     TerminalApprovalContext::default(),
                 )),
+                terminal_permission_profile: Arc::new(std::sync::Mutex::new(
+                    PermissionProfile::default(),
+                )),
             })),
         }
     }
@@ -194,6 +204,9 @@ impl ToolRegistry {
                 terminal_workspace: Arc::new(std::sync::RwLock::new(None)),
                 terminal_approval_ctx: Arc::new(std::sync::Mutex::new(
                     TerminalApprovalContext::default(),
+                )),
+                terminal_permission_profile: Arc::new(std::sync::Mutex::new(
+                    PermissionProfile::default(),
                 )),
             })),
         }
@@ -263,6 +276,43 @@ impl ToolRegistry {
     /// WS handle.
     pub fn clear_terminal_approval_ctx(&self) {
         self.set_terminal_approval_ctx(TerminalApprovalContext::default());
+    }
+
+    /// Get a clone of the shared terminal-permission-profile handle.
+    /// `register_builtin_tools` clones this into `TerminalHandler` so
+    /// the agent service can update the profile per session without
+    /// re-registering the tool.
+    pub fn terminal_permission_profile_handle(
+        &self,
+    ) -> Arc<std::sync::Mutex<PermissionProfile>> {
+        self.inner
+            .read()
+            .expect("registry rwlock not poisoned")
+            .terminal_permission_profile
+            .clone()
+    }
+
+    /// Set the per-session permission profile. Called by
+    /// `LocalAgentService::send_message` with the `profile_arc` it
+    /// manages for `resource_guard` — so `TerminalHandler` can consult
+    /// the same profile to skip its internal `ApprovalManager`
+    /// confirmation for already-granted commands.
+    pub fn set_terminal_permission_profile(&self, profile: PermissionProfile) {
+        match self
+            .inner
+            .read()
+            .expect("registry rwlock not poisoned")
+            .terminal_permission_profile
+            .lock()
+        {
+            Ok(mut guard) => *guard = profile,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "terminal_permission_profile lock poisoned; ignoring update"
+                );
+            }
+        }
     }
 
     /// Register a new tool.

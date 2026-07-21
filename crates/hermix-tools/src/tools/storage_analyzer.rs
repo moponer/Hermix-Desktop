@@ -588,7 +588,7 @@ impl ToolHandler for StorageAnalyzerHandler {
         );
         tool_schema(
             "storage_analyzer",
-            "只读磁盘占用分析。扫描指定目录或整套 Windows 热点目录，返回各子目录大小（≥50MB，降序，Top40）与所有盘符容量。全程只读，绝不删除任何文件。供 agent 在对话里做 🟢🟡🔴 分级。",
+            "【磁盘分析首选工具】只读磁盘占用分析器。扫描指定目录或整套 Windows 热点目录，返回各子目录大小（≥50MB，降序，Top40）与所有盘符容量。\n\n⚠️ 当用户要求分析磁盘占用/清理空间/查看大文件时，必须优先调用本工具，而非在 terminal 中运行 PowerShell 脚本。本工具是 Safe 级别（只读、无审批），而 terminal 中的 PowerShell 脚本可能因 Git Bash 引号剥离而失败，且每次调用都可能触发审批。\n\n使用方式：\n- 无参数：扫描整套 Windows 热点（用户配置/AppData/Temp/下载/Program Files/开发缓存）+ 所有盘符容量\n- 带 path 参数：扫描指定目录的子目录大小\n\n全程只读，绝不删除任何文件。删除请使用 storage_clean 工具。",
             JsonSchema::object(props, vec![]),
         )
     }
@@ -606,7 +606,7 @@ pub fn register(registry: &ToolRegistry) {
         Arc::new(|| true),
         vec![],
         true,
-        "只读磁盘占用分析：扫描目录或 Windows 热点，返回子目录大小与盘符容量",
+        "【磁盘分析首选工具】只读磁盘占用分析：扫描目录或 Windows 热点，返回子目录大小与盘符容量。优先使用此工具而非 terminal+PowerShell。",
         "💽",
         None,
         RiskLevel::Safe,

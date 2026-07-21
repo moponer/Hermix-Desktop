@@ -1475,6 +1475,9 @@ impl AgentService for LocalAgentService {
         // pointing at a dead WS handle. Cheap (Mutex write, single
         // Arc drop). See `set_terminal_approval_ctx` above.
         self.tool_registry.clear_terminal_approval_ctx();
+        // 2026-07-21: also clear the per-session permission profile.
+        self.tool_registry
+            .set_terminal_permission_profile(PermissionProfile::default());
 
         Ok(AgentReply {
             text: reply_text,
@@ -1728,6 +1731,22 @@ impl AgentService for LocalAgentService {
         let profile_arc_for_callback: Arc<std::sync::Mutex<PermissionProfile>> = Arc::new(
             std::sync::Mutex::new(agent_config.permission_profile.clone()),
         );
+        // 2026-07-21: sync the initial profile to the registry's
+        // shared handle so `TerminalHandler` can consult it to skip
+        // `ApprovalManager` confirmation for already-granted commands.
+        // The `on_pre_tool_approved` callback below keeps this in sync
+        // as the user approves new resources during the turn.
+        if let Ok(p) = profile_arc_for_callback.lock() {
+            self.tool_registry.set_terminal_permission_profile(p.clone());
+        }
+        // Also grant the workspace root so in-workspace terminal
+        // commands don't trigger confirmation.
+        if let Some(ws) = &agent_config.workspace {
+            profile_arc_for_callback
+                .lock()
+                .expect("profile_arc poisoned")
+                .grant_path(ws);
+        }
         let consciousness_tool_start = self.consciousness_tracker.clone();
         let consciousness_tool_complete = self.consciousness_tracker.clone();
         let consciousness_status = self.consciousness_tracker.clone();
@@ -2222,12 +2241,20 @@ impl AgentService for LocalAgentService {
             // separate pending map.
             on_pre_tool_approved: {
                 let profile_arc = profile_arc_for_callback.clone();
+                let registry_for_approval = self.tool_registry.clone();
                 Some(Arc::new(move |tc: &ToolCall| {
                     let raw_params: Value = serde_json::from_str(&tc.function.arguments)
                         .unwrap_or(Value::Object(Default::default()));
                     let grant = PendingGrant::from_tool_call(&tc.function.name, &raw_params);
                     let mut profile = profile_arc.lock().expect("profile_arc poisoned");
                     grant.apply_to(&mut profile);
+                    // 2026-07-21: sync the updated profile to the
+                    // registry's shared handle so `TerminalHandler`
+                    // sees the new grant immediately (skip its
+                    // internal `ApprovalManager` confirmation for
+                    // this command prefix on subsequent calls).
+                    registry_for_approval
+                        .set_terminal_permission_profile(profile.clone());
                     tracing::info!(
                         tool = %tc.function.name,
                         path = ?grant.path,
@@ -2370,6 +2397,10 @@ impl AgentService for LocalAgentService {
         // pointing at a dead WS handle. Cheap (Mutex write, single
         // Arc drop). See `set_terminal_approval_ctx` above.
         self.tool_registry.clear_terminal_approval_ctx();
+        // 2026-07-21: also clear the per-session permission profile
+        // so a dropped session's grants don't leak into the next one.
+        self.tool_registry
+            .set_terminal_permission_profile(PermissionProfile::default());
 
         Ok(AgentReply {
             text: reply_text,

@@ -102,3 +102,8 @@ apps/desktop-tauri/src-tauri/$null
 /check_api.mjs
 /query_db.sql
 /tmp_msgs.json
+
+# Tauri sidecar binaries (build outputs, NOT source — never commit)
+apps/desktop-tauri/src-tauri/binaries/
+/officecli.exe
+/⚠️
