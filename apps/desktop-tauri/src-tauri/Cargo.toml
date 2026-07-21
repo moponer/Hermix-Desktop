@@ -30,6 +30,7 @@ which = "6"
 # with a `NotFound` stub for the other side. The Tauri commands in
 # `commands_cua.rs` mirror the same pattern.
 hermix-cua = { path = "../../../crates/hermix-cua" }
+hermix-plugin = { path = "../../../crates/hermix-plugin" }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

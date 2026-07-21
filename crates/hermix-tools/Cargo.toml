@@ -10,6 +10,7 @@ description = "Tool registry, toolsets, and tool implementations for Hermix Agen
 hermix-core = { workspace = true }
 hermix-config = { workspace = true }
 hermix-cua = { workspace = true }
+hermix-plugin = { workspace = true }
 tokio = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true }

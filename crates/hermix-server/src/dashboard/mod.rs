@@ -4,6 +4,7 @@
 //! providing the `/api/*` routes consumed by the React web dashboard.
 
 pub mod agents;
+pub mod custom_apps;
 pub mod custom_providers;
 pub mod analytics;
 pub mod cua;
@@ -310,4 +311,18 @@ pub fn router() -> Router<HttpServerState> {
         // lands, the endpoint is reachable from `curl` for
         // debugging.
         .route("/api/cua/trace/{session_id}", get(cua::get_cua_trace))
+        // Custom apps — user-facing desktop applications
+        .route(
+            "/api/custom-apps",
+            get(custom_apps::list_apps).post(custom_apps::create_app),
+        )
+        .route(
+            "/api/custom-apps/{id}",
+            get(custom_apps::get_app)
+                .put(custom_apps::update_app)
+                .delete(custom_apps::delete_app),
+        )
+        .route("/api/custom-apps/{id}/package", post(custom_apps::package_app))
+        .route("/api/custom-apps/{id}/run", post(custom_apps::run_app))
+        .route("/api/custom-apps/{id}/icon", get(custom_apps::get_app_icon))
 }

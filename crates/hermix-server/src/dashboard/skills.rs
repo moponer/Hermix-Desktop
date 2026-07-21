@@ -829,7 +829,7 @@ mod tests {
         let reg = hermix_tools::ToolRegistry::new();
         let skill_provider: Arc<dyn SkillProvider> = Arc::new(NoopSkillProvider);
         let terminal: Arc<dyn TerminalBackend> = Arc::new(NoopBackend);
-        hermix_tools::register_builtin_tools(&reg, terminal, skill_provider, None, None, None);
+        hermix_tools::register_builtin_tools(&reg, terminal, skill_provider, None, None, None, None);
         let registered: HashSet<String> =
             reg.list_toolsets().into_iter().collect();
         // Sanity: at least the *core* floor must be present
