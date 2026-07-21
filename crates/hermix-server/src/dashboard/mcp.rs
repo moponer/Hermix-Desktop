@@ -138,7 +138,6 @@ fn now_iso() -> String {
 /// (filesystem / fetch / git / github / brave-search) so the persistence
 /// surface is identical regardless of which side writes first.
 fn seed_default() -> McpServersState {
-    let now = now_iso();
     McpServersState {
         seeded: true,
         servers: vec![],

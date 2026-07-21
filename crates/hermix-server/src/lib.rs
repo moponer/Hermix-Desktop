@@ -5848,7 +5848,7 @@ fn todo_change_to_stream(
 }
 
 /// Streaming WebSocket handler.
-async fn handle_ws_stream(mut socket: WebSocket, state: HttpServerState, session_id: String) {
+async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id: String) {
     // 2026-07-20: split the WebSocket into sender/receiver halves so that
     // handle_ws_stream_send can simultaneously forward agent events TO the
     // client AND read approval_response/clarify_response FROM the client.
