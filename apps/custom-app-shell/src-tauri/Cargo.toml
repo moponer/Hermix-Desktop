@@ -1,5 +1,5 @@
 [package]
-name = "custom-app-shell"
+name = "app-shell"
 version = "1.0.0"
 edition = "2021"
 
