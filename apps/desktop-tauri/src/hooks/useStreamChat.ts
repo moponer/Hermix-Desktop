@@ -310,7 +310,7 @@ interface StreamCallbacks {
   onAcuiDirective?: (directive: AcuiDirective) => void;
 }
 
-export function useStreamChat() {
+export function useStreamChat(activeSessionId: string | null) {
   // Per-session streaming state. We track the *session id* (not just a
   // boolean) so the UI can scope the "正在思考…" indicator and the
   // composer-disabled state to the specific session that's mid-stream.
@@ -420,6 +420,13 @@ export function useStreamChat() {
   //   3. WS1's onclose fires (async macro task) → settle1() runs again
   //      → closes wsRef.current (WS2!) → send2 shows "disconnected"
   const activeSendIdRef = useRef(0);
+  // 2026-07-21: track the currently-active session id so per-session
+  // context_usage / usage_update events can be filtered — drop stale
+  // events from a background session once the user switches away.
+  const activeSessionIdRef = useRef<string | null>(activeSessionId);
+  useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
+  // Session id of the WS connection currently held in wsRef.current.
+  const wsSessionIdRef = useRef<string | null>(null);
   // 2026-07-07: shared per-send state via refs so that WS reconnection
   // (doConnect retry) shares the same `done` / `sentToServer` flags
   // instead of creating fresh local variables each time.
@@ -768,6 +775,7 @@ export function useStreamChat() {
         try {
           const ws = new WebSocket(resolveWebSocketUrl(sessionId));
           wsRef.current = ws;
+          wsSessionIdRef.current = sessionId;
 
           // Approval responses are routed back to the original
           // `callbacks.onApprovalRequest(...)` Promise through a
@@ -1253,6 +1261,13 @@ export function useStreamChat() {
 // Context usage snapshot — fired after every agent-loop turn.
 // Used to render a persistent context-usage bar in the chat footer.
               if (evtType === "context_usage" || evtType === "ContextUsage") {
+                // 2026-07-21: drop events whose WS session != active session
+                // (a background session's context_usage must not pollute the
+                // bar of the session the user switched to). See commit d28f76e.
+                if (activeSessionIdRef.current && wsSessionIdRef.current
+                    && activeSessionIdRef.current !== wsSessionIdRef.current) {
+                  return;
+                }
                 const used = typeof (data?.used_tokens ?? data?.event?.used_tokens) === "number"
                   ? (data?.used_tokens ?? data?.event?.used_tokens) as number
                   : 0;
@@ -1283,6 +1298,11 @@ export function useStreamChat() {
               //                cache_read_tokens, cache_creation_tokens,
               //                reasoning_tokens } }
               if (evtType === "usage_update" || evtType === "UsageUpdate") {
+                // 2026-07-21: same session filter as context_usage above.
+                if (activeSessionIdRef.current && wsSessionIdRef.current
+                    && activeSessionIdRef.current !== wsSessionIdRef.current) {
+                  return;
+                }
                 const ev = data?.event ?? data ?? {};
                 const toNum = (v: unknown): number =>
                   typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0;
