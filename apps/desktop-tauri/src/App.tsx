@@ -564,7 +564,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     max: RIGHT_MAX,
     side: "right",
   });
-  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream, wsSendRaw } = useStreamChat(activeSessionId);
+  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat(activeSessionId);
 
   // Per-send phase tracking. Set by the `onPhaseChange` callback in
   // `handleSendMessage` and scoped to the current `sessionId` so the
@@ -1192,22 +1192,29 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
       const now = Date.now();
       console.error(`[APPROVAL-CLICK] id=${requestId} t=${now}`);
 
-      // Primary: send via WS
-      const payload = JSON.stringify({
-        type: "approval_response",
-        request_id: requestId,
-        decision: "approved",
-      });
-      const sent = wsSendRaw(payload);
-      console.error(`[APPROVAL-SENT-WS] id=${requestId} sent=${sent} payloadLen=${payload.length}`);
-
-      // Fallback: send via REST API after 1s delay.
-      // Tauri WebView2 WebSocket can lose buffered messages on connection
-      // reset — ws.send() returns true but server never receives the message.
-      // REST bypasses WebSocket entirely and guarantees delivery.
-      // registry.resolve() is idempotent so WS+REST duplicates are harmless.
+      // 2026-07-21: removed the App.tsx `wsSendRaw(payload)` step that used
+      // to live here. It was REDUNDANT with the main WS path in
+      // `useStreamChat.ts:1175 liveWs.send(payload)`, which fires when the
+      // `resolveApproval()` Promise below settles and which already guards
+      // against stale WS references (only sends if `wsRef.current` is
+      // OPEN). Sending the same payload from BOTH paths meant server-side
+      // `ApprovalRegistry::resolve()` got called twice — first call
+      // returned `matched=true` (the real success), second call returned
+      // `matched=false` (idempotent miss) and surfaced as a confusing
+      // red `[APPROVAL-REST] matched=false` in the console, which users
+      // read as "the approval failed".
       //
-      // 2026-07-20: fixed two bugs:
+      // We now keep only:
+      //   1. resolveApproval() → triggers the main WS path (liveWs.send
+      //      with proper wsRef OPEN guard)
+      //   2. REST fallback 1s later → guarantees delivery even if the WS
+      //      silently dropped the message (the original "double insurance"
+      //      design intent). ApprovalRegistry::resolve() is idempotent so
+      //      REST-after-WS is harmless; REST-only success (matched=true
+      //      here) signals WS likely dropped the message and we want
+      //      that to be visible in logs so we can grep for it.
+      //
+      // 2026-07-20: fixed two bugs in the REST path:
       //  1. PORT: was hardcoded to 9518 (wrong); the server listens on 3000
       //     (api.ts:API_BASE). The old port was never in the Tauri CSP either,
       //     so the fetch was silently blocked. Using api.apiUrl() guarantees the
@@ -1233,7 +1240,25 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
               body: restPayload,
             });
             const data = await res.json();
-            console.error(`[APPROVAL-REST] id=${requestId} ok=${data.ok} matched=${data.matched}`);
+            // matched=true  → REST was the path that actually delivered
+            //                  (WS likely dropped the message — worth
+            //                  keeping the loud console.error so we can
+            //                  grep hermix-fresh.log / WebView2 console
+            //                  to detect a recurrence).
+            // matched=false → idempotent miss, the WS path already
+            //                  resolved the registry entry first. NOT
+            //                  an error — log at info level so it
+            //                  stops looking like a red failure in the
+            //                  console.
+            if (data.matched) {
+              console.error(
+                `[APPROVAL-REST] id=${requestId} matched=true — REST delivered (WS path likely dropped the message)`,
+              );
+            } else {
+              console.log(
+                `[APPROVAL-REST] id=${requestId} matched=false — idempotent miss, WS path already resolved this request`,
+              );
+            }
           } catch (e) {
             console.error(`[APPROVAL-REST-FAIL] id=${requestId} error=${String(e)}`);
           }
@@ -1241,21 +1266,59 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
       }
 
       // Resolve the promise immediately so the UI updates
+      // AND triggers the main WS path (useStreamChat.ts:1175 liveWs.send)
       resolveApproval(requestId, "approved");
     },
-    [activeSessionId, resolveApproval, wsSendRaw],
+    [activeSessionId, resolveApproval],
   );
 
   const handleDenyApproval = useCallback(
     (requestId: string) => {
-      const sent = wsSendRaw(JSON.stringify({ type: "approval_response", request_id: requestId, decision: "denied" }));
-      if (!sent) {
-        resolveApproval(requestId, "denied");
-        return;
+      console.error(`[APPROVAL-DENY] id=${requestId} t=${Date.now()}`);
+
+      // 2026-07-21: mirror the approve-path cleanup — drop the redundant
+      // wsSendRaw() step here too. The main WS path in useStreamChat.ts
+      // (the `.then(resp => ...)` after `resolveApproval()`) handles
+      // sending `approval_response` over the live WS, with a proper
+      // wsRef.current OPEN guard. The REST fallback below is what
+      // actually catches WebView2's silent WS message loss.
+      const restPayload = JSON.stringify({
+        request_id: requestId,
+        decision: "denied",
+      });
+      const restSid =
+        pendingApprovalSessionsRef.current.get(requestId) ?? activeSessionId;
+      if (restSid) {
+        const restUrl = api.apiUrl(`/v1/sessions/${restSid}/approval`);
+        setTimeout(async () => {
+          try {
+            const res = await fetch(restUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: restPayload,
+            });
+            const data = await res.json();
+            if (data.matched) {
+              console.error(
+                `[APPROVAL-DENY-REST] id=${requestId} matched=true — REST delivered (WS path likely dropped the message)`,
+              );
+            } else {
+              console.log(
+                `[APPROVAL-DENY-REST] id=${requestId} matched=false — idempotent miss, WS path already resolved this request`,
+              );
+            }
+          } catch (e) {
+            console.error(`[APPROVAL-DENY-REST-FAIL] id=${requestId} error=${String(e)}`);
+          }
+        }, 1000);
       }
+
+      // Resolve the promise immediately so the UI updates
+      // AND triggers the main WS path (useStreamChat.ts:1175 liveWs.send
+      // sends decision="denied" via the `.then(resp => ...)` chain).
       resolveApproval(requestId, "denied");
     },
-    [resolveApproval, wsSendRaw],
+    [activeSessionId, resolveApproval],
   );
 
   /**
