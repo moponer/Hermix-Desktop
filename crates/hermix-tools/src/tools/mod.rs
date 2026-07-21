@@ -170,6 +170,10 @@ pub fn register_all(
         terminal_backend,
         registry.terminal_workspace_handle(),
         registry.terminal_approval_ctx_handle(),
+        // TODO(P6-wire-terminal): pass registry.terminal_permission_profile_handle()
+        // once `TerminalHandler::new` accepts the handle and gates commands/paths
+        // against `PermissionProfile.granted_commands` / `granted_paths`. Until
+        // then the terminal tool always prompts regardless of profile state.
     );
     // P1.3: web tools (keyless local backends: Baidu HTML scraper +
     // reqwest HTML fetch).

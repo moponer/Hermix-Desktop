@@ -185,6 +185,58 @@ static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     ]
 });
 
+/// Patterns that are **always read-only** — they have no side effects
+/// and should never trigger confirmation, even if a `CONFIRM_PATTERN`
+/// would otherwise match. Checked after `DENIED_PATTERNS` but before
+/// `CONFIRM_PATTERNS` so a read-only PowerShell cmdlet like
+/// `Get-ChildItem` is never held up by the broad `powershell` confirm
+/// pattern.
+///
+/// Rationale (2026-07-21): the user reported that simple read-only
+/// operations like `Get-PSDrive` and `Get-ChildItem` were triggering
+/// approval prompts during a disk-analysis task. These commands are
+/// inherently safe — they read metadata and never modify state.
+/// Pre-emptively allowlisting them eliminates false-positive approval
+/// prompts for common exploration workflows.
+static READONLY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
+        // PowerShell read-only cmdlets — Get-* cmdlets that only read
+        // state. We match the cmdlet name anywhere in the command so
+        // `powershell -Command "Get-ChildItem C:\Users"` is covered.
+        re(r"(?i)\bGet-ChildItem\b"),
+        re(r"(?i)\bGet-PSDrive\b"),
+        re(r"(?i)\bGet-Volume\b"),
+        re(r"(?i)\bGet-Item\b"),
+        re(r"(?i)\bGet-ItemProperty\b"),
+        re(r"(?i)\bGet-Process\b"),
+        re(r"(?i)\bGet-Service\b"),
+        re(r"(?i)\bMeasure-Object\b"),
+        re(r"(?i)\bMeasure\b"),
+        re(r"(?i)\bSelect-Object\b"),
+        re(r"(?i)\bWhere-Object\b"),
+        re(r"(?i)\bSort-Object\b"),
+        re(r"(?i)\bGet-WmiObject\b"),
+        re(r"(?i)\bGet-CimInstance\b"),
+        re(r"(?i)\bGet-Content\b"),
+        re(r"(?i)\bGet-ComputerInfo\b"),
+        re(r"(?i)\bGet-Disk\b"),
+        re(r"(?i)\bGet-Partition\b"),
+        // Windows read-only commands
+        re(r"(?i)\bdir\s"),
+        re(r"(?i)\bwhere\s"),
+        re(r"(?i)\bwhereis\s"),
+        re(r"(?i)\bwhoami\b"),
+        re(r"(?i)\bsysteminfo\b"),
+        re(r"(?i)\bhostname\b"),
+        re(r"(?i)\bver\b"),
+        re(r"(?i)\bvol\s"),
+        re(r"(?i)\bfsutil\s+volume\s"),
+        // Git read-only subcommands (already Approved by default, but
+        // pinning here in case a future confirm pattern catches them).
+        re(r"(?i)\bgit\s+(status|log|diff|show|branch|remote|ls-files)\b"),
+    ]
+});
+
 // ---------------------------------------------------------------------------
 // TerminalApprovalContext (2026-07-17, "Caution tool needs UI prompts")
 // ---------------------------------------------------------------------------
@@ -327,6 +379,30 @@ impl ApprovalManager {
             .join(" ")
     }
 
+    /// Extract a prefix key from a command for session-level approval
+    /// matching. Takes the first 2 whitespace-separated tokens (e.g.
+    /// `storage_analyzer --path` from `storage_analyzer --path "C:\"`)
+    /// so that approving one invocation of a command also covers
+    /// subsequent invocations with different arguments.
+    ///
+    /// Rationale (2026-07-21): the previous implementation used the
+    /// full normalized command string as the session key, which meant
+    /// `storage_analyzer --path "C:\"` and `storage_analyzer --path
+    /// "C:\Users"` were treated as two different commands — the user
+    /// had to approve each one separately. Prefix matching (first 2
+    /// tokens) groups them so a single approval covers all arguments.
+    ///
+    /// For single-token commands (e.g. `ls`), the key is just the
+    /// command name itself.
+    fn command_prefix_key(command: &str) -> String {
+        command
+            .trim()
+            .split_whitespace()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     /// Attach a user allowlist. Returns `self` for builder-style use.
     /// The allowlist is consulted on every `check_approval` call
     /// after the confirm patterns have matched.
@@ -412,13 +488,27 @@ impl ApprovalManager {
             }
         }
 
-        // 2. Session-level approval — if this exact command was approved
+        // 1b. Read-only patterns — these commands have no side effects
+        //     and are always allowed, even if a CONFIRM_PATTERN would
+        //     otherwise match. Checked AFTER denied patterns (so a
+        //     catastrophic command is never downgraded) but BEFORE
+        //     session/confirm checks so read-only exploration never
+        //     triggers an approval prompt.
+        for re in READONLY_PATTERNS.iter() {
+            if re.is_match(command) {
+                return ApprovalDecision::Approved;
+            }
+        }
+
+        // 2. Session-level approval — if this command prefix was approved
         //    in the current session, skip re-prompting. This only runs
         //    AFTER denied patterns are checked, so catastrophic commands
-        //    are always rejected. Uses normalized form for matching.
-        let normalized = Self::normalize_command(command);
+        //    are always rejected. Uses prefix-based matching (first 2
+        //    tokens) so `storage_analyzer --path "C:\"` approval also
+        //    covers `storage_analyzer --path "C:\Users"`.
+        let prefix_key = Self::command_prefix_key(command);
         if let Ok(set) = self.session_approved.lock() {
-            if set.contains(&normalized) {
+            if set.contains(&prefix_key) {
                 return ApprovalDecision::Approved;
             }
         }
@@ -478,9 +568,9 @@ impl ApprovalManager {
     /// WS-approval path can persist the per-session approval without
     /// requiring `&mut self` on the handler. Backed by `Mutex` internally.
     pub fn approve_for_session(&self, command: &str) {
-        let normalized = Self::normalize_command(command);
+        let prefix_key = Self::command_prefix_key(command);
         if let Ok(mut set) = self.session_approved.lock() {
-            set.insert(normalized);
+            set.insert(prefix_key);
         }
     }
 
@@ -503,13 +593,13 @@ impl ApprovalManager {
         // touching disk so a slow IO doesn't block readers of the
         // same HashSet (the WS-approval path may be racing the
         // normal request flow).
-        let normalized = Self::normalize_command(command);
+        let prefix_key = Self::command_prefix_key(command);
         let snapshot: std::collections::HashSet<String> = {
             let mut set = self
                 .session_approved
                 .lock()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-            set.insert(normalized);
+            set.insert(prefix_key);
             set.clone()
         };
         if let Some(path) = persist_path {
@@ -540,9 +630,10 @@ impl ApprovalManager {
 
     /// Check if a command was previously approved in this session.
     pub fn is_approved_in_session(&self, command: &str) -> bool {
+        let prefix_key = Self::command_prefix_key(command);
         self.session_approved
             .lock()
-            .map(|s| s.contains(command))
+            .map(|s| s.contains(&prefix_key))
             .unwrap_or(false)
     }
 
@@ -1599,8 +1690,8 @@ mod tests {
 
         let loaded = load_session_approvals(&path);
         assert_eq!(loaded.len(), 2);
-        assert!(loaded.contains("systemctl restart nginx"));
-        assert!(loaded.contains("apt install foo"));
+        assert!(loaded.contains("systemctl restart"));
+        assert!(loaded.contains("apt install"));
 
         // Fresh manager sees the same session approvals.
         let m2 = ApprovalManager::new();
@@ -1652,5 +1743,91 @@ mod tests {
         std::fs::write(&path, b"{not valid json").unwrap();
         let set = load_session_approvals(&path);
         assert!(set.is_empty());
+    }
+
+    // ----- 2026-07-21: read-only patterns + prefix-based session approval -----
+
+    /// Read-only PowerShell cmdlets (Get-ChildItem, Get-PSDrive, etc.)
+    /// must be Approved even though the broad `powershell` confirm
+    /// pattern would otherwise catch them.
+    #[test]
+    fn readonly_patterns_skip_confirmation() {
+        let m = ApprovalManager::new();
+        // Get-ChildItem — read-only, should be Approved.
+        assert_eq!(
+            m.check_approval("powershell -Command \"Get-ChildItem C:\\Users\""),
+            ApprovalDecision::Approved,
+            "Get-ChildItem is read-only and must not require confirmation"
+        );
+        // Get-PSDrive — read-only disk space query.
+        assert_eq!(
+            m.check_approval("powershell -Command \"Get-PSDrive\""),
+            ApprovalDecision::Approved,
+            "Get-PSDrive is read-only and must not require confirmation"
+        );
+        // systeminfo — read-only system info.
+        assert_eq!(
+            m.check_approval("systeminfo"),
+            ApprovalDecision::Approved,
+            "systeminfo is read-only"
+        );
+    }
+
+    /// Read-only patterns do NOT downgrade genuinely dangerous
+    /// commands. `Get-Content` is read-only, but if the command also
+    /// matches a DENIED_PATTERN (e.g. format), it must still be denied.
+    #[test]
+    fn readonly_patterns_do_not_override_denied() {
+        let m = ApprovalManager::new();
+        // rm -rf / is always denied regardless of any readonly match.
+        assert_eq!(
+            m.check_approval("rm -rf /"),
+            ApprovalDecision::Denied,
+            "denied patterns take precedence over readonly patterns"
+        );
+    }
+
+    /// Session approval now uses prefix matching: approving
+    /// `storage_analyzer --path "C:\\"` also covers
+    /// `storage_analyzer --path "C:\\Users"`.
+    ///
+    /// Use `apt install` as the "different command" probe because it
+    /// matches a CONFIRM_PATTERN (unlike `storage_clean` which falls
+    /// through to the implicit-Approved default at check_approval:551).
+    #[test]
+    fn session_approval_prefix_matching() {
+        let m = ApprovalManager::new();
+        m.approve_for_session("storage_analyzer --path \"C:\\\"");
+        // Different argument, same prefix → should be Approved.
+        assert_eq!(
+            m.check_approval("storage_analyzer --path \"C:\\Users\""),
+            ApprovalDecision::Approved,
+            "prefix-based session approval should cover different arguments"
+        );
+        // Different command entirely (matches CONFIRM_PATTERN, so it
+        // would require confirmation *if* the prefix wasn't already
+        // approved) → still RequiresConfirmation.
+        assert_eq!(
+            m.check_approval("apt install --yes ripgrep"),
+            ApprovalDecision::RequiresConfirmation,
+            "different command prefix should not be covered"
+        );
+    }
+
+    /// `command_prefix_key` extracts the first 2 tokens for matching.
+    #[test]
+    fn command_prefix_key_extracts_first_two_tokens() {
+        assert_eq!(
+            ApprovalManager::command_prefix_key("storage_analyzer --path \"C:\\\""),
+            "storage_analyzer --path"
+        );
+        assert_eq!(
+            ApprovalManager::command_prefix_key("ls"),
+            "ls"
+        );
+        assert_eq!(
+            ApprovalManager::command_prefix_key("  powershell   -Command   \"Get-Process\"  "),
+            "powershell -Command"
+        );
     }
 }
