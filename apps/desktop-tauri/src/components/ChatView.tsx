@@ -3,6 +3,10 @@ import {
   PanelRight,
   Lock,
 } from "lucide-react";
+import {
+  shouldFollowOnStreamChunk,
+  computeBottomScrollTop,
+} from "../utils/chatScroll";
 import type { ChatMessage, TimelineStep, QueuedMessage, QueuedImage } from "../types";
 import type { CompressMethod } from "../utils/imageCompressor";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
@@ -354,8 +358,7 @@ import {
 import { useExpertCutoff } from "../hooks/useExpertCutoff";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
-import { getSessionArchiveRefs, getAvailableTools, updateSessionMetadata, apiUrl, getModelList, saveModelList, type ArchiveRef, type ToolDescriptor } from "../api";
-import { ArchiveRefsGraph } from "./ArchiveRefsGraph";
+import { getAvailableTools, updateSessionMetadata, apiUrl, getModelList, saveModelList, type ToolDescriptor } from "../api";
 import type { Session } from "../types";
 import type { ChatOverrides } from "../hooks/useStreamChat";
 const mascotUrl = "/mascot-256.png";
@@ -654,195 +657,6 @@ function useModelSelector() {
   return { models, byProvider, availableExtras, selectedModel, setSelectedModel, currentDisplay };
 }
 
-/**
- * Compact banner above the chat list: shows how many messages the
- * Rust side has archived to disk for the current session, and lets
- * the user expand a list of `node:<id>` anchors. Clicking an anchor
- * hands the file path to `pickDirectory` / `read_artifact_file`
- * round-trip — for now we just copy the path to clipboard so the
- * user can paste it into the artifact pane themselves, which is the
- * simplest "no new feature" affordance that satisfies the "show me
- * the archive" intent. A future commit can wire an inline preview
- * directly (open CodeView at the anchor).
- */
-function ArchiveRefsBanner({
-  refs,
-  totalChars,
-  open,
-  onToggle,
-}: {
-  refs: ArchiveRef[];
-  totalChars: number;
-  open: boolean;
-  onToggle: () => void;
-}) {
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  // v3 (2026-06-21): 主人 "继续" → Mermaid Canvas 本地化复刻落地。
-  // 复用同一个 banner，list / graph 模式互斥。注意：graph 是手写 SVG，
-  // 不是 mermaid 库（不做新依赖，bundle 优先 — 主人 cross-project
-  // 偏好："JS gzip 8KB 越小越好"）。
-  const [viewMode, setViewMode] = useState<"list" | "graph">("list");
-  const handleCopy = async (ref: ArchiveRef) => {
-    const anchor =
-      ref.lineRange && ref.lineRange[0] === ref.lineRange[1]
-        ? `#L${ref.lineRange[0]}`
-        : ref.lineRange
-          ? `#L${ref.lineRange[0]}-L${ref.lineRange[1]}`
-          : "";
-    const target = `${ref.filePath}${anchor}`;
-    try {
-      await navigator.clipboard.writeText(target);
-      setCopiedId(ref.nodeId);
-      setTimeout(() => setCopiedId((cur) => (cur === ref.nodeId ? null : cur)), 1200);
-    } catch {
-      // Clipboard API unavailable (rare on desktop Tauri); silently
-      // ignore — the user can still read the path from the banner.
-    }
-  };
-  return (
-    <div
-      className="mx-3 sm:mx-4 mb-2 rounded-lg border"
-      style={{
-        borderColor: "var(--color-border)",
-        background: "var(--color-bg-secondary)",
-      }}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left"
-        style={{ color: "var(--color-text-primary)" }}
-        aria-expanded={open}
-      >
-        <span
-          aria-hidden
-          style={{
-            fontSize: 11,
-            transform: open ? "rotate(90deg)" : "rotate(0deg)",
-            transition: "transform 120ms ease",
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          ▶
-        </span>
-        <span style={{ fontSize: 12, fontWeight: 600 }}>
-          已归档 {refs.length} 条消息
-        </span>
-        <span style={{ fontSize: 11, color: "var(--color-text-secondary)" }}>
-          · 共 {totalChars.toLocaleString("zh-CN")} chars · 点击展开节点
-        </span>
-        {/* v3 list/graph 切换 tab — 在标题栏右侧 push，onClick stopPropagation
-            避免触发外层 onToggle。 */}
-        <span
-          className="ml-auto flex items-center gap-1"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            onClick={() => setViewMode("list")}
-            aria-pressed={viewMode === "list"}
-            style={{
-              fontSize: 10,
-              padding: "1px 6px",
-              borderRadius: 4,
-              border: "1px solid var(--color-border)",
-              color:
-                viewMode === "list"
-                  ? "var(--color-text-primary)"
-                  : "var(--color-text-secondary)",
-              background:
-                viewMode === "list"
-                  ? "var(--color-bg-elevated, rgba(255,255,255,0.06))"
-                  : "transparent",
-            }}
-          >
-            列表
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode("graph")}
-            aria-pressed={viewMode === "graph"}
-            style={{
-              fontSize: 10,
-              padding: "1px 6px",
-              borderRadius: 4,
-              border: "1px solid var(--color-border)",
-              color:
-                viewMode === "graph"
-                  ? "var(--color-text-primary)"
-                  : "var(--color-text-secondary)",
-              background:
-                viewMode === "graph"
-                  ? "var(--color-bg-elevated, rgba(255,255,255,0.06))"
-                  : "transparent",
-            }}
-          >
-            图谱
-          </button>
-        </span>
-      </button>
-      {open && (
-        viewMode === "list" ? (
-        <ul
-          className="px-3 pb-2 max-h-64 overflow-y-auto"
-          style={{
-            borderTop: "1px solid var(--color-border)",
-            fontSize: 11,
-            color: "var(--color-text-secondary)",
-          }}
-        >
-          {refs.map((r) => (
-            <li
-              key={r.nodeId}
-              className="flex items-center justify-between gap-2 py-1"
-            >
-              <span
-                className="font-mono truncate flex-1 min-w-0"
-                title={`${r.filePath}${
-                  r.lineRange
-                    ? r.lineRange[0] === r.lineRange[1]
-                      ? `#L${r.lineRange[0]}`
-                      : `#L${r.lineRange[0]}-L${r.lineRange[1]}`
-                    : ""
-                }`}
-              >
-                node:{r.nodeId}
-                {r.lineRange && (
-                  <span style={{ opacity: 0.7, marginLeft: 6 }}>
-                    L{r.lineRange[0]}
-                    {r.lineRange[0] !== r.lineRange[1] ? `-L${r.lineRange[1]}` : ""}
-                  </span>
-                )}
-                <span style={{ marginLeft: 8 }}>{r.charCount.toLocaleString("zh-CN")} chars</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => handleCopy(r)}
-                className="px-2 py-0.5 rounded"
-                style={{
-                  fontSize: 11,
-                  border: "1px solid var(--color-border)",
-                  color: copiedId === r.nodeId ? "var(--color-success)" : "var(--color-text-secondary)",
-                  background: "transparent",
-                }}
-              >
-                {copiedId === r.nodeId ? "已复制" : "复制路径"}
-              </button>
-            </li>
-          ))}
-        </ul>
-        ) : (
-          <div
-            style={{ borderTop: "1px solid var(--color-border)" }}
-          >
-            <ArchiveRefsGraph refs={refs} />
-          </div>
-        )
-      )}
-    </div>
-  );
-}
-
 // ── ModelStatusBar — top-of-chat status strip ─────────
 //
 // Surfaces the currently-active default model and whether its provider
@@ -1137,12 +951,10 @@ contextUsage = null,
   // the bottom, so browsing history doesn't get interrupted by
   // new streaming chunks.
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const isNearBottom = useCallback(() => {
-    const el = scrollContainerRef.current;
-    if (!el) return true; // container not mounted → scroll anyway
-    const threshold = 150; // px from bottom
-    return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-  }, []);
+  // 2026-07-22 (Bug #5): the previous `isNearBottom` callback lived
+  // here, but with the scrollIntoView → scrollTop rewrite the value
+  // is now read directly inside `handleContainerScroll` (same
+  // threshold: 150px). Keeping the helper would just be dead code.
 
   /**
    * Post-stream activity heuristic. The agent loop runs many turns
@@ -1218,42 +1030,6 @@ contextUsage = null,
     }
   };
 
-  // ── Archived context banner (v2 short-term unload, 2026-06-21) ───
-  //
-  // When a session's context crosses the 80% pressure threshold, the
-  // Rust side archives the middle of the conversation to disk and
-  // appends one JSON-Lines row per archived message to
-  // `<hermix_home>/sessions/<sid>/archive-index.jsonl`. We fetch
-  // that index once when the session changes and render a compact
-  // banner above the messages — clicking an anchor opens the
-  // archive file at that exact node in CodeView, which the user can
-  // then hand back to the agent if they want to revisit the
-  // archived turn.
-  //
-  // Empty array → no banner (the common case for short sessions).
-  // `nodeCount` is derived from `refs.length` so the headline stays
-  // accurate even after a manual `read_artifact_file` deletion
-  // cleans some rows up on disk.
-  const [archiveRefs, setArchiveRefs] = useState<ArchiveRef[]>([]);
-  const [archiveOpen, setArchiveOpen] = useState(false);
-  useEffect(() => {
-    if (!sessionId) {
-      setArchiveRefs([]);
-      setArchiveOpen(false);
-      return;
-    }
-    let cancelled = false;
-    getSessionArchiveRefs(sessionId).then((refs) => {
-      // Stale-response guard: a fast session-switch could let the
-      // older fetch resolve last and clobber the newer banner. The
-      // flag is set when *this* effect is torn down.
-      if (!cancelled) setArchiveRefs(refs);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId]);
-
   // T2026-06-21 P1: dynamic tool discovery. We pull the master list
   // from `GET /v1/tools` on mount and refresh it whenever the window
   // regains focus — the registry is the single source of truth, so
@@ -1274,10 +1050,6 @@ contextUsage = null,
       window.removeEventListener("focus", load);
     };
   }, []);
-  const archiveTotalChars = useMemo(
-    () => archiveRefs.reduce((sum, r) => sum + (r.charCount || 0), 0),
-    [archiveRefs],
-  );
   const [permissionLevel, setPermissionLevel] = usePermissionLevel();
   const { workspace, setWorkspace: setWorkspaceRaw } = useSessionWorkspace(sessionId);
   // 2026-06-26 主人反馈：「目录进入对话界面后就无法设置了，在进入前没有设置过」。
@@ -1334,7 +1106,7 @@ contextUsage = null,
   // 产物栏"的语义。
   const lastIsWelcomeRef = useRef<boolean | null>(null);
   useEffect(() => {
-    const isWelcome = !session || session.messages.length === 0;
+    const isWelcome = !session || ((session.message_count ?? 0) === 0 && session.messages.length === 0);
     if (isWelcome && lastIsWelcomeRef.current !== true) {
       onEnterWelcome?.();
     }
@@ -1561,22 +1333,64 @@ const clearPendingImages = useCallback(() => {
   // New approach: a ref tracks "scroll pending", and a single rAF
   // loop runs for the lifetime of the streaming session. Non-streaming
   // message additions use a separate lightweight effect.
+  //
+  // 2026-07-22 (owner-reported bug, Bug #5): the previous
+  // implementation called `messagesEndRef.scrollIntoView({ block:
+  // "end" })` for both streaming and post-submit scrolls. Two
+  // failure modes that this rewrite fixes:
+  //   (a) `scrollIntoView` is a no-op when the target node is
+  //       already inside the viewport. Streaming chunks that grow
+  //       the container above the visible area (e.g. an inline tool
+  //       timeline expanding) leave `scrollTop` unmoved because the
+  //       sentinel `messagesEndRef` stays inside the viewport and
+  //       the browser does nothing. Symptom: "内容会在某个位置停住，
+  //       手动下拉才能看到下面的继续输出的内容".
+  //   (b) Submitting a new message while the user has scrolled up
+  //       used to respect `hasUserScrolledUpRef`, leaving the user
+  //       stranded in history. Symptom: "往上翻看对话内容后...发送
+  //       消息出去不会自动滚动到用户消息的这个位置".
+  //
+  // Fix: replace `scrollIntoView` with an explicit `scrollTop =
+  // scrollHeight - clientHeight` write (re-runs even when the
+  // sentinel is already visible). Add a `forceScrollSeq` state —
+  // bumped by user-initiated events (handleSubmit) — that bypasses
+  // the sticky guard for one frame.
   const scrollPendingRef = useRef(false);
+  const [forceScrollSeq, setForceScrollSeq] = useState(0);
+  const lastObservedForceSeqRef = useRef(0);
 
   useEffect(() => {
     scrollPendingRef.current = true;
   }, [session?.messages]);
 
+  // Single scroll primitive. `force=true` ignores the sticky guard
+  // (used for user-initiated events). Otherwise, sticky-bottom
+  // applies: when the user has scrolled up to read history, we
+  // don't yank them back to the bottom.
+  const scrollToBottom = useCallback(
+    (force: boolean) => {
+      const el = scrollContainerRef.current;
+      if (!el) return;
+      if (!shouldFollowOnStreamChunk(hasUserScrolledUpRef.current, force)) {
+        return;
+      }
+      el.scrollTop = computeBottomScrollTop(el.scrollHeight, el.clientHeight);
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!isStreaming) return;
     let raf = 0;
     const tick = () => {
-      if (scrollPendingRef.current) {
+      // force-scroll takes priority over the dirty flag so user-initiated
+      // events land immediately even when no streaming chunk has arrived.
+      if (forceScrollSeq !== lastObservedForceSeqRef.current) {
+        lastObservedForceSeqRef.current = forceScrollSeq;
+        scrollToBottom(true);
+      } else if (scrollPendingRef.current) {
         scrollPendingRef.current = false;
-        const node = messagesEndRef.current;
-        if (node && isNearBottom()) {
-          node.scrollIntoView({ block: "end" });
-        }
+        scrollToBottom(false);
       }
       raf = requestAnimationFrame(tick);
     };
@@ -1584,7 +1398,7 @@ const clearPendingImages = useCallback(() => {
     return () => {
       cancelAnimationFrame(raf);
     };
-  }, [isStreaming, isNearBottom]);
+  }, [isStreaming, scrollToBottom, forceScrollSeq]);
 
   // 2026-07-12: Restore-conversation auto-scroll.
   // On initial mount / F5 reload / session switch, the recovered
@@ -1612,24 +1426,30 @@ const clearPendingImages = useCallback(() => {
   }, [session?.id]);
 
   const handleContainerScroll = useCallback(() => {
-    // After a programmatic scrollIntoView, isNearBottom() is true and
-    // this flag is cleared naturally on the same onScroll tick — no
-    // need to suppress the event.
-    hasUserScrolledUpRef.current = !isNearBottom();
-  }, [isNearBottom]);
+    // After a programmatic scroll, distanceFromBottomPx is ~0 and this
+    // flag is cleared naturally on the same onScroll tick — no need to
+    // suppress the event.
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    hasUserScrolledUpRef.current = dist >= 150; // matches threshold in isNearBottom
+  }, []);
 
   // Non-streaming: scroll on message count change (new message, session switch).
   // Three branches:
-  //   1. `justRestoredRef` true (initial mount / reload / session switch):
-  //      unconditional force-scroll, ignore user's prior scroll position
-  //      because there is no prior session in this container.
+  //   1. `justRestoredRef` true (initial mount / reload / session switch)
+  //      OR `forceScrollSeq > 0` (handleSubmit bumped the counter):
+  //      unconditional force-scroll, ignore user's prior scroll position.
+  //      The submit case was the owner-reported bug #5 — the user
+  //      expects to see the message they just sent.
   //   2. User has scrolled up to browse history: stay put, do not disturb.
   //   3. Otherwise (user is still near bottom): follow the new content.
   useEffect(() => {
     if (isStreaming) return;
-    const node = messagesEndRef.current;
-    if (!node) return;
-    if (!justRestoredRef.current && hasUserScrolledUpRef.current) return;
+    const force = justRestoredRef.current || forceScrollSeq > 0;
+    if (!force && hasUserScrolledUpRef.current) return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
 
     // Double rAF: first frame lets React commit the message DOM, second
     // frame lets images / web fonts settle so `scrollHeight` is final.
@@ -1637,11 +1457,22 @@ const clearPendingImages = useCallback(() => {
     // because the container is still growing as child rows mount.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        node.scrollIntoView({ block: "end" });
-        justRestoredRef.current = false;
+        el.scrollTop = computeBottomScrollTop(el.scrollHeight, el.clientHeight);
+        if (justRestoredRef.current) {
+          justRestoredRef.current = false;
+        }
       });
     });
-  }, [session?.messages?.length, isStreaming, isNearBottom]);
+    // Reset the force-scroll counter once the effect has consumed it.
+    // We compare against lastObservedForceSeqRef so we only reset when
+    // we've actually applied the scroll; a fast double-submit before
+    // the rAF fires will leave the counter at the higher value.
+    if (forceScrollSeq > 0 && forceScrollSeq === lastObservedForceSeqRef.current) {
+      setForceScrollSeq(0);
+    } else if (forceScrollSeq > 0) {
+      lastObservedForceSeqRef.current = forceScrollSeq;
+    }
+  }, [session?.messages?.length, isStreaming, forceScrollSeq]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -1803,6 +1634,20 @@ const clearPendingImages = useCallback(() => {
             attachedFilePaths: attachedPaths.length > 0 ? attachedPaths : undefined,
           }
         : undefined;
+    // 2026-07-22 (Bug #5): bump the force-scroll counter so the user's
+    // own submit event overrides the sticky-bottom guard. Without this,
+    // a user who had scrolled up to read history would not see the
+    // message they just sent — the viewport would stay where it was.
+    // The rAF streaming loop AND the non-streaming effect both observe
+    // this counter and will scroll to the bottom on the next frame.
+    setForceScrollSeq((s) => s + 1);
+    // Synchronous best-effort scroll: React's commit + effect runs
+    // happen on the next microtask, but the user clicked the button
+    // now. Writing `scrollTop` once here costs ~0.1ms and gives them
+    // an immediate visual response; the effect-based scroll that
+    // follows (after the new message row mounts) will catch the case
+    // where the container grew past the original viewport.
+    scrollToBottom(true);
     // Clear any previous stream error — the user is starting a new
     // turn, so the old error is stale.  The banner will disappear
     // immediately and, if this turn also fails, re-appear via the
@@ -2097,14 +1942,6 @@ const clearPendingImages = useCallback(() => {
         rightOpen={rightOpen}
         onToggleRight={onToggleRight}
       />
-      {archiveRefs.length > 0 && (
-        <ArchiveRefsBanner
-          refs={archiveRefs}
-          totalChars={archiveTotalChars}
-          open={archiveOpen}
-          onToggle={() => setArchiveOpen((v) => !v)}
-        />
-      )}
       {/* P0-T1 (Frontend Audit 2026-07-13): todo cards are now
         spliced inline next to their originating assistant message
         (see `streamRow` useMemo above). The previous top-of-stream
