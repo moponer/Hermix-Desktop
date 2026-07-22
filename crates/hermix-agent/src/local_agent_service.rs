@@ -620,6 +620,7 @@ impl LocalAgentService {
         provider: Arc<dyn LlmProvider>,
     ) -> AgentLoop {
         let hermix_home = agent_config.hermix_home.clone();
+        let compressor_model = agent_config.model.clone();
         let mut agent = AgentLoop::new(agent_config, agent_tool_registry, provider);
 
         // Wire Phase 7 H1: tool schema router (KeywordRouter + AlwaysInclude).
@@ -738,7 +739,8 @@ impl LocalAgentService {
                 // means "use the agent's hardcoded default" — no
                 // regression for existing config.yaml files.
                 let (breaker_threshold, breaker_cooldown_secs, summary_model,
-                     min_summary_tokens, summary_tokens_ceiling) = {
+                     min_summary_tokens, summary_tokens_ceiling,
+                     pressure_threshold_percent) = {
                     let cfg = self
                         .config
                         .lock()
@@ -753,12 +755,17 @@ impl LocalAgentService {
                         cfg.compaction.summary_model.clone(),
                         cfg.compaction.min_summary_tokens,
                         cfg.compaction.summary_tokens_ceiling,
+                        cfg.compaction.pressure_threshold_percent,
                     )
                 };
                 // Resolve token-budget overrides against CompressorConfig
                 // defaults so a `None` value still picks up the existing
                 // 2_000 / 12_000 baseline (no surprise regressions).
                 let mut comp_cfg = crate::compression::CompressorConfig::default();
+                // Set context_length to the actual model's context window
+                // instead of the hardcoded 200k default. This ensures all
+                // threshold calculations use the correct value.
+                comp_cfg.context_length = hermix_intelligence::model_metadata::get_model_context_length(&compressor_model) as u64;
                 if let Some(v) = min_summary_tokens {
                     comp_cfg.min_summary_tokens = v;
                 }
@@ -766,6 +773,11 @@ impl LocalAgentService {
                     comp_cfg.summary_tokens_ceiling = v;
                 }
                 comp_cfg.summary_model_override = summary_model;
+                // Forward user-configured pressure threshold to the compressor
+                // so it uses the same ratio as ContextManager.
+                if let Some(v) = pressure_threshold_percent {
+                    comp_cfg.threshold_percent = v;
+                }
                 let compressor = crate::compression::ContextCompressor::new(
                     comp_cfg,
                     aux.clone(),

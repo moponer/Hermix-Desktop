@@ -466,18 +466,47 @@ impl AgentLoop {
             // Image injection: if read_image succeeded, extract base64 data
             // and inject it as multimodal content so the LLM "sees" the image
             // on the next turn — free, local, no API key.
+            //
+            // 2026-07-22: Updated to read from `_image_meta._image_data_b64`
+            // (the new nested format). Falls back to `_image_data` for results
+            // produced by older versions of the tool. The `_image_meta` dict is
+            // designed to survive budget truncation because `enforce_budget`
+            // skips `_image_meta` (it detects the key and excludes it from
+            // char counting). Even if truncation somehow damages the outer
+            // JSON, the meta dict is at the top level and likely survives.
             if let Some(tc) = tool_calls.iter().find(|t| t.id == result.tool_call_id) {
                 if tc.function.name == "read_image" && !result.is_error {
                     if let Ok(parsed) = serde_json::from_str::<Value>(&result.content) {
-                        if let (Some(b64), Some(mime)) = (
-                            parsed.get("_image_data").and_then(|v| v.as_str()),
-                            parsed.get("mime_type").and_then(|v| v.as_str()),
-                        ) {
+                        // Try new nested format first, fall back to old flat format
+                        let (b64, mime) = if let Some(meta) = parsed.get("_image_meta") {
+                            (
+                                meta.get("_image_data_b64").and_then(|v| v.as_str()),
+                                meta.get("mime_type").and_then(|v| v.as_str()),
+                            )
+                        } else {
+                            (
+                                parsed.get("_image_data").and_then(|v| v.as_str()),
+                                parsed.get("mime_type").and_then(|v| v.as_str()),
+                            )
+                        };
+                        if let (Some(b64), Some(mime)) = (b64, mime) {
                             let img_path = parsed
                                 .get("path")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("<unknown>");
-                            let hint = format!("[Image loaded from: {img_path}]");
+                            let need_detail = parsed
+                                .get("need_detail")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let detail = parsed
+                                .get("detail")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("auto");
+                            let hint = if need_detail {
+                                format!("[Image loaded from: {img_path}] (preview at {detail} — call read_image again with detail=auto or detail=full for higher resolution)")
+                            } else {
+                                format!("[Image loaded from: {img_path}]")
+                            };
                             ctx.add_message(Message::user_with_image(
                                 &hint,
                                 b64,
@@ -488,6 +517,8 @@ impl AgentLoop {
                                 path = img_path,
                                 mime = mime,
                                 b64_len = b64.len(),
+                                detail = detail,
+                                need_detail = need_detail,
                                 "read_image result injected as multimodal content"
                             );
                         }
@@ -599,6 +630,37 @@ impl AgentLoop {
         }
 
         self.auto_compress_if_over_threshold(ctx).await;
+
+        // After compression, emit an updated context_usage event so the
+        // frontend progress bar reflects the reduced token count immediately
+        // (the pre-compression event was already sent above with the old value).
+        let new_total = ctx.total_tokens();
+        if new_total < total_tokens {
+            if let Some(on_c) = on_chunk {
+                let new_percent = if max_tokens > 0 {
+                    ((new_total as f64 / max_tokens as f64) * 100.0).min(100.0)
+                } else {
+                    0.0
+                };
+                on_c(StreamChunk {
+                    delta: Some(hermix_core::StreamDelta {
+                        content: None,
+                        tool_calls: None,
+                        extra: Some(serde_json::json!({
+                            "event": "context_usage",
+                            "used_tokens": new_total as u64,
+                            "max_tokens": max_tokens as u64,
+                            "threshold_tokens": threshold as u64,
+                            "percent": new_percent,
+                            "cache_read_tokens": 0,
+                            "cache_creation_tokens": 0,
+                        })),
+                    }),
+                    finish_reason: None,
+                    usage: None,
+                });
+            }
+        }
         // `total_turns` lives on `state` now (the previous `&mut u32`
         // parameter was hoisted into `LoopState`); no copy-back needed.
     }

@@ -121,6 +121,9 @@ pub fn build_agent_config(
         // context window for `custom-{id}:{model}` instead of falling back
         // to `DEFAULT_FALLBACK_CONTEXT` (128k).
         llm_providers: config.llm_providers.clone(),
+        // Forward compaction pressure threshold so ContextManager uses the
+        // user-configured ratio instead of the hardcoded 0.50 default.
+        context_pressure_ratio: config.compaction.pressure_threshold_percent,
         // P0-1 (Frontend Audit 2026-07-13): forward the desktop Settings →
         // Advanced tab values into the live AgentConfig. Each field is
         // `Option<…>` on the hermix-config side, so a `None` means "user

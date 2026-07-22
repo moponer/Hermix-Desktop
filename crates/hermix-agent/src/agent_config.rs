@@ -327,6 +327,13 @@ pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub llm_providers: HashMap<String, hermix_config::LlmProviderConfig>,
 
+    /// Pressure ratio (0.0–1.0) at which auto-compression and context-pressure
+    /// warnings fire. Forwarded from `compaction.pressure_threshold_percent` in
+    /// config.yaml. `None` falls back to the hardcoded
+    /// [`crate::context::CONTEXT_PRESSURE_TRIGGER_RATIO`] (0.50).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_pressure_ratio: Option<f64>,
+
     /// Optional platform hint key (e.g. "cli", "telegram", "discord").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
@@ -895,6 +902,7 @@ impl Default for AgentConfig {
             permission_profile: PermissionProfile::default(),
             permission: None,
             llm_providers: HashMap::new(),
+            context_pressure_ratio: None,
             ephemeral_skills: Vec::new(),
             max_routed_tools: default_max_routed_tools(),
             active_toolsets: Vec::new(),

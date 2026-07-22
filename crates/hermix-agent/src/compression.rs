@@ -718,8 +718,8 @@ impl Default for CompressorConfig {
     fn default() -> Self {
         Self {
             context_length: 200_000,
-            threshold_percent: 0.50,
-            pressure_threshold_percent: 0.50,
+            threshold_percent: 0.90,
+            pressure_threshold_percent: 0.90,
             output_reserve_tokens: 4096,
             protect_first_n: 3,
             protect_last_n: 20,
@@ -1400,7 +1400,10 @@ impl ContextCompressor {
         compress_threshold: f64,
         context_length: Option<u64>,
     ) -> Vec<Message> {
-        if messages.len() <= protect_recent {
+        // Dynamically adjust protect_recent: never protect more than half
+        // the messages, otherwise there's nothing to compress.
+        let effective_protect = protect_recent.min(messages.len() / 2).max(2);
+        if messages.len() <= effective_protect {
             return messages.to_vec();
         }
 
@@ -1419,7 +1422,7 @@ impl ContextCompressor {
 
         // Compress: keep recent messages intact, summarize older ones
         let mut result: Vec<Message> = Vec::with_capacity(messages.len());
-        let compress_boundary = messages.len().saturating_sub(protect_recent);
+        let compress_boundary = messages.len().saturating_sub(effective_protect);
 
         // Keep head messages (system prompt + first exchange)
         for i in 0..3.min(compress_boundary) {

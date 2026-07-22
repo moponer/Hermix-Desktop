@@ -72,20 +72,16 @@ const USER_CHAR_LIMIT: usize = 1375;
 
 /// Pressure ratio at which auto-compression / context-pressure warnings fire.
 ///
-/// 0.50 = match Hermes Agent Python reference default (conservative,
-/// leaves 50% headroom for tool outputs and assistant generation).
-/// See `agent_loop::auto_compress_if_over_threshold` and the inline
-/// `Context pressure` warn tier ladder (`>= 0.95` high, `>= 0.85` medium).
+/// 0.80 = trigger at 80% of context window, leaving 20% headroom for tool
+/// outputs and assistant generation. The old 0.50 default wasted half the
+/// context window on large models (128k+).
 ///
 /// This constant is the **fallback default** used when no
 /// [`crate::compression::CompressorConfig`] is supplied (e.g. tests and
 /// the smoke `resolve_context` example). Production callers read the
 /// ratio off `CompressorConfig.pressure_threshold_percent`, which is
 /// the single source of truth at runtime.
-///
-/// Aligned with Hermes Agent reference: 0.50 trigger (Agent layer) + 0.85
-/// Gateway safety net (not implemented here — see O3.2).
-pub const CONTEXT_PRESSURE_TRIGGER_RATIO: f64 = 0.50;
+pub const CONTEXT_PRESSURE_TRIGGER_RATIO: f64 = 0.90;
 
 /// Default output reservation in tokens.
 ///
@@ -164,6 +160,10 @@ pub struct ContextManager {
     /// we don't fire the pressure warning while the model still has
     /// legitimate headroom to emit its output.
     output_reserve_tokens: usize,
+    /// Pressure ratio (0.0–1.0) at which auto-compression / warnings fire.
+    /// Defaults to [`CONTEXT_PRESSURE_TRIGGER_RATIO`] (0.50). Overridden
+    /// by `compaction.pressure_threshold_percent` in config.yaml.
+    pressure_ratio: f64,
     /// 2026-07-05: running sum of [`estimate_tokens`] for every message
     /// currently held. Maintained incrementally in
     /// [`Self::add_message`] / [`Self::reset`] / [`Self::truncate_to_budget`]
@@ -185,6 +185,7 @@ impl ContextManager {
             messages: Vec::new(),
             max_context_tokens,
             output_reserve_tokens: DEFAULT_OUTPUT_RESERVE_TOKENS,
+            pressure_ratio: CONTEXT_PRESSURE_TRIGGER_RATIO,
             cached_total_tokens: 0,
         }
     }
@@ -277,7 +278,7 @@ impl ContextManager {
     /// reserved headroom for its own response even after the warning fires.
     pub fn pressure_threshold_tokens(&self) -> usize {
         let effective = self.max_context_tokens.saturating_sub(self.output_reserve_tokens);
-        ((effective as f64) * CONTEXT_PRESSURE_TRIGGER_RATIO).max(1.0) as usize
+        ((effective as f64) * self.pressure_ratio).max(1.0) as usize
     }
 
     /// Override the per-instance output reserve (tokens). Useful for tests
@@ -285,6 +286,18 @@ impl ContextManager {
     /// default `4096` tokens.
     pub fn with_output_reserve(mut self, output_reserve_tokens: usize) -> Self {
         self.output_reserve_tokens = output_reserve_tokens;
+        self
+    }
+
+    /// Override the per-instance pressure ratio (0.0–1.0).
+    ///
+    /// Controls when auto-compression and context-pressure warnings fire:
+    /// `threshold = (max_context - output_reserve) * ratio`.
+    /// Defaults to [`CONTEXT_PRESSURE_TRIGGER_RATIO`] (0.50). The runtime
+    /// value is forwarded from `compaction.pressure_threshold_percent` in
+    /// config.yaml via `AgentConfig.context_pressure_ratio`.
+    pub fn with_pressure_ratio(mut self, ratio: f64) -> Self {
+        self.pressure_ratio = ratio.clamp(0.01, 1.0);
         self
     }
 
@@ -308,6 +321,7 @@ impl ContextManager {
             messages: Vec::new(),
             max_context_tokens,
             output_reserve_tokens: DEFAULT_OUTPUT_RESERVE_TOKENS,
+            pressure_ratio: CONTEXT_PRESSURE_TRIGGER_RATIO,
             cached_total_tokens: 0,
         }
     }

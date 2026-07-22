@@ -134,6 +134,11 @@ function endsAtParagraphBoundary(text: string): boolean {
   return /\n\s*$/.test(text);
 }
 
+/** Detect retry/error status messages that should show even during streaming phases. */
+function isRetryStatus(statusText: string): boolean {
+  return /retry|retrying|重试|invalid.*tool|truncated|empty.*response/i.test(statusText);
+}
+
 const NOOP = () => {};
 
 /**
@@ -206,6 +211,14 @@ function StreamingBubbleImpl({
   const hasTextStep = effectiveSteps.some((s) => s.kind === "text");
   const hasNoContent = !hasTextStep;
 
+  // 2026-07-21: detect whether any tool group is still running so we can
+  // suppress the shimmer indicator while tool cards are active.
+  const hasRunningToolInSteps = isStreamingPhase && effectiveSteps.some(
+    (s) => s.kind === "tools" && s.events.some(
+      (e) => e.type === "tool_start" || e.type === "tool_stdout",
+    ),
+  );
+
   return (
     // Same outer layout as MessageBubble(showHeader=true) so the
     // avatar + meta line above the body matches the post-stream
@@ -240,8 +253,10 @@ function StreamingBubbleImpl({
             )}
             {/* 流式态下中文 phase label（如"正在思考…"）已表达"等待中"，
                 后端瞬态英文 statusText（"Still waiting for the model…"）属冗余
-                且破坏中文 UI 一致性，故流式态抑制、仅非流式态展示。 */}
-            {statusText && !STREAMING_PHASES.has(effectivePhase) && (
+                且破坏中文 UI 一致性，故流式态抑制、仅非流式态展示。
+                例外：重试/错误状态（retrying、invalid tool、truncated）
+                传达了关键诊断信息，即使在流式态也应展示。 */}
+            {statusText && (!STREAMING_PHASES.has(effectivePhase) || isRetryStatus(statusText)) && (
               <span className="h-tiny text-text-faint max-w-[240px] truncate">
                 {statusText}
               </span>
@@ -326,8 +341,13 @@ function StreamingBubbleImpl({
              让用户知道 agent 在持续思考/调工具而没有结束。
              严格边界：此组件只挂在 StreamingBubble（isStreaming=true）内，
              历史消息重载时根本不渲染 — 满足主人"恢复历史不显示"的要求。
-             至少要有一段 reasoning 才挂，避免和上面"无内容 placeholder"重复。 */}
-        {!hasNoContent && isStreamingPhase &&
+             至少要有一段 reasoning 才挂，避免和上面"无内容 placeholder"重复。
+             2026-07-21: 当有工具卡片正在运行时，隐藏 shimmer 指示器——
+             工具卡片的 🔄 运行中 + 进度条已经是足够的状态指示，
+             shimmer 的"正在回复"会在工具卡片下方制造冗余动画，
+             让用户误以为"什么都没在做"。工具运行中时只保留工具卡片，
+             工具完成后再恢复 shimmer。 */}
+        {!hasNoContent && isStreamingPhase && !hasRunningToolInSteps &&
          ((unifiedSteps && unifiedSteps.length > 0)
             ? unifiedSteps.some((s) => s.kind === "reasoning")
             : (reasoningContent ?? "").trim().length > 0) && (

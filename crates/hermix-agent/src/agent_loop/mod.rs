@@ -1772,6 +1772,10 @@ impl AgentLoop {
             &self.config.model,
             Some(&self.config.llm_providers),
         );
+        // Apply user-configured pressure ratio from compaction config.
+        if let Some(ratio) = self.config.context_pressure_ratio {
+            ctx = ctx.with_pressure_ratio(ratio);
+        }
 
         // Sanitize surrogates and strip prior budget warnings from history
         for msg in messages.iter_mut() {
