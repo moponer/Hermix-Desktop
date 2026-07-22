@@ -1536,6 +1536,60 @@ impl ContextCompressor {
             }
         }
 
+        // Pass 1.5: SmartCrusher — compress large JSON arrays in tool results.
+        // This runs before the summary pass to reduce token count while
+        // preserving structured data. Content-aware compression preserves
+        // errors, anomalies, and schema information.
+        for (i, msg) in result.iter_mut().take(prune_boundary).enumerate() {
+            if is_pinned(i) || msg.role != MessageRole::Tool {
+                continue;
+            }
+            let content = match msg.content.as_deref() {
+                Some(c) => c,
+                None => continue,
+            };
+            // Skip already-processed or very short content
+            if content.len() < 500
+                || content.starts_with("[Duplicate tool output")
+                || content.starts_with("[ALREADY EXECUTED]")
+            {
+                continue;
+            }
+            if let Some(crushed) = crate::json_crusher::try_crush(content) {
+                if crushed.ratio > 0.1 {
+                    // Only apply if we save more than 10%
+                    if !self.config.quiet_mode {
+                        tracing::info!(
+                            "SmartCrusher: compressed tool result #{} ({} -> {} items, {:.0}% savings)",
+                            i,
+                            crushed.items_before,
+                            crushed.items_after,
+                            crushed.ratio * 100.0,
+                        );
+                    }
+                    msg.content = Some(crushed.value.to_string());
+                    pruned += 1;
+                }
+            }
+        }
+
+        // Pass 1.6: Semantic Dedup — detect and merge semantically similar
+        // messages (paraphrases, repeated questions). Uses Jaccard similarity
+        // on token sets, no embedding model required.
+        let dedup_config = crate::semantic_dedup::SemanticDedupConfig::default();
+        let dedup_result = crate::semantic_dedup::semantic_dedup(&result, &dedup_config);
+        if dedup_result.removed_count > 0 {
+            if !self.config.quiet_mode {
+                tracing::info!(
+                    "Semantic dedup: removed {} similar messages ({} tokens saved)",
+                    dedup_result.removed_count,
+                    dedup_result.tokens_saved,
+                );
+            }
+            result = dedup_result.messages;
+            pruned += dedup_result.removed_count;
+        }
+
         // Pass 2: Replace old tool results with informative summaries.
         // Build tool_call_id -> (tool_name, arguments) map for summary generation.
         let mut call_id_to_tool: std::collections::HashMap<String, (String, String)> =

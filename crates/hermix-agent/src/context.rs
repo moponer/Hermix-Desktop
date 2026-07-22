@@ -1984,35 +1984,33 @@ let ctx = RouteContext {
             DEFAULT_FALLBACK_CONTEXT as usize,
             "default_budget() must route through DEFAULT_FALLBACK_CONTEXT"
         );
-        // (128_000 - 4096) * 0.50 = 61_952
-        assert_eq!(cm.pressure_threshold_tokens(), 61_952);
+        // (128_000 - 4096) * 0.90 = 111_513
+        assert_eq!(cm.pressure_threshold_tokens(), 111_513);
     }
 
     #[test]
     fn test_pressure_threshold_tokens_default() {
         let cm = ContextManager::new(200_000);
-        // (200_000 - 4096 reserve) * 0.50 = 195_904 * 0.50 = 97_952
-        // Aligned with Hermes Agent reference: 0.50 trigger threshold.
-        assert_eq!(cm.pressure_threshold_tokens(), 97_952);
+        // (200_000 - 4096 reserve) * 0.90 = 195_904 * 0.90 = 176_313
+        assert_eq!(cm.pressure_threshold_tokens(), 176_313);
     }
 
     #[test]
     fn test_pressure_threshold_tokens_per_model() {
         let gpt = ContextManager::for_model("gpt-4o");     // 128k tokens
-        // (128_000 - 4096) * 0.50 = 123_904 * 0.50 = 61_952
-        assert_eq!(gpt.pressure_threshold_tokens(), 61_952);
+        // (128_000 - 4096) * 0.90 = 123_904 * 0.90 = 111_513
+        assert_eq!(gpt.pressure_threshold_tokens(), 111_513);
 
         let gemini = ContextManager::for_model("gemini-1.5-pro"); // 1_048_576 tokens
-        // (1_048_576 - 4096) * 0.50 = 1_044_480 * 0.50 = 522_240
-        assert_eq!(gemini.pressure_threshold_tokens(), 522_240);
+        // (1_048_576 - 4096) * 0.90 = 1_044_480 * 0.90 = 940_032
+        assert_eq!(gemini.pressure_threshold_tokens(), 940_032);
     }
 
     #[test]
     fn test_pressure_threshold_tokens_with_zero_reserve_matches_legacy() {
-        // When reserve = 0, the threshold degenerates to the legacy
-        // `max * 0.50` formula. This is the canonical regression guard.
+        // When reserve = 0, the threshold degenerates to `max * 0.90`.
         let cm = ContextManager::new(200_000).with_output_reserve(0);
-        assert_eq!(cm.pressure_threshold_tokens(), 100_000);
+        assert_eq!(cm.pressure_threshold_tokens(), 180_000);
     }
 
     #[test]

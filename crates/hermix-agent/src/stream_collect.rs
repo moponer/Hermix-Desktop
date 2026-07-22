@@ -640,15 +640,37 @@ pub(crate) async fn collect_stream_inner(
                             }
                             // First chunk has still not arrived but
                             // we haven't reached the deadline yet —
-                            // re-arm idle with the *remaining* time
+                            // emit warm/stall notices and re-arm idle
                             // so we keep tightening toward the
-                            // deadline without losing the warm/stall
-                            // cadence if the activity_secs is shorter.
+                            // deadline while informing the UI.
                             let elapsed = collect_started.elapsed();
                             let remaining = first_chunk_deadline_dur
                                 .saturating_sub(elapsed)
                                 .max(Duration::from_millis(1));
-                            idle.as_mut().reset(tokio::time::Instant::now() + remaining);
+                            if !warm_notice_sent {
+                                emit_status(
+                                    config,
+                                    callbacks,
+                                    "activity",
+                                    "Still waiting for the model…",
+                                );
+                                warm_notice_sent = true;
+                                idle.as_mut()
+                                    .reset(tokio::time::Instant::now() + stall_dur.min(remaining));
+                            } else if stall_secs > 0 && !stall_notice_sent {
+                                emit_status(
+                                    config,
+                                    callbacks,
+                                    "activity",
+                                    "Still no model output — the stream may be stuck.",
+                                );
+                                stall_notice_sent = true;
+                                idle.as_mut()
+                                    .reset(tokio::time::Instant::now() + remaining);
+                            } else {
+                                idle.as_mut()
+                                    .reset(tokio::time::Instant::now() + remaining);
+                            }
                             continue;
                         }
                         if !warm_notice_sent {
