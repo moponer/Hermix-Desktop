@@ -165,7 +165,30 @@ export interface ToolGroup {
   statusNote?: string;
 }
 
-export function groupTimeline(events: ExecutionTimelineEvent[]): ToolGroup[] {
+/**
+ * Group timeline events into one `ToolGroup` per tool invocation.
+ *
+ * `opts.streamComplete` (default `true`): whether the *parent turn*
+ * has finished streaming. While the live WS is still feeding events
+ * (`streamComplete === false`), any group that opened but never
+ * received a `tool_complete` is left in `"running"` state — the
+ * renderer paints it as a "运行中" badge + spinner (see ToolRow),
+ * which is the correct visual cue for "tool started, result
+ * still arriving". Only once the parent turn settles do we promote
+ * stranded groups to `"error"` with an "执行已中断（无完成事件）"
+ * note — that path is reserved for genuine reload-after-crash cases
+ * where the live WS is long gone.
+ *
+ * Default `true` keeps the legacy behaviour for any caller that
+ * doesn't know about the option (notably `expandTimelineToMessages`
+ * at the bottom of this file, which only ever runs on persisted
+ * history after the stream is fully settled).
+ */
+export function groupTimeline(
+  events: ExecutionTimelineEvent[],
+  opts?: { streamComplete?: boolean },
+): ToolGroup[] {
+  const streamComplete = opts?.streamComplete ?? true;
   const groups: ToolGroup[] = [];
   const active = new Map<string, number>();
 
@@ -253,21 +276,26 @@ export function groupTimeline(events: ExecutionTimelineEvent[]): ToolGroup[] {
       active.delete(dedupKey);
     }
   }
-  // Stranded pass — any group still in `active` had a `tool_start`
-  // but never received a `tool_complete`. On reload (when the live
-  // WS is long gone) the right read is "interrupted", not "still
-  // running". The previous behaviour left these groups in their
-  // default `"running"` state, which the renderer then painted as
-  // a green "运行中" badge — the exact symptom the user reported
-  // ("重启进入对话,所有工具卡在运行中,还多了一个 terminal
-  // 运行中子行"). Promote each stranded group to `"error"` with
-  // a short note; the renderer's existing error branch handles
-  // badge + LiveTerminal label from there.
-  for (const idx of active.values()) {
-    const grp = groups[idx];
-    if (grp && grp.status === "running") {
-      grp.status = "error";
-      grp.statusNote = "执行已中断（无完成事件）";
+  // Stranded pass — only runs once the parent turn has settled.
+  // During live streaming (`streamComplete === false`) we leave
+  // any `tool_start`-without-`tool_complete` group in `"running"`
+  // state so the renderer keeps showing the spinner / "运行中"
+  // badge — the close event is simply on its way. Forcing these
+  // to "error" mid-stream is what produced the "上来就提示执行中断,
+  // 实际后面又成功了" symptom the user reported on 2026-07-22.
+  //
+  // On settled reload (the default `true`), we still promote every
+  // stranded group to `"error"` + "执行已中断（无完成事件）" —
+  // that is the correct read for history recovered after the live
+  // WS is long gone. The renderer's existing error branch handles
+  // the badge + LiveTerminal label from there.
+  if (streamComplete) {
+    for (const idx of active.values()) {
+      const grp = groups[idx];
+      if (grp && grp.status === "running") {
+        grp.status = "error";
+        grp.statusNote = "执行已中断（无完成事件）";
+      }
     }
   }
   return groups;

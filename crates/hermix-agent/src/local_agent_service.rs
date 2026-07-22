@@ -1447,32 +1447,56 @@ impl AgentService for LocalAgentService {
         // folded". The parent's messages stay untouched (UI
         // routing keeps working); the child is a sibling
         // browseable via the lineage API.
+        //
+        // 2026-07-22 (Bug #3): fire-and-forget on
+        // `spawn_blocking` instead of awaiting inline. The child
+        // creation does one `INSERT INTO sessions` + N×`INSERT
+        // INTO messages` in autocommit (no transaction wrapper),
+        // which historically took 3–6s on disks with cold caches
+        // or when `archived_turns` had 100+ entries. Awaiting it
+        // inline delayed `Ok(AgentReply)` past the WS heartbeat
+        // (15s), so the front-end saw `ws_disconnected=true` /
+        // `was_client_disconnect=true` close frames and rendered
+        // the truncated turn as the assistant's final reply. The
+        // child session is purely a lineage tree entry — its
+        // `child_id` is not consumed anywhere on the reply path,
+        // and a missing child is already handled as `lineage tree
+        // will show the parent without children`. Move the work to
+        // the blocking pool so the agent loop's stream task can
+        // return immediately and emit the Done event while the
+        // child materialisation finishes in the background.
         if let Some(snap) = snapshot.as_ref() {
             if !snap.summary.is_empty() {
-                match self.session_persistence.create_compression_child_session(
-                    session_id,
-                    snap,
-                    Some(&effective_model),
-                    Some("local"),
-                ) {
-                    Ok(child_id) => {
-                        tracing::info!(
-                            target: "hermix.lineage",
-                            parent = %session_id,
-                            child = %child_id,
-                            "compression child session created"
-                        );
+                let sp = self.session_persistence.clone();
+                let parent_id = session_id.to_string();
+                let model_owned = effective_model.clone();
+                let snap_owned = snap.clone();
+                tokio::task::spawn_blocking(move || {
+                    match sp.create_compression_child_session(
+                        &parent_id,
+                        &snap_owned,
+                        Some(&model_owned),
+                        Some("local"),
+                    ) {
+                        Ok(child_id) => {
+                            tracing::info!(
+                                target: "hermix.lineage",
+                                parent = %parent_id,
+                                child = %child_id,
+                                "compression child session created (async)"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                target: "hermix.lineage",
+                                parent = %parent_id,
+                                error = %e,
+                                "failed to create compression child session; lineage \
+                                 tree will show the parent without children"
+                            );
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "hermix.lineage",
-                            parent = %session_id,
-                            error = %e,
-                            "failed to create compression child session; lineage \
-                             tree will show the parent without children"
-                        );
-                    }
-                }
+                });
             }
         }
 
@@ -2490,21 +2514,37 @@ impl AgentService for LocalAgentService {
 
         // 2026-07-05 (N-02): see sync-path comment. Same
         // child-session materialisation for the stream path.
+        //
+        // 2026-07-22 (Bug #3): also fire-and-forget on
+        // `spawn_blocking` here. Same rationale as the sync-path
+        // block above — the inline call historically held the
+        // stream task 3–6s past the agent-loop reply, exceeding the
+        // front-end's 15s WS heartbeat and causing
+        // `ws_disconnected=true` close frames. The stream task must
+        // return `Ok(AgentReply)` as soon as the agent loop emits
+        // the Done event so the WS forward loop can shut down
+        // cleanly.
         if let Some(snap) = snapshot.as_ref() {
             if !snap.summary.is_empty() {
-                if let Err(e) = self.session_persistence.create_compression_child_session(
-                    session_id,
-                    snap,
-                    Some(&effective_model),
-                    Some("local"),
-                ) {
-                    tracing::warn!(
-                        target: "hermix.lineage",
-                        parent = %session_id,
-                        error = %e,
-                        "failed to create compression child session (stream path)"
-                    );
-                }
+                let sp = self.session_persistence.clone();
+                let parent_id = session_id.to_string();
+                let model_owned = effective_model.clone();
+                let snap_owned = snap.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = sp.create_compression_child_session(
+                        &parent_id,
+                        &snap_owned,
+                        Some(&model_owned),
+                        Some("local"),
+                    ) {
+                        tracing::warn!(
+                            target: "hermix.lineage",
+                            parent = %parent_id,
+                            error = %e,
+                            "failed to create compression child session (stream path)"
+                        );
+                    }
+                });
             }
         }
 

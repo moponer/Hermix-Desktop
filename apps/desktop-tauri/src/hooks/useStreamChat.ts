@@ -652,21 +652,21 @@ export function useStreamChat(activeSessionId: string | null) {
             }
           }, IDLE_TIMEOUT_MS);
         };
-        // Reset the STALE timer (300s). Suspended while a tool is in
-        // flight (toolRunningRef.current === true), so spawn_blocking
-        // tools that emit no WS events during execution (storage_analyzer
-        // walking C:\, 60-90s) don't get falsely settled as stale_stream.
+        // Reset the STALE timer (300s). When a tool is in flight
+        // (toolRunningRef.current === true), we use a longer cap
+        // (STALE_STREAM_TIMEOUT_MS * 2 = 600s) instead of completely
+        // disabling the timer. This prevents a hung tool from keeping
+        // the stream alive forever — if the backend crashes mid-tool
+        // (no tool_complete, no Done event), the 600s cap ensures the
+        // user doesn't stare at "正在思考" for 5+ minutes.
         // The timer is re-armed by `tool_complete` (which flips the ref
         // back to false) and by every text/thinking event afterwards.
+        const TOOL_STALE_CAP_MS = STALE_STREAM_TIMEOUT_MS * 2;
         const resetStaleTimer = () => {
           if (staleStreamTimer !== null) clearTimeout(staleStreamTimer);
-          if (toolRunningRef.current) {
-            // Tool is mid-execution on the server — don't restart the
-            // watchdog. Either tool_complete will re-arm it, or the
-            // longer IDLE timeout (300s) will catch a true hang.
-            staleStreamTimer = null;
-            return;
-          }
+          const timeout = toolRunningRef.current
+            ? TOOL_STALE_CAP_MS
+            : STALE_STREAM_TIMEOUT_MS;
           staleStreamTimer = setTimeout(() => {
             if (!doneRef.current) {
               // Don't override the phase if already in a settled state.
@@ -677,7 +677,7 @@ export function useStreamChat(activeSessionId: string | null) {
                 "partial"
               );
             }
-          }, STALE_STREAM_TIMEOUT_MS);
+          }, timeout);
         };
         const disarmTimeouts = () => {
           if (idleTimeout !== null) {
@@ -1374,6 +1374,22 @@ export function useStreamChat(activeSessionId: string | null) {
                     typeof snap.last_changed_at_unix_ms === "number"
                       ? (snap.last_changed_at_unix_ms as number)
                       : undefined;
+                  // 2026-07-22: forward the compression-process phase
+                  // so `CompactionStatusBanner` can render the
+                  // "starting / in_progress / complete / failed"
+                  // transitions instead of jumping straight from the
+                  // pressure warning to the post-attempt result.
+                  // Older snapshots without the field decode as
+                  // `"idle"` (additive change, no wire break).
+                  const rawPhase = typeof snap.phase === "string" ? snap.phase : "idle";
+                  const phase: import("../components/CompactionStatusBanner").CompactionPhase =
+                    rawPhase === "starting" ||
+                    rawPhase === "in_progress_fast" ||
+                    rawPhase === "in_progress_llm" ||
+                    rawPhase === "complete" ||
+                    rawPhase === "failed"
+                      ? rawPhase
+                      : "idle";
                   setCompactionStatus({
                     state,
                     usedText: usedTokens !== undefined ? fmt(usedTokens) : undefined,
@@ -1388,6 +1404,7 @@ export function useStreamChat(activeSessionId: string | null) {
                       toNumber(snap.consecutive_llm_failures) ?? undefined,
                     lastFailureReason,
                     lastChangedAt,
+                    phase,
                   });
                 }
                 return;

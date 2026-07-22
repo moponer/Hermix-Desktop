@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { extractMemoryUpdates, extractMemoryRecalls, parseContent } from "./messageParser";
+import {
+  extractMemoryUpdates,
+  extractMemoryRecalls,
+  groupTimeline,
+  parseContent,
+} from "./messageParser";
 import type { ExecutionTimelineEvent } from "../types";
 
 function memEvent(over: Partial<ExecutionTimelineEvent>): ExecutionTimelineEvent {
@@ -177,5 +182,56 @@ describe("extractMemoryRecalls", () => {
       }),
     ];
     expect(extractMemoryRecalls(events)).toHaveLength(1);
+  });
+});
+
+function toolEvent(over: Partial<ExecutionTimelineEvent>): ExecutionTimelineEvent {
+  return {
+    type: "tool_start",
+    tool: "read_file",
+    created_at: new Date().toISOString(),
+    ...over,
+  } as ExecutionTimelineEvent;
+}
+
+describe("groupTimeline stranded-pass (2026-07-22 FIX)", () => {
+  it("keeps stranded groups as `running` while the turn is still streaming", () => {
+    // Tool `tool_start` arrives, no `tool_complete` yet. Live WS is
+    // still feeding events. The renderer should keep showing the
+    // "运行中" badge + spinner, not jump to "已中断".
+    const events = [toolEvent({ type: "tool_start", tool: "read_file" })];
+    const groups = groupTimeline(events, { streamComplete: false });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe("running");
+    expect(groups[0].statusNote ?? "").not.toMatch(/执行已中断/);
+  });
+
+  it("promotes stranded groups to `error` once the turn has settled (default)", () => {
+    // Same events, but the parent turn has finished streaming. This
+    // is the legacy / reload path: stranded = genuinely interrupted.
+    const events = [toolEvent({ type: "tool_start", tool: "read_file" })];
+    const groups = groupTimeline(events);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe("error");
+    expect(groups[0].statusNote).toBe("执行已中断（无完成事件）");
+  });
+
+  it("uses streamComplete=true when called without opts (backward compat)", () => {
+    const events = [toolEvent({ type: "tool_start", tool: "read_file" })];
+    const groups = groupTimeline(events);
+    // Same as the explicit-true case above — defaults preserve
+    // the historical behaviour for `expandTimelineToMessages`.
+    expect(groups[0].status).toBe("error");
+  });
+
+  it("does not touch a group that already received tool_complete, even during streaming", () => {
+    const ts = new Date().toISOString();
+    const events = [
+      toolEvent({ type: "tool_start", tool: "read_file", created_at: ts }),
+      toolEvent({ type: "tool_complete", tool: "read_file", created_at: ts }),
+    ];
+    const groups = groupTimeline(events, { streamComplete: false });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe("done");
   });
 });

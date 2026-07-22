@@ -489,14 +489,20 @@ pub async fn auto_compress_if_over_threshold<F>(
     // 2026-06-29: pressure snapshot — fired before any compression
     // attempt so the banner can show "即将触发自动压缩" the moment
     // we cross the threshold, not only after the LLM call lands.
+    // 2026-07-22: stamped `phase = "starting"` so the
+    // `CompactionStatusBanner` shows the user that work is about
+    // to begin — without this the banner jumped straight from
+    // the pressure warning to the post-attempt result, with no
+    // visible "压缩中" transition in between.
     if let Some(ref compressor) = compressor {
         let mut guard: tokio::sync::MutexGuard<'_, dyn CompressionEngine + Send> =
             compressor.lock().await;
-        let pre_snap = guard.breaker_snapshot(
+        let pre_snap = guard.breaker_snapshot_with_phase(
             total_tokens as u64,
             threshold as u64,
             max_c as u64,
             None,
+            "starting",
         );
         drop(guard);
         emit_compaction_status(callbacks, &pre_snap);
@@ -542,8 +548,6 @@ pub async fn auto_compress_if_over_threshold<F>(
     // Prefer the advanced LLM-powered compressor when available.
     if let Some(ref compressor) = compressor {
         let messages = ctx.get_messages().to_vec();
-        let mut guard: tokio::sync::MutexGuard<'_, dyn CompressionEngine + Send> =
-            compressor.lock().await;
         // 2026-07-18 (P1): pressure-tiered compression. Moderate
         // pressure (< 85%) takes the fast path — archive + dedup
         // + score-drop + static fallback, no LLM call, so the
@@ -553,7 +557,35 @@ pub async fn auto_compress_if_over_threshold<F>(
         // overflows. The 0.85 tier matches the `>= 0.85 medium`
         // warn ladder in `context.rs` so log lines stay consistent.
         let pressure = total_tokens as f64 / max_c as f64;
-        let compressed = if pressure < HIGH_PRESSURE_RED_LINE {
+        let use_fast_path = pressure < HIGH_PRESSURE_RED_LINE;
+        let in_progress_phase = if use_fast_path {
+            "in_progress_fast"
+        } else {
+            "in_progress_llm"
+        };
+        // 2026-07-22: emit an `in_progress` snapshot just before the
+        // actual work begins so the front-end `CompactionStatusBanner`
+        // can render its spinner / "正在压缩中" pill during the LLM
+        // round-trip (5–30s on real models). The post-attempt snapshot
+        // below will then transition to `"complete"` / `"failed"` to
+        // close the loop.
+        {
+            let mut guard: tokio::sync::MutexGuard<'_, dyn CompressionEngine + Send> =
+                compressor.lock().await;
+            let in_progress_snap = guard.breaker_snapshot_with_phase(
+                total_tokens as u64,
+                threshold as u64,
+                max_c as u64,
+                None,
+                in_progress_phase,
+            );
+            drop(guard);
+            emit_compaction_status(callbacks, &in_progress_snap);
+        }
+        // Now do the actual compression work — pressure-tiered.
+        let mut guard: tokio::sync::MutexGuard<'_, dyn CompressionEngine + Send> =
+            compressor.lock().await;
+        let compressed = if use_fast_path {
             tracing::info!(
                 "moderate pressure ({:.0}%) — using fast compression (no LLM summary)",
                 pressure * 100.0
@@ -611,6 +643,10 @@ pub async fn auto_compress_if_over_threshold<F>(
         // breaker state machine actually transitions. Then we
         // snapshot the post-state for the banner.
         //
+        // 2026-07-22: also stamp `phase = "complete"` / `"failed"`
+        // so the `CompactionStatusBanner` can close the "正在压缩中"
+        // spinner that the `in_progress` snapshot opened.
+        //
         // The whole post-processing chain happens *before* the
         // guard is dropped so the snapshot we report reflects
         // the exact state the breaker saw. The callback is
@@ -636,11 +672,13 @@ pub async fn auto_compress_if_over_threshold<F>(
             } else {
                 None
             };
-            let mut snap = guard.breaker_snapshot(
+            let phase = if success { "complete" } else { "failed" };
+            let mut snap = guard.breaker_snapshot_with_phase(
                 used_after as u64,
                 threshold as u64,
                 max_c as u64,
                 failure_reason,
+                phase,
             );
             // Pin the post-state so the banner shows the *post-attempt*
             // value even if `breaker_state()` re-derives a HalfOpen
@@ -805,6 +843,26 @@ mod spawn_streaming_tests {
                 threshold_tokens,
                 max_tokens,
                 failure_reason,
+                // 2026-07-22: the test engine doesn't drive any
+                // compression-phase semantics; defaults to `"idle"`.
+                phase: "idle".to_string(),
+            }
+        }
+        fn breaker_snapshot_with_phase(
+            &mut self,
+            current_tokens: u64,
+            threshold_tokens: u64,
+            max_tokens: u64,
+            failure_reason: Option<String>,
+            phase: &str,
+        ) -> CompressionEngineSnapshot {
+            CompressionEngineSnapshot {
+                state: CompressionEngineState::Closed,
+                current_tokens,
+                threshold_tokens,
+                max_tokens,
+                failure_reason,
+                phase: phase.to_string(),
             }
         }
         fn record_outcome(&mut self, _success: bool) -> CompressionEngineState {

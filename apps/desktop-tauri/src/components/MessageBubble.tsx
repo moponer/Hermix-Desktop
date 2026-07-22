@@ -6,7 +6,7 @@ import {
   FileText, FilePlus, ArrowRight,
   CheckCheck, Search, FolderOpen, Edit3, Trash2, Eye,
   FileSearch, Database, GitBranch,
-  Hammer, Bot,
+  Hammer, Bot, Clock, Timer,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownBody } from "./MarkdownBody";
@@ -442,8 +442,28 @@ function ProcessTimeline({
 
   if (processSteps.length === 0) return null;
 
-  const totalTools = processSteps.reduce(
-    (acc, s) => acc + (s.kind === "tools" ? s.events.length : 0),
+  // Pre-compute tool groups per step so the "已完成 N 个工具" count
+  // reflects actual tool *invocations*, not raw timeline events. A
+  // single tool call can emit hundreds of `tool_stdout` chunks, which
+  // previously inflated the count to 700+ for just a handful of tools.
+  // Using the same `groupTimeline` call that drives rendering guarantees
+  // the header count always matches what the user sees when expanded.
+  //
+  // 2026-07-22 FIX (streamComplete): while the live WS is still feeding
+  // events for this message (`isStreaming === true`), ask `groupTimeline`
+  // to *not* flip stranded groups to `"error"` — that was the source of
+  // "读取文件上来就提示执行中断，实际后面又成功了". The ToolRow renderer
+  // paints `"running"` as a "运行中" badge + spinner, which is the correct
+  // mid-stream cue; only when the turn settles do we promote stranded
+  // groups to "error" / "执行已中断（无完成事件）" so reloads still surface
+  // the genuine interruption case.
+  const stepGroups = processSteps.map((s) =>
+    s.kind === "tools"
+      ? groupTimeline(s.events, { streamComplete: !isStreaming })
+      : null,
+  );
+  const totalTools = stepGroups.reduce(
+    (acc, groups) => acc + (groups ? groups.length : 0),
     0,
   );
 
@@ -481,12 +501,12 @@ function ProcessTimeline({
       )}
       {expanded && (
         <div className="tl-process-body">
-          {processSteps.map((step, i) => {
+          {stepGroups.map((groups, i) => {
+            const step = processSteps[i];
             if (step.kind === "reasoning") {
               return <ReasoningBlock key={`ps-${i}`} content={step.content} />;
             }
-            if (step.kind !== "tools") return null;
-            const groups = groupTimeline(step.events);
+            if (step.kind !== "tools" || !groups) return null;
             if (groups.length === 0) return null;
             return (
               <ToolTimelineSection
@@ -787,6 +807,18 @@ function AssistantMessage({
             {message.model && <span className="h-tiny opacity-60">·</span>}
             {message.model && <span className="h-tiny">{message.model}</span>}
             {message.stopReason && <StopReasonChip reason={message.stopReason} meta={message.stopReasonMeta} />}
+            {message.compressed && (
+              <span
+                className="h-tiny px-1.5 rounded-sm"
+                style={{
+                  background: "var(--color-bg-tertiary, rgba(255,255,255,0.06))",
+                  color: "var(--color-text-secondary)",
+                  fontSize: 10,
+                }}
+              >
+                已压缩
+              </span>
+            )}
           </div>
         )}
 
@@ -2120,6 +2152,28 @@ function ToolCallsFallback({ calls }: { calls: NonNullable<ChatMessage["tool_cal
 // render as an empty Hermes bubble (avatar + "Hermes · 刚刚" + no
 // body). Routing them here gives them a real visual identity that
 // reads as "the agent is asking, not yet answering".
+
+/** Format a millisecond duration as `0m 30s` / `4m 32s`. */
+function formatApprovalCountdown(ms: number): string {
+  const totalSec = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}m ${s.toString().padStart(2, "0")}s`;
+}
+
+/** Live countdown hook — re-renders once per second while the
+ *  deadline is still in the future. Returns null when no deadline. */
+function useApprovalCountdown(expiresAt: number | null | undefined): number | null {
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (typeof expiresAt !== "number") return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [expiresAt]);
+  if (typeof expiresAt !== "number") return null;
+  return Math.max(0, expiresAt - now);
+}
+
 function riskVisual(risk?: string) {
   // Matches the server's `RiskLevel` enum
   // (`hermix-core::traits::RiskLevel`):
@@ -2270,34 +2324,56 @@ function ApprovalCard({
   }
   const vis = riskVisual(meta.riskLevel);
   const { Icon } = vis;
-  const decided = meta.decision === "approved" || meta.decision === "denied";
+  const isPending = !meta.decision;
   const approved = meta.decision === "approved";
+  const isExpired = meta.decision === "expired";
+  const decided = !isPending;
   const desc = describeToolArgs(meta.tool, meta.args);
 
+  // Live countdown against the server-emitted deadline
+  const remainingMs = useApprovalCountdown(meta.expiresAt);
+  const showCountdown = isPending && typeof remainingMs === "number";
+  const countdownIsDanger =
+    typeof remainingMs === "number" && remainingMs <= 30_000;
+
+  // Card state class
+  const cardStateClass = decided
+    ? (approved ? "approval-card--ok" : isExpired ? "approval-card--expired" : "approval-card--deny")
+    : "";
+
+  // Accent bar color
+  const accentColor = decided
+    ? (approved ? "var(--color-success)" : isExpired ? "var(--color-text-muted, #888)" : "var(--color-error)")
+    : vis.iconBg.includes("239")
+      ? "var(--color-error)"
+      : vis.iconBg.includes("185")
+        ? "var(--color-success)"
+        : "var(--color-warning, #f59e0b)";
+
+  // Icon badge bg + content
+  const iconBg = decided
+    ? (approved ? "rgba(16, 185, 129, 0.10)" : isExpired ? "rgba(130, 130, 130, 0.10)" : "rgba(239, 68, 68, 0.10)")
+    : vis.iconBg;
+
   return (
-    <div className={`approval-card h-enter ${decided ? (approved ? "approval-card--ok" : "approval-card--deny") : ""}`}>
+    <div className={`approval-card h-enter ${cardStateClass}`}>
       {/* Left accent bar */}
-      <div className="approval-accent" style={{ background: decided
-        ? (approved ? "var(--color-success)" : "var(--color-error)")
-        : vis.iconBg.includes("239")
-          ? "var(--color-error)"
-          : vis.iconBg.includes("185")
-            ? "var(--color-success)"
-            : "var(--color-warning, #f59e0b)"
-      }} />
+      <div className="approval-accent" style={{ background: accentColor }} />
 
       <div className="approval-inner">
         {/* Icon + tool row */}
         <div className="approval-head">
           <span
             className="approval-icon"
-            style={{ background: vis.iconBg }}
+            style={{ background: iconBg }}
             title={vis.pillLabel}
           >
             {decided ? (
               approved
                 ? <Check size={12} className="text-success" />
-                : <X size={12} className="text-error" />
+                : isExpired
+                  ? <Clock size={12} style={{ color: "var(--color-text-muted, #888)" }} />
+                  : <X size={12} className="text-error" />
             ) : (
               <Icon size={12} className={vis.iconClass} />
             )}
@@ -2308,11 +2384,21 @@ function ApprovalCard({
             <span className="approval-desc">{desc}</span>
           </div>
 
+          {/* Countdown pill (pending only) */}
+          {showCountdown && (
+            <span className={`approval-countdown-pill ${countdownIsDanger ? "is-danger" : ""}`}>
+              <Timer size={10} />
+              {formatApprovalCountdown(remainingMs)}
+            </span>
+          )}
+
           {/* Right side */}
           <div className="approval-actions">
             {decided ? (
-              <span className={`approval-decision ${approved ? "is-ok" : "is-err"}`}>
-                {approved ? "已允许" : "已拒绝"}
+              <span className={`approval-decision ${
+                approved ? "is-ok" : isExpired ? "is-expired" : "is-err"
+              }`}>
+                {approved ? "已允许" : isExpired ? "已超时" : "已拒绝"}
               </span>
             ) : (
               <>
@@ -2334,6 +2420,17 @@ function ApprovalCard({
             )}
           </div>
         </div>
+
+        {/* Footer text for resolved state */}
+        {decided && (
+          <div className="approval-footer">
+            {approved
+              ? "操作已继续执行"
+              : isExpired
+                ? "审批超时，操作已被自动取消；如仍想执行，请重新发起"
+                : "操作已中止"}
+          </div>
+        )}
       </div>
     </div>
   );

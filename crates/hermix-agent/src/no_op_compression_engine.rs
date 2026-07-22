@@ -90,6 +90,29 @@ impl CompressionEngine for NoOpCompressionEngine {
             threshold_tokens,
             max_tokens,
             failure_reason,
+            // 2026-07-22: `breaker_snapshot` (no phase) defaults
+            // to `"idle"`. The NoOp engine never produces real
+            // compression events so no in-progress phases are
+            // ever surfaced from this code path.
+            phase: "idle".to_string(),
+        }
+    }
+
+    fn breaker_snapshot_with_phase(
+        &mut self,
+        current_tokens: u64,
+        threshold_tokens: u64,
+        max_tokens: u64,
+        failure_reason: Option<String>,
+        phase: &str,
+    ) -> CompressionEngineSnapshot {
+        CompressionEngineSnapshot {
+            state: CompressionEngineState::Closed,
+            current_tokens,
+            threshold_tokens,
+            max_tokens,
+            failure_reason,
+            phase: phase.to_string(),
         }
     }
 

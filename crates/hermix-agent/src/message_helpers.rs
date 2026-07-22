@@ -60,6 +60,12 @@ pub fn emit_compaction_status(
             threshold_tokens: snapshot.threshold_tokens,
             max_tokens: snapshot.max_tokens,
             last_failure_reason: snapshot.failure_reason.clone(),
+            // 2026-07-22: forward the compression-process phase so the
+            // front-end `CompactionStatusBanner` can render
+            // "正在准备压缩" → "正在压缩中" → "压缩完成" / "压缩失败"
+            // transitions instead of jumping straight from the
+            // pressure warning to the post-attempt result.
+            phase: snapshot.phase.clone(),
             ..Default::default()
         };
         cb(&crate_snapshot);

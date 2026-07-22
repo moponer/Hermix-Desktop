@@ -653,6 +653,28 @@ pub trait CompressionEngine: CoreContextEngine {
         failure_reason: Option<String>,
     ) -> CompressionEngineSnapshot;
 
+    /// 2026-07-22: same as [`Self::breaker_snapshot`] but lets the
+    /// caller stamp the compression `phase` explicitly so the
+    /// front-end `CompactionStatusBanner` can render the
+    /// "starting / in_progress / complete / failed" transitions.
+    ///
+    /// Default impl is `breaker_snapshot(...)` with `phase` forced
+    /// to `"idle"` so existing plugin implementors continue to
+    /// compile without changes. The agent loop's built-in
+    /// `ContextCompressor` overrides this to forward the phase
+    /// into the snapshot.
+    fn breaker_snapshot_with_phase(
+        &mut self,
+        current_tokens: u64,
+        threshold_tokens: u64,
+        max_tokens: u64,
+        failure_reason: Option<String>,
+        phase: &str,
+    ) -> CompressionEngineSnapshot {
+        let _ = phase;
+        self.breaker_snapshot(current_tokens, threshold_tokens, max_tokens, failure_reason)
+    }
+
     /// Record the outcome of a compression attempt and return
     /// the resulting breaker state. `success == false` rolls
     /// the breaker toward Open (circuit-break); `success ==
@@ -671,6 +693,22 @@ pub struct CompressionEngineSnapshot {
     pub threshold_tokens: u64,
     pub max_tokens: u64,
     pub failure_reason: Option<String>,
+    /// 2026-07-22: Process phase of the most recent compression
+    /// attempt, surfaced to the front-end `CompactionStatusBanner`
+    /// so it can render "正在压缩中…" / "压缩完成" / "压缩失败"
+    /// transitions instead of jumping straight from "即将触发自动
+    /// 压缩" to the post-attempt result. `"idle"` is the default
+    /// for snapshots produced outside an active attempt (e.g. a
+    /// periodic heartbeat). Older snapshots that don't carry the
+    /// field are decoded as `"idle"` — additive change, no wire-
+    /// format break.
+    #[serde(default = "default_phase_idle")]
+    pub phase: String,
+}
+
+#[allow(dead_code)]
+fn default_phase_idle() -> String {
+    "idle".to_string()
 }
 
 /// Coarse breaker state. Mirrors `compression::BreakerState`.

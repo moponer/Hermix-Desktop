@@ -96,4 +96,85 @@ describe("CompactionStatusBanner", () => {
     renderBanner("pressure", { maxText: "205k", maxTokens: 205_000 });
     expect(screen.getByText(/当前用量:120k \/ 205k tokens/)).toBeInTheDocument();
   });
+
+  // 2026-07-22: phase-specific copy overrides the breaker-state copy
+  // so the user sees "正在准备压缩" / "正在压缩中" / "压缩完成" /
+  // "压缩失败" transitions instead of a single static warning card
+  // jumping straight to the post-attempt result.
+  describe("phase overrides (2026-07-22)", () => {
+    function renderWithPhase(
+      phase: import("./CompactionStatusBanner").CompactionPhase,
+      overrides: Partial<CompactionStatus> = {},
+    ) {
+      return render(
+        <CompactionStatusBanner
+          status={{
+            state: "closed",
+            usedText: "120k",
+            thresholdText: "160k",
+            unit: "tokens",
+            percent: 75,
+            phase,
+            ...overrides,
+          }}
+        />,
+      );
+    }
+
+    it("starting phase shows '正在准备' with spinner", () => {
+      const { container } = renderWithPhase("starting");
+      expect(screen.getByText(/上下文压缩:正在准备/)).toBeInTheDocument();
+      // Loader2 icon should carry the `animate-spin` class so the
+      // mid-attempt phases read as "actively working".
+      expect(container.querySelector(".animate-spin")).toBeTruthy();
+    });
+
+    it("in_progress_fast phase shows the fast-path copy", () => {
+      const { container } = renderWithPhase("in_progress_fast");
+      expect(screen.getByText(/上下文压缩:正在压缩中\(快速通道\)/)).toBeInTheDocument();
+      expect(container.querySelector(".animate-spin")).toBeTruthy();
+    });
+
+    it("in_progress_llm phase shows the LLM-summary copy", () => {
+      const { container } = renderWithPhase("in_progress_llm");
+      expect(screen.getByText(/上下文压缩:正在压缩中\(LLM 摘要\)/)).toBeInTheDocument();
+      expect(container.querySelector(".animate-spin")).toBeTruthy();
+    });
+
+    it("complete phase shows the success copy with no spinner", () => {
+      const { container } = renderWithPhase("complete");
+      expect(screen.getByText(/上下文压缩:已完成/)).toBeInTheDocument();
+      expect(container.querySelector(".animate-spin")).toBeFalsy();
+    });
+
+    it("failed phase shows the failure copy", () => {
+      renderWithPhase("failed");
+      expect(screen.getByText(/上下文压缩:本轮失败/)).toBeInTheDocument();
+    });
+
+    it("idle phase falls back to the breaker-state copy (back-compat)", () => {
+      // Explicit `phase: "idle"` should behave exactly like the
+      // pre-phase banner — driven purely by `state`.
+      renderWithPhase("idle");
+      expect(screen.getByText(/上下文自动压缩:正常/)).toBeInTheDocument();
+    });
+
+    it("undefined phase falls back to the breaker-state copy (older snapshots)", () => {
+      // Older snapshots from before the phase field was added
+      // don't carry `phase` at all; the banner must still render.
+      const { container } = render(
+        <CompactionStatusBanner
+          status={{
+            state: "pressure",
+            usedText: "120k",
+            thresholdText: "160k",
+            unit: "tokens",
+            percent: 75,
+          }}
+        />,
+      );
+      expect(screen.getByText(/上下文使用率偏高/)).toBeInTheDocument();
+      expect(container.querySelector(".animate-spin")).toBeFalsy();
+    });
+  });
 });

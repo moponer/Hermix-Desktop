@@ -1622,7 +1622,14 @@ impl AgentLoop {
         // because the spawn task already ran `record_outcome` on
         // the same engine.
         let tokens_saved = guard.last_metrics().tokens_saved;
-        let snap = guard.breaker_snapshot(tokens_saved, 0, 0, None);
+        // 2026-07-22: derive `phase` from the engine's own metrics
+        // — the spawn path doesn't get an explicit "complete"/"failed"
+        // label from the caller, so we infer it. `summary_errors == 0`
+        // means success (matches the post-snap logic in
+        // `compression_ops::auto_compress_if_over_threshold`).
+        let summary_errors = guard.last_metrics().summary_errors;
+        let phase = if summary_errors == 0 { "complete" } else { "failed" };
+        let snap = guard.breaker_snapshot_with_phase(tokens_saved, 0, 0, None, phase);
         crate::message_helpers::emit_compaction_status(&self.callbacks, &snap);
     }
 

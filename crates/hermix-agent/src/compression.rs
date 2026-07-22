@@ -26,6 +26,7 @@ use hermix_core::{
     CompressionEngineState, LlmProvider, Message, MessageRole,
 };
 use hermix_core::traits::CoreContextEngine;
+use hermix_core::types::ContentPart;
 use hermix_intelligence::auxiliary::{
     AuxiliaryClient, AuxiliaryError, AuxiliaryRequest, AuxiliaryTask,
 };
@@ -966,6 +967,29 @@ pub struct BreakerSnapshot {
     /// milliseconds. `None` when the breaker has never transitioned
     /// away from `Closed`.
     pub last_changed_at_unix_ms: Option<i64>,
+    // -- 2026-07-22 additions: compression process phase ----------
+    /// Process phase of the compression attempt that produced this
+    /// snapshot. Surfaces to the front-end `CompactionStatusBanner`
+    /// so it can show "正在准备压缩" → "正在压缩中" → "压缩完成" /
+    /// "压缩失败" instead of jumping straight from the pressure
+    /// warning to the post-attempt result.
+    ///
+    /// Recognised values (front-end mirrors them in
+    /// `CompactionStatusBanner.tsx`):
+    ///   - `"idle"`         — no compression in flight (default)
+    ///   - `"starting"`     — pressure detected, about to begin work
+    ///   - `"in_progress"`  — archive / score-drop / LLM summary running
+    ///   - `"complete"`     — last attempt finished successfully
+    ///   - `"failed"`       — last attempt finished with errors
+    ///
+    /// `#[serde(default)]` keeps older snapshots that don't carry
+    /// the field deserialising as `"idle"`.
+    #[serde(default = "default_phase")]
+    pub phase: String,
+}
+
+fn default_phase() -> String {
+    "idle".to_string()
 }
 
 fn default_unit() -> String {
@@ -987,6 +1011,7 @@ impl Default for BreakerSnapshot {
             unit: default_unit(),
             last_failure_reason: None,
             last_changed_at_unix_ms: None,
+            phase: default_phase(),
         }
     }
 }
@@ -1257,6 +1282,28 @@ impl ContextCompressor {
         max_tokens: u64,
         last_failure_reason: Option<String>,
     ) -> BreakerSnapshot {
+        self.breaker_snapshot_with_phase(
+            used_tokens,
+            threshold_tokens,
+            max_tokens,
+            last_failure_reason,
+            "idle",
+        )
+    }
+
+    /// Same as [`Self::breaker_snapshot`] but lets the caller set the
+    /// compression `phase` explicitly. 2026-07-22: introduced so the
+    /// `CompactionStatusBanner` can render the "starting / in_progress
+    /// / complete / failed" transitions instead of jumping straight
+    /// from the pressure warning to the post-attempt result.
+    pub fn breaker_snapshot_with_phase(
+        &mut self,
+        used_tokens: u64,
+        threshold_tokens: u64,
+        max_tokens: u64,
+        last_failure_reason: Option<String>,
+        phase: &str,
+    ) -> BreakerSnapshot {
         let state = self.breaker_state();
         let cooldown_remaining_secs = match (state, self.breaker_open_until) {
             (BreakerState::Open, Some(deadline)) => {
@@ -1287,6 +1334,7 @@ impl ContextCompressor {
             unit: default_unit(),
             last_failure_reason,
             last_changed_at_unix_ms: self.last_state_change_unix_ms,
+            phase: phase.to_string(),
         }
     }
 
@@ -1674,6 +1722,59 @@ impl ContextCompressor {
                     pruned += 1;
                 }
             }
+        }
+
+        // Pass 4.5 (2026-07-22, Bug #4): strip base64 image data from
+        // *user* messages' `content_parts`. The legacy Pass 4 above
+        // only catches Tool-role content — it skips anything where
+        // `msg.role != MessageRole::Tool`. The `read_image` tool
+        // result handling at `run_loop.rs:510` injects a fresh
+        // `Message::user_with_image(...)` (User role + content_parts
+        // with one Text + one ImageUrl) on every successful read, so
+        // each compression pass leaves the full base64 payload in
+        // place and re-ships it on every subsequent LLM turn —
+        // context blows up the moment one read_image is invoked.
+        // Pinned messages are still skipped (existing contract); the
+        // kept-text-part already carries the `[Image loaded from:
+        // <path>]` hint from `read_image` so the LLM can re-invoke
+        // read_image for higher resolution if needed.
+        for (i, msg) in result.iter_mut().take(prune_boundary).enumerate() {
+            if is_pinned(i) {
+                continue;
+            }
+            if msg.role != MessageRole::User {
+                continue;
+            }
+            let Some(parts) = msg.content_parts.as_mut() else {
+                continue;
+            };
+            let had_image = parts
+                .iter()
+                .any(|p| matches!(p, ContentPart::ImageUrl { .. }));
+            if !had_image {
+                continue;
+            }
+            let mut kept: Vec<ContentPart> = Vec::with_capacity(parts.len() + 1);
+            for part in parts.drain(..) {
+                match part {
+                    ContentPart::Text { text } => {
+                        if !text.is_empty() {
+                            kept.push(ContentPart::Text { text });
+                        }
+                    }
+                    ContentPart::ImageUrl { .. } => {
+                        // Drop the base64 payload. The companion Text
+                        // part (preserved above) already names the
+                        // file path so a follow-up read_image call
+                        // can recover full-resolution data.
+                    }
+                }
+            }
+            kept.push(ContentPart::Text {
+                text: "[image data removed to save context]".to_string(),
+            });
+            msg.content_parts = if kept.is_empty() { None } else { Some(kept) };
+            pruned += 1;
         }
 
         (result, deduped, pruned)
@@ -2695,6 +2796,39 @@ impl CompressionEngine for ContextCompressor {
             threshold_tokens: snap.threshold_tokens,
             max_tokens: snap.max_tokens,
             failure_reason: snap.last_failure_reason,
+            // 2026-07-22: `breaker_snapshot` (no phase) defaults to
+            // `"idle"`. Callers that want a specific phase should
+            // use `breaker_snapshot_with_phase` below.
+            phase: "idle".to_string(),
+        }
+    }
+
+    fn breaker_snapshot_with_phase(
+        &mut self,
+        current_tokens: u64,
+        threshold_tokens: u64,
+        max_tokens: u64,
+        failure_reason: Option<String>,
+        phase: &str,
+    ) -> CompressionEngineSnapshot {
+        let snap = self.breaker_snapshot_with_phase(
+            current_tokens,
+            threshold_tokens,
+            max_tokens,
+            failure_reason,
+            phase,
+        );
+        CompressionEngineSnapshot {
+            state: match snap.state {
+                BreakerState::Closed => CompressionEngineState::Closed,
+                BreakerState::HalfOpen => CompressionEngineState::HalfOpen,
+                BreakerState::Open => CompressionEngineState::Open,
+            },
+            current_tokens: snap.used_tokens,
+            threshold_tokens: snap.threshold_tokens,
+            max_tokens: snap.max_tokens,
+            failure_reason: snap.last_failure_reason,
+            phase: snap.phase,
         }
     }
 
@@ -3174,7 +3308,7 @@ mod tests {
             messages.push(msg(MessageRole::User, &format!("t{i}")));
         }
 
-        let (out, _dedup, pruned) = compressor.prune_old_tool_results(&messages, 20, None, None);
+        let (out, _dedup, pruned) = compressor.prune_old_tool_results(&messages, 0, None, None);
         assert!(pruned >= 1);
         // Smart summary replaces oversized output (e.g. "[ALREADY EXECUTED] [shell]  (500 chars)")
         let first_tool_content = out[3].content.as_deref().unwrap_or("");
@@ -3328,6 +3462,160 @@ mod tests {
         assert!(!out
             .iter()
             .any(|m| m.tool_call_id.as_deref() == Some("orphan")));
+    }
+
+    // ---------- Bug #4 (2026-07-22): strip base64 ImageUrl from User content_parts ----------
+
+    fn user_with_image_msg(hint: &str, b64: &str) -> Message {
+        Message::user_with_image(hint, b64, "image/png")
+    }
+
+    #[test]
+    fn prune_strips_image_url_from_user_message_content_parts() {
+        // The legacy Pass 4 only acted on Tool-role content. A User
+        // message with content_parts (e.g. injected by run_loop.rs
+        // when read_image succeeds) was never cleaned, so every
+        // subsequent LLM turn re-shipped the full base64 blob.
+        let cfg = quiet_config();
+        let compressor =
+            ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
+        let messages = vec![
+            msg(MessageRole::System, "sys"),
+            msg(MessageRole::User, "describe"),
+            user_with_image_msg("[Image loaded from: /tmp/foo.png]", "AAAA_BIG_BASE64_BLOB"),
+            msg(MessageRole::Assistant, "ok"),
+            msg(MessageRole::User, "next question"),
+        ];
+        let (out, _dedup, pruned) = compressor.prune_old_tool_results(&messages, 0, None, None);
+
+        let pruned_user = &out[2];
+        assert_eq!(pruned_user.role, MessageRole::User);
+        let parts = pruned_user
+            .content_parts
+            .as_ref()
+            .expect("content_parts preserved");
+        // No ImageUrl part should remain.
+        assert!(
+            !parts
+                .iter()
+                .any(|p| matches!(p, ContentPart::ImageUrl { .. })),
+            "ImageUrl part must be stripped after compression; got: {parts:?}"
+        );
+        // Text hint survives + a placeholder is appended.
+        let joined: String = parts
+            .iter()
+            .filter_map(|p| match p {
+                ContentPart::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("[Image loaded from: /tmp/foo.png]"),
+            "image path hint must be preserved: {joined}"
+        );
+        assert!(
+            joined.contains("[image data removed to save context]"),
+            "placeholder must be appended so LLM knows an image was here: {joined}"
+        );
+        assert!(pruned >= 1);
+    }
+
+    #[test]
+    fn prune_strips_image_url_from_user_with_multiple_images() {
+        // user_with_images (multiple attachments) — all ImageUrl parts
+        // must go, Text part kept.
+        let cfg = quiet_config();
+        let compressor =
+            ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
+        let images = [
+            ("image/png", "BASE64_IMG_1_LARGE"),
+            ("image/jpeg", "BASE64_IMG_2_LARGE"),
+            ("image/png", "BASE64_IMG_3_LARGE"),
+        ];
+        let messages = vec![
+            msg(MessageRole::System, "sys"),
+            msg(MessageRole::User, "compare these"),
+            Message::user_with_images("see attached", &images),
+            msg(MessageRole::Assistant, "ok"),
+            msg(MessageRole::User, "and?"),
+        ];
+        let (out, _dedup, _pruned) = compressor.prune_old_tool_results(&messages, 0, None, None);
+        let parts = out[2].content_parts.as_ref().unwrap();
+        let image_count = parts
+            .iter()
+            .filter(|p| matches!(p, ContentPart::ImageUrl { .. }))
+            .count();
+        assert_eq!(
+            image_count, 0,
+            "all 3 ImageUrl parts must be stripped; got parts={parts:?}"
+        );
+    }
+
+    #[test]
+    fn prune_does_not_strip_image_url_from_pinned_user_message() {
+        // Pinning a message exempts it from all prune passes, including
+        // the new Pass 4.5. Without this, pinning would no longer mean
+        // "leave this message verbatim". `PinConfig::is_pinned` matches
+        // on keywords against `msg.content` (string field) — for an
+        // image-bearing message we mirror the read_image hint text
+        // into `msg.content` so the keyword hits. (A separate concern
+        // is that `is_pinned` doesn't read `content_parts` at all —
+        // that's pre-existing PinConfig behaviour, not Pass 4.5.)
+        let cfg = quiet_config();
+        let compressor =
+            ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
+        let mut pinned_image_msg =
+            user_with_image_msg("[Image loaded from: /tmp/pinned.png]", "BASE64_PINNED");
+        // Mirror the hint into msg.content so is_pinned sees it.
+        pinned_image_msg.content = Some(
+            "[Image loaded from: /tmp/pinned.png]".to_string(),
+        );
+        let messages = vec![
+            msg(MessageRole::System, "sys"),
+            msg(MessageRole::User, "describe"),
+            pinned_image_msg,
+            msg(MessageRole::Assistant, "ok"),
+        ];
+        let pin = crate::compression_pipeline::PinConfig {
+            pin_roles: Vec::new(),
+            pin_keywords: vec!["[image loaded from:".to_string()],
+        };
+        let (out, _dedup, pruned) =
+            compressor.prune_old_tool_results(&messages, 0, None, Some(&pin));
+        let parts = out[2].content_parts.as_ref().unwrap();
+        let image_count = parts
+            .iter()
+            .filter(|p| matches!(p, ContentPart::ImageUrl { .. }))
+            .count();
+        assert_eq!(
+            image_count, 1,
+            "pinned image-bearing message must keep its base64; got parts={parts:?}"
+        );
+        assert_eq!(
+            pruned, 0,
+            "pin exempts message from all prune passes including Pass 4.5"
+        );
+    }
+
+    #[test]
+    fn prune_leaves_user_messages_without_image_url_untouched() {
+        // A User message whose content_parts is plain text (or no
+        // content_parts at all) must not gain a "[image data removed]"
+        // placeholder. Regression guard for the Pass 4.5 short-circuit.
+        let cfg = quiet_config();
+        let compressor =
+            ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
+        let messages = vec![
+            msg(MessageRole::System, "sys"),
+            msg(MessageRole::User, "describe"),
+            msg(MessageRole::Assistant, "ok"),
+            msg(MessageRole::User, "next"),
+        ];
+        let (out, _dedup, pruned) = compressor.prune_old_tool_results(&messages, 0, None, None);
+        assert_eq!(pruned, 0, "plain text messages must not be pruned");
+        assert_eq!(out[1].content.as_deref(), Some("describe"));
+        assert_eq!(out[3].content.as_deref(), Some("next"));
     }
 
     #[test]
