@@ -519,6 +519,32 @@ impl AgentLoop {
                                 .get("detail")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("auto");
+
+                            // ── First-principles image lifecycle ────────
+                            //
+                            // Before injecting the new image, strip
+                            // ImageUrl from ALL previous multimodal
+                            // messages. The LLM has already analysed
+                            // those images — the analysis lives in the
+                            // assistant replies. The base64 payload has
+                            // zero marginal information value; keeping
+                            // it would waste 20–80 KB of context per
+                            // old image.
+                            //
+                            // After this call, the only base64 in
+                            // context will be the one we're about to
+                            // inject. File paths are preserved in the
+                            // Text parts so the LLM can re-read any
+                            // image at higher resolution if needed.
+                            let stripped = crate::tool_result_processor::strip_previous_image_urls(ctx);
+                            if stripped > 0 {
+                                tracing::info!(
+                                    stripped_count = stripped,
+                                    "stripped ImageUrl from {} previous message(s) before new image injection",
+                                    stripped,
+                                );
+                            }
+
                             let hint = if need_detail {
                                 format!("[Image loaded from: {img_path}] (preview at {detail} — call read_image again with detail=auto or detail=full for higher resolution)")
                             } else {
@@ -899,6 +925,7 @@ tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run)");
 self.notify_phase(&LoopPhase::Init, 0);
 let mut post_tool_nudge_count: u32 = 0;
         let mut agent_recovery_nudge_count: u32 = 0;
+        let mut completion_verify_nudge_count: u32 = 0;
 
         let session_id = self.config.session_id.as_deref().unwrap_or("");
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
@@ -1249,6 +1276,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                         post_tool_nudge_count,
                         agent_recovery_nudge_count,
                         recent_tool_failure,
+                        completion_verify_nudge_count,
                         total_turns,
                         max_turns: self.config.max_turns,
                         max_autonomous_nudges: default_max_autonomous_nudges(),
@@ -1260,6 +1288,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 autonomous_nudge_count = outcome.new_autonomous_nudge_count;
                 post_tool_nudge_count = outcome.new_post_tool_nudge_count;
                 agent_recovery_nudge_count = outcome.new_agent_recovery_nudge_count;
+                completion_verify_nudge_count = outcome.new_completion_verify_nudge_count;
                 if self.apply_fallback_outcome(
                     &mut ctx,
                     outcome.action,
@@ -1551,6 +1580,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
 self.notify_phase(&LoopPhase::Init, 0);
         let mut post_tool_nudge_count: u32 = 0;
         let mut agent_recovery_nudge_count: u32 = 0;
+        let mut completion_verify_nudge_count: u32 = 0;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
 
         let mut state = LoopState::default();
@@ -2048,6 +2078,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                         post_tool_nudge_count,
                         agent_recovery_nudge_count,
                         recent_tool_failure,
+                        completion_verify_nudge_count,
                         total_turns,
                         max_turns: self.config.max_turns,
                         max_autonomous_nudges: default_max_autonomous_nudges(),
@@ -2059,6 +2090,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 autonomous_nudge_count = outcome.new_autonomous_nudge_count;
                 post_tool_nudge_count = outcome.new_post_tool_nudge_count;
                 agent_recovery_nudge_count = outcome.new_agent_recovery_nudge_count;
+                completion_verify_nudge_count = outcome.new_completion_verify_nudge_count;
                 if self.apply_fallback_outcome(
                     &mut ctx,
                     outcome.action,

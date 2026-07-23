@@ -3091,8 +3091,113 @@ async fn get_session_messages(
         }
     }
 
+    // 2026-07-22 (Plan C): load archived messages from compression
+    // child sessions so the user can still see what was said before
+    // compression. Children are ordered by creation time (oldest
+    // first), so the archived turns appear in chronological order
+    // before the main session's active messages.
+    let child_ids = state
+        .session_persistence
+        .find_children(&session_id)
+        .unwrap_or_default();
+    let mut archived_entries_with_ts: Vec<(String, Vec<(hermix_agent::SessionEntry, Option<String>)>)> = Vec::new();
+    for child_id in &child_ids {
+        let child_ets = state
+            .session_persistence
+            .load_session_with_approvals_and_timestamps(child_id)
+            .unwrap_or_default();
+        // Also build args_map from archived entries so tool argument
+        // reconstruction works for archived tool messages.
+        for (entry, _) in &child_ets {
+            if let hermix_agent::SessionEntry::Message(m) = entry {
+                if let Some(ref tcs) = m.tool_calls {
+                    for tc in tcs {
+                        args_map.insert(tc.id.clone(), tc.function.arguments.clone());
+                    }
+                }
+            }
+        }
+        archived_entries_with_ts.push((child_id.clone(), child_ets));
+    }
+
     let mut idx = 0usize;
-    let messages: Vec<ProtocolMessage> = entries
+    let mut all_messages: Vec<ProtocolMessage> = Vec::new();
+    // 2026-07-23 FIX: buffer compression-child messages here instead of
+    // extending `all_messages` immediately. They are prepended *after*
+    // the main session messages are built so we can de-duplicate child
+    // copies against the parent's (possibly reactivated) active rows.
+    let mut child_all: Vec<ProtocolMessage> = Vec::new();
+
+    // Archived messages from compression child sessions (oldest first).
+    // These carry `compressed: Some(true)` so the frontend can render
+    // a subtle "已压缩" marker on them.
+    for (child_id, child_ets) in archived_entries_with_ts {
+        let child_msgs: Vec<ProtocolMessage> = child_ets
+            .into_iter()
+            .filter(|(e, _ts)| !matches!(e, hermix_agent::SessionEntry::Message(m) if matches!(m.role, MessageRole::System)))
+            .filter_map(|(entry, ts)| {
+                match entry {
+                    hermix_agent::SessionEntry::Message(m) => {
+                        let id = format!("{}-{}", child_id, idx);
+                        idx += 1;
+                        let tool_calls = m.tool_calls.clone();
+                        let tool_name = m.name.clone();
+                        let execution_timeline = m.execution_timeline.clone();
+                        let tool_arguments = if matches!(m.role, MessageRole::Tool) {
+                            m.tool_call_id.as_ref().and_then(|id| args_map.get(id)).cloned()
+                        } else {
+                            None
+                        };
+                        let timestamp = ts.clone().unwrap_or_else(|| now.clone());
+                        Some(ProtocolMessage {
+                            id,
+                            role: match m.role {
+                                MessageRole::User => hermix_transport::Role::User,
+                                MessageRole::Assistant => hermix_transport::Role::Assistant,
+                                MessageRole::System => hermix_transport::Role::System,
+                                MessageRole::Tool => hermix_transport::Role::Tool,
+                            },
+                            content: m.content.unwrap_or_default(),
+                            timestamp,
+                            model: None,
+                            tool_calls,
+                            tool_name,
+                            tool_arguments,
+                            extra: None,
+                            reasoning_content: m.reasoning_content.clone(),
+                            execution_timeline,
+                            created_at: ts,
+                            compressed: Some(true),
+                        })
+                    }
+                    hermix_agent::SessionEntry::Approval(record)
+                    | hermix_agent::SessionEntry::ApprovalOrphan(record) => {
+                        let id = format!("{}-approval-{}", child_id, idx);
+                        idx += 1;
+                        Some(ProtocolMessage {
+                            id,
+                            role: hermix_transport::Role::Approval,
+                            content: String::new(),
+                            timestamp: ts.clone().unwrap_or_else(|| now.clone()),
+                            model: None,
+                            tool_calls: None,
+                            tool_name: None,
+                            tool_arguments: None,
+                            extra: Some(serde_json::to_value(&record).unwrap_or(serde_json::Value::Null)),
+                            reasoning_content: None,
+                            execution_timeline: None,
+                            created_at: ts,
+                            compressed: Some(true),
+                        })
+                    }
+                }
+            })
+            .collect();
+        child_all.extend(child_msgs);
+    }
+
+    // Main session messages (not compressed).
+    let main_msgs: Vec<ProtocolMessage> = entries
         .into_iter()
         .zip(timestamps.into_iter())
         // Defense-in-depth: the SQL filter in
@@ -3177,6 +3282,7 @@ async fn get_session_messages(
                     reasoning_content: m.reasoning_content.clone(),
                     execution_timeline,
                     created_at: ts,
+                    compressed: None,
                 }
             }
             hermix_agent::SessionEntry::Approval(record)
@@ -3206,14 +3312,49 @@ async fn get_session_messages(
                     // assistant turn's tool calls, so no timeline.
                     execution_timeline: None,
                     created_at: ts,
+                    compressed: None,
                 }
             }
         })
         .collect();
+    // 2026-07-23 FIX (restore+compression duplicate): a compression
+    // child session stores a *copy* of the folded-away turns (written
+    // with active=1 into the child). At compression time the parent's
+    // own copy of those turns is deactivated, so normally only the
+    // child copy is shown. But after `/restore` (restore_last_undone)
+    // reactivates the parent's turns, BOTH the parent's reactivated
+    // rows AND the child's copy would be returned — every archived
+    // turn rendered twice in the UI. Drop a child message when an
+    // identical (role+content) message already exists among the
+    // parent's active messages. Because the child copy is a faithful
+    // byte-for-byte copy of the original turn content, this signature
+    // match is exact; legitimate distinct turns are never collapsed.
+    let role_sig = |r: &hermix_transport::Role| -> &'static str {
+        match r {
+            hermix_transport::Role::User => "user",
+            hermix_transport::Role::Assistant => "assistant",
+            hermix_transport::Role::System => "system",
+            hermix_transport::Role::Tool => "tool",
+            hermix_transport::Role::Approval => "approval",
+        }
+    };
+    let main_sigs: std::collections::HashSet<String> = main_msgs
+        .iter()
+        .map(|m| format!("{}|{}", role_sig(&m.role), m.content))
+        .collect();
+    let child_filtered: Vec<ProtocolMessage> = child_all
+        .into_iter()
+        .filter(|m| !main_sigs.contains(&format!("{}|{}", role_sig(&m.role), m.content)))
+        .collect();
+    // Preserve chronological order: archived (child) first, then the
+    // parent's active messages.
+    all_messages.extend(child_filtered);
+    all_messages.extend(main_msgs);
+
     let context_usage = state.session_persistence.get_context_usage(&session_id);
     Ok(Json(SessionMessagesResponse {
         session_id,
-        messages,
+        messages: all_messages,
         context_usage,
     }))
 }
@@ -4845,7 +4986,6 @@ async fn handle_ws_stream_send(
     // message — making it look like the session "resumed" and
     // produced output after being stopped.
     let ws_disconnected = Arc::new(AtomicBool::new(false));
-    let ws_disconnected_clone = ws_disconnected.clone();
     let active_key_clone = active_key.clone();
 
     // 2026-07-19: surface a prior compression-quota warning (set by the
@@ -4872,33 +5012,38 @@ async fn handle_ws_stream_send(
         });
     }
 
+    // P1-2: Clone trace_id for the heartbeat arm before the spawn
+    // moves trace_id_owned into the agent task closure.
+    let trace_id_heartbeat = trace_id_owned.clone();
     let agent_handle = tokio::spawn(async move {
         let result = agent_service
             .send_message_stream(&session_id_clone, &request_text, overrides, on_chunk)
             .await;
 
-        // If the client disconnected mid-stream, skip sending the
-        // terminal Done/Error event. The front-end will never see
-        // a "completed" phase, so on session reload it treats the
-        // message as interrupted — even if send_message_stream
-        // already persisted the full response to DB (best-effort
-        // race: the abort below reduces the window further).
-        if ws_disconnected_clone.load(std::sync::atomic::Ordering::SeqCst) {
-            tracing::debug!(
-                session = %session_id_clone,
-                "WS disconnected before agent finished; skipping Done/Error event"
-            );
-            // Release the session lock even when the WS disconnected.
-            // This allows the user to re-send the message later without
-            // hitting the "already being processed" guard.
-            active_sessions.lock().unwrap().remove(&active_key_clone);
-            active_handles.lock().unwrap().remove(&active_key_clone);
-            // 2026-07-16: also drop the recent_sends entry so a retry of
-            // the same text after a stop/disconnect is NOT silently
-            // swallowed by the dedup window (user must be able to retry).
-            recent_sends.lock().unwrap().remove(&active_key_clone);
-            return;
+        // 2026-07-22 FIX: Previously, if ws_disconnected was true, we
+        // skipped sending the terminal Done/Error event entirely. This
+        // caused the frontend to hang or show "interrupted" because it
+        // never received a closing signal. Now, we always attempt to send
+        // the terminal event (best-effort). If the socket is dead, the
+        // send fails silently, but the session reload from DB will still
+        // show accurate status via execution_timeline.
+        
+        // Always release session/active locks and recent_sends entry,
+        // regardless of whether WS disconnected. Without this, an aborted
+        // agent task after ws_close_frame would leave the session locked
+        // forever, blocking subsequent messages.
+        {
+            let mut active_s = active_sessions.lock().unwrap();
+            active_s.remove(&active_key_clone);
+            let mut active_h = active_handles.lock().unwrap();
+            active_h.remove(&active_key_clone);
+            let mut rs = recent_sends.lock().unwrap();
+            rs.remove(&active_key_clone);
         }
+
+        // If the socket is dead, the send will fail silently;
+        // log it for diagnostics. The frontend will get
+        // the result by reloading the session from DB.
 
         match result {
             Ok(reply) => {
@@ -4956,7 +5101,7 @@ async fn handle_ws_stream_send(
                     "agent task failed; classifying for user-facing message"
                 );
                 let (code, message) = user_facing_agent_error(&e);
-                let _ = tx
+                if let Err(send_err) = tx
                     .send(WsEnvelope {
                         version: 1,
                         request_id: request_id_owned.clone(),
@@ -4966,7 +5111,20 @@ async fn handle_ws_stream_send(
                             message: redact_sensitive(&message),
                         },
                     })
-                    .await;
+                    .await
+                {
+                    // 2026-07-22: The rx forward loop has already exited
+                    // (likely because the client closed the WS). The error
+                    // event is lost — the user won't see it in the chat.
+                    // Log this so we can diagnose "error silently eaten"
+                    // from post-mortem logs instead of guessing.
+                    tracing::warn!(
+                        session = %session_id_clone,
+                        error = %send_err,
+                        user_message = %message,
+                        "Error event FAILED to send — WS already closed, user will not see this error in chat"
+                    );
+                }
             }
         }
 
@@ -5092,6 +5250,19 @@ async fn handle_ws_stream_send(
                     session = %session_id,
                     "ws_stream: heartbeat ping"
                 );
+                // 2026-07-22 (P1-2): send BOTH a WS-protocol Ping and
+                // an application-level Heartbeat text frame. The Ping
+                // refreshes middlebox/NAT idle timers and lets the
+                // server detect dead connections when the send fails.
+                // But browser WebSocket JS API never surfaces pings to
+                // `onmessage` — so the client's 300s IDLE/stale timers
+                // are never reset by pings alone. The Heartbeat text
+                // frame fires `onmessage`, which resets the client
+                // timers (the reset happens at the top of the handler,
+                // before event-type dispatch). Together: the server
+                // catches dead connections in ~15s, the client catches
+                // them in ~300s (or immediately if the browser's TCP
+                // stack reports the socket close).
                 if sender.send(WsMessage::Ping(Bytes::new())).await.is_err() {
                     exit_branch = "heartbeat_ping_fail";
                     was_client_disconnect = true;
@@ -5101,6 +5272,27 @@ async fn handle_ws_stream_send(
                     // heartbeat ping failed → the WS path is dead even
                     // though we can't yet read a close frame, so we
                     // must let the agent task know.
+                    shutdown_notify.notify_one();
+                    state.active_handles.lock().unwrap().remove(&active_key);
+                    state.active_sessions.lock().unwrap().remove(&active_key);
+                    break;
+                }
+                // Application-level heartbeat — resets the client's
+                // IDLE/stale timers via `onmessage`. Minimal JSON,
+                // ~60 bytes, no per-event allocation beyond the
+                // envelope + serde serialize.
+                let hb = WsEnvelope {
+                    version: 1,
+                    request_id: None,
+                    trace_id: trace_id_heartbeat.clone(),
+                    event: StreamEvent::Heartbeat,
+                };
+                if sender.send(WsMessage::Text(
+                    serde_json::to_string(&hb).unwrap_or_default().into(),
+                )).await.is_err() {
+                    exit_branch = "heartbeat_text_fail";
+                    was_client_disconnect = true;
+                    ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                     shutdown_notify.notify_one();
                     state.active_handles.lock().unwrap().remove(&active_key);
                     state.active_sessions.lock().unwrap().remove(&active_key);
@@ -6774,16 +6966,51 @@ fn redact_sensitive(input: &str) -> String {
 /// 2026-07-19: turn a raw `AgentError` from the agent loop into a
 /// user-facing `(code, message)` pair.
 ///
-/// Quota / rate-limit failures (HTTP 429 or a provider-specific
-/// "用量上限" / "Token Plan" message) get a clear, actionable Chinese
-/// message instead of the raw provider JSON — which buries "用量上限"
-/// inside a `request_id`-laden blob the user can't parse and leaves
-/// them wondering why the message silently produced no reply. Auth
-/// failures get a config-focused hint. Everything else falls back to
+/// Each classified category prepends a short actionable Chinese prefix
+/// (e.g. "AI 服务过载:") followed by the **original provider error
+/// message**, so the user can see what actually happened (which model,
+/// which provider, what the API returned) instead of a generic
+/// one-size-fits-all banner. Everything else falls back to
 /// `e.to_string()` so we never lose diagnostic detail.
 fn user_facing_agent_error(e: &AgentError) -> (String, String) {
     let s = e.to_string();
     let lower = s.to_lowercase();
+
+    /// Extract the human-readable message from a raw error string.
+    /// Provider responses are often nested JSON like:
+    ///   `API error 529 <unknown status code>: {"type":"error","error":{"message":"负载较高..."}}`
+    /// This function strips the `API error NNN` prefix and extracts
+    /// the inner `message` field if present, falling back to the
+    /// stripped string otherwise.
+    fn extract_provider_message(raw: &str) -> String {
+        // Strip repeated "LLM API error: API error:" wrappers
+        let stripped = raw
+            .replace("LLM API error: ", "")
+            .replace("LLM API error: ", "")
+            .replace("API error ", "");
+        // Try to extract the provider's own message from JSON
+        // e.g. `529 <unknown status code>: {"type":"error","error":{"message":"负载较高..."}}`
+        if let Some(json_start) = stripped.find('{') {
+            let json_part = &stripped[json_start..];
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_part) {
+                if let Some(msg) = parsed
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                {
+                    return msg.to_string();
+                }
+                if let Some(msg) = parsed.get("message").and_then(|m| m.as_str()) {
+                    return msg.to_string();
+                }
+            }
+        }
+        // Not JSON or no message field — return the stripped version
+        stripped.trim().to_string()
+    }
+
+    let provider_msg = extract_provider_message(&s);
+
     if lower.contains("429")
         || lower.contains("too many requests")
         || lower.contains("rate_limit")
@@ -6794,7 +7021,18 @@ fn user_facing_agent_error(e: &AgentError) -> (String, String) {
     {
         (
             "quota_exhausted".to_string(),
-            "Token Plan 用量已达上限,请升级套餐或购买积分后重试。".to_string(),
+            format!("用量已达上限: {provider_msg}"),
+        )
+    } else if lower.contains("529")
+        || lower.contains("overloaded")
+        || lower.contains("负载较高")
+        || lower.contains("server is overloaded")
+        || lower.contains("service unavailable")
+        || lower.contains("503")
+    {
+        (
+            "provider_overloaded".to_string(),
+            format!("AI 服务过载: {provider_msg}"),
         )
     } else if lower.contains("401")
         || lower.contains("unauthorized")
@@ -6803,7 +7041,7 @@ fn user_facing_agent_error(e: &AgentError) -> (String, String) {
     {
         (
             "auth_error".to_string(),
-            "API 密钥无效或已过期,请检查模型提供商配置。".to_string(),
+            format!("API 密钥认证失败: {provider_msg}"),
         )
     } else {
         ("agent_error".to_string(), s)

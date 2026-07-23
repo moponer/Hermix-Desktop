@@ -184,6 +184,20 @@ pub const MAX_POST_TOOL_NUDGES: u32 = 3;
 /// behavior is consistent across both nudge flavors.
 pub const MAX_AGENT_RECOVERY_NUDGES: u32 = 3;
 
+/// Max "completion-verification" nudges before respecting the LLM's
+/// stop signal.
+///
+/// 2026-07-23 (主人反馈 #2): the agent must NOT declare a task complete
+/// on the strength of a visible-text reply alone. When tools were used
+/// this session and the LLM is about to finalize (visible text, no new
+/// tool call, no recoverable failure), we inject ONE verification nudge
+/// requiring the LLM to re-examine the tool outputs / final state against
+/// the original request and continue (with a tool call) if anything is
+/// unverified. Capped at 1 so a re-affirmed completion is respected and
+/// we never loop — but a single verification pass is enough to catch the
+/// "LLM claimed done but the result was fake / unverified" failure mode.
+pub const MAX_COMPLETION_VERIFY_NUDGES: u32 = 1;
+
 /// What should the agent loop do when the LLM responded with no tool
 /// calls?
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +238,11 @@ pub struct EmptyResponseInput<'a> {
     /// immediately finalizing. `None` when no tool failed, or when
     /// the last tool succeeded.
     pub recent_tool_failure: Option<ToolFailureRecord>,
+    /// Number of "completion-verification" nudges already fired this
+    /// session. Capped at [`MAX_COMPLETION_VERIFY_NUDGES`]. 2026-07-23:
+    /// added to back the new completion-verification gate (section 2d)
+    /// which forces the LLM to verify real completion before finalizing.
+    pub completion_verify_nudge_count: u32,
     pub total_turns: u32,
     pub max_turns: u32,
     pub max_autonomous_nudges: u32,
@@ -238,6 +257,7 @@ pub struct EmptyResponseOutput {
     pub new_autonomous_nudge_count: u32,
     pub new_post_tool_nudge_count: u32,
     pub new_agent_recovery_nudge_count: u32,
+    pub new_completion_verify_nudge_count: u32,
 }
 
 /// Detect if the LLM's visible text looks like it's giving up due to
@@ -324,6 +344,7 @@ pub fn decide_empty_response(
             new_autonomous_nudge_count: input.autonomous_nudge_count,
             new_post_tool_nudge_count: input.post_tool_nudge_count,
             new_agent_recovery_nudge_count: input.agent_recovery_nudge_count,
+            new_completion_verify_nudge_count: input.completion_verify_nudge_count,
         };
     }
 
@@ -386,6 +407,7 @@ pub fn decide_empty_response(
             new_autonomous_nudge_count: input.autonomous_nudge_count,
             new_post_tool_nudge_count: input.post_tool_nudge_count + 1,
             new_agent_recovery_nudge_count: input.agent_recovery_nudge_count,
+            new_completion_verify_nudge_count: input.completion_verify_nudge_count,
         };
     }
 
@@ -437,6 +459,7 @@ pub fn decide_empty_response(
             new_autonomous_nudge_count: input.autonomous_nudge_count,
             new_post_tool_nudge_count: input.post_tool_nudge_count,
             new_agent_recovery_nudge_count: input.agent_recovery_nudge_count + 1,
+            new_completion_verify_nudge_count: input.completion_verify_nudge_count,
         };
     }
 
@@ -520,6 +543,74 @@ pub fn decide_empty_response(
             new_autonomous_nudge_count: input.autonomous_nudge_count,
             new_post_tool_nudge_count: input.post_tool_nudge_count,
             new_agent_recovery_nudge_count: input.agent_recovery_nudge_count + 1,
+            new_completion_verify_nudge_count: input.completion_verify_nudge_count,
+        };
+    }
+
+    // 2d. Completion-verification gate — 2026-07-23 (主人反馈 #2).
+    //     The agent must NOT declare a task complete on the strength of
+    //     a visible-text reply alone. When tools were used this session
+    //     and the LLM is about to finalize (visible text, no new tool
+    //     call, and neither the permission-giveup nor the
+    //     tool-failure-retry branch fired), inject ONE verification
+    //     nudge requiring the LLM to re-examine the tool outputs / final
+    //     state against the user's original request and continue (with a
+    //     tool call) if anything is unverified or unmet.
+    //
+    //     This directly addresses the reported failure mode: the LLM
+    //     replied "done" but the result was fake / unverified, only
+    //     discovered on the NEXT conversation. The nudge explicitly
+    //     tells the LLM to confirm the end state via a tool (re-read the
+    //     file, re-run the check) rather than assume — and to keep
+    //     working if the criterion isn't met.
+    //
+    //     Capped at MAX_COMPLETION_VERIFY_NUDGES (1): after one
+    //     verification pass, if the LLM re-affirms completion we respect
+    //     it and finalize (no loop). If instead the LLM calls a tool to
+    //     verify, the loop continues naturally. Skipped for pure Q&A
+    //     sessions (no tools used) since there is nothing to verify.
+    //
+    //     SCOPING (2026-07-23 follow-up): this gate must NOT fire when a
+    //     real failure or permission give-up is already on the table —
+    //     those are owned by sections 2b (permission-giveup) and 2c
+    //     (tool-failure-retry) and would otherwise double-nudge or
+    //     hijack their finalize-after-exhaustion semantics. We only fire
+    //     on a *clean* completion claim: tools were used, there is no
+    //     recorded recent tool failure, the reply is not a permission
+    //     give-up, and the LLM produced visible text claiming done.
+    if input.history_includes_tool
+        && input.has_tool_schemas
+        && (input.max_turns == 0 || input.total_turns < input.max_turns)
+        && input.completion_verify_nudge_count < MAX_COMPLETION_VERIFY_NUDGES
+        && (input.assistant_has_visible_text)(input.assistant_msg)
+        && input.recent_tool_failure.is_none()
+        && !looks_like_permission_giveup(
+            input.assistant_msg.content.as_deref().unwrap_or(""),
+        )
+    {
+        let nudge = "Before you finalize, you MUST verify the task is genuinely complete. \
+            Re-examine the tool outputs and the user's original request. \
+            Do NOT declare completion based on assumption alone — if you have not \
+            directly confirmed the final result (e.g. re-read the file, re-run the \
+            check, or otherwise observed the end state), do that now with a tool call. \
+            Only respond with a final summary if you have concrete evidence the task \
+            is done. If any acceptance criterion is unmet or unverified, continue \
+            working (call the appropriate tool). The task is NOT complete until you \
+            have verified it."
+            .to_string();
+        tracing::info!(
+            nudge_count = input.completion_verify_nudge_count + 1,
+            max = MAX_COMPLETION_VERIFY_NUDGES,
+            total_turns = input.total_turns,
+            "completion_verify_nudge: forcing LLM to verify real completion before finalize"
+        );
+        return EmptyResponseOutput {
+            action: EmptyResponseAction::ContinueWithSystemNudge(nudge),
+            new_codex_ack_continuations: input.codex_ack_continuations,
+            new_autonomous_nudge_count: input.autonomous_nudge_count,
+            new_post_tool_nudge_count: input.post_tool_nudge_count,
+            new_agent_recovery_nudge_count: input.agent_recovery_nudge_count,
+            new_completion_verify_nudge_count: input.completion_verify_nudge_count + 1,
         };
     }
 
@@ -577,6 +668,7 @@ pub fn decide_empty_response(
             new_autonomous_nudge_count: input.autonomous_nudge_count + 1,
             new_post_tool_nudge_count: input.post_tool_nudge_count,
             new_agent_recovery_nudge_count: input.agent_recovery_nudge_count,
+            new_completion_verify_nudge_count: input.completion_verify_nudge_count,
         };
     }
 
@@ -592,6 +684,7 @@ pub fn decide_empty_response(
         new_autonomous_nudge_count: input.autonomous_nudge_count,
         new_post_tool_nudge_count: input.post_tool_nudge_count,
         new_agent_recovery_nudge_count: input.agent_recovery_nudge_count,
+        new_completion_verify_nudge_count: input.completion_verify_nudge_count,
     }
 }
 
@@ -634,6 +727,7 @@ mod tests {
             post_tool_nudge_count: 0,
             agent_recovery_nudge_count: 0,
             recent_tool_failure: None,
+            completion_verify_nudge_count: 0,
             total_turns: 3,
             max_turns: 30,
             max_autonomous_nudges: 8,
@@ -644,7 +738,11 @@ mod tests {
     #[test]
     fn default_is_finalize() {
         let m = make_assistant_msg(Some("ok done"), false);
-        let out = decide_empty_response(base_input(&m));
+        let mut input = base_input(&m);
+        // Non-tool session: section 2d (completion-verify) only applies
+        // when tools were used, so a plain reply finalizes directly.
+        input.history_includes_tool = false;
+        let out = decide_empty_response(input);
         assert_eq!(out.action, EmptyResponseAction::Finalize);
     }
 
@@ -704,16 +802,29 @@ mod tests {
 
     #[test]
     fn post_tool_nudge_does_not_fire_when_visible_text_present() {
-        // When the LLM produced visible text after tool execution,
-        // no nudge — respect the LLM's answer.
+        // When the LLM produced visible text after tool execution, the
+        // post-tool nudge (section 2) does NOT fire — it only fires on
+        // empty visible text. But a clean completion claim in a tool
+        // session now hits section 2d (completion-verify), which is the
+        // intended replacement for the old blind finalize. The post-tool
+        // counter must stay untouched.
         let m = make_assistant_msg(Some("20个子目录（车辆），无文件。"), false);
         let input = base_input(&m); // history_includes_tool=true
         let out = decide_empty_response(input);
-        assert_eq!(
-            out.action,
-            EmptyResponseAction::Finalize,
-            "should finalize when LLM gave visible text"
-        );
+        assert_eq!(out.new_post_tool_nudge_count, 0);
+        match out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
+                assert!(
+                    text.contains("verify") || text.contains("NOT complete"),
+                    "clean completion claim must trigger verification nudge, got: {text}"
+                );
+                assert_eq!(out.new_completion_verify_nudge_count, 1);
+            }
+            other => panic!(
+                "expected completion-verify nudge, got {:?}",
+                other
+            ),
+        }
     }
 
     #[test]
@@ -808,7 +919,9 @@ mod tests {
     #[test]
     fn autonomous_nudge_does_not_fire_when_tools_already_used() {
         // After tools have been used, the autonomous pre-tool nudge
-        // should NOT fire — the post-tool nudge handles that case.
+        // (section 3) must NOT fire — new_autonomous_nudge_count stays 0.
+        // A visible completion claim in a tool session now hits section
+        // 2d (completion-verify) instead of finalizing blindly.
         let m = make_assistant_msg(
             Some("20个子目录（车辆），无文件。"),
             false,
@@ -818,12 +931,14 @@ mod tests {
         input.history_includes_tool = true;
         input.autonomous_nudge_count = 0;
         let out = decide_empty_response(input);
-        assert_eq!(
-            out.action,
-            EmptyResponseAction::Finalize,
-            "must finalize when LLM gave visible text after tools — respect the answer"
-        );
         assert_eq!(out.new_autonomous_nudge_count, 0);
+        match out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(_) => {}
+            other => panic!(
+                "expected completion-verify nudge (not autonomous), got {:?}",
+                other
+            ),
+        }
     }
 
     #[test]
@@ -926,18 +1041,30 @@ mod tests {
 
     #[test]
     fn permission_giveup_nudge_does_not_fire_on_normal_text() {
-        // Normal visible text after tools should still finalize.
+        // Normal visible text after tools — not a permission give-up, so
+        // section 2b does NOT fire. With no recorded tool failure, the
+        // completion-verification gate (section 2d) now injects one
+        // verification pass instead of finalizing blindly — this is the
+        // exact "fake completion" bug 主人 reported.
         let m = make_assistant_msg(
             Some("扫描完成，C盘共有20个目录。"),
             false,
         );
         let input = base_input(&m);
         let out = decide_empty_response(input);
-        assert_eq!(
-            out.action,
-            EmptyResponseAction::Finalize,
-            "normal text should finalize, not trigger permission nudge"
-        );
+        match out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
+                assert!(
+                    text.contains("verify") || text.contains("NOT complete"),
+                    "clean completion claim must trigger verification nudge, got: {text}"
+                );
+                assert_eq!(out.new_completion_verify_nudge_count, 1);
+            }
+            other => panic!(
+                "expected completion-verify nudge, got {:?}",
+                other
+            ),
+        }
     }
 
     #[test]
@@ -1116,14 +1243,28 @@ mod tests {
 
     #[test]
     fn tool_failure_retry_nudge_does_not_fire_when_no_failure() {
-        // No recent failure recorded — behave like the default and
-        // Finalize. This protects against a buggy caller that
-        // forgets to populate `recent_tool_failure`.
+        // No recent failure recorded → section 2c does NOT fire
+        // (new_agent_recovery_nudge_count unchanged). However, a visible
+        // completion claim in a tool session now hits section 2d
+        // (completion-verify), which is the intended replacement for the
+        // old blind finalize.
         let m = make_assistant_msg(Some("任务完成"), false);
         let mut input = base_input(&m);
         input.recent_tool_failure = None;
         let out = decide_empty_response(input);
-        assert_eq!(out.action, EmptyResponseAction::Finalize);
+        assert_eq!(out.new_agent_recovery_nudge_count, 0);
+        match out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
+                assert!(
+                    text.contains("verify") || text.contains("NOT complete"),
+                    "clean completion claim must trigger verification nudge, got: {text}"
+                );
+            }
+            other => panic!(
+                "expected completion-verify nudge, got {:?}",
+                other
+            ),
+        }
     }
 
     #[test]
@@ -1197,5 +1338,82 @@ mod tests {
         ));
         let out = decide_empty_response(input);
         assert_eq!(out.action, EmptyResponseAction::Finalize);
+    }
+
+    // ===== 2026-07-23: section 2d (completion-verification gate) =====
+
+    #[test]
+    fn completion_verify_nudge_fires_on_tool_session_with_visible_text() {
+        // Normal successful-looking completion in a tool-using session:
+        // the LLM says "done" but we must force one verification pass.
+        let m = make_assistant_msg(Some("All files renamed. Task complete."), false);
+        let out = decide_empty_response(base_input(&m));
+        match out.action {
+            EmptyResponseAction::ContinueWithSystemNudge(text) => {
+                assert!(
+                    text.contains("verify") || text.contains("验证"),
+                    "nudge must demand verification, got: {text}"
+                );
+                assert_eq!(out.new_completion_verify_nudge_count, 1);
+            }
+            other => panic!("expected completion-verify nudge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completion_verify_nudge_does_not_fire_without_tool_history() {
+        // Pure Q&A session — nothing to verify, so finalize directly.
+        let m = make_assistant_msg(Some("The capital of France is Paris."), false);
+        let mut input = base_input(&m);
+        input.history_includes_tool = false;
+        let out = decide_empty_response(input);
+        assert_eq!(out.action, EmptyResponseAction::Finalize);
+        assert_eq!(out.new_completion_verify_nudge_count, 0);
+    }
+
+    #[test]
+    fn completion_verify_nudge_does_not_fire_on_first_turn_no_text() {
+        // No visible text → section 2 (post-tool nudge) owns this case,
+        // not the completion-verify gate (section 2d). 2d must NOT fire
+        // (new_completion_verify_nudge_count stays 0); the post-tool
+        // nudge is what fires.
+        let m = make_assistant_msg(None, false);
+        let mut input = base_input(&m);
+        let out = decide_empty_response(input);
+        assert_eq!(out.new_completion_verify_nudge_count, 0);
+        assert!(
+            matches!(out.action, EmptyResponseAction::ContinueWithSystemNudge(_)),
+            "post-tool nudge should fire on empty visible text, got: {:?}",
+            out.action
+        );
+    }
+
+    #[test]
+    fn completion_verify_nudge_respects_max_count() {
+        // At MAX, even a tool-using visible-text completion finalizes —
+        // we don't loop forever; a re-affirmed completion is respected.
+        let m = make_assistant_msg(Some("Task complete."), false);
+        let mut input = base_input(&m);
+        input.completion_verify_nudge_count = MAX_COMPLETION_VERIFY_NUDGES;
+        let out = decide_empty_response(input);
+        assert_eq!(out.action, EmptyResponseAction::Finalize);
+        assert_eq!(
+            out.new_completion_verify_nudge_count,
+            MAX_COMPLETION_VERIFY_NUDGES
+        );
+    }
+
+    #[test]
+    fn completion_verify_nudge_increments_only_its_own_counter() {
+        // Firing the completion-verify nudge must NOT consume the shared
+        // agent-recovery budget (sections 2b/2c), so a later genuine
+        // failure/giveup can still be nudged.
+        let m = make_assistant_msg(Some("Done."), false);
+        let mut input = base_input(&m);
+        input.agent_recovery_nudge_count = MAX_AGENT_RECOVERY_NUDGES; // exhausted
+        let out = decide_empty_response(input);
+        assert!(matches!(out.action, EmptyResponseAction::ContinueWithSystemNudge(_)));
+        assert_eq!(out.new_agent_recovery_nudge_count, MAX_AGENT_RECOVERY_NUDGES);
+        assert_eq!(out.new_completion_verify_nudge_count, 1);
     }
 }
