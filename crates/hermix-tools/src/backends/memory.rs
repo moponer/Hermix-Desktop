@@ -475,6 +475,49 @@ impl FileMemoryBackend {
         }
     }
 
+    /// Build a "No entry matched" error that lists every available
+    /// entry with its `[idx]` and an 80-char preview. The LLM can
+    /// then either pick a more precise substring, or — once we wire
+    /// a `memory_list` tool — fetch the list again before retrying.
+    ///
+    /// Without this, the LLM was flying blind on every `replace` /
+    /// `remove` miss: it had to guess what the right `old_text` was
+    /// based on its own (often stale) snapshot of the file, and
+    /// usually re-guessed wrong. Surfacing the index list turns
+    /// the failure into a self-service retry path.
+    ///
+    /// `target` is "memory" or "user" (used in the message body for
+    /// clarity — the LLM shouldn't have to know which file a given
+    /// target maps to).
+    fn format_no_match_error(
+        target: &str,
+        old_text: &str,
+        entries: &[String],
+    ) -> String {
+        if entries.is_empty() {
+            return format!(
+                "No entry matched '{}' in {} — the memory file is currently empty. \
+                 Add the entry first with action='add', or use a different old_text.",
+                old_text, target,
+            );
+        }
+        let available: Vec<String> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| format!("  [{}] {}", i, Self::preview(e)))
+            .collect();
+        format!(
+            "No entry matched '{}' in {} ({} entries on disk). \
+             Pick a more precise substring — ideally the entire entry, or a \
+             unique phrase from it. Tip: copy the full text after the [N] marker \
+             below verbatim. Available entries:\n{}",
+            old_text,
+            target,
+            entries.len(),
+            available.join("\n"),
+        )
+    }
+
     fn char_limit_for(target: &str) -> usize {
         if target == "user" {
             USER_CHAR_LIMIT
@@ -516,6 +559,7 @@ impl FileMemoryBackend {
         entries: &[String],
         message: &str,
         archived_to: Option<&Path>,
+        archived_count: Option<usize>,
     ) -> String {
         let limit = Self::char_limit_for(target);
         let current = entries.join(ENTRY_DELIMITER).chars().count();
@@ -541,6 +585,9 @@ impl FileMemoryBackend {
         if let Some(p) = archived_to {
             body["archived_to"] = json!(p.display().to_string());
         }
+        if let Some(n) = archived_count {
+            body["archived_count"] = json!(n);
+        }
         body.to_string()
     }
 
@@ -559,9 +606,11 @@ impl FileMemoryBackend {
     /// any value ≤ `char_limit_for(target)` to control how
     /// aggressively to trim.
     ///
-    /// Returns `Some(archive_path)` if any entries were moved
-    /// and `None` if the kept entries already fit within
-    /// `target_kept_size` (the common no-op path).
+    /// Returns `Some((archive_path, archived_count))` if any entries
+    /// were moved, where `archived_count` is how many entries were
+    /// rotated out of the live memory file, and `None` if the kept
+    /// entries already fit within `target_kept_size` (the common
+    /// no-op path).
     ///
     /// # Mechanics
     ///
@@ -591,7 +640,7 @@ impl FileMemoryBackend {
         &self,
         target: &str,
         target_kept_size: usize,
-    ) -> Result<Option<PathBuf>, ToolError> {
+    ) -> Result<Option<(PathBuf, usize)>, ToolError> {
         let limit = Self::char_limit_for(target);
         let path = self.path_for(target)?;
         self.ensure_within_dir(&path)?;
@@ -626,6 +675,7 @@ impl FileMemoryBackend {
         if to_archive.is_empty() {
             return Ok(None);
         }
+        let archived_count = to_archive.len();
 
         let dir = self.dir();
         tokio::fs::create_dir_all(&dir).await.map_err(|e| {
@@ -732,7 +782,7 @@ impl FileMemoryBackend {
         let current_bytes = std::fs::read(&path).unwrap_or_default();
         self.atomic_write(&path, &new_memory, &current_bytes).await?;
 
-        Ok(Some(archive_path))
+        Ok(Some((archive_path, archived_count)))
     }
 }
 
@@ -764,6 +814,7 @@ impl MemoryBackend for FileMemoryBackend {
                 &entries,
                 "Entry already exists (no duplicate added).",
                 None,
+                None,
             ));
         }
 
@@ -784,6 +835,7 @@ impl MemoryBackend for FileMemoryBackend {
         // false-positive on our own archive write.
         let mut original_for_drift = original;
         let mut archived_to: Option<PathBuf> = None;
+        let mut archived_count: Option<usize> = None;
         if new_total > limit {
             // Try to make room by moving older entries to
             // archive.md. If the archive frees enough space,
@@ -804,13 +856,14 @@ impl MemoryBackend for FileMemoryBackend {
                 .saturating_sub(delimiter_cost)
                 .saturating_sub(1);
             match self.try_auto_archive(target, target_kept_size).await? {
-                Some(p) => {
+                Some((p, n)) => {
                     // Re-read baseline + entries after
                     // archive mutated the file.
                     let post = self.read_file(&path).await?;
                     entries = Self::parse_entries(&post);
                     original_for_drift = post;
                     archived_to = Some(p);
+                    archived_count = Some(n);
                     let recalc_total = {
                         let mut tmp = entries.clone();
                         tmp.push(trimmed.to_string());
@@ -874,6 +927,7 @@ impl MemoryBackend for FileMemoryBackend {
                  positive."
             },
             archived_to.as_deref(),
+            archived_count,
         );
         if !scan.matches.is_empty() {
             // Append the scan status JSON so the LLM has
@@ -922,9 +976,8 @@ impl MemoryBackend for FileMemoryBackend {
             .collect();
 
         if matches.is_empty() {
-            return Err(ToolError::ExecutionFailed(format!(
-                "No entry matched '{}'.",
-                old_text
+            return Err(ToolError::ExecutionFailed(Self::format_no_match_error(
+                target, old_text, &entries,
             )));
         }
 
@@ -936,8 +989,9 @@ impl MemoryBackend for FileMemoryBackend {
                     .map(|i| Self::preview(&entries[*i]))
                     .collect();
                 return Err(ToolError::ExecutionFailed(format!(
-                    "Multiple entries matched '{}'. Be more specific. Matches: {}",
+                    "Multiple entries matched '{}' in {}. Be more specific. Matches: {}",
                     old_text,
+                    target,
                     previews.join(" | ")
                 )));
             }
@@ -973,6 +1027,7 @@ impl MemoryBackend for FileMemoryBackend {
                  (BLOCKED: prefix)."
             },
             None,
+            None,
         );
         if !scan.matches.is_empty() {
             resp = format!("{}\n{}", resp, scan_status_json(&scan));
@@ -1006,9 +1061,8 @@ impl MemoryBackend for FileMemoryBackend {
             .collect();
 
         if matches.is_empty() {
-            return Err(ToolError::ExecutionFailed(format!(
-                "No entry matched '{}'.",
-                old_text
+            return Err(ToolError::ExecutionFailed(Self::format_no_match_error(
+                target, old_text, &entries,
             )));
         }
 
@@ -1020,8 +1074,9 @@ impl MemoryBackend for FileMemoryBackend {
                     .map(|i| Self::preview(&entries[*i]))
                     .collect();
                 return Err(ToolError::ExecutionFailed(format!(
-                    "Multiple entries matched '{}'. Be more specific. Matches: {}",
+                    "Multiple entries matched '{}' in {}. Be more specific. Matches: {}",
                     old_text,
+                    target,
                     previews.join(" | ")
                 )));
             }
@@ -1036,6 +1091,7 @@ impl MemoryBackend for FileMemoryBackend {
             target,
             &entries,
             "Entry removed.",
+            None,
             None,
         ))
     }
@@ -1165,6 +1221,12 @@ mod tests {
         );
         let archive_path = parsed["archived_to"].as_str().unwrap();
         assert!(archive_path.ends_with("archive.md"));
+        // The archive must also report how many entries moved.
+        assert_eq!(
+            parsed["archived_count"].as_u64(),
+            Some(1),
+            "archive should report exactly 1 archived entry; got: {resp}"
+        );
         // MEMORY.md now contains only the two newest entries.
         let mem_entries = parse_entries_at(&backend, "memory").await;
         assert_eq!(mem_entries.len(), 2);
@@ -1230,7 +1292,8 @@ mod tests {
             mem_entries.iter().any(|e| e.ends_with(" 4")),
             "newest entry must remain in MEMORY.md; got: {mem_entries:?}"
         );
-        let archive_path = result.unwrap();
+        let (archive_path, archived_count) = result.unwrap();
+        assert!(archived_count > 0, "archive must report a positive count");
         let archive_content = std::fs::read_to_string(&archive_path).unwrap();
         // The oldest entry ("0") must always end up in archive.md
         // because it has the highest archive priority (the walk
@@ -1414,6 +1477,98 @@ mod tests {
         let (_tmp, backend) = make_backend();
         let err = backend.add("notes", "x").await.unwrap_err();
         assert!(format!("{}", err).contains("Invalid target"));
+    }
+
+    // ---- 2026-07-23: 'No entry matched' error must list available
+    //      entries so the LLM can self-correct without flying blind.
+    //      Regression: 主人截图 2026-07-23 显示 LLM 看到 "No entry
+    //      matched '比如行驶证、营运证进行重命名'" 后没拿到可用列表，
+    //      反复猜 old_text 失败 → 放弃任务。---- //
+    #[tokio::test]
+    async fn no_match_replace_lists_available_entries() {
+        let (_tmp, backend) = make_backend();
+        backend
+            .add("user", "比如行驶证、营运证进行重命名")
+            .await
+            .unwrap();
+        backend
+            .add("user", "another fact about QCC files")
+            .await
+            .unwrap();
+        let err = backend
+            .replace("user", "完全不在文件里的字符串", "new")
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("No entry matched '完全不在文件里的字符串'"),
+            "error must echo the failing old_text, got: {msg}"
+        );
+        assert!(
+            msg.contains("[0] 比如行驶证、营运证进行重命名"),
+            "error must list entry [0] with the actual stored text, got: {msg}"
+        );
+        assert!(
+            msg.contains("[1] another fact about QCC files"),
+            "error must list entry [1] with the actual stored text, got: {msg}"
+        );
+        assert!(
+            msg.contains("2 entries on disk"),
+            "error must report entry count, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_match_remove_lists_available_entries() {
+        let (_tmp, backend) = make_backend();
+        backend.add("memory", "the user prefers dark mode").await.unwrap();
+        let err = backend
+            .remove("memory", "totally wrong substring")
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("No entry matched"));
+        assert!(msg.contains("[0] the user prefers dark mode"));
+    }
+
+    #[tokio::test]
+    async fn no_match_with_empty_memory_gives_add_hint() {
+        let (_tmp, backend) = make_backend();
+        let err = backend
+            .replace("memory", "anything", "new")
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("memory file is currently empty"),
+            "empty memory should hint at action='add', got: {msg}"
+        );
+        assert!(
+            msg.contains("action='add'"),
+            "should point the LLM at the right action, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn replace_with_whitespace_padded_old_text_still_works() {
+        // The LLM often copies the old_text with surrounding
+        // whitespace (or with full-width space U+3000) from a
+        // bullet list. The .trim() call on the input covers
+        // ASCII + U+3000 + newlines, so the substring match
+        // still finds the entry.
+        let (_tmp, backend) = make_backend();
+        backend
+            .add("user", "比如行驶证、营运证进行重命名")
+            .await
+            .unwrap();
+        let padded = "  \u{3000}\n 比如行驶证、营运证进行重命名 \n";
+        let result = backend
+            .replace("user", padded, "已重命名: 行驶证 / 营运证")
+            .await
+            .unwrap();
+        assert!(result.contains("Entry replaced"));
+        let entries = parse_entries_at(&backend, "user").await;
+        assert_eq!(entries, vec!["已重命名: 行驶证 / 营运证".to_string()]);
     }
 
     async fn parse_entries_at(backend: &FileMemoryBackend, target: &str) -> Vec<String> {

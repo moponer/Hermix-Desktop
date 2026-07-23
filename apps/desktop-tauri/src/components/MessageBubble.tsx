@@ -274,14 +274,20 @@ function ToolGroupCard({
   const isError = group.status === "error";
   const [open, setOpen] = useState(false);
 
-  const startEv = group.events.find((e) => e.type === "tool_start");
-  const completeEv = group.events.find((e) => e.type === "tool_complete");
-  const stdout = group.events
-    .filter((e) => e.type === "tool_stdout")
-    .map((e) => e.content ?? "")
-    .join("");
-  const output = completeEv?.content ?? stdout ?? "";
-  const hasOutput = output.length > 0;
+  // P4-1: Memoize event-derived data so large stdout outputs
+  // aren't re-joined on every render (e.g. a tool with 500
+  // stdout chunks would previously concatenate 500 strings on
+  // every parent re-render even though the result is identical).
+  const { startEv, output, hasOutput } = useMemo(() => {
+    const startEv = group.events.find((e) => e.type === "tool_start");
+    const completeEv = group.events.find((e) => e.type === "tool_complete");
+    const stdout = group.events
+      .filter((e) => e.type === "tool_stdout")
+      .map((e) => e.content ?? "")
+      .join("");
+    const output = completeEv?.content ?? stdout ?? "";
+    return { startEv, output, hasOutput: output.length > 0 };
+  }, [group.events]);
 
   const toolName = group.tool;
   const args = startEv?.arguments;
@@ -440,14 +446,18 @@ function ProcessTimeline({
     if (!isStreaming) setUserOverride(null);
   }, [isStreaming]);
 
-  if (processSteps.length === 0) return null;
-
   // Pre-compute tool groups per step so the "已完成 N 个工具" count
   // reflects actual tool *invocations*, not raw timeline events. A
   // single tool call can emit hundreds of `tool_stdout` chunks, which
   // previously inflated the count to 700+ for just a handful of tools.
   // Using the same `groupTimeline` call that drives rendering guarantees
   // the header count always matches what the user sees when expanded.
+  //
+  // useMemo: during streaming the parent re-renders 30-50×/s (rAF chunk
+  // batches). Without memo, `groupTimeline` re-runs on every render even
+  // when `processSteps` hasn't changed between batches. The dependency
+  // array limits recomputation to when the steps array or streaming flag
+  // actually changes.
   //
   // 2026-07-22 FIX (streamComplete): while the live WS is still feeding
   // events for this message (`isStreaming === true`), ask `groupTimeline`
@@ -457,13 +467,38 @@ function ProcessTimeline({
   // mid-stream cue; only when the turn settles do we promote stranded
   // groups to "error" / "执行已中断（无完成事件）" so reloads still surface
   // the genuine interruption case.
-  const stepGroups = processSteps.map((s) =>
-    s.kind === "tools"
-      ? groupTimeline(s.events, { streamComplete: !isStreaming })
-      : null,
+  const stepGroups = useMemo(
+    () =>
+      processSteps.map((s) =>
+        s.kind === "tools"
+          ? groupTimeline(s.events, { streamComplete: !isStreaming })
+          : null,
+      ),
+    // `processSteps` is a new array on every render during streaming
+    // (the parent rebuilds it from the live message's unified_steps),
+    // so the memo will recompute when steps actually change. When the
+    // stream settles (`isStreaming` flips false), the groups must also
+    // recompute because `streamComplete` changes stranded→error.
+    [processSteps, isStreaming],
   );
+
+  if (processSteps.length === 0) return null;
+
   const totalTools = stepGroups.reduce(
     (acc, groups) => acc + (groups ? groups.length : 0),
+    0,
+  );
+
+  // P4-3: Count error tools so the header chip can surface
+  // failure count at a glance, e.g. "已完成 5 个工具 (2 失败)".
+  // This lets the user know something went wrong even when the
+  // process body is collapsed.
+  const errorTools = stepGroups.reduce(
+    (acc, groups) =>
+      acc +
+      (groups
+        ? groups.filter((g) => g.status === "error").length
+        : 0),
     0,
   );
 
@@ -473,9 +508,11 @@ function ProcessTimeline({
   //   "已完成 7s"                 ← < 1 minute
   //   "已完成 1m 23s"             ← ≥ 1 minute (s always shown, never 0-padded)
   //   "已完成 5 个工具 7s"        ← when tools ran (count + duration)
+  //   "已完成 5 个工具 (2 失败) 7s" ← when some tools failed (P4-3)
   const durationPart = formatDuration(durationMs);
+  const errorPart = errorTools > 0 ? ` (${errorTools} 失败)` : "";
   const settledLabel = totalTools > 0
-    ? (durationPart ? `已完成 ${totalTools} 个工具 ${durationPart}` : `已完成 ${totalTools} 个工具`)
+    ? (durationPart ? `已完成 ${totalTools} 个工具${errorPart} ${durationPart}` : `已完成 ${totalTools} 个工具${errorPart}`)
     : (durationPart ? `已完成 ${durationPart}` : "已完成");
 
   return (
@@ -495,7 +532,11 @@ function ProcessTimeline({
           ) : (
             <ChevronRight size={12} className="reasoning-chevron" />
           )}
-          <CheckCircle2 size={11} className="tl-process-check" />
+          {errorTools > 0 ? (
+            <AlertTriangle size={11} className="tl-process-check tl-process-check--err" />
+          ) : (
+            <CheckCircle2 size={11} className="tl-process-check" />
+          )}
           <span className="reasoning-label">{settledLabel}</span>
         </button>
       )}
@@ -1348,6 +1389,9 @@ function toolVerb(tool: string, argsJson?: string): string {
   if (!t || t === "tool") {
     return inferVerbFromArgs(argsJson) ?? "调用工具";
   }
+  // Memory tool: generic "记忆" verb; the concrete action
+  // (写入/删除/替换记忆) is shown by toolPrimaryArg below.
+  if (t.includes("memory")) return "记忆";
   for (const cat of TOOL_CATEGORIES) {
     if (cat.keywords.length === 0) continue;
     for (const kw of cat.keywords) {
@@ -1484,6 +1528,18 @@ function toolPrimaryArg(tool: string, argsJson?: string, stdoutHint?: string): s
   };
   const trim = (s: string, n: number) => s.length > n ? s.slice(0, n - 1) + "…" : s;
   const t = tool.toLowerCase();
+  // Memory tool: show the action (写入/删除/替换记忆) instead of a
+  // generic label. "整理记忆" (auto-archive) is surfaced as a chip
+  // from the tool result in the render layer.
+  if (t.includes("memory")) {
+    const action = str("action");
+    const c = str("content");
+    const old = str("old_text");
+    if (action === "add") return "写入记忆: " + (c ? trim(c, 28) : "");
+    if (action === "replace") return "替换记忆: " + (old ? trim(old, 28) : "");
+    if (action === "remove") return "删除记忆: " + (old ? trim(old, 28) : "");
+    return "记忆操作";
+  }
   // Path-based tools
   if (t.includes("read_file") || t.includes("write_file") || t.includes("patch") || t.includes("edit") || t.includes("delete_file") || t.includes("list_files")) {
     return trim(str("path") ?? str("file_path") ?? str("directory") ?? "", 80) || stdoutFallback(t, stdoutHint);
@@ -1538,6 +1594,31 @@ function toolPrimaryArg(tool: string, argsJson?: string, stdoutHint?: string): s
     }
   }
   return stdoutFallback(t, stdoutHint);
+}
+
+/**
+ * See `memoryArchiveChip` in ToolEventCard.tsx — same semantics. When a
+ * memory operation triggers the backend's auto-archive, the tool result
+ * embeds `archived_count` (or `archived_to`); surface that as a chip
+ * ("已归档N条" / "整理记忆") so the user sees the "整理记忆" action.
+ */
+function memoryArchiveChip(tool: string | undefined, output?: string): string | null {
+  if (!tool || !tool.toLowerCase().includes("memory")) return null;
+  if (!output) return null;
+  const re = /\{[^{}]*\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(output))) {
+    try {
+      const obj = JSON.parse(m[0]) as Record<string, unknown>;
+      if (typeof obj.archived_count === "number") {
+        return `已归档${obj.archived_count}条`;
+      }
+      if (obj.archived_to) return "整理记忆";
+    } catch {
+      // not JSON — keep scanning
+    }
+  }
+  return null;
 }
 
 /**
@@ -1725,6 +1806,12 @@ function ToolMessageCard({
     return toolResultPeek(meta.output, meta.args);
   }, [meta.output, meta.args, meta.status, meta.completedAt, meta.errorReason, isError, isRunning]);
 
+  // Archive chip for memory operations that triggered auto-archive.
+  const archiveChip = useMemo(
+    () => memoryArchiveChip(meta.tool, meta.output),
+    [meta.tool, meta.output],
+  );
+
   // Colored tile background for the icon
   const cat = classifyTool(meta.tool);
   const iconBg = cat.bg;
@@ -1768,6 +1855,11 @@ function ToolMessageCard({
                       | 找到 12 个结果 (search - muted) */}
         {resultPeek && !isError && (
           <span className="tw-msg-result-peek">{resultPeek}</span>
+        )}
+        {archiveChip && (
+          <span className="tw-msg-chip tw-msg-archive-chip" title="记忆已自动归档旧条目">
+            {archiveChip}
+          </span>
         )}
 
         {/* Right side: line stats + status indicator.

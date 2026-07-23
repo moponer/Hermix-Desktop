@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use serde_json::{json, Value};
 use tracing::{info, instrument};
-use hermix_core::{AgentError,AgentResult,format_token_count,Message,MessageRole,StreamChunk,ToolCall,ToolErrorRecord,ToolSchema,UsageStats};
+use hermix_core::{AgentError,AgentResult,format_token_count,LlmResponse,Message,MessageRole,StreamChunk,ToolCall,ToolErrorRecord,ToolSchema,UsageStats};
 use crate::agent_helpers::default_max_autonomous_nudges;
 use crate::agent_loop::{
     AgentLoop, LoopPhase, LoopState, PostLlmAction, PostResponseAction, PreparedRun, TurnRuntimeRoute,
@@ -70,6 +70,23 @@ pub fn build_active_skills_block(
     out.truncate(cap);
     out.push_str(&footer);
     Some(out)
+}
+
+/// Outcome of [`AgentLoop::do_tool_turn`] — tells the caller what
+/// to do after the tool execution block completes.
+///
+/// 2026-07-22 (P1-3): extracted from the duplicated tool-execution
+/// blocks in `run()` and `run_stream()` (~120 lines saved).
+enum ToolTurnOutcome {
+    /// Rollback threshold was hit; the caller should `continue`
+    /// the loop to start a fresh turn with the restored checkpoint.
+    Rollback,
+    /// Convergence detection triggered a hard stop; the caller
+    /// should return this `AgentResult`.
+    Converge(Result<AgentResult, AgentError>),
+    /// The turn completed normally; the caller should proceed
+    /// to the next loop iteration.
+    Continue,
 }
 
 impl AgentLoop {
@@ -665,6 +682,185 @@ impl AgentLoop {
         // parameter was hoisted into `LoopState`); no copy-back needed.
     }
 
+    // 2026-07-22 (P1-3): shared tool-execution + post-tool + convergence +
+    // TurnReport block. Both `run()` and `run_stream()` had identical
+    // ~60-line copies of this code. The only real differences are:
+    //   - log level (info vs debug for phase notification)
+    //   - `finalize_agent_result` params (is_stream flag + last_finish_reason)
+    //   - `do_post_tool_iteration` stream params (None vs Some)
+    // All three are parameterized here.
+    #[allow(clippy::too_many_arguments)]
+    async fn do_tool_turn(
+        &self,
+        ctx: &mut ContextManager,
+        state: &mut LoopState,
+        tool_calls: &[ToolCall],
+        total_turns: u32,
+        tool_errors: &mut Vec<ToolErrorRecord>,
+        session_id: &str,
+        session_started_hooks_fired: bool,
+        persist_user_idx: Option<usize>,
+        review_memory_at_end: bool,
+        tool_call_ids: &HashMap<String, String>,
+        response: &LlmResponse,
+        is_stream: bool,
+        last_finish_reason: Option<String>,
+        stream_needs_break: Option<&Arc<AtomicBool>>,
+        on_chunk: Option<&(dyn Fn(StreamChunk) + Send + Sync)>,
+    ) -> ToolTurnOutcome {
+        // --- Phase: ToolExecution ---
+        let tool_start = Instant::now();
+        if is_stream {
+            tracing::debug!(
+                phase = %LoopPhase::ToolExecution,
+                turn = total_turns,
+                tools = tool_calls.len(),
+                "do_tool_turn: executing tool calls"
+            );
+        } else {
+            tracing::info!(
+                phase = %LoopPhase::ToolExecution,
+                turn = total_turns,
+                tools = tool_calls.len(),
+                "do_tool_turn: executing tool calls"
+            );
+        }
+        self.notify_phase(&LoopPhase::ToolExecution, total_turns);
+
+        let results = self
+            .execute_tool_calls(
+                tool_calls,
+                total_turns,
+                self.config
+                    .max_cost_usd
+                    .map(|limit| (limit - state.cost_guard.session_cost_usd).max(0.0)),
+                tool_errors,
+            )
+            .await;
+        state
+            .timings
+            .record_tool(tool_start.elapsed().as_millis() as u64);
+
+        // --- Rollback check ---
+        let turn_error_count = results.iter().filter(|r| r.is_error).count() as u32;
+        if self.config.rollback_on_tool_error_threshold > 0
+            && turn_error_count >= self.config.rollback_on_tool_error_threshold
+        {
+            if let Some(snapshot) = state.message_cache.checkpoint().cloned() {
+                *ctx.get_messages_mut() = snapshot;
+                ctx.add_message(Message::system(format!(
+                    "Auto-rollback: {} tool call(s) failed in one turn. \
+                     Restored latest checkpoint and continuing.",
+                    turn_error_count
+                )));
+                ctx.recompute_total_tokens();
+                return ToolTurnOutcome::Rollback;
+            }
+        }
+
+        // --- Phase: PostToolExec ---
+        tracing::debug!(
+            phase = %LoopPhase::PostToolExec,
+            turn = total_turns,
+            "do_tool_turn: post-tool iteration"
+        );
+        self.notify_phase(&LoopPhase::PostToolExec, total_turns);
+
+        let mut total_turns_mut = total_turns;
+        self.do_post_tool_iteration(
+            ctx,
+            tool_calls,
+            results,
+            state,
+            session_id,
+            tool_errors,
+            session_started_hooks_fired,
+            persist_user_idx,
+            review_memory_at_end,
+            &mut total_turns_mut,
+            tool_call_ids,
+            stream_needs_break.map(|a| a.as_ref()),
+            on_chunk,
+        )
+        .await;
+
+        // --- Convergence detection ---
+        let visible_text_this_turn = response.message.content.as_deref().unwrap_or("");
+        let has_visible = Self::assistant_visible_text_after_think_blocks(&response.message);
+        let convergence_signal = state.convergence_detector.check(
+            has_visible,
+            tool_calls.len(),
+            turn_error_count as usize,
+            visible_text_this_turn,
+        );
+        match convergence_signal {
+            crate::convergence_detector::ConvergenceSignal::Converge {
+                reason,
+                consecutive_count,
+            } => {
+                tracing::info!(
+                    reason = ?reason,
+                    consecutive = consecutive_count,
+                    "convergence detected (hard stop) — concluding run"
+                );
+                self.persist_session_terminal(
+                    ctx,
+                    session_id,
+                    total_turns,
+                    review_memory_at_end,
+                );
+                let result = self.finalize_agent_result(
+                    ctx,
+                    total_turns,
+                    tool_errors,
+                    state.cost_guard.accumulated_usage.clone(),
+                    state.cost_guard.session_cost_usd,
+                    session_started_hooks_fired,
+                    persist_user_idx,
+                    is_stream,
+                    false,
+                    last_finish_reason,
+                );
+                return ToolTurnOutcome::Converge(Ok(result));
+            }
+            _ => {}
+        }
+
+        // --- TurnReport ---
+        crate::turn_report::TurnReport {
+            turn: total_turns,
+            end_phase: LoopPhase::PostToolExec,
+            stage: LoopPhase::PostToolExec.as_orchestration_stage(),
+            api_ms: state.timings.total_api_time_ms,
+            tool_ms: state.timings.total_tool_time_ms,
+            tool_calls: vec![],
+            replay_count: 0,
+            has_visible_text: has_visible,
+            has_thinking: response
+                .message
+                .reasoning_content
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty()),
+            prompt_tokens: response
+                .usage
+                .as_ref()
+                .map(|u| u.prompt_tokens)
+                .unwrap_or(0),
+            completion_tokens: response
+                .usage
+                .as_ref()
+                .map(|u| u.completion_tokens)
+                .unwrap_or(0),
+            context_tokens: ctx.total_tokens() as u64,
+            outcome: crate::turn_report::TurnOutcome::Continue,
+            mode: None,
+            task_id: None,
+        }
+        .emit();
+
+        ToolTurnOutcome::Continue
+    }
+
     #[instrument(
         name = "run",
         level = "info",
@@ -702,6 +898,7 @@ impl AgentLoop {
 tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run)");
 self.notify_phase(&LoopPhase::Init, 0);
 let mut post_tool_nudge_count: u32 = 0;
+        let mut agent_recovery_nudge_count: u32 = 0;
 
         let session_id = self.config.session_id.as_deref().unwrap_or("");
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
@@ -1034,6 +1231,11 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                     ));
                 }
                 // No visible text — fall through to decide_empty_response
+                let recent_tool_failure =
+                    crate::empty_response_handler::ToolFailureRecord::from_recent_error(
+                        &tool_errors,
+                        total_turns,
+                    );
                 let outcome = crate::empty_response_handler::decide_empty_response(
                     crate::empty_response_handler::EmptyResponseInput {
                         assistant_msg: &assistant_msg,
@@ -1045,6 +1247,8 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                         autonomous_mode: self.config.autonomous_mode,
                         autonomous_nudge_count,
                         post_tool_nudge_count,
+                        agent_recovery_nudge_count,
+                        recent_tool_failure,
                         total_turns,
                         max_turns: self.config.max_turns,
                         max_autonomous_nudges: default_max_autonomous_nudges(),
@@ -1055,6 +1259,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 codex_ack_continuations = outcome.new_codex_ack_continuations;
                 autonomous_nudge_count = outcome.new_autonomous_nudge_count;
                 post_tool_nudge_count = outcome.new_post_tool_nudge_count;
+                agent_recovery_nudge_count = outcome.new_agent_recovery_nudge_count;
                 if self.apply_fallback_outcome(
                     &mut ctx,
                     outcome.action,
@@ -1206,128 +1411,34 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                     persist_user_idx,
                 ));
             }
-            let tool_start = Instant::now();
-            tracing::info!(phase = %LoopPhase::ToolExecution, turn = total_turns, tools = tool_calls.len(), "run: executing tool calls");
-self.notify_phase(&LoopPhase::ToolExecution, total_turns);
-            let results = self
-                .execute_tool_calls(
-                    &tool_calls,
-                    total_turns,
-                    self.config
-                        .max_cost_usd
-                        .map(|limit| (limit - state.cost_guard.session_cost_usd).max(0.0)),
-                    &mut tool_errors,
-                )
-                .await;
-            let tool_elapsed = tool_start.elapsed().as_millis() as u64;
-            state.timings.record_tool(tool_elapsed);
-
-            let turn_tool_error_count = results.iter().filter(|r| r.is_error).count() as u32;
-            if self.config.rollback_on_tool_error_threshold > 0
-                && turn_tool_error_count >= self.config.rollback_on_tool_error_threshold
-            {
-                if let Some(snapshot) = state.message_cache.checkpoint().cloned() {
-                    *ctx.get_messages_mut() = snapshot;
-                    ctx.add_message(Message::system(format!(
-                        "Auto-rollback: {} tool call(s) failed in one turn. Restored latest checkpoint and continuing.",
-                        turn_tool_error_count
-                    )));
-                    ctx.recompute_total_tokens();
-                    continue;
-                }
-            }
-
-            // --- Post-tool iteration (shared with run_stream) ---
-            tracing::debug!(phase = %LoopPhase::PostToolExec, turn = total_turns, "run: post-tool iteration");
-self.notify_phase(&LoopPhase::PostToolExec, total_turns);
-            let run_turn_error_count = results.iter().filter(|r| r.is_error).count() as u32;
-            self.do_post_tool_iteration(
+            let outcome = self.do_tool_turn(
                 &mut ctx,
-                &tool_calls,
-                results,
                 &mut state,
-                session_id,
+                &tool_calls,
+                total_turns,
                 &mut tool_errors,
+                session_id,
                 session_started_hooks_fired,
                 persist_user_idx,
                 review_memory_at_end,
-                &mut total_turns,
                 &tool_call_ids,
-                None, // no stream_needs_break in non-stream mode
-                None, // no on_chunk in non-stream mode
+                &response,
+                false, // is_stream
+                None,  // last_finish_reason
+                None,  // stream_needs_break
+                None,  // on_chunk
             ).await;
+            match outcome {
+                ToolTurnOutcome::Rollback => continue,
+                ToolTurnOutcome::Converge(result) => return result,
+                ToolTurnOutcome::Continue => {}
+            }
             // 2026-07-19: arm the turn-transition watchdog. Mirrors
             // the run_stream() side. The next loop iteration's
             // top-of-loop check will fire if we don't reach the
             // pre-turn-setup checkpoint within
             // `turn_transition_deadline_secs` of now.
             transition_started_at = Some(Instant::now());
-
-            // 2026-07-08 (HH), revised 2026-07-09: replay convergence guard.
-            // If this turn consisted ENTIRELY of replayed tool calls, the
-            // 2026-07-09: Removed replay advisory injection.
-            // The LLM has full context — no need for system-level
-            // notes about cached results.
-
-            // 2026-07-09 (AL-8, simplified): Convergence detection —
-            // ONLY ErrorLoop hard stop. Removed NoProgressWithTools and
-            // SimilarContent advisory warnings: they injected system
-            // messages that polluted the LLM's context and interfered
-            // with legitimate long tool chains. Trust the LLM to decide
-            // when to stop.
-            let visible_text_this_turn = response.message.content.as_deref().unwrap_or("");
-            let has_visible = Self::assistant_visible_text_after_think_blocks(&response.message);
-            let convergence_signal = state.convergence_detector.check(
-                has_visible,
-                tool_calls.len(),
-                run_turn_error_count as usize,
-                visible_text_this_turn,
-            );
-            match convergence_signal {
-                crate::convergence_detector::ConvergenceSignal::Converge { reason, consecutive_count } => {
-                    // Hard stop: only ErrorLoop reaches here.
-                    tracing::info!(
-                        reason = ?reason,
-                        consecutive = consecutive_count,
-                        "convergence detected (hard stop) — concluding run"
-                    );
-                    self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
-                    return Ok(self.finalize_agent_result(
-                        &ctx,
-                        total_turns,
-                        &tool_errors,
-                        state.cost_guard.accumulated_usage.clone(),
-                        state.cost_guard.session_cost_usd,
-                        session_started_hooks_fired,
-                        persist_user_idx,
-                        false,
-                        false,
-                        None,
-                    ));
-                }
-                // Advisory warnings are silently ignored — no system
-                // message injection. The LLM has full context.
-                _ => {}
-            }
-
-            // P1-1: Emit structured TurnReport for observability.
-            crate::turn_report::TurnReport {
-                turn: total_turns,
-                end_phase: LoopPhase::PostToolExec,
-                stage: LoopPhase::PostToolExec.as_orchestration_stage(),
-                api_ms: state.timings.total_api_time_ms,
-                tool_ms: state.timings.total_tool_time_ms,
-                tool_calls: vec![],
-                replay_count: 0,
-                has_visible_text: has_visible,
-                has_thinking: response.message.reasoning_content.as_deref().is_some_and(|s| !s.trim().is_empty()),
-                prompt_tokens: response.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
-                completion_tokens: response.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0),
-                context_tokens: ctx.total_tokens() as u64,
-                outcome: crate::turn_report::TurnOutcome::Continue,
-                mode: None,
-                task_id: None,
-            }.emit();
         }
     }
 
@@ -1439,6 +1550,7 @@ self.notify_phase(&LoopPhase::PostToolExec, total_turns);
         tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run_stream)");
 self.notify_phase(&LoopPhase::Init, 0);
         let mut post_tool_nudge_count: u32 = 0;
+        let mut agent_recovery_nudge_count: u32 = 0;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
 
         let mut state = LoopState::default();
@@ -1918,6 +2030,11 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 // finalize decisions used to be open-coded here and
                 // duplicated in `run_blocking`. Now both call sites
                 // delegate to `decide_empty_response`.
+                let recent_tool_failure =
+                    crate::empty_response_handler::ToolFailureRecord::from_recent_error(
+                        &tool_errors,
+                        total_turns,
+                    );
                 let outcome = crate::empty_response_handler::decide_empty_response(
                     crate::empty_response_handler::EmptyResponseInput {
                         assistant_msg: &assistant_msg,
@@ -1929,6 +2046,8 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                         autonomous_mode: self.config.autonomous_mode,
                         autonomous_nudge_count,
                         post_tool_nudge_count,
+                        agent_recovery_nudge_count,
+                        recent_tool_failure,
                         total_turns,
                         max_turns: self.config.max_turns,
                         max_autonomous_nudges: default_max_autonomous_nudges(),
@@ -1939,6 +2058,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 codex_ack_continuations = outcome.new_codex_ack_continuations;
                 autonomous_nudge_count = outcome.new_autonomous_nudge_count;
                 post_tool_nudge_count = outcome.new_post_tool_nudge_count;
+                agent_recovery_nudge_count = outcome.new_agent_recovery_nudge_count;
                 if self.apply_fallback_outcome(
                     &mut ctx,
                     outcome.action,
@@ -2086,123 +2206,33 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 ));
             }
 
-            let tool_start = std::time::Instant::now();
-            tracing::debug!(phase = %LoopPhase::ToolExecution, turn = total_turns, tools = tool_calls.len(), "run_stream: executing tool calls");
-self.notify_phase(&LoopPhase::ToolExecution, total_turns);
-            let results = self
-                .execute_tool_calls(
-                    &tool_calls,
-                    total_turns,
-                    self.config
-                        .max_cost_usd
-                        .map(|limit| (limit - state.cost_guard.session_cost_usd).max(0.0)),
-                    &mut tool_errors,
-                )
-                .await;
-            state
-                .timings
-                .record_tool(tool_start.elapsed().as_millis() as u64);
-
-            let turn_tool_error_count = results.iter().filter(|r| r.is_error).count() as u32;
-            if self.config.rollback_on_tool_error_threshold > 0
-                && turn_tool_error_count >= self.config.rollback_on_tool_error_threshold
-            {
-                if let Some(snapshot) = state.message_cache.checkpoint().cloned() {
-                    *ctx.get_messages_mut() = snapshot;
-                    ctx.add_message(Message::system(format!(
-                        "Auto-rollback: {} tool call(s) failed in one turn. Restored latest checkpoint and continuing.",
-                        turn_tool_error_count
-                    )));
-                    ctx.recompute_total_tokens();
-                    continue;
-                }
-            }
-
-            // --- Post-tool iteration (shared with run) ---
-            tracing::debug!(phase = %LoopPhase::PostToolExec, turn = total_turns, "run_stream: post-tool iteration");
-self.notify_phase(&LoopPhase::PostToolExec, total_turns);
-            let stream_turn_error_count = results.iter().filter(|r| r.is_error).count() as u32;
-            self.do_post_tool_iteration(
+            let outcome = self.do_tool_turn(
                 &mut ctx,
-                &tool_calls,
-                results,
                 &mut state,
-                session_id,
+                &tool_calls,
+                total_turns,
                 &mut tool_errors,
+                session_id,
                 session_started_hooks_fired,
                 persist_user_idx,
                 review_memory_at_end,
-                &mut total_turns,
                 &tool_call_ids,
-                Some(&stream_needs_break), // stream-specific
-                Some(on_chunk.as_ref()),   // stream-specific
+                &response,
+                true,  // is_stream
+                last_finish_reason.clone(),
+                Some(&stream_needs_break),
+                Some(on_chunk.as_ref()),
             ).await;
+            match outcome {
+                ToolTurnOutcome::Rollback => continue,
+                ToolTurnOutcome::Converge(result) => return result,
+                ToolTurnOutcome::Continue => {}
+            }
             // 2026-07-19: arm the turn-transition watchdog. The next
             // loop iteration's top-of-loop check will fire if we
             // don't reach the pre-turn-setup checkpoint within
             // `turn_transition_deadline_secs` of now.
             transition_started_at = Some(Instant::now());
-
-            // 2026-07-09: Removed replay advisory injection.
-            // The LLM has full context — no need for system-level
-            // notes about cached results.
-
-            // 2026-07-09 (AL-8, simplified): Convergence detection —
-            // ONLY ErrorLoop hard stop. Removed advisory warnings that
-            // polluted the LLM's context.
-            let visible_text_this_turn = response.message.content.as_deref().unwrap_or("");
-            let has_visible = Self::assistant_visible_text_after_think_blocks(&response.message);
-            let convergence_signal = state.convergence_detector.check(
-                has_visible,
-                tool_calls.len(),
-                stream_turn_error_count as usize,
-                visible_text_this_turn,
-            );
-            match convergence_signal {
-                crate::convergence_detector::ConvergenceSignal::Converge { reason, consecutive_count } => {
-                    // Hard stop: only ErrorLoop reaches here.
-                    tracing::info!(
-                        reason = ?reason,
-                        consecutive = consecutive_count,
-                        "convergence detected (hard stop) — concluding run"
-                    );
-                    self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
-                    return Ok(self.finalize_agent_result(
-                        &ctx,
-                        total_turns,
-                        &tool_errors,
-                        state.cost_guard.accumulated_usage.clone(),
-                        state.cost_guard.session_cost_usd,
-                        session_started_hooks_fired,
-                        persist_user_idx,
-                        true,
-                        false,
-                        last_finish_reason.clone(),
-                    ));
-                }
-                // Advisory warnings are silently ignored — no system
-                // message injection. The LLM has full context.
-                _ => {}
-            }
-
-            // P1-1: Emit structured TurnReport for observability.
-            crate::turn_report::TurnReport {
-                turn: total_turns,
-                end_phase: LoopPhase::PostToolExec,
-                stage: LoopPhase::PostToolExec.as_orchestration_stage(),
-                api_ms: state.timings.total_api_time_ms,
-                tool_ms: state.timings.total_tool_time_ms,
-                tool_calls: vec![],
-                replay_count: 0,
-                has_visible_text: has_visible,
-                has_thinking: response.message.reasoning_content.as_deref().is_some_and(|s| !s.trim().is_empty()),
-                prompt_tokens: response.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
-                completion_tokens: response.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0),
-                context_tokens: ctx.total_tokens() as u64,
-                outcome: crate::turn_report::TurnOutcome::Continue,
-                mode: None,
-                task_id: None,
-            }.emit();
         }
     }
 

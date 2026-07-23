@@ -209,8 +209,20 @@ function groupEvents(events: ExecutionTimelineEvent[]): ToolGroup[] {
   for (const idx of active.values()) {
     const grp = groups[idx];
     if (grp && grp.status === "running") {
-      grp.status = "error";
-      if (!grp.statusNote) grp.statusNote = "执行已中断（无完成事件）";
+      // 2026-07-22 FIX: Do not automatically mark as error when there
+      // is stdout output. Some tools stream data without a formal close
+      // event (e.g., OCR/image reading that stops due to LLM API error).
+      // If the tool produced output, treat it as done rather than interrupted.
+      const hasOutput = grp.events.some(
+        (e: any) => e.type === "tool_stdout" && e.content && e.content.trim().length > 0,
+      );
+      if (hasOutput) {
+        grp.status = "done";
+        grp.endedAt = grp.startedAt;
+      } else {
+        grp.status = "error";
+        if (!grp.statusNote) grp.statusNote = "执行已中断（无完成事件）";
+      }
     }
   }
   return groups;
@@ -296,6 +308,7 @@ const TOOL_VERB: Record<string, string> = {
   code: "已生成代码",
   create: "已创建",
   file_change: "已变更",
+  memory: "记忆",
 };
 
 function toolVerb(tool: string): string {
@@ -332,6 +345,18 @@ function primaryArg(tool: string, argsJson?: string, stdoutHint?: string): strin
   };
   const trim = (s: string, n: number) => s.length > n ? s.slice(0, n - 1) + "…" : s;
   const t = tool.toLowerCase();
+  // Memory tool: show the action (写入/删除/替换记忆) instead of a
+  // generic "已使用 memory". "整理记忆" (auto-archive) is surfaced as
+  // a separate chip from the tool result below.
+  if (t.includes("memory")) {
+    const action = str("action");
+    const c = str("content");
+    const old = str("old_text");
+    if (action === "add") return "写入记忆: " + (c ? trim(c, 28) : "");
+    if (action === "replace") return "替换记忆: " + (old ? trim(old, 28) : "");
+    if (action === "remove") return "删除记忆: " + (old ? trim(old, 28) : "");
+    return "记忆操作";
+  }
   if (t.includes("read_file") || t.includes("write_file") || t.includes("patch") || t.includes("edit") || t.includes("delete_file") || t.includes("list_files")) {
     return trim(str("path") ?? str("file_path") ?? str("directory") ?? "", 80) || stdoutFallback(t, stdoutHint);
   }
@@ -379,6 +404,35 @@ function stdoutFallback(_toolLower: string, stdout?: string): string | null {
   const firstLine = trimmed.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
   if (!firstLine) return null;
   return firstLine.length > 80 ? firstLine.slice(0, 79) + "…" : firstLine;
+}
+
+/**
+ * When a memory operation triggers the backend's auto-archive, the tool
+ * result embeds `archived_count` (or `archived_to`). Surface that as a
+ * short chip — "已归档N条" — so the user sees that older entries were
+ * rotated out, which is the "整理记忆" action the user asked to label.
+ *
+ * `output` is the tool result string (JSON). We scan for the first
+ * JSON object carrying one of those keys so a trailing scan-status line
+ * doesn't break parsing.
+ */
+function memoryArchiveChip(tool: string | undefined, output?: string): string | null {
+  if (!tool || !tool.toLowerCase().includes("memory")) return null;
+  if (!output) return null;
+  const re = /\{[^{}]*\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(output))) {
+    try {
+      const obj = JSON.parse(m[0]) as Record<string, unknown>;
+      if (typeof obj.archived_count === "number") {
+        return `已归档${obj.archived_count}条`;
+      }
+      if (obj.archived_to) return "整理记忆";
+    } catch {
+      // not JSON — keep scanning
+    }
+  }
+  return null;
 }
 
 /** Unwrap common JSON wrappers (`{"result":"…","exit_code":0}`) that
@@ -490,6 +544,16 @@ function ToolRow({ group }: { group: ToolGroup }) {
         .join(""),
     [group.events],
   );
+  // 2026-07-21: for code_execution, show only the LAST stdout line while
+  // running — each new line overwrites the previous one, giving a
+  // single-line live progress indicator. Once complete, fall back to
+  // the full stdout.
+  const isCodeExec = group.tool === "execute_code" || group.tool === "code_execution";
+  const lastStdoutLine = useMemo(() => {
+    if (!isCodeExec) return "";
+    const lines = stdout.split("\n").map(l => l.trim()).filter(Boolean);
+    return lines[lines.length - 1] ?? "";
+  }, [stdout, isCodeExec]);
   const primary = primaryArg(group.tool, group.args, stdout);
   const dur = durationOf(group);
   // 2026-07-05 (N-04): live progress fraction for currently
@@ -507,8 +571,16 @@ function ToolRow({ group }: { group: ToolGroup }) {
 
   // Inline result peek — first meaningful line, truncated to ~60 chars.
   // Shown as `| peek` after the tool name when the card is collapsed.
+  // 2026-07-21: for code_execution while running, use lastStdoutLine
+  // (overwriting-style progress) instead of first line.
   const peek = useMemo(() => {
     if (!hasBody) return "";
+    // code_execution running → show last stdout line (overwriting)
+    if (isCodeExec && isRunning && lastStdoutLine) {
+      return lastStdoutLine.length > 80
+        ? lastStdoutLine.slice(0, 76) + "..."
+        : lastStdoutLine;
+    }
     const src = stdout || summary;
     // Take the first non-empty line that isn't pure JSON wrapper noise.
     const lines = src.split("\n").map(l => l.trim()).filter(Boolean);
@@ -518,7 +590,13 @@ function ToolRow({ group }: { group: ToolGroup }) {
       ? first.slice(0, 76) + "..."
       : first;
     return collaped;
-  }, [stdout, summary, hasBody]);
+  }, [stdout, summary, hasBody, isCodeExec, isRunning, lastStdoutLine]);
+
+  // Archive chip for memory operations that triggered auto-archive.
+  const archiveChip = useMemo(
+    () => memoryArchiveChip(group.tool, summary),
+    [group.tool, summary],
+  );
 
   return (
     <div
@@ -562,6 +640,11 @@ function ToolRow({ group }: { group: ToolGroup }) {
               <span className="tw-msg-sep">|</span>
               <span className="tw-msg-peek">{peek}</span>
             </>
+          )}
+          {archiveChip && (
+            <span className="tw-msg-chip tw-msg-archive-chip" title="记忆已自动归档旧条目">
+              {archiveChip}
+            </span>
           )}
         </span>
 
@@ -626,11 +709,18 @@ function ToolRow({ group }: { group: ToolGroup }) {
       {/* Expandable output body — suppressed for error tools:
           same rationale as the chevron above. The error is
           already shown in the statusNote/peek on the summary
-          line; expanding to a red body is just noise. */}
+          line; expanding to a red body is just noise.
+          2026-07-21: for code_execution while running, show
+          only the last stdout line (single-line overwriting
+          progress) instead of the full output. */}
       {hasBody && open && !isError && (
         <div className="tw-msg-body">
           <LiveTerminal
-            content={stdout || summary}
+            content={
+              isCodeExec && isRunning && lastStdoutLine
+                ? lastStdoutLine
+                : (stdout || summary)
+            }
             // Live streaming is gated on *both* the group's status
             // AND a missing close timestamp. `isRunning` alone is
             // not enough: a reloaded session always has groups in
