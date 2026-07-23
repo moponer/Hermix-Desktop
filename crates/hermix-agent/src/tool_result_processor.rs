@@ -12,7 +12,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 
-use hermix_core::{Message, ToolCall, ToolResult};
+use hermix_core::{ContentPart, Message, ToolCall, ToolResult};
 
 use crate::context::ContextManager;
 use crate::terminal_filter;
@@ -77,9 +77,146 @@ pub fn push_tool_result_from_struct(
     push_tool_result(ctx, tool_calls, &result.tool_call_id, &result.content);
 }
 
+/// Strip base64 image data from a `read_image` tool result JSON.
+///
+/// After the image has been injected as multimodal content
+/// (`Message::user_with_image`) by `run_loop.rs`, the base64 data
+/// remaining in the tool result message is **pure redundancy** — the
+/// same blob is stored twice in context, easily doubling the token
+/// count for each image read (5 images × ~80 KB base64 × 2 copies
+/// ≈ 800 K chars ≈ 200 K tokens of wasted context).
+///
+/// This function replaces `_image_meta._image_data_b64` (new nested
+/// format) and `_image_data` (legacy flat format) with a short
+/// placeholder, preserving all other metadata (path, dimensions,
+/// mime_type, etc.) so the LLM still knows what image was loaded.
+///
+/// Returns the original content unchanged if:
+/// - The content is not valid JSON
+/// - The JSON doesn't contain image data keys
+pub fn strip_image_base64(content: &str) -> String {
+    let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(content) else {
+        return content.to_string();
+    };
+
+    let mut stripped = false;
+
+    // New nested format: _image_meta._image_data_b64
+    if let Some(meta) = parsed.get_mut("_image_meta").and_then(|v| v.as_object_mut()) {
+        if meta.contains_key("_image_data_b64") {
+            meta.insert(
+                "_image_data_b64".to_string(),
+                serde_json::Value::String(
+                    "[stripped — injected as multimodal content]".to_string(),
+                ),
+            );
+            stripped = true;
+        }
+    }
+
+    // Legacy flat format: _image_data
+    if parsed.get("_image_data").is_some() {
+        parsed["_image_data"] = serde_json::Value::String(
+            "[stripped — injected as multimodal content]".to_string(),
+        );
+        stripped = true;
+    }
+
+    if stripped {
+        serde_json::to_string(&parsed).unwrap_or_else(|_| content.to_string())
+    } else {
+        content.to_string()
+    }
+}
+
+/// Strip `ImageUrl` from all existing multimodal user messages in the
+/// context, keeping only their `Text` parts.
+///
+/// # First-principles rationale
+///
+/// An image's base64 payload (20–80 KB) has **zero marginal information
+/// value** once the LLM has analysed it — the analysis text already lives
+/// in the assistant message that followed. Keeping the base64 is
+/// information-theoretically equivalent to keeping a raw bitmap after
+/// saving a JPEG: pure waste of the scarcest resource (context window).
+///
+/// # When to call
+///
+/// Called in `prepare_assistant_turn()` (session_lifecycle.rs) **after**
+/// the LLM has produced its response. By this point the LLM has already
+/// analysed every image in context, so all `ImageUrl` base64 payloads
+/// have zero marginal information value. The analysis lives in the
+/// assistant reply; file paths are preserved in the `Text` parts so the
+/// LLM can `read_image` again if it needs more detail.
+///
+/// # Parallel tool calls
+///
+/// When multiple `read_image` calls execute in the same batch, all
+/// images are injected into context (without stripping each other) so
+/// the LLM can see them all simultaneously. After the LLM responds,
+/// this function strips ALL of them at once.
+///
+/// # Token accounting
+///
+/// After stripping, `ctx.recompute_total_tokens()` is called so the
+/// cached running total reflects the removed base64. Without this the
+/// pressure threshold would remain artificially high until the next
+/// `add_message` call.
+///
+/// Returns the number of image URLs stripped.
+pub fn strip_previous_image_urls(ctx: &mut ContextManager) -> usize {
+    let mut stripped_count = 0usize;
+    let mut any_changed = false;
+
+    for msg in ctx.get_messages_mut().iter_mut() {
+        let Some(parts) = msg.content_parts.as_mut() else {
+            continue;
+        };
+        let had_image = parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. }));
+        if !had_image {
+            continue;
+        }
+
+        // Rebuild parts: keep all Text, drop all ImageUrl, append a
+        // short note so the LLM knows the image was analysed and
+        // the base64 was removed to save context.
+        let mut kept: Vec<ContentPart> = Vec::with_capacity(parts.len() + 1);
+        for part in parts.drain(..) {
+            match part {
+                ContentPart::Text { text } => {
+                    if !text.is_empty() {
+                        kept.push(ContentPart::Text { text });
+                    }
+                }
+                ContentPart::ImageUrl { .. } => {
+                    stripped_count += 1;
+                }
+            }
+        }
+        kept.push(ContentPart::Text {
+            text: "[image base64 removed to save context — \
+                   analysis is in the assistant reply above; \
+                   re-call read_image if you need to see it again]"
+                .to_string(),
+        });
+        msg.content_parts = Some(kept);
+        any_changed = true;
+    }
+
+    if any_changed {
+        ctx.recompute_total_tokens();
+    }
+
+    stripped_count
+}
+
 /// Look up the tool name for `tool_call_id` from `tool_calls`, then
 /// push `Message::tool_result(id, content, tool_name)` into `ctx`.
 /// For terminal tools, applies RTK-style command-aware output filtering.
+/// For `read_image` results, strips base64 image data before pushing —
+/// the image is injected separately as multimodal content by
+/// `run_loop.rs`, so keeping the full base64 in the tool result
+/// message would double the context cost per image.
 pub fn push_tool_result(
     ctx: &mut ContextManager,
     tool_calls: &[ToolCall],
@@ -92,7 +229,21 @@ pub fn push_tool_result(
         .map(|tc| tc.function.name.as_str());
 
     let filtered = apply_terminal_filter(content, tool_name, tool_calls, tool_call_id);
-    ctx.add_message(Message::tool_result(tool_call_id, &filtered, tool_name));
+
+    // Strip base64 from read_image tool results. Under the zero-
+    // context-overhead model (2026-07-23 v2), the main agent must
+    // NEVER see image base64 — it should delegate analysis to a
+    // sub-agent via `delegate_task`. The base64 in the raw tool
+    // result would bloat the main context, so we strip it here.
+    // The tool result still contains the file path and metadata so
+    // the LLM can construct the `delegate_task` call.
+    let final_content = if tool_name == Some("read_image") {
+        strip_image_base64(&filtered)
+    } else {
+        filtered
+    };
+
+    ctx.add_message(Message::tool_result(tool_call_id, &final_content, tool_name));
 }
 
 /// 2026-07-18 (A+C product fix): when a tool call was **denied** (not

@@ -44,6 +44,17 @@ pub const DEFAULT_SUB_AGENT_TIMEOUT_SECS: u64 = 300;
 pub const SUB_AGENT_MIN_TURNS: u32 = 2;
 /// Ceiling on child max_turns to keep sub-tasks bounded.
 pub const SUB_AGENT_MAX_TURNS_CAP: u32 = 12;
+/// Maximum character length of the sub-agent's final text result
+/// that is returned to the parent context. Without this cap, a
+/// sub-agent that produces a very long analysis (e.g. 50,000 chars)
+/// would inject that entire text as a single `tool_result` into
+/// the parent's `ContextManager`, causing context explosion — the
+/// very problem `delegate_task` is meant to prevent.
+///
+/// 8,000 chars ≈ 2,000 tokens, which is the same order as a single
+/// `read_image` blob. This is large enough for a detailed structured
+/// analysis but small enough to keep the parent context lean.
+pub const SUB_AGENT_RESULT_MAX_CHARS: usize = 8_000;
 
 /// Lineage record persisted to disk for each spawned sub-agent.
 ///
@@ -323,7 +334,7 @@ impl SubAgentOrchestrator {
                 lineage.ended_at = Some(Utc::now());
                 self.persist_lineage(&lineage).await;
 
-                let final_text = extract_final_assistant_text(&result.messages);
+                let (final_text, was_truncated) = extract_final_assistant_text(&result.messages);
                 json!({
                     "sub_agent_id": sub_agent_id,
                     "status": "completed",
@@ -331,6 +342,7 @@ impl SubAgentOrchestrator {
                     "total_turns": result.total_turns,
                     "finished_naturally": result.finished_naturally,
                     "result": final_text,
+                    "truncated": was_truncated,
                     "usage": result.usage.as_ref().map(|u| json!({
                         "prompt_tokens": u.prompt_tokens,
                         "completion_tokens": u.completion_tokens,
@@ -550,23 +562,83 @@ impl std::fmt::Display for SubAgentError {
     }
 }
 
+/// Build the initial messages for a child agent.
+///
+/// The child receives:
+/// 1. A **system message** with sub-agent-specific guidance — most importantly
+///    the batching strategy that prevents the child from blowing its own context.
+/// 2. A **user message** with the task description and optional context.
+///
+/// The system message is critical because the child's `AgentLoop` builds its
+/// system prompt via `build_system_prompt` (which includes the full
+/// `directions.rs`), but that prompt is generic — it doesn't know the child
+/// is a sub-agent with specific constraints (no `delegate_task`, limited
+/// turns, must batch). The injected system message fills that gap.
 fn initial_messages(task: &str, context: Option<&str>) -> Vec<Message> {
+    let mut messages = Vec::new();
+
+    // Sub-agent-specific guidance — injected as a system message so the
+    // child LLM always sees it, regardless of the parent's directions.
+    let sub_agent_guidance = concat!(
+        "[Sub-agent operating constraints]\n",
+        "You are a sub-agent running in an isolated context. Key rules:\n",
+        "1. You CANNOT call `delegate_task` — it is blocked. Do all work yourself.\n",
+        "2. You CANNOT ask the user questions (`clarify` is blocked). If you lack info, \
+           state what's missing in your final response.\n",
+        "3. Your result is capped at ~8,000 chars. Be concise and structured.\n",
+        "\n",
+        "## Batching strategy (CRITICAL — prevents context explosion)\n",
+        "If you need to analyze multiple images or large files:\n",
+        "- **NEVER read more than 3-5 images/files in a single turn.** Each read \
+           injects large content into your context.\n",
+        "- Process in **batches**: read batch 1 → analyze → record conclusions → \
+           then read batch 2 → analyze → record conclusions → etc.\n",
+        "- For image analysis: call `read_image` for 3-5 images per turn. After the \
+           LLM analyzes them, the next turn reads the next batch.\n",
+        "- Your final response should aggregate ALL batch conclusions into a single \
+           structured summary.\n",
+        "- If you run out of turns before finishing all batches, return a partial \
+           summary noting which items were not processed.\n",
+    );
+    messages.push(Message::system(sub_agent_guidance));
+
+    // User message with task + context.
     let mut content = task.to_string();
     if let Some(ctx) = context {
         if !ctx.trim().is_empty() {
             content = format!("{task}\n\n[Context]\n{ctx}");
         }
     }
-    vec![Message::user(&content)]
+    messages.push(Message::user(&content));
+
+    messages
 }
 
-fn extract_final_assistant_text(messages: &[Message]) -> String {
-    messages
+fn extract_final_assistant_text(messages: &[Message]) -> (String, bool) {
+    let raw = messages
         .iter()
         .rev()
         .find(|m| matches!(m.role, hermix_core::MessageRole::Assistant))
         .and_then(|m| m.content.clone())
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    if raw.chars().count() <= SUB_AGENT_RESULT_MAX_CHARS {
+        return (raw, false);
+    }
+
+    // Char-safe truncation — CJK / emoji must not panic.
+    let end_byte = raw
+        .char_indices()
+        .nth(SUB_AGENT_RESULT_MAX_CHARS)
+        .map(|(byte, _)| byte)
+        .unwrap_or(raw.len());
+    let removed = raw.chars().count() - SUB_AGENT_RESULT_MAX_CHARS;
+    let truncated = format!(
+        "{}\n\n[... sub-agent result truncated: {} characters removed ...]",
+        &raw[..end_byte],
+        removed
+    );
+    (truncated, true)
 }
 
 #[cfg(test)]
@@ -756,5 +828,102 @@ mod tests {
         assert_eq!(child.memory_nudge_interval, 0);
         assert_eq!(child.skill_creation_nudge_interval, 0);
         assert!(child.quiet_mode);
+    }
+
+    #[test]
+    fn extract_final_assistant_text_returns_short_text_unchanged() {
+        let messages = vec![
+            Message::user("hello"),
+            Message::assistant("short reply"),
+        ];
+        let (text, truncated) = extract_final_assistant_text(&messages);
+        assert_eq!(text, "short reply");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn extract_final_assistant_text_truncates_long_output() {
+        let long_content: String = "x".repeat(SUB_AGENT_RESULT_MAX_CHARS * 2);
+        let messages = vec![
+            Message::user("analyze"),
+            Message::assistant(&long_content),
+        ];
+        let (text, truncated) = extract_final_assistant_text(&messages);
+        assert!(truncated);
+        assert!(text.contains("sub-agent result truncated"));
+        // The text must be shorter than the original.
+        assert!(text.chars().count() < long_content.chars().count());
+        // The text must include the prefix of the original content.
+        assert!(text.starts_with(&"x".repeat(100)));
+    }
+
+    #[test]
+    fn extract_final_assistant_text_cjk_truncation_is_char_safe() {
+        // Each Chinese character is 3 bytes in UTF-8.
+        // Truncating at a byte boundary would panic; char-safe truncation must work.
+        let long_content: String = "中".repeat(SUB_AGENT_RESULT_MAX_CHARS + 500);
+        let messages = vec![
+            Message::user("分析"),
+            Message::assistant(&long_content),
+        ];
+        let (text, truncated) = extract_final_assistant_text(&messages);
+        assert!(truncated);
+        assert!(text.contains("sub-agent result truncated"));
+        // No panic — that's the main assertion.
+    }
+
+    #[test]
+    fn extract_final_assistant_text_returns_last_assistant_message() {
+        let messages = vec![
+            Message::user("q1"),
+            Message::assistant("first answer"),
+            Message::user("q2"),
+            Message::assistant("second answer"),
+        ];
+        let (text, truncated) = extract_final_assistant_text(&messages);
+        assert_eq!(text, "second answer");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn extract_final_assistant_text_empty_when_no_assistant() {
+        let messages = vec![Message::user("hello")];
+        let (text, truncated) = extract_final_assistant_text(&messages);
+        assert_eq!(text, "");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn initial_messages_includes_sub_agent_guidance() {
+        let msgs = initial_messages("test task", None);
+        // Should have 2 messages: system guidance + user task.
+        assert_eq!(msgs.len(), 2);
+        // First message is system guidance.
+        assert!(matches!(msgs[0].role, hermix_core::MessageRole::System));
+        let guidance = msgs[0].content.as_deref().unwrap_or("");
+        assert!(guidance.contains("Sub-agent operating constraints"));
+        assert!(guidance.contains("delegate_task"));
+        assert!(guidance.contains("Batching strategy"));
+        assert!(guidance.contains("3-5"));
+        // Second message is user task.
+        assert!(matches!(msgs[1].role, hermix_core::MessageRole::User));
+        assert_eq!(msgs[1].content.as_deref(), Some("test task"));
+    }
+
+    #[test]
+    fn initial_messages_with_context() {
+        let msgs = initial_messages("analyze images", Some("paths: a.jpg, b.jpg"));
+        assert_eq!(msgs.len(), 2);
+        let user_content = msgs[1].content.as_deref().unwrap_or("");
+        assert!(user_content.contains("analyze images"));
+        assert!(user_content.contains("paths: a.jpg, b.jpg"));
+        assert!(user_content.contains("[Context]"));
+    }
+
+    #[test]
+    fn initial_messages_without_context_no_context_label() {
+        let msgs = initial_messages("do something", None);
+        let user_content = msgs[1].content.as_deref().unwrap_or("");
+        assert!(!user_content.contains("[Context]"));
     }
 }

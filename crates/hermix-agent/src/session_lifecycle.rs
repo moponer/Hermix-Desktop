@@ -160,6 +160,31 @@ pub fn prepare_assistant_turn(
     let assistant_msg = response.message.clone();
     let tool_calls = assistant_msg.tool_calls.clone();
     ctx.add_message(assistant_msg.clone());
+
+    // ── Image base64 lifecycle (2026-07-23, revised) ──────
+    //
+    // Safety-net cleanup for image base64. Under the zero-context-
+    // overhead model (2026-07-23 v2), `read_image` is never called
+    // directly in the main context — all image analysis is delegated
+    // to sub-agents via `delegate_task`. The sub-agent's isolated
+    // context absorbs the base64 cost and is destroyed when done.
+    //
+    // This strip call is retained as a safety net in case:
+    //  - A user pastes/attaches an inline image (which enters the
+    //    main context as a `user_with_image` message).
+    //  - A legacy code path injects an image message.
+    // Under normal operation with the new model, there should be
+    // nothing to strip here.
+    let stripped = crate::tool_result_processor::strip_previous_image_urls(ctx);
+    if stripped > 0 {
+        tracing::debug!(
+            stripped_count = stripped,
+            "stripped ImageUrl from {} message(s) after assistant response — \
+             image base64 no longer needed (LLM has already analysed it)",
+            stripped,
+        );
+    }
+
 if assistant_msg
 .tool_calls
 .as_ref()

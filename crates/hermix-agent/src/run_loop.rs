@@ -477,97 +477,70 @@ impl AgentLoop {
             "do_post_tool_iteration: post-tool results accepted, entering writeback & auto-compress"
         );
 
+        // 2026-07-23 (v2 — zero-context-overhead model, inspired by
+        // Hermes Agent's delegate_task design): When the LLM calls
+        // `read_image` in the main context, NO image base64 is ever
+        // injected into the main context. All base64 is stripped from
+        // tool results (see `strip_image_base64` in
+        // `tool_result_processor.rs`). Instead, a system nudge is
+        // injected telling the LLM to use `delegate_task` for image
+        // analysis — the sub-agent's isolated context absorbs the
+        // base64 cost and destroys it when done.
+        //
+        // This is the "zero-context-overhead" model: the main context
+        // NEVER contains image base64, period. Even a single image
+        // costs 2,000–8,000 tokens that are paid on every subsequent
+        // turn — that's always wasteful.
+        let mut read_image_paths: Vec<String> = Vec::new();
+        for result in &results {
+            if result.is_error {
+                continue;
+            }
+            let Some(tc) = tool_calls.iter().find(|t| t.id == result.tool_call_id) else {
+                continue;
+            };
+            if tc.function.name != "read_image" {
+                continue;
+            }
+            let Ok(parsed) = serde_json::from_str::<Value>(&result.content) else {
+                continue;
+            };
+            let img_path = parsed
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<unknown>");
+            read_image_paths.push(img_path.to_string());
+        }
+
+        if !read_image_paths.is_empty() {
+            let total = read_image_paths.len();
+            tracing::info!(
+                paths = ?read_image_paths,
+                total = total,
+                "read_image called in main context — injecting delegate_task nudge (zero-context-overhead model)"
+            );
+            // Universal nudge: ALWAYS use delegate_task for image analysis.
+            let paths_str = read_image_paths.join(", ");
+            ctx.add_message(Message::system(&format!(
+                "[SYSTEM — 图片分析必须使用 delegate_task]\n\
+                 你刚才在主上下文中调用了 read_image 读取了 {total} 张图片：{paths}\n\n\
+                 ⚠️ 图片 base64 已从工具结果中剥离，你无法在主上下文中看到图片内容。\n\n\
+                 【必须操作】使用 `delegate_task` 将图片分析任务派给子 agent：\n\
+                 - 子 agent 拥有隔离的上下文，可以自由调用 read_image 查看和分析图片\n\
+                 - 子 agent 完成后只回传纯文字结论，图片 base64 不会进入你的上下文\n\
+                 - 如有多张图片，可分批派发给多个子 agent（建议每批 3-5 张）\n\n\
+                 示例：\n\
+                 delegate_task(task=\"读取并分析图片，返回图片中可见的所有关键信息（文字、数字、证件字段等）的 JSON 摘要\", \\\n\
+                 context=\"图片路径：{paths}\")\n\n\
+                 🔴 禁止在主上下文中再次调用 read_image。所有图片分析必须通过 delegate_task 进行。\
+                 这条规则没有例外——即使是单张图片也必须走子 agent。",
+                total = total,
+                paths = paths_str,
+            )));
+        }
+
         for result in results {
             push_tool_result(ctx, tool_calls, &result.tool_call_id, &result.content);
-
-            // Image injection: if read_image succeeded, extract base64 data
-            // and inject it as multimodal content so the LLM "sees" the image
-            // on the next turn — free, local, no API key.
-            //
-            // 2026-07-22: Updated to read from `_image_meta._image_data_b64`
-            // (the new nested format). Falls back to `_image_data` for results
-            // produced by older versions of the tool. The `_image_meta` dict is
-            // designed to survive budget truncation because `enforce_budget`
-            // skips `_image_meta` (it detects the key and excludes it from
-            // char counting). Even if truncation somehow damages the outer
-            // JSON, the meta dict is at the top level and likely survives.
-            if let Some(tc) = tool_calls.iter().find(|t| t.id == result.tool_call_id) {
-                if tc.function.name == "read_image" && !result.is_error {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(&result.content) {
-                        // Try new nested format first, fall back to old flat format
-                        let (b64, mime) = if let Some(meta) = parsed.get("_image_meta") {
-                            (
-                                meta.get("_image_data_b64").and_then(|v| v.as_str()),
-                                meta.get("mime_type").and_then(|v| v.as_str()),
-                            )
-                        } else {
-                            (
-                                parsed.get("_image_data").and_then(|v| v.as_str()),
-                                parsed.get("mime_type").and_then(|v| v.as_str()),
-                            )
-                        };
-                        if let (Some(b64), Some(mime)) = (b64, mime) {
-                            let img_path = parsed
-                                .get("path")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("<unknown>");
-                            let need_detail = parsed
-                                .get("need_detail")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false);
-                            let detail = parsed
-                                .get("detail")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("auto");
-
-                            // ── First-principles image lifecycle ────────
-                            //
-                            // Before injecting the new image, strip
-                            // ImageUrl from ALL previous multimodal
-                            // messages. The LLM has already analysed
-                            // those images — the analysis lives in the
-                            // assistant replies. The base64 payload has
-                            // zero marginal information value; keeping
-                            // it would waste 20–80 KB of context per
-                            // old image.
-                            //
-                            // After this call, the only base64 in
-                            // context will be the one we're about to
-                            // inject. File paths are preserved in the
-                            // Text parts so the LLM can re-read any
-                            // image at higher resolution if needed.
-                            let stripped = crate::tool_result_processor::strip_previous_image_urls(ctx);
-                            if stripped > 0 {
-                                tracing::info!(
-                                    stripped_count = stripped,
-                                    "stripped ImageUrl from {} previous message(s) before new image injection",
-                                    stripped,
-                                );
-                            }
-
-                            let hint = if need_detail {
-                                format!("[Image loaded from: {img_path}] (preview at {detail} — call read_image again with detail=auto or detail=full for higher resolution)")
-                            } else {
-                                format!("[Image loaded from: {img_path}]")
-                            };
-                            ctx.add_message(Message::user_with_image(
-                                &hint,
-                                b64,
-                                mime,
-                            ));
-                            tracing::info!(
-                                tool_call_id = %result.tool_call_id,
-                                path = img_path,
-                                mime = mime,
-                                b64_len = b64.len(),
-                                detail = detail,
-                                need_detail = need_detail,
-                                "read_image result injected as multimodal content"
-                            );
-                        }
-                    }
-                }
-            }
             // 2026-07-18: if the result is a *denial* (user拒绝 /
             // 超时 / 连接中断), inject the structured "tell the user"
             // system note right after the tool_result so the LLM's

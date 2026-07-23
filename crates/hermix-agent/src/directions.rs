@@ -31,7 +31,7 @@ const TOOL_USAGE_GUIDANCE: &str = r#"
 Before calling a generic tool like `terminal`, `process_registry`, or `execute_code`, **scan the available tool list** for a purpose-built alternative. Purpose-built tools encode correct arguments, error handling, and side-effect discipline that generic tools cannot match.
 
 ## Decision pattern
-1. The user mentions a specific file type, service, or action → look for a tool whose name/description matches (e.g. `.pdf` → `read_pdf`, GitHub → `github_*`, image → `read_image`). **Image handling (free, local, no API key):** If the user *pasted/attached/dropped* an image in THIS message, you ALREADY see it via multimodal context — analyze it directly and do NOT call any tool. If the user references an image *by file path* (e.g. `C:\photos\car001.jpg`) or you discover image files via `list_files`/`terminal`, call `read_image` with that path — it reads the file and lets you **SEE the actual pixels** via native multimodal vision (the same as pasted images, free, offline, no API key). **The `vision` tool has been REMOVED (it required a paid API key); `read_image` is the free local replacement. Do NOT use `cua_ocr_recognize` (OCR-only text extraction, inferior).** **Never ask the user to describe the image or provide a mapping/lookup table.**
+1. The user mentions a specific file type, service, or action → look for a tool whose name/description matches (e.g. `.pdf` → `read_pdf`, GitHub → `github_*`, image → `delegate_task` + `read_image` via sub-agent). **Image handling (free, local, no API key):** If the user *pasted/attached/dropped* an image in THIS message, you ALREADY see it via multimodal context — analyze it directly and do NOT call any tool. If the user references an image *by file path* or you discover image files, you MUST delegate the analysis to a sub-agent via `delegate_task` — never call `read_image` in your own context (see "Image analysis" section below for the mandatory protocol). **Do NOT use `cua_ocr_recognize` (OCR-only text extraction, inferior to LLM vision).** **Never ask the user to describe the image or provide a mapping/lookup table.**
 2. If a matching tool exists, **call it first**. Do not chain `terminal` calls to re-implement what the tool already does.
 3. Only fall back to `terminal` / `process_registry` when no purpose-built tool covers the task, or when the user explicitly asks for raw shell access.
 
@@ -40,10 +40,36 @@ When the user message contains:
 - An explicit file path (e.g. `G:\…\通知.pdf`, `/home/user/file.txt`, `C:\code\main.rs`)
 - A file name or extension (`.pdf`, `.md`, `.json`)
 - A request to "read", "write", "draft", "create", "analyze" a file
+- A request to "rename", "move", "重命名" a file → use `move_file(source, destination)`
 
-**You MUST call the appropriate tool (`read_pdf` for PDFs, `read_file` for text/code, `write_file` for creating files, `read_image` for images, etc.) using that EXACT path — do not use `terminal` or `list_files` to search for the file first.**
+**You MUST call the appropriate tool (`read_pdf` for PDFs, `read_file` for text/code, `write_file` for creating files, `delegate_task` for images, `move_file` for rename/move) using that EXACT path — do not use `terminal` or `list_files` to search for the file first. For images, pass the path to `delegate_task` so a sub-agent can call `read_image` in its isolated context (see "Image analysis" section below).**
 
-**For IMAGE files referenced BY PATH:** if the user gives an image path (e.g. `C:\photos\car001.jpg`, a 车证/证件照/截图/diagram) or you discover image files via `list_files`/`terminal` and the user wants them identified, call `read_image` with that path — it loads the image so you can **SEE it natively** (licence plates, document fields, UI layout, photos, diagrams — full visual understanding). **Never ask the user "what's in the image" or "give me a mapping table"; the LLM sees it for you.** Note: this uses native multimodal vision (free) — NOT OCR text extraction. For pasted/inline images you already see them for free via multimodal context — analyze directly, do NOT call any tool. **The `vision` tool has been REMOVED (it required a paid API key); `read_image` is the free local replacement.**
+**For IMAGE files referenced BY PATH:** if the user gives an image path (e.g. `C:\photos\car001.jpg`, a 车证/证件照/截图/diagram) or you discover image files via `list_files`/`terminal` and the user wants them identified, **you MUST use `delegate_task` to analyze them** — see the "Image analysis" section below. **Never call `read_image` directly in your own context.** Each `read_image` injects a large base64 blob that permanently inflates your context window, even after cleanup — the token cost is paid on every subsequent turn. The only exception is images the user pasted/attached inline in THIS message — you already see those for free via multimodal context, analyze directly, do NOT call any tool. **The `vision` tool has been REMOVED** (it required a paid API key); `read_image` is the free local replacement but must only be called by sub-agents, never by you.
+
+**Image analysis — ALWAYS use `delegate_task` (zero-context-overhead model):**
+
+`read_image` injects a base64 image blob into the context of whoever calls it. A single image costs 2,000–8,000 tokens and that cost is paid on EVERY subsequent turn for the rest of the session. Calling `read_image` in your own context is therefore **always wasteful** — the image data has zero value after you've analyzed it, but you keep paying for it.
+
+**Mandatory protocol for ANY image analysis task:**
+1. **Plan first**: Use `list_files` / `terminal` / `glob` to get the list of image paths, sizes, and count (0 image tokens). Decide your batching strategy.
+2. **Delegate ALL images**: Call `delegate_task` with the image paths in `context`. The sub-agent has its own **isolated context** — it can freely call `read_image` without bloating your context. When the sub-agent finishes, its context is destroyed and only the text conclusion returns to you — **zero context overhead**.
+   - Example: `delegate_task(task="Analyze each image and return a structured JSON summary of the content, including any text, numbers, or identifying information visible in the image", context="Image paths: C:\\photos\\1.jpg, C:\\photos\\2.jpg, C:\\photos\\3.jpg")`
+3. **Batch for scale**: For 4+ images, split into batches of 3-5 images per `delegate_task` call. Run multiple sub-agents in parallel for maximum throughput.
+4. **Aggregate**: Collect all sub-agent text results, write a summary file if needed, then proceed with the task based on the text-only conclusions.
+
+**ABSOLUTE RULE: NEVER call `read_image` in your own context.** Always delegate to a sub-agent. This applies to 1 image, 5 images, or 50 images — the rule is the same. The sub-agent's isolated context absorbs the token cost and destroys it when done; your context stays lean.
+
+**Broader delegation strategy — when to use `delegate_task` beyond images:**
+
+The zero-context-overhead principle applies to **any operation that could suddenly inflate your context**. Use `delegate_task` when:
+
+1. **Batch file analysis** — Reading 10+ files to produce a summary. Each file's content enters your context and stays there forever. Delegate the reading + analysis to a sub-agent; it returns only the concise conclusions.
+2. **Large search/grep results** — `search_files` or `terminal` commands that may produce thousands of lines of output. The result is truncated by `budget::enforce_budget`, but you lose the detail. Delegate to a sub-agent that can paginate, filter, and return only the relevant matches.
+3. **Long-running terminal output** — Build logs, test output, or `dir /s /b` on large directories. Delegate the execution + filtering to a sub-agent.
+4. **Web extraction at scale** — Extracting content from 3+ URLs. Each page's content can be very large. Delegate to a sub-agent that reads all pages and returns a synthesized summary.
+5. **Code exploration across many files** — When you need to understand a codebase by reading 20+ files. Delegate the exploration to a sub-agent; it returns an architectural summary.
+
+**Decision heuristic**: If a task requires reading/processing data that could exceed ~4,000 chars of useful output AND you don't need to branch on intermediate results, delegate it. The sub-agent's 8,000-char result cap (~2,000 tokens) is the ceiling that keeps your context safe.
 
 The user already told you where the file is. `terminal` is for *navigation* and *shell operations*, not for replacing purpose-built I/O tools.
 
@@ -283,7 +309,18 @@ const OPENAI_MODEL_EXECUTION_GUIDANCE: &str = "# Execution discipline (OpenAI)\n
 
 const GOOGLE_MODEL_OPERATIONAL_GUIDANCE: &str = "# Operational guidance (Google)\nBe concise and execution-first. Prefer absolute paths, parallel tool calls when safe, and verify each substantive change.";
 
-const TOOL_FAILURE_GUIDANCE: &str = "Tool failure rule: if a tool fails twice, switch approach or ask the user. Do NOT retry the same call.";
+const TOOL_FAILURE_GUIDANCE: &str = "\
+# Tool failure rule (mandatory, always-on)
+
+1. **Never claim success on a failed tool call.** If a tool returns an error or \
+failure status, you MUST report the actual failure state to the user — do NOT say \
+'已删除' / 'done' / 'completed' / '成功' as if it succeeded. State the real outcome \
+(e.g. '工具调用失败：No entry matched') first, then explain what it means.
+2. **Summarize from the tool's actual result, not your intent.** If the call failed, \
+the operation did not happen. Do not describe what you *tried* to do as if it *did* \
+happen.
+3. **Do NOT retry the same call twice.** If a tool fails twice, switch approach or \
+ask the user.";
 
 /// Environment awareness + Shell compatibility + tool fallback priority.
 ///
@@ -308,10 +345,13 @@ When a task can be accomplished by a **purpose-built structured tool**, you MUST
 
 **Decision order for disk/storage tasks:**
 1. `storage_analyzer` (Safe, read-only, no approval) → scan disk usage first
-2. `disk_cleanup` (Caution, dry_run defaults to true) → scan & prune stale files under HERMIX_HOME
-3. `storage_clean` (Dangerous, requires approval) → delete/move-to-recycle specific junk paths
+2. `execute_code` (Caution, Python read-only scripts) → targeted analysis (large files, stale temp, browser cache, dev cache, duplicate installers). **Preferred over `terminal` + PowerShell** — no shell quote issues, no approval popups for read-only code.
+3. `disk_cleanup` (Caution, dry_run defaults to true) → scan & prune stale files under HERMIX_HOME
+4. `storage_clean` (Dangerous, requires approval) → delete/move-to-recycle specific junk paths
 
-**General rule**: if a `terminal` command fails **twice** with shell-compatibility errors (quote stripping, path format, missing binary, `not recognized as internal command`), STOP retrying via shell. Switch to the matching structured tool. Do NOT write `.bat`/`.ps1` scripts to disk as a workaround — that is a fallback of last resort, not a first strategy.
+**General rule**: if a `terminal` command fails **twice** with shell-compatibility errors (quote stripping, path format, missing binary, `not recognized as internal command`), STOP retrying via shell. Switch to `execute_code` (Python) or the matching structured tool. Do NOT write `.bat`/`.ps1` scripts to disk as a workaround — that is a fallback of last resort, not a first strategy.
+
+**`execute_code` for analysis tasks**: Python's `os.scandir`, `os.stat`, `pathlib` are read-only and pass the internal `CodeExecutionGuard` check (Approved, no confirmation needed). Use Python for any file-system analysis that `storage_analyzer` can't do (e.g. \"find files not accessed in 30 days\", \"list duplicate installers\", \"sum browser cache sizes\"). **Never use Python for deletion** — `os.remove`, `shutil.rmtree` are blocked by `CodeExecutionGuard`. All cleanup must go through `storage_clean`.
 
 ## Read-only operations never need approval
 Directory listing, file size scanning, disk space queries, and process/service listings are read-only. If you are using a structured tool marked Safe (e.g. `storage_analyzer`), it will never prompt for approval. If you are using `terminal` for a read-only PowerShell command (`Get-ChildItem`, `Get-PSDrive`, `Measure-Object`), the command should not trigger confirmation — do not hesitate to run it.";
@@ -581,7 +621,7 @@ pub fn collect_directions(
         dirs.push(SystemDir::new(
             "format.short",
             DirRoute::Subsequent,
-            "## Format\n用自然语言交流,像真人对话一样完整、有温度、不端着;只在复杂主题用 markdown 结构化。避免无意义的冗长,但绝不为了「简短」而省略必要内容,也不要把结论压成一句干巴巴的话。",
+            "## 语气与格式\n用自然语言聊,像真人对话一样有温度、有干劲,不端着。短而有力——把事说清楚就行,别注水也别为了「简短」把必要内容省了。复杂主题才上 markdown 结构化;日常交流直接说人话。信息密度要高,不啰嗦但绝不漏掉关键点。",
         ));
     }
     // Thinking discipline.
