@@ -1009,18 +1009,30 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   }, [activeSession]);
 
   /**
-   * Auto-generate a session title from the first user message, unless the
-   * existing title is already a meaningful one. Mirrors the previous
-   * in-place logic; the only change is that we now expose it as a helper
-   * so the persistence call below can reuse the same value.
+   * Auto-generate a session title from the FIRST user message of the
+   * conversation, unless the existing title is already a meaningful one.
+   *
+   * 2026-07-23 fix: previously the title was recomputed whenever
+   * `(s.message_count ?? s.messages.length) === 0`. But in-memory
+   * `message_count` for in-app-created sessions stays 0 forever (it is only
+   * ever set from the backend), so that condition was true on EVERY send —
+   * and the `firstUserContent` passed in was actually the *current* (last)
+   * message. The result: the sidebar title kept getting overwritten by the
+   * last user message instead of the first.
+   *
+   * Now we only recompute while the title is still a placeholder, and we
+   * derive the text from the FIRST user message found in `s.messages`
+   * (falling back to the just-sent message only for a brand-new session's
+   * very first turn). Once a real title exists it is preserved across turns.
    */
-  const computeAutoTitle = (s: Session, firstUserContent: string): string => {
+  const computeAutoTitle = (s: Session, fallbackContent: string): string => {
     const isPlaceholder =
       !s.title || s.title === "新建对话" || s.title === "新对话" || s.title === "New chat";
-    return isPlaceholder || (s.message_count ?? s.messages.length) === 0
-      ? firstUserContent.replace(/\s+/g, " ").trim().slice(0, 28) +
-        (firstUserContent.length > 28 ? "…" : "")
-      : s.title;
+    if (!isPlaceholder) return s.title;
+    const firstUserMsg = s.messages.find((m) => m.role === "user");
+    const raw = firstUserMsg?.content ?? fallbackContent;
+    const text = raw.replace(/\s+/g, " ").trim();
+    return text.slice(0, 28) + (text.length > 28 ? "…" : "");
   };
 
 const handleNewChat = useCallback(async () => {
