@@ -585,6 +585,20 @@ impl AgentLoop {
             }
         }
 
+        // ★ 2026-07-23: if any tool call mutated a memory store, bump the
+        //   context epoch so the next `resolve_initial_system_prompt` (on the
+        //   next user message) force-rebuilds the Context layer from disk
+        //   instead of reusing the frozen `stored_system_prompt`. Without
+        //   this, `memory` tool edits (add/replace/remove) would be invisible
+        //   to the LLM until the next session restart.
+        if tool_calls.iter().any(is_memory_store_mutation) {
+            self.bump_context_epoch();
+            tracing::debug!(
+                target: "hermix.context_epoch",
+                "memory store mutated by tool call; bumped context_epoch for next prompt rebuild"
+            );
+        }
+
         ordered
             .into_iter()
             .map(|slot| {
@@ -617,4 +631,28 @@ impl AgentLoop {
             })
             .collect()
     }
+}
+
+/// Detect whether a tool call mutates a memory store whose change must be
+/// reflected in the next system-prompt rebuild.
+///
+/// The `memory` tool rewrites `memories/MEMORY.md` / `memories/USER.md` on
+/// disk for `action in {add, replace, remove}` (the frozen context snapshot
+/// in the system prompt is sourced from those files). Bumping the context
+/// epoch after such a call makes `build_context_layer` (`PromptCache`-keyed
+/// by epoch) re-read those files on the next user message, so in-session
+/// memory edits take effect immediately instead of only after a session
+/// restart. `read` (and any non-`memory` tool) is non-mutating. (2026-07-23)
+fn is_memory_store_mutation(tc: &ToolCall) -> bool {
+    if tc.function.name != "memory" {
+        return false;
+    }
+    let args: Value = match serde_json::from_str(&tc.function.arguments) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    matches!(
+        args.get("action").and_then(|a| a.as_str()),
+        Some("add") | Some("replace") | Some("remove")
+    )
 }

@@ -256,6 +256,13 @@ pub struct AgentLoop {
     /// Bump this via `context_epoch.fetch_add(1, Ordering::Relaxed)`
     /// when memory/skills/context-files are modified.
     context_epoch: std::sync::atomic::AtomicU64,
+    /// Epoch at which `config.stored_system_prompt` was last (re)built.
+    /// `resolve_initial_system_prompt` compares this against `context_epoch`
+    /// to detect that a memory/skill/context-file store mutated since the
+    /// stored prompt was frozen, forcing a rebuild instead of reusing the
+    /// stale frozen string. (2026-07-23: makes `memory` tool edits take
+    /// effect in-session instead of only after a session restart.)
+    stored_prompt_epoch: std::sync::atomic::AtomicU64,
     /// Optional embedding provider for vector recall in memory prefetch.
     /// When set, `memory_prefetch` generates embeddings and passes them
     /// to `MemoryQuery` for cosine similarity search.
@@ -690,6 +697,7 @@ impl AgentLoop {
             memory_recall_seeded: std::sync::atomic::AtomicBool::new(false),
             prompt_cache: std::sync::Mutex::new(crate::agent_helpers::PromptCache::default()),
             context_epoch: std::sync::atomic::AtomicU64::new(0),
+            stored_prompt_epoch: std::sync::atomic::AtomicU64::new(0),
             embedding_provider: None,
             compression_in_flight: std::sync::Mutex::new(None),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
@@ -740,6 +748,7 @@ impl AgentLoop {
             memory_recall_seeded: std::sync::atomic::AtomicBool::new(false),
             prompt_cache: std::sync::Mutex::new(crate::agent_helpers::PromptCache::default()),
             context_epoch: std::sync::atomic::AtomicU64::new(0),
+            stored_prompt_epoch: std::sync::atomic::AtomicU64::new(0),
             embedding_provider: None,
             compression_in_flight: std::sync::Mutex::new(None),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
@@ -1332,6 +1341,24 @@ impl AgentLoop {
         tool_call_count: usize,
     ) -> (String, bool) {
         let snapshot = self.tool_error_counter.lock().ok().map(|c| c.snapshot());
+        let context_epoch = self.context_epoch.load(std::sync::atomic::Ordering::SeqCst);
+        // ★ 2026-07-23: a memory/skill/context-file store mutated since the
+        //   frozen `config.stored_system_prompt` was built (epoch mismatch),
+        //   so force a fresh build instead of reusing the stale frozen string.
+        //   `config` is owned and the run-loop is `&self`, so we cannot update
+        //   `stored_system_prompt` in place. Instead the rebuild re-reads the
+        //   Context layer from disk via the `PromptCache` epoch key; the stable
+        //   + volatile layers remain cache hits, so the only real cost is two
+        //   small file reads on the first turn after the mutation, then
+        //   negligible. The LLM provider still prefix-caches by prompt content,
+        //   so rebuilds across turns do not invalidate the upstream cache.
+        let has_frozen_prompt = self
+            .config
+            .stored_system_prompt
+            .as_ref()
+            .map_or(false, |s| !s.trim().is_empty());
+        let force_rebuild =
+            has_frozen_prompt && self.stored_prompt_epoch.load(std::sync::atomic::Ordering::SeqCst) != context_epoch;
         crate::prompt_assembly::resolve_initial_system_prompt_with_tool_errors(
             &self.config,
             &self.prompt_cache,
@@ -1341,6 +1368,8 @@ impl AgentLoop {
             tool_schemas,
             tool_call_count,
             snapshot.as_ref(),
+            context_epoch,
+            force_rebuild,
         )
     }
 

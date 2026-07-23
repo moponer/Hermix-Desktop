@@ -428,6 +428,7 @@ pub fn build_system_prompt_with_tool_errors(
     model_for_prompt: &str,
     tool_call_count: usize,
     tool_error_counts: Option<&std::collections::HashMap<String, u32>>,
+    context_epoch: u64,
 ) -> String {
     let tool_names_set: HashSet<&str> =
         tool_schemas.iter().map(|t| t.name.as_str()).collect();
@@ -511,7 +512,7 @@ pub fn build_system_prompt_with_tool_errors(
         prompt_cache,
         memory_router,
         &tool_names_set,
-        0, // context_epoch: bump when memory/skills mutate
+        context_epoch, // bumped when memory/skills/context-files mutate
     );
 
     let suffix_text = build_dynamic_suffix(config, model_for_prompt);
@@ -645,7 +646,7 @@ pub fn build_system_prompt(
         prompt_cache,
         memory_router,
         &tool_names_set,
-        0, // context_epoch: bump when memory/skills mutate
+        0, // test helper: unit tests never mutate memory/skill stores in-session
     );
 
     let suffix_text = build_dynamic_suffix(config, model_for_prompt);
@@ -927,11 +928,37 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
     tool_schemas: &[ToolSchema],
     tool_call_count: usize,
     tool_error_counts: Option<&std::collections::HashMap<String, u32>>,
+    context_epoch: u64,
+    force_rebuild: bool,
 ) -> (String, bool) {
-    let (prompt, restored) = if let Some(ref s) = config.stored_system_prompt {
-        let t = s.trim();
-        if !t.is_empty() {
-            (s.clone(), true)
+    // ★ 2026-07-23: `force_rebuild` is set by the AgentLoop when a
+    //   memory/skill/context-file store mutated since
+    //   `config.stored_system_prompt` was frozen at
+    //   `stored_prompt_epoch`. When set, we bypass the reuse path and
+    //   re-read the Context layer from disk so in-session `memory` tool
+    //   edits (add/replace/remove) take effect on the next user message
+    //   instead of only after a session restart.
+    let (prompt, restored) = if !force_rebuild {
+        if let Some(ref s) = config.stored_system_prompt {
+            let t = s.trim();
+            if !t.is_empty() {
+                (s.clone(), true)
+            } else {
+                (
+                    build_system_prompt_with_tool_errors(
+                        config,
+                        prompt_cache,
+                        memory_router,
+                        user_message,
+                        tool_schemas,
+                        &config.model,
+                        tool_call_count,
+                        tool_error_counts,
+                        context_epoch,
+                    ),
+                    false,
+                )
+            }
         } else {
             (
                 build_system_prompt_with_tool_errors(
@@ -943,6 +970,7 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
                     &config.model,
                     tool_call_count,
                     tool_error_counts,
+                    context_epoch,
                 ),
                 false,
             )
@@ -958,6 +986,7 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
                 &config.model,
                 tool_call_count,
                 tool_error_counts,
+                context_epoch,
             ),
             false,
         )
@@ -1022,6 +1051,8 @@ pub fn resolve_initial_system_prompt(
     user_message: &str,
     tool_schemas: &[ToolSchema],
     tool_call_count: usize,
+    context_epoch: u64,
+    force_rebuild: bool,
 ) -> (String, bool) {
     resolve_initial_system_prompt_with_tool_errors(
         config,
@@ -1032,6 +1063,8 @@ pub fn resolve_initial_system_prompt(
         tool_schemas,
         tool_call_count,
         None,
+        context_epoch,
+        force_rebuild,
     )
 }
 
@@ -1224,6 +1257,8 @@ mod tests {
             &[],
             0,
             Some(&counts),
+            0,
+            false,
         );
         assert!(!restored);
         assert!(
@@ -1253,6 +1288,8 @@ mod tests {
             "hello",
             &[],
             0,
+            0,
+            false,
         );
         let prompt_new = resolve_initial_system_prompt_with_tool_errors(
             &cfg,
@@ -1263,6 +1300,8 @@ mod tests {
             &[],
             0,
             None,
+            0,
+            false,
         );
         // With `None` snapshot the wire MUST be byte-identical to the
         // legacy path; otherwise existing callers would see their
@@ -1285,6 +1324,8 @@ mod tests {
             "hi",
             &[],
             0,
+            0,
+            false,
         );
         assert!(!prompt.0.is_empty());
     }
