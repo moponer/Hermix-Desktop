@@ -31,7 +31,7 @@ const TOOL_USAGE_GUIDANCE: &str = r#"
 Before calling a generic tool like `terminal`, `process_registry`, or `execute_code`, **scan the available tool list** for a purpose-built alternative. Purpose-built tools encode correct arguments, error handling, and side-effect discipline that generic tools cannot match.
 
 ## Decision pattern
-1. The user mentions a specific file type, service, or action → look for a tool whose name/description matches (e.g. `.pdf` → `read_pdf`, GitHub → `github_*`, image → `delegate_task` + `read_image` via sub-agent). **Image handling (free, local, no API key):** If the user *pasted/attached/dropped* an image in THIS message, you ALREADY see it via multimodal context — analyze it directly and do NOT call any tool. If the user references an image *by file path* or you discover image files, you MUST delegate the analysis to a sub-agent via `delegate_task` — never call `read_image` in your own context (see "Image analysis" section below for the mandatory protocol). **Do NOT use `cua_ocr_recognize` (OCR-only text extraction, inferior to LLM vision).** **Never ask the user to describe the image or provide a mapping/lookup table.**
+1. The user mentions a specific file type, service, or action → look for a tool whose name/description matches (e.g. `.pdf` → `read_pdf`, GitHub → `github_*`, image → `delegate_task` + `read_image` via sub-agent). **Image handling (free, local, no API key):** If the user *pasted/attached/dropped* an image in THIS message, you ALREADY see it via multimodal context — analyze it directly and do NOT call any tool. If the user references an image *by file path* or you discover image files, you MUST delegate the analysis to a sub-agent via `delegate_task` — never call `read_image` in your own context (see "Image analysis" section below for the mandatory protocol). 🔴 **ABSOLUTELY FORBIDDEN: `cua_ocr_recognize`** — the local Windows OCR engine has extremely poor accuracy for Chinese documents, IDs, certificates, and licence plates (often <30% character accuracy). Using it wastes a turn, produces unreliable output, and you'll need to re-do the analysis with `delegate_task` anyway. **There are NO exceptions to this rule** — not for single images, not for "just checking the text", not for any reason. Use `delegate_task` instead. **Never ask the user to describe the image or provide a mapping/lookup table.**
 2. If a matching tool exists, **call it first**. Do not chain `terminal` calls to re-implement what the tool already does.
 3. Only fall back to `terminal` / `process_registry` when no purpose-built tool covers the task, or when the user explicitly asks for raw shell access.
 
@@ -44,7 +44,7 @@ When the user message contains:
 
 **You MUST call the appropriate tool (`read_pdf` for PDFs, `read_file` for text/code, `write_file` for creating files, `delegate_task` for images, `move_file` for rename/move) using that EXACT path — do not use `terminal` or `list_files` to search for the file first. For images, pass the path to `delegate_task` so a sub-agent can call `read_image` in its isolated context (see "Image analysis" section below).**
 
-**For IMAGE files referenced BY PATH:** if the user gives an image path (e.g. `C:\photos\car001.jpg`, a 车证/证件照/截图/diagram) or you discover image files via `list_files`/`terminal` and the user wants them identified, **you MUST use `delegate_task` to analyze them** — see the "Image analysis" section below. **Never call `read_image` directly in your own context.** Each `read_image` injects a large base64 blob that permanently inflates your context window, even after cleanup — the token cost is paid on every subsequent turn. The only exception is images the user pasted/attached inline in THIS message — you already see those for free via multimodal context, analyze directly, do NOT call any tool. **The `vision` tool has been REMOVED** (it required a paid API key); `read_image` is the free local replacement but must only be called by sub-agents, never by you.
+**For IMAGE files referenced BY PATH:** if the user gives an image path (e.g. `C:\photos\car001.jpg`, a 车证/证件照/截图/diagram) or you discover image files via `list_files`/`terminal` and the user wants them identified, **you MUST use `delegate_task` to analyze them** — see the "Image analysis" section below. **Never call `read_image` directly in your own context.** Each `read_image` injects a large base64 blob that permanently inflates your context window, even after cleanup — the token cost is paid on every subsequent turn. The only exception is images the user pasted/attached inline in THIS message — you already see those for free via multimodal context, analyze directly, do NOT call any tool. **The `vision` tool has been REMOVED** (it required a paid API key); `read_image` is the free local replacement but must only be called by sub-agents, never by you. 🔴 **`cua_ocr_recognize` is ALSO FORBIDDEN in the main context** — its local OCR engine cannot reliably read Chinese text on documents, IDs, or certificates. It always produces inferior results vs. LLM vision in a sub-agent, and wastes a turn.
 
 **Image analysis — ALWAYS use `delegate_task` (zero-context-overhead model):**
 
@@ -56,8 +56,29 @@ When the user message contains:
    - Example: `delegate_task(task="Analyze each image and return a structured JSON summary of the content, including any text, numbers, or identifying information visible in the image", context="Image paths: C:\\photos\\1.jpg, C:\\photos\\2.jpg, C:\\photos\\3.jpg")`
 3. **Batch for scale**: For 4+ images, split into batches of 3-5 images per `delegate_task` call. Run multiple sub-agents in parallel for maximum throughput.
 4. **Aggregate**: Collect all sub-agent text results, write a summary file if needed, then proceed with the task based on the text-only conclusions.
+5. **Continue execution**: When `delegate_task` returns, the sub-agent's result is ALREADY in your context as a `tool_result`. You MUST immediately continue the original task using that result — do NOT stop, do NOT say "waiting for results" or "等子 agent 回来", and do NOT treat the delegate_task call as the end of your work. The sub-agent has already finished; you now have its output and must act on it.
 
-**ABSOLUTE RULE: NEVER call `read_image` in your own context.** Always delegate to a sub-agent. This applies to 1 image, 5 images, or 50 images — the rule is the same. The sub-agent's isolated context absorbs the token cost and destroys it when done; your context stays lean.
+**Critical: `delegate_task` is synchronous from your perspective.** When you call `delegate_task`, the system runs the sub-agent to completion and then returns the result to you in the SAME tool_result. There is nothing to "wait for" — by the time you see the tool_result, the sub-agent is done. Your next turn MUST use the returned result to continue the original task.
+
+## Context-bloat prevention — absolute rules (2026-07-23, applies to ALL data, not just images)
+
+**Core principle**: Anything you read into your own context is paid for **on every subsequent turn for the rest of the session**. Sub-agents are isolated — they pay once and destroy. So the question is NEVER "can I do this myself?" but "would doing this myself permanently bloat my context for diminishing returns?".
+
+**Hard rules (must follow — these are not suggestions):**
+
+1. **NEVER call `read_image` in your own context.** Already explicitly forbidden above. The base64 cost is permanent.
+2. **NEVER call `cua_ocr_recognize` in your own context.** Local OCR is unreliable for Chinese text and always inferior to LLM vision in a sub-agent.
+3. **NEVER call `read_pdf` in your own context if the PDF is > 5 pages.** A 100-page PDF dumped into your context as text costs 30K+ tokens. Delegate the extraction + summarization to a sub-agent that runs `pdftotext`/`pandoc` page-by-page.
+4. **NEVER call `read_file` on files > ~50 KB (~1500 lines).** Read the file metadata first via `list_files` or `terminal` `wc -l`; if too large, delegate the analysis to a sub-agent.
+5. **NEVER inline file contents into the `task` parameter of `delegate_task`.** The `task` string IS the sub-agent's first user message — pasting 50 KB of file content there just shifts the bloat. Pass paths and let the sub-agent read.
+6. **NEVER chain 3+ reads/searches in your own context to gather info you don't branch on.** Use `delegate_task` to read+analyze, returning only the concise conclusion.
+7. **NEVER issue `terminal` / `execute_command` commands that may produce unbounded output** (`cat` on a large file, `dir /s /b` on a directory tree, dumping logs without grep). Delegate to a sub-agent that can paginate + filter.
+
+**Decision heuristic (use this for ANY data type — image / PDF / doc / code / log / web page / DB row):**
+
+> Will this read/processing likely produce > 4,000 chars of output that I don't need to branch on? **→ Delegate.** Will it produce < 4,000 chars and I need it to make a decision? **→ Read directly.** When in doubt, delegate — the cost of an unnecessary delegation is one sub-agent turn; the cost of a context-bloat mistake compounds across the entire remaining session.
+
+**Scope (this is NOT image-specific):** The rule covers every data type that has volume — PDFs, Word docs, Excel sheets, codebases, search results, log files, web pages, API responses, database exports. The mechanism (sub-agent isolation) is general; only the *attachment format* is image-specific (because OpenAI vision requires multimodal content parts).
 
 **Broader delegation strategy — when to use `delegate_task` beyond images:**
 

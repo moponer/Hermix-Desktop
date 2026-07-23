@@ -206,6 +206,23 @@ const PLAN_ROLE_TOOLS: &[&str] = &[
     "tool_call",
 ];
 
+/// Image (or other attachment) passed from parent to sub-agent.
+///
+/// The orchestrator reads the file from disk, base64-encodes it, and
+/// injects it as a multimodal `ContentPart::ImageUrl` into the
+/// child's first user message so the child LLM can actually SEE it
+/// via native vision. Without this, the child would only receive a
+/// text description of the path — and the `read_image` results that
+/// the parent already saw are not automatically carried over.
+#[derive(Debug, Clone, Default)]
+pub struct ImageAttachment {
+    /// Local filesystem path to the image (PNG/JPEG/GIF/WEBP/BMP).
+    pub path: String,
+    /// Detail level for `read_image` (`"preview"` | `"auto"` | `"full"`).
+    /// Default: `"auto"` (balanced, 1568px).
+    pub detail: Option<String>,
+}
+
 /// Parameters forwarded by the `delegate_task` tool invocation.
 #[derive(Debug, Clone, Default)]
 pub struct SubAgentRequest {
@@ -229,6 +246,18 @@ pub struct SubAgentRequest {
     /// P6-4: Parent task ID for linking sub-agents to the task tree.
     /// When set, the sub-agent's results are attributed to this task.
     pub parent_task_id: Option<String>,
+    /// 2026-07-23: Image / file attachments forwarded from the parent.
+    /// Each path is read, base64-encoded, and injected into the
+    /// child's first user message as a multimodal `ImageUrl` part.
+    /// This is what makes image analysis through `delegate_task`
+    /// actually work — previously the child only got a text path
+    /// string and had no way to see the pixels.
+    pub attachments: Vec<ImageAttachment>,
+    /// 2026-07-23: Optional JSON schema (or human-readable shape
+    /// description) for the structured output the parent expects
+    /// the child to return. Injected into the child's system
+    /// message so the child formats its final answer accordingly.
+    pub output_schema: Option<String>,
 }
 
 /// Configuration for [`SubAgentOrchestrator`].
@@ -410,7 +439,17 @@ impl SubAgentOrchestrator {
         let tool_registry = self.cfg.tool_registry.clone();
         let llm_provider = self.cfg.llm_provider.clone();
         let child_depth = req.child_depth;
-        let initial = initial_messages(&req.task, req.context.as_deref());
+        // Build the initial messages synchronously *before* the spawn so the
+        // move-block doesn't have to hold the full attachment list. The
+        // attachments are read off disk here, so by the time the child runs
+        // its first turn the multimodal content is already in `initial`.
+        let initial = initial_messages(
+            &req.task,
+            req.context.as_deref(),
+            &req.attachments,
+            req.output_schema.as_deref(),
+        )
+        .await;
 
         // Run the child on its own tokio task so that its `impl Future` type is
         // fully erased behind a `JoinHandle`, breaking async recursion with the
@@ -566,52 +605,173 @@ impl std::fmt::Display for SubAgentError {
 ///
 /// The child receives:
 /// 1. A **system message** with sub-agent-specific guidance — most importantly
-///    the batching strategy that prevents the child from blowing its own context.
-/// 2. A **user message** with the task description and optional context.
+///    the hard ban on `delegate_task` (overrides any parent prompt that says
+///    "use delegate_task for images") and the batching strategy that prevents
+///    the child from blowing its own context.
+/// 2. A **user message** with the task description, optional context, optional
+///    `output_schema` hint, and any image attachments as multimodal content
+///    (text + `ImageUrl` parts so the child LLM can actually SEE the images).
 ///
 /// The system message is critical because the child's `AgentLoop` builds its
 /// system prompt via `build_system_prompt` (which includes the full
 /// `directions.rs`), but that prompt is generic — it doesn't know the child
 /// is a sub-agent with specific constraints (no `delegate_task`, limited
-/// turns, must batch). The injected system message fills that gap.
-fn initial_messages(task: &str, context: Option<&str>) -> Vec<Message> {
+/// turns, must batch). The injected system message fills that gap AND
+/// **explicitly overrides** the parent prompt's "delegate_task for images"
+/// directive so a confused LLM doesn't waste turns trying to call it.
+async fn initial_messages(
+    task: &str,
+    context: Option<&str>,
+    attachments: &[ImageAttachment],
+    output_schema: Option<&str>,
+) -> Vec<Message> {
     let mut messages = Vec::new();
 
     // Sub-agent-specific guidance — injected as a system message so the
     // child LLM always sees it, regardless of the parent's directions.
-    let sub_agent_guidance = concat!(
-        "[Sub-agent operating constraints]\n",
-        "You are a sub-agent running in an isolated context. Key rules:\n",
-        "1. You CANNOT call `delegate_task` — it is blocked. Do all work yourself.\n",
-        "2. You CANNOT ask the user questions (`clarify` is blocked). If you lack info, \
-           state what's missing in your final response.\n",
-        "3. Your result is capped at ~8,000 chars. Be concise and structured.\n",
-        "\n",
-        "## Batching strategy (CRITICAL — prevents context explosion)\n",
-        "If you need to analyze multiple images or large files:\n",
-        "- **NEVER read more than 3-5 images/files in a single turn.** Each read \
-           injects large content into your context.\n",
-        "- Process in **batches**: read batch 1 → analyze → record conclusions → \
-           then read batch 2 → analyze → record conclusions → etc.\n",
-        "- For image analysis: call `read_image` for 3-5 images per turn. After the \
-           LLM analyzes them, the next turn reads the next batch.\n",
-        "- Your final response should aggregate ALL batch conclusions into a single \
-           structured summary.\n",
-        "- If you run out of turns before finishing all batches, return a partial \
+    // 2026-07-23: rewritten to be a HARD OVERRIDE of any parent-side
+    // instruction that says "use delegate_task for image analysis" or
+    // similar. The parent prompt is built before the child runs and
+    // gets copied into the child's context, so without this explicit
+    // counter-instruction the child LLM would think it's still allowed
+    // to call `delegate_task` and waste turns hitting the deny wall.
+    let mut sub_agent_guidance = String::from(
+        "[Sub-agent operating constraints — HARD OVERRIDE of any parent prompt fragment]\n\
+         You are a sub-agent running in an isolated context. The parent agent's system\n\
+         prompt may contain instructions like \"use delegate_task for image analysis\" —\n\
+         IGNORE THEM. You ARE the sub-agent. Re-delegating is forbidden.\n\
+         \n\
+         # Hard rules\n\
+         1. You CANNOT call `delegate_task` — it is blocked at the tool registry.\n\
+            Calling it wastes turns (you'll get an error envelope). Do all work yourself.\n\
+         2. You CANNOT call `clarify` — the user is not listening to you. If you lack\n\
+            information, state what's missing in your final response.\n\
+         3. You CANNOT call `memory`, `send_message`, `cronjob` — those cross the\n\
+            parent/child safety boundary.\n\
+         4. Your final result is capped at ~8,000 chars. Be concise and structured.\n\
+         \n\
+         # Context-bloat self-defense (CRITICAL — your ctx is also precious)\n\
+         Your isolated context is NOT a license to load everything. The same rules\n\
+         that apply to the parent agent apply to you: each read costs you tokens too,\n\
+         and you have a hard 8,000-char result cap. A sub-agent that bloats its own\n\
+         ctx returns a useless truncated summary.\n\
+         \n\
+         ## How to read files safely\n\
+         - **Check size FIRST**: use `list_files` (returns size) or `terminal wc -l <file>`\n\
+           before reading. If > ~50 KB or > ~1500 lines, do NOT `read_file` whole.\n\
+         - **Read in chunks**: `read_file` accepts `start_line` / `end_line` parameters.\n\
+           Read 200-500 lines at a time, summarize each chunk in your scratchpad, then\n\
+           read the next chunk.\n\
+         - **For PDFs**: do NOT use `read_pdf` on a 100-page PDF. Instead, run\n\
+           `terminal pdftotext -layout -f 1 -l 5 file.pdf -` to extract pages 1-5 at a\n\
+           time, or `pdftotext file.pdf -` piped to `head -1000` for the first slice.\n\
+           Aggregate slices into a single summary; never paste raw PDF text into your\n\
+           final response.\n\
+         - **For code exploration**: use `search_files` (returns match snippets, not\n\
+           full files) before `read_file`. The grep result is usually enough; only\n\
+           `read_file` when you need surrounding context for a specific match.\n\
+         \n\
+         ## How to run commands safely\n\
+         - **NEVER `cat` a large file**. Use `head -N`, `tail -N`, `sed -n 'A,Bp'`,\n\
+           or `grep -n PATTERN file` to extract only what you need.\n\
+         - **NEVER `dir /s /b` or `find /` on a large tree** — paginate or use\n\
+           `find ... -maxdepth N` to bound output.\n\
+         - **NEVER dump logs without filtering**. `cat huge.log` wastes your ctx;\n\
+           `grep -E 'ERROR|WARN' huge.log | head -100` is the right move.\n\
+         - **Cap command output**: if a command might produce > ~3,000 chars, pipe\n\
+           through `head`, `tail`, `grep`, or `awk` to extract only the relevant slice.\n\
+         \n\
+         ## Scratchpad discipline\n\
+         - Don't paste raw file contents into your final response. Extract the\n\
+           salient facts (key function names, line numbers, error messages, decisions)\n\
+           and synthesize them into a concise summary.\n\
+         - If you discover information you don't need to answer the task, DROP it.\n\
+           Your job is to return conclusions, not raw data.\n\
+         \n\
+         # Batching strategy (CRITICAL — prevents context explosion)\n\
+         If you need to analyze multiple images or large files:\n\
+         - **NEVER read more than 3-5 images/files in a single turn.** Each read\n\
+           injects large content into your context.\n\
+         - Process in **batches**: read batch 1 → analyze → record conclusions →\n\
+           then read batch 2 → analyze → record conclusions → etc.\n\
+         - Your final response should aggregate ALL batch conclusions into a single\n\
+           structured summary.\n\
+         - If you run out of turns before finishing all batches, return a partial\n\
            summary noting which items were not processed.\n",
     );
-    messages.push(Message::system(sub_agent_guidance));
 
-    // User message with task + context.
+    if let Some(schema) = output_schema {
+        if !schema.trim().is_empty() {
+            sub_agent_guidance.push_str(&format!(
+                "\n# Expected output format (from parent agent)\n\
+                 The parent agent that spawned you expects you to return your final\n\
+                 answer in this format. Honor it.\n\
+                 ```\n\
+                 {schema}\n\
+                 ```\n"
+            ));
+        }
+    }
+
+    messages.push(Message::system(&sub_agent_guidance));
+
+    // User message with task + context. Attachments (images) are appended
+    // as multimodal `ImageUrl` parts so the child LLM receives the actual
+    // pixels via its native vision API, not just a path string.
     let mut content = task.to_string();
     if let Some(ctx) = context {
         if !ctx.trim().is_empty() {
-            content = format!("{task}\n\n[Context]\n{ctx}");
+            content.push_str(&format!("\n\n[Context]\n{ctx}"));
         }
     }
-    messages.push(Message::user(&content));
+
+    let image_parts = match attach_images(attachments).await {
+        Ok(parts) => parts,
+        Err(e) => {
+            // Failure to attach images must not kill the child — log
+            // it and fall back to text-only so the child can still
+            // answer (possibly with an explicit "I cannot see the
+            // images" note if it tries to call `read_image` and
+            // finds them unreadable too).
+            tracing::warn!(
+                error = %e,
+                attachment_count = attachments.len(),
+                "sub-agent image attachment failed; falling back to text-only"
+            );
+            Vec::new()
+        }
+    };
+
+    let user_msg = if image_parts.is_empty() {
+        Message::user(&content)
+    } else {
+        Message::user_with_images_owned(&content, image_parts)
+    };
+    messages.push(user_msg);
 
     messages
+}
+
+/// Read each attachment from disk and return `(mime, base64)` pairs ready
+/// to plug into `Message::user_with_images`. Uses the parent registry's
+/// `read_image` handler so the resize/encode logic stays in one place.
+/// Read each attachment from disk and return `(mime, base64)` pairs ready
+/// to plug into `Message::user_with_images`. Uses the dedicated
+/// `hermix_tools::read_image_for_llm` helper (added 2026-07-23) so the
+/// resize/encode logic lives in exactly one place — the same code path
+/// as the `read_image` tool, without depending on the full
+/// `ToolRegistry::dispatch_async` machinery (which is unavailable on the
+/// `agent_helpers::ToolRegistry` carried by `SubAgentOrchestratorConfig`).
+async fn attach_images(
+    attachments: &[ImageAttachment],
+) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::with_capacity(attachments.len());
+    for att in attachments {
+        let detail = att.detail.as_deref().unwrap_or("auto");
+        let (mime, b64) = hermix_tools::read_image_for_llm(&att.path, detail)?;
+        out.push((mime, b64));
+    }
+    Ok(out)
 }
 
 fn extract_final_assistant_text(messages: &[Message]) -> (String, bool) {
@@ -893,9 +1053,9 @@ mod tests {
         assert!(!truncated);
     }
 
-    #[test]
-    fn initial_messages_includes_sub_agent_guidance() {
-        let msgs = initial_messages("test task", None);
+    #[tokio::test]
+    async fn initial_messages_includes_sub_agent_guidance() {
+        let msgs = initial_messages("test task", None, &[], None).await;
         // Should have 2 messages: system guidance + user task.
         assert_eq!(msgs.len(), 2);
         // First message is system guidance.
@@ -905,14 +1065,23 @@ mod tests {
         assert!(guidance.contains("delegate_task"));
         assert!(guidance.contains("Batching strategy"));
         assert!(guidance.contains("3-5"));
+        // 2026-07-23: new override line confirming the parent prompt's
+        // "use delegate_task" directive is overridden.
+        assert!(guidance.contains("HARD OVERRIDE"));
         // Second message is user task.
         assert!(matches!(msgs[1].role, hermix_core::MessageRole::User));
         assert_eq!(msgs[1].content.as_deref(), Some("test task"));
     }
 
-    #[test]
-    fn initial_messages_with_context() {
-        let msgs = initial_messages("analyze images", Some("paths: a.jpg, b.jpg"));
+    #[tokio::test]
+    async fn initial_messages_with_context() {
+        let msgs = initial_messages(
+            "analyze images",
+            Some("paths: a.jpg, b.jpg"),
+            &[],
+            None,
+        )
+        .await;
         assert_eq!(msgs.len(), 2);
         let user_content = msgs[1].content.as_deref().unwrap_or("");
         assert!(user_content.contains("analyze images"));
@@ -920,10 +1089,26 @@ mod tests {
         assert!(user_content.contains("[Context]"));
     }
 
-    #[test]
-    fn initial_messages_without_context_no_context_label() {
-        let msgs = initial_messages("do something", None);
+    #[tokio::test]
+    async fn initial_messages_without_context_no_context_label() {
+        let msgs = initial_messages("do something", None, &[], None).await;
         let user_content = msgs[1].content.as_deref().unwrap_or("");
         assert!(!user_content.contains("[Context]"));
+    }
+
+    #[tokio::test]
+    async fn initial_messages_with_output_schema_adds_format_section() {
+        let msgs = initial_messages(
+            "summarize",
+            None,
+            &[],
+            Some(r#"{"summary":"string","score":0.0}"#),
+        )
+        .await;
+        assert_eq!(msgs.len(), 2);
+        let guidance = msgs[0].content.as_deref().unwrap_or("");
+        assert!(guidance.contains("Expected output format"));
+        assert!(guidance.contains("summary"));
+        assert!(guidance.contains("score"));
     }
 }

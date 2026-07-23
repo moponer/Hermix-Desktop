@@ -54,6 +54,31 @@ Key crates:
 - **Parity fixtures** — `hermix-parity-tests/fixtures/` has golden JSON; `pending/` is excluded from test runs
 - **Desktop app frontend** — `apps/desktop-tauri/src/`, uses `@` alias for `src/`
 
+## Core principles (2026-07-23, applies to all work — code, design, bug fix, doc)
+
+1. **First principles** — every design decision must derive from physical / architectural constraints, not analogies or "we always did it this way". Examples:
+   - "LLM 单次响应能发几个 tool_call" → derive L1 batch capacity
+   - "每个 read 进 ctx 都要在每轮付 token 费" → derive 派单原则
+   - 问"在什么物理约束下我的方案会崩"比"参考别人怎么做"更重要
+
+2. **Adversarial review** — every plan must explicitly answer "in what scenarios will this break?". If you can't enumerate failure modes, the plan is incomplete. Examples:
+   - LLM fan-out 100 个 → 第 4 轮 LLM 偷懒？第 8 轮静默丢失？
+   - Sub-agent 拿到 task 字符串含 50KB → 子 agent ctx 爆？
+   - 主 agent 自己 read 50MB 文件 → parent ctx 永久膨胀？
+
+3. **Zero-context-bloat is the core constraint** (主人 2026-07-23 explicit): ANY data operation that could inflate context MUST go through sub-agent isolation. This is NOT image-specific — it applies to:
+   - Images (attachments) ✅ (already enforced)
+   - PDFs > 5 pages (read_pdf in main ctx → 30K+ tokens)
+   - Files > 50 KB / 1500 lines (read_file whole → ctx bloat)
+   - Long command output (`cat huge.log`, `dir /s`, `find /`)
+   - Web extraction at scale (3+ URLs)
+   - Code exploration across 20+ files
+   - Any task where output > ~4,000 chars and you don't branch on intermediates
+   
+   Mechanism: sub-agent isolation — sub-agent pays the read cost once, returns concise conclusion, parent context stays clean. See `directions.rs::TOOL_USAGE_GUIDANCE` (Context-bloat prevention — absolute rules) and `sub_agent_orchestrator.rs::sub_agent_guidance` (Context-bloat self-defense) for the operational rules.
+
+4. **delegate_task is the universal fan-out tool** — it is NOT image-specific. The `attachments` field is just one (image) data path; `task` + `context` paths + sub-agent reading files itself cover everything else. Architecture: see `docs/ARCHITECTURE_REFACTOR_PLAN.md §7` for L1/L2/L3 batch scaling plan.
+
 ## Gotchas
 
 - `.cargo/config.toml` hardcodes MSVC linker path — don't override
