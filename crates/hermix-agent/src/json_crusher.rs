@@ -214,24 +214,15 @@ fn crush_object_array(arr: &[Value]) -> Vec<Value> {
 struct FieldStats {
     /// Field name -> (count of unique values, total count)
     fields: std::collections::HashMap<String, (usize, usize)>,
-    /// Fields that appear in error-like objects
-    error_fields: std::collections::HashSet<String>,
 }
 
 /// Extract statistics about fields in an object array.
 fn extract_field_stats(arr: &[Value]) -> FieldStats {
     let mut fields: std::collections::HashMap<String, (std::collections::HashSet<String>, usize)> =
         std::collections::HashMap::new();
-    let mut error_fields = std::collections::HashSet::new();
 
     for item in arr {
         if let Value::Object(obj) = item {
-            // Check if this looks like an error
-            let is_error = obj.keys().any(|k| {
-                let kl = k.to_lowercase();
-                kl.contains("error") || kl.contains("fail") || kl.contains("exception")
-            });
-
             for (key, val) in obj {
                 let entry = fields.entry(key.clone()).or_default();
                 entry.1 += 1;
@@ -241,9 +232,6 @@ fn extract_field_stats(arr: &[Value]) -> FieldStats {
                 };
                 entry.0.insert(val_str);
 
-                if is_error {
-                    error_fields.insert(key.clone());
-                }
             }
         }
     }
@@ -253,7 +241,6 @@ fn extract_field_stats(arr: &[Value]) -> FieldStats {
             .into_iter()
             .map(|(k, (uniq, total))| (k, (uniq.len(), total)))
             .collect(),
-        error_fields,
     }
 }
 
