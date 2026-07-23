@@ -5,7 +5,7 @@ import {
   ShieldCheck, ShieldAlert, HelpCircle, X, Sparkles, Brain,
   FileText, FilePlus, ArrowRight,
   CheckCheck, Search, FolderOpen, Edit3, Trash2, Eye,
-  FileSearch, Database, GitBranch,
+  FileSearch, Database, GitBranch, SearchX,
   Hammer, Bot, Clock, Timer,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -26,6 +26,11 @@ import {
   isPathArg, extractFirstPath, extractLineStats,
 } from "./bubbles/ToolOutputPreviews";
 import { Avatar } from "./Avatar";
+import {
+  parseMemoryResult,
+  memoryActionLabel,
+  memoryStatusColor,
+} from "../utils/memoryToolResult";
 // InlinePathPreview was retired 2026-06-22 — every path click now
 // routes through ChatView's `onPathClick` → RightSidebar preview.
 // See the comment near the markdown-body render below for the bug
@@ -1741,6 +1746,12 @@ function ToolMessageCard({
   const isError = meta.status === "error";
   const [open, setOpen] = useState(false);
   const hasOutput = meta.output != null && meta.output.length > 0;
+  // Memory tool: lift the structured JSON result so the row reads
+  // `<动作> <记忆文件路径> <状态>` and the path is clickable to a
+  // preview. no-match / ambiguous are soft outcomes ("未查到对应内容"
+  // / "匹配到多条"), never a red "失败" badge.
+  const memResult =
+    meta.tool === "memory" ? parseMemoryResult(meta.output) : null;
   // Two-piece label: `<verb> <object>` (e.g. "读取 PDF D:\data\发票汇总.xls").
   //   - `verb` comes from `toolVerb` (registered Chinese verb, or the
   //     literal English name for unknown tools).
@@ -1753,7 +1764,9 @@ function ToolMessageCard({
   // 情况显示的" — verb 不再硬塞 "调用工具" 占位符。当 LLM 输出
   // `tool="tool"` 这种空占位时，根据 args 形状 (command/path/url/
   // query/code) 推断 verb; args 也空就显示 "未知操作"。
-  const verb = toolVerb(meta.tool, meta.args);
+  const verb = memResult
+    ? memoryActionLabel(memResult.action)
+    : toolVerb(meta.tool, meta.args);
   // The row has two visually distinct slots:
   //
   //   1. Verb slot (left):  always shows `verb` alone — e.g. "读取 PDF",
@@ -1768,17 +1781,27 @@ function ToolMessageCard({
   // again in its own span — which produced visible duplicates like
   // "调用工具 D:\data\发票汇总.xls D:\data\发票汇总.xls" once `primary`
   // already had the path. Keep them as two slots and never merge.
-  const primary = isError
-    ? (summarizeError(meta.output) ?? toolPrimaryArg(meta.tool, meta.args, meta.output))
-    : toolPrimaryArg(meta.tool, meta.args, meta.output);
+  const primary = memResult
+    ? memResult.path
+    : isError
+      ? (summarizeError(meta.output) ?? toolPrimaryArg(meta.tool, meta.args, meta.output))
+      : toolPrimaryArg(meta.tool, meta.args, meta.output);
   const stats = extractLineStats(meta.tool, meta.args);
   // Path-shaped primary arg is clickable.  We only auto-recognise
   // the standard file ops; everything else (e.g. python scripts,
   // arbitrary text) is left as plain text to avoid spurious "open
   // file" affordances.
-  const isPathLike = isPathArg(meta.tool, meta.args, meta.output);
-  const primaryPath = isPathLike ? (meta.output || meta.args) : null;
+  const isPathLike = memResult ? true : isPathArg(meta.tool, meta.args, meta.output);
+  const primaryPath = memResult
+    ? memResult.path
+    : isPathLike ? (meta.output || meta.args) : null;
   const handlePrimaryClick = (e: React.MouseEvent) => {
+    // Memory tool: the path is always a real file — open it directly.
+    if (memResult?.path && onPathClick) {
+      e.stopPropagation();
+      onPathClick(memResult.path, e);
+      return;
+    }
     if (isPathLike && primaryPath && onPathClick) {
       const path = extractFirstPath(primaryPath);
       if (path) {
@@ -1794,6 +1817,10 @@ function ToolMessageCard({
   // tool produced (or why it failed). Extracted from the output
   // in priority order: error message → success summary → first line.
   const resultPeek = useMemo(() => {
+    // Memory tool: the status badge already states the outcome
+    // ("未查到对应内容" / "成功" / …); keep the row to a single line
+    // and let the expandable body carry the full message.
+    if (memResult) return null;
     if (isError) {
       return meta.errorReason
         ?? summarizeError(meta.output)
@@ -1881,29 +1908,57 @@ function ToolMessageCard({
               全部改成小图标 + 文字形式, 颜色统一调到 muted/success/warning
               (蓝/红色字符完全不渲染). 已完成 → ✓; 失败 → ⚠; 运行中 → ⏵;
               已中断 → ⚠. */}
-          <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
-            {isRunning && !meta.completedAt ? (
-              <>
-                <Loader2 size={11} className="animate-spin shrink-0" />
-                运行中
-              </>
-            ) : isError ? (
-              <>
-                <AlertCircle size={11} className="shrink-0" />
-                失败
-              </>
-            ) : isRunning ? (
-              <>
-                <AlertTriangle size={11} className="shrink-0" />
-                已中断
-              </>
-            ) : (
-              <>
-                <Check size={11} className="shrink-0" />
-                已完成
-              </>
-            )}
-          </span>
+          {(() => {
+            // Memory tool: render the structured status as the badge
+            // — "未查到对应内容" / "匹配到多条" / "成功" / "失败".
+            // no-match / ambiguous are soft (muted / amber), never red.
+            const memBadge = (st: string) => {
+              switch (st) {
+                case "success":
+                  return <><Check size={11} className="shrink-0" /> 成功</>;
+                case "not_found":
+                  return <><SearchX size={11} className="shrink-0" /> 未查到对应内容</>;
+                case "ambiguous":
+                  return <><AlertTriangle size={11} className="shrink-0" /> 匹配到多条</>;
+                case "error":
+                  return <><AlertCircle size={11} className="shrink-0" /> 失败</>;
+                default:
+                  return <><Check size={11} className="shrink-0" /> 成功</>;
+              }
+            };
+            if (memResult && !isRunning) {
+              return (
+                <span className={`tw-msg-state ${memoryStatusColor(memResult.status)}`}>
+                  {memBadge(memResult.status)}
+                </span>
+              );
+            }
+            return (
+              <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
+                {isRunning && !meta.completedAt ? (
+                  <>
+                    <Loader2 size={11} className="animate-spin shrink-0" />
+                    运行中
+                  </>
+                ) : isError ? (
+                  <>
+                    <AlertCircle size={11} className="shrink-0" />
+                    失败
+                  </>
+                ) : isRunning ? (
+                  <>
+                    <AlertTriangle size={11} className="shrink-0" />
+                    已中断
+                  </>
+                ) : (
+                  <>
+                    <Check size={11} className="shrink-0" />
+                    已完成
+                  </>
+                )}
+              </span>
+            );
+          })()}
           {hasOutput && (
             <span className="tw-msg-chev">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
           )}

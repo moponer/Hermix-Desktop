@@ -130,6 +130,25 @@ export interface ToolMessageMeta {
    * renders that pre-date this field simply ignore it.
    */
   errorReason?: string;
+  /**
+   * Memory-tool-only: the action performed (add / replace / remove /
+   * read), populated from the tool's structured JSON result. Lets the
+   * card show "编辑记忆 / 更新记忆 / 删除记忆 / 查找记忆" instead of a
+   * generic verb.
+   */
+  action?: string;
+  /**
+   * Memory-tool-only: absolute path of the memory file the operation
+   * touched (e.g. `…/MEMORY.md` / `…/USER.md`). Rendered as a
+   * clickable link that opens a preview.
+   */
+  file_path?: string;
+  /**
+   * Memory-tool-only: structured outcome from the tool's JSON result
+   * (`success` / `not_found` / `ambiguous` / `error`). Drives the
+   * badge text — `not_found` renders "未查到对应内容", NOT "失败".
+   */
+  memoryStatus?: "success" | "not_found" | "ambiguous" | "error";
 }
 
 // ---------------------------------------------------------------------------

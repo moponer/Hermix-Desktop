@@ -2,10 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Terminal, Globe, Wrench, Loader2,
   ChevronDown, ChevronRight,
-  AlertTriangle, Copy, CheckCheck, Check,
+  AlertTriangle, AlertCircle, SearchX, Copy, CheckCheck, Check,
 } from "lucide-react";
 import { formatDuration } from "../utils/time";
 import type { ExecutionTimelineEvent } from "../types";
+import {
+  parseMemoryResult,
+  memoryActionLabel,
+  memoryStatusLabel,
+  memoryStatusColor,
+} from "../utils/memoryToolResult";
 
 interface ToolEventCardProps {
   events: ExecutionTimelineEvent[];
@@ -569,6 +575,15 @@ function ToolRow({ group }: { group: ToolGroup }) {
   }, [group.events]);
   const hasBody = stdout.length > 0 || (summary && summary !== stdout);
 
+  // Memory tool: lift the structured result so the row reads
+  // `<动作> <记忆文件路径> <状态>` and the status shows "未查到对应内容"
+  // / "匹配到多条" instead of a red "失败". The path is the memory
+  // file (MEMORY.md / USER.md).
+  const memResult =
+    group.tool === "memory" ? parseMemoryResult(summary || stdout) : null;
+  const displayLabel = memResult ? memoryActionLabel(memResult.action) : label;
+  const displayPrimary = memResult ? memResult.path : primary;
+
   // Inline result peek — first meaningful line, truncated to ~60 chars.
   // Shown as `| peek` after the tool name when the card is collapsed.
   // 2026-07-21: for code_execution while running, use lastStdoutLine
@@ -610,7 +625,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
         className="tw-msg-row"
         data-tool-kind={toolKind(group.tool)}
         data-open={open ? "true" : undefined}
-        title={primary ?? label}
+        title={displayPrimary ?? displayLabel}
       >
         {/* Left cluster: icon + tool name + primary + peek */}
         <span className="tw-msg-main">
@@ -622,7 +637,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
             )}
           </span>
 
-          <span className="tw-msg-verb">{label}</span>
+          <span className="tw-msg-verb">{displayLabel}</span>
           {/* ×N badge: shown when coalesceAdjacent merged N identical
               tool calls into one row. Helps the user spot LLM retry loops
               at a glance — "3 个失败" + a single peek is louder than 3
@@ -632,10 +647,10 @@ function ToolRow({ group }: { group: ToolGroup }) {
               ×{(group as ToolGroup & { _runCount?: number })._runCount}
             </span>
           )}
-          {primary && <span className="tw-msg-primary">{primary}</span>}
+          {displayPrimary && <span className="tw-msg-primary">{displayPrimary}</span>}
 
           {/* Inline separator + result peek (visible when collapsed) */}
-          {hasBody && (
+          {hasBody && !memResult && (
             <>
               <span className="tw-msg-sep">|</span>
               <span className="tw-msg-peek">{peek}</span>
@@ -662,6 +677,19 @@ function ToolRow({ group }: { group: ToolGroup }) {
                   三角警告图标, 中性"工具执行中断"语义, 不再用 error 红。 */}
               <AlertTriangle size={10} className="shrink-0" />
               {group.statusNote?.startsWith("执行已中断") ? "已中断" : "失败"}
+            </span>
+          ) : memResult ? (
+            <span className={`tw-msg-badge ${memoryStatusColor(memResult.status)}`}>
+              {memResult.status === "not_found" ? (
+                <SearchX size={10} className="shrink-0" />
+              ) : memResult.status === "ambiguous" ? (
+                <AlertTriangle size={10} className="shrink-0" />
+              ) : memResult.status === "error" ? (
+                <AlertCircle size={10} className="shrink-0" />
+              ) : (
+                <Check size={10} className="shrink-0" />
+              )}
+              {memoryStatusLabel(memResult.status)}
             </span>
           ) : (
             <span className="tw-msg-badge tw-msg-done-badge">

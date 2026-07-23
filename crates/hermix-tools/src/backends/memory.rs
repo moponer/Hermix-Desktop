@@ -554,8 +554,18 @@ impl FileMemoryBackend {
         Ok(())
     }
 
+    /// Build a successful structured result. All memory-tool outcomes
+    /// (success / not-found / ambiguous) share this shape so the chat
+    /// UI can render one consistent card: an action verb, the memory
+    /// file path (clickable → preview), and an explicit `status`.
+    ///
+    /// `success:false` outcomes (no-match, ambiguous) are returned as
+    /// `Ok(...)` — they are NOT execution errors, so they must not
+    /// show a red "失败" badge.
     fn success_response(
+        action: &str,
         target: &str,
+        path: &Path,
         entries: &[String],
         message: &str,
         archived_to: Option<&Path>,
@@ -570,7 +580,10 @@ impl FileMemoryBackend {
             .min(100);
         let mut body = json!({
             "success": true,
+            "status": "success",
+            "action": action,
             "target": target,
+            "path": path.display().to_string(),
             "message": message,
             "entries": entries,
             "entry_count": entries.len(),
@@ -589,6 +602,33 @@ impl FileMemoryBackend {
             body["archived_count"] = json!(n);
         }
         body.to_string()
+    }
+
+    /// Build a soft "no match" / "ambiguous" structured result.
+    /// Returned as `Ok(...)` (not `Err`) because the operation was
+    /// understood and the file was read — the only problem is that
+    /// `old_text` did not locate a unique entry. The chat UI renders
+    /// `status: "not_found"` as "未查到对应内容" and `status:
+    /// "ambiguous"` as "匹配到多条，需更精确", never as a hard failure.
+    fn miss_response(
+        status: &str,
+        action: &str,
+        target: &str,
+        path: &Path,
+        message: &str,
+        entries: &[String],
+    ) -> String {
+        json!({
+            "success": false,
+            "status": status,
+            "action": action,
+            "target": target,
+            "path": path.display().to_string(),
+            "message": message,
+            "entries": entries,
+            "entry_count": entries.len()
+        })
+        .to_string()
     }
 
     /// Try to free space in MEMORY.md (or USER.md) by moving
@@ -810,7 +850,9 @@ impl MemoryBackend for FileMemoryBackend {
 
         if entries.iter().any(|e| e == trimmed) {
             return Ok(Self::success_response(
+                "add",
                 target,
+                &path,
                 &entries,
                 "Entry already exists (no duplicate added).",
                 None,
@@ -916,7 +958,9 @@ impl MemoryBackend for FileMemoryBackend {
         )
         .await?;
         let mut resp = Self::success_response(
+            "add",
             target,
+            &path,
             &final_entries,
             if scan.matches.is_empty() {
                 "Entry added."
@@ -963,11 +1007,12 @@ impl MemoryBackend for FileMemoryBackend {
         let original = self.read_file(&path).await?;
         let mut entries = Self::parse_entries(&original);
 
+        let norm_old = normalize_for_match(old_text);
         let matches: Vec<usize> = entries
             .iter()
             .enumerate()
             .filter_map(|(idx, e)| {
-                if e.contains(old_text) {
+                if normalize_for_match(e).contains(&norm_old) {
                     Some(idx)
                 } else {
                     None
@@ -976,9 +1021,14 @@ impl MemoryBackend for FileMemoryBackend {
             .collect();
 
         if matches.is_empty() {
-            return Err(ToolError::ExecutionFailed(Self::format_no_match_error(
-                target, old_text, &entries,
-            )));
+            return Ok(Self::miss_response(
+                "not_found",
+                "replace",
+                target,
+                &path,
+                &Self::format_no_match_error(target, old_text, &entries),
+                &entries,
+            ));
         }
 
         if matches.len() > 1 {
@@ -988,12 +1038,19 @@ impl MemoryBackend for FileMemoryBackend {
                     .iter()
                     .map(|i| Self::preview(&entries[*i]))
                     .collect();
-                return Err(ToolError::ExecutionFailed(format!(
-                    "Multiple entries matched '{}' in {}. Be more specific. Matches: {}",
-                    old_text,
+                return Ok(Self::miss_response(
+                    "ambiguous",
+                    "replace",
                     target,
-                    previews.join(" | ")
-                )));
+                    &path,
+                    &format!(
+                        "Multiple entries matched '{}' in {}. Be more specific. Matches: {}",
+                        old_text,
+                        target,
+                        previews.join(" | ")
+                    ),
+                    &entries,
+                ));
             }
         }
 
@@ -1018,7 +1075,9 @@ impl MemoryBackend for FileMemoryBackend {
         self.atomic_write(&path, &Self::format_entries(&entries), original.as_bytes())
             .await?;
         let mut resp = Self::success_response(
+            "replace",
             target,
+            &path,
             &entries,
             if scan.matches.is_empty() {
                 "Entry replaced."
@@ -1048,11 +1107,12 @@ impl MemoryBackend for FileMemoryBackend {
         let _guard = self.write_lock.lock().await;
         let original = self.read_file(&path).await?;
         let mut entries = Self::parse_entries(&original);
+        let norm_old = normalize_for_match(old_text);
         let matches: Vec<usize> = entries
             .iter()
             .enumerate()
             .filter_map(|(idx, e)| {
-                if e.contains(old_text) {
+                if normalize_for_match(e).contains(&norm_old) {
                     Some(idx)
                 } else {
                     None
@@ -1061,9 +1121,14 @@ impl MemoryBackend for FileMemoryBackend {
             .collect();
 
         if matches.is_empty() {
-            return Err(ToolError::ExecutionFailed(Self::format_no_match_error(
-                target, old_text, &entries,
-            )));
+            return Ok(Self::miss_response(
+                "not_found",
+                "remove",
+                target,
+                &path,
+                &Self::format_no_match_error(target, old_text, &entries),
+                &entries,
+            ));
         }
 
         if matches.len() > 1 {
@@ -1073,12 +1138,19 @@ impl MemoryBackend for FileMemoryBackend {
                     .iter()
                     .map(|i| Self::preview(&entries[*i]))
                     .collect();
-                return Err(ToolError::ExecutionFailed(format!(
-                    "Multiple entries matched '{}' in {}. Be more specific. Matches: {}",
-                    old_text,
+                return Ok(Self::miss_response(
+                    "ambiguous",
+                    "remove",
                     target,
-                    previews.join(" | ")
-                )));
+                    &path,
+                    &format!(
+                        "Multiple entries matched '{}' in {}. Be more specific. Matches: {}",
+                        old_text,
+                        target,
+                        previews.join(" | ")
+                    ),
+                    &entries,
+                ));
             }
         }
 
@@ -1088,9 +1160,48 @@ impl MemoryBackend for FileMemoryBackend {
             .await?;
 
         Ok(Self::success_response(
+            "remove",
             target,
+            &path,
             &entries,
             "Entry removed.",
+            None,
+            None,
+        ))
+    }
+
+    async fn read(&self, target: &str) -> Result<String, ToolError> {
+        let path = self.path_for(target)?;
+        self.ensure_within_dir(&path)?;
+        let content = self.read_file(&path).await?;
+        let entries = Self::parse_entries(&content);
+        if entries.is_empty() {
+            return Ok(Self::miss_response(
+                "not_found",
+                "read",
+                target,
+                &path,
+                &format!(
+                    "memory store '{target}' is currently empty. Use action='add' to create the first entry."
+                ),
+                &entries,
+            ));
+        }
+        let body: Vec<String> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| format!("[{}] {}", i, e))
+            .collect();
+        let listing = format!(
+            "Current entries in '{target}' (copy the text after [N] verbatim for replace/remove):\n{}",
+            body.join("\n"),
+        );
+        Ok(Self::success_response(
+            "read",
+            target,
+            &path,
+            &entries,
+            &listing,
             None,
             None,
         ))
@@ -1098,6 +1209,24 @@ impl MemoryBackend for FileMemoryBackend {
 }
 
 // --- helpers ----------------------------------------------------------------
+
+/// Whitespace / markdown / quote-normalize a string for fuzzy matching.
+///
+/// Lets `old_text` match even when the LLM's copy of an entry differs
+/// in spacing, `*emphasis*` markers, or curly-vs-straight quotes — the
+/// most common cause of "no match" on `replace` / `remove`. We keep
+/// `contains` semantics (so a unique phrase still locates the entry)
+/// but compare against the normalized form on both sides.
+fn normalize_for_match(s: &str) -> String {
+    let collapsed: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed
+        .replace("**", "")
+        .replace('*', "")
+        .replace('\u{201c}', "\"")
+        .replace('\u{201d}', "\"")
+        .replace('\u{2018}', "'")
+        .replace('\u{2019}', "'")
+}
 
 /// Build a sibling path with a different suffix. Used for the
 /// `.lock` and `.tmp.<uuid>` and `.bak.<ts>` sidecar files.
@@ -1159,6 +1288,29 @@ mod tests {
             .unwrap();
         let entries = parse_entries_at(&backend, "memory").await;
         assert_eq!(entries, vec!["new fact".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn replace_matches_despite_markdown_and_quote_noise() {
+        // Mirrors the Edit-tool workflow: the LLM copies an entry's
+        // text but drops `**emphasis**` markers and uses curly quotes.
+        // `normalize_for_match` must still locate the entry.
+        let (_tmp, backend) = make_backend();
+        backend
+            .add("memory", "User prefers **concise** answers")
+            .await
+            .unwrap();
+        let resp = backend
+            .replace(
+                "memory",
+                "User prefers concise answers",
+                "User prefers concise Chinese answers",
+            )
+            .await
+            .unwrap();
+        assert!(resp.contains("Entry replaced"));
+        let entries = parse_entries_at(&backend, "memory").await;
+        assert_eq!(entries, vec!["User prefers concise Chinese answers".to_string()]);
     }
 
     #[tokio::test]
@@ -1495,11 +1647,15 @@ mod tests {
             .add("user", "another fact about QCC files")
             .await
             .unwrap();
-        let err = backend
+        let resp = backend
             .replace("user", "完全不在文件里的字符串", "new")
             .await
-            .unwrap_err();
-        let msg = format!("{err}");
+            .unwrap();
+        assert!(
+            resp.contains("\"status\":\"not_found\""),
+            "no-match must be a soft 'not_found' status, not a tool error, got: {resp}"
+        );
+        let msg = resp;
         assert!(
             msg.contains("No entry matched '完全不在文件里的字符串'"),
             "error must echo the failing old_text, got: {msg}"
@@ -1522,11 +1678,15 @@ mod tests {
     async fn no_match_remove_lists_available_entries() {
         let (_tmp, backend) = make_backend();
         backend.add("memory", "the user prefers dark mode").await.unwrap();
-        let err = backend
+        let resp = backend
             .remove("memory", "totally wrong substring")
             .await
-            .unwrap_err();
-        let msg = format!("{err}");
+            .unwrap();
+        assert!(
+            resp.contains("\"status\":\"not_found\""),
+            "no-match must be a soft 'not_found' status, not a tool error, got: {resp}"
+        );
+        let msg = resp;
         assert!(msg.contains("No entry matched"));
         assert!(msg.contains("[0] the user prefers dark mode"));
     }
@@ -1534,11 +1694,15 @@ mod tests {
     #[tokio::test]
     async fn no_match_with_empty_memory_gives_add_hint() {
         let (_tmp, backend) = make_backend();
-        let err = backend
+        let resp = backend
             .replace("memory", "anything", "new")
             .await
-            .unwrap_err();
-        let msg = format!("{err}");
+            .unwrap();
+        assert!(
+            resp.contains("\"status\":\"not_found\""),
+            "no-match must be a soft 'not_found' status, not a tool error, got: {resp}"
+        );
+        let msg = resp;
         assert!(
             msg.contains("memory file is currently empty"),
             "empty memory should hint at action='add', got: {msg}"

@@ -12,6 +12,7 @@
 // the builder rather than a chat row full of `<system-reminder>…</system-reminder>`.
 
 import type { ChatMessage, ToolMessageMeta, ApprovalMessageMeta } from "./types";
+import { parseMemoryResult } from "./utils/memoryToolResult";
 
 // The shape the server actually returns. Snake_case; optional id /
 // timestamp; raw `extra` for approvals and `tool_name` for tools.
@@ -104,7 +105,7 @@ function buildToolMeta(
   detectToolError: (content: string) => string | null,
 ): ToolMessageMeta {
   const startedAt = wire.timestamp ?? new Date().toISOString();
-  return {
+  const base: ToolMessageMeta = {
     tool: wire.tool_name ?? "tool",
     args: wire.tool_arguments,
     status: "done",
@@ -113,6 +114,19 @@ function buildToolMeta(
     startedAt,
     completedAt: startedAt,
   };
+  // Memory tool: lift the structured result (action / path / status)
+  // so the card can render one row — <动作> <路径> <状态> — and the
+  // path becomes clickable. no-match / ambiguous are soft outcomes
+  // (status "not_found" / "ambiguous"), never a red "失败" badge.
+  if (base.tool === "memory") {
+    const mem = parseMemoryResult(wire.content);
+    if (mem) {
+      base.action = mem.action;
+      base.file_path = mem.path;
+      base.memoryStatus = mem.status;
+    }
+  }
+  return base;
 }
 
 /**
