@@ -862,6 +862,8 @@ interface ChatViewProps {
   streamingStatus?: string | null;
 /** Compaction pipeline status from backend's `compaction_status` WS event. */
 compactionStatus?: CompactionStatus | null;
+/** Called when the user dismisses the compaction status UI (banner + inline). */
+onDismissCompaction?: () => void;
 /** Context window usage from backend's `context_usage` WS event. */
 contextUsage?: { usedTokens: number; maxTokens: number; thresholdTokens: number; percent: number } | null;
 /** 2026-07-14: per-turn token usage snapshot from the backend's
@@ -939,12 +941,26 @@ export function ChatView({
   pendingToolsCount = 0,
   streamingStatus,
   compactionStatus = null,
+  onDismissCompaction,
 contextUsage = null,
   usageSnapshot = null,
   onEnterWelcome,
 }: ChatViewProps) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  // 2026-07-23: in-conversation-flow compaction progress card.
+  // Local dismiss flag so closing the inline card during an active
+  // compression does NOT wipe the composer-above banner (and does not
+  // hide the live phase — it just hides this one inline copy). Reset
+  // whenever a new compression attempt starts (phase → active) so the
+  // card reappears for the next run.
+  const [inlineCompactionDismissed, setInlineCompactionDismissed] = useState(false);
+  useEffect(() => {
+    const phase = compactionStatus?.phase;
+    if (phase === "starting" || phase === "in_progress_fast" || phase === "in_progress_llm") {
+      setInlineCompactionDismissed(false);
+    }
+  }, [compactionStatus?.phase]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // 2026-07-06: ref to the scrollable message container for
   // user-scroll detection. Only auto-scroll if the user is near
@@ -1615,6 +1631,16 @@ const clearPendingImages = useCallback(() => {
     return out;
   }, [messagesWithStream, todoGroups]);
 
+  // P2-3: Pre-compute showHeader for every row so the render loop
+  // doesn't call shouldShowAssistantHeader (which does a backward
+  // walk) on every render for every assistant message. The flags
+  // are a boolean array aligned to streamRow indices.
+  const showHeaderFlags = useMemo(() => {
+    return streamRow.map((_, idx) =>
+      shouldShowAssistantHeader(idx, streamRow)
+    );
+  }, [streamRow]);
+
   const handleSubmit = async () => {
     const trimmed = input.trim();
     if (!trimmed) return;
@@ -1947,7 +1973,7 @@ const clearPendingImages = useCallback(() => {
         (see `streamRow` useMemo above). The previous top-of-stream
         strip is gone. */}
       <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
-        <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-5">
+        <div className="msg-stream-list max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-5">
           {streamRow.map((row, idx) => {
             if (row.kind === "todo") {
               return (
@@ -2008,7 +2034,7 @@ const clearPendingImages = useCallback(() => {
             // it correctly finds the turn boundary (user message) even
             // when mergeConsecutiveAssistantMessages has collapsed
             // multiple server-persisted assistant rows into one.
-            const showHeader = msg.role !== "assistant" || shouldShowAssistantHeader(idx, streamRow);
+            const showHeader = msg.role !== "assistant" || showHeaderFlags[idx];
             return (
               <MemoMessageBubble
                 key={msg.id}
@@ -2024,6 +2050,30 @@ const clearPendingImages = useCallback(() => {
               />
             );
           })}
+
+          {/* 2026-07-23: in-conversation-flow compaction progress card.
+              Surfaces the live compression attempt INSIDE the message
+              stream (not just the composer-above banner) so the user
+              sees the "正在压缩上下文" action where the conversation
+              actually lives. Pure front-end state (compactionStatus) —
+              never persisted. Shows only while an attempt is in flight;
+              auto-hides on complete/failed (or when dismissed). */}
+          {(() => {
+            const phase = compactionStatus?.phase;
+            const active =
+              phase === "starting" ||
+              phase === "in_progress_fast" ||
+              phase === "in_progress_llm";
+            if (!active || inlineCompactionDismissed) return null;
+            return (
+              <div className="compaction-inline-card">
+                <CompactionStatusBanner
+                  status={compactionStatus}
+                  onDismiss={() => setInlineCompactionDismissed(true)}
+                />
+              </div>
+            );
+          })()}
 
           {/* The streaming assistant message is now rendered inline in
               the loop above (so tool cards visually precede streamed
@@ -2136,7 +2186,7 @@ const clearPendingImages = useCallback(() => {
 the composer so it stays in view while the user types.
 Today the prop is always null (no backend wiring yet) so
 the banner is a no-op. Day 2 will plumb the WS event. */}
-<CompactionStatusBanner status={compactionStatus} />
+<CompactionStatusBanner status={compactionStatus} onDismiss={onDismissCompaction} />
 
 {/* Context usage indicator — shows current context window usage
 as a small bar with token count and percentage. The percentage is

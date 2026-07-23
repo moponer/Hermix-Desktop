@@ -104,7 +104,11 @@ function localizeStreamError(err: string): string {
   }
   // Rate limit
   if (/(rate\s*limit|429|too\s+many\s+requests)/i.test(extracted)) {
-    return "请求过于频繁，请稍后重试。";
+    return extracted;
+  }
+  // 2026-07-22: Provider overloaded / service unavailable (529 / 503)
+  if (/(529|overloaded|负载较高|service\s+unavailable|503)/i.test(extracted)) {
+    return extracted;
   }
   // 400 / bad request — model not found (common MiniMax error)
   if (/(400|bad\s+request|unknown\s+model|invalid\s+model|model.*not\s+found)/i.test(extracted)) {
@@ -564,7 +568,56 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     max: RIGHT_MAX,
     side: "right",
   });
-  const { streaming, streamingSessionId, streamingStatus, compactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat(activeSessionId);
+  const { streaming, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat(activeSessionId);
+
+  // 2026-07-22: Session message eviction — clear the *previous* session's
+  // messages array (keeping message_count) when switching away. This solves
+  // the "A→B smooth, B→A laggy" asymmetry: when A has many messages, React
+  // must render all react-markdown + Prism.js instances, causing lag. After
+  // eviction, switching back re-fetches from the server, but the peak memory
+  // drops from max(A+B) to max(1). Must be declared AFTER streamingSessionId.
+  const pendingEvictRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prevId = prevActiveSessionIdRef.current;
+    if (!prevId || prevId === activeSessionId) return;
+
+    // Never evict a session that is still streaming — the onChunk /
+    // onToolStart / onToolComplete / onDone callbacks all write into
+    // s.messages. Clearing them mid-stream would lose all accumulated
+    // text and tool events. Defer eviction until the stream finishes.
+    if (streamingSessionId === prevId) {
+      pendingEvictRef.current = prevId;
+      return;
+    }
+
+    const evict = (s: typeof sessionsRef.current[number]) =>
+      s.id === prevId && s.messages.length > 0
+        ? { ...s, messages: [], message_count: s.message_count ?? s.messages.length }
+        : s;
+    setSessions((prev) => prev.map(evict));
+    // Synchronous mirror so the getSessionMessages effect (which reads
+    // sessionsRef.current) sees the eviction immediately, without
+    // waiting for the next render cycle's useEffect to update the ref.
+    sessionsRef.current = sessionsRef.current.map(evict);
+  }, [activeSessionId, streamingSessionId]);
+
+  // Deferred eviction: when a stream finishes (streamingSessionId → null),
+  // check whether the previously-viewed session's messages are still in
+  // memory and evict them. This handles the case where the user switched
+  // away from a session WHILE it was streaming — the eviction was
+  // skipped above, and this effect picks it up once the stream completes.
+  useEffect(() => {
+    if (pendingEvictRef.current && !streamingSessionId) {
+      const evictId = pendingEvictRef.current;
+      pendingEvictRef.current = null;
+      const evict = (s: typeof sessionsRef.current[number]) =>
+        s.id === evictId && s.messages.length > 0
+          ? { ...s, messages: [], message_count: s.message_count ?? s.messages.length }
+          : s;
+      setSessions((prev) => prev.map(evict));
+      sessionsRef.current = sessionsRef.current.map(evict);
+    }
+  }, [streamingSessionId]);
 
   // Per-send phase tracking. Set by the `onPhaseChange` callback in
   // `handleSendMessage` and scoped to the current `sessionId` so the
@@ -658,6 +711,11 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   >(new Map());
   // Retry timers for approval responses — cleaned up when approval is resolved
   const approvalRetryTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+  // Frontend timeout timers — auto-mark as "expired" when the
+  // server-emitted deadline passes without a user click. Without
+  // this the card stays "等待你的决定" forever even though the
+  // backend already auto-denied at 30s and the agent moved on.
+  const approvalTimeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   /**
    * 2026-07-18 主人反馈"请求的按钮不够突出啊，差点没看见,而且
    * 我认为需要一个提醒机制,比如右下角的气泡提醒等待你确认"。
@@ -959,7 +1017,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   const computeAutoTitle = (s: Session, firstUserContent: string): string => {
     const isPlaceholder =
       !s.title || s.title === "新建对话" || s.title === "新对话" || s.title === "New chat";
-    return isPlaceholder || s.messages.length === 0
+    return isPlaceholder || (s.message_count ?? s.messages.length) === 0
       ? firstUserContent.replace(/\s+/g, " ").trim().slice(0, 28) +
         (firstUserContent.length > 28 ? "…" : "")
       : s.title;
@@ -1128,6 +1186,12 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
         if (retryTimer) {
           clearInterval(retryTimer);
           approvalRetryTimersRef.current.delete(requestId);
+        }
+        // Clean up frontend timeout timer
+        const timeoutTimer = approvalTimeoutTimersRef.current.get(requestId);
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          approvalTimeoutTimersRef.current.delete(requestId);
         }
         // 2026-07-18: mirror the resolver map size to the toast state.
         pendingApprovalSessionsRef.current.delete(requestId);
@@ -1671,6 +1735,19 @@ streamPhaseRef.current = null;
         };
       }));
 
+    // Set a frontend timeout to auto-mark as "expired" when the
+    // server-emitted deadline passes. The backend already auto-denies
+    // at 30s, but without this timer the card UI stays "等待你的决定"
+    // forever — the user sees buttons that no longer do anything.
+    if (req.expiresAt) {
+      const delay = Math.max(0, req.expiresAt - Date.now());
+      const timer = setTimeout(() => {
+        approvalTimeoutTimersRef.current.delete(req.requestId);
+        resolveApproval(req.requestId, "expired");
+      }, delay);
+      approvalTimeoutTimersRef.current.set(req.requestId, timer);
+    }
+
     return new Promise<{ decision: ApprovalDecision }>((resolve) => {
       approvalResolversRef.current.set(req.requestId, (decision) => resolve({ decision }));
       // 2026-07-18: sync to PendingApprovalToast state + record which
@@ -1743,6 +1820,17 @@ streamPhaseRef.current = null;
             // config error, etc.) — React may batch the
             // setStreamingSessionId(sessionId)+null into one render
             // so the catch block below may be too late. Handle here.
+            //
+            // 2026-07-22 (React 18 batching bug fix): capture
+            // currentAssistantIdRef.current into a local variable
+            // BEFORE calling setSessions. React 18's automatic
+            // batching defers the setSessions updater to the next
+            // render cycle, but `currentAssistantIdRef.current = null`
+            // on the next line executes immediately. Without this
+            // capture, the updater reads null and no message gets
+            // the error text — the user sees the spinner disappear
+            // with no error shown in the assistant bubble.
+            const assistantIdAtError = currentAssistantIdRef.current;
             const errText = `⚠️ ${localizeStreamError(err)}`;
             setStreamPhase(null);
             setSessions((prev) => prev.map((s) => {
@@ -1750,7 +1838,7 @@ streamPhaseRef.current = null;
               return {
                 ...s,
                 messages: s.messages.map((m) =>
-                  m.id === currentAssistantIdRef.current
+                  m.id === assistantIdAtError
                     ? { ...m, content: m.content || errText, stopReason: "error" as const }
                     : m
                 ),
@@ -2316,6 +2404,75 @@ return {
             // data will be loaded on the next session switch
             // (getSessionMessages in the activeSessionId effect).
 
+            // 2026-07-21: Mark any still-running tool groups as
+            // "interrupted" in the execution_timeline. When the stream
+            // settles (done/error/partial), any tool that received
+            // `tool_start` but never `tool_complete` is stranded —
+            // the backend either crashed mid-tool or the agent loop
+            // exited without closing the tool. Without this synthetic
+            // `tool_complete`, the tool card stays "running" with a
+            // spinner forever, and on reload the stranded pass in
+            // ToolEventCard shows "执行已中断（无完成事件）" — but
+            // during the live session the user sees a stuck spinner
+            // + "正在思考" with no explanation.
+            if (assistantIdAtDone && runningToolRef.current.size > 0) {
+              const strandedIds = new Set(runningToolRef.current.keys());
+              setSessions((prev) => prev.map((s) => {
+                if (s.id !== sessionId) return s;
+                return {
+                  ...s,
+                  messages: s.messages.map((m) => {
+                    if (m.id !== assistantIdAtDone) return m;
+                    const timeline = m.execution_timeline ?? [];
+                    if (timeline.length === 0) return m;
+                    // Append a synthetic tool_complete for each
+                    // stranded tool_call_id.
+                    const now = new Date().toISOString();
+                    const patched = [...timeline];
+                    for (const id of strandedIds) {
+                      // Only add if there's a tool_start but no
+                      // tool_complete for this tool_call_id.
+                      const hasComplete = timeline.some(
+                        (e) => e.type === "tool_complete" && e.tool_call_id === id
+                      );
+                      if (!hasComplete) {
+                        const startEv = timeline.find(
+                          (e) => e.type === "tool_start" && e.tool_call_id === id
+                        );
+                        // Check if the tool produced any stdout output before
+                        // the session ended. If it did, treat it as a normal
+                        // completion rather than an interruption.
+                        const hasStdout = timeline.some(
+                          (e) => e.type === "tool_stdout"
+                            && e.tool_call_id === id
+                            && e.content
+                            && String(e.content).trim().length > 0
+                        );
+                        const statusContent = hasStdout
+                          ? ""
+                          : "[ERROR] 执行已中断（无完成事件）";
+                        const extraFields: Record<string, any> = {};
+                        if (statusContent) {
+                          extraFields.content = statusContent;
+                        }
+                        patched.push({
+                          type: "tool_complete",
+                          tool: startEv?.tool,
+                          tool_call_id: id,
+                          created_at: now,
+                          ...extraFields,
+                        });
+                      }
+                    }
+                    if (patched.length === timeline.length) return m;
+                    return { ...m, execution_timeline: patched };
+                  }),
+                  updated_at: new Date().toISOString(),
+                };
+              }));
+              runningToolRef.current.clear();
+            }
+
             // Stream is done — drop the assistant id ref so a stale
             // value can't route chunks into the wrong message if
             // the user fires off a new turn later.
@@ -2329,6 +2486,9 @@ return {
             // Clean up retry timers
             approvalRetryTimersRef.current.forEach((timer) => clearInterval(timer));
             approvalRetryTimersRef.current.clear();
+            // Clean up frontend timeout timers
+            approvalTimeoutTimersRef.current.forEach((timer) => clearTimeout(timer));
+            approvalTimeoutTimersRef.current.clear();
             // 2026-07-18: clear the toast trackers too — every pending
             // approval just got force-denied by the cleanup, so the
             // bubble has nothing to remind about. Without this the
@@ -2350,13 +2510,18 @@ return {
         finalOverrides,
       );
     } catch (e) {
+      // 2026-07-22 (React 18 batching bug fix): same capture pattern
+      // as onError above. By the time catch runs, onError may have
+      // already set currentAssistantIdRef.current = null. Capture
+      // first, use inside setSessions updater.
+      const assistantIdAtCatch = currentAssistantIdRef.current;
       const errText = `⚠️ ${localizeStreamError(String(e))}`;
       setSessions((prev) => prev.map((s) => {
         if (s.id !== sessionId) return s;
         return {
           ...s,
           messages: s.messages.map((m) =>
-            m.id === currentAssistantIdRef.current
+            m.id === assistantIdAtCatch
               ? { ...m, content: m.content || errText }
               : m
           ),
@@ -2621,6 +2786,7 @@ return {
               streamingPhase={streamPhase ?? (isStreamingActiveSession ? "streaming" : null)}
               streamingStatus={streamingStatus}
               compactionStatus={compactionStatus}
+              onDismissCompaction={() => setCompactionStatus(null)}
 contextUsage={contextUsage}
               usageSnapshot={usageSnapshot}
               pendingToolsCount={pendingToolsCount}
