@@ -107,6 +107,22 @@ pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBacke
         RiskLevel::Safe,
         /* override_existing = */ false,
     );
+    // move_file — structured file move/copy/rename (no shell involvement)
+    registry.register_with_risk(
+        "move_file",
+        "file",
+        MoveFileHandler.schema(),
+        Arc::new(MoveFileHandler),
+        Arc::new(|| true),
+        vec![],
+        true,
+        "Move, copy, or rename a file/directory using native OS APIs (no shell). \
+         Eliminates shell quote/path-format issues that plague `terminal`-based copy/move.",
+        "📦",
+        None,
+        RiskLevel::Caution,
+        /* override_existing = */ false,
+    );
 }
 
 /// Resolve a path to an absolute string for display in LLM-visible tool
@@ -626,6 +642,229 @@ impl ToolHandler for ReadImageHandler {
              \n\
              ## Cost: FREE — no external API calls",
             JsonSchema::object(props, vec!["path".into()]),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MoveFileHandler — structured file move/copy/rename (no shell)
+// ---------------------------------------------------------------------------
+
+/// Tool for moving, copying, or renaming files and directories using
+/// native `std::fs` APIs. This bypasses the shell entirely, eliminating
+/// the quote-stripping, path-format, and binary-not-found issues that
+/// plague `terminal`-based file operations on Windows.
+///
+/// **Why this exists**: The LLM frequently tries to copy/move files via
+/// `terminal` (`cp`, `copy`, `Copy-Item`, `robocopy`), and each variant
+/// hits a different shell-compatibility wall — Git Bash strips quotes,
+/// `cp` doesn't exist, `Copy-Item` needs different syntax, etc. A single
+/// `std::fs` call succeeds on the first try regardless of shell.
+pub struct MoveFileHandler;
+
+impl Default for MoveFileHandler {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl MoveFileHandler {
+    /// Copy a file. Uses `std::fs::copy` which handles binary files
+    /// correctly on all platforms.
+    fn copy_file(src: &Path, dst: &Path) -> Result<u64, String> {
+        std::fs::copy(src, dst).map_err(|e| format!("复制失败 '{}': {}", src.display(), e))
+    }
+
+    /// Recursively copy a directory and its contents.
+    fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<u64, String> {
+        std::fs::create_dir_all(dst)
+            .map_err(|e| format!("无法创建目标目录 '{}': {}", dst.display(), e))?;
+        let mut total_bytes: u64 = 0;
+        for entry in std::fs::read_dir(src)
+            .map_err(|e| format!("无法读取源目录 '{}': {}", src.display(), e))? {
+            let entry = entry.map_err(|e| format!("读取目录条目失败: {}", e))?;
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            if from.is_dir() {
+                total_bytes += Self::copy_dir_recursive(&from, &to)?;
+            } else {
+                total_bytes += Self::copy_file(&from, &to)?;
+            }
+        }
+        Ok(total_bytes)
+    }
+
+    /// Move a file or directory. Tries `std::fs::rename` first (atomic,
+    /// same-drive). If that fails with a cross-device error, falls back
+    /// to copy + delete.
+    fn move_entry(src: &Path, dst: &Path) -> Result<u64, String> {
+        match std::fs::rename(src, dst) {
+            Ok(()) => {
+                // rename succeeded — we don't know the size without
+                // reading metadata before the move, but that's fine;
+                // the caller reports success, not byte count.
+                Ok(0)
+            }
+            Err(e) if e.raw_os_error() == Some(17) /* EXDEV: cross-device */ => {
+                // Cross-drive move: copy then delete source.
+                let bytes = if src.is_dir() {
+                    Self::copy_dir_recursive(src, dst)?
+                } else {
+                    Self::copy_file(src, dst)?
+                };
+                if src.is_dir() {
+                    std::fs::remove_dir_all(src)
+                        .map_err(|e| format!("移动后删除源目录失败 '{}': {}", src.display(), e))?;
+                } else {
+                    std::fs::remove_file(src)
+                        .map_err(|e| format!("移动后删除源文件失败 '{}': {}", src.display(), e))?;
+                }
+                Ok(bytes)
+            }
+            Err(e) => Err(format!("移动失败 '{} → {}': {}", src.display(), dst.display(), e)),
+        }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for MoveFileHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let src = params
+            .get("src")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'src' parameter".into()))?;
+        let dst = params
+            .get("dst")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'dst' parameter".into()))?;
+        let copy_mode = params
+            .get("copy")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let overwrite = params
+            .get("overwrite")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let src_path = Path::new(src);
+        let dst_path = Path::new(dst);
+
+        // Credential guard — same as read_file/write_file
+        CredentialGuard::new().check_read_access(src_path)?;
+        CredentialGuard::new().check_read_access(dst_path)?;
+
+        // Source must exist
+        if !src_path.exists() {
+            return Err(ToolError::ExecutionFailed(format!(
+                "源路径不存在: '{}'", src
+            )));
+        }
+
+        // Handle destination exists
+        if dst_path.exists() {
+            if !overwrite {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "目标已存在: '{}'。如果需要覆盖，请设置 overwrite: true。",
+                    dst
+                )));
+            }
+            // Remove existing destination
+            if dst_path.is_dir() {
+                std::fs::remove_dir_all(dst_path)
+                    .map_err(|e| ToolError::ExecutionFailed(format!(
+                        "覆盖目标目录失败 '{}': {}", dst, e
+                    )))?;
+            } else {
+                std::fs::remove_file(dst_path)
+                    .map_err(|e| ToolError::ExecutionFailed(format!(
+                        "覆盖目标文件失败 '{}': {}", dst, e
+                    )))?;
+            }
+        }
+
+        // Auto-create parent directories of dst
+        if let Some(parent) = dst_path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| ToolError::ExecutionFailed(format!(
+                        "无法创建目标父目录 '{}': {}", parent.display(), e
+                    )))?;
+            }
+        }
+
+        // Execute the operation in a blocking task (fs operations are blocking)
+        let src_owned = src.to_string();
+        let dst_owned = dst.to_string();
+        let result = tokio::task::spawn_blocking(move || {
+            let src_p = Path::new(&src_owned);
+            let dst_p = Path::new(&dst_owned);
+            if copy_mode {
+                if src_p.is_dir() {
+                    Self::copy_dir_recursive(src_p, dst_p)
+                } else {
+                    Self::copy_file(src_p, dst_p).map(|_| 0u64)
+                }
+            } else {
+                Self::move_entry(src_p, dst_p)
+            }
+        })
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("文件操作任务失败: {}", e)))?;
+
+        let bytes = result?;
+        let abs_src = to_absolute_path(src);
+        let abs_dst = to_absolute_path(dst);
+        let op = if copy_mode { "copied" } else { "moved" };
+
+        Ok(json!({
+            "ok": true,
+            "operation": op,
+            "src": abs_src,
+            "dst": abs_dst,
+            "bytes": bytes,
+        })
+        .to_string())
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "src".into(),
+            json!({
+                "type": "string",
+                "description": "Source file or directory path. Must exist."
+            }),
+        );
+        props.insert(
+            "dst".into(),
+            json!({
+                "type": "string",
+                "description": "Destination path. Parent directories are auto-created. If dst already exists, set overwrite: true to replace it."
+            }),
+        );
+        props.insert(
+            "copy".into(),
+            json!({
+                "type": "boolean",
+                "default": false,
+                "description": "If true, copy the file/directory (keep source). If false (default), move it (source is removed after copy for cross-drive, or renamed atomically for same-drive)."
+            }),
+        );
+        props.insert(
+            "overwrite".into(),
+            json!({
+                "type": "boolean",
+                "default": false,
+                "description": "If true, overwrite the destination if it already exists. If false (default), the tool errors when dst exists."
+            }),
+        );
+        tool_schema(
+            "move_file",
+            "Move, copy, or rename a file or directory using native OS filesystem APIs — no shell involved. \
+             This is the PREFERRED way to copy/move/rename files on Windows: it bypasses all shell \
+             compatibility issues (quote stripping, path format, missing binaries). \
+             Set copy: true to copy (keep source), omit or false to move. Set overwrite: true to replace existing destination.",
+            JsonSchema::object(props, vec!["src".into(), "dst".into()]),
         )
     }
 }

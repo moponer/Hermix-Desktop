@@ -72,7 +72,6 @@ pub use tools::cronjob::{CronjobBackend, CronjobHandler};
 pub use tools::cua::{
     CuaLeftClickHandler, CuaPressKeyHandler, CuaScreenInfoHandler,
     CuaScreenshotHandler, CuaTypeTextHandler, CuaUiClickHandler, CuaUiTreeHandler,
-    CuaOcrRecognizeHandler,
 };
 pub use tools::delegation::{DelegateTaskHandler, DelegationBackend};
 pub use tools::file::{

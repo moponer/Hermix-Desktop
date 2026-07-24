@@ -449,7 +449,37 @@ pub(crate) async fn collect_stream_inner(
                                     finish_reason: Some("interrupted".to_string()),
                                 }));
                             }
-                            let chunk = chunk_result?;
+                            let chunk = match chunk_result {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    // Stream error mid-stream — return
+                                    // accumulated partial content as
+                                    // Interrupted so it flows through
+                                    // graceful_interrupt_result and
+                                    // gets persisted to DB. Without
+                                    // this, a network blip or API
+                                    // error mid-stream drops all
+                                    // accumulated content and the
+                                    // session reloads empty.
+                                    tracing::warn!(
+                                        error = %e,
+                                        "stream chunk error mid-stream — returning partial content for persistence"
+                                    );
+                                    let (flush_c, flush_r) = think_parser.flush();
+                                    if !flush_c.is_empty() { content.push_str(&flush_c); }
+                                    if !flush_r.is_empty() { reasoning_content.push_str(&flush_r); }
+                                    tool_call_sanitizer.flush();
+                                    let message = assemble_stream_assistant_message(
+                                        &content, &reasoning_content, &tool_calls,
+                                    );
+                                    return Ok(StreamCollectOutcome::Interrupted(LlmResponse {
+                                        message,
+                                        usage: last_usage.clone(),
+                                        model: active_model.to_string(),
+                                        finish_reason: Some("stream_error".to_string()),
+                                    }));
+                                }
+                            };
                             apply_stream_collect_chunk(
                                 callbacks,
                                 chunk,
@@ -582,7 +612,34 @@ pub(crate) async fn collect_stream_inner(
                                         finish_reason: Some("interrupted".to_string()),
                                     }));
                                 }
-                                let chunk = chunk_result?;
+                                let chunk = match chunk_result {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        // Same rationale as the
+                                        // activity_secs==0 path above:
+                                        // return accumulated partial
+                                        // content as Interrupted so it
+                                        // gets persisted instead of
+                                        // being dropped.
+                                        tracing::warn!(
+                                            error = %e,
+                                            "stream chunk error mid-stream (silence_watch) — returning partial content for persistence"
+                                        );
+                                        let (flush_c, flush_r) = think_parser.flush();
+                                        if !flush_c.is_empty() { content.push_str(&flush_c); }
+                                        if !flush_r.is_empty() { reasoning_content.push_str(&flush_r); }
+                                        tool_call_sanitizer.flush();
+                                        let message = assemble_stream_assistant_message(
+                                            &content, &reasoning_content, &tool_calls,
+                                        );
+                                        return Ok(StreamCollectOutcome::Interrupted(LlmResponse {
+                                            message,
+                                            usage: last_usage.clone(),
+                                            model: active_model.to_string(),
+                                            finish_reason: Some("stream_error".to_string()),
+                                        }));
+                                    }
+                                };
                                 apply_stream_collect_chunk(
                                     callbacks,
                                     chunk,

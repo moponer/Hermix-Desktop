@@ -22,6 +22,11 @@ use crate::terminal_filter;
 static FILTER_SAVED_CHARS: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
 static FILTER_SAVED_CALLS: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
 
+/// Counter for terminal failure hints injected this run.
+/// Capped at 2 to avoid flooding the context with repeated hints.
+static TERMINAL_HINT_COUNT: AtomicU64 = AtomicU64::new(0);
+const MAX_TERMINAL_HINTS: u64 = 2;
+
 /// Report cumulative RTK savings since process start.
 pub fn rtk_savings() -> (u64, u64) {
     (
@@ -67,6 +72,106 @@ fn apply_terminal_filter(content: &str, tool_name: Option<&str>, tool_calls: &[T
     }
 }
 
+/// Detect whether a terminal tool result content indicates a
+/// shell-compatibility failure (as opposed to a command logic error).
+///
+/// We only inject the hint when the failure looks like a shell issue —
+/// not when the command itself had a logic bug. This prevents noisy
+/// hints on every non-zero exit code.
+fn is_shell_compatibility_failure(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    // Common Windows shell-compatibility error patterns
+    lower.contains("not recognized as an internal or external command")
+        || lower.contains("is not recognized") // PowerShell variant
+        || lower.contains("command not found")
+        || lower.contains("no such file or directory") && lower.contains("bash")
+        || lower.contains("the system cannot find the file specified")
+        || lower.contains("the system cannot find the path specified")
+        || lower.contains("'cp' is not recognized")
+        || lower.contains("'mv' is not recognized")
+        || lower.contains("'cat' is not recognized")
+        || lower.contains("'ls' is not recognized")
+        || lower.contains("'rm' is not recognized")
+        || lower.contains("syntax error") && lower.contains("powershell")
+        || lower.contains("parsererror")
+        || lower.contains("无法将") && lower.contains("识别为")
+        || lower.contains("找不到")
+}
+
+/// Detect whether terminal content indicates a non-zero exit code
+/// (even if `is_error` is false — terminal returns Ok with exit code
+/// in the output text).
+fn has_nonzero_exit_code(content: &str) -> bool {
+    // Terminal output appends `[exit code: N]` at the end
+    if let Some(pos) = content.rfind("[exit code: ") {
+        let rest = &content[pos + "[exit code: ".len()..];
+        if let Some(end) = rest.find(']') {
+            let code_str = &rest[..end];
+            if let Ok(code) = code_str.trim().parse::<i32>() {
+                return code != 0;
+            }
+        }
+    }
+    false
+}
+
+/// If the tool result is a failed `terminal` call, append a hint
+/// suggesting structured alternatives. The hint is appended directly
+/// to the tool result content (not a separate system message) so the
+/// LLM sees it immediately in the same context block.
+///
+/// Only fires for shell-compatibility failures (not logic errors),
+/// and is capped at `MAX_TERMINAL_HINTS` injections per run to avoid
+/// context flooding.
+///
+/// Returns the (possibly modified) content string.
+pub fn maybe_append_terminal_failure_hint(
+    content: &str,
+    tool_name: Option<&str>,
+    is_error: bool,
+) -> String {
+    // Only process terminal tool results
+    if tool_name != Some("terminal") {
+        return content.to_string();
+    }
+
+    // Check if this is a failure: either an explicit error, or a
+    // non-zero exit code in the output text.
+    let is_failure = is_error || has_nonzero_exit_code(content);
+    if !is_failure {
+        return content.to_string();
+    }
+
+    // Only inject for shell-compatibility failures, not logic errors
+    if !is_shell_compatibility_failure(content) {
+        return content.to_string();
+    }
+
+    // Cap injections to avoid flooding
+    let count = TERMINAL_HINT_COUNT.fetch_add(1, Ordering::Relaxed);
+    if count >= MAX_TERMINAL_HINTS {
+        return content.to_string();
+    }
+
+    format!(
+        "{content}\n\
+         \n---\n
+         [SYSTEM — terminal 命令失败提示]\n\
+         该 terminal 命令因 shell 兼容性问题失败（可能是：命令不存在、引号被 Git Bash 吞掉、路径格式不兼容）。\n\
+         替代方案（按优先级）：\n\
+         1. **文件复制/移动/重命名** → 使用 `move_file` 工具（原生 OS API，不经过 shell，无引号/路径问题）\n\
+         2. **文件读取** → 使用 `read_file` 工具\n\
+         3. **文件搜索** → 使用 `search_files` 工具\n\
+         4. **其他操作** → 使用 `execute_code` (Python) 替代 terminal\n\
+         不要再用不同的 shell 命令变体重试同一操作。"
+    )
+}
+
+/// Reset the terminal hint counter (called at the start of each run).
+pub fn reset_terminal_hint_counter() {
+    TERMINAL_HINT_COUNT.store(0, Ordering::Relaxed);
+}
+
 /// Push a `ToolResult` struct into context (batch path, after budget
 /// pressure injection).
 pub fn push_tool_result_from_struct(
@@ -74,7 +179,12 @@ pub fn push_tool_result_from_struct(
     tool_calls: &[ToolCall],
     result: &ToolResult,
 ) {
-    push_tool_result(ctx, tool_calls, &result.tool_call_id, &result.content);
+    let tool_name = tool_calls
+        .iter()
+        .find(|tc| tc.id == result.tool_call_id)
+        .map(|tc| tc.function.name.as_str());
+    let content = maybe_append_terminal_failure_hint(&result.content, tool_name, result.is_error);
+    push_tool_result(ctx, tool_calls, &result.tool_call_id, &content);
 }
 
 /// Strip base64 image data from a `read_image` tool result JSON.

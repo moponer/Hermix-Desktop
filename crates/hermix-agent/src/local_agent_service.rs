@@ -214,6 +214,12 @@ pub struct LocalAgentService {
     /// and wondering why long-context compression is silently degraded.
     /// `take_compression_quota_warning` consumes it at most once.
     compression_quota_warning: Arc<std::sync::Mutex<Option<String>>>,
+    /// Active interrupt controllers for in-flight streaming sessions,
+    /// keyed by session_id. When the server shuts down, `interrupt_all()`
+    /// calls `interrupt(None)` on every controller so the agent loop
+    /// returns `graceful_interrupt_result` and `local_agent_service`
+    /// persists the partial output before the process exits.
+    active_interrupts: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::interrupt::InterruptController>>>,
 }
 
 pub type ProviderFactory = Arc<dyn Fn(&GatewayConfig, &str) -> Arc<dyn LlmProvider> + Send + Sync>;
@@ -324,6 +330,33 @@ impl LocalAgentService {
         }
     }
 
+    /// Interrupt all active agent tasks so they gracefully stop and
+    /// persist their partial output. Called by the server's shutdown
+    /// path before the process exits. Each registered `InterruptController`
+    /// receives `interrupt(None)`, which causes the agent loop's
+    /// `tokio::select!` / `take_interrupt_graceful()` check to fire,
+    /// returning `graceful_interrupt_result` — and the caller
+    /// (`send_message_stream`) then persists the ctx messages to the DB.
+    fn interrupt_all(&self) {
+        let count = {
+            let guard = match self.active_interrupts.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            let n = guard.len();
+            for (_sid, ctrl) in guard.iter() {
+                ctrl.interrupt(None);
+            }
+            n
+        };
+        if count > 0 {
+            tracing::info!(
+                active_sessions = count,
+                "interrupt_all: signalled all active agent tasks to gracefully stop for persistence"
+            );
+        }
+    }
+
     /// Create a new `LocalAgentService`.
     pub fn new(
         config: Arc<GatewayConfig>,
@@ -345,6 +378,7 @@ impl LocalAgentService {
             memory_router,
             compression_health_checked: std::sync::atomic::AtomicBool::new(false),
             compression_quota_warning: Arc::new(std::sync::Mutex::new(None)),
+            active_interrupts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -371,6 +405,7 @@ impl LocalAgentService {
             memory_router,
             compression_health_checked: std::sync::atomic::AtomicBool::new(false),
             compression_quota_warning: Arc::new(std::sync::Mutex::new(None)),
+            active_interrupts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -1188,6 +1223,15 @@ impl AgentService for LocalAgentService {
         LocalAgentService::take_compression_quota_warning(self)
     }
 
+    /// Delegate to the inherent `interrupt_all` method so the server
+    /// can call this through `Arc<dyn AgentService>` on shutdown.
+    fn interrupt_all(&self) {
+        // The inherent method is defined above on `LocalAgentService`.
+        // We call it by method resolution — Rust picks the inherent
+        // method over the trait default.
+        LocalAgentService::interrupt_all(self);
+    }
+
     // TODO(L8): send_message and send_message_stream share ~300 lines of
     // duplicated setup code (session loading, gateway safety net, image
     // handling, model resolution, etc.). Consider extracting a shared
@@ -1402,7 +1446,22 @@ impl AgentService for LocalAgentService {
         // Create and run agent
         let agent =
             self.spawn_agent_loop(session_id, agent_config, agent_tool_registry, provider);
-        let result = agent.run(messages.clone(), None).await?;
+        // Register the agent's InterruptController (same as the stream path).
+        {
+            let sid = session_id.to_string();
+            let ctrl = agent.interrupt.clone();
+            if let Ok(mut guard) = self.active_interrupts.lock() {
+                guard.insert(sid, ctrl);
+            }
+        }
+        let result = agent.run(messages.clone(), None).await;
+        // Always remove the interrupt controller.
+        {
+            if let Ok(mut guard) = self.active_interrupts.lock() {
+                guard.remove(session_id);
+            }
+        }
+        let result = result?;
 
         // Update messages with agent response, then collapse any
         // multiple assistant entries produced within one turn (e.g.
@@ -2413,9 +2472,28 @@ impl AgentService for LocalAgentService {
         let agent = self
             .spawn_agent_loop(session_id, agent_config, agent_tool_registry, provider)
             .with_callbacks(callbacks);
+        // Register the agent's InterruptController so the server's
+        // shutdown path can call `interrupt_all()` and let the agent
+        // gracefully stop + persist its partial output instead of
+        // being dropped mid-stream when the process exits.
+        {
+            let sid = session_id.to_string();
+            let ctrl = agent.interrupt.clone();
+            if let Ok(mut guard) = self.active_interrupts.lock() {
+                guard.insert(sid, ctrl);
+            }
+        }
         let result = agent
             .run_stream(messages.clone(), None, Some(boxed_on_chunk))
-            .await?;
+            .await;
+        // Always remove the interrupt controller — whether the run
+        // succeeded or failed, the agent is no longer active.
+        {
+            if let Ok(mut guard) = self.active_interrupts.lock() {
+                guard.remove(session_id);
+            }
+        }
+        let result = result?;
 
         // Update messages with agent response, then collapse any
         // multiple assistant entries produced within one turn (e.g.

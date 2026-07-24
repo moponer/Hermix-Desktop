@@ -91,7 +91,6 @@ pub fn register(registry: &ToolRegistry) {
     register_one("cua_ui_click", "👆", CoreRisk::Dangerous, Arc::new(CuaUiClickHandler::new()));
     register_one("cua_ui_focus", "🎯", CoreRisk::Dangerous, Arc::new(CuaUiFocusHandler::new()));
     register_one("cua_ui_invoke", "⚙️", CoreRisk::Dangerous, Arc::new(CuaUiInvokeHandler::new()));
-    register_one("cua_ocr_recognize", "🔤", CoreRisk::Safe, Arc::new(CuaOcrRecognizeHandler::new()));
     // Phase 3 mouse handlers (audit fix): these three were
     // previously defined in `all_handlers()` factory but never wired into
     // `register()`, so the LLM could not actually invoke them despite
@@ -1486,122 +1485,15 @@ impl ToolHandler for CuaUiInvokeHandler {
     }
 }
 
-// =========================================================================
-// Phase 2-D: OCR handler
-// =========================================================================
-
-// -- CuaOcrRecognizeHandler -----------------------------------------------
-
-/// Recognise text in a PNG screenshot via Windows.Media.Ocr.
-pub struct CuaOcrRecognizeHandler;
-
-impl CuaOcrRecognizeHandler {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for CuaOcrRecognizeHandler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl ToolHandler for CuaOcrRecognizeHandler {
-    async fn execute(&self, params: Value) -> Result<String, ToolError> {
-        let session_id = extract_session_id(&params);
-
-        let started = std::time::Instant::now();
-        let result = if let Some(p) = params.get("path").and_then(|v| v.as_str()) {
-            if p.is_empty() {
-                return Err(ToolError::InvalidParams(
-                    "'path' must be a non-empty local image file path".into(),
-                ));
-            }
-            let p = p.to_string();
-            run_blocking(move || hermix_cua::ocr::recognize_from_path(&p)).await?
-        } else {
-            let png_base64 = params
-                .get("png_base64")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    ToolError::InvalidParams(
-                        "missing 'path' or 'png_base64' — pass a local image file path, \
-                         or the base64 PNG from cua_screenshot"
-                            .into(),
-                    )
-                })?;
-            let closure_bytes = base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                png_base64,
-            )
-            .map_err(|e| ToolError::InvalidParams(format!("base64 decode: {e}")))?;
-            run_blocking(move || hermix_cua::ocr::recognize_from_png(&closure_bytes)).await?
-        };
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-
-        let text_preview = if result.text.len() > 80 {
-            format!("{}...", &result.text[..80])
-        } else {
-            result.text.clone()
-        };
-        let event = TraceEvent::new(
-            TraceKind::Other {
-                subkind: "ocr_recognize".into(),
-            },
-            &session_id,
-            format!("lines={} preview={text_preview:?}", result.lines.len()),
-        )
-        .with_elapsed_ms(elapsed_ms);
-        let _ = TRACE.record(&event);
-
-        Ok(json!({
-            "tool": "cua_ocr_recognize",
-            "text": result.text,
-            "lines": result.lines,
-            "line_count": result.lines.len(),
-            "ok": true,
-        })
-        .to_string())
-    }
-
-    fn schema(&self) -> ToolSchema {
-        let mut props = IndexMap::new();
-        props.insert(
-            "path".into(),
-            json!({
-                "type": "string",
-                "description": "Local image file path (PNG/JPEG/GIF/WEBP...). Reads the file and runs the LOCAL Windows OCR engine — free, offline, no API key. Preferred for images already on disk (e.g. C:\\photos\\car001.jpg)."
-            }),
-        );
-        props.insert(
-            "png_base64".into(),
-            json!({
-                "type": "string",
-                "description": "Base64-encoded PNG from cua_screenshot's png_base64 field (optional fallback for screenshots)."
-            }),
-        );
-        tool_schema(
-            "cua_ocr_recognize",
-            "Extract text from an image using the LOCAL Windows.Media.Ocr engine — free, offline, no API key required.\n\
-             \n\
-             Pass a local image file `path` (e.g. `C:\\photos\\car001.jpg`) to read printed text, \
-             licence plates, document fields, etc. JPEG / GIF / WEBP / PNG are all supported.\n\
-             Alternatively pass `png_base64` (the output of `cua_screenshot`) for screenshot OCR.\n\
-             \n\
-             ## Usage\n\
-             1. Give a `path` to an image file on disk, OR call `cua_screenshot` and pass its `png_base64`\n\
-             2. The result contains recognised `text` (all lines joined), plus per-`line` and per-`word` detail with bounding rects\n\
-             \n\
-             ## Requirements\n\
-             Windows 10/11 with an OCR language pack installed. English (US) is pre-installed;\n\
-             Chinese Simplified needs the Chinese language feature-on-demand (otherwise Chinese text is not recognised).",
-            JsonSchema::object(props, vec![]),
-        )
-    }
-}
-
+// ---------------------------------------------------------------------------
+// Phase 2-D: OCR handler — REMOVED 2026-07-25
+//
+// `cua_ocr_recognize` was removed because the local Windows.Media.Ocr engine
+// had <30% character accuracy for Chinese documents/IDs/certificates. The LLM
+// kept calling it instead of `delegate_task` + sub-agent `read_image`, wasting
+// turns and polluting the main context with unreliable OCR output. All image
+// analysis now goes through `delegate_task` → sub-agent `read_image` (LLM
+// vision), which has far higher accuracy.
 // ---------------------------------------------------------------------------
 // Re-exports — `register_builtins` imports the handler types
 // directly. The convenience group below keeps the imports
@@ -1617,8 +1509,6 @@ pub use self::{
     CuaUiClickHandler as UiClick, CuaUiFindHandler as UiFind,
     CuaUiFocusHandler as UiFocus, CuaUiInvokeHandler as UiInvoke,
     CuaUiTreeHandler as UiTree,
-    // OCR handler (Phase 2-D)
-    CuaOcrRecognizeHandler as OcrRecognize,
 };
 
 // Convenience factory: build all five handlers behind an
@@ -1640,8 +1530,6 @@ pub fn all_handlers() -> Vec<Arc<dyn ToolHandler>> {
         Arc::new(CuaUiClickHandler::new()),
         Arc::new(CuaUiFocusHandler::new()),
         Arc::new(CuaUiInvokeHandler::new()),
-        // Phase 2-D: OCR
-        Arc::new(CuaOcrRecognizeHandler::new()),
         // Phase 3: scroll, double-click, move-cursor
         Arc::new(CuaScrollHandler::new()),
         Arc::new(CuaDoubleClickHandler::new()),

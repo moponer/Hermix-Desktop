@@ -22,7 +22,7 @@ import {
 } from "./messageParser";
 import {
   ScreenshotPreview, WindowListPreview, WindowAtPointPreview, UiTreePreview,
-  UiFindPreview, UiClickPreview, UiSingleNamePreview, OcrPreview,
+  UiFindPreview, UiClickPreview, UiSingleNamePreview,
   isPathArg, extractFirstPath, extractLineStats,
 } from "./bubbles/ToolOutputPreviews";
 import { Avatar } from "./Avatar";
@@ -2002,10 +2002,7 @@ function ToolMessageCard({
       {!isError && meta.tool === "cua_ui_invoke" && (
         <UiSingleNamePreview output={meta.output} verb="触发" />
       )}
-      {!isError && meta.tool === "cua_ocr_recognize" && (
-        <OcrPreview output={meta.output} />
-      )}
-      {hasOutput && open && !isError && meta.tool !== "cua_screenshot" && meta.tool !== "cua_list_windows" && meta.tool !== "cua_window_at_point" && meta.tool !== "cua_ui_tree" && meta.tool !== "cua_ui_find" && meta.tool !== "cua_ui_click" && meta.tool !== "cua_ui_focus" && meta.tool !== "cua_ui_invoke" && meta.tool !== "cua_ocr_recognize" && (
+      {hasOutput && open && !isError && meta.tool !== "cua_screenshot" && meta.tool !== "cua_list_windows" && meta.tool !== "cua_window_at_point" && meta.tool !== "cua_ui_tree" && meta.tool !== "cua_ui_find" && meta.tool !== "cua_ui_click" && meta.tool !== "cua_ui_focus" && meta.tool !== "cua_ui_invoke" && (
         <div className="tw-msg-body">
           <LiveTerminal
             content={meta.output!}

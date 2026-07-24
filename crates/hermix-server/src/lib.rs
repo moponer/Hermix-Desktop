@@ -2085,6 +2085,14 @@ pub async fn run_server_with_state(
     let tickloop_mgr = state.tickloop_manager.clone();
     let tracker = Arc::new(state.consciousness_tracker.clone());
 
+    // Clone agent_service + active_handles BEFORE moving `state` into
+    // the router. On shutdown we call `interrupt_all()` so active agent
+    // tasks gracefully stop and persist their partial output — without
+    // this, spawned tasks are dropped mid-stream when the process exits
+    // and the session reloads empty on restart.
+    let agent_service_for_shutdown = state.agent_service.clone();
+    let active_handles_for_shutdown = state.active_handles.clone();
+
     // Shutdown signal: /shutdown endpoint sends `true`, graceful shutdown waits for it.
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -2133,6 +2141,34 @@ pub async fn run_server_with_state(
             _ = shutdown_rx.changed() => {
                 tracing::info!("hermes-server graceful shutdown (HTTP /shutdown)");
             }
+        }
+        // Interrupt all active agent tasks so they gracefully stop
+        // and persist their partial output before the process exits.
+        // Without this, spawned agent tasks are dropped mid-stream
+        // when the runtime shuts down, and the session reloads empty.
+        agent_service_for_shutdown.interrupt_all();
+        // Give agent tasks up to 2s to finish persisting. The sidecar's
+        // stop() waits 3s for graceful exit, so 2s here leaves ~1s of
+        // slack for axum connection teardown + tickloop stop.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let remaining = {
+                match active_handles_for_shutdown.lock() {
+                    Ok(guard) => guard.len(),
+                    Err(_) => 0,
+                }
+            };
+            if remaining == 0 || std::time::Instant::now() >= deadline {
+                if remaining > 0 {
+                    tracing::warn!(
+                        active_tasks = remaining,
+                        "shutdown: {} agent task(s) did not finish within 2s — their partial output may be lost",
+                        remaining
+                    );
+                }
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         tickloop_mgr.stop().await;
     };

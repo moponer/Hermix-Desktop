@@ -361,8 +361,6 @@ pub fn run() {
             commands_cua::cua_ui_click,
             commands_cua::cua_ui_focus,
             commands_cua::cua_ui_invoke,
-            // Phase 2-D: OCR
-            commands_cua::cua_ocr_recognize,
             // Phase 2-E: Browser automation (self-hosted CDP)
             commands_cua::cua_browser_navigate,
             commands_cua::cua_browser_screenshot,

@@ -304,6 +304,16 @@ fn scan_long_hex(
                 j += 1;
             }
             if j - i >= min_len {
+                // Skip masking if this hex run looks like a filename —
+                // i.e. it's immediately followed by a dot + 1-5
+                // alphanumeric chars (e.g. `ab12cd34...ef.jpg`). Real
+                // API keys / tokens never have file extensions after
+                // them, but hash-based filenames (MD5=32, SHA1=40)
+                // are commonly caught by the 32-char threshold.
+                if is_followed_by_file_extension(bytes, j) {
+                    i = j;
+                    continue;
+                }
                 out.push((i, j, kind));
                 i = j;
                 continue;
@@ -311,6 +321,26 @@ fn scan_long_hex(
         }
         i += 1;
     }
+}
+
+/// Check if `bytes[pos]` starts a file-extension pattern: a literal `.`
+/// followed by 1-5 ASCII alphanumeric characters, then a non-alphanumeric
+/// boundary (or end of input). Examples that match: `.jpg`, `.png`,
+/// `.webp`, `.json`. This prevents `scan_long_hex` from redacting
+/// hash-based filenames like `D:\data\a1b2c3d4...d4.jpg`.
+fn is_followed_by_file_extension(bytes: &[u8], pos: usize) -> bool {
+    if pos >= bytes.len() || bytes[pos] != b'.' {
+        return false;
+    }
+    let mut k = pos + 1;
+    let ext_start = k;
+    while k < bytes.len() && bytes[k].is_ascii_alphanumeric() {
+        k += 1;
+    }
+    let ext_len = k - ext_start;
+    // Extension must be 1-5 chars and followed by a boundary
+    // (end of input, quote, whitespace, path separator, etc.)
+    ext_len >= 1 && ext_len <= 5
 }
 
 fn placeholder_for(kind: MaskKind) -> String {

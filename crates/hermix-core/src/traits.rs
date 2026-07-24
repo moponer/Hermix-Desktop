@@ -533,6 +533,15 @@ pub trait AgentService: Send + Sync {
     fn take_compression_quota_warning(&self) -> Option<String> {
         None
     }
+
+    /// Interrupt all active agent tasks so they gracefully stop,
+    /// persist their partial output, and return. Called by the
+    /// server's shutdown path before the process exits — without
+    /// this, spawned agent tasks are dropped mid-execution and
+    /// their accumulated streaming output is lost (the session
+    /// reloads empty on restart). Default is a no-op for services
+    /// that don't track active tasks.
+    fn interrupt_all(&self) {}
 }
 
 // ---------------------------------------------------------------------------

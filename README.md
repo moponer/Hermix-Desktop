@@ -62,7 +62,6 @@
 | 2-C | `cua_ui_click` | 点击 UIA 元素 |
 | 2-C | `cua_ui_focus` | 聚焦 UIA 元素 |
 | 2-C | `cua_ui_invoke` | 触发 UIA 动作 |
-| 2-D | `cua_ocr_recognize` | 离线 OCR |
 
 ### 全栈自研，Windows 原生 API
 

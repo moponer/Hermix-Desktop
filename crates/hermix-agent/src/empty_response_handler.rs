@@ -7,10 +7,9 @@
 //! 2. LLM outputs visible text → rendered as Markdown for the user
 //! 3. LLM calls tools → results go into context → next turn LLM naturally summarizes
 //!
-//! The system prompt already contains `TOOL_EXECUTION_SUMMARY_GUIDANCE`,
-//! `STOPPING_SUMMARY_GUIDANCE`, and `THINKING_DISCIPLINE_GUIDANCE` — these
-//! instruct the LLM to produce visible text after tool execution. We trust
-//! the LLM to follow these instructions.
+//! The system prompt contains `THINKING_DISCIPLINE_GUIDANCE` and
+//! `REPLY_TERMINATION_GUIDANCE` — these instruct the LLM on output
+//! format. We trust the LLM to follow these instructions.
 //!
 //! This module handles the **rare edge cases** where the LLM stops without
 //! tool calls and we need to decide what to do:

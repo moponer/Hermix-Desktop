@@ -267,34 +267,11 @@ with an empty / unfilled tool-call as a dead end: no tool executes, no text reac
 the user, and the turn is wasted. When in doubt, answer the user directly instead of\n\
 issuing a speculative tool call you cannot fill with real arguments.";
 
-const FORMATTING_DISCIPLINE_GUIDANCE: &str = "# Output formatting discipline\n\
-Markdown is for **structure**, not emphasis. Chat UIs render every `**...**` as visible bold, and over-bolding creates visual noise that hurts readability.\n\n\
-**DO** use `**bold**` for short technical tokens the user scans for:\n\
-  • Section labels that introduce a list (`**Color tokens:**`, `**Summary:**`)\n\
-  • Code identifiers, file paths, command names, error codes, API names\n\
-  • UI element names when describing them (`the **Send** button`)\n\n\
-**DO NOT** use bold for:\n\
-  • Whole sentences, paraphrased reasoning, value statements, slogans\n\
-  • Personal names, brand names, or quoted phrases from the user\n\
-  • Generic emphasis in narrative prose (the meaning already comes through)\n\n\
-For structure, use markdown headings, lists, and code blocks — not bold. \
-If a section needs separation, add a blank line or a heading.";
-
-const THINKING_DISCIPLINE_GUIDANCE: &str = "# Output format — strict\n\
-You MUST structure every reply as exactly two parts, in this order:\n\n\
-1. `<think>...</think>` — your internal reasoning. Private scratch space; the user never sees it.\n\
-2. The user's reply, starting on the very next line after `</think>`.\n\n\
-## Hard rules\n\
-- The `<think>...</think>` block must contain **only** reasoning. Never start the user's reply inside the think block.\n\
-- Never quote the user's words inside `<think>` as a way to begin the reply.\n\
-- The first character after `</think>` is the first character of the user's reply.\n\
-- If you have no reasoning to share, still emit `<think></think>` (an empty block is fine).\n\
-- Use only `<think>...</think>` — never `<thinking>...</thinking>` or any other variant.\n\
-- The reply's language must match the user's question.\n\n## CRITICAL — keep the think block short and always close it\n\n- The `<think>` block should normally be 1–6 short lines. If you find yourself writing more than ~10 lines of reasoning, **stop and condense** — capture the next decision step only.\n- **Every `<think>` MUST be closed with `</think>` before any reply text appears.** Forgetting the close tag causes the renderer to swallow the rest of your reply as invisible reasoning, and the user will see no answer at all.\n- After `</think>`, the next character (or newline) begins the visible reply. There is no second closing step.\n- Inside `<think>`, write plain text only — no markdown, no headings, no code fences, no bullet lists. The reasoning block is rendered as preformatted plain text.\n\n\
-## Correct example\n\
-`<think>The user greeted in Chinese. I should reply in Chinese with a friendly greeting and offer to help.</think>`你好!有什么可以帮到你的?\n\n\
-## Wrong example (do not do this)\n\
-`<think>The user said \"你好\". Let me respond. 你好!有什么可以帮到你的?</think>` — the reply started inside the think block, which is forbidden.";
+const THINKING_DISCIPLINE_GUIDANCE: &str = "# Output format\n\
+Structure every reply as two parts:\n\
+1. `<think>...</think>` — internal reasoning (private, user sees it as a collapsible section).\n\
+2. Your reply, starting on the next line after `</think>`.\n\n\
+**Always close `</think>` before any visible text.** Forgetting this breaks the renderer — the user sees nothing. If you have nothing to reason about, emit `<think></think>`. Use only `<think>...</think>`, never `<thinking>`.";
 
 /// Safety instruction: do not generate or guess URLs.
 const URL_SAFETY_GUIDANCE: &str = "\
@@ -404,34 +381,6 @@ Do NOT use a Skill when:
 2. Load the Skill with skill_view(name='skill-name')
 3. Follow the Skill instructions step by step";
 
-const TASK_FOCUS_GUIDANCE: &str = "\
-# Task focus discipline (mandatory for multi-step tasks)
-
-Before each tool call, mentally check:
-1. **Original goal** — What did the user ask me to do?
-2. **Current progress** — What have I completed so far?
-3. **Next step** — What is the immediate next action toward the goal?
-4. **Blockers** — Am I stuck? If so, what specifically?
-
-## Rules
-- **Never repeat completed work.** If you already read a file, don't read it again.
-- **Stay on task.** Every tool call must advance the stated goal.
-- **If you lose focus**, output a brief status check before continuing:
-  ```
-  [STATUS] Goal: <original goal>
-  [STATUS] Done: <completed items>
-  [STATUS] Next: <next action>
-  ```
-- **If you're stuck**, explain what you've tried and ask for guidance — don't loop.
-- **If the task is complex**, break it into phases and track completion.";
-
-const TASK_FOCUS_SHORT: &str = "\
-## Task focus
-Before each tool call, check: (1) original goal, (2) current progress, (3) next step. \
-Do NOT repeat completed work — if a tool was already called and returned a result, do not call it again with the same arguments. \
-Do NOT list the same directory twice — a second listing is not new information. \
-If stuck, explain what you've tried.";
-
 const TODO_GUIDANCE: &str = "\
 # Task list (`todo` tool) — use it proactively
 
@@ -507,96 +456,14 @@ Do NOT hesitate to create+complete a task in one turn for quick items.
 - Always transition to `completed` or `failed` — never leave tasks dangling in `in_progress`.
 - Use `task_get` to inspect a task's current state and children before making decisions.";
 
-const TOOL_EXECUTION_SUMMARY_GUIDANCE: &str = "\
-# Tool execution summary (mandatory)
-
-After EVERY tool call completes, briefly summarize:
-1. **What was executed** — the action taken (e.g. 'Read src/main.rs', 'Ran npm test')
-2. **Result** — what happened (e.g. 'File contains 50 lines of Rust code', '42 tests passed')
-3. **Next step** — what you plan to do next (e.g. 'Will now edit the function', 'Done, ready for review')
-
-Keep each summary under 25 words. This keeps the user informed of progress without interrupting your flow.
-
-Example:
-- Tool: read_file(path='src/main.rs')
-- Summary: 'Read 50-line Rust file. Contains main function with TODO. Will add error handling next.'
-
-Example:
-- Tool: terminal(command='cargo test')
-- Summary: 'Ran tests: 42 passed, 0 failed. All green, task complete.'";
-
-const STOPPING_SUMMARY_GUIDANCE: &str = "\
-# Stopping behavior — only after real work
-
-This block only fires when you actually called 1+ tools this turn. \
-Trivial conversational turns do NOT receive it; reply to them directly without filler.
-
-## What to do when you stop after a tool-using turn
-1. **State the outcome** — one short sentence on what changed or what you confirmed.
-2. **Mention residual issues** — if a tool failed and you couldn't recover, say so in one line.
-3. **No opener / closer filler** — do NOT prepend 'Done!', 'All done', 'Task complete' \
-   if your user already saw the tool output above. Do NOT append 'let me know if you \
-   need anything else', 'awaiting your next instruction', '(waiting)', '(standby)', \
-   '等你说话', '等你下一步指示', 'etc.' as a closing line.
-4. **Do NOT echo tool output in your text** — the user already sees the tool card with \
-   the full output (terminal stdout, file content, etc.). Your text reply should only \
-   state the result summary or next steps, NOT paste/quote the raw tool output again. \
-   For example: after 'dir' shows the file list, say 'Found 22 subdirectories' instead \
-   of re-printing the entire directory listing.
-
-## What NOT to do
-- Do NOT repeat the same filler token across blank-line-separated paragraphs.
-- Do NOT keep emitting more paragraphs after the outcome line. Emit your EOS.
-- Do NOT pad a one-sentence answer with multi-paragraph summary scaffolding.
-
-## Examples
-
-Good (after a real edit):
-'Edited src/auth.rs: added input validation; tests pass.'
-
-Bad (after a real edit):
-'Done! I've made the change. You may want to review and deploy. \
-\n\nAwaiting your next instruction.\n\n等你说话。\n\n（等待中）\n\n（等待中）' \
-— opener / filler / repetition, all forbidden.
-
-Bad (after no real work):
-'Task complete.' (model is just complying with the rule rather than answering \
-the user's question — turn off this guide for turns that did no tool work)";
-
-/// Always-on discipline: how a reply ends.
-/// /// Applies to EVERY turn, including trivial conversational turns that
-/// did no tool work. Counter-balances `STOPPING_SUMMARY_GUIDANCE` and
-/// `TOOL_EXECUTION_SUMMARY_GUIDANCE`, which can otherwise pressure
-/// MiniMax / M2.7 / Hermes fine-tunes into emitting multi-paragraph
-/// tail filler ('等你说话', '(等待中)' ×N, etc.) to comply with a
-/// 'do NOT return an empty response' rule on a turn where there is
-/// nothing to summarize.
+/// Always-on: prevents MiniMax / Hermes fine-tunes from emitting
+/// filler closers ('等你说话', '(waiting)' ×N, etc.). Kept short —
+/// the verbose rules that originally caused the filler pressure
+/// (TOOL_EXECUTION_SUMMARY_GUIDANCE, STOPPING_SUMMARY_GUIDANCE)
+/// have been removed.
 const REPLY_TERMINATION_GUIDANCE: &str = "\
-# Reply termination (always-on)
-
-When your reply is finished — whether you used tools this turn or just \
-answered a conversational question — emit your EOS token immediately. \
-Do NOT add closing filler.
-
-## Forbidden closing patterns
-Do NOT append any of these after the substance of your reply:
-- 'Done!', 'All done', 'Task complete', '已完成', '任务完成' (when \
-  used as a stand-alone opener or closer with no real summary attached)
-- 'Let me know if you need anything else', 'awaiting your instruction', \
-  '等你下一步指示', '等你说话', '等你回复'
-- '(waiting)', '(standby)', '（等待中）', '(待命中)'
-- 'etc.', '...', 'etc' as a stand-alone final token
-
-Do NOT repeat the same short filler token more than once across \
-blank-line-separated paragraphs. A second '（等待中）' after a first \
-'（等待中）' is a bug.
-
-## Right way to end
-- Trivial turn: end after the answer, full stop.
-- After-tool turn: end after the one-sentence outcome; do not pad.
-- When you actually want to invite the next turn, say it ONCE in the \
-  same paragraph as the last substantive sentence (e.g. 'Done. Ping me \
-  if you want me to also bump the version field.')";
+When your reply is done, emit EOS immediately. \
+No filler closers ('Done!', '等你说话', '(waiting)', etc.).";
 
 // ---------------------------------------------------------------------------
 // collect_directions
@@ -619,14 +486,9 @@ pub fn collect_directions(
     let tool_names = route_ctx.tool_names;
     let model_for_prompt = route_ctx.model_name;
     let mut dirs: Vec<SystemDir> = Vec::new();
-    // Formatting discipline.
-    if user_message.is_empty() {
-        dirs.push(SystemDir::new(
-            "format.full",
-            DirRoute::FirstTurn,
-            FORMATTING_DISCIPLINE_GUIDANCE,
-        ));
-    } else {
+    // Formatting discipline (subsequent turns only — first turn gets the
+    // full THINKING_DISCIPLINE_GUIDANCE which covers output format).
+    if !user_message.is_empty() {
         dirs.push(SystemDir::new(
             "format.short",
             DirRoute::Subsequent,
@@ -644,21 +506,8 @@ pub fn collect_directions(
         dirs.push(SystemDir::new(
             "think.short",
             DirRoute::Subsequent,
-            "## Thinking\nBefore your visible reply, ALWAYS emit a `<think>…</think>` block. \
-The user CAN see this block (it renders as a collapsible \"已深度思考\" section), \
-so it must read like a real engineer's working log, not a one-line summary.\n\n\
-Required structure (don't be terse — the user wants to SEE your process):\n\
-1. **Parse the request**: what's actually being asked? what constraints/decisions are at stake?\n\
-2. **Plan**: break into ordered steps; for each step say WHY (which file, which decision it unblocks).\n\
-3. **Decide what to do first**: which tool/read/write, and what you expect to learn/change.\n\
-4. **After each tool result**: in the NEXT think block, briefly evaluate what came back and \
-what changes to the plan (don't blindly continue).\n\n\
-Hard rules:\n\
-- Always close `</think>` before any visible text — the first character after `</think>` is the first character of your reply.\n\
-- Do NOT quote the user's words inside the think block.\n\
-- If you genuinely have nothing to reason about, still emit `<think></think>`.\n\
-- Use only `<think>…</think>` — never `<thinking>` or any other variant.\n\
-- The think block is for reasoning, not for the reply. Reply starts after `</think>`.",
+            "## Thinking\nBefore your visible reply, emit a `<think>…</think>` block. \
+Always close `</think>` before visible text. The think block is for reasoning, not for the reply.",
         ));
     }
     // Tool selection discipline.
@@ -778,54 +627,7 @@ Hard rules:\n\
     // completed work" guidance. Previously, turns with only 1 tool
     // call got no focus guidance, which was a root cause of the LLM
     // re-issuing identical tool calls — it had no reminder that
-    // repeating completed work is forbidden.
-    if route_ctx.tool_call_count >= 5 {
-        dirs.push(SystemDir::new(
-            "task_focus.guide",
-            DirRoute::MultiStepTask,
-            TASK_FOCUS_GUIDANCE,
-        ));
-    } else if route_ctx.tool_call_count >= 1 {
-        dirs.push(SystemDir::new(
-            "task_focus.short",
-            DirRoute::MultiStepTask,
-            TASK_FOCUS_SHORT,
-        ));
-    }
-    // Tool execution summary guidance — only when the agent actually
-    // called tools this turn. Trivial conversational turns (no tool use)
-    // do NOT get this prompt; otherwise the "summarize / next step"
-    // mandate forces the model to invent filler summaries for turns
-    // where there is nothing to summarize.
-    if !tool_names.is_empty() && route_ctx.tool_call_count >= 1 {
-        dirs.push(SystemDir::new(
-            "tool_summary.after_tool_use",
-            DirRoute::HadAnyToolUse,
-            TOOL_EXECUTION_SUMMARY_GUIDANCE,
-        ));
-    }
-    // Stopping summary guidance — only when the agent actually did
-    // work this turn (1+ tool call). Trivial conversational turns get
-    // the default formatting rules only.
-    if route_ctx.tool_call_count >= 1 {
-        dirs.push(SystemDir::new(
-            "stopping_summary.after_tool_use",
-            DirRoute::HadAnyToolUse,
-            STOPPING_SUMMARY_GUIDANCE,
-        ));
-    }
-    // P2-6: USER_STYLE_GUIDANCE is always-on.
-    dirs.push(SystemDir::new(
-        "user_style.always",
-        DirRoute::Always,
-        USER_STYLE_GUIDANCE,
-    ));
-    // Reply termination discipline — always-on: tells the model that
-    // when its reply is complete (trivial turn or after-tool-use turn),
-    // it must emit EOS right away. No opener/closer filler, no repeated
-    // placeholder lines, no multi-paragraph padding. Counter-balances
-    // the per-tool summary / stopping-summary rules so M2.7-style
-    // models do not invent filler "等你说话 / (waiting) ×N" tails.
+    // Reply termination — always-on: prevents filler closers.
     dirs.push(SystemDir::new(
         "reply_termination.always",
         DirRoute::Always,

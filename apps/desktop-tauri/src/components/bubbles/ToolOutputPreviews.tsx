@@ -495,109 +495,11 @@ function UiSingleNamePreview({ output, verb }: { output?: string; verb: string }
 }
 
 /**
- * Inline preview for `cua_ocr_recognize` tool results.
- *
- * Backend returns:
- *   { text, lines: [{text, words: [{text, rect}]}, ...],
- *     line_count, avg_confidence }
- *
- * The full text is the headline; per-line detail (word count +
- * the line's bounding rect reconstructed from word rects) sits
- * in a scrollable list so the user can pick out the exact
- * location of any phrase.
+ * REMOVED 2026-07-25: OcrPreview was the inline preview for
+ * `cua_ocr_recognize` tool results. The tool itself was removed because
+ * the local Windows OCR engine had <30% accuracy for Chinese documents.
+ * All image analysis now goes through `delegate_task` → sub-agent `read_image`.
  */
-function OcrPreview({ output }: { output?: string }) {
-  const parsed = useMemo(() => {
-    if (!output) return null;
-    try {
-      const v = JSON.parse(output);
-      if (
-        v && typeof v === "object" && !Array.isArray(v) &&
-        typeof v.text === "string" && Array.isArray(v.lines)
-      ) {
-        return v as {
-          text: string;
-          lines: Array<{
-            text: string;
-            words: Array<{
-              text: string;
-              rect: { x: number; y: number; width: number; height: number };
-            }>;
-          }>;
-          line_count: number;
-          avg_confidence: number | null;
-        };
-      }
-    } catch {
-      // not JSON, fall through
-    }
-    return null;
-  }, [output]);
-  if (!parsed) return null;
-  const { text, lines, line_count, avg_confidence } = parsed;
-  const confLabel = avg_confidence !== null && avg_confidence !== undefined
-    ? ` · 置信度 ${(avg_confidence * 100).toFixed(0)}%`
-    : "";
-  return (
-    <div className="mt-1.5 rounded-md overflow-hidden border border-border-primary/40 bg-bg-secondary/20">
-      <div className="px-2 py-1 text-[11px] text-text-faint bg-bg-secondary/40 border-b border-border-primary/30 flex items-center justify-between">
-        <span>OCR 识别结果</span>
-        <span className="font-mono">
-          {line_count} 行{confLabel}
-        </span>
-      </div>
-      {text.trim().length === 0 ? (
-        <div className="px-3 py-3 text-[12px] text-text-faint text-center italic">
-          未识别到文字
-        </div>
-      ) : (
-        <>
-          <pre className="px-2.5 py-1.5 text-[12px] font-mono text-text-primary whitespace-pre-wrap break-words max-h-40 overflow-auto border-b border-border-primary/30">
-            {text}
-          </pre>
-          {lines.length > 0 && (
-            <ul className="divide-y divide-border-primary/30 max-h-48 overflow-auto">
-              {lines.map((line, i) => {
-                // Reconstruct the line bounding rect from its words.
-                let minX = Number.POSITIVE_INFINITY, minY = Number.POSITIVE_INFINITY;
-                let maxR = 0, maxB = 0;
-                for (const w of line.words) {
-                  const r = w.rect;
-                  if (r.x < minX) minX = r.x;
-                  if (r.y < minY) minY = r.y;
-                  if (r.x + r.width > maxR) maxR = r.x + r.width;
-                  if (r.y + r.height > maxB) maxB = r.y + r.height;
-                }
-                const rectLabel =
-                  line.words.length === 0
-                    ? "—"
-                    : `${maxR - minX}×${maxB - minY} @ (${minX},${minY})`;
-                return (
-                  <li
-                    key={`ocr-line-${i}-${minX}-${minY}`}
-                    className="px-2.5 py-1 text-[12px] hover:bg-bg-tertiary/40"
-                  >
-                    <div className="flex items-baseline gap-2">
-                      <span className="shrink-0 text-text-faint font-mono text-[10px] w-6 text-right">
-                        {i + 1}
-                      </span>
-                      <span className="flex-1 truncate text-text-primary" title={line.text}>
-                        {line.text || <span className="italic text-text-faint">（空行）</span>}
-                      </span>
-                      <span className="shrink-0 font-mono text-[10px] text-text-faint">
-                        {line.words.length}词 · {rectLabel}
-                      </span>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
 
 /**
  * Heuristic: does the tool's primary arg point to a real file on
@@ -655,7 +557,6 @@ export {
   UiFindPreview,
   UiClickPreview,
   UiSingleNamePreview,
-  OcrPreview,
   // Shared arg-parsing helpers used by both these previews and
   // ToolMessageCard (still in MessageBubble.tsx).
   isPathArg,

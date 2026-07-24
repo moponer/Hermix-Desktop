@@ -854,62 +854,12 @@ pub async fn cua_ui_invoke(name: String) -> Result<CuaCommandResponse, String> {
 }
 
 // ===========================================================================
-// 14) cua_ocr_recognize
+// 14) cua_ocr_recognize — REMOVED 2026-07-25
+//
+// The local Windows.Media.Ocr engine had <30% accuracy for Chinese documents.
+// The tool was removed; all image analysis goes through delegate_task →
+// sub-agent read_image (LLM vision) instead.
 // ===========================================================================
-
-/// Decode a base64-encoded PNG and run `Windows.Media.Ocr` over it.
-/// Returns the full text plus per-line / per-word bounding rects.
-///
-/// Mirrors the LLM-facing `cua_ocr_recognize` tool. The decoded
-/// bytes are moved into the blocking closure (single ownership);
-/// the front-end just hands us the same `png_base64` it received
-/// from `cua_screenshot`.
-#[tauri::command]
-pub async fn cua_ocr_recognize(png_base64: String) -> Result<CuaCommandResponse, String> {
-    let png_bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        &png_base64,
-    )
-    .map_err(|e| format!("cua::invalid_params: base64 decode failed: {e}"))?;
-    #[cfg(windows)]
-    {
-        SAFETY
-            .check(None, RiskLevel::Low)
-            .map_err(|e| format!("cua::denied: {e}"))?;
-        let started = std::time::Instant::now();
-        let result: Result<hermix_cua::ocr::OcrResponse, hermix_cua::CuaError> =
-            run_blocking(move || hermix_cua::ocr::recognize_from_png(&png_bytes)).await;
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        let resp = result.map_err(|e| e.to_string())?;
-        let line_count = resp.lines.len();
-        let preview = if resp.text.len() > 80 {
-            format!("{}…", &resp.text[..80])
-        } else {
-            resp.text.clone()
-        };
-        let ev = TraceEvent::new(
-            TraceKind::Other {
-                subkind: "ocr_recognize".into(),
-            },
-            "tauri-direct",
-            format!("lines={line_count} preview={preview:?}"),
-        )
-        .with_elapsed_ms(elapsed_ms);
-        let _ = TRACE.record(&ev);
-        let value = serde_json::json!({
-            "text": resp.text,
-            "lines": resp.lines,
-            "line_count": line_count,
-            "avg_confidence": resp.avg_confidence,
-        });
-        Ok(CuaCommandResponse::ok("cua_ocr_recognize", elapsed_ms, value))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = png_bytes;
-        Err("cua_ocr_recognize requires Windows".into())
-    }
-}
 
 // ===========================================================================
 // Phase 2-E: Browser automation (self-hosted CDP client)

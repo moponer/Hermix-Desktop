@@ -536,7 +536,19 @@ impl AgentLoop {
         }
 
         for result in results {
-            push_tool_result(ctx, tool_calls, &result.tool_call_id, &result.content);
+            // Apply terminal failure hint: if the terminal command failed
+            // due to shell-compatibility issues, append a structured
+            // suggestion to use move_file / read_file / execute_code instead.
+            let tool_name = tool_calls
+                .iter()
+                .find(|tc| tc.id == result.tool_call_id)
+                .map(|tc| tc.function.name.as_str());
+            let content = crate::tool_result_processor::maybe_append_terminal_failure_hint(
+                &result.content,
+                tool_name,
+                result.is_error,
+            );
+            push_tool_result(ctx, tool_calls, &result.tool_call_id, &content);
             // if the result is a *denial* (user拒绝 /
             // 超时 / 连接中断), inject the structured "tell the user"
             // system note right after the tool_result so the LLM's
@@ -874,6 +886,10 @@ impl AgentLoop {
         messages: Vec<Message>,
         tools: Option<Vec<ToolSchema>>,
     ) -> Result<AgentResult, AgentError> {
+        // Reset per-run terminal hint counter so a new user message
+        // gets a fresh allowance of failure hints.
+        crate::tool_result_processor::reset_terminal_hint_counter();
+
         // ---- Step 1: Prepare the run context ----
         // Sanitize messages, route tools, build the system prompt, hydrate the
         // todo store, prefetch memory, and run the optional preflight compress.
@@ -1031,7 +1047,27 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                             persist_user_idx,
                         ));
                     }
-                    Err(e) => return Err(e),
+                    // Non-interrupt errors (API error, network timeout,
+                    // credential failure) — convert to graceful interrupt
+                    // so the ctx messages are returned and persisted.
+                    // Without this, returning Err(e) causes
+                    // local_agent_service's `?` to skip the post-run
+                    // persist, and the session reloads empty.
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "LLM call failed (non-stream path) — treating as graceful interrupt for persistence"
+                        );
+                        return Ok(self.graceful_interrupt_result(
+                            &ctx,
+                            total_turns,
+                            &tool_errors,
+                            state.cost_guard.accumulated_usage.clone(),
+                            state.cost_guard.session_cost_usd,
+                            session_started_hooks_fired,
+                            persist_user_idx,
+                        ));
+                    }
                 };
                 if let Some(ref u) = r.usage {
                     turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
@@ -1707,7 +1743,32 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                         }),
                     };
                     let _ = self.invoke_hook(HookType::PostApiRequest, &post_api_ctx);
-                    match stream_collect? {
+                    // If collect_stream_llm_response itself returns Err
+                    // (e.g. provider build failure, credential error),
+                    // convert to graceful interrupt so the ctx messages
+                    // are returned and persisted by the caller. Without
+                    // this, the `?` would propagate the error,
+                    // local_agent_service's `?` would skip the post-run
+                    // persist, and the session would reload empty.
+                    let stream_outcome = match stream_collect {
+                        Ok(outcome) => outcome,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "collect_stream_llm_response failed — treating as graceful interrupt for persistence"
+                            );
+                            return Ok(self.graceful_interrupt_result(
+                                &ctx,
+                                total_turns,
+                                &tool_errors,
+                                state.cost_guard.accumulated_usage.clone(),
+                                state.cost_guard.session_cost_usd,
+                                session_started_hooks_fired,
+                                persist_user_idx,
+                            ));
+                        }
+                    };
+                    match stream_outcome {
                         StreamCollectOutcome::Complete(resp) => resp,
                         StreamCollectOutcome::Interrupted(partial) => {
                             state
@@ -1742,7 +1803,27 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                                 persist_user_idx,
                             ));
                         }
-                        Err(e) => return Err(e),
+                        // Non-interrupt errors (API error, network timeout,
+                        // credential failure) — convert to graceful interrupt
+                        // so the ctx messages are returned and persisted.
+                        // Without this, returning Err(e) causes
+                        // local_agent_service's `?` to skip the post-run
+                        // persist, and the session reloads empty.
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "LLM call failed (stream retry path) — treating as graceful interrupt for persistence"
+                            );
+                            return Ok(self.graceful_interrupt_result(
+                                &ctx,
+                                total_turns,
+                                &tool_errors,
+                                state.cost_guard.accumulated_usage.clone(),
+                                state.cost_guard.session_cost_usd,
+                                session_started_hooks_fired,
+                                persist_user_idx,
+                            ));
+                        }
                     }
                 };
                 inner_attempt = inner_attempt.saturating_add(1);
