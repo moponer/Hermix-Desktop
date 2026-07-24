@@ -565,19 +565,14 @@ pub const BUILTIN_PERSONALITY_ANALYST: &str = "\
 pub const SELF_EVOLUTION_GUIDANCE: &str = "\
 ## Self-Evolution Capabilities\n\
 \n\
-You have four procedural-memory actions available via the `skill_manage` tool. \
-Use them to grow with the user — this is your persistent self-improvement channel, \
-not an admin task that needs explicit permission.\n\
+You have procedural-memory actions available via the `skill_manage` tool. \
+This is your persistent self-improvement channel — not an admin task.\n\
 \n\
-### When to evolve\n\
-- **After a multi-step task** (≥ 2 distinct tool calls of the same shape) → \
-consider `auto_create` to crystallize the workflow.\n\
-- **When the user says \"do it this way from now on\" / \"remember this\" / \
-\"save as script\"** → `create` or `update` immediately, do not ask for permission.\n\
-- **When you hit friction with an existing skill** → `self_improve` to append a \
-\"## Improvement Feedback\" section. Do not silently rewrite the whole file.\n\
-- **When the workspace is empty** (no skills installed yet) → \
-`install_builtins` to seed the standard set (planning, debugging, refactoring, ...).\n\
+### Actions\n\
+- `auto_create` / `auto_extract_from_conversation` — crystallize a workflow into a skill.\n\
+- `create` / `update` — manual skill management.\n\
+- `self_improve` — append a '## Improvement Feedback' section to an existing skill.\n\
+- `install_builtins` — seed the standard set when the workspace is empty.\n\
 \n\
 ### How to write a good skill\n\
 1. **Slug**: lowercase, hyphen-separated, ASCII only. `discover_skills` walks \
@@ -586,26 +581,21 @@ consider `auto_create` to crystallize the workflow.\n\
    ```yaml\n\
    ---\n\
    name: my-skill\n\
-   description: One-line purpose. Used in tooltips and slash-command hints.\n\
+   description: One-line purpose.\n\
    commands:\n\
      - name: my-skill\n\
        description: What /my-skill does\n\
        template: \"{args}\"\n\
    ---\n\
    ```\n\
-3. **Body**: imperative steps the next agent should follow. Reference tools by \
-their `tool_name`, not by capability. Keep under 2000 words.\n\
-4. **Verify**: after `create` / `update`, call `skills_list` to confirm the new \
-skill is visible.\n\
+3. **Body**: imperative steps. Reference tools by `tool_name`. Keep under 2000 words.\n\
+4. **Verify**: after `create` / `update`, call `skills_list` to confirm visibility.\n\
 \n\
 ### Boundaries\n\
-- **DO** write into `$hermix_home/skills/`. The path is in the Runtime \
-Environment block of this prompt.\n\
+- **DO** write into `$hermix_home/skills/`.\n\
 - **DO NOT** touch SOUL.md, config.yaml, .env, auth.json, approval_allowlist.json, \
-or anything outside `$hermix_home/`. Use the appropriate tool instead.\n\
-- **DO NOT** persist one-off tasks or things that change session-to-session.\n\
-- **DO NOT** ask for permission for `create` / `auto_create` / `self_improve` — \
-these are first-class actions. The user reviews the resulting file.";
+or anything outside `$hermix_home/`.\n\
+- **DO NOT** persist one-off tasks or things that change session-to-session.";
 
 /// Load the SOUL.md personality file from `<HERMIX_HOME>/SOUL.md`.
 /// /// Returns `None` if the file doesn't exist or can't be read.

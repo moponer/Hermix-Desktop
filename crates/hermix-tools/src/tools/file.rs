@@ -811,7 +811,7 @@ impl ToolHandler for MoveFileHandler {
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("文件操作任务失败: {}", e)))?;
 
-        let bytes = result?;
+        let bytes = result.map_err(ToolError::ExecutionFailed)?;
         let abs_src = to_absolute_path(src);
         let abs_dst = to_absolute_path(dst);
         let op = if copy_mode { "copied" } else { "moved" };

@@ -707,7 +707,7 @@ async fn initial_messages(
          ## How to read files safely\n\
          - **Check size FIRST**: use `list_files` (returns size) or `terminal wc -l <file>`\n\
            before reading. If > ~50 KB or > ~1500 lines, do NOT `read_file` whole.\n\
-         - **Read in chunks**: `read_file` accepts `start_line` / `end_line` parameters.\n\
+         - **Read in chunks**: `read_file` accepts `offset` / `limit` parameters.\n\
            Read 200-500 lines at a time, summarize each chunk in your scratchpad, then\n\
            read the next chunk.\n\
          - **For PDFs**: do NOT use `read_pdf` on a 100-page PDF. Instead, run\n\

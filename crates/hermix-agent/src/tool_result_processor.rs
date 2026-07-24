@@ -27,6 +27,15 @@ static FILTER_SAVED_CALLS: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new
 static TERMINAL_HINT_COUNT: AtomicU64 = AtomicU64::new(0);
 const MAX_TERMINAL_HINTS: u64 = 2;
 
+/// Tracks which tools have errored this run. Used by
+/// `maybe_append_terminal_failure_hint` to avoid suggesting
+/// alternatives that have already been tried and failed —
+/// preventing the ping-pong cycle (terminal fails → hint says
+/// use move_file → move_file fails → LLM tries terminal again →
+/// hint says use move_file again …).
+static FAILED_TOOLS_THIS_RUN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
 /// Report cumulative RTK savings since process start.
 pub fn rtk_savings() -> (u64, u64) {
     (
@@ -73,29 +82,38 @@ fn apply_terminal_filter(content: &str, tool_name: Option<&str>, tool_calls: &[T
 }
 
 /// Detect whether a terminal tool result content indicates a
-/// shell-compatibility failure (as opposed to a command logic error).
+/// **shell-compatibility** failure (as opposed to a command logic error).
 ///
-/// We only inject the hint when the failure looks like a shell issue —
-/// not when the command itself had a logic bug. This prevents noisy
-/// hints on every non-zero exit code.
+/// We only inject the hint when the failure is genuinely a shell issue —
+/// not when the command itself had a logic bug (wrong path, missing file,
+/// permission denied, etc.). This prevents false-positive hints on
+/// ordinary command failures.
+///
+/// Key distinction: shell-compat errors are about the *shell environment*
+/// being wrong (command doesn't exist, syntax can't be parsed, quotes
+/// stripped), NOT about the *target* being wrong (file not found, access
+/// denied). The latter are legitimate errors the LLM should handle
+/// differently.
 fn is_shell_compatibility_failure(content: &str) -> bool {
     let lower = content.to_lowercase();
-    // Common Windows shell-compatibility error patterns
+    // --- True shell-compatibility errors ---
+    // These mean the shell layer itself can't handle the command.
     lower.contains("not recognized as an internal or external command")
-        || lower.contains("is not recognized") // PowerShell variant
+        || lower.contains("is not recognized as a cmdlet") // PowerShell: command doesn't exist
         || lower.contains("command not found")
-        || lower.contains("no such file or directory") && lower.contains("bash")
-        || lower.contains("the system cannot find the file specified")
-        || lower.contains("the system cannot find the path specified")
+        // Specific Unix commands that don't exist on Windows/Git Bash
         || lower.contains("'cp' is not recognized")
         || lower.contains("'mv' is not recognized")
         || lower.contains("'cat' is not recognized")
         || lower.contains("'ls' is not recognized")
         || lower.contains("'rm' is not recognized")
-        || lower.contains("syntax error") && lower.contains("powershell")
+        || lower.contains("'grep' is not recognized")
+        || lower.contains("'find' is not recognized")
+        // PowerShell parser errors — the shell couldn't even parse the command
         || lower.contains("parsererror")
-        || lower.contains("无法将") && lower.contains("识别为")
-        || lower.contains("找不到")
+        || (lower.contains("syntax error") && lower.contains("powershell"))
+        // Chinese PowerShell: "无法将 xxx 项识别为 cmdlet"
+        || (lower.contains("无法将") && lower.contains("识别为"))
 }
 
 /// Detect whether terminal content indicates a non-zero exit code
@@ -115,14 +133,32 @@ fn has_nonzero_exit_code(content: &str) -> bool {
     false
 }
 
+/// Record that a tool errored this run. Called for EVERY tool result
+/// (not just terminal) so the hint function knows which alternatives
+/// have already been tried and failed.
+pub fn record_tool_failure(tool_name: &str) {
+    if tool_name.is_empty() {
+        return;
+    }
+    if let Ok(mut set) = FAILED_TOOLS_THIS_RUN.lock() {
+        set.insert(tool_name.to_string());
+    }
+}
+
 /// If the tool result is a failed `terminal` call, append a hint
 /// suggesting structured alternatives. The hint is appended directly
 /// to the tool result content (not a separate system message) so the
 /// LLM sees it immediately in the same context block.
 ///
-/// Only fires for shell-compatibility failures (not logic errors),
+/// Only fires for genuine shell-compatibility failures (not logic errors),
 /// and is capped at `MAX_TERMINAL_HINTS` injections per run to avoid
 /// context flooding.
+///
+/// **Ping-pong prevention**: before suggesting an alternative, checks
+/// `FAILED_TOOLS_THIS_RUN` to see if that alternative has already been
+/// tried and failed. If all alternatives have failed, the message changes
+/// to "stop retrying and tell the user" instead of suggesting more
+/// alternatives.
 ///
 /// Returns the (possibly modified) content string.
 pub fn maybe_append_terminal_failure_hint(
@@ -153,23 +189,67 @@ pub fn maybe_append_terminal_failure_hint(
         return content.to_string();
     }
 
-    format!(
-        "{content}\n\
-         \n---\n
-         [SYSTEM — terminal 命令失败提示]\n\
-         该 terminal 命令因 shell 兼容性问题失败（可能是：命令不存在、引号被 Git Bash 吞掉、路径格式不兼容）。\n\
-         替代方案（按优先级）：\n\
-         1. **文件复制/移动/重命名** → 使用 `move_file` 工具（原生 OS API，不经过 shell，无引号/路径问题）\n\
-         2. **文件读取** → 使用 `read_file` 工具\n\
-         3. **文件搜索** → 使用 `search_files` 工具\n\
-         4. **其他操作** → 使用 `execute_code` (Python) 替代 terminal\n\
-         不要再用不同的 shell 命令变体重试同一操作。"
-    )
+    // Check which alternatives have already been tried and failed.
+    // This prevents the ping-pong cycle: terminal fails → hint says
+    // use move_file → move_file fails → LLM tries terminal again →
+    // hint says use move_file again.
+    let failed = FAILED_TOOLS_THIS_RUN
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+
+    // Build the suggestion list, excluding already-failed alternatives.
+    let mut suggestions: Vec<&str> = Vec::new();
+    if !failed.contains("move_file") {
+        suggestions.push("文件复制/移动/重命名 → 使用 `move_file` 工具（原生 OS API，不经过 shell）");
+    }
+    if !failed.contains("read_file") {
+        suggestions.push("文件读取 → 使用 `read_file` 工具");
+    }
+    if !failed.contains("search_files") {
+        suggestions.push("文件搜索 → 使用 `search_files` 工具");
+    }
+    if !failed.contains("execute_code") {
+        suggestions.push("其他操作 → 使用 `execute_code` (Python) 替代 terminal");
+    }
+
+    if suggestions.is_empty() {
+        // All alternatives have been tried and failed — tell the LLM
+        // to stop retrying and inform the user.
+        format!(
+            "{content}\n\
+             \n---\n
+             [SYSTEM — terminal 命令失败提示]\n\
+             该 terminal 命令因 shell 兼容性问题失败。\n\
+             你之前已尝试过所有结构化替代工具（move_file / read_file / search_files / execute_code），但它们也都失败了。\n\
+             【停止重试】。不要再换 shell 命令变体，也不要再换结构化工具。\n\
+             用中文告诉用户：你尝试了哪些方法、各自的具体失败原因是什么，请用户提供指导。"
+        )
+    } else {
+        let list = suggestions
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("{}. {}", i + 1, s))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "{content}\n\
+             \n---\n
+             [SYSTEM — terminal 命令失败提示]\n\
+             该 terminal 命令因 shell 兼容性问题失败（可能是：命令不存在、引号被 Git Bash 吞掉、路径格式不兼容）。\n\
+             可用的替代方案：\n{list}\n\
+             不要再用不同的 shell 命令变体重试同一操作。"
+        )
+    }
 }
 
-/// Reset the terminal hint counter (called at the start of each run).
+/// Reset the terminal hint counter and failed-tool tracker (called at
+/// the start of each run).
 pub fn reset_terminal_hint_counter() {
     TERMINAL_HINT_COUNT.store(0, Ordering::Relaxed);
+    if let Ok(mut set) = FAILED_TOOLS_THIS_RUN.lock() {
+        set.clear();
+    }
 }
 
 /// Push a `ToolResult` struct into context (batch path, after budget

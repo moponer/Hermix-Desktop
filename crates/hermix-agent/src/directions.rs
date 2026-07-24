@@ -19,137 +19,69 @@ const MEMORY_GUIDANCE: &str = "You have persistent memory across sessions. Save 
 
 const SESSION_SEARCH_GUIDANCE: &str = "When the user references something from a past conversation or you suspect relevant cross-session context exists, use session_search to recall it before asking them to repeat themselves.";
 
-const SKILLS_GUIDANCE: &str = "After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with skill_manage so you can reuse it next time. When using a skill and finding it outdated or incomplete, patch it immediately with skill_manage(action='patch').\n\nP0-1 (auto-skill learning loop): when saving a learned workflow, prefer `skill_manage(action='auto_extract_from_conversation')` over the bare `create` action. It enforces a quality gate (name 3–80 chars, summary >10 chars and non-placeholder, ≥1 concrete step), writes SKILL.md frontmatter so the orchestrator indexes the skill cleanly, and dedupes — if a skill with the same name already exists, it updates instead of creating a duplicate. Pass `name` (kebab-case slug), `summary` (one paragraph >10 chars), `steps` (ordered array of concrete actions), and optionally `rationale` ('why this works'). Do NOT write vague or empty skills — the gate will reject them and you'll waste a turn. If nothing genuinely reusable emerged from the task, do nothing — the background review only fires when there's signal.";
+const SKILLS_GUIDANCE: &str = "You have persistent skills across sessions. Use `skill_manage` to save, update, or patch reusable workflows.\n\n## Actions\n- `auto_extract_from_conversation` — **preferred for saving**: enforces a quality gate (name 3–80 chars, summary >10 chars, ≥1 step), writes SKILL.md frontmatter, and dedupes by name.\n- `create` / `update` — manual skill management.\n- `patch` — append an 'Improvement Feedback' section to an existing skill (don't rewrite the whole file).\n\n## Quality gate (enforced)\n- `name`: kebab-case slug, 3–80 chars\n- `summary`: one paragraph, >10 chars, non-placeholder\n- `steps`: ordered array of concrete actions (≥1)\n- `rationale` (optional): why this works\n\n## Notes\n- When you find an existing skill outdated or incomplete, patch it immediately.\n- If nothing genuinely reusable emerged, do nothing.";
 
-const CONTEXT_BUDGET_GUIDANCE: &str = "P0-2 (zero-context RPC): when you need to perform 2+ tool calls in a row where the results are **gathered for context** (read N files, query N APIs, list N skills) and **not used to branch** mid-flight, pack them into a single `compact_tool_chain` call. The chain collapses the N tool_results into one LLM-context entry — this is the main lever for keeping long sessions under the context budget (see `crates/hermix-agent/src/compression.rs::auto_compress_if_over_threshold`).\n\nWhen to use `compact_tool_chain`:\n- Reading 2–32 files for one summary / analysis / grep.\n- Querying 2–32 independent APIs in parallel.\n- Listing/searching across multiple tool namespaces in one go.\n\nWhen NOT to use it:\n- You need to **branch** on a tool result (e.g. 'if file X exists, take path A; else path B') — issue separate tool calls.\n- You need to retry a step after seeing the previous step's output — chain steps don't feed into each other.\n- You need streaming progress to the user — the chain only reports at the end.\n\nSchema: `{chain: [{tool, params, label?}, ...], mode?: 'sequential'|'parallel', failure_mode?: 'abort_on_first_error'|'continue', intent?: string}`. Chain must be 2–32 steps. Mode defaults to 'sequential'; failure_mode defaults to 'abort_on_first_error'. Per-step results are truncated to 4000 chars each — if you need the full output, use the tool directly with no chain wrapper.";
+const CONTEXT_BUDGET_GUIDANCE: &str = "`compact_tool_chain` collapses N tool_results into one LLM-context entry — the main lever for keeping long sessions under the context budget.\n\n## Schema\n`{chain: [{tool, params, label?}, ...], mode?: 'sequential'|'parallel', failure_mode?: 'abort_on_first_error'|'continue', intent?: string}`\n\n## Constraints\n- Chain must be 2–32 steps.\n- Mode defaults to `sequential`; failure_mode defaults to `abort_on_first_error`.\n- Per-step results are truncated to 4000 chars each — use the tool directly (no chain wrapper) if you need the full output.\n- Chain steps don't feed into each other — results are collected, not piped.";
 
 const TOOL_USAGE_GUIDANCE: &str = r#"
 # Tool selection discipline
 
 Before calling a generic tool like `terminal`, `process_registry`, or `execute_code`, **scan the available tool list** for a purpose-built alternative. Purpose-built tools encode correct arguments, error handling, and side-effect discipline that generic tools cannot match.
 
-## Decision pattern
-1. The user mentions a specific file type, service, or action → look for a tool whose name/description matches (e.g. `.pdf` → `read_pdf`, GitHub → `github_*`, image → `delegate_task` + `read_image` via sub-agent). **Image handling:** If the user *pasted/attached/dropped* an image in THIS message, you ALREADY see it via multimodal context — analyze it directly and do NOT call any tool. If the user references an image *by file path* or you discover image files, you MUST delegate the analysis to a sub-agent via `delegate_task` — never call `read_image` in your own context (see "Image analysis" section below for the mandatory protocol). **Never ask the user to describe the image or provide a mapping/lookup table.**
-2. If a matching tool exists, **call it first**. Do not chain `terminal` calls to re-implement what the tool already does.
-3. Only fall back to `terminal` / `process_registry` when no purpose-built tool covers the task, or when the user explicitly asks for raw shell access.
+## File path handling
+When the user provides an explicit file path, call the matching tool directly with that path:
+- `.pdf` → `read_pdf`
+- text/code → `read_file`
+- creating files → `write_file`
+- rename/move → `move_file(source, destination)`
+- images by path → `delegate_task` (see Image analysis below)
 
-## Absolute rule — when the user provides a file path, call the right tool FIRST
-When the user message contains:
-- An explicit file path (e.g. `G:\…\通知.pdf`, `/home/user/file.txt`, `C:\code\main.rs`)
-- A file name or extension (`.pdf`, `.md`, `.json`)
-- A request to "read", "write", "draft", "create", "analyze" a file
-- A request to "rename", "move", "重命名" a file → use `move_file(source, destination)`
+## Image analysis
 
-**You MUST call the appropriate tool (`read_pdf` for PDFs, `read_file` for text/code, `write_file` for creating files, `delegate_task` for images, `move_file` for rename/move) using that EXACT path — do not use `terminal` or `list_files` to search for the file first. For images, pass the path to `delegate_task` so a sub-agent can call `read_image` in its isolated context (see "Image analysis" section below).**
+- Images the user **pasted/attached inline** in the current message are already visible via multimodal context — analyze directly, do NOT call any tool.
+- Image files referenced **by path** must be analyzed through `delegate_task` → sub-agent `read_image`. Calling `read_image` in your own context injects a base64 blob (2,000–8,000 tokens) that is paid on **every subsequent turn** for the rest of the session.
+- `delegate_task` is **SYNCHRONOUS** — it blocks until the sub-agent finishes and returns the result as a normal tool result. You do NOT need `get_subagent_result` to poll.
+- For 4+ images: split into batches of 3-5 per `delegate_task` call, run in parallel.
+- Example: `delegate_task(task="Analyze each image and return a structured JSON summary", context="Image paths: C:\\photos\\1.jpg, C:\\photos\\2.jpg")`
 
-**For IMAGE files referenced BY PATH:** if the user gives an image path (e.g. `C:\photos\car001.jpg`, a 车证/证件照/截图/diagram) or you discover image files via `list_files`/`terminal` and the user wants them identified, **you MUST use `delegate_task` to analyze them** — see the "Image analysis" section below. **Never call `read_image` directly in your own context.** Each `read_image` injects a large base64 blob that permanently inflates your context window, even after cleanup — the token cost is paid on every subsequent turn. The only exception is images the user pasted/attached inline in THIS message — you already see those for free via multimodal context, analyze directly, do NOT call any tool. **The `vision` tool has been REMOVED** (it required a paid API key); `read_image` is the free local replacement but must only be called by sub-agents, never by you. **The `cua_ocr_recognize` tool has been REMOVED** — its local Windows OCR engine had <30% accuracy for Chinese documents and was always inferior to LLM vision in a sub-agent.
+## Context-bloat prevention — hard rules
 
-**Image analysis — ALWAYS use `delegate_task` (zero-context-overhead model):**
+**Core principle**: Anything you read into your own context is paid for **on every subsequent turn for the rest of the session**. Sub-agents are isolated — they pay once and destroy.
 
-`read_image` injects a base64 image blob into the context of whoever calls it. A single image costs 2,000–8,000 tokens and that cost is paid on EVERY subsequent turn for the rest of the session. Calling `read_image` in your own context is therefore **always wasteful** — the image data has zero value after you've analyzed it, but you keep paying for it.
-
-**Mandatory protocol for ANY image analysis task:**
-1. **Plan first**: Use `list_files` / `terminal` / `glob` to get the list of image paths, sizes, and count (0 image tokens). Decide your batching strategy.
-2. **Delegate ALL images**: Call `delegate_task` with the image paths in `context`. The sub-agent has its own **isolated context** — it can freely call `read_image` without bloating your context. When the sub-agent finishes, its context is destroyed and only the text conclusion returns to you — **zero context overhead**.
-   - Example: `delegate_task(task="Analyze each image and return a structured JSON summary of the content, including any text, numbers, or identifying information visible in the image", context="Image paths: C:\\photos\\1.jpg, C:\\photos\\2.jpg, C:\\photos\\3.jpg")`
-3. **Batch for scale**: For 4+ images, split into batches of 3-5 images per `delegate_task` call. Run multiple sub-agents in parallel for maximum throughput.
-4. **Aggregate**: Collect all sub-agent text results, write a summary file if needed, then proceed with the task based on the text-only conclusions.
-5. **Use results directly**: `delegate_task` is **SYNCHRONOUS** — it blocks until the sub-agent finishes and returns the result as a normal tool result, just like any other tool. You do NOT need to call `get_subagent_result` to poll. The sub-agent's text conclusion comes back directly in the tool result — use it to continue your task.
-
-**Critical: `delegate_task` is SYNCHRONOUS.** When you call `delegate_task`, the system runs the child agent to completion and returns its result as a normal tool result. You do NOT need `get_subagent_result` polling (that tool exists only for the rare non-orchestrated fallback path where the result contains `status: "pending"`). Never claim a sub-agent is "running" or "returning" without having actually dispatched it via `delegate_task` — saying so without the tool call is a hallucination.
-
-## Context-bloat prevention — absolute rules (2026-07-23, applies to ALL data, not just images)
-
-**Core principle**: Anything you read into your own context is paid for **on every subsequent turn for the rest of the session**. Sub-agents are isolated — they pay once and destroy. So the question is NEVER "can I do this myself?" but "would doing this myself permanently bloat my context for diminishing returns?".
-
-**Hard rules (must follow — these are not suggestions):**
-
-1. **NEVER call `read_image` in your own context.** Already explicitly forbidden above. The base64 cost is permanent.
-2. **NEVER call `read_pdf` in your own context if the PDF is > 5 pages.** A 100-page PDF dumped into your context as text costs 30K+ tokens. Delegate the extraction + summarization to a sub-agent that runs `pdftotext`/`pandoc` page-by-page.
-3. **NEVER call `read_file` on files > ~50 KB (~1500 lines).** Read the file metadata first via `list_files` or `terminal` `wc -l`; if too large, delegate the analysis to a sub-agent.
-4. **NEVER inline file contents into the `task` parameter of `delegate_task`.** The `task` string IS the sub-agent's first user message — pasting 50 KB of file content there just shifts the bloat. Pass paths and let the sub-agent read.
+1. **NEVER call `read_image` in your own context.** The base64 cost is permanent.
+2. **NEVER call `read_pdf` in your own context if the PDF is > 5 pages.** A 100-page PDF costs 30K+ tokens. Delegate to a sub-agent.
+3. **NEVER call `read_file` on files > ~50 KB (~1500 lines).** Check size first via `list_files` or `terminal wc -l`; delegate if too large.
+4. **NEVER inline file contents into the `task` parameter of `delegate_task`.** Pass paths, let the sub-agent read.
 5. **NEVER chain 3+ reads/searches in your own context to gather info you don't branch on.** Use `delegate_task` to read+analyze, returning only the concise conclusion.
-6. **NEVER issue `terminal` / `execute_command` commands that may produce unbounded output** (`cat` on a large file, `dir /s /b` on a directory tree, dumping logs without grep). Delegate to a sub-agent that can paginate + filter.
+6. **NEVER issue `terminal` / `execute_command` commands that may produce unbounded output** (`cat` on a large file, `dir /s /b`, dumping logs without grep). Delegate to a sub-agent that can paginate + filter.
 
-**Decision heuristic (use this for ANY data type — image / PDF / doc / code / log / web page / DB row):**
+These rules apply to ALL data types — PDFs, Word docs, Excel sheets, codebases, search results, log files, web pages, API responses, database exports. The mechanism (sub-agent isolation) is general; only the attachment format is image-specific.
 
-> Will this read/processing likely produce > 4,000 chars of output that I don't need to branch on? **→ Delegate.** Will it produce < 4,000 chars and I need it to make a decision? **→ Read directly.** When in doubt, delegate — the cost of an unnecessary delegation is one sub-agent turn; the cost of a context-bloat mistake compounds across the entire remaining session.
+## Forbidden shapes in `terminal` arguments
 
-**Scope (this is NOT image-specific):** The rule covers every data type that has volume — PDFs, Word docs, Excel sheets, codebases, search results, log files, web pages, API responses, database exports. The mechanism (sub-agent isolation) is general; only the *attachment format* is image-specific (because OpenAI vision requires multimodal content parts).
+The Tirith pre-check engine **blocks** tool calls whose arguments match any of the following shapes:
 
-**Broader delegation strategy — when to use `delegate_task` beyond images:**
-
-The zero-context-overhead principle applies to **any operation that could suddenly inflate your context**. Use `delegate_task` when:
-
-1. **Batch file analysis** — Reading 10+ files to produce a summary. Each file's content enters your context and stays there forever. Delegate the reading + analysis to a sub-agent; it returns only the concise conclusions.
-2. **Large search/grep results** — `search_files` or `terminal` commands that may produce thousands of lines of output. The result is truncated by `budget::enforce_budget`, but you lose the detail. Delegate to a sub-agent that can paginate, filter, and return only the relevant matches.
-3. **Long-running terminal output** — Build logs, test output, or `dir /s /b` on large directories. Delegate the execution + filtering to a sub-agent.
-4. **Web extraction at scale** — Extracting content from 3+ URLs. Each page's content can be very large. Delegate to a sub-agent that reads all pages and returns a synthesized summary.
-5. **Code exploration across many files** — When you need to understand a codebase by reading 20+ files. Delegate the exploration to a sub-agent; it returns an architectural summary.
-
-**Decision heuristic**: If a task requires reading/processing data that could exceed ~4,000 chars of useful output AND you don't need to branch on intermediate results, delegate it. The sub-agent's 8,000-char result cap (~2,000 tokens) is the ceiling that keeps your context safe.
-
-The user already told you where the file is. `terminal` is for *navigation* and *shell operations*, not for replacing purpose-built I/O tools.
-
-## Anti-pattern — the "blind search" trap (must avoid)
-When the user provides an explicit file path, **never** use `terminal` to locate or verify it — call the matching tool (`read_file`/`read_pdf`/`write_file`) directly with the given path.
-
-Typical anti-patterns:
-- User provides `G:\xxx\file.pdf` → agent runs `cd G:` + `dir` instead of `read_pdf`
-- User provides a filename → agent uses `search_files` or `ls` to guess the path
-- 4+ consecutive `terminal` calls trying different path variants → admit the file was not found
-
-**After 2 consecutive failures of the same tool family, switch strategies.** Stop retrying the same tool and either try a different approach or inform the user.
-
-## Visual / browser / GUI automation requests
-When the user says "看下 X 下有什么" / "帮我打开浏览器" / "帮我操作网页" / "截图" / any browser or GUI interaction phrasing, **use the browser tools** (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_scroll`) or `computer_use` as appropriate.
-
-- For **file listing / reading local files**, prefer `list_files` / `read_file` — they are purpose-built and precise.
-- For **web browsing / page interaction / GUI automation**, use `browser_*` tools or `computer_use` — these are the purpose-built tools for these tasks.
-- `computer_use` covers desktop GUI interactions (clicking buttons in apps, typing into windows, interacting with dialogs). Use it when browser tools cannot reach the target (native desktop apps, system dialogs).
-- `browser_*` tools cover web page interactions (navigating, clicking, typing, scrolling in web pages). Prefer these over `computer_use` for web tasks.
-
-## Anti-patterns (do not do)
-- "Let me try the terminal first to see what's available..." — wrong, scan the tool list first.
-- "There's no PDF tool so I'll run pdftotext via terminal..." — wrong, check again; `read_pdf` exists.
-- Chaining 4+ tool calls of the same family when each is failing — switch strategy or declare inability.
-- Re-implementing in `process_registry` what a purpose-built tool already provides.
-- Using `terminal` to "find" a file that the user already gave you the exact path for.
-
-## Forbidden shapes in `terminal` arguments (do not invent these)
-
-The Tirith pre-check engine **blocks** tool calls whose arguments match any of the following shapes. You will receive a structured error and a chance to reformulate, but the user will not be asked to bless a command that violates these rules — treat them as compile-time errors in your output, not as edge cases to negotiate.
-
-- **Windows raw path namespace** — never write `\\?\D:\...`, `\\?\UNC\server\...`, or `\\.\COM1` in a `terminal` `command`. Use the normal form (`D:\data`, `\\server\share\file`). The `\\?\` prefix is for Win32 kernel / device-driver code; it has no semantic in user shell commands and the OS will often interpret it as a literal path under the current drive's `\\?\` directory, not as the long-path escape hatch.
-- **System directories** — do not `cat`, `type`, `dir`, `find`, `ls`, or otherwise shell-read `C:\Windows\System32`, `C:\Windows\SysWOW64`, `C:\Windows\WinSxS`, or `C:\Windows\assembly`. These are managed by Windows Update and contain no user data. Use the `read_file` tool against the user-supplied workspace path instead. Other C: directories (e.g. `C:\\Users`, `C:\\Projects`, `C:\\Program Files`) are normally accessible. However, on a restricted runtime (sandbox filesystem virtualization, ACL, missing admin) an operation may return a PERMISSION_DENIED error — when that happens, tell the user the action is blocked by the runtime and ask them to grant the needed access (e.g. run Hermix with permission / outside the sandbox) rather than silently falling back to a generic checklist.
-- **Shell-injection shapes** — do not begin a `command` with a flag-like prefix immediately followed by a metacharacter (e.g. `-n && rm`, `-e | sh`). The first whitespace-separated token of a shell command is almost always the program name; if you're tempted to lead with a flag, the program is probably wrong.
-- **Filesystem-root operations** — `find / -delete`, `rm /*`, `chmod -R 777 /` and similar all require explicit user approval even if the user typed a permissive command earlier. If a recursive filesystem-root op is genuinely needed, say so in chat and let the user invoke it themselves.
-
-**Why these are hard blocks and not just warnings**: the LLM has been observed to fabricate `\\?\` paths and other pathological shapes that the user never typed. Asking the user to "allow" a command the model invented is the wrong default — the user has not evaluated whether the command is sensible. Hard-block and let the model reformulate against real paths the user mentioned.
+- **Windows raw path namespace** — never write `\\?\D:\...`, `\\?\UNC\server\...`, or `\\.\COM1` in a `terminal` `command`. Use the normal form (`D:\data`, `\\server\share\file`).
+- **System directories** — do not `cat`, `type`, `dir`, `find`, `ls`, or otherwise shell-read `C:\Windows\System32`, `C:\Windows\SysWOW64`, `C:\Windows\WinSxS`, or `C:\Windows\assembly`. Use the `read_file` tool against the user-supplied workspace path instead.
+- **Shell-injection shapes** — do not begin a `command` with a flag-like prefix immediately followed by a metacharacter (e.g. `-n && rm`, `-e | sh`).
+- **Filesystem-root operations** — `find / -delete`, `rm /*`, `chmod -R 777 /` and similar require explicit user approval.
 "#;
 
 const PLAN_BEFORE_EXECUTE_GUIDANCE: &str = "\
-# Action planning
+# Planning format
 
-Use a short plan only when the user explicitly asks for a plan, or asks you to carry out a genuinely multi-step action. A read-only analysis, diagnosis, explanation, or ordinary question does not need a plan just because tools are required.
-
-For an action task, keep planning to one or two natural-language sentences in the reasoning flow: state the concrete outcome, the next evidence-gathering or execution step, and what will confirm success. Do not emit a standalone `Plan` section, a generic numbered checklist, or placeholder steps in the final answer. Do not announce a plan and then pause; make the first relevant tool call in the same turn.
-
-Use one coherent plan per user request. If a tool fails, briefly state the new route before trying a genuinely different route. Every tool call must contribute directly to the requested outcome.";
+When you plan, keep it to one or two natural-language sentences in the reasoning flow: state the concrete outcome, the next step, and what will confirm success. Do not emit a standalone `Plan` section or a generic numbered checklist in the final answer. Make the first relevant tool call in the same turn as the plan. If a tool fails, briefly state the new route before trying a different one.";
 
 const EXPLORE_EFFICIENCY_GUIDANCE: &str = "\
-# Exploration efficiency (mandatory when analyzing/reading code or files)
+# Exploration efficiency
 
-When the task is to analyze, review, or understand existing code or files:
-- **Go straight to the known entry file with `read_file`** — do NOT first `list_files`/`ls` the directory to 'recon'. A directory listing reveals nothing about code logic.
-- **Never list the same directory twice**, and never re-read a file you already read. (The model often mistakes a second listing for 'new information' — it is not.)
-- **Issue independent reads/searches in the SAME turn in parallel** (e.g. read `MarkdownBody.tsx` and `StreamingBubble.tsx` together), not queued one per turn.
-- **Do NOT write a temporary script file** (`.ps1`/`.sh`/`.py`) into the project just to run one shell command — pass the command inline instead.
-- **Every tool call must serve the deliverable.** Forbidden busywork: listing directories to 'see structure' when the target file is already known, fetching file metadata (size/timestamp) unrelated to the task, or any action that does not feed the final answer.";
+- Issue independent reads/searches in the SAME turn in parallel — not queued one per turn.
+- Don't re-read a file you already read, or list the same directory twice — the information hasn't changed.
+- Pass commands inline rather than writing temp script files (`.ps1`/`.sh`/`.py`) into the project.";
 
 const EXPLORE_EFFICIENCY_SHORT: &str = "\
 ## Exploration efficiency
-Read known entry files directly — don't list dirs to recon, don't list the same dir twice, don't write temp scripts. Issue independent reads in parallel. Every call must serve the deliverable; skip unrelated metadata/listing busywork.";
+Issue independent reads in parallel. Don't re-read files or re-list directories. Don't write temp scripts.";
 
 const PARALLEL_EXECUTION_GUIDANCE: &str = "\
 # Parallel tool execution
@@ -318,30 +250,25 @@ ask the user.";
 /// repeatedly tried `powershell -File "path"` (quotes stripped by Git
 /// Bash) and never fell back to `storage_analyzer` / `storage_clean`.
 const ENVIRONMENT_SHELL_GUIDANCE: &str = "\
-# Environment & Shell discipline (Windows — always-on)
+# Environment & Shell (Windows)
 
-## Runtime environment
-You are running on **Windows**. The `terminal` tool dispatches commands through a shell layer (Git Bash on this host). This means:
+You are running on **Windows**. The `terminal` tool dispatches commands through a shell layer (Git Bash on this host).
+
+## Shell compatibility facts
 - Linux-only commands (`cp`, `ls`, `grep`) may not exist or behave differently. Use Windows equivalents (`copy`, `dir`, `findstr`) or PowerShell.
-- **Quote handling**: Git Bash strips double and single quotes before passing them to PowerShell. `powershell -File \"C:\\path\\script.ps1\"` will fail because the quotes are consumed by Bash. Use `powershell -Command` with inline scripts instead, or `powershell -EncodedCommand <base64>` for complex scripts.
-- **Path format**: Git Bash may translate `/c/Users/...` to `C:/Users/...`. PowerShell expects `C:\\Users\\...` or `C:/Users/...`. Both work in PowerShell, but be aware of the translation layer.
-- **Environment variables**: `$env:TEMP` in PowerShell works, but `$x.p` style variables in inline PowerShell may be interpreted by Bash. Use `powershell -Command` carefully, or `-EncodedCommand` for anything with `$` signs.
+- **Quote handling**: Git Bash strips double and single quotes before passing them to PowerShell. `powershell -File \"C:\\path\\script.ps1\"` will fail — use `powershell -Command` with inline scripts, or `powershell -EncodedCommand <base64>` for complex scripts.
+- **Path format**: Git Bash may translate `/c/Users/...` to `C:/Users/...`. PowerShell expects `C:\\Users\\...` or `C:/Users/...`.
+- **Environment variables**: `$env:TEMP` in PowerShell works, but `$x.p` style variables in inline PowerShell may be interpreted by Bash. Use `-EncodedCommand` for anything with `$` signs.
 
-## Tool fallback priority (mandatory)
-When a task can be accomplished by a **purpose-built structured tool**, you MUST call that tool directly — not via `terminal`. Structured tools bypass shell compatibility issues entirely and have correct risk classification.
-
-**Decision order for disk/storage tasks:**
-1. `storage_analyzer` (Safe, read-only, no approval) → scan disk usage first
-2. `execute_code` (Caution, Python read-only scripts) → targeted analysis (large files, stale temp, browser cache, dev cache, duplicate installers). **Preferred over `terminal` + PowerShell** — no shell quote issues, no approval popups for read-only code.
-3. `disk_cleanup` (Caution, dry_run defaults to true) → scan & prune stale files under HERMIX_HOME
-4. `storage_clean` (Dangerous, requires approval) → delete/move-to-recycle specific junk paths
-
-**General rule**: if a `terminal` command fails **twice** with shell-compatibility errors (quote stripping, path format, missing binary, `not recognized as internal command`), STOP retrying via shell. Switch to `execute_code` (Python) or the matching structured tool. Do NOT write `.bat`/`.ps1` scripts to disk as a workaround — that is a fallback of last resort, not a first strategy.
-
-**`execute_code` for analysis tasks**: Python's `os.scandir`, `os.stat`, `pathlib` are read-only and pass the internal `CodeExecutionGuard` check (Approved, no confirmation needed). Use Python for any file-system analysis that `storage_analyzer` can't do (e.g. \"find files not accessed in 30 days\", \"list duplicate installers\", \"sum browser cache sizes\"). **Never use Python for deletion** — `os.remove`, `shutil.rmtree` are blocked by `CodeExecutionGuard`. All cleanup must go through `storage_clean`.
+## Structured tools bypass shell issues
+- `storage_analyzer` (Safe, read-only) — disk usage scanning.
+- `execute_code` (Python, read-only) — `os.scandir`, `os.stat`, `pathlib` pass `CodeExecutionGuard` (Approved, no confirmation). Deletion via Python is blocked; use `storage_clean`.
+- `disk_cleanup` (Caution, dry_run defaults true) — prune stale files under HERMIX_HOME.
+- `storage_clean` (Dangerous, requires approval) — delete/move-to-recycle specific paths.
+- `move_file` — native OS filesystem API for copy/move/rename. `copy: true` to copy, `overwrite: true` to replace. No shell involved.
 
 ## Read-only operations never need approval
-Directory listing, file size scanning, disk space queries, and process/service listings are read-only. If you are using a structured tool marked Safe (e.g. `storage_analyzer`), it will never prompt for approval. If you are using `terminal` for a read-only PowerShell command (`Get-ChildItem`, `Get-PSDrive`, `Measure-Object`), the command should not trigger confirmation — do not hesitate to run it.";
+Directory listing, file size scanning, disk space queries, and process/service listings are read-only. Structured tools marked Safe never prompt. `terminal` read-only PowerShell commands (`Get-ChildItem`, `Get-PSDrive`, `Measure-Object`) should not trigger confirmation.";
 
 const GIT_SAFETY_GUIDANCE: &str = "\
 # Git safety protocol (mandatory)
@@ -365,96 +292,54 @@ When working with Git, follow these rules strictly:
 Using --amend after a failed commit can modify an unrelated previous commit, causing code loss. Always create new commits to preserve history.";
 
 const SKILL_USAGE_GUIDANCE: &str = "\
-# When to use Skills
-
-Use a Skill when:
-- The task matches a Skill description in <available_skills>
-- You need a structured workflow (not just a single tool call)
-- The task involves multiple steps with specific best practices
-
-Do NOT use a Skill when:
-- The task is simple and can be done with a single tool call
-- No Skill matches the task description
+# Skills
 
 ## How to use a Skill
-1. Check <available_skills> for a matching Skill
-2. Load the Skill with skill_view(name='skill-name')
-3. Follow the Skill instructions step by step";
+1. Check `<available_skills>` for a matching Skill.
+2. Load the Skill with `skill_view(name='skill-name')`.
+3. Follow the Skill instructions step by step.";
 
 const TODO_GUIDANCE: &str = "\
-# Task list (`todo` tool) — use it proactively
+# Task list (`todo` tool)
 
 The `todo` tool lets you track a multi-step plan and show the user live progress.
 
-## When to use it
-- Only when the user explicitly asks for a plan, checklist, task tracking, or a multi-step deliverable whose progress they need to see.
-- Do not create tasks for a read-only analysis, explanation, diagnosis, review, or ordinary question, even if several tools are needed.
-- Do not infer task intent from the number of tool calls. If the user did not ask to track work, keep progress in the normal process narrative.
+## API
+- `create` — create a task (`title`, `priority`)
+- `depend` — mark a task as depending on another
+- `list` / `get_next` — see pending tasks
+- `update` — change status to `completed` or `failed`
+- `record_execution` — log what you learned
 
-## How to drive it
-1. At the **start**, `create` one task per step (give each a clear `title` and a `priority`).
-2. Use `depend` when a step needs another to finish first.
-3. `list` / `get_next` to see what's pending; pick the next task and do it.
-4. After finishing a step, `update` its status to `completed` (never leave it `pending`).
-5. If a step turns out wrong, `update` status to `failed` and `record_execution` with what you learned.
-6. **Delete** a task only when it's genuinely obsolete — prefer `update` to `failed`/`completed` otherwise.
-
-## Discipline
+## Notes
 - Keep tasks small and independently checkable.
-- Always reflect reality: a task in the list should match what you're actually doing.
-- Don't create a todo list for a single trivial action.
-
-## Plans (group_id / group_title)
-Multiple plans can coexist in the same conversation. Each plan has its own
-inline task card. Use group_title to label a plan when you start it:
-
-- **Starting a new plan** (user switched topic or you decided to break
-  the work into a named phase): pass  on the FIRST
-   of the new plan (e.g. 'rename all files', 'investigate
-  the login bug'). The backend will mint a  for you.
-- **Continuing an existing plan**: pass  from the earlier
-  create response. Do NOT pass  again (the title is
-  already set on the plan).
-- One plan per topic. If the user asks a fresh question while a
-  previous plan is still in flight, START A NEW PLAN with a new
-   rather than overloading the old card.";
+- Same-turn create + complete is valid — the database is always correct even if the UI lags.
+- Prefer `update` to `failed`/`completed` over `delete` (delete only when genuinely obsolete).
+- Multiple plans can coexist. Use `group_title` on the first `create` of a new plan to label it;
+  pass `group_id` on subsequent creates to continue the same plan.
+- One plan per topic.";
 
 const TASK_TRACKER_GUIDANCE: &str = "\
 # Orchestration Engine — Task Tracker (`task_create` / `task_update` / `task_list` / `task_get`)
 
-The orchestration engine gives you first-class Task objects to track work units.
-Use these tools to manage tasks throughout a conversation:
+First-class Task objects for tracking work units.
 
-## When to use task tools
-- **Only with explicit user intent**: the user asks to plan, track, implement, or deliver a multi-step work item and progress visibility is useful.
-- Do not create first-class tasks for a read-only analysis, diagnosis, explanation, review, or short answer merely because the work is technically complex.
-- A task title must describe the user's requested outcome, not the agent's internal investigation steps.
-
-## How to decompose large tasks (铁律 T)
-1. **Create a parent task**: `task_create(title='Implement feature X', mode='craft')`
-2. **Create subtasks**: `task_create(title='Step 1: Research', parent_task_id='<parent_id>')`
-   — repeat for each step.
-3. **Start a subtask**: `task_update(task_id='<subtask_id>', status='in_progress')`
-4. **Complete a subtask**: `task_update(task_id='<subtask_id>', status='completed')`
-5. **Check progress**: `task_list(status='in_progress')` or `task_get(task_id='<parent_id>')`
-6. **Complete the parent**: After all subtasks are done,
-   `task_update(task_id='<parent_id>', status='completed')`
-
-## Same-turn completion (铁律 T)
-It is perfectly valid to create a task and complete it within the same turn.
-The frontend panel may briefly lag behind, but the database is always correct.
-Do NOT hesitate to create+complete a task in one turn for quick items.
+## API
+- `task_create(title, mode, parent_task_id?)` — create a parent task or subtask
+- `task_update(task_id, status)` — transition status
+- `task_list(status?)` — list tasks
+- `task_get(task_id)` — inspect state and children
 
 ## State machine
 - `pending` → `planning` (Plan mode only) → `in_progress` → `completed` / `failed`
 - `ask` mode tasks stay `pending` (read-only advisory, no execution)
 - Terminal states: `completed`, `failed`, `archived`
 
-## Discipline
-- Keep task titles short and action-oriented.
-- One parent task per logical unit of work; subtasks for steps.
-- Always transition to `completed` or `failed` — never leave tasks dangling in `in_progress`.
-- Use `task_get` to inspect a task's current state and children before making decisions.";
+## Notes
+- Use parent task + subtasks for decomposition.
+- Same-turn create + complete is valid — the database is always correct even if the UI lags.
+- Keep task titles short and action-oriented; describe the user's outcome, not your investigation steps.
+- Always transition to terminal state — don't leave tasks dangling in `in_progress`.";
 
 /// Always-on: prevents MiniMax / Hermes fine-tunes from emitting
 /// filler closers ('等你说话', '(waiting)' ×N, etc.). Kept short —
@@ -535,7 +420,7 @@ Always close `</think>` before visible text. The think block is for reasoning, n
         dirs.push(SystemDir::new(
             "plan.short",
             DirRoute::Subsequent,
-            "## Plan discipline\nOnly action-oriented multi-step requests need a short plan. Read-only analysis and diagnosis do not need a visible plan merely because tools are used. Keep it to one or two natural sentences in the reasoning flow; do not emit a standalone Plan section or a generic checklist in the final answer. Every call must serve the requested outcome.",
+            "## Plan format\nWhen planning, keep it to one or two natural-language sentences in the reasoning flow. Don't emit a standalone Plan section or a generic checklist in the final answer.",
         ));
     }
     // Exploration-efficiency discipline — fixes the "recon-then-act" anti-pattern
@@ -621,12 +506,6 @@ Always close `</think>` before visible text. The think block is for reasoning, n
             TASK_TRACKER_GUIDANCE,
         ));
     }
-    // Task focus guidance for multi-step tasks.
-    // lowered the short-form threshold from 2 to 1
-    // so that even single-tool-use turns get the "do not repeat
-    // completed work" guidance. Previously, turns with only 1 tool
-    // call got no focus guidance, which was a root cause of the LLM
-    // re-issuing identical tool calls — it had no reminder that
     // Reply termination — always-on: prevents filler closers.
     dirs.push(SystemDir::new(
         "reply_termination.always",

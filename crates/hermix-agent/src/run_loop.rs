@@ -536,6 +536,18 @@ impl AgentLoop {
         }
 
         for result in results {
+            // Record failed tools for the terminal hint's ping-pong
+            // prevention: if a structured alternative already failed,
+            // the hint won't suggest it again.
+            if result.is_error {
+                if let Some(name) = tool_calls
+                    .iter()
+                    .find(|tc| tc.id == result.tool_call_id)
+                    .map(|tc| tc.function.name.as_str())
+                {
+                    crate::tool_result_processor::record_tool_failure(name);
+                }
+            }
             // Apply terminal failure hint: if the terminal command failed
             // due to shell-compatibility issues, append a structured
             // suggestion to use move_file / read_file / execute_code instead.
@@ -777,7 +789,7 @@ impl AgentLoop {
         self.do_post_tool_iteration(
             ctx,
             tool_calls,
-            results,
+            results.clone(),
             state,
             session_id,
             tool_errors,
@@ -794,11 +806,36 @@ impl AgentLoop {
         // --- Convergence detection ---
         let visible_text_this_turn = response.message.content.as_deref().unwrap_or("");
         let has_visible = Self::assistant_visible_text_after_think_blocks(&response.message);
+        // Build per-tool failure/success lists for the convergence detector.
+        // This lets it detect "terminal keeps failing even though read_file
+        // succeeds" — a pattern the old aggregate error count missed.
+        let failed_tool_names: Vec<&str> = results
+            .iter()
+            .filter(|r| r.is_error)
+            .filter_map(|r| {
+                tool_calls
+                    .iter()
+                    .find(|tc| tc.id == r.tool_call_id)
+                    .map(|tc| tc.function.name.as_str())
+            })
+            .collect();
+        let succeeded_tool_names: Vec<&str> = results
+            .iter()
+            .filter(|r| !r.is_error)
+            .filter_map(|r| {
+                tool_calls
+                    .iter()
+                    .find(|tc| tc.id == r.tool_call_id)
+                    .map(|tc| tc.function.name.as_str())
+            })
+            .collect();
         let convergence_signal = state.convergence_detector.check(
             has_visible,
             tool_calls.len(),
             turn_error_count as usize,
             visible_text_this_turn,
+            &failed_tool_names,
+            &succeeded_tool_names,
         );
         match convergence_signal {
             crate::convergence_detector::ConvergenceSignal::Converge {
@@ -1493,6 +1530,10 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
         tools: Option<Vec<ToolSchema>>,
         on_chunk: Option<Box<dyn Fn(StreamChunk) + Send + Sync>>,
     ) -> Result<AgentResult, AgentError> {
+        // Reset per-run terminal hint counter so a new user message
+        // gets a fresh allowance of failure hints.
+        crate::tool_result_processor::reset_terminal_hint_counter();
+
         let _run_started = Instant::now();
         info!(
             msg_count = messages.len(),

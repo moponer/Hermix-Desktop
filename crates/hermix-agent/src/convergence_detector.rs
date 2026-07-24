@@ -71,6 +71,9 @@ pub(crate) struct ConvergenceConfig {
     /// Max consecutive turns where ALL tool calls errored.
     /// This triggers a hard stop (Converge).
     pub max_error_turns: u32,
+    /// Max consecutive turns where the SAME tool errored (even if
+    /// other tools succeeded). This triggers an advisory WARN.
+    pub max_per_tool_error_turns: u32,
     /// Max consecutive turns with similar visible text before issuing
     /// a WARN (not a hard stop).
     pub max_similar_content_turns: u32,
@@ -85,12 +88,15 @@ impl Default for ConvergenceConfig {
             // The LLM might legitimately be doing a long chain of reads.
             // Do NOT kill the loop — just nudge the LLM to summarize.
             max_no_progress_turns: 15,
-            // 8 consecutive turns of ALL-error tool calls → hard stop.
-            // This is the only hard-stop signal: the LLM is truly stuck
-            // because every tool it tries fails.
-            // Raised from 5 to 8: some errors are transient (network,
-            // rate-limit) and the LLM might succeed on retry.
-            max_error_turns: 8,
+            // 3 consecutive turns of ALL-error tool calls → hard stop.
+            // Lowered from 8: if every tool fails for 3 turns straight,
+            // the LLM is truly stuck. 8 was too many — the user would
+            // watch 8 rounds of failures before the loop stopped.
+            max_error_turns: 3,
+            // 3 consecutive turns where the SAME tool errored → advisory.
+            // Even if other tools succeeded, if one tool keeps failing
+            // the LLM should switch approach.
+            max_per_tool_error_turns: 3,
             // 5 consecutive turns of >80% similar visible text → advisory.
             // The LLM might be giving progress updates that look similar
             // but aren't stuck. Warn but don't kill.
@@ -109,6 +115,10 @@ pub(crate) struct ConvergenceDetector {
     no_progress_count: u32,
     /// Consecutive turns where ALL tool calls errored.
     error_loop_count: u32,
+    /// Per-tool consecutive error counts. Key = tool name, value =
+    /// consecutive turns where this tool errored. Reset when the tool
+    /// succeeds or when a different tool errors.
+    per_tool_error_counts: std::collections::HashMap<String, u32>,
     /// Consecutive turns where visible text was >threshold similar to the previous turn.
     similar_content_count: u32,
     /// Last turn's visible text (for similarity comparison).
@@ -118,6 +128,9 @@ pub(crate) struct ConvergenceDetector {
     no_progress_warned: bool,
     /// Whether a SimilarContent warning has already been issued this run.
     similar_content_warned: bool,
+    /// Set of tools for which we've already issued a per-tool error
+    /// warning this run. Prevents repeated warnings for the same tool.
+    per_tool_warned: std::collections::HashSet<String>,
 }
 
 impl ConvergenceDetector {
@@ -156,12 +169,16 @@ impl ConvergenceDetector {
     /// - `tool_call_count`: number of FRESH tool calls made this turn (0 = no tools)
     /// - `tool_error_count`: number of tool calls that errored this turn
     /// - `visible_text`: the visible text produced this turn (empty if none)
+    /// - `failed_tool_names`: names of tools that errored this turn
+    /// - `succeeded_tool_names`: names of tools that succeeded this turn
     pub(crate) fn check(
         &mut self,
         has_visible_text: bool,
         tool_call_count: usize,
         tool_error_count: usize,
         visible_text: &str,
+        failed_tool_names: &[&str],
+        succeeded_tool_names: &[&str],
     ) -> ConvergenceSignal {
         // --- No-progress detection (advisory, not hard stop) ---
         // Tools were called but no visible text was produced.
@@ -188,6 +205,36 @@ impl ConvergenceDetector {
                     count
                 ),
             };
+        }
+
+        // --- Per-tool error tracking (advisory WARN) ---
+        // Even if not ALL tools errored, if the SAME tool keeps failing,
+        // the LLM should switch approach. This catches the case where
+        // the LLM interleaves a failing terminal call with a successful
+        // read_file — the old logic would reset error_loop_count, masking
+        // the terminal failure pattern.
+        for name in succeeded_tool_names {
+            self.per_tool_error_counts.remove(*name);
+        }
+        for name in failed_tool_names {
+            let count = self.per_tool_error_counts.entry((*name).to_string()).or_insert(0);
+            *count += 1;
+        }
+        // Check if any tool has exceeded the per-tool threshold
+        for (name, &count) in &self.per_tool_error_counts {
+            if count >= self.config.max_per_tool_error_turns && !self.per_tool_warned.contains(name) {
+                self.per_tool_warned.insert(name.clone());
+                return ConvergenceSignal::Warn {
+                    reason: ConvergenceReason::NoProgressWithTools,
+                    consecutive_count: count,
+                    message: format!(
+                        "Tool `{}` has failed for {} consecutive turns. \
+                         You MUST switch to a different approach or tool — do NOT retry `{}` again. \
+                         If no alternative exists, tell the user what you've tried and ask for guidance.",
+                        name, count, name
+                    ),
+                };
+            }
         }
 
         // --- Error loop detection (HARD STOP) ---
@@ -249,6 +296,8 @@ impl ConvergenceDetector {
     pub(crate) fn reset(&mut self) {
         self.no_progress_count = 0;
         self.error_loop_count = 0;
+        self.per_tool_error_counts.clear();
+        self.per_tool_warned.clear();
         self.similar_content_count = 0;
         self.last_visible_text.clear();
         self.no_progress_warned = false;
@@ -287,22 +336,22 @@ mod tests {
         });
 
         assert_eq!(
-            d.check(false, 2, 0, ""),
+            d.check(false, 2, 0, "", &[], &[]),
             ConvergenceSignal::Continue
         );
         assert_eq!(
-            d.check(false, 1, 0, ""),
+            d.check(false, 1, 0, "", &[], &[]),
             ConvergenceSignal::Continue
         );
         // Third no-progress turn: advisory warning, NOT hard stop
-        let signal = d.check(false, 1, 0, "");
+        let signal = d.check(false, 1, 0, "", &[], &[]);
         match signal {
             ConvergenceSignal::Warn { reason: ConvergenceReason::NoProgressWithTools, .. } => {}
             other => panic!("expected Warn(NoProgressWithTools), got {:?}", other),
         }
         // Fourth no-progress turn: no repeat warning (already warned)
         assert_eq!(
-            d.check(false, 1, 0, ""),
+            d.check(false, 1, 0, "", &[], &[]),
             ConvergenceSignal::Continue
         );
     }
@@ -314,12 +363,12 @@ mod tests {
             ..Default::default()
         });
 
-        d.check(false, 2, 0, ""); // 1
-        d.check(false, 1, 0, ""); // 2
-        d.check(true, 0, 0, "Done!"); // visible text -> reset
-        d.check(false, 1, 0, ""); // 1 again
+        d.check(false, 2, 0, "", &[], &[]); // 1
+        d.check(false, 1, 0, "", &[], &[]); // 2
+        d.check(true, 0, 0, "Done!", &[], &[]); // visible text -> reset
+        d.check(false, 1, 0, "", &[], &[]); // 1 again
         assert_eq!(
-            d.check(false, 1, 0, ""),
+            d.check(false, 1, 0, "", &[], &[]),
             ConvergenceSignal::Continue // still at 2, not 3
         );
     }
@@ -333,12 +382,12 @@ mod tests {
 
         // Turn 1: 2 tools, both error
         assert_eq!(
-            d.check(false, 2, 2, ""),
+            d.check(false, 2, 2, "", &["terminal", "read_file"], &[]),
             ConvergenceSignal::Continue
         );
         // Turn 2: 1 tool, error -> hard stop (Converge)
         assert_eq!(
-            d.check(false, 1, 1, ""),
+            d.check(false, 1, 1, "", &["terminal"], &[]),
             ConvergenceSignal::Converge {
                 reason: ConvergenceReason::ErrorLoop,
                 consecutive_count: 2,
@@ -354,9 +403,51 @@ mod tests {
             ..Default::default()
         });
 
-        d.check(false, 2, 1, ""); // 2 tools, 1 error -> not all errors
+        d.check(false, 2, 1, "", &["terminal"], &["read_file"]); // 2 tools, 1 error -> not all errors
         assert_eq!(
-            d.check(false, 2, 1, ""),
+            d.check(false, 2, 1, "", &["terminal"], &["read_file"]),
+            ConvergenceSignal::Continue
+        );
+    }
+
+    #[test]
+    fn test_per_tool_error_triggers_warning() {
+        // Even if other tools succeed, if the SAME tool keeps failing,
+        // a per-tool warning should fire.
+        let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
+            max_per_tool_error_turns: 3,
+            ..Default::default()
+        });
+
+        // terminal fails 2 turns, but read_file succeeds — no warning yet
+        d.check(false, 2, 1, "", &["terminal"], &["read_file"]);
+        d.check(false, 2, 1, "", &["terminal"], &["read_file"]);
+        // Third consecutive terminal failure -> warning
+        let signal = d.check(false, 2, 1, "", &["terminal"], &["read_file"]);
+        match signal {
+            ConvergenceSignal::Warn { message, .. } => {
+                assert!(message.contains("terminal"));
+                assert!(message.contains("switch"));
+            }
+            other => panic!("expected Warn for terminal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_per_tool_error_resets_on_success() {
+        let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
+            max_per_tool_error_turns: 3,
+            ..Default::default()
+        });
+
+        // terminal fails 2 turns
+        d.check(false, 1, 1, "", &["terminal"], &[]);
+        d.check(false, 1, 1, "", &["terminal"], &[]);
+        // terminal succeeds -> counter reset
+        d.check(false, 1, 0, "", &[], &["terminal"]);
+        // terminal fails again — should be at 1, not 3
+        assert_eq!(
+            d.check(false, 1, 1, "", &["terminal"], &[]),
             ConvergenceSignal::Continue
         );
     }
@@ -368,9 +459,9 @@ mod tests {
     }
 
     #[test]
-    fn test_default_error_loop_threshold_is_8() {
+    fn test_default_error_loop_threshold_is_3() {
         let config = ConvergenceConfig::default();
-        assert_eq!(config.max_error_turns, 8);
+        assert_eq!(config.max_error_turns, 3);
     }
 
     #[test]
@@ -387,16 +478,16 @@ mod tests {
             ..Default::default()
         });
 
-        d.check(true, 0, 0, "The file has been created successfully");
-        d.check(true, 0, 0, "The file has been created successfully.");
-        let signal = d.check(true, 0, 0, "The file has been created successfully!");
+        d.check(true, 0, 0, "The file has been created successfully", &[], &[]);
+        d.check(true, 0, 0, "The file has been created successfully.", &[], &[]);
+        let signal = d.check(true, 0, 0, "The file has been created successfully!", &[], &[]);
         match signal {
             ConvergenceSignal::Warn { reason: ConvergenceReason::SimilarContent, .. } => {}
             other => panic!("expected Warn(SimilarContent), got {:?}", other),
         }
         // No repeat warning
         assert_eq!(
-            d.check(true, 0, 0, "The file has been created successfully!!"),
+            d.check(true, 0, 0, "The file has been created successfully!!", &[], &[]),
             ConvergenceSignal::Continue
         );
     }
