@@ -310,23 +310,22 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
           >
             <RefreshCw size={14} />
           </button>
-          {app.is_packaged ? (
-            <button
-              className="btn btn--primary"
-              onClick={handleRun}
-            >
-              <Play size={14} /> 启动应用
-            </button>
-          ) : (
-            <button
-              className="btn btn--primary"
-              onClick={handlePackage}
-              disabled={packaging}
-            >
-              <Package size={14} />
-              {packaging ? "打包中..." : "打包为 EXE"}
-            </button>
-          )}
+          <button
+            className="btn btn--primary"
+            onClick={handleRun}
+            title="运行（自动编译并启动，用于本地测试）"
+          >
+            <Play size={14} /> 运行
+          </button>
+          <button
+            className="btn"
+            onClick={handlePackage}
+            disabled={packaging}
+            title="打包为可分发到其他电脑的独立 EXE"
+          >
+            <Package size={14} />
+            {packaging ? "打包中..." : "打包"}
+          </button>
         </div>
       </div>
     </div>

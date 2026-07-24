@@ -68,26 +68,23 @@ export function AppCard({ app, onView, onPackage, onRun, onDelete, packaging }: 
           <Eye size={14} />
           详情
         </button>
-        {app.is_packaged ? (
-          <button
-            className="custom-app-card__btn custom-app-card__btn--run"
-            onClick={onRun}
-            title="启动应用"
-          >
-            <Play size={14} />
-            启动
-          </button>
-        ) : (
-          <button
-            className="custom-app-card__btn custom-app-card__btn--package"
-            onClick={onPackage}
-            disabled={packaging}
-            title="打包为独立 EXE"
-          >
-            <Package size={14} />
-            {packaging ? "打包中..." : "打包"}
-          </button>
-        )}
+        <button
+          className="custom-app-card__btn custom-app-card__btn--run"
+          onClick={onRun}
+          title="运行（自动编译并启动，用于本地测试）"
+        >
+          <Play size={14} />
+          运行
+        </button>
+        <button
+          className="custom-app-card__btn custom-app-card__btn--package"
+          onClick={onPackage}
+          disabled={packaging}
+          title="打包为可分发到其他电脑的独立 EXE"
+        >
+          <Package size={14} />
+          {packaging ? "打包中..." : "打包"}
+        </button>
         <button
           className="custom-app-card__btn custom-app-card__btn--delete"
           onClick={onDelete}

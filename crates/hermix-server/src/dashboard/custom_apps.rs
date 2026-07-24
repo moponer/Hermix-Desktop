@@ -7,7 +7,7 @@
 //!   PUT    /api/custom-apps/{id}         — update app code
 //!   DELETE /api/custom-apps/{id}         — delete an app
 //!   POST   /api/custom-apps/{id}/package — package app as standalone EXE
-//!   POST   /api/custom-apps/{id}/run     — launch a packaged app
+//!   POST   /api/custom-apps/{id}/run     — build (latest source) and launch the app
 //!   GET    /api/custom-apps/{id}/icon    — get app custom icon (PNG)
 
 use std::sync::Arc;
@@ -198,7 +198,12 @@ pub async fn package_app(
     })))
 }
 
-/// POST /api/custom-apps/{id}/run — launch a packaged app.
+/// POST /api/custom-apps/{id}/run — build (latest source) and launch the app.
+///
+/// Always recompiles the app's source (backend.ts + ui.tsx via esbuild)
+/// before launching, so the running build reflects the latest code — this
+/// is the "test locally" path. Packaging for distribution reuses the same
+/// `package_plugin` step but without spawning the window.
 pub async fn run_app(
     State(state): State<HttpServerState>,
     Path(id): Path<String>,
@@ -209,6 +214,18 @@ pub async fn run_app(
         (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": format!("应用不存在: {id}") })),
+        )
+    })?;
+
+    // Build first so the run reflects the latest source (dev/test loop).
+    manager.package_plugin(&id).await.map_err(|e| {
+        let status = match &e {
+            hermix_plugin::PluginError::EsbuildNotFound(_) => StatusCode::SERVICE_UNAVAILABLE,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (
+            status,
+            Json(json!({ "error": format!("编译应用失败: {e}") })),
         )
     })?;
 

@@ -177,7 +177,7 @@ pub async fn custom_app_package(id: String) -> Result<serde_json::Value, String>
     }))
 }
 
-/// Run a packaged custom app.
+/// Run a custom app (build latest source then launch).
 #[tauri::command]
 pub async fn custom_app_run(id: String) -> Result<serde_json::Value, String> {
     let shell_path = resolve_shell_path();
@@ -192,6 +192,12 @@ pub async fn custom_app_run(id: String) -> Result<serde_json::Value, String> {
     let entry = manager
         .get_plugin(&id)
         .ok_or_else(|| format!("应用不存在: {id}"))?;
+
+    // 先编译最新源码，确保运行的是最新代码（测试场景：改完即看）
+    manager
+        .package_plugin(&id)
+        .await
+        .map_err(|e| format!("编译应用失败: {e}"))?;
 
     let wm = PluginWindowManager::new(shell_path);
     wm.open_plugin(&entry)
