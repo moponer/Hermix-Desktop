@@ -46,7 +46,7 @@ interface RightSidebarProps {
   onAddFileToChat?: (path: string) => void;
   /** Callback when a file should be previewed from the file explorer. */
   onPreviewFile?: (path: string, name: string) => void;
-  /** 2026-07-08 (user): 允许外部控制当前标签（如点目录 chip 直接切到「电脑」） */
+  /** (user): 允许外部控制当前标签（如点目录 chip 直接切到「电脑」） */
   activeTab?: RightTab;
   onTabChange?: (tab: RightTab) => void;
 }
@@ -250,14 +250,12 @@ export function PreviewPanel({
   }, [previewState]);
 
   // Fetch file content when artifact changes.
-  //
   // This MUST live in an effect, not in the render body — calling
   // setState during render triggers:
-  //   "Cannot update a component (`App`) while rendering a
-  //    different component (`RightSidebar`)"
+  // "Cannot update a component (`App`) while rendering a
+  // different component (`RightSidebar`)"
   // because the state update propagates to App's onSelectArtifact
   // callback and ends up re-rendering App mid-render.
-  //
   // The cancellation flag prevents a stale async resolution from
   // overwriting the state of a newer artifact after the user has
   // already switched files.
@@ -493,7 +491,7 @@ export function PreviewPanel({
               to the legacy colored tile if no extension match. */}
           {(() => {
             // Modal header icon — sized to dominate the row
-            // (主人 2026-06-22: "head 上面的可以大一点").
+            // (用户 "head 上面的可以大一点").
             // 40 / 34 px reads as a real file tab header, not a
             // little badge tucked next to a filename.  At 40px
             // the dog-ear, label and brand color all stay crisp.
@@ -704,14 +702,17 @@ export function PreviewPanel({
                         {children}
                       </a>
                     ),
-                    // 2026-07-14: Reuse MarkdownBody's CodeBlock so
+                    // Reuse MarkdownBody's CodeBlock so
                     // fenced code blocks in markdown previews get
                     // syntax highlighting + language label + copy
                     // button, matching the chat bubble experience.
                     code({ className, children, ...props }) {
                       const match = /language-(\w+)/.exec(className || "");
                       const codeString = String(children).replace(/\n$/, "");
-                      if (match) return <CodeBlock language={match[1]} code={codeString} />;
+                      if (match) {
+                        const dark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+                        return <CodeBlock language={match[1]} code={codeString} isDark={dark} />;
+                      }
                       return <code {...props}>{children}</code>;
                     },
                   }}
@@ -847,7 +848,7 @@ export function PreviewPanel({
 }
 
 export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArtifact, workspaceRoot, rawCount, onAddFileToChat, onPreviewFile, activeTab: activeTabProp, onTabChange }: RightSidebarProps) {
-  // 2026-07-08 (user): activeTab 可被外部控制（点目录 chip → 切到「电脑」）。
+  // (user): activeTab 可被外部控制（点目录 chip → 切到「电脑」）。
   // 传了 activeTab/onTabChange 走受控；否则用内部 state。
   const [internalTab, setInternalTab] = useState<RightTab>("products");
   const activeTab = activeTabProp ?? internalTab;
@@ -870,10 +871,9 @@ export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArt
   }, [artifacts, filter, query]);
 
   // Deselect when filtered selection disappears.
-  //
   // Was previously done inline in the render body which triggered
-  //   "Cannot update a component (`App`) while rendering a
-  //    different component (`RightSidebar`)"
+  // "Cannot update a component (`App`) while rendering a
+  // different component (`RightSidebar`)"
   // because onSelectArtifact ultimately calls setState on App. The
   // setState-during-render phase must run as an effect so it fires
   // after the current render commits.
@@ -1333,7 +1333,7 @@ function ComputerTab({
             <span className="text-text-faint text-[11px]">选择目录…</span>
           )}
           {breadcrumbs.map((seg, i) => (
-            <span key={i} className="computer-crumb-group">
+            <span key={`crumb-${seg.name || i}`} className="computer-crumb-group">
               <button
                 type="button"
                 onClick={() => navigateTo(seg.path)}
@@ -1543,7 +1543,7 @@ function FileExplorerContextMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
 
-  // 2026-07-17: previously the parent hardcoded menuH=200 to clamp the
+  // previously the parent hardcoded menuH=200 to clamp the
   // menu inside the viewport — but the menu actually grows with item
   // count (file menu has 6 items, dir menu has 3; dividers add more
   // visual height). In short windows a 6-item menu could overflow the
@@ -1778,7 +1778,7 @@ function BrowserTab() {
           <div className="space-y-1">
             {history.map((h, i) => (
               <button
-                key={i}
+                key={`hist-${h.path || i}`}
                 onClick={() => setUrl(h)}
                 className="block w-full text-left px-2 py-1 rounded text-[11px] text-text-muted hover:bg-bg-hover truncate transition-colors"
               >

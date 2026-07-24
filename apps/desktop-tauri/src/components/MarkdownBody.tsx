@@ -14,12 +14,13 @@ import { Children, isValidElement, memo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { oneLight, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Check, Copy, X } from "lucide-react";
+import { useSafeTimeout } from "../hooks/useSafeTimeout";
 
 /* ── Path linkification ──────────────────────────────────────── */
 
-// 2026-06-22: switched `\w` to `\p{L}\p{N}` with the `u` flag so
+// switched `\w` to `\p{L}\p{N}` with the `u` flag so
 // Chinese filenames (e.g. `D:\data\发票汇总.xlsx`) match. The old
 // regex only matched ASCII paths, which is why the user's
 // assistant reply "已生成 D:\data\发票汇总.xlsx …" rendered the
@@ -27,7 +28,7 @@ import { Check, Copy, X } from "lucide-react";
 // `\p{L}` matches any Unicode letter, `\p{N}` any digit, which
 // covers Latin + Han + digits + underscores via \w equivalents,
 // minus the underscore which we add back below.
-// 2026-07-14: added leading/trailing boundary lookarounds so CJK
+// added leading/trailing boundary lookarounds so CJK
 // prose like "我们/他们.txt" no longer false-matches. A path must now
 // sit next to start-of-string / whitespace / punctuation (incl. the
 // Chinese 。，、；：etc. covered by \p{P}) on both sides. The documented
@@ -106,10 +107,20 @@ const LANG_LABEL: Record<string, string> = {
   md: "Markdown", txt: "Text",
 };
 
-// 2026-07-14: Exported so PreviewPanel can reuse the same code
+/** Reads the current dark-mode state from the DOM.
+ *  useTheme() applies the `.dark` class to <html> and <body>.
+ *  Reading it here (during render) is safe because it's idempotent
+ *  and the parent re-renders when the theme changes, which
+ *  re-invokes this function with the updated value. */
+function readIsDark(): boolean {
+  return typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+}
+
+// Exported so PreviewPanel can reuse the same code
 // block rendering (language label + copy button + syntax highlighting)
 // instead of rendering plain <pre><code> elements.
-function CodeBlockImpl({ language, code }: { language: string; code: string }) {
+function CodeBlockImpl({ language, code, isDark = false }: { language: string; code: string; isDark?: boolean }) {
+  const safeSetTimeout = useSafeTimeout();
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
   const handleCopy = async () => {
@@ -117,20 +128,19 @@ function CodeBlockImpl({ language, code }: { language: string; code: string }) {
       await navigator.clipboard.writeText(code);
       setCopied(true);
       setFailed(false);
-      setTimeout(() => setCopied(false), 1500);
+      safeSetTimeout(() => setCopied(false), 1500);
     } catch {
       // Non-secure context / denied permission / Tauri webview edge cases.
       setFailed(true);
       setCopied(false);
-      setTimeout(() => setFailed(false), 1500);
+      safeSetTimeout(() => setFailed(false), 1500);
     }
   };
   return (
-    // 浅色独立代码块(参考 IDE 截图风格):
-    //   - wrapper 浅灰 #fafafa + 1px 标准边框
-    //   - header 白 #ffffff "浮"在代码区之上(比 code 亮一档)
-    //   - code 区继承 wrapper 浅灰,oneLight 语法高亮
-    //   - 浅气泡 + 浅代码块通过 1-2 档色调差形成"独立容器"感
+    // 代码块容器: 背景跟随主题 (light: #fafafa / dark: #1a1d23)
+    // - wrapper 底色 + 1px 标准边框
+    // - header 比 code 区亮一档 (light: #fff / dark: #22252b)
+    // - code 区继承 wrapper 底色, 语法高亮按主题切换 (oneLight / oneDark)
     <div
       className="not-prose my-2.5 overflow-hidden rounded-md"
       style={{
@@ -138,12 +148,12 @@ function CodeBlockImpl({ language, code }: { language: string; code: string }) {
         border: "1px solid var(--color-bg-code-border)",
       }}
     >
-      {/* Header: 比 code 区亮一档(白) + 底边线 subtle 1px */}
+      {/* Header: 比 code 区亮一档 + 底边线 subtle 1px */}
       <div
         className="flex items-center justify-between px-4 py-2 text-[11px] border-b"
         style={{
           background: "var(--color-bg-code-header)",
-          color: "var(--color-text-faint)",
+          color: "var(--color-text-muted)",
           borderColor: "var(--color-border-subtle)",
         }}
       >
@@ -152,8 +162,8 @@ function CodeBlockImpl({ language, code }: { language: string; code: string }) {
         </span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-black/5"
-          style={{ color: "var(--color-text-faint)" }}
+          className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-bg-hover"
+          style={{ color: "var(--color-text-muted)" }}
         >
           {copied ? <Check size={11} /> : failed ? <X size={11} /> : <Copy size={11} />}
           <span className="font-medium">{copied ? "已复制" : failed ? "复制失败" : "复制"}</span>
@@ -161,16 +171,16 @@ function CodeBlockImpl({ language, code }: { language: string; code: string }) {
       </div>
       <SyntaxHighlighter
         language={language}
-        style={oneLight}
+        style={isDark ? oneDark : oneLight}
         customStyle={{
           margin: 0,
           borderRadius: 0,
           fontSize: "13px",
           padding: "16px",  // 四边统一 16px inset
-          background: "transparent",  // 继承 wrapper 浅灰
+          background: "transparent",  // 继承 wrapper 底色
           lineHeight: "1.65",
         }}
-        // 2026-07-15: Removed preTagProps — react-syntax-highlighter
+        // Removed preTagProps — react-syntax-highlighter
         // passes it through to the DOM <pre> element, causing a React
         // warning "does not recognize the `preTagProps` prop".  The
         // className we needed (code-block-body) is now applied via CSS
@@ -188,13 +198,14 @@ function CodeBlockImpl({ language, code }: { language: string; code: string }) {
   );
 }
 
-// 2026-07-14: memo so already-rendered code blocks skip re-tokenization
+// memo so already-rendered code blocks skip re-tokenization
 // on every streaming chunk. This is the real per-chunk cost (not bundle
 // size — the highlighter is statically imported). Output depends only on
-// (language, code), so the comparator is exact.
+// (language, code, isDark), so the comparator is exact — isDark is
+// included so theme switches force a re-render with the new palette.
 export const CodeBlock = memo(
   CodeBlockImpl,
-  (a, b) => a.language === b.language && a.code === b.code,
+  (a, b) => a.language === b.language && a.code === b.code && a.isDark === b.isDark,
 );
 
 /* ── Top-level body renderer ──────────────────────────────── */
@@ -210,6 +221,7 @@ export interface MarkdownBodyProps {
 
 export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
   const handlePathClick = onPathClick ?? (() => {});
+  const isDark = readIsDark();
   return (
     <div className="prose max-w-none">
       <ReactMarkdown
@@ -224,12 +236,12 @@ export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || "");
             const codeString = String(children).replace(/\n$/, "");
-            if (match) return <CodeBlock language={match[1]} code={codeString} />;
+            if (match) return <CodeBlock language={match[1]} code={codeString} isDark={isDark} />;
             return <code {...props}>{children}</code>;
           },
-          // 2026-07-16 v3: LLM 输出里的 `- [ ]` / `- [x]` 任务标记
+          // v3: LLM 输出里的 `- [ ]` / `- [x]` 任务标记
           // 完全不渲染任何 marker。普通无序列表本来就有 disc 圆点，
-          // 在文本里再画方框/勾选字符是冗余噪音（主人反馈）。直接
+          // 在文本里再画方框/勾选字符是冗余噪音（用户反馈）。直接
           // 返回 null，让 <li> 的默认 disc marker 承担列表语义即可。
           input({ type, ...props }) {
             if (type === "checkbox") return null;
