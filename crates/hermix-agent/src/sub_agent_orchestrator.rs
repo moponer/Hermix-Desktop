@@ -101,6 +101,11 @@ pub struct SubAgentLineage {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubAgentStatus {
+    /// Dispatched: the child loop has been spawned on its own tokio task but
+    /// has not yet produced a terminal result. Introduced for the async
+    /// `execute_async` path so the parent agent gets a `sub_agent_id`
+    /// immediately instead of blocking on the child to completion.
+    Spawned,
     Started,
     Completed,
     Failed,
@@ -306,17 +311,10 @@ impl SubAgentOrchestrator {
     /// prove `Send` through that cycle, which it cannot. Boxing into
     /// `dyn Future + Send` erases the child's future type and breaks the
     /// cycle.
-    pub fn execute(self: &Arc<Self>, req: SubAgentRequest) -> BoxSendFuture<String> {
-        let this = self.clone();
-        Box::pin(async move { this.execute_inner(req).await })
-    }
-
-    async fn execute_inner(self: Arc<Self>, req: SubAgentRequest) -> String {
-        let sub_agent_id = format!("subagent-{}", uuid::Uuid::new_v4());
-        let started_at = Utc::now();
-
-        let mut lineage = SubAgentLineage {
-            sub_agent_id: sub_agent_id.clone(),
+    /// Build a fresh lineage record for a sub-agent with the given status.
+    fn build_lineage(&self, req: &SubAgentRequest, sub_agent_id: &str, status: SubAgentStatus) -> SubAgentLineage {
+        SubAgentLineage {
+            sub_agent_id: sub_agent_id.to_string(),
             parent_session_id: self.cfg.parent_session_id.clone(),
             task: req.task.clone(),
             context: req.context.clone(),
@@ -325,8 +323,8 @@ impl SubAgentOrchestrator {
             depth: req.child_depth,
             max_depth: req.max_depth,
             parent_budget_remaining_usd: req.parent_budget_remaining_usd,
-            status: SubAgentStatus::Started,
-            started_at,
+            status,
+            started_at: Utc::now(),
             ended_at: None,
             total_turns: 0,
             prompt_tokens: None,
@@ -335,14 +333,16 @@ impl SubAgentOrchestrator {
             error: None,
             role: req.role,
             parent_task_id: req.parent_task_id.clone(),
-        };
+        }
+    }
 
-        // Best-effort lineage persistence — failures must never break delegation.
-        self.persist_lineage(&lineage).await;
-
-        // Build and run the child.
-        let outcome = self.run_child(&req, &sub_agent_id).await;
-
+    /// Update a base lineage record with the outcome of a child run and persist it.
+    async fn persist_terminal_lineage(
+        &self,
+        base: &SubAgentLineage,
+        outcome: &Result<hermix_core::AgentResult, SubAgentError>,
+    ) {
+        let mut lineage = base.clone();
         match outcome {
             Ok(result) => {
                 lineage.status = SubAgentStatus::Completed;
@@ -353,8 +353,78 @@ impl SubAgentOrchestrator {
                     lineage.estimated_cost_usd = usage.estimated_cost;
                 }
                 lineage.ended_at = Some(Utc::now());
-                self.persist_lineage(&lineage).await;
+            }
+            Err(e) => {
+                lineage.status = match e {
+                    SubAgentError::Timeout => SubAgentStatus::Timeout,
+                    SubAgentError::Cancelled => SubAgentStatus::Cancelled,
+                    SubAgentError::Agent(_) => SubAgentStatus::Failed,
+                };
+                lineage.error = Some(e.to_string());
+                lineage.ended_at = Some(Utc::now());
+            }
+        }
+        self.persist_lineage(&lineage).await;
+    }
 
+    /// Execute a `delegate_task` request **asynchronously**: spawn the child
+    /// loop on its own detached tokio task, persist a `Spawned` lineage record
+    /// immediately, and return a JSON envelope containing `sub_agent_id` right
+    /// away. The parent agent is NOT blocked on the child to completion — it
+    /// receives the id and can call `get_subagent_result(sub_agent_id)` later
+    /// (or keep doing other work / dispatch more sub-agents in parallel).
+    ///
+    /// This is the root-cause fix for the old sync behaviour where the main
+    /// agent's single tool call blocked up to `timeout` seconds waiting for the
+    /// child, which both hurt UX and tempted the LLM to hallucinate "waiting
+    /// for the sub-agent to return" instead of actually dispatching.
+    pub fn execute_async(self: &Arc<Self>, req: SubAgentRequest) -> BoxSendFuture<String> {
+        let this = self.clone();
+        Box::pin(async move {
+            let sub_agent_id = format!("subagent-{}", uuid::Uuid::new_v4());
+            let lineage = this.build_lineage(&req, &sub_agent_id, SubAgentStatus::Spawned);
+            this.persist_lineage(&lineage).await;
+
+            // Detach the child run — it persists its own terminal lineage when done.
+            let this2 = this.clone();
+            let req2 = req.clone();
+            let base_lineage = lineage.clone();
+            let sub_agent_id_for_task = sub_agent_id.clone();
+            tokio::spawn(async move {
+                let outcome = this2.run_child(&req2, &sub_agent_id_for_task).await;
+                this2.persist_terminal_lineage(&base_lineage, &outcome).await;
+            });
+
+            json!({
+                "sub_agent_id": sub_agent_id,
+                "status": "spawned",
+                "polling_tool": "get_subagent_result",
+                "note": "Sub-agent is now running in the background and does NOT block your turn. Continue with other work, or call get_subagent_result(sub_agent_id) to fetch its output when ready.",
+            })
+            .to_string()
+        })
+    }
+
+    pub fn execute(self: &Arc<Self>, req: SubAgentRequest) -> BoxSendFuture<String> {
+        let this = self.clone();
+        Box::pin(async move { this.execute_inner(req).await })
+    }
+
+    async fn execute_inner(self: Arc<Self>, req: SubAgentRequest) -> String {
+        let sub_agent_id = format!("subagent-{}", uuid::Uuid::new_v4());
+        let lineage = self.build_lineage(&req, &sub_agent_id, SubAgentStatus::Started);
+
+        // Best-effort lineage persistence — failures must never break delegation.
+        self.persist_lineage(&lineage).await;
+
+        // Build and run the child.
+        let outcome = self.run_child(&req, &sub_agent_id).await;
+
+        // Persist the terminal state (updates lineage fields + writes file).
+        self.persist_terminal_lineage(&lineage, &outcome).await;
+
+        match outcome {
+            Ok(result) => {
                 let (final_text, was_truncated) = extract_final_assistant_text(&result.messages);
                 json!({
                     "sub_agent_id": sub_agent_id,
@@ -376,23 +446,12 @@ impl SubAgentOrchestrator {
                 .to_string()
             }
             Err(e) => {
-                let status = match &e {
-                    SubAgentError::Timeout => SubAgentStatus::Timeout,
-                    SubAgentError::Cancelled => SubAgentStatus::Cancelled,
-                    SubAgentError::Agent(_) => SubAgentStatus::Failed,
-                };
-                lineage.status = status;
-                lineage.error = Some(e.to_string());
-                lineage.ended_at = Some(Utc::now());
-                self.persist_lineage(&lineage).await;
-
                 json!({
                     "sub_agent_id": sub_agent_id,
-                    "status": match status {
-                        SubAgentStatus::Timeout => "timeout",
-                        SubAgentStatus::Cancelled => "cancelled",
-                        SubAgentStatus::Failed => "failed",
-                        _ => "failed",
+                    "status": match &e {
+                        SubAgentError::Timeout => "timeout",
+                        SubAgentError::Cancelled => "cancelled",
+                        SubAgentError::Agent(_) => "failed",
                     },
                     "task": req.task,
                     "error": e.to_string(),

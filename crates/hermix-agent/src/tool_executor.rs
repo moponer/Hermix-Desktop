@@ -264,7 +264,7 @@ impl AgentLoop {
                 // Orchestrator internally runs the child on its own
                 // `tokio::spawn` task, which erases the child future and breaks
                 // async recursion between parent / child `execute_tool_calls`.
-                let output = orch.execute(req).await;
+                let output = orch.execute_async(req).await;
                 orchestrated.push(ToolResult::ok(&tc.id, output));
             }
         }

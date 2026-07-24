@@ -217,7 +217,7 @@ impl ToolHandler for DelegateTaskHandler {
 
         tool_schema(
             "delegate_task",
-            "Delegate a task to a sub-agent with an isolated context. SYNCHRONOUS: the sub-agent runs to completion and its result is returned in this tool_result — there is nothing to wait for. When you see the tool_result, the sub-agent has already finished and you MUST continue the original task using the returned result.\n\n\
+            "Delegate a task to a sub-agent with an isolated context. SYNCHRONOUS: delegate_task blocks until the sub-agent finishes and returns its result as a normal tool result — just like any other tool. You do NOT need to call get_subagent_result to poll. The sub-agent's text conclusion (capped at ~8,000 chars) comes back directly in the tool result. Use it to continue your task.\n\n\
              # When to use\n\
              - The task is genuinely independent of your current focus (no shared state needed mid-task).\n\
              - You want a separate context (e.g. image analysis where you don't want the pixels in YOUR context).\n\

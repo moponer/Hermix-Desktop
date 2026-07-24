@@ -22,6 +22,7 @@ pub mod cronjob;
 pub mod cua;
 pub mod custom_app_manager;
 pub mod delegation;
+pub mod get_subagent_result;
 pub mod disk_cleanup;
 pub mod file;
 pub mod gpt_image;
@@ -125,6 +126,7 @@ pub fn register_all(
         Arc::new(crate::backends::delegation::SignalDelegationBackend::new())
             as Arc<dyn delegation::DelegationBackend>,
     );
+    get_subagent_result::register(registry);
     media_workflow::register(
         registry,
         Arc::new(media_workflow::PlanningWorkflowBackend::new())

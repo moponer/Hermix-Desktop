@@ -3,8 +3,9 @@
 //! Inspired by the upstream Hermes Python project's
 //! `DELEGATE_BLOCKED_TOOLS` constant (sub-agents cannot
 //! recursively delegate, cannot interact with the user, cannot
-//! write to shared memory, and cannot send messages to
-//! external platforms) and the `MAX_DELEGATE_DEPTH = 2` cap.
+//! write to shared memory, cannot send messages to external
+//! platforms, and cannot execute arbitrary shell commands)
+//! and the `MAX_DELEGATE_DEPTH = 2` cap.
 //!
 //! Implemented in Rust as a single auditable module that
 //! exposes:
@@ -79,6 +80,14 @@ use hermix_core::ToolSchema;
 /// - `cronjob` — scheduling guard. A child must NEVER
 /// schedule new jobs. The child runs to completion; it
 /// does not get to leave background timers behind.
+/// - `terminal` — execution guard. A sub-agent must NEVER run
+/// arbitrary shell commands. Code execution / file mutation that
+/// a task genuinely needs should be escalated back to the parent
+/// agent, which runs under the user's approval guardrail. Handing
+/// "go run this command" to an un-supervised child is exactly the
+/// escape we close here. Explore/Plan roles already exclude
+/// `terminal` via their read-only toolset; this entry hard-closes
+/// it for the General role too.
 /// - `delegate_task` is duplicated here as a string for
 /// explicit clarity in error messages. The deny-list is
 /// a const slice of `&'static str` so it's safe to embed
@@ -89,6 +98,7 @@ pub const BLOCKED_TOOLS_FOR_SUBAGENT: &[&str] = &[
     "memory",
     "send_message",
     "cronjob",
+    "terminal",
 ];
 
 /// Maximum delegate depth. The parent is depth 0, a direct
@@ -167,13 +177,14 @@ mod tests {
     }
 
     #[test]
-    fn blocklist_includes_the_five_dangerous_tools() {
+    fn blocklist_includes_the_known_dangerous_tools() {
         for required in &[
             "delegate_task",
             "clarify",
             "memory",
             "send_message",
             "cronjob",
+            "terminal",
         ] {
             assert!(
                 BLOCKED_TOOLS_FOR_SUBAGENT.contains(required),
@@ -189,16 +200,19 @@ mod tests {
 
     #[test]
     fn contains_blocked_tool_finds_blocked() {
+        // `terminal` is now in the blocklist; it appears before
+        // `memory` in the input, so it is the first match.
         let names = vec!["read_file", "terminal", "memory"];
         assert_eq!(
             contains_blocked_tool(&names).as_deref(),
-            Some("memory")
+            Some("terminal")
         );
     }
 
     #[test]
     fn contains_blocked_tool_returns_none_when_clean() {
-        let names = vec!["read_file", "terminal", "glob"];
+        // `terminal` is blocked, so a clean list must avoid it.
+        let names = vec!["read_file", "glob", "grep"];
         assert!(contains_blocked_tool(&names).is_none());
     }
 
@@ -227,11 +241,13 @@ mod tests {
         let filtered = filter_schemas_for_subagent(&schemas);
         let names: Vec<String> = filtered.iter().map(|s| s.name.clone()).collect();
         assert!(names.contains(&"read_file".to_string()));
-        assert!(names.contains(&"terminal".to_string()));
         assert!(names.contains(&"glob".to_string()));
+        // Blocked tools (memory, clarify) AND the execution guard
+        // (terminal) must all be stripped.
         assert!(!names.contains(&"memory".to_string()));
         assert!(!names.contains(&"clarify".to_string()));
-        assert_eq!(names.len(), 3);
+        assert!(!names.contains(&"terminal".to_string()));
+        assert_eq!(names.len(), 2);
     }
 
     #[test]
