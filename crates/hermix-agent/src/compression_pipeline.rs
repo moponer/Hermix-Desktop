@@ -208,22 +208,22 @@ fn is_already_a_dedup_marker(msg: &Message) -> bool {
 ///
 /// Dimensions (weights sum to 1.0):
 /// - `recency(0.25)` — position-based; later messages score higher.
-///   We have no per-message timestamp (`Message::execution_timeline`
-///   carries *events* during a turn, not the turn's own wall clock),
-///   so recency is approximated by message index.
+/// We have no per-message timestamp (`Message::execution_timeline`
+/// carries *events* during a turn, not the turn's own wall clock),
+/// so recency is approximated by message index.
 /// - `role_position(0.25)` — `system=1.0`, `tool=0.7`,
-///   `user=0.5`, `assistant=0.4`. Reflects that system messages
-///   carry rules the LLM must keep following.
+/// `user=0.5`, `assistant=0.4`. Reflects that system messages
+/// carry rules the LLM must keep following.
 /// - `frequency(0.15)` — same `tool_call_id` referenced by ≥ 1
-///   other message → bump. Catches "important tool result that
-///   downstream turns keep referring to".
+/// other message → bump. Catches "important tool result that
+/// downstream turns keep referring to".
 /// - `instructional_marker(0.15)` — content matches imperative
-///   patterns (`!`-commands, `run …`, `git …`, file paths ending
-///   in action verbs, `请`, `不要`, `must`, `never`). Hits a
-///   1.0 if the message looks like an instruction to the agent.
+/// patterns (`!`-commands, `run …`, `git …`, file paths ending
+/// in action verbs, `请`, `不要`, `must`, `never`). Hits a
+/// 1.0 if the message looks like an instruction to the agent.
 /// - `query_relevance(0.20)` — keyword overlap (CJK bigram +
-///   latin word) with the most recent `User` message. Zero when
-///   no query is set (e.g. `TokenScorer::new()` in tests).
+/// latin word) with the most recent `User` message. Zero when
+/// no query is set (e.g. `TokenScorer::new()` in tests).
 #[derive(Debug, Clone)]
 pub struct TokenScorer {
     /// Keywords extracted from the most recent user message.
@@ -245,8 +245,7 @@ impl TokenScorer {
     /// Build a scorer aware of the current task: extracts keywords
     /// (CJK bigrams + latin words ≥ 2 chars, minus stopwords) from
     /// the most recent `User` message in `messages`.
-    ///
-    /// This is the no-embedding proxy for Headroom's
+    /// /// This is the no-embedding proxy for Headroom's
     /// `semantic_centrality = cosine_similarity(embed(task), embed(block))`.
     /// Keyword overlap is a cruder signal but costs nothing and
     /// never increases binary size.
@@ -272,7 +271,6 @@ impl TokenScorer {
     pub fn score(&self, msg: &Message, all: &[Message], idx: usize) -> f64 {
         let n = all.len().max(1);
         // recency: linear ramp from 0.0 (oldest) to 1.0 (newest).
-        //
         // P2 note (2026-07-18): `idx` is the position within the
         // `messages` slice passed to *this* compress() call. It is
         // a correct recency proxy inside a single pass (messages
@@ -429,11 +427,11 @@ fn extract_keywords(text: &str) -> Vec<String> {
 /// of these hold (regardless of score):
 /// - it is pinned (`pin.is_pinned`)
 /// - it is within the last `protect_last_n` messages (recent
-///   context the LLM is actively building on)
+/// context the LLM is actively building on)
 /// - it looks like an instruction (`looks_like_instruction`) or is
-///   a `System` message
+/// a `System` message
 /// - its `tool_call_id` is referenced by ≥ 2 messages in the list
-///   (a tool result downstream turns keep referring to)
+/// (a tool result downstream turns keep referring to)
 ///
 /// **min_keep floor:** even when all of the above allow a drop,
 /// the function never lets `kept.len()` fall below `min_keep`.

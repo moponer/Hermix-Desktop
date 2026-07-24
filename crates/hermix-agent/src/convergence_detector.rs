@@ -136,15 +136,13 @@ impl ConvergenceDetector {
 
     /// Adjust the no-progress threshold based on the L1 Domain Mode
     /// preset's `max_stall_turns`.
-    ///
-    /// Each domain has a different tolerance for tool-only turns:
+    /// /// Each domain has a different tolerance for tool-only turns:
     /// - Code: 5 (compile-test cycle is short)
     /// - Research: 7 (multi-source gathering takes longer)
     /// - Write: 4 (writing should produce visible text quickly)
     /// - Operate: 3 (file ops should be fast)
     /// - Chat: 2 (no tools expected)
-    ///
-    /// Called once per turn from `ModeComposition::preset.max_stall_turns`.
+    /// /// Called once per turn from `ModeComposition::preset.max_stall_turns`.
     #[allow(dead_code)]
     pub(crate) fn apply_domain_max_stall(&mut self, max_stall_turns: u32) {
         if max_stall_turns > 0 {
@@ -153,8 +151,7 @@ impl ConvergenceDetector {
     }
 
     /// Record a completed turn and check for convergence.
-    ///
-    /// Parameters:
+    /// /// Parameters:
     /// - `has_visible_text`: whether the assistant produced user-visible text this turn
     /// - `tool_call_count`: number of FRESH tool calls made this turn (0 = no tools)
     /// - `tool_error_count`: number of tool calls that errored this turn

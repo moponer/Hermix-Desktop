@@ -1,6 +1,6 @@
 //! Per-run turn-level timing accumulators.
 //!
-//! Phase 5 (2026-07-04 follow-up): the 2 sibling `u64` fields
+//! Phase 5 (follow-up): the 2 sibling `u64` fields
 //! (`total_api_time_ms`, `total_tool_time_ms`) that used to live
 //! directly on `LoopState` were bridged back from `run()`'s
 //! loop-locals via 2 sibling arguments in `publish_from`. Folding

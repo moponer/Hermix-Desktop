@@ -16,8 +16,7 @@ pub struct FileSync {
 
 impl FileSync {
     /// Create a new FileSync instance.
-    ///
-    /// - `local_root`: Root directory on the local filesystem.
+    /// /// - `local_root`: Root directory on the local filesystem.
     /// - `remote_backend`: A `TerminalBackend` used to read/write files remotely.
     pub fn new(local_root: PathBuf, remote_backend: Arc<dyn TerminalBackend>) -> Self {
         Self {
@@ -32,8 +31,7 @@ impl FileSync {
     }
 
     /// Sync local files to the remote environment.
-    ///
-    /// For each path (relative to `local_root`), reads the local file and
+    /// /// For each path (relative to `local_root`), reads the local file and
     /// writes it to the same relative path on the remote backend.
     pub async fn sync_to_remote(&self, paths: &[PathBuf]) -> Result<(), AgentError> {
         for path in paths {
@@ -57,8 +55,7 @@ impl FileSync {
     }
 
     /// Sync remote files to the local environment.
-    ///
-    /// For each path (relative to `local_root`), reads from the remote
+    /// /// For each path (relative to `local_root`), reads from the remote
     /// backend and writes to the local filesystem.
     pub async fn sync_from_remote(&self, paths: &[PathBuf]) -> Result<(), AgentError> {
         for path in paths {
@@ -93,8 +90,7 @@ impl FileSync {
     }
 
     /// Watch local files for changes and sync them to the remote environment.
-    ///
-    /// This runs an infinite polling loop that checks for modifications.
+    /// /// This runs an infinite polling loop that checks for modifications.
     /// Call from a spawned task; cancel via the returned `JoinHandle`.
     pub async fn watch_and_sync(&self) -> Result<(), AgentError> {
         use std::collections::HashMap;

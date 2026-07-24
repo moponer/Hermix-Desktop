@@ -4,6 +4,7 @@ import { clsx } from "clsx";
 import { openExternalUrl } from "../desktopBridge";
 import { tryReadArtifact, tryRenderOfficePreview } from "../utils/artifactReader";
 import { classifyArtifactKind } from "../utils/artifacts";
+import { useSafeTimeout } from "../hooks/useSafeTimeout";
 
 interface InlinePathPreviewProps {
   /** Raw path the user clicked (may be relative — backend will anchor). */
@@ -26,7 +27,7 @@ type PreviewState =
 
 const OFFICE_EXTS = new Set(["docx", "doc", "xlsx", "xls", "pptx", "ppt"]);
 
-// 2026-07-17: extension→kind mapping used to be defined here with its
+// extension→kind mapping used to be defined here with its
 // own (smaller) extension set, drifted from the App.tsx duplicate and
 // from the canonical one in utils/artifacts.ts. Now uses the shared
 // `classifyArtifactKind` so the same file renders the same icon /
@@ -66,6 +67,7 @@ function translatePreviewError(raw: string): string {
 }
 
 export function InlinePathPreview({ path, workspaceRoot, onClose, anchor }: InlinePathPreviewProps) {
+  const safeSetTimeout = useSafeTimeout();
   const [state, setState] = useState<PreviewState>({ status: "loading" });
   const [copied, setCopied] = useState(false);
 
@@ -170,7 +172,7 @@ export function InlinePathPreview({ path, workspaceRoot, onClose, anchor }: Inli
               onClick={async () => {
                 await navigator.clipboard.writeText(state.content);
                 setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
+                safeSetTimeout(() => setCopied(false), 1500);
               }}
               className="p-1 rounded hover:bg-bg-hover text-text-muted hover:text-text-primary transition-colors"
               title="复制内容"

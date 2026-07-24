@@ -25,8 +25,8 @@ fn sentence_boundary_re() -> &'static Regex {
         // Python's `(?<=[.!?])(?:\s|\n)|(?:\n\n)` by matching the
         // punctuation as part of the alternative and advancing the cut
         // point past the whitespace. Branches (in priority order):
-        //   1. paragraph break `\n\n`
-        //   2. `.!?` followed by a space or newline
+        // 1. paragraph break `\n\n`
+        // 2. `.!?` followed by a space or newline
         Regex::new(r"\n\n|[.!?]\s").expect("sentence boundary regex")
     })
 }
@@ -82,8 +82,7 @@ impl SentenceBuffer {
     }
 
     /// Append a delta and return any completed sentences in order.
-    ///
-    /// Sentences shorter than `min_sentence_len` (after trimming) are merged
+    /// /// Sentences shorter than `min_sentence_len` (after trimming) are merged
     /// back into the buffer and will be concatenated with the next sentence.
     /// Duplicate sentences (case-insensitive, ignoring trailing `.!,`) are
     /// dropped.
@@ -111,8 +110,7 @@ impl SentenceBuffer {
 
     /// Emit the buffer right now if it has exceeded the force-flush length.
     /// Returns `None` if the buffer is shorter than `long_flush_len`.
-    ///
-    /// Unlike [`finish`](Self::finish), the buffer is only flushed when big
+    /// /// Unlike [`finish`](Self::finish), the buffer is only flushed when big
     /// enough — this mirrors Python's timeout-based flush in the queue-read
     /// loop.
     pub fn force_flush(&mut self) -> Option<String> {

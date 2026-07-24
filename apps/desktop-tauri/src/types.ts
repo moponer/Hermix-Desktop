@@ -13,7 +13,7 @@
  *   click did NOT reach the agent; the displayed state is
  *   honest about that and the user is told the action was
  *   not performed. This is the state the owner requested
- *   on 2026-06-14 after seeing the card flip to "已允许"
+ *   on after seeing the card flip to "已允许"
  *   while the LLM acted as if denied — a UI/backend
  *   desync caused by a silent stale-click path.
  */
@@ -153,13 +153,11 @@ export interface ToolMessageMeta {
 
 // ---------------------------------------------------------------------------
 // ChatMessage — canonical in-memory chat-row type.
-//
-// Before N-09 the front-end had three near-identical types describing the
+// Before the front-end had three near-identical types describing the
 // same entity: a wire shape (snake_case `extra`, no UI state), `ChatMessage`
 // (in-memory typed projection, UI-only fields), and ad-hoc inline literals
 // at call sites. Every wire → UI projection had to be kept in sync manually.
-//
-// N-09 collapses them: `ChatMessage` is the single source of truth, wire
+// collapses them: `ChatMessage` is the single source of truth, wire
 // fields live alongside UI fields. The wire → UI projection is centralised
 // in `protocolAdapter.ts` (`wireToChatMessage`) so adding a new
 // approval/clarify/tool field is a one-file change.
@@ -211,7 +209,7 @@ export interface ChatMessage {
    */
   reasoningExpanded?: boolean;
   /**
-   * 2026-07-16: Wall-clock time the LLM spent on this turn, in
+   * Wall-clock time the LLM spent on this turn, in
    * milliseconds. Populated by the front-end at the `Done` event
    * (useStreamChat measures `Date.now() - sendStartedAt`); NOT
    * persisted server-side, so it's only present for messages that
@@ -239,8 +237,7 @@ export interface ChatMessage {
    * images after a session reload).
    */
   images?: ChatMessageImage[];
-  // ── N-09 wire-only carry-over fields ─────────────────────────────────
-  //
+  // ── wire-only carry-over fields ─────────────────────────────────
   // Carried verbatim from the JSON response so a session reload shows
   // the same content the user saw mid-stream. The typed-`tool` /
   // typed-`approval` props above are derived from these by
@@ -328,7 +325,7 @@ export interface ExecutionTimelineEvent {
   memory_recall_total_chars?: number;
   memory_recall_preview_keys?: string[];
   memory_recall_turn_number?: number;
-  /** 2026-06-29 (C3 marker protocol): section_gate-only payload.
+  /** (C3 marker protocol): section_gate-only payload.
    *  Carries the serialised `SectionGateReport` from the backend.
    *  `patched` lists sections the gate auto-spliced in;
    *  `pending` lists optional sections absent under the current
@@ -358,7 +355,7 @@ export type TimelineStep =
   | { kind: "tools"; events: ExecutionTimelineEvent[] }
   | { kind: "text"; content: string };
 
-/** 2026-06-29 (C3 marker protocol): wire-mirror of the backend's
+/** (C3 marker protocol): wire-mirror of the backend's
  *  `SectionGateReport`. Field names match the `serde(rename=...)`
  *  tags emitted by `crates/hermix-agent/src/context.rs`. */
 export interface SectionGateReport {
@@ -437,7 +434,7 @@ export interface AutomationTask {
   history: RunRecord[];
   created_at: string;
   updated_at: string;
-  /** 2026-07-05: skills attached to this cron job — maps to CronJob.skills. */
+  /** skills attached to this cron job — maps to CronJob.skills. */
   skills?: string[];
 }
 
@@ -457,8 +454,8 @@ export interface PluginSettings {
 }
 
 export type NavPage = "chat" | "search" | "plugins" | "automation" | "settings" | "agents" | "groupchat" | "experts" | "analytics" | "customapps";
-//   ↑ "experts" is kept for backward compat — it's now an alias of "agents"
-//     with initialTab="builtin". Sidebar no longer exposes it directly.
+// ↑ "experts" is kept for backward compat — it's now an alias of "agents"
+// with initialTab="builtin". Sidebar no longer exposes it directly.
 
 // Re-export from api
 export type { SessionSummary, SystemStatus, HermesConfig, SkillInfo } from "./api";

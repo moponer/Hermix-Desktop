@@ -74,8 +74,7 @@ use tower_http::services::ServeDir;
 pub const HTTP_PLATFORM: &str = "http";
 
 /// Default timeout for pending tool-call approval requests.
-///
-/// Mirrors the upstream `approvals.timeout: 60s` in the Hermes
+/// /// Mirrors the upstream `approvals.timeout: 60s` in the Hermes
 /// 7-layer defense model: if the WS client doesn't send an
 /// `ApprovalResponse` within this window, the request is
 /// auto-resolved to `false` (deny) and removed from the
@@ -83,8 +82,7 @@ pub const HTTP_PLATFORM: &str = "http";
 /// loop indefinitely, and it shifts the burden of stale
 /// requests to deny-by-default (fail-closed) -- which is the
 /// only safe direction for a destructive-tool approval.
-///
-/// **2026-06-14 bump:** raised from 60s → 300s. The 60s
+/// /// **bump:** raised from 60s → 300s. The 60s
 /// ceiling produced a user-facing race: a user who paused to
 /// read the risk level, then clicked "允许" at second 61, saw
 /// the card flip to "已允许" client-side, but the backend
@@ -95,20 +93,16 @@ pub const HTTP_PLATFORM: &str = "http";
 /// enough to read a command and make a decision, short
 /// enough that a stuck UI still resolves. The frontend
 /// shows a countdown so the user always knows the budget.
-///
-/// 2026-07-19: lowered 300s → 30s after type-B recurrence
+/// /// lowered 300s → 30s after type-B recurrence
 /// showed that 5 minutes of "● ● ● 正在思考" felt permanent to
-/// the user. With 30s the agent loop gets an auto-deny within
-/// the user's mental "this is broken" budget, the agent
-/// proceeds to the next turn (where it then triggers
-/// `tool_result_processor::push_tool_result` with the structured
-/// "tell the user" denial note), and the frontend settles
-/// with `finish_reason="agent_error"` instead of pinning the
-/// UI for 5 minutes straight. Pair this with the
-/// `turn_transition_deadline_secs` watchdog (also 30s) for
-/// one consistent mental model: "30s without progress = the
-/// agent loop is going to recover or settle".
-pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Zero means **no auto-deny timeout** — the approval card stays
+/// open indefinitely until the user explicitly clicks 允许 or 拒绝.
+/// This is the user's explicit requirement (2026-07-25): "审批不该
+/// 有超时，如果不审批默认就等待，不再继续往下". The agent loop
+/// blocks on the oneshot receiver until the user resolves it; the
+/// only other unblock paths are WS disconnect (→ `ChannelClosed`)
+/// and server-side task abort.
+pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::ZERO;
 
 /// Compute the wall-clock deadline (Unix milliseconds) for a fresh
 /// approval request. Centralized so the WS envelope and the persisted
@@ -116,14 +110,22 @@ pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(30);
 /// would otherwise show a countdown that doesn't match the original
 /// (the two `now()` calls taken a few microseconds apart diverge
 /// visibly when the deadline is rounded to seconds for display).
-///
-/// Returns `Utc::now().timestamp_millis() + DEFAULT_APPROVAL_TIMEOUT.as_millis() as i64`.
-/// Monotonic clock is not appropriate here — we want wall-clock so
-/// the deadline survives a clock-jump and matches the user's
-/// `Date.now()` on the front-end (which is also wall-clock).
-pub fn compute_approval_deadline_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
-        + DEFAULT_APPROVAL_TIMEOUT.as_millis() as i64
+/// Returns `None` when `DEFAULT_APPROVAL_TIMEOUT` is zero — no
+/// deadline means the front-end countdown pill is hidden and the
+/// card stays open until the user explicitly resolves it.
+/// Otherwise returns `Some(now + timeout_ms)` so the front-end can
+/// render a live countdown. Monotonic clock is not appropriate
+/// here — we want wall-clock so the deadline survives a clock-jump
+/// and matches the user's `Date.now()` on the front-end (which is
+/// also wall-clock).
+pub fn compute_approval_deadline_ms() -> Option<i64> {
+if DEFAULT_APPROVAL_TIMEOUT.is_zero() {
+return None;
+}
+Some(
+chrono::Utc::now().timestamp_millis()
++ DEFAULT_APPROVAL_TIMEOUT.as_millis() as i64,
+)
 }
 
 // ---------------------------------------------------------------------------
@@ -131,8 +133,7 @@ pub fn compute_approval_deadline_ms() -> i64 {
 // ---------------------------------------------------------------------------
 
 /// Thread-safe registry for pending tool-call approval requests.
-///
-/// When the agent needs user approval before executing a risky tool, it
+/// /// When the agent needs user approval before executing a risky tool, it
 /// creates a `oneshot::Sender<bool>` keyed by `(session_id, request_id)`.
 /// The client resolves the request via a [`WsClientMessage::ApprovalResponse`]
 /// message on the same WebSocket, which looks up and completes the channel.
@@ -233,8 +234,7 @@ impl ApprovalRegistry {
     /// resolved, `false` if the request had already been resolved (e.g. by a
     /// prior `resolve` call, or by the timeout task firing first) or was
     /// never registered.
-    ///
-    /// The WS handler is the only caller — it maps the client-sent
+    /// /// The WS handler is the only caller — it maps the client-sent
     /// `ApprovalResponse { decision: bool }` into `DeniedByUser` /
     /// `Approved` here, keeping the enum construction server-side so the
     /// agent crate stays decoupled from the wire format.
@@ -392,7 +392,6 @@ mod approval_registry_tests {
         // dropping the HttpServerState) and the receiver
         // yields `Err` — the agent loop treats this as a
         // deny-by-default.
-        //
         // We simulate by dropping the registry (the inner Arc
         // goes to zero when no other clones remain). The
         // receiver is the last thing holding state alive, so
@@ -413,11 +412,10 @@ mod approval_registry_tests {
         // the registry's clone (the HttpServerState holds one
         // clone, the approval_requester closure holds another,
         // etc.), and verify that the rx yields Err.
-        //
         // For the contract surface we just need to assert:
-        //   "if no one ever resolves, and the sender side
-        //   gets dropped, the rx must yield Err (not hang
-        //   forever)".
+        // "if no one ever resolves, and the sender side
+        // gets dropped, the rx must yield Err (not hang
+        // forever)".
         // We test the actual mechanism by manually dropping
         // the sender via a oneshot::Sender that we take back
         // from the registry's internals. Simpler: just drop
@@ -492,7 +490,7 @@ mod approval_registry_tests {
 
     #[tokio::test]
     async fn timeout_zero_disables_timer() {
-        //  must skip spawning the timer
+        // must skip spawning the timer
         // task entirely. The receiver then hangs forever
         // (until dropped) — which is the historical
         // pre-timeout behavior, preserved for tests that
@@ -521,44 +519,23 @@ mod approval_registry_tests {
     }
 
     #[tokio::test]
-    async fn default_timeout_constant_is_30_seconds() {
-        // 2026-07-19: lowered 300s → 30s after type-B recurrence.
-        // Pin the value so accidental drift does not silently
-        // re-introduce the 5-minute user-facing freeze.
-        // If anyone ever
-        // bumps this, the WS UI countdown logic and the
-        // upstream-parity docs need to follow. Bumped from
-        // 60s → 300s on 2026-06-14 — the 60s window produced a
-        // user-visible "I clicked allow but the agent said
-        // denied" race; see the doc-comment on
-        // `DEFAULT_APPROVAL_TIMEOUT` for the full story.
-        assert_eq!(DEFAULT_APPROVAL_TIMEOUT, std::time::Duration::from_secs(30));
+    async fn default_timeout_constant_is_zero() {
+        // 2026-07-25: changed from 30s to ZERO (no auto-deny).
+        // The user explicitly requested: "审批不该有超时，如果不审批
+        // 默认就等待，不再继续往下". The approval card stays open
+        // indefinitely until the user explicitly resolves it.
+        assert_eq!(DEFAULT_APPROVAL_TIMEOUT, std::time::Duration::ZERO);
         let reg = ApprovalRegistry::new();
-        assert_eq!(reg.default_timeout(), std::time::Duration::from_secs(30));
+        assert_eq!(reg.default_timeout(), std::time::Duration::ZERO);
     }
 
-    /// `compute_approval_deadline_ms` returns wall-clock "now"
-    /// plus `DEFAULT_APPROVAL_TIMEOUT`. The WS envelope and the
-    /// persisted `ApprovalRecord` share the SAME value (one
-    /// call site per request, not one per consumer) — see
-    /// `on_pre_tool_dispatch` in this file. This test pins
-    /// that invariant: deadline − now is at least
-    /// `DEFAULT_APPROVAL_TIMEOUT` and at most that plus a
-    /// couple of ms (test execution can pause a hair, but a 5s
-    /// slack accommodates slow CI without false positives).
+    /// `compute_approval_deadline_ms` returns `None` when
+    /// `DEFAULT_APPROVAL_TIMEOUT` is zero — no deadline means
+    /// the front-end countdown pill is hidden and the card stays
+    /// open until the user explicitly resolves it.
     #[test]
-    fn compute_approval_deadline_is_now_plus_default_timeout() {
-        let before = chrono::Utc::now().timestamp_millis();
-        let deadline = compute_approval_deadline_ms();
-        let after = chrono::Utc::now().timestamp_millis();
-
-        let timeout_ms = DEFAULT_APPROVAL_TIMEOUT.as_millis() as i64;
-        let expected_min = before + timeout_ms;
-        let expected_max = after + timeout_ms;
-        assert!(
-            deadline >= expected_min && deadline <= expected_max,
-            "deadline {deadline} not in [{expected_min}, {expected_max}]"
-        );
+    fn compute_approval_deadline_is_none_when_timeout_zero() {
+        assert_eq!(compute_approval_deadline_ms(), None);
     }
 
     #[tokio::test]
@@ -616,9 +593,9 @@ mod approval_registry_tests {
     // updates. We construct a minimal `HttpServerState` with empty
     // maps and verify that:
     // - `Session` adds a compiled regex to the per-session bypass
-    //   map and the new entry makes `pre_approval_checker` hit.
+    // map and the new entry makes `pre_approval_checker` hit.
     // - `Always` lazily creates the persistent `UserAllowlist` and
-    //   writes it to disk; reload from disk restores the entries.
+    // writes it to disk; reload from disk restores the entries.
     // - `Once` and `Deny` are no-ops.
     // -----------------------------------------------------------------
 
@@ -668,7 +645,7 @@ mod approval_registry_tests {
             )),
             mcp_manager: hermix_mcp::ArcMcpManager::new(Arc::new(hermix_tools::ToolRegistry::new())),
             task_engine: None,
-            // 2026-07-06: dedup map. See the production `build`
+            // dedup map. See the production `build`
             // path; test_state mirrors it.
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
@@ -809,8 +786,7 @@ mod approval_registry_tests {
         assert_eq!(patterns.len(), 2);
     }
 
-    // ── 2026-07-06: dedup tests for `check_recent_send` ────────
-    //
+    // ── dedup tests for `check_recent_send` ────────
     // Background: a single user "你好" was triggering 9
     // `send_message_stream` calls in 2 minutes. Root cause was
     // client-side WS auto-retry + App.tsx queue re-drain races.
@@ -1045,7 +1021,7 @@ pub struct HttpServerState {
     /// list of compiled regex patterns (mirroring `UserAllowlist`).
     pub session_bypass:
         Arc<std::sync::Mutex<HashMap<String, Vec<Regex>>>>,
-    /// 2026-07-06: per-`(session_id, content_hash)` send-dedup.
+    /// per-`(session_id, content_hash)` send-dedup.
     /// Prevents retry storms (WS auto-retry + queue re-drain) from
     /// triggering N parallel `send_message_stream` calls for the
     /// same user message — the visible symptom was 9 calls in 2
@@ -1054,7 +1030,7 @@ pub struct HttpServerState {
     /// (good enough — restart also clears the WS clients that
     /// produced the storm).
     pub recent_sends: Arc<Mutex<HashMap<String, std::time::Instant>>>,
-    /// 2026-07-06: set of session IDs that currently have an active
+    /// set of session IDs that currently have an active
     /// `send_message_stream` running. Prevents concurrent streams for
     /// the same session — the frontend retry mechanism (MAX_RETRIES=3
     /// in useStreamChat.ts) can race with a disconnected WS to start
@@ -1062,7 +1038,7 @@ pub struct HttpServerState {
     /// two agent loops run in parallel, producing duplicate tool calls
     /// and doubling the response text — the user sees "LLM 重复回复".
     pub active_sessions: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
-    /// 2026-07-17: per-active-stream `JoinHandle`, keyed by the same
+    /// per-active-stream `JoinHandle`, keyed by the same
     /// `dedup_key(session_id, text)` used for `active_sessions`. Enables
     /// the "user re-sends the original question after the LLM self-
     /// interrupts / hangs" recovery path: when a fresh send arrives for
@@ -1087,8 +1063,7 @@ pub struct HttpServerState {
     /// MCP servers the user configured in the dashboard's "连接器" tab,
     /// registers their tools into the shared `tool_registry`, and
     /// routes `tools/call` JSON-RPC back into the right server.
-    ///
-    /// Wrapped in `Arc` so the per-tool handlers (which live in the
+    /// /// Wrapped in `Arc` so the per-tool handlers (which live in the
     /// `ToolRegistry`) can hold a `Weak` back-reference without
     /// forming a cycle. Earlier versions declared `McpManager` but
     /// never constructed it — the manager is wired here, once, at
@@ -1162,8 +1137,7 @@ impl HttpServerState {
     /// — the constructor takes care of building a `LocalAgentService`
     /// (or honouring a test-supplied [`AgentService`] mock) before
     /// exposing the state to the router.
-    ///
-    /// Polish/automation rewrite endpoints live in
+    /// /// Polish/automation rewrite endpoints live in
     /// [`crate::dashboard::polish`] and call this to dispatch a single
     /// stateless LLM turn. They build an ad-hoc session id, send one
     /// user turn, then call `reset_session` so the parent conversation
@@ -1252,7 +1226,7 @@ impl HttpServerState {
             hermix_tools::tools::todo::TodoChange,
         >(hermix_tools::tools::todo::TODO_EVENT_CHANNEL_CAPACITY);
 
-        // 2026-07-21 (custom_apps wiring fix): construct a shared
+        // (custom_apps wiring fix): construct a shared
         // PluginManager for the custom-app system and clone it into
         // both `state.custom_app_manager` (HTTP API at /api/custom-apps)
         // and the LLM tool `custom_app_manager` (registered by
@@ -1288,21 +1262,24 @@ impl HttpServerState {
         );
 
         // ★ P1-② (2026-07-05): load native plugins (.dll) from
-        //   $HERMIX_HOME/plugins/tools/ and /plugins/memory/.
-        //   Each directory must contain a `plugin.yaml` with a
-        //   `binary` field. Plugins export `hermix_plugin_init()`
-        //   via the C ABI. Each ToolInstance is wrapped as
-        //   `NativeToolAdapter`, registered into `tool_registry`.
+        // $HERMIX_HOME/plugins/tools/ and /plugins/memory/.
+        // Each directory must contain a `plugin.yaml` with a
+        // `binary` field. Plugins export `hermix_plugin_init()`
+        // via the C ABI. Each ToolInstance is wrapped as
+        // `NativeToolAdapter`, registered into `tool_registry`.
         {
             let dll_paths =
                 hermix_agent::native_plugin::discover_native_plugins(&hermix_home);
             for dll in &dll_paths {
+                // SAFETY: `dll` path is discovered by `discover_native_plugins`
+                // which filters for .dll files. `load` validates exported symbols.
                 match unsafe {
                     hermix_agent::native_plugin::LoadedNativePlugin::load(dll)
                 } {
                     Ok(plugin) => {
                         let mut registered = 0usize;
                         for idx in 0..plugin.tool_count {
+                            // SAFETY: `idx` is bounded by `plugin.tool_count`.
                             match unsafe { plugin.create_tool_handler(idx) } {
                                 Ok(handler) => {
                                     let schema = handler.schema();
@@ -1373,7 +1350,6 @@ impl HttpServerState {
         // one. Disabling happens later in the request lifecycle: the
         // dashboard's `update_server` route calls
         // `McpManager::disconnect` when `enabled` flips to false.
-        //
         // Each `connect()` registers discovered tools (with real
         // schemas) into the tool registry, so the LLM sees them in the
         // next `get_definitions()` call. We deliberately ignore
@@ -1508,7 +1484,7 @@ impl HttpServerState {
             task_engine: Some(Arc::new(
                 hermix_gateway::groupchat::TaskEngineRuntime::new(groupchat_mgr),
             )),
-            // 2026-07-06: dedup map for retry-storm protection. See
+            // dedup map for retry-storm protection. See
             // the `recent_sends` field doc on the struct. Cleared
             // on server restart, which is fine because the WS
             // clients that produced the storm are also gone.
@@ -1600,7 +1576,7 @@ impl HttpServerState {
             hermix_tools::tools::todo::TodoChange,
         >(hermix_tools::tools::todo::TODO_EVENT_CHANNEL_CAPACITY);
 
-        // 2026-07-21 (custom_apps wiring fix): construct a shared
+        // (custom_apps wiring fix): construct a shared
         // PluginManager for the custom-app system and clone it into
         // both `state.custom_app_manager` (HTTP API at /api/custom-apps)
         // and the LLM tool `custom_app_manager` (registered by
@@ -1723,7 +1699,7 @@ impl HttpServerState {
             task_engine: Some(Arc::new(
                 hermix_gateway::groupchat::TaskEngineRuntime::new(groupchat_mgr),
             )),
-            // 2026-07-06: dedup map for retry-storm protection. See
+            // dedup map for retry-storm protection. See
             // the `recent_sends` field doc on the struct. Cleared
             // on server restart, which is fine because the WS
             // clients that produced the storm are also gone.
@@ -1774,8 +1750,7 @@ impl HttpServerState {
     /// Build a [`GroupChatManager`] with SQLite-backed persistence
     /// (falling back to in-memory when the DB can't be opened) and
     /// optionally wire an `AgentService` as its dispatcher.
-    ///
-    /// Always returns a manager — when every persistence backend fails,
+    /// /// Always returns a manager — when every persistence backend fails,
     /// a blank in-memory manager is the final fallback, so the front-end
     /// never sees 503 for groupchat operations.
     fn init_groupchat_manager(
@@ -1954,7 +1929,7 @@ pub fn router(state: HttpServerState) -> Router {
             "/v1/sessions/{session_id}/messages",
             get(get_session_messages).post(send_message),
         )
-        // v2 (2026-06-21): archive refs surface for the chat UI.
+        // archive refs surface for the chat UI.
         // `GET /v1/sessions/{id}/archive-refs` returns the per-session
         // JSONL index written by `archive_context_section`. Empty
         // Vec when the session has never been archived.
@@ -1981,7 +1956,7 @@ pub fn router(state: HttpServerState) -> Router {
             "/v1/sessions/{session_id}/approval",
             post(approve_via_rest),
         )
-        // v1 (2026-07-07): todo (task list) HTTP endpoints. The LLM
+        // todo (task list) HTTP endpoints. The LLM
         // goes through the `todo` tool over WS; the desktop TodoPanel
         // hits these endpoints for hydration (GET) and manual
         // checkbox toggles (PATCH). See `list_todos` / `patch_todo`.
@@ -1997,7 +1972,7 @@ pub fn router(state: HttpServerState) -> Router {
         // Expert catalog (driven by the desktop client's bundled built-ins).
         .route("/v1/experts", get(list_experts).post(register_expert))
         .route("/v1/experts/{id}", get(get_expert))
-        // T2026-06-21 P1: dynamic tool discovery — the desktop client
+        // TP1: dynamic tool discovery — the desktop client
         // calls this once at startup and uses the result as the single
         // source of truth for `overrides.tools`. Adding a new tool to
         // the `ToolRegistry` automatically surfaces it in the chat UI
@@ -2120,9 +2095,7 @@ pub async fn run_server_with_state(
     // socket on 3000 locks the port until the OS reaps the orphan
     // (30s~4min). With SO_REUSEADDR we can re-bind immediately even
     // if the previous listener is still in TIME_WAIT / CLOSE_WAIT.
-    //
     // On Linux this is also helpful for fast-restart during dev.
-    //
     // Tokio API: TcpSocket::bind() returns (), then socket.listen(1024)
     // returns the actual TcpListener. This is two-step by design so
     // SO_REUSEADDR/SO_REUSEPORT can be set between bind and listen.
@@ -2202,9 +2175,8 @@ async fn list_experts(State(state): State<HttpServerState>) -> Json<ExpertListRe
 }
 
 // ---------------------------------------------------------------------------
-// T2026-06-21 P1: dynamic tool discovery
+// TP1: dynamic tool discovery
 // ---------------------------------------------------------------------------
-//
 // Returns every tool currently registered in the `ToolRegistry` so the
 // desktop client can decide what to expose to the LLM without any
 // hard-coded tool names on the front-end. Adding a tool to the registry
@@ -2509,7 +2481,6 @@ async fn patch_session(
 // ---------------------------------------------------------------------------
 // Todo (task list) HTTP endpoints
 // ---------------------------------------------------------------------------
-//
 // The `todo` tool is the canonical mutation path (LLM-driven). These
 // endpoints exist so the front-end can (a) hydrate the TodoPanel on
 // initial mount via `GET /v1/todos`, and (b) let the user manually
@@ -2517,14 +2488,12 @@ async fn patch_session(
 // dispatch through the same `TodoHandler` so the broadcast path
 // (`todo_event_tx`) fires on every change, keeping the WS stream and
 // the HTTP loop consistent.
-//
 // Why not call FileTodoBackend directly? Two reasons:
-//   * The broadcast fires only when TodoHandler.execute() runs.
-//     Bypassing the handler would skip the WS forwarder and leave
-//     the desktop panel stale.
-//   * It keeps the schema (parameter names, status enums) in one
-//     place — the LLM tool definition.
-//
+// * The broadcast fires only when TodoHandler.execute() runs.
+// Bypassing the handler would skip the WS forwarder and leave
+// the desktop panel stale.
+// * It keeps the schema (parameter names, status enums) in one
+// place — the LLM tool definition.
 // Trade-off: each `GET` re-enters `ToolHandler::execute`, which
 // parses the LLM-style action envelope. For N items this is O(N)
 // JSON parse, which is fine (todo lists are <100 items).
@@ -2590,7 +2559,6 @@ async fn patch_todo(
     // can be attributed to the right chat. Without it the row would
     // be persisted with `session_id = None` (orphan) and the WS
     // snapshot would not include it on the next reconnect.
-    //
     // We don't restore the previous session after dispatch: the
     // TodoItem has already been written with the correct session_id
     // (Commit A) and a concurrent agent-loop turn will re-stamp its
@@ -2618,7 +2586,6 @@ async fn delete_todo(
     // (`todo_event_tx`) fires and the WS forwarder drops the row from
     // every connected TodoPanel — keeping the HTTP loop and the WS
     // stream consistent (same rationale as `patch_todo`).
-    //
     // Commit D — same `?session_id=...` rationale as `patch_todo`:
     // thread the session through to the persisted TodoItem so the
     // delete doesn't leave an orphan row in `todos.json`.
@@ -2639,8 +2606,7 @@ async fn delete_todo(
 }
 
 /// Open `sessions.db` for **read-only-ish** server-side access.
-///
-/// Every server route that touches `sessions.db` MUST go through this
+/// /// Every server route that touches `sessions.db` MUST go through this
 /// helper rather than calling `Connection::open` directly. Without it,
 /// `journal_mode = WAL` only applies to the writer side
 /// (`session_persistence::open_with_wal`), and the server opener
@@ -2649,8 +2615,7 @@ async fn delete_todo(
 /// moment the writer was killed mid-transaction and left a stale
 /// `-shm` page table — which happens on every Tauri sidecar SIGKILL
 /// shutdown.
-///
-/// Best-effort on PRAGMA failures: if WAL mode is rejected (read-only
+/// /// Best-effort on PRAGMA failures: if WAL mode is rejected (read-only
 /// file, exclusive lock held, etc.) we log a warning and continue —
 /// Detect the canonical SQLite "database disk image is malformed"
 /// diagnostic. Phase 21 extension (2026-07-07): the original WAL fix
@@ -2669,8 +2634,7 @@ fn is_malformed_error(err: &rusqlite::Error) -> bool {
 /// safe to call from a retry path. If the rebuild itself fails the
 /// caller should give up and return 500 to the user rather than
 /// silently swallow.
-///
-/// Both indexes are present from migration 2 onward (the schema
+/// /// Both indexes are present from migration 2 onward (the schema
 /// migration creates `messages_fts` for CJK bigram search and
 /// `messages_fts_trigram` for ASCII substring). On older DBs where
 /// trigram is missing, we treat the rebuild as best-effort and
@@ -2724,7 +2688,6 @@ async fn delete_session(
     // indexes and retry once. If the rebuild itself fails or the
     // retry still errors, fall through to the original 500 surface
     // so the user isn't silently told the delete succeeded.
-    //
     // No labelled block needed: the retry path returns directly
     // via `return Ok(Json(...))`, and the happy path falls through
     // to the closing `}` of the for-loop naturally. Both branches
@@ -2735,13 +2698,13 @@ async fn delete_session(
         message: e.to_string(),
     })?;
 
-    // 2026-07-08: after the DB rows are gone, also remove the on-disk
+    // after the DB rows are gone, also remove the on-disk
     // session artifacts so they don't linger as orphaned data. There
     // are TWO separate trees:
-    //   1. `<home>/sessions/<sid>/`        — archive-index.jsonl
-    //      (written via `hermix_home`, NOT data_dir)
-    //   2. `<home>/data/sessions/<sid>.md` — session log
-    //      (written via `data_dir`, flat file)
+    // 1. `<home>/sessions/<sid>/`        — archive-index.jsonl
+    // (written via `hermix_home`, NOT data_dir)
+    // 2. `<home>/data/sessions/<sid>.md` — session log
+    // (written via `data_dir`, flat file)
     // The sidebar list reads from the DB only, so the session won't
     // resurrect — but leaving these behind is an orphaned-data leak.
     // Best-effort: log + ignore on failure; never fail the delete
@@ -2751,7 +2714,7 @@ async fn delete_session(
         let data_dir = hermix_config::paths::data_dir_in(home);
 
         // 1. Archive tree: <hermix_home>/sessions/<sid>/ (holds
-        //    archive-index.jsonl + per-turn markdown sidecars).
+        // archive-index.jsonl + per-turn markdown sidecars).
         let archive_dir = home.join("sessions").join(&session_id);
         if archive_dir.exists() {
             if let Err(e) = std::fs::remove_dir_all(&archive_dir) {
@@ -2776,8 +2739,8 @@ async fn delete_session(
             }
         }
         // 2b. Legacy per-turn sidecars: any `<stamp>-<sid>.md` left in
-        //     sessions_dir (normally migrated to sessions_dir/orphans/
-        //     on the next save, but a deleted session never gets one).
+        // sessions_dir (normally migrated to sessions_dir/orphans/
+        // on the next save, but a deleted session never gets one).
         if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().into_owned();
@@ -2796,7 +2759,7 @@ async fn delete_session(
         }
 
         // 3. RL trajectory: <data>/trajectories/<sid>.json (written by
-        //    SessionPersistence::save_trajectory on every completed turn).
+        // SessionPersistence::save_trajectory on every completed turn).
         let traj_file = data_dir.join("trajectories").join(format!("{session_id}.json"));
         if traj_file.exists() {
             if let Err(e) = std::fs::remove_file(&traj_file) {
@@ -2809,16 +2772,16 @@ async fn delete_session(
         }
     };
 
-    // 2026-07-08: purge the deleted session's recall memory from
+    // purge the deleted session's recall memory from
     // memory.db so a removed conversation leaves zero vector/embedding
     // residue. memory.db is WAL + owned by the same process as
     // sessions.db, so a second `Connection::open` (mirroring
     // `open_sessions_db_for_read`) is the established, safe pattern.
     // Every session-scoped store is covered:
-    //   - frames / facts            (tagged `session:{id}`, JSON `tags`)
-    //   - recall_audit / session_snapshots (explicit `session_id` col)
-    //   - frames_fts / facts_fts    (FTS shadow tables; must stay in
-    //     sync with frames/facts or future searches corrupt)
+    // - frames / facts            (tagged `session:{id}`, JSON `tags`)
+    // - recall_audit / session_snapshots (explicit `session_id` col)
+    // - frames_fts / facts_fts    (FTS shadow tables; must stay in
+    // sync with frames/facts or future searches corrupt)
     // Best-effort: any failure is logged + ignored; the session delete
     // itself must never fail because the memory purge hiccupped.
     let purge_session_memory = || {
@@ -2951,7 +2914,7 @@ async fn delete_session(
                     message: e.to_string(),
                 })?;
                 let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
-                // 2026-07-08: same success-path logging/cleanup as the
+                // same success-path logging/cleanup as the
                 // happy path below (see cleanup_session_dir + tracing::info).
                 cleanup_session_dir();
                 purge_session_memory();
@@ -3006,7 +2969,7 @@ async fn delete_session(
     // to replay a half-checkpointed WAL.
     let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
 
-    // 2026-07-08: surface the deletion in backend logs. Previously the
+    // surface the deletion in backend logs. Previously the
     // happy path was completely silent, so operators/owners had no way
     // to confirm a delete actually happened.
     cleanup_session_dir();
@@ -3021,21 +2984,18 @@ async fn delete_session(
 
 /// `GET /v1/sessions/{id}/archive-refs` — return every [`ArchiveRef`]
 /// the agent loop has written for this session.
-///
-/// v2 (2026-06-21): backing storage is a JSONL file at
+/// /// backing storage is a JSONL file at
 /// `<hermix_home>/sessions/<sid>/archive-index.jsonl`. We don't go
 /// through `AgentService` / `AgentLoop::last_archive_refs()` because
 /// that field only holds the **most recent** archive run — for the
 /// chat banner we want the full history of archived nodes so the
 /// user can re-open any of them.
-///
-/// Returns `200 { refs: [] }` when:
+/// /// Returns `200 { refs: [] }` when:
 /// - the session has never triggered a compression round (common),
 /// - the index file is missing / empty,
 /// - the session id is malformed (we still don't 404 because the
-///   state of "session exists but never archived" is a valid one).
-///
-/// All errors during file IO are swallowed (logged) and surfaced as
+/// state of "session exists but never archived" is a valid one).
+/// /// All errors during file IO are swallowed (logged) and surfaced as
 /// an empty list — the chat UI must never crash just because the
 /// archive sidecar had a bad write.
 async fn get_session_archive_refs(
@@ -3056,7 +3016,7 @@ async fn get_session_messages(
     Path(session_id): Path<String>,
     State(state): State<HttpServerState>,
 ) -> Result<Json<SessionMessagesResponse>, HttpError> {
-    // v33 (2026-07-06): use the *timestamped* loader so each entry
+    // use the *timestamped* loader so each entry
     // carries the persisted `messages.created_at` and the desktop
     // client can render the real relative time on session reload
     // (e.g. "3 天前" instead of "刚刚"). The legacy
@@ -3091,7 +3051,7 @@ async fn get_session_messages(
         }
     }
 
-    // 2026-07-22 (Plan C): load archived messages from compression
+    // (Plan C): load archived messages from compression
     // child sessions so the user can still see what was said before
     // compression. Children are ordered by creation time (oldest
     // first), so the archived turns appear in chronological order
@@ -3122,7 +3082,7 @@ async fn get_session_messages(
 
     let mut idx = 0usize;
     let mut all_messages: Vec<ProtocolMessage> = Vec::new();
-    // 2026-07-23 FIX: buffer compression-child messages here instead of
+    // FIX: buffer compression-child messages here instead of
     // extending `all_messages` immediately. They are prepended *after*
     // the main session messages are built so we can de-duplicate child
     // copies against the parent's (possibly reactivated) active rows.
@@ -3219,7 +3179,7 @@ async fn get_session_messages(
                 // forced to fall back to a generic "tool" label.
                 let tool_calls = m.tool_calls.clone();
                 let tool_name = m.name.clone();
-                // v4 (2026-06-22): forward the persisted execution
+                // forward the persisted execution
                 // timeline so session reloads can rebuild the same
                 // inline tool cards the user saw mid-stream
                 // (correct status, arguments, stdout). Without this,
@@ -3227,7 +3187,7 @@ async fn get_session_messages(
                 // as a stale "运行中" pill because no event marked
                 // them as completed.
                 let execution_timeline = m.execution_timeline.clone();
-                // v5 (2026-06-22): reconstruct tool arguments from
+                // reconstruct tool arguments from
                 // the linked assistant message's tool_calls. Without
                 // this, reloaded tool messages have no `args` and
                 // the desktop client falls back to "调用工具" (generic).
@@ -3239,7 +3199,7 @@ async fn get_session_messages(
                 } else {
                     None
                 };
-                // v33 (2026-07-06): use the persisted `created_at`
+                // use the persisted `created_at`
                 // (carried in via the parallel query) as the wire
                 // timestamp so the desktop client shows the real
                 // relative time on reload. Fall back to `now` only
@@ -3254,7 +3214,7 @@ async fn get_session_messages(
                         MessageRole::System => hermix_transport::Role::System,
                         MessageRole::Tool => hermix_transport::Role::Tool,
                     },
-                    // 2026-07-12 (Bug B): persist already runs through
+                    // (Bug B): persist already runs through
                     // `ToolCallSanitizer` in `stream_collect` and the
                     // ThinkBlockParser strips `<think>...</think>` from
                     // visible content at write time, so what we read
@@ -3317,7 +3277,7 @@ async fn get_session_messages(
             }
         })
         .collect();
-    // 2026-07-23 FIX (restore+compression duplicate): a compression
+    // FIX (restore+compression duplicate): a compression
     // child session stores a *copy* of the folded-away turns (written
     // with active=1 into the child). At compression time the parent's
     // own copy of those turns is deactivated, so normally only the
@@ -3383,7 +3343,7 @@ async fn send_message(
         on_event: None,
         pre_approval_checker: None,
         on_prefetch_intent: None,
-        // 2026-07-19 type-B: non-streaming HTTP path doesn't own a WS
+        // type-B: non-streaming HTTP path doesn't own a WS
         // socket, so there is no soft-shutdown signal to wake any
         // approval `rx.await`. Leave None — it falls back to plain
         // `rx.await` (which here has no race because this path
@@ -3463,8 +3423,7 @@ async fn restore_session(
 /// The frontend sends the approval via HTTP when `ws.send()` returns true
 /// but the server doesn't receive the message (Tauri WebView2 WebSocket
 /// can lose buffered messages on connection reset).
-///
-/// Request body: `{ "request_id": "...", "decision": "approved" | "denied" }`
+/// /// Request body: `{ "request_id": "...", "decision": "approved" | "denied" }`
 async fn approve_via_rest(
     State(state): State<HttpServerState>,
     Path(session_id): Path<String>,
@@ -3526,7 +3485,6 @@ async fn approve_via_rest(
     // resource-side-effect path that persists to GatewayConfig. The
     // existing command-only path remains as a fallback for the
     // Dangerous-tier terminal approvals that don't carry a path.
-    //
     // Only record on the **first** successful resolve. Duplicate
     // responses (matched=false from the resolve call above) would
     // otherwise re-grant the same path / re-add the same allowlist
@@ -3565,8 +3523,7 @@ async fn approve_via_rest(
 /// `GET /v1/sessions/{session_id}/lineage` — return the parent→ancestor
 /// chain (upward) and immediate children (downward) for session lineage
 /// browsing in the frontend tree view.
-///
-/// Response: `{ ancestors: [SessionNode], children: [SessionNode], current: SessionNode }`
+/// /// Response: `{ ancestors: [SessionNode], children: [SessionNode], current: SessionNode }`
 async fn get_session_lineage(
     Path(session_id): Path<String>,
     State(state): State<HttpServerState>,
@@ -3766,7 +3723,13 @@ async fn handle_ws(mut socket: WebSocket, state: HttpServerState, session_id: St
     while let Some(Ok(msg)) = socket.next().await {
         match msg {
             WsMessage::Text(text) => {
-                let parsed: Option<SendMessageRequest> = serde_json::from_str(&text).ok();
+                let parsed: Option<SendMessageRequest> = match serde_json::from_str(&text) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to parse WS text as SendMessageRequest");
+                        None
+                    }
+                };
                 let request = parsed.unwrap_or_else(|| SendMessageRequest {
                     text: text.to_string(),
                     model: None,
@@ -3800,7 +3763,7 @@ async fn handle_ws(mut socket: WebSocket, state: HttpServerState, session_id: St
                     on_event: None,
                     pre_approval_checker: None,
                     on_prefetch_intent: None,
-                    // 2026-07-19 type-B: see sibling `/api/sessions/.../messages`
+                    // type-B: see sibling `/api/sessions/.../messages`
                     // initializer; no WS → no shutdown token → falls back to
                     // plain `rx.await`.
                     shutdown: None,
@@ -3856,17 +3819,15 @@ const DEDUP_WINDOW_SECS: u64 = 30;
 /// Map GC horizon. Entries older than this are evicted on every
 /// insert so the map stays bounded.
 const DEDUP_GC_SECS: u64 = 60;
-/// 2026-07-18: server-side WS heartbeat cadence.
-///
-/// Background: long-running spawn_blocking tools (storage_analyzer
+/// server-side WS heartbeat cadence.
+/// /// Background: long-running spawn_blocking tools (storage_analyzer
 /// walking C:\, code review, plan generation) produce zero
 /// application frames for many seconds. WebView2 / OS / NAT
 /// middleboxes silently drop idle sockets (60–600s). The forward
 /// loop only detects this on the *next* `socket.send` failure —
 /// during a long tool there is no next send, so the WS dies
 /// invisibly.
-///
-/// We emit a WS-protocol Ping every WS_HEARTBEAT_INTERVAL_SECS.
+/// /// We emit a WS-protocol Ping every WS_HEARTBEAT_INTERVAL_SECS.
 /// Pings are auto-ACKed by the browser at the tungstenite layer
 /// (no app message), cost ~2 bytes on the wire, and force every
 /// hop to refresh its idle timer. 15s is well below the shortest
@@ -3878,13 +3839,12 @@ const WS_HEARTBEAT_INTERVAL_SECS: u64 = 15;
 /// `Some(elapsed_secs)` if a duplicate was found within the dedup
 /// window (caller should reject), or `None` if the send is fresh
 /// (caller should proceed and the entry is recorded).
-///
-/// 2026-07-06: extracted from `handle_ws_stream_send` so the dedup
+/// /// extracted from `handle_ws_stream_send` so the dedup
 /// contract is unit-testable without a WebSocket.
 fn check_recent_send(state: &HttpServerState, session_id: &str, text: &str) -> Option<u64> {
     let key = dedup_key(session_id, text);
     let now = std::time::Instant::now();
-    // ★ DIAG 2026-07-08: unconditional stderr print so we can confirm
+    // ★ DIAG unconditional stderr print so we can confirm
     // dedup is reached even if tracing is filtered.
     eprintln!(
         "!!!DEDUP CALLED!!! session={} text={:?} key={} map_lock_ok={}",
@@ -3893,7 +3853,7 @@ fn check_recent_send(state: &HttpServerState, session_id: &str, text: &str) -> O
         key,
         state.recent_sends.lock().is_ok()
     );
-    // T2026-07-06: diagnostic — confirm dedup is reached in real WS path.
+    // Tdiagnostic — confirm dedup is reached in real WS path.
     tracing::info!(
         session = %session_id,
         key = %key,
@@ -3909,7 +3869,6 @@ fn check_recent_send(state: &HttpServerState, session_id: &str, text: &str) -> O
     // lock the first thread sees an empty map → inserts and returns
     // `None`; every subsequent thread sees the freshly-inserted
     // entry and returns `Some(elapsed)` for dedup.
-    //
     // Mutex poisoned: fail-open (don't block the user). Caller
     // will see `None` and proceed without dedup.
     let duplicate: Option<u64> = match state.recent_sends.lock() {
@@ -3965,7 +3924,7 @@ async fn handle_ws_stream_send(
 ) {
     use tokio::sync::mpsc;
 
-    // ★ DIAG 2026-07-08: unconditional entry print — owner reported
+    // ★ DIAG unconditional entry print — owner reported
     // 10x send_message_stream on backend but only 1x handleSendMessage
     // on frontend. If we see 10x here too, the trigger is upstream
     // (multiple WS frames from a single sendStream call → most likely
@@ -3979,7 +3938,7 @@ async fn handle_ws_stream_send(
         trace_id
     );
 
-    // 2026-07-19 (type-B root-cause): soft-shutdown `Notify` for the
+    // (type-B root-cause): soft-shutdown `Notify` for the
     // agent task. Cloned into `AgentOverrides::shutdown` so the agent
     // loop's `resolve_pre_dispatch` can race the approval oneshot
     // against it. We then `notify_one()` here when the WS is observed
@@ -3990,22 +3949,21 @@ async fn handle_ws_stream_send(
     // because the user explicitly wants to cancel.
     let shutdown_notify: Arc<tokio::sync::Notify> = Arc::new(tokio::sync::Notify::new());
 
-    // 2026-07-17: user-retry recovery. The key is
+    // user-retry recovery. The key is
     // `dedup_key(session_id, text)` — the same collision domain used by
     // `active_sessions` and `active_handles`.
-    //
     // Order of checks (most-specific first):
-    //   1. LIVE TASK (override): if the same (session, text) STILL has a
-    //      spawned agent task, the user has re-sent the original question
-    //      after the LLM self-interrupted (or the backend task hung
-    //      without emitting `Done`, so the frontend gave up via its
-    //      stale-timeout but the lock is still held). This is an explicit
-    //      retry — abort the stale task, free BOTH dedup locks, and let
-    //      the new send take over. This is the fix for "LLM stopped on
-    //      its own; re-sending the question does nothing".
-    //   2. RECENT SEND (storm guard): no live task, but identical content
-    //      arrived within DEDUP_WINDOW_SECS — that's a genuine client
-    //      retry storm / queue re-drain, still coalesced as before.
+    // 1. LIVE TASK (override): if the same (session, text) STILL has a
+    // spawned agent task, the user has re-sent the original question
+    // after the LLM self-interrupted (or the backend task hung
+    // without emitting `Done`, so the frontend gave up via its
+    // stale-timeout but the lock is still held). This is an explicit
+    // retry — abort the stale task, free BOTH dedup locks, and let
+    // the new send take over. This is the fix for "LLM stopped on
+    // its own; re-sending the question does nothing".
+    // 2. RECENT SEND (storm guard): no live task, but identical content
+    // arrived within DEDUP_WINDOW_SECS — that's a genuine client
+    // retry storm / queue re-drain, still coalesced as before.
     let active_key = dedup_key(session_id, &request.text);
 
     let stale_handle = {
@@ -4050,7 +4008,7 @@ async fn handle_ws_stream_send(
         return;
     }
 
-    // 2026-07-06: session-level active-stream lock. After the override
+    // session-level active-stream lock. After the override
     // above freed a stale entry, this insert succeeds for the new send.
     // The key is derived from `dedup_key` so both checks use the same
     // collision domain. This catches retries that arrive AFTER the
@@ -4070,7 +4028,7 @@ async fn handle_ws_stream_send(
             text_len = request.text.len(),
             "active_stream: duplicate (session_id, text) still locked; settling as deduped (safety net)"
         );
-        // 2026-07-17: 之前这个分支返回 `StreamEvent::Error`(code=
+        // 之前这个分支返回 `StreamEvent::Error`(code=
         // "duplicate_stream")，桌面端把它渲染成红色的「发送失败」横幅——
         // 这是误导：消息并没有失败，它正在被处理。这里改为与上方
         // `check_recent_send` 去重路径一致，发一个合成的 `Done`
@@ -4139,14 +4097,12 @@ async fn handle_ws_stream_send(
     // tool-call batch). We forward only events whose session
     // matches this WS connection's session, so a session-A tool
     // call does not leak into session-B's pane.
-    //
     // Rationale for per-session filtering here, not in the
     // front-end: the TodoPanel already keys state by session id,
     // but if we shipped raw events to every connection the React
     // store would still have to discard cross-session updates.
     // Filtering at the transport layer keeps the wire clean and
     // prevents another tab from snooping on a sibling session.
-    //
     // `None` session changes (CLI mode / legacy bootstrap)
     // intentionally route to every session — the right fallback
     // when no active session context is available.
@@ -4248,7 +4204,6 @@ async fn handle_ws_stream_send(
             // (populated when the user picks "Allow for this
             // session"). A hit on either is enough to skip the WS
             // round-trip.
-            //
             // The closure is sync (it holds a `std::sync::Mutex` for
             // both maps — the agent loop calls this on a tokio
             // worker thread) and extracts the canonical "command"
@@ -4336,7 +4291,6 @@ async fn handle_ws_stream_send(
                 // forever, and the agent's `AwaitApproval` is never
                 // resolved — the stream appears to "stuck thinking"
                 // with no recovery path short of a hard restart.
-                //
                 // The first attempted fix wrapped `blocking_send` in
                 // `tokio::task::block_in_place`, but `on_event` is a
                 // SYNCHRONOUS `Fn(Value) -> ()` invoked from inside
@@ -4346,7 +4300,6 @@ async fn handle_ws_stream_send(
                 // context where blocking is not allowed" when the
                 // worker pool tears down — see tokio-1.51.1
                 // `runtime/blocking/shutdown.rs:51:21`.
-                //
                 // The current fix: spawn a fire-and-forget task that
                 // owns the `tx` clone and awaits `tx.send(envelope)`.
                 // This guarantees delivery (no `try_send` drop), keeps
@@ -4384,7 +4337,7 @@ async fn handle_ws_stream_send(
                         // `ApprovalRecord` (so a session reload can
                         // re-render the countdown against the
                         // original deadline, not a fresh one).
-                        expires_at: Some(expires_at_ms),
+                        expires_at: expires_at_ms,
                         // 4-state approval: once / session / always /
                         // deny. The server sends the full set on
                         // every approval card so the desktop UI
@@ -4451,7 +4404,7 @@ async fn handle_ws_stream_send(
                     // deadline, not a freshly recomputed one
                     // (otherwise the countdown would briefly jump
                     // backwards or forwards across a page refresh).
-                    expires_at: Some(expires_at_ms),
+                    expires_at: expires_at_ms,
                     linked_assistant_id: None,
                 };
                 if let Err(e) = persistence.append_approval_message(&sid, &record) {
@@ -4497,7 +4450,7 @@ async fn handle_ws_stream_send(
                 }
             }))
         },
-        // 2026-07-19 (type-B root-cause): forward the WS-side
+        // (type-B root-cause): forward the WS-side
         // soft-shutdown `Notify` so the agent loop can race it
         // against the approval oneshot (see
         // `tool_dispatch::resolve_pre_dispatch` and the `Notify` arm
@@ -4513,7 +4466,7 @@ async fn handle_ws_stream_send(
     // `StreamEvent::Thinking` (for the collapsible "思考过程" block
     // in MessageBubble). Without this capture the parsed-out
     // `_think` text was discarded per the previous "think is internal
-    // scaffolding" product decision — but 主人 (2026-07-08) asked to
+    // scaffolding" product decision — but 用户 (2026-07-08) asked to
     // surface it as a foldable block, so we forward it.
     let tx_for_think = tx.clone();
     // One parser per WS stream — its state is meaningless across turn
@@ -4524,7 +4477,6 @@ async fn handle_ws_stream_send(
     // assistant message bookkeeping, but the *WS-side* text payload
     // we forward to the desktop client is the *raw* delta.content —
     // which means think tags leak into the user's terminal stream.
-    //
     // Re-parsing on the server side here lets the desktop client
     // see a clean `Text` event stream with no think blocks.  We
     // deliberately do *not* forward the reasoning text to the
@@ -4560,7 +4512,7 @@ async fn handle_ws_stream_send(
             if let Some(ref mut text) = delta.content {
                 if !text.is_empty() {
                     let (clean, think) = think_parser.lock().unwrap().feed(text);
-                    // 2026-07-08: forward the extracted think block to
+                    // forward the extracted think block to
                     // the client as `StreamEvent::Thinking` so the
                     // chat layer can render a collapsible "思考过程"
                     // block. `ThinkBlockParser::feed` returns the body
@@ -4588,15 +4540,15 @@ async fn handle_ws_stream_send(
         }
         if let Some(delta) = &chunk.delta {
             // 1. Text content (LLM response, already think-stripped
-            //    by the local `think_parser` above).  We then run
-            //    the *stateful* tool-call sanitizer so a
-            //    `<minimax:tool_call>…</minimax:tool_call>` block
-            //    split across chunks is fully suppressed (the
-            //    previous per-chunk regex would leak the tail of any
-            //    block whose opener had not yet been seen).  The
-            //    redactor also strips the bare `minimax:tool_call`
-            //    literal and orphan closing tags, so even a malformed
-            //    LLM response is sanitised.
+            // by the local `think_parser` above).  We then run
+            // the *stateful* tool-call sanitizer so a
+            // `<minimax:tool_call>…</minimax:tool_call>` block
+            // split across chunks is fully suppressed (the
+            // previous per-chunk regex would leak the tail of any
+            // block whose opener had not yet been seen).  The
+            // redactor also strips the bare `minimax:tool_call`
+            // literal and orphan closing tags, so even a malformed
+            // LLM response is sanitised.
             if let Some(text) = &delta.content {
                 if !text.is_empty() {
                     let mut guard = tool_call_sanitizer.lock().unwrap();
@@ -4678,7 +4630,7 @@ async fn handle_ws_stream_send(
                                 .and_then(|t| t.as_str())
                                 .map(String::from)
                                 .unwrap_or_else(|| format!("{}-anon", tool));
-                            // 2026-07-18 (A+C product fix): surface a
+                            // (A+C product fix): surface a
                             // user-facing denial so the front-end can
                             // show a "this call was blocked" banner
                             // that matches the agent's injected
@@ -4832,7 +4784,7 @@ async fn handle_ws_stream_send(
                             }
                         }
                         "usage_update" => {
-                            // 2026-07-14: Per-turn usage snapshot for the
+                            // Per-turn usage snapshot for the
                             // front-end cache-hit chip. Mirrors the
                             // `context_usage` branch shape but carries the
                             // token breakdown instead of window pressure.
@@ -4873,7 +4825,7 @@ async fn handle_ws_stream_send(
                             }
                         }
                         "memory_update" => {
-                            // 2026-07-14: surface memory writes/updates/
+                            // surface memory writes/updates/
                             // deletes/summaries in the chat so the user can
                             // see what the agent is remembering. Mirrors the
                             // `usage_update` branch shape but carries the
@@ -4913,7 +4865,7 @@ async fn handle_ws_stream_send(
                             }
                         }
                         "memory_recall" => {
-                            // 2026-07-14 (Phase 19 A): the agent recalled
+                            // (Phase 19 A): the agent recalled
                             // N related facts from memory this turn. We
                             // surface a small preview (top-3 keys + count)
                             // to the chat so the user can see "the agent
@@ -4988,7 +4940,7 @@ async fn handle_ws_stream_send(
     let ws_disconnected = Arc::new(AtomicBool::new(false));
     let active_key_clone = active_key.clone();
 
-    // 2026-07-19: surface a prior compression-quota warning (set by the
+    // surface a prior compression-quota warning (set by the
     // one-shot startup health check if it hit a 429 / quota error) as a
     // persistent `CompactionStatus` banner. Without this the user only
     // sees the quota error in the backend log and never learns why
@@ -5020,7 +4972,7 @@ async fn handle_ws_stream_send(
             .send_message_stream(&session_id_clone, &request_text, overrides, on_chunk)
             .await;
 
-        // 2026-07-22 FIX: Previously, if ws_disconnected was true, we
+        // FIX: Previously, if ws_disconnected was true, we
         // skipped sending the terminal Done/Error event entirely. This
         // caused the frontend to hang or show "interrupted" because it
         // never received a closing signal. Now, we always attempt to send
@@ -5078,7 +5030,7 @@ async fn handle_ws_stream_send(
                     })
                     .await
                 {
-                    // 2026-07-14 (P0-1 defense): tx.send failure means
+                    // (P0-1 defense): tx.send failure means
                     // the client's WS reader side dropped. Log a warning
                     // so we can diagnose "stream hung with no Done"
                     // issues from logs instead of just seeing the Done
@@ -5091,7 +5043,7 @@ async fn handle_ws_stream_send(
                 }
             }
             Err(e) => {
-                // 2026-07-19: keep the raw error in the log (for debugging)
+                // keep the raw error in the log (for debugging)
                 // but send the user a classified, actionable message so
                 // quota / auth failures aren't a mystery. The original
                 // `e.to_string()` survives in the WARN below.
@@ -5113,7 +5065,7 @@ async fn handle_ws_stream_send(
                     })
                     .await
                 {
-                    // 2026-07-22: The rx forward loop has already exited
+                    // The rx forward loop has already exited
                     // (likely because the client closed the WS). The error
                     // event is lost — the user won't see it in the chat.
                     // Log this so we can diagnose "error silently eaten"
@@ -5131,7 +5083,7 @@ async fn handle_ws_stream_send(
         // Release the per-session stream lock so future sends
         // (same or different content) for this session are allowed.
         active_sessions.lock().unwrap().remove(&active_key_clone);
-        // 2026-07-16: drop the recent_sends entry on stream completion
+        // drop the recent_sends entry on stream completion
         // (success OR error). Otherwise a failed send ("LLM busy, try
         // later") leaves the text in the dedup map for DEDUP_WINDOW_SECS
         // (30s), and the user's legitimate retry is silently dropped —
@@ -5141,7 +5093,7 @@ async fn handle_ws_stream_send(
         recent_sends.lock().unwrap().remove(&active_key_clone);
     });
 
-    // 2026-07-17: register the live task handle OUTSIDE the spawned
+    // register the live task handle OUTSIDE the spawned
     // future (the handle does not exist inside its own closure) so a
     // user retry of the same (session, text) can abort it if it later
     // hangs without sending a terminal `Done` event. This runs
@@ -5155,8 +5107,7 @@ async fn handle_ws_stream_send(
         "ws_stream: rx forward loop starting"
     );
 
-    // 2026-07-18: server-side WS heartbeat.
-    //
+    // server-side WS heartbeat.
     // Background: storage_analyzer (and similar spawn_blocking tools)
     // can run for many seconds with **zero application-level frames**
     // on the wire. WebView2 / OS / NAT / antivirus middleboxes have
@@ -5164,7 +5115,6 @@ async fn handle_ws_stream_send(
     // our side. The forward loop only learns about the disconnect
     // when the next `socket.send` fails — but during a long tool
     // there is no next send.
-    //
     // Fix: drive the forward loop with `tokio::select!` and emit a
     // WS-protocol Ping every WS_HEARTBEAT_INTERVAL_SECS. Pings are
     // auto-ACKed by the browser at the tungstenite layer (never reach
@@ -5172,13 +5122,12 @@ async fn handle_ws_stream_send(
     // every hop in the path to refresh its idle timer. If the client
     // is dead, the heartbeat's `socket.send` fails the same way as a
     // data send — we hit the existing disconnect cleanup.
-    //
     // Why a select arm instead of a separate spawned ticker:
     // - Single owner of `socket` → no `&mut socket` borrowing fight.
     // - When the rx loop exits, the select drops the heartbeat future
-    //   on the floor automatically — no extra JoinHandle to cancel.
+    // on the floor automatically — no extra JoinHandle to cancel.
     // - `biased` keeps events from starving under heavy heartbeat
-    //   cadence (every tick prefers the rx arm first).
+    // cadence (every tick prefers the rx arm first).
     let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(
         WS_HEARTBEAT_INTERVAL_SECS,
     ));
@@ -5189,7 +5138,7 @@ async fn handle_ws_stream_send(
     heartbeat.tick().await;
 
     let mut was_client_disconnect = false;
-    // 2026-07-21 (diagnostic): every arm of the rx-forward loop's
+    // (diagnostic): every arm of the rx-forward loop's
     // `select!` (send-fail, heartbeat-fail, ws close/err/none, rx
     // none) sets the same `was_client_disconnect` flag and the same
     // generic exit INFO line — making it impossible to tell from a
@@ -5217,7 +5166,7 @@ async fn handle_ws_stream_send(
                             exit_branch = "rx_send_fail";
                             was_client_disconnect = true;
                             ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                            // 2026-07-19 (type-B root-cause): soft-drain
+                            // (type-B root-cause): soft-drain
                             // instead of hard-abort. Notify the agent
                             // task so any in-flight approval wait wakes
                             // up as `ChannelClosed` (via
@@ -5250,7 +5199,7 @@ async fn handle_ws_stream_send(
                     session = %session_id,
                     "ws_stream: heartbeat ping"
                 );
-                // 2026-07-22 (P1-2): send BOTH a WS-protocol Ping and
+                // (P1-2): send BOTH a WS-protocol Ping and
                 // an application-level Heartbeat text frame. The Ping
                 // refreshes middlebox/NAT idle timers and lets the
                 // server detect dead connections when the send fails.
@@ -5267,7 +5216,7 @@ async fn handle_ws_stream_send(
                     exit_branch = "heartbeat_ping_fail";
                     was_client_disconnect = true;
                     ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                    // 2026-07-19 (type-B root-cause): same soft-drain
+                    // (type-B root-cause): same soft-drain
                     // pattern as the rx.send-fail arm above. The
                     // heartbeat ping failed → the WS path is dead even
                     // though we can't yet read a close frame, so we
@@ -5299,7 +5248,7 @@ async fn handle_ws_stream_send(
                     break;
                 }
             }
-            // 2026-07-20: read incoming WS messages during streaming.
+            // read incoming WS messages during streaming.
             // Before this arm was added, the select! loop only forwarded
             // agent events TO the client and sent heartbeats — it never
             // read FROM the socket. This meant `approval_response` and
@@ -5308,7 +5257,6 @@ async fn handle_ws_stream_send(
             // agent finished and handle_ws_stream_send returned. By then
             // the 30s ApprovalRegistry timeout had already fired
             // (default-deny), and the user's click was a no-op.
-            //
             // Now we read from the socket concurrently. ApprovalResponse
             // and ClarifyResponse are processed immediately (resolving
             // the oneshot in ApprovalRegistry / ClarifyDispatcher so
@@ -5508,8 +5456,7 @@ async fn ws_groupchat_upgrade(
 }
 
 /// Handle a group chat session over WebSocket.
-///
-/// The client sends `{"type":"send","text":"..."}` and the server
+/// /// The client sends `{"type":"send","text":"..."}` and the server
 /// streams each agent's reply chunk by chunk. After receiving the
 /// initial message, the socket is moved into a background sender task
 /// and the handler returns — the frontend opens a **new** WS connection
@@ -5782,9 +5729,8 @@ async fn handle_ws_groupchat(
     // forwards both (a) `mpsc::Receiver<WsEnvelope>` for streaming
     // chunks and (b) `broadcast::Receiver<RoomEvent>` for task-engine
     // events. It exits when:
-    //   * the channel closes (client gone / send failed), OR
-    //   * the runtime emits `RoomEvent::RoomCompleted` for the room.
-    //
+    // * the channel closes (client gone / send failed), OR
+    // * the runtime emits `RoomEvent::RoomCompleted` for the room.
     // We do not block here: the handler returns and the spawned
     // task continues to drive the socket until one of those
     // exit conditions fires.
@@ -5911,8 +5857,7 @@ fn room_event_to_stream(
 /// Translate a `TodoChange` (emitted by the `todo` tool) into a
 /// wire-level [`StreamEvent`] that the desktop `useStreamChat`
 /// hook already knows how to dispatch.
-///
-/// v1 (2026-07-07): every mutation becomes a `TodoItemUpserted`
+/// /// every mutation becomes a `TodoItemUpserted`
 /// so the front-end can apply upsert-by-id semantics. The
 /// `session_id` field on every event is the WS session that
 /// produced the change — desktop tabs already filter their todo
@@ -6058,7 +6003,7 @@ fn todo_change_to_stream(
 
 /// Streaming WebSocket handler.
 async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id: String) {
-    // 2026-07-20: split the WebSocket into sender/receiver halves so that
+    // split the WebSocket into sender/receiver halves so that
     // handle_ws_stream_send can simultaneously forward agent events TO the
     // client AND read approval_response/clarify_response FROM the client.
     // Before this split, the select! loop in handle_ws_stream_send only
@@ -6190,7 +6135,7 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
         match msg {
             WsMessage::Text(text) => {
                 let trace_id = trace_id_base.clone();
-                // T2026-07-06: diagnostic — log every WS message receipt.
+                // Tdiagnostic — log every WS message receipt.
                 tracing::info!(
                     session = %session_id,
                     text_preview = %text.chars().take(80).collect::<String>(),
@@ -6201,7 +6146,7 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
                 if let Ok(ws_msg) = serde_json::from_str::<WsClientMessage>(&text) {
                     match ws_msg {
                         WsClientMessage::ApprovalResponse { request_id, decision } => {
-                            // 2026-07-19: INFO-level receipt log. The
+                            // INFO-level receipt log. The
                             // previous `debug!` (line 5753 below) was
                             // invisible at the default log level, so
                             // when the user's click "disappeared" and
@@ -6253,7 +6198,7 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
                                 &request_id,
                                 outcome,
                             );
-                            // 2026-07-19: matched/miss diagnostic.
+                            // matched/miss diagnostic.
                             // `matched=false` means the request_id was
                             // not found in the pending approvals map —
                             // either the entry was already timed out,
@@ -6307,7 +6252,6 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
                             // request and the response (it shouldn't —
                             // the registry keeps the request alive), we
                             // skip the side effect and log.
-                            //
                             // Only record on the first successful
                             // resolve — duplicate responses would
                             // otherwise re-grant the same path /
@@ -6586,7 +6530,13 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
                 }
 
                 // Legacy plain-text / SendMessageRequest fallback.
-                let parsed: Option<SendMessageRequest> = serde_json::from_str(&text).ok();
+                let parsed: Option<SendMessageRequest> = match serde_json::from_str(&text) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to parse WS text as SendMessageRequest");
+                        None
+                    }
+                };
                 let request = parsed.unwrap_or_else(|| SendMessageRequest {
                     text: text.to_string(),
                     model: None,
@@ -6625,15 +6575,13 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
 /// resolved / evicted, `Err` on a DB error. Used by the
 /// 4-state `session` / `always` side-effect handlers below to
 /// know which command to add to the bypass / persistent list.
-///
-/// P6 (2026-07-20): for resource-scope approvals (file/terminal
+/// /// P6 (2026-07-20): for resource-scope approvals (file/terminal
 /// outside the declared permission profile), also extracts the
 /// `path` argument so the `Always` choice can persist the path to
 /// `config.yaml::permission_profile.granted_paths`. Returns `None`
 /// for both fields when the row doesn't exist or isn't a resource
 /// approval.
-///
-/// IMPORTANT (2026-07-20): both call sites invoke this helper
+/// /// IMPORTANT (2026-07-20): both call sites invoke this helper
 /// **after** `approval_registry.resolve()`, which removes the
 /// pending row. The earlier `is_pending` guard therefore always
 /// returned `false` and silently dropped every Session/Always
@@ -6685,8 +6633,7 @@ fn lookup_pending_command(
 /// be `None` depending on what the original tool call used. Caller
 /// (typically `record_approval_side_effect_for_resource`) decides
 /// what to persist based on which fields are populated.
-///
-/// IMPORTANT (2026-07-20): like [`lookup_pending_command`], this is
+/// /// IMPORTANT (2026-07-20): like [`lookup_pending_command`], this is
 /// called after `approval_registry.resolve()`, so the previous
 /// `is_pending` guard would always short-circuit to `(None, None)`
 /// and silently discard every Session/Always grant. The persisted
@@ -6868,16 +6815,16 @@ fn record_resource_approval_side_effect(
     match choice {
         hermix_transport::ApprovalChoice::Always => {
             // 1. Pull a fresh GatewayConfig snapshot (the user may
-            //    have edited it via Settings since startup).
+            // have edited it via Settings since startup).
             let mut cfg: hermix_config::GatewayConfig = state
                 .agent_service
                 .current_config_value()
                 .and_then(|v| serde_json::from_value(v).ok())
                 .unwrap_or_else(|| state.config.as_ref().clone());
             // 2. Apply grants. Mirrors the
-            //    `PendingGrant::from_tool_call` heuristic in
-            //    hermix-core so server- and client-side agree on
-            //    what "grant this resource" means.
+            // `PendingGrant::from_tool_call` heuristic in
+            // hermix-core so server- and client-side agree on
+            // what "grant this resource" means.
             if let Some(p) = &path {
                 cfg.permission_profile.grant_path(p);
             }
@@ -6885,9 +6832,9 @@ fn record_resource_approval_side_effect(
                 cfg.permission_profile.grant_command(c);
             }
             // 3. Persist to config.yaml so the grant survives
-            //    server restart. Failure is logged but does not
-            //    abort the request — the in-memory state is
-            //    already pushed to the agent service below.
+            // server restart. Failure is logged but does not
+            // abort the request — the in-memory state is
+            // already pushed to the agent service below.
             let config_path = state.hermix_home.join("config.yaml");
             if let Err(e) = hermix_config::save_config_yaml(&config_path, &cfg) {
                 tracing::warn!(
@@ -6905,8 +6852,8 @@ fn record_resource_approval_side_effect(
                 );
             }
             // 4. Push the updated config to the live agent service
-            //    so the next chat's `build_agent_config` picks up
-            //    the new profile without a server restart.
+            // so the next chat's `build_agent_config` picks up
+            // the new profile without a server restart.
             match serde_json::to_value(&cfg) {
                 Ok(value) => state.agent_service.set_config(value),
                 Err(e) => tracing::warn!(
@@ -6963,10 +6910,9 @@ fn redact_sensitive(input: &str) -> String {
     out
 }
 
-/// 2026-07-19: turn a raw `AgentError` from the agent loop into a
+/// turn a raw `AgentError` from the agent loop into a
 /// user-facing `(code, message)` pair.
-///
-/// Each classified category prepends a short actionable Chinese prefix
+/// /// Each classified category prepends a short actionable Chinese prefix
 /// (e.g. "AI 服务过载:") followed by the **original provider error
 /// message**, so the user can see what actually happened (which model,
 /// which provider, what the API returned) instead of a generic
@@ -6978,7 +6924,7 @@ fn user_facing_agent_error(e: &AgentError) -> (String, String) {
 
     /// Extract the human-readable message from a raw error string.
     /// Provider responses are often nested JSON like:
-    ///   `API error 529 <unknown status code>: {"type":"error","error":{"message":"负载较高..."}}`
+    /// `API error 529 <unknown status code>: {"type":"error","error":{"message":"负载较高..."}}`
     /// This function strips the `API error NNN` prefix and extracts
     /// the inner `message` field if present, falling back to the
     /// stripped string otherwise.
@@ -7050,7 +6996,6 @@ fn user_facing_agent_error(e: &AgentError) -> (String, String) {
 
 // ---------------------------------------------------------------------------
 // Visible-text sanitizer for raw tool-call markers in LLM output.
-//
 // The redactor itself lives in `hermix_core::tool_call_sanitizer`
 // (see `hermix_core::ToolCallSanitizer`). It is a *stateful*
 // state-machine: opening and closing XML tags may arrive in different
@@ -7058,9 +7003,7 @@ fn user_facing_agent_error(e: &AgentError) -> (String, String) {
 // implementation) would leak any block whose opener and closer were
 // split across a chunk boundary. The new implementation holds the
 // in-between chunks until the matching close arrives.
-//
 // ## Why this lives in two places
-//
 // The agent loop (`hermix_agent::agent_loop::apply_stream_collect_chunk`)
 // runs one copy so the *persisted* assistant message is clean on
 // reload. The WS layer (`hermix_server::lib` on_chunk) runs a second
@@ -7068,9 +7011,7 @@ fn user_facing_agent_error(e: &AgentError) -> (String, String) {
 // are idempotent (the second pass is a no-op once the text is
 // already clean), so the doubling is intentional belt-and-suspenders
 // and not a bug.
-//
 // ## What it does NOT do
-//
 // It does NOT try to *execute* the embedded tool call. That would
 // require either (a) telling the agent loop to use a different
 // text-based parser as the authoritative source, or (b) pre-parsing
@@ -7078,7 +7019,6 @@ fn user_facing_agent_error(e: &AgentError) -> (String, String) {
 // events out-of-band. Both are bigger surface-area changes; the
 // narrow "don't show the XML to the user" fix is enough to stop the
 // visible leak today.
-//
 // The original regression tests for this leak have been moved to
 // `hermix_core::tool_call_sanitizer::tests`.
 
@@ -7101,7 +7041,7 @@ fn parse_permission_level(value: Option<&str>) -> Option<PermissionLevel> {
 }
 
 /// Convert wire-format images (raw bytes) to agent-format images (base64).
-/// 2026-06-25: 多图支持 — client sends `Vec<ImageAttachment>` with binary
+/// 多图支持 — client sends `Vec<ImageAttachment>` with binary
 /// `bytes`; the LLM API needs `data:<mime>;base64,<...>` URLs, so we
 /// encode here.
 fn convert_wire_images(
@@ -7276,14 +7216,12 @@ impl IntoResponse for HttpError {
 
 /// Resolve an LLM provider name and base URL for the runtime TickLoop SelfCheck
 /// connectivity probe.
-///
-/// Priority:
+/// /// Priority:
 /// 1. `config.model`'s `provider` segment → look up that provider in `llm_providers`
-///    and return its `base_url` (if set) + provider name.
+/// and return its `base_url` (if set) + provider name.
 /// 2. The first provider in `llm_providers` that has an `api_key` set → provider name,
-///    and its `base_url` (if set).
-///
-/// Returns `Some((name, base_url_or_none))` so the runtime can infer a default URL
+/// and its `base_url` (if set).
+/// /// Returns `Some((name, base_url_or_none))` so the runtime can infer a default URL
 /// even when `base_url` is not explicitly configured.
 pub(crate) fn extract_llm_probe_url(config: &GatewayConfig) -> Option<(String, Option<String>)> {
     // 1) Try the active model string ("provider:model")
@@ -7304,9 +7242,9 @@ pub(crate) fn extract_llm_probe_url(config: &GatewayConfig) -> Option<(String, O
         }
     }
     // 2) Fall back to the first provider that is "configurable" (api_key OR env
-    //    var OR explicit base_url). Without an api_key/env, the runtime can't
-    //    actually authenticate, but returning the provider name + base_url lets
-    //    the caller at least surface a useful default (and probe it).
+    // var OR explicit base_url). Without an api_key/env, the runtime can't
+    // actually authenticate, but returning the provider name + base_url lets
+    // the caller at least surface a useful default (and probe it).
     for (name, p) in &config.llm_providers {
         let has_key = p.api_key.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
             || std::env::var(os_env_var(name)).ok().map(|s| !s.is_empty()).unwrap_or(false);
@@ -7414,16 +7352,15 @@ mod probe_url_tests {
 /// "crashed child left a LISTEN socket on the same port" scenario
 /// that crashed hermix-desktop sidecar on Windows with
 /// `os error 10048 (WSAEADDRINUSE)`.
-///
-/// We:
+/// /// We:
 /// 1. Bind a TCP listener on a random port with SO_REUSEADDR=on
-///    (mirroring the production TcpSocket::bind path in
-///    `run_server_with_state`).
+/// (mirroring the production TcpSocket::bind path in
+/// `run_server_with_state`).
 /// 2. Drop that listener without graceful shutdown — simulating
-///    a process crash.
+/// a process crash.
 /// 3. Immediately re-bind the SAME port with SO_REUSEADDR=on.
 /// 4. Assert the second bind succeeds (would fail with
-///    WSAEADDRINUSE on Windows without SO_REUSEADDR).
+/// WSAEADDRINUSE on Windows without SO_REUSEADDR).
 #[cfg(test)]
 mod reuseaddr_regression_tests {
     use std::net::SocketAddr;
@@ -7477,8 +7414,7 @@ mod reuseaddr_regression_tests {
 
 /// Phase 21 (2026-07-07): regression coverage for the
 /// "database disk image is malformed" `delete_session` bug.
-///
-/// Root cause: `delete_session` opened `sessions.db` in the legacy
+/// /// Root cause: `delete_session` opened `sessions.db` in the legacy
 /// `journal_mode = delete` (single-writer, blocking) default while
 /// the writer side ran in `journal_mode = WAL`. When the writer
 /// was killed mid-transaction (Tauri sidecar SIGKILL on shutdown,
@@ -7488,8 +7424,7 @@ mod reuseaddr_regression_tests {
 /// pre-checkpoint and a post-commit truncate, makes both processes
 /// speak the same journal format and keeps the on-disk file
 /// fully consistent.
-///
-/// This test asserts (1) the delete-side PRAGMA matches the
+/// /// This test asserts (1) the delete-side PRAGMA matches the
 /// writer side, (2) the WAL is truncated after commit, and
 /// (3) the 404 path rolls back the cascade DELETEs.
 /// Phase 21 extension (2026-07-07): the WAL regression tests
@@ -7771,7 +7706,6 @@ mod delete_session_wal_regression_tests {
         // file path CREATES the file (rusqlite default), so the helper
         // succeeds — but the file has **no schema**, so any
         // `SELECT FROM sessions` raises "no such table: sessions".
-        //
         // The pre-fix behavior silently swallowed this error and
         // returned an empty list. This test pins the helper's contract:
         // the open succeeds and the journal mode is WAL, but the
@@ -8079,10 +8013,8 @@ struct DeliverResultsRequest {
 
 /// `POST /v1/tasks/{task_id}/results` — Register deliverable artifacts
 /// for a Task.
-///
-/// (Phase 7 / P7-1)
-///
-/// This is the `present_files` equivalent endpoint. It:
+/// /// (Phase 7 / P7-1)
+/// /// This is the `present_files` equivalent endpoint. It:
 /// 1. Classifies each file path/URL by artifact type (html/image/report/video/file/directory)
 /// 2. Adds each as a `TaskResultRef` to the Task's `results` field
 /// 3. Emits a `ResultDelivered` event via the orchestration bus
@@ -8149,8 +8081,7 @@ async fn deliver_results(
 
 /// Classify a file path or URL into a `TaskArtifactType` based on its
 /// extension or scheme.
-///
-/// - `.html` / `.htm` → `Html`
+/// /// - `.html` / `.htm` → `Html`
 /// - `.png` / `.jpg` / `.jpeg` / `.gif` / `.svg` / `.webp` → `Image`
 /// - `.pdf` / `.doc` / `.docx` / `.xls` / `.xlsx` / `.md` → `Report`
 /// - `.mp4` / `.avi` / `.mov` / `.webm` → `Video`
@@ -8380,10 +8311,8 @@ async fn list_automation_runs(
 }
 
 /// `POST /v1/automations/{id}/trigger` — Manually trigger an automation.
-///
-/// (Phase 6 / P6-5)
-///
-/// Dispatches through the unified `agent_service.send_message()` path,
+/// /// (Phase 6 / P6-5)
+/// /// Dispatches through the unified `agent_service.send_message()` path,
 /// the same path used by HTTP chat requests and the scheduler's trigger
 /// callback (铁律 DD: HTTP 与自动化同路径).
 async fn trigger_automation_endpoint(

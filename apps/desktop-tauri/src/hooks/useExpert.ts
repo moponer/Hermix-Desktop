@@ -1,13 +1,12 @@
 // Expert + workspace + permission state hooks.
-//
 // State is persisted in localStorage so it survives reloads and session switches.
 // - `hermix.session.<id>.expertId` — the expert currently hired for session <id>
 // - `hermix.desktop.permission_level` — global ("default" | "full")
 // - `hermix.desktop.workspace` — global default workspace (separate from per-message
-//   project binding; this is the *default* sent to backend as `workspace` field)
+// project binding; this is the *default* sent to backend as `workspace` field)
 // - `hermix.desktop.recent_experts` — LRU list of recently hired expert ids
-//   (capped at 5) used by the ChatView expert chip so it shows only what
-//   the user has actually touched, not the full 18-item catalog.
+// (capped at 5) used by the ChatView expert chip so it shows only what
+// the user has actually touched, not the full 18-item catalog.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -28,13 +27,11 @@ export const SESSION_WORKSPACE_KEY = (sessionId: string) => sessionKey(sessionId
 export const SESSION_SKILLS_KEY = (sessionId: string) => sessionKey(sessionId, "skills");
 
 // ── Draft storage keys ──────────────────────────────────────────────
-//
 // When the user is in the welcome state (no active session), they can
 // still pick an expert / workspace from the composer chips. Without
 // these draft keys, the per-session hooks had no place to write the
 // choice, so `setExpert` / `setWorkspace` silently dropped the call
 // and the chip stayed on "专家" / "目录" after the user picked an item.
-//
 // The draft is the source of truth while `sessionId === null` and gets
 // migrated into the new session's per-session storage on first send
 // (see App.tsx :: handleSendMessage).
@@ -93,7 +90,7 @@ export function useSessionExpert(sessionId: string | null | undefined): {
   clear: () => void;
 } {
   // 统一使用 draft key 作为唯一数据源，session key 仅用于向后兼容。
-  // 修复：设置了 session key 但读的是 draft key，导致选择不生效（主人 23:26 反馈）
+  // 修复：设置了 session key 但读的是 draft key，导致选择不生效（用户 23:26 反馈）
   const [expertId, setExpertId] = useState<string | null>(() => {
     // 优先读取 draft key（主数据源）
     try {

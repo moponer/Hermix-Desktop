@@ -52,8 +52,7 @@ impl From<std::io::Error> for SkillError {
 // ---------------------------------------------------------------------------
 
 /// Central manager for skill CRUD operations.
-///
-/// Delegates storage to a [`SkillStore`] implementation and optionally
+/// /// Delegates storage to a [`SkillStore`] implementation and optionally
 /// synchronises with a remote [`SkillsHubClient`].
 pub struct SkillManager {
     store: Arc<dyn SkillStore>,

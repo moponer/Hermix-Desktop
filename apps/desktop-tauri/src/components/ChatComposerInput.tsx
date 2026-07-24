@@ -1,18 +1,14 @@
 // src/components/ChatComposerInput.tsx
-//
-// v2 (2026-06-25): 重写 — 参考 ChatView.tsx 的 Composer 同款布局。
-//
+// 重写 — 参考 ChatView.tsx 的 Composer 同款布局。
 // 主诉：之前是单行 <input>，没工具栏、没 textarea 自动高度、没队列指示。
-//       GroupChatView 输入卡顿也是因为父组件 1500 行每次 setInputText 都重渲染。
-//
+// GroupChatView 输入卡顿也是因为父组件 1500 行每次 setInputText 都重渲染。
 // 本版改进：
-//   · 用 <textarea>（min-h-72 → max-h-200 自动撑开）+ Enter 发送 / Shift+Enter 换行
-//   · **状态下沉**：input 状态放本组件内部 useState，父组件传 ref 读取
-//     → 父组件 GroupChatView 每次输入零重渲染（textarea onChange 只更新本组件）
-//   · 容器样式 100% 复刻 ChatView Composer：rounded-2xl / border / shadow / px-4
-//   · 工具栏对齐：右边发送按钮（32x32 square）+ 停止按钮（仅 streaming 时）
-//   · isStreaming 时 placeholder 改为"输入消息加入队列..."
-//
+// · 用 <textarea>（min-h-72 → max-h-200 自动撑开）+ Enter 发送 / Shift+Enter 换行
+// · **状态下沉**：input 状态放本组件内部 useState，父组件传 ref 读取
+// → 父组件 GroupChatView 每次输入零重渲染（textarea onChange 只更新本组件）
+// · 容器样式 100% 复刻 ChatView Composer：rounded-2xl / border / shadow / px-4
+// · 工具栏对齐：右边发送按钮（32x32 square）+ 停止按钮（仅 streaming 时）
+// · isStreaming 时 placeholder 改为"输入消息加入队列..."
 // 群聊不需要 ChatView 的专家/目录/权限/模型/语音/图片/润色等复杂元素，
 // 最小化原则 —— 只复刻"用户输入 + 发送"这层。
 

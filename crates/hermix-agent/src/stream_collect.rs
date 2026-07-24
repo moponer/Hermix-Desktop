@@ -47,8 +47,7 @@ pub(crate) enum StreamCollectOutcome {
 
 /// Pack the streamed content/reasoning/tool_calls into the final assistant
 /// message.
-///
-/// Always sets a `content` string when `tool_calls` are present, even when
+/// /// Always sets a `content` string when `tool_calls` are present, even when
 /// the sanitizer has stripped the raw XML to an empty string. Some API
 /// providers (MiniMax M3) reject assistant messages whose `content` field
 /// is `null` or missing when they carry `tool_calls`.
@@ -83,14 +82,12 @@ pub fn assemble_stream_assistant_message(
 }
 
 /// Apply one streaming [`StreamChunk`] during `collect_stream_llm_response`.
-///
-/// `think_parser` is a stateful splitter that pulls `<think>...</think>` text
+/// /// `think_parser` is a stateful splitter that pulls `<think>...</think>` text
 /// out of the visible content stream in real time and routes it to
 /// `reasoning_content` instead. Without this, providers that embed their
 /// reasoning in `delta.content` (MiniMax M2.7, Qwen, DeepSeek-R1) would
 /// leak the whole thinking monologue into the user-visible reply.
-///
-/// `tool_call_sanitizer` is a stateful redactor that pulls raw
+/// /// `tool_call_sanitizer` is a stateful redactor that pulls raw
 /// `<minimax:tool_call>…</minimax:tool_call>` /
 /// `<invoke name="…">…</invoke>` blocks out of the *clean* (post-think)
 /// text. Without it, providers that emit tool calls as raw XML inside
@@ -112,7 +109,7 @@ pub fn apply_stream_collect_chunk(
     on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
 ) {
     let mut chunk = chunk;
-    // 2026-07-14 (Frontend Audit, "思考被切成两段"): track whether
+    // (Frontend Audit, "思考被切成两段"): track whether
     // the think-block parser above already emitted thinking for
     // THIS chunk. Some providers (MiniMax M2.7 with the
     // `extra.thinking` adapter, hybrid transports that re-wrap a
@@ -122,7 +119,6 @@ pub fn apply_stream_collect_chunk(
     // `callbacks.on_thinking` fires twice — the chat UI accumulates
     // the same sentence into `unified_steps` twice, rendering as
     // TWO "已深度思考" blocks for what the model said once.
-    //
     // Strict priority order: parser-extracted `think_text`
     // (canonical — same path that the persisted `reasoning_content`
     // is built from) wins over `delta.extra.thinking`. We only
@@ -138,11 +134,11 @@ pub fn apply_stream_collect_chunk(
             raw_content.push_str(&clean_text);
             // Second pass: scrub raw tool-call XML out of the
             // *clean* text. We do this BEFORE both
-            //   (a) the local `content` accumulator (so the
-            //       persisted assistant message is clean on
-            //       reload) and
-            //   (b) the chunk we forward to the WS layer (so
-            //       the live stream never shows leaked XML).
+            // (a) the local `content` accumulator (so the
+            // persisted assistant message is clean on
+            // reload) and
+            // (b) the chunk we forward to the WS layer (so
+            // the live stream never shows leaked XML).
             let visible_text = tool_call_sanitizer.feed(&clean_text);
             if !visible_text.is_empty() {
                 content.push_str(&visible_text);
@@ -214,8 +210,7 @@ pub fn apply_stream_collect_chunk(
 }
 
 /// Collect one streaming completion into [`LlmResponse`] (first attempt in `run_stream` D-step).
-///
-/// Opens a streaming completion, iterates over chunks, and assembles the final
+/// /// Opens a streaming completion, iterates over chunks, and assembles the final
 /// response. Supports graceful interrupt and a silence-watchdog that emits
 /// activity-status events when the stream stalls.
 #[allow(clippy::too_many_arguments)]
@@ -246,7 +241,7 @@ pub(crate) async fn collect_stream_llm_response(
     active_model: &str,
     on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
 ) -> Result<StreamCollectOutcome, AgentError> {
-    // 2026-07-18 (Round 29 follow-up): outer hard timeout. The inner
+    // (Round 29 follow-up): outer hard timeout. The inner
     // silence_watch only emits "activity" notices — it does not abort
     // the stream — so a provider that opens the SSE / chunked
     // connection and then never sends a chunk (network hang, API
@@ -259,7 +254,6 @@ pub(crate) async fn collect_stream_llm_response(
     // thinking-only reply, so a stuck provider degrades into a
     // visible post-tool nudge (or finalizes if all nudges are
     // exhausted) instead of hanging.
-    //
     // `stream_overall_timeout_secs == 0` opts out of the watchdog
     // (legacy behaviour).
     let overall_secs = config.stream_overall_timeout_secs;
@@ -403,7 +397,7 @@ pub(crate) async fn collect_stream_inner(
     let mut tool_call_sanitizer = ToolCallSanitizer::new();
 
     let activity_secs = config.stream_activity_interval_secs;
-    // 2026-07-19: tight tripwire for the "SSE opened but no chunk ever
+    // tight tripwire for the "SSE opened but no chunk ever
     // arrives" hang that pins the agent loop and the UI at
     // "正在思考…" until the 180 s outer watchdog fires. Once the
     // first chunk has arrived, this deadline is ignored (the
@@ -417,7 +411,7 @@ pub(crate) async fn collect_stream_inner(
     if activity_secs == 0 {
         // `activity_secs == 0` is the "silence activity notices"
         // sentinel used by tests and bytelemetry-hungry operators.
-        // 2026-07-19: even in that mode we still need to enforce the
+        // even in that mode we still need to enforce the
         // first-chunk deadline — otherwise an SSE-open / no-chunk
         // hang pins the UI until the 180 s outer watchdog fires.
         const IDLE_ARM_MAX: Duration = Duration::from_secs(86_400);
@@ -534,13 +528,12 @@ pub(crate) async fn collect_stream_inner(
         let first_chunk_deadline_dur = Duration::from_secs(first_chunk_deadline);
 
         'silence_watch: loop {
-            // 2026-07-19: when no chunk has arrived yet, the idle
+            // when no chunk has arrived yet, the idle
             // arm is bounded by the time remaining until the
             // first-chunk deadline (capped at 1ms so it doesn't
             // degenerate to a busy-loop). Once the first chunk
             // arrives, this override is dropped and we fall back
             // to the legacy activity cadence (`first_dur`).
-            //
             // Note: `first_dur == 0` (the test "silence activity
             // notices" sentinel) used to short-circuit the
             // deadline tripwire because `min(0, remaining)` = 0.
@@ -608,7 +601,7 @@ pub(crate) async fn collect_stream_inner(
                         }
                     }
                     _ = idle.as_mut() => {
-                        // 2026-07-19: the first-chunk deadline arm.
+                        // the first-chunk deadline arm.
                         // We idle-limited by `remaining` above, so
                         // waking up here means we hit the deadline
                         // before any chunk arrived. Break out with a
@@ -726,7 +719,7 @@ pub(crate) async fn collect_stream_inner(
     }
     tool_call_sanitizer.flush();
 
-    // 2026-07-17: last-line defence for models that ignore the system
+    // last-line defence for models that ignore the system
     // prompt and emit an unwrapped reasoning monologue as visible content.
     // If the whole reply reads like internal analysis ("I think...",
     // "trying to reconstruct...", etc.) and never used a ` <think` tag,
@@ -756,7 +749,7 @@ pub(crate) async fn collect_stream_inner(
         }
     }
 
-    // 2026-07-08: filter out tool calls with empty function names.
+    // filter out tool calls with empty function names.
     // MiniMax M2.7 streaming sometimes creates placeholder tool call
     // entries (via the index-based delta assembly above) whose `name`
     // field never arrives — the name delta was either lost in transit
@@ -801,7 +794,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    /// 2026-07-14 (Frontend Audit, "思考被切成两段"): when a single
+    /// (Frontend Audit, "思考被切成两段"): when a single
     /// LLM chunk carries BOTH a `<think>...</think>` span in
     /// `delta.content` AND a `delta.extra.thinking` value, the
     /// chat UI used to render the same sentence as TWO "已深度思考"
@@ -934,8 +927,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // 2026-07-18: hard outer timeout tests for `collect_stream_llm_response`.
-    //
+    // hard outer timeout tests for `collect_stream_llm_response`.
     // Symptom (Round 29): provider opens the SSE connection and then
     // never sends a chunk (network hang, API outage, silently dropped
     // TCP). Without the outer timeout the inner `silence_watch` only
@@ -1057,8 +1049,7 @@ mod tests {
     /// scaffold, mutating only the LLM provider and the
     /// `stream_overall_timeout_secs` config. Returns whatever
     /// `StreamCollectOutcome` the wrapper surfaces.
-    ///
-    /// The first-chunk deadline is set well above the overall
+    /// /// The first-chunk deadline is set well above the overall
     /// timeout so the existing `hard_timeout_*` tests still exercise
     /// the outer watchdog path (the tighter "no_first_chunk" arm
     /// is covered by `first_chunk_timeout_*` tests below).
@@ -1073,7 +1064,7 @@ mod tests {
         drive_collect_with(provider, stream_overall_timeout_secs, first_chunk).await
     }
 
-    /// 2026-07-19: same as [`drive_collect`] but lets the caller
+    /// same as [`drive_collect`] but lets the caller
     /// also override `stream_first_chunk_timeout_secs` for tests
     /// that need to observe the new first-chunk tripwire directly.
     async fn drive_collect_with(
@@ -1203,7 +1194,7 @@ mod tests {
         }
     }
 
-    /// 2026-07-19: round 29 follow-up. When the provider opens the
+    /// round 29 follow-up. When the provider opens the
     /// streaming connection but never sends the **first** chunk,
     /// the new `stream_first_chunk_timeout_secs` tripwire aborts
     /// the inner collect early with `finish_reason="no_first_chunk"`.
@@ -1250,7 +1241,7 @@ mod tests {
         }
     }
 
-    /// 2026-07-19: once the first chunk has arrived, the
+    /// once the first chunk has arrived, the
     /// first-chunk deadline is no longer applicable; the
     /// stream continues normally and the provider's `stop`
     /// finish_reason is honoured.

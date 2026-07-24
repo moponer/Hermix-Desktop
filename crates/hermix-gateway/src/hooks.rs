@@ -144,8 +144,7 @@ impl HookEmitStats {
 }
 
 /// Discovers, loads, and fires event hooks. Cheaply cloneable via `Arc`.
-///
-/// ```ignore
+/// /// ```ignore
 /// let mut reg = HookRegistry::new();
 /// reg.register_builtins();
 /// reg.discover_and_load(Path::new("/home/me/.hermes/hooks"));
@@ -174,8 +173,7 @@ impl HookRegistry {
     }
 
     /// Limit concurrent hook handler executions across the registry.
-    ///
-    /// `None` removes the limit (default). Useful to cap subprocess fan-out.
+    /// /// `None` removes the limit (default). Useful to cap subprocess fan-out.
     pub fn set_execution_limits(&mut self, max_concurrent_handlers: Option<usize>) {
         self.hook_semaphore = max_concurrent_handlers
             .filter(|&n| n > 0)
@@ -227,8 +225,7 @@ impl HookRegistry {
 
     /// Scan `hooks_dir` for subdirectories containing a valid `HOOK.yaml`
     /// and register a [`CommandHookHandler`] for each.
-    ///
-    /// Behavior parity with Python:
+    /// /// Behavior parity with Python:
     /// - Missing directory → silent no-op
     /// - Subentries that aren't directories → skipped silently
     /// - Missing `HOOK.yaml` → skipped silently
@@ -409,8 +406,7 @@ impl Default for HookRegistry {
 /// Handler that spawns a subprocess for each event and pipes the event
 /// JSON in via stdin. The exit code is checked; non-zero exits log a
 /// warning. Stdout/stderr are captured and trace-logged.
-///
-/// This is the user-facing handler type — it lets hook authors write
+/// /// This is the user-facing handler type — it lets hook authors write
 /// hooks in any language (bash, deno, node, go, ...) without ever
 /// touching Rust or Python.
 #[derive(Debug)]
@@ -570,8 +566,7 @@ let mut cmd = tokio::process::Command::new(&argv0);
 
 /// Built-in hook that, on `gateway:startup`, reads `~/.hermix/BOOT.md` and
 /// emits a structured log entry containing the boot instructions.
-///
-/// **Difference from Python**: the Python version spawns a one-shot
+/// /// **Difference from Python**: the Python version spawns a one-shot
 /// `AIAgent` to execute the BOOT.md instructions. Doing that in Rust
 /// would require `hermes-gateway` depending on `hermes-agent` (a higher
 /// crate), which is a layering inversion. Instead, this Rust hook
@@ -579,8 +574,7 @@ let mut cmd = tokio::process::Command::new(&argv0);
 /// `boot_md` target, and stores the content in the hook itself so a
 /// downstream wiring layer (e.g. `hermes-cli`) can register a follow-on
 /// in-process handler that actually runs the agent.
-///
-/// In practice, most operators run BOOT.md from `hermes-cli` startup
+/// /// In practice, most operators run BOOT.md from `hermes-cli` startup
 /// directly anyway; the hook surface is preserved purely for parity.
 #[derive(Debug)]
 pub struct BootMdHook {

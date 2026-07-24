@@ -55,7 +55,7 @@ pub use traits::{
 // Re-export AgentService supporting types
 pub use traits::{AgentOverrides, AgentReply};
 
-// Re-export the pluggable context-compression surface (N-03)
+// Re-export the pluggable context-compression surface ()
 pub use traits::{
     CompressionEngine, CompressionEngineMetrics, CompressionEngineSnapshot,
     CompressionEngineState, CoreContextEngine,
@@ -76,7 +76,7 @@ pub use acui::{AcuiDirective, AcuiHide, AcuiPosition, AcuiShow, AcuiState, AcuiU
 // Re-export ParseMode from traits
 pub use traits::ParseMode;
 
-// Re-export ApprovalOutcome taxonomy (2026-07-18 A+C product fix)
+// Re-export ApprovalOutcome taxonomy (A+C product fix)
 pub use approval::ApprovalOutcome;
 
 // Re-export PermissionMode and RiskLevel from traits

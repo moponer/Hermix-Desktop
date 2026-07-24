@@ -11,7 +11,6 @@ export interface ParsedContent {
 }
 
 // ── Thinking inline ──────────────────────────────────────────────
-//
 // The system prompt instructs the model to emit reasoning inside
 // `<think>...</think>`. We drop these blocks entirely from the
 // rendered body — they're internal scaffolding, not user output.
@@ -26,35 +25,28 @@ const ORPHAN_OPEN_RE = /<think>[\s\S]*$/i;
 const LIFECYCLE_RE = /\[lifecycle:[^\]]*\]/gi;
 
 // ── Context-compaction banner (defence-in-depth) ─────────────────
-//
 // `ContextCompressor::compress()` prepends `SUMMARY_PREFIX`
 // ("[CONTEXT COMPACTION] Earlier turns in this conversation were
 // compacted …") to every compaction summary, and `LocalAgentService`
 // injects a sibling "[CONTEXT COMPACTION — REFERENCE ONLY]" system
 // message when a session is reloaded. Both are infrastructure that
 // the *LLM* needs to see — they're not user-facing content.
-//
 // Two failure modes leak the banner into the chat:
-//
-//   1. The LLM echoes the banner verbatim as the opening of its
-//      reply. This is the symptom the user reported: they sent
-//      "你好", and the AI's "reply" was the [CONTEXT COMPACTION]
-//      block. (The banner's own prompt explicitly says "Do NOT echo,
-//      quote or re-issue" — but that instruction is best-effort.)
-//
-//   2. A persisted assistant message from a pre-fix turn was loaded
-//      on session reload and rendered as-is.
-//
+// 1. The LLM echoes the banner verbatim as the opening of its
+// reply. This is the symptom the user reported: they sent
+// "你好", and the AI's "reply" was the [CONTEXT COMPACTION]
+// block. (The banner's own prompt explicitly says "Do NOT echo,
+// quote or re-issue" — but that instruction is best-effort.)
+// 2. A persisted assistant message from a pre-fix turn was loaded
+// on session reload and rendered as-is.
 // Without this strip the user sees a 1-2 KB wall of system-level
 // scaffolding where their reply should be. Match covers the two
 // banner variants:
-//
-//   - `[CONTEXT COMPACTION]`            — current `SUMMARY_PREFIX`
-//   - `[CONTEXT COMPACTION — REFERENCE ONLY]` — session-reload variant
-//   - `[CONTEXT SUMMARY]:`              — legacy v1 prefix
-//                                          (`compression.rs:55`
-//                                          `LEGACY_SUMMARY_PREFIX`)
-//
+// - `[CONTEXT COMPACTION]`            — current `SUMMARY_PREFIX`
+// - `[CONTEXT COMPACTION — REFERENCE ONLY]` — session-reload variant
+// - `[CONTEXT SUMMARY]:`              — legacy v1 prefix
+// (`compression.rs:55`
+// `LEGACY_SUMMARY_PREFIX`)
 // Pattern requires the closing `--- END OF … ---` marker on its own
 // line. Without the marker we leave the banner alone — false negatives
 // here are acceptable (the user sees a banner they probably should
@@ -66,7 +58,6 @@ const CONTEXT_COMPACTION_RE =
   /\[CONTEXT (?:COMPACTION[^\]]*|SUMMARY)\]:?[\s\S]*?\n---\s*END OF[\s\S]*?---/gi;
 
 // ── Tool-call XML leak (defence-in-depth) ─────────────────────────
-//
 // Some open-weight models (MiniMax / M2.7, MiniMax / Hermes fine-tunes)
 // emit tool calls as raw XML inside their normal text content instead
 // of through the OpenAI `tools` field. The server has a streaming
@@ -76,12 +67,11 @@ const CONTEXT_COMPACTION_RE =
 // from before the redactor was added, a persisted message from a
 // pre-fix turn, or a non-streaming path we haven't audited), the user
 // still never sees leaked XML — `parseContent` removes it here.
-//
 // Patterns we strip:
-//   1. Full MiniMax wrapper:    <minimax:tool_call>…</minimax:tool_call>
-//   2. Bare prefix + invoke:    minimax:tool_call <invoke …>…</invoke>
-//   3. Standalone <invoke…>…</invoke>  (Hermes standard, no wrapper)
-//   4. Orphan close tags       </minimax:tool_call>  </invoke>
+// 1. Full MiniMax wrapper:    <minimax:tool_call>…</minimax:tool_call>
+// 2. Bare prefix + invoke:    minimax:tool_call <invoke …>…</invoke>
+// 3. Standalone <invoke…>…</invoke>  (Hermes standard, no wrapper)
+// 4. Orphan close tags       </minimax:tool_call>  </invoke>
 const TOOL_CALL_FULL_RE =
   /<minimax:tool_call\s*>[\s\S]*?<\/minimax:tool_call>/gi;
 // Bare "minimax:tool_call" (no leading `<`) immediately followed by
@@ -201,9 +191,9 @@ export function groupTimeline(
       // Attach the status note to the most recent *running* tool
       // group instead of rendering it as its own row. Without this,
       // a single tool call expands to 3 stacked rows in the rail:
-      //   [tool card: read_file  执行中]
-      //   [status note: 正在处理 …]
-      //   [tool card: read_file  已执行]
+      // [tool card: read_file  执行中]
+      // [status note: 正在处理 …]
+      // [tool card: read_file  已执行]
       // The middle one is redundant — the user can already see
       // "执行中" on the tool card itself. Mirrors `groupEvents` in
       // ToolEventCard.tsx so the ACUI renderer and the inline
@@ -283,7 +273,6 @@ export function groupTimeline(
   // badge — the close event is simply on its way. Forcing these
   // to "error" mid-stream is what produced the "上来就提示执行中断,
   // 实际后面又成功了" symptom the user reported on 2026-07-22.
-  //
   // On settled reload (the default `true`), we still promote every
   // stranded group to `"error"` + "执行已中断（无完成事件）" —
   // that is the correct read for history recovered after the live
@@ -650,13 +639,12 @@ export function buildFallbackSteps(message: ChatMessage): TimelineStep[] {
   const parsed = parseContent(message.content);
   const hasBody = !!(parsed.body && parsed.body.trim());
 
-  // 2026-07-11: When the LLM doesn't close its <think> tag, the
+  // When the LLM doesn't close its <think> tag, the
   // ThinkBlockParser routes ALL text (including body) to
   // reasoning_content, leaving content empty. On reload, we need
   // to show that text as body — NOT as a reasoning block — to
   // match what the user saw during streaming (the onDone handler
   // uses reply_text which falls back to reasoning_content).
-  //
   // Rule: if content has body text, show reasoning as a reasoning
   // block + body as text (normal case). If content is empty but
   // reasoning has text, show reasoning AS the body text (fallback
@@ -690,7 +678,7 @@ export function buildFallbackSteps(message: ChatMessage): TimelineStep[] {
  * `message.unified_steps` when available, otherwise fall back to
  * `buildFallbackSteps`.
  *
- * 2026-07-11: Adjacent `kind: "reasoning"` steps are merged into
+ * Adjacent `kind: "reasoning"` steps are merged into
  * a single block. The LLM often emits several `<think>…</think>`
  * segments back-to-back (one per sub-topic, separated by `**小标题**`
  * + blank lines). Server emits one `StreamEvent::Thinking` per

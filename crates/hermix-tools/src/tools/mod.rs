@@ -72,21 +72,20 @@ pub mod web;
 /// Register all migrated tools via their self-registration functions.
 /// During migration, unmigrated tools still go through `register_builtins.rs`.
 /// Once all tools are migrated, `register_builtins.rs` is deleted.
-///
-/// P1.3 (2026-07-02) signature change: `register_all` now accepts the
+/// /// P1.3 (2026-07-02) signature change: `register_all` now accepts the
 /// three backends that tools needed but didn't fit into a default
 /// constructor:
 /// - `terminal_backend`: shared by `terminal`, `read_file`,
-///   `write_file` (and reachable from `delegate_task` / shell exec).
-///   `register_builtin_tools` is the single owner of this handle; if
-///   you call `register_all` from elsewhere, pass a backend of the
-///   same kind you'd pass to `register_builtin_tools`.
+/// `write_file` (and reachable from `delegate_task` / shell exec).
+/// `register_builtin_tools` is the single owner of this handle; if
+/// you call `register_all` from elsewhere, pass a backend of the
+/// same kind you'd pass to `register_builtin_tools`.
 /// - `skill_provider`: backs the three `skills_*` tools.
 /// - `browser_backend`: backs the ten `browser_*` tools. The
-///   `register_builtin_tools` caller constructs a
-///   `SessionedBrowserBackend` wrapping a `BrowserRegistry` so
-///   group-chat sessions get isolated CDP state; tests can pass any
-///   `Arc<dyn BrowserBackend>`.
+/// `register_builtin_tools` caller constructs a
+/// `SessionedBrowserBackend` wrapping a `BrowserRegistry` so
+/// group-chat sessions get isolated CDP state; tests can pass any
+/// `Arc<dyn BrowserBackend>`.
 pub fn register_all(
     registry: &ToolRegistry,
     terminal_backend: Arc<dyn TerminalBackend>,

@@ -1,0 +1,1976 @@
+/* ════════════════════════════════════════════════════════════════════
+   § 18.  PROSE & MESSAGE FLOW
+   ════════════════════════════════════════════════════════════════════ */
+
+.prose {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-body);
+  line-height: 1.72;
+  font-weight: 400;
+  letter-spacing: 0.005em;
+}
+.prose p { margin: 0 0 0.65em; }
+.prose p:last-child { margin-bottom: 0; }
+.prose strong { color: var(--color-text-primary); font-weight: 540; letter-spacing: -0.005em; }
+.prose em { font-style: italic; color: var(--color-text-secondary); }
+.prose a {
+  color: var(--color-link);
+  text-decoration: none;
+  border-bottom: 1px solid var(--color-link);
+  padding-bottom: 0.5px;
+  transition: color var(--duration-fast) ease, border-color var(--duration-fast) ease, opacity var(--duration-fast) ease;
+}
+.prose a:hover {
+  text-decoration: underline;
+  border-bottom-color: transparent;
+  opacity: 1;
+}
+.prose h1, .prose h2, .prose h3, .prose h4 {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  margin: 1em 0 0.4em;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.prose h1 { font-size: 1.42em; }
+.prose h2 { font-size: 1.22em; }
+.prose h3 { font-size: 1.08em; }
+.prose h4 { font-size: 0.98em; color: var(--color-text-secondary); }
+.prose ul, .prose ol { 
+  padding-left: 1.6em; 
+  margin: 0.5em 0; 
+  list-style-position: outside;
+}
+.prose ul { list-style-type: disc; }
+.prose ol { list-style-type: decimal; }
+.prose li { margin: 0.15em 0; }
+.prose li::marker { color: var(--color-text-secondary); }
+.prose blockquote {
+  padding: 0 0 0 0.8em;
+  margin: 0.4em 0;
+  color: var(--color-text-secondary);
+  font-style: italic;
+  border-left: 2px solid var(--color-bg-tertiary);
+}
+.prose hr { border: 0; border-top: 1px solid var(--color-bg-tertiary); margin: 0.9em 0; }
+.prose table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.92em; width: 100%; }
+.prose th, .prose td { padding: 0.4em 0.6em; border: 1px solid var(--color-bg-tertiary); }
+.prose th { background: var(--color-bg-secondary); font-weight: 600; color: var(--color-text-primary); }
+.prose code {
+  background: var(--color-bg-tertiary);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.95em;
+  color: var(--color-text-primary);
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-weight: 500;
+  border: 1px solid var(--color-border-subtle);
+}
+.prose pre {
+  /* CodeBlock 组件把 highlighter 包在独立浅色容器里。
+     内层 <pre> 保持 transparent,让 wrapper 的 #fafafa 透出,
+     避免双层背景。 */
+  background: transparent;
+  color: var(--color-text-on-code);
+  border-radius: 0;
+  padding: 0;
+  overflow: hidden;
+  margin: 0.5em 0;
+  box-shadow: none;
+  border: none;
+}
+/* Inside the CodeBlock component, the outer wrapper owns the
+   rounded corners and the spacing. Reset the `.prose pre` rules
+   so the toolbar and the code area are flush (no margin, no
+   padding), AND keep the code area background transparent so
+   it inherits the wrapper's #fafafa — the highlighter would
+   otherwise inject its own background and create a visible
+   second-tone band that reads as a nested card. */
+.prose pre.code-block-body,
+.prose pre.code-block-body > code,
+.prose pre[class*="language-"],
+.prose pre[class*="language-"] > code {
+  margin: 0;
+  padding: 0;
+  background: transparent !important;
+  border-radius: 0;
+  box-shadow: none !important;
+}
+.prose pre code {
+  background: transparent;
+  padding: 10px 12px;
+  color: inherit;
+  font-size: 12px;
+  border: 0;
+  font-weight: 400;
+  line-height: 1.5;
+  display: block;
+  overflow-x: auto;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+}
+
+/* ── Message flow (v6 refined 2026-07-10) ──
+   Design principles:
+   • User: right-aligned bubble with accent-soft tint, rounded asymmetric
+   • Assistant: borderless text flow, no card chrome
+   • Vertical rhythm: 20px between turns, 4px within a turn */
+.msg-card {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+}
+.msg-card + .msg-card { margin-top: 20px; }
+
+.msg-stream-list > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 150px;
+}
+.msg-bubble-user {
+  background: var(--color-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 14%, transparent);
+  border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-2xl);
+  padding: 10px 14px;
+  font-size: var(--font-size-body);
+  line-height: 1.68;
+  color: var(--color-text-primary);
+  max-width: 80%;
+  transition: background var(--duration-fast) ease;
+}
+.msg-bubble-user:hover {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.msg-user-column {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: fit-content;
+  max-width: 80%;
+  margin-left: auto;
+}
+.msg-bubble-user {
+  max-width: 100%;
+}
+
+/* ── Assistant streaming bubble ──
+   Outer flex: avatar on the left, body column on the right.
+   Used by StreamingBubble to keep the avatar and the markdown body
+   in the same column rhythm as the regular MessageBubble
+   (showHeader=true), so streaming text doesn't "jump" when the
+   stream completes and switches to the final bubble layout. */
+.msg-bubble-assistant {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 28px;
+}
+.msg-bubble-avatar {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.msg-bubble-body {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-body, 14px);
+  line-height: 1.72;
+  color: var(--color-text-primary);
+}
+
+/* ── Vertical rhythm ── */
+.msg-stack { display: flex; flex-direction: column; }
+.msg-channel { margin-top: 10px; }
+.msg-channel:first-child { margin-top: 0; }
+
+/* ── Agent activity indicator (post-stream gap) ──
+   v5: 旋转图标 + 进度文字——无边框，仅靠底色区分状态。
+     data-state="thinking" — between turns, analyzing results
+     data-state="tools"    — tool calls currently executing */
+.agent-activity {
+  display: flex;
+  align-items: center;
+  margin-left: 38px;
+  margin-top: 10px;
+}
+.agent-activity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-secondary);
+  border: 0;  /* v5: 无边框 */
+  line-height: 1.4;
+}
+.agent-activity[data-state="tools"] .agent-activity-pill {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  /* v5: 无边框，仅靠底色 */
+}
+.agent-activity-dot-stack {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  width: 18px;
+  height: 12px;
+}
+.agent-activity-bounce-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-text-secondary);
+  animation: agent-activity-bounce 1.2s ease-in-out infinite;
+}
+.agent-activity-bounce-dot--delay1 { animation-delay: 0.15s; }
+.agent-activity-bounce-dot--delay2 { animation-delay: 0.30s; }
+@keyframes agent-activity-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30%           { transform: translateY(-3px); opacity: 1; }
+}
+
+/* ── Wait-for-input indicator ──
+   Final completion state — shown when no stream, no tools pending,
+   no post-stream activity window. Tells the user "Hermix finished,
+   waiting for your next message". */
+/* ── Wait-for-input indicator (pure animation, no chrome) ── */
+/* v9: 等待输入指示器 — 与消息气泡同节奏、缩进对齐 */
+.wait-for-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* 与 Avatar(22) + gap-2.5(10) 对齐: 22 + 10 = 32 */
+  margin-left: 32px;
+  margin-top: 4px;
+  margin-bottom: 2px;
+  /* Intentional: no border, no background, no colored text. The
+     three dots are the only visual signal. */
+}
+.wait-for-input-label {
+  font-size: 11.5px;
+  color: var(--color-text-faint);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  user-select: none;
+  /* v9: 加 italic 表达"轻量、非强制提示"语义 */
+  font-style: italic;
+}
+.wait-for-input-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /* Reserve a stable hit-box so the dots don't shift if we ever
+     change the count. The dots themselves are 3px circles; the
+     gap is between their bounding boxes, not the dot centers. */
+  padding: 3px 0;
+  height: 10px;
+}
+.wait-for-input-dot {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--color-text-faint);
+  /* Slower, gentler bounce than agent-activity dots — the agent
+     has fully stopped, so the indicator should feel calm, not
+     urgent. ~1.8s cycle. */
+  animation: wait-for-input-bounce 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  /* v9: opacity 基线降到 0.25, bounce 峰值 0.65, 更克制 */
+  opacity: 0.25;
+}
+.wait-for-input-dot--delay1 { animation-delay: 0.18s; }
+.wait-for-input-dot--delay2 { animation-delay: 0.36s; }
+@keyframes wait-for-input-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.25;
+  }
+  30% {
+    transform: translateY(-2.5px);
+    opacity: 0.65;
+  }
+}
+
+/* ── Channel label (soft chip) ──
+   v5: 章节用"小灰胶囊"——纯背景色 + 文字，无边框。
+   边框在 12.5px 的字号下显得过粗，去掉后更贴近"分组标记"而不是"控件"。 */
+.channel-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 6px;
+  border-radius: var(--radius-full);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+  border: 0;  /* v5: 无边框，仅靠浅灰底色 */
+}
+.channel-label svg { color: var(--color-text-faint); flex-shrink: 0; }
+.channel-label-count {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 10px;
+  color: var(--color-text-faint);
+  margin-left: auto;
+}
+
+/* ── Artifact card (v10) ──
+   简洁列表项 — 仅一行: 文件图标 + 文件名 + 扩展 chip.
+   不再使用浅灰底 + 4 宫格摘要 (v9 已废弃: 信息密度过高,
+   在 480px 右列里占太多垂直空间, 像 panel 而不是 list).
+   v10: 纯透明背景 + hover 浅灰底, 与对话流风格一致. */
+.artifact-card {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+.artifact-card:hover {
+  background: var(--color-bg-hover);
+}
+.artifact-card.is-active {
+  background: var(--color-bg-active);
+}
+
+/* v10: 文件类型 chip (替代 v9 的 4 宫格摘要) */
+.artifact-ext {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--color-text-faint);
+  background: var(--color-bg-tertiary);
+  letter-spacing: 0.02em;
+  border: 0;
+  flex-shrink: 0;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+}
+
+/* v10 移除 .artifact-summary / .artifact-cell / .artifact-tag —
+   见 git diff. 信息折叠到文件类型 chip, 文件路径用 title tooltip 表达. */
+
+/* ── File change block ───────────────────────────────────────────
+   Flat, no background, no borders, no per-file icons. Title row
+   shows "文件变更 (N个)" in the same body-text colour and size as
+   the rest of the assistant reply. Each filename is rendered as
+   a link-styled span (blue, hover underline) so the user can
+   click it to open the file in the preview popover. ───────────── */
+.file-change-block {
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+.file-change-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+.file-change-count {
+  color: var(--color-text-faint);
+  font-size: 11px;
+  margin-left: 1px;
+  font-weight: 400;
+}
+.file-change-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+}
+.file-change-list li {
+  margin: 0;
+  padding: 0;
+}
+.file-change-link {
+  background: none;
+  border: 0;
+  padding: 1px 0;
+  font-size: 12px;
+  color: var(--color-link-soft);
+  cursor: pointer;
+  text-decoration: none;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  transition: color var(--duration-fast) ease;
+}
+.file-change-link:hover {
+  text-decoration: underline;
+  color: var(--color-link-soft-hover);
+}
+
+[data-theme="light"] .file-pill.is-created  { color: #15803d; border-color: rgba(34, 197, 94, 0.30); background: rgba(34, 197, 94, 0.10); }
+[data-theme="light"] .file-pill.is-created  svg { color: #15803d; }
+[data-theme="light"] .file-pill.is-modified { color: #b45309; border-color: rgba(245, 158, 11, 0.30); background: rgba(245, 158, 11, 0.10); }
+[data-theme="light"] .file-pill.is-modified svg { color: #b45309; }
+[data-theme="light"] .file-pill.is-deleted  { color: #b91c1c; border-color: rgba(239, 68, 68, 0.30); background: rgba(239, 68, 68, 0.10); }
+[data-theme="light"] .file-pill.is-deleted  svg { color: #b91c1c; }
+[data-theme="light"] .file-pill.is-renamed  { color: #b45309; border-color: rgba(245, 158, 11, 0.30); background: rgba(245, 158, 11, 0.10); }
+[data-theme="light"] .file-pill.is-renamed  svg { color: #b45309; }
+
+[data-theme="dark"]  .file-pill.is-created  { color: #4ade80; border-color: rgba(34, 197, 94, 0.40); background: rgba(34, 197, 94, 0.16); }
+[data-theme="dark"]  .file-pill.is-created  svg { color: #4ade80; }
+[data-theme="dark"]  .file-pill.is-modified { color: #fbbf24; border-color: rgba(245, 158, 11, 0.40); background: rgba(245, 158, 11, 0.16); }
+[data-theme="dark"]  .file-pill.is-modified svg { color: #fbbf24; }
+[data-theme="dark"]  .file-pill.is-deleted  { color: #f87171; border-color: rgba(239, 68, 68, 0.40); background: rgba(239, 68, 68, 0.16); }
+[data-theme="dark"]  .file-pill.is-deleted  svg { color: #f87171; }
+[data-theme="dark"]  .file-pill.is-renamed  { color: #fbbf24; border-color: rgba(245, 158, 11, 0.40); background: rgba(245, 158, 11, 0.16); }
+[data-theme="dark"]  .file-pill.is-renamed  svg { color: #fbbf24; }
+
+/* ── Inline path link (assistant prose) ──────────────────────
+   Flat link style — no chip background, no border, no icon. Renders
+   as plain prose text that becomes a link on hover (underline).
+   Mirrors the colour of the rest of the assistant reply's
+   hyperlinks (the "查看全部制品 →" link blue) so paths read as
+   part of the prose, not as a UI widget. */
+.md-path-link {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  color: var(--color-link);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  vertical-align: baseline;
+  transition: color var(--duration-fast) ease;
+}
+.md-path-link:hover {
+  color: var(--color-link-hover);
+}
+/* Relative paths keep the warning amber so the user can tell at a
+   glance "this won't resolve unless I'm in the right workspace". */
+.md-path-link--rel {
+  color: var(--color-warning);
+}
+.md-path-link--rel:hover {
+  color: var(--color-warning);
+  filter: brightness(1.15);
+}
+
+/* ── Markdown task list marker (LLM output `- [ ]` / `- [x]`)
+   v3: 不渲染任何 marker。普通无序列表已有 disc 圆点，
+   任务标记的符号与圆点重复，用户要求去掉。input handler 直接
+   返回 null（见 MarkdownBody.tsx），此处不再保留任何样式。 */
+
+/* ── Preview pane ──
+   Scoped strictly inside .preview-pane so SyntaxHighlighter's injected
+   global <style> rules and markdown-rendered elements (<h1>, <strong>, …)
+   never bleed into the chat area. */
+.preview-pane {
+  scrollbar-gutter: stable;
+}
+
+/* Preview pane default font — pure monospace stack.
+   v3 had a `sans-serif` fallback that broke CJK rendering (Consolas
+   doesn't have CJK glyphs, fell back to 微软雅黑 → ASCII/CJK size
+   mismatch). v7 keeps the same rule but the only `*` selector here
+   is scoped to the preview pane wrapper, so it doesn't bleed. */
+.preview-pane,
+.preview-pane *,
+.preview-pane *::before,
+.preview-pane *::after {
+  font-family: "JetBrains Mono", "JetBrainsMono NF", "Cascadia Mono",
+    "Cascadia Code", Consolas, "Source Code Pro", Menlo, ui-monospace,
+    monospace !important;
+}
+
+/* v7 抛弃了 <table> 渲染层 —— 下面这些选择器只针对历史残留的 markdown
+   注入做兜底（不针对 code-table，因为 v7 已经不再有 .code-table） */
+.preview-pane-inner pre,
+.preview-pane-inner pre > code {
+  background: transparent !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* Prevent any markdown-injected element from escaping the preview pane. */
+.preview-pane h1,
+.preview-pane h2,
+.preview-pane h3,
+.preview-pane h4,
+.preview-pane h5,
+.preview-pane h6,
+.preview-pane p,
+.preview-pane ul,
+.preview-pane ol,
+.preview-pane li,
+.preview-pane strong,
+.preview-pane em,
+.preview-pane blockquote,
+.preview-pane a,
+.preview-pane img,
+.preview-pane hr {
+  font-family: inherit !important;
+  margin-top: 0 !important;
+  margin-bottom: 0.4em !important;
+  max-width: 100% !important;
+}
+
+/* Path / filename rows in the preview header — read as plain text.
+   v7: 11px / 500, matches lucide-docs density. */
+.preview-pane .preview-filename,
+.preview-pane .preview-path-row,
+.preview-pane .preview-path-row * {
+  font-weight: 500 !important;
+  font-size: 11px;
+  letter-spacing: -0.005em;
+}
+.file-pill-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border-radius: 0;
+  font-size: 12.5px;
+  color: var(--color-link);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+.file-pill-toggle:hover {
+  color: var(--color-link-hover);
+  text-decoration: underline;
+}
+
+/* ── Memory update block (2026-07-14) ── */
+/* Surfaces what the agent remembered this turn. Palette is strictly
+   gray/zinc + amber/green/red action tints — no blue/indigo/violet. */
+.memory-update-block {
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+.memory-update-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+.memory-update-count {
+  color: var(--color-text-faint);
+  font-size: 11px;
+  font-weight: 400;
+}
+.memory-update-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.memory-update-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.memory-update-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.memory-update-text {
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.memory-update-num {
+  color: var(--color-text-faint);
+}
+
+/* ── Memory recall block (Phase 19 A) ── */
+/* Single-line "💭 想到 N 条" chip per recall. Visually subtler
+ * than memory-update (it's a read, not a write). */
+.memory-recall-block {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.memory-recall-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-secondary);
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.memory-recall-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+.memory-recall-trigger {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24; /* amber-400, allowed */
+}
+.memory-recall-keys {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--color-text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+.memory-recall-chars {
+  color: var(--color-text-faint);
+  font-size: 11px;
+}
+
+/* ── Stream error banner ─────────────────────────────────────────
+   A quiet inline alert above the composer: short title + actionable
+   detail, no raw provider URL, and no large warning emoji. */
+.stream-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-warning) 8%, var(--color-bg-secondary));
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.stream-error-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--color-warning);
+}
+.stream-error-content {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.stream-error-title {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.stream-error-detail {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+.stream-error-dismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -3px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-faint);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+.stream-error-dismiss:hover,
+.stream-error-dismiss:focus-visible {
+  color: var(--color-text-primary);
+  outline: none;
+}
+
+
+.tasks-block {
+  overflow: visible;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+}
+.tasks-progress {
+  height: 2px;
+  background: var(--color-bg-tertiary);
+  overflow: hidden;
+  border-radius: var(--radius-full);
+}
+.tasks-progress-bar {
+  height: 100%;
+  background: var(--color-success);
+  transition: width 0.4s ease;
+}
+.tasks-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.tasks-header svg {
+  flex-shrink: 0;
+}
+.tasks-header-count {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--color-text-faint);
+}
+.tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  border-radius: var(--radius-sm);
+}
+.task-row:hover {
+  background: var(--color-bg-hover);
+}
+.task-row svg {
+  flex-shrink: 0;
+}
+.task-row.done { color: var(--color-text-secondary); }
+.task-row.done .task-text {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+.task-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Tool timeline ── */
+.tool-rail { position: relative; padding-left: 16px; }
+.tool-rail::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  bottom: 4px;
+  width: 1.5px;
+  background: var(--color-border-subtle);
+  border-radius: 0.75px;
+}
+.tool-row {
+  position: relative;
+  margin-bottom: 2px;
+  padding: 1px 0;
+}
+.tool-row .rail-dot {
+  position: absolute;
+  left: -16px;
+  top: 9px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-bg-primary);
+  border: 1.5px solid var(--color-text-faint);
+  transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.tool-row.tool-done    .rail-dot { border-color: var(--color-success); }
+.tool-row.tool-error   .rail-dot { border-color: var(--color-error); }
+.tool-row.tool-running .rail-dot {
+  border-color: var(--color-warning);
+  background: var(--color-warning-soft);
+  animation: tool-pulse 1.6s ease-in-out infinite;
+}
+@keyframes tool-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--color-warning-soft); }
+  50%      { box-shadow: 0 0 0 4px transparent; }
+}
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  user-select: none;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  transition: background var(--duration-fast) ease;
+}
+.tool-head:hover { background: var(--color-bg-secondary); }
+.tool-name {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+/* One-line preview of the call's arguments (e.g. the command line
+   for `terminal`, the path for `read_file`/`write_file`, the URL
+   for `browser`). Renders right after the tool name in a slightly
+   muted monospace so the eye still parses it as "the same row". */
+.tool-args {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  max-width: 38ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* keep the *trailing* part of long paths visible
+                     (file name) instead of the leading root */
+  text-align: left;
+  margin-left: 2px;
+}
+.tool-args[data-ltr="1"],
+.tool-msg-args[data-ltr="1"] {
+  /* search_files hints (path · "query") and browser URLs read
+     better left-to-right, otherwise the path tail gets clipped. */
+  direction: ltr;
+}
+.tool-args::before { content: "·"; margin-right: 6px; color: var(--color-text-faint); }
+
+/* Inline progress note attached from a `status` event (e.g. "正在处理").
+   Sits next to the running tool's "执行中" badge so the user can see
+   what the LLM is doing mid-flight without spawning a separate row
+   in the timeline — that was the source of the "3 rows per tool call"
+   visual chaos. */
+.tool-status-note {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  font-style: italic;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+/* Same hint, used by the inline role=tool message card. Slightly
+   wider allowed because the row is single-line. */
+.tool-msg-args {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  max-width: 48ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  margin-left: 4px;
+}
+.tool-msg-args::before { content: "·"; margin-right: 6px; color: var(--color-text-faint); }
+.tool-body {
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  max-height: 320px;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+/* ── Tool result panel (collapsible, no header bar) ───────────────
+   用户反馈:
+     之前 tool 折叠面板里有一个 `.tool-output-bar` 子组件, 显示
+     "运行中 / 输出 / 已中断" 标签 + 绿色脉冲点 + "N 行 · K B" 统计。
+     这个头部和行头的 "已执行 {result peek}" + 状态徽章完全重复,
+     而且 "○ terminal 运行中" 这个绿点子行非常刺眼, 用户要求
+     整个移除, 只要一个简洁的折叠面板。
+
+   现在的设计:
+     · 没有头部 — 不再有 "运行中 / 输出 / 已中断" 标签
+     · 没有脉冲绿点 — 行头的 spinner + 状态徽章已经够
+     · 没有线号 — 简单 `<pre>` + white-space: pre-wrap
+     · 只有一个轻量 monospace 面板, subtle bg, padding, max-height
+     · 复制按钮在右上角, hover 时才显示 — 减少常驻 chrome
+     · 状态通过面板的 `data-running` 属性传达 (CSS 留 hook,
+       当前没用, 留作未来扩展) ─────────────────────────────────── */
+.tw-msg-output {
+  position: relative;
+  margin-top: 4px;
+  padding: 8px 30px 8px 12px;
+  background: transparent;  /* v6: 与父容器 (chat-assistant) 同底, 不再"贴" */
+  border: 0;
+  border-radius: 5px;
+  max-height: 320px;
+  overflow: auto;
+  /* 字体策略:
+     · ASCII / 标点: Cascadia Code / Consolas (Windows 内置, 真等宽)
+     · CJK: 浏览器会按字符回退到 Cascadia Code 没有的字符, 我们主动
+            放一个 sans-serif 中文 (Microsoft YaHei) 在 cascade 末尾,
+            否则 Windows 默认会回退到 SimSun (宋体, 老式衬线), 与现代
+            UI 风格冲突, 用户会感觉"老气 / 没调过".
+     · 末位 monospace 兜底, 确保非 Windows 环境也有等宽 fallback. */
+  font-family: "Cascadia Code", "JetBrains Mono", "Sarasa Mono SC", Consolas, ui-monospace, "Microsoft YaHei", "微软雅黑", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  font-variant-ligatures: none;
+  letter-spacing: 0.2px;
+}
+.tw-msg-output[data-empty="true"] {
+  padding: 8px 12px;
+  font-family: var(--font-sans, system-ui);
+}
+.tw-msg-output::-webkit-scrollbar { width: 8px; height: 8px; }
+.tw-msg-output::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-text-faint) 40%, transparent);
+  border-radius: 4px;
+}
+.tw-msg-output::-webkit-scrollbar-track { background: transparent; }
+.tw-msg-output-text {
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  background: transparent;
+}
+.tw-msg-output-empty {
+  display: block;
+  font-size: 11.5px;
+  color: var(--color-text-faint);
+  font-style: italic;
+  font-family: var(--font-sans, system-ui);
+}
+/* Copy chip — floats top-right, hidden until the user hovers the
+   panel. We keep it minimal (icon only) so it doesn't compete with
+   the result text for attention. */
+.tw-msg-output-copy {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease, color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.tw-msg-output:hover .tw-msg-output-copy,
+.tw-msg-output-copy:focus-visible {
+  opacity: 1;
+}
+.tw-msg-output-copy:hover {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-bg-tertiary) 80%, transparent);
+}
+.tw-msg-output-copy[data-copied="true"] {
+  opacity: 1;
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+}
+
+/* ── Legacy `.tool-terminal*` (defence-in-depth) ──────────────
+   Kept so any leftover call site that hasn't migrated to
+   `.tool-output*` still renders something sensible instead of
+   unstyled markup. New code should use `.tool-output`. ──────── */
+.tool-terminal {
+  background: var(--color-bg-code);
+  border-top: 1px solid var(--color-border-subtle);
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+}
+.tool-terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px 6px 12px;
+  background: var(--color-bg-code-header);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border-subtle) 60%, transparent);
+}
+.tool-terminal-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: filter var(--duration-fast) ease;
+}
+.tool-terminal-dot:nth-child(1) { background: #ff5f56; }
+.tool-terminal-dot:nth-child(2) { background: #ffbd2e; }
+.tool-terminal-dot:nth-child(3) { background: #27c93f; }
+.tool-terminal[data-running="true"] .tool-terminal-dot {
+  animation: terminal-dot-pulse 1.4s ease-in-out infinite;
+}
+.tool-terminal[data-running="true"] .tool-terminal-dot:nth-child(2) { animation-delay: 0.15s; }
+.tool-terminal[data-running="true"] .tool-terminal-dot:nth-child(3) { animation-delay: 0.3s; }
+@keyframes terminal-dot-pulse {
+  0%, 100% { filter: brightness(0.85); }
+  50%      { filter: brightness(1.15); }
+}
+.tool-terminal-title {
+  margin-left: 8px;
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+  letter-spacing: 0.04em;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+.tool-terminal[data-running="true"] .tool-terminal-title {
+  color: var(--color-accent);
+}
+.tool-terminal[data-running="true"] .tool-terminal-title::after {
+  content: "▌";
+  margin-left: 4px;
+  color: var(--color-accent);
+  animation: h-caret 1s steps(2) infinite;
+}
+@keyframes h-caret {
+  0%, 50%   { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+.tool-terminal-copy {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-faint);
+  font-size: 10px;
+  font-family: var(--font-sans, system-ui);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+.tool-terminal:hover .tool-terminal-copy,
+.tool-terminal-copy:focus-visible {
+  opacity: 1;
+}
+.tool-terminal-copy:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border-subtle);
+}
+.tool-terminal-copy[data-copied="true"] {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-success) 22%, transparent);
+  opacity: 1;
+}
+.tool-terminal-body {
+  margin: 0;
+  padding: 10px 14px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-variant-ligatures: none;
+}
+.tool-terminal-body::-webkit-scrollbar { width: 8px; height: 8px; }
+.tool-terminal-body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-text-faint) 40%, transparent);
+  border-radius: 4px;
+}
+.tool-terminal-body::-webkit-scrollbar-track { background: transparent; }
+
+/* ── Premium tool event card ──────────────────────────────────────
+   WorkBuddy-style compact row per tool, with a click-to-expand
+   terminal block for stdout / output. Each card is a discrete
+   object — bordered, rounded, hover-reactive — so completed tool
+   calls read at a glance instead of melting into the prose.
+
+   Visual contract:
+     · Done   — bordered card, neutral bg, status-tinted icon,
+                left-edge stays neutral (success feels quiet)
+     · Error  — bordered card with a static red left bar, red icon
+     · Running — pulsing accent left bar, accent-tinted bg, icon
+                 tinted, terminal body auto-expanded
+
+   Format:
+     ┌────────────────────────────────────────────────────────┐
+     │ [icon]  已执行命令  cargo build --release  0.4s  ✓ 成功 │
+     ├────────────────────────────────────────────────────────┤
+     │ ● ● ●  输出                                       📋   │
+     │ Compiling hermix v0.1.0                               │
+     │ Finished `release` profile...                         │
+     └────────────────────────────────────────────────────────┘
+   ─────────────────────────────────────────────────────────── */
+.tw-msg {
+  margin: 2px 0;
+  border-radius: var(--radius-md);
+  border: 0;
+  background: transparent;
+  transition: none;
+  overflow: visible;
+  padding-left: 0;
+}
+.tw-msg:hover { border: 0; box-shadow: none; background: transparent; }
+.tw-msg--run, .tw-msg--err, .tw-msg--ok { border: 0; background: transparent; position: static; }
+
+/* ── Consecutive tool calls (same agent): visually grouped ───────
+   .msg-stream > * + * 给 12px (Round 15 加, 解决 user 消息无上边距),
+   但 agent 连续调多个工具时这个 12px + .tw-msg margin (3+3=6) = 18px
+   让 tool cards 看起来"松散" — 用户 反馈 "每个调用间隔
+   这么大". 同一 agent 内的连续 tool call 紧贴 (4px) 即可, 不同来源
+   (user → assistant → tool) 仍走 12px. */
+.tw-msg + .tw-msg {
+  margin-top: 4px;
+}
+
+/* Status bar on the left edge — pulses for running, static for
+   error. Done state has no bar (success stays quiet). */
+/* Header row — compact single-line, 30px min-height. */
+.tw-msg-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  line-height: 1.4;
+  cursor: pointer;
+  min-height: 0;
+  border-radius: 0;
+  transition: color var(--duration-fast) ease;
+}
+.tw-msg-row:hover,
+.tw-msg-row[data-open="true"],
+.tw-msg-row:focus-visible {
+  background: transparent;
+}
+.tw-msg-row:focus-visible {
+  outline: none;
+  color: var(--color-text-primary);
+}
+.tw-msg-row[data-open="true"] + .tw-msg-body {
+  background: transparent;
+  border-top: none;
+}
+
+/* ── Colored icon tile — matches FileTypeIcon style
+   Small rounded square with a brand-colored background, white icon.
+   Replaces the old plain outline icon (`.tw-msg-icon`). The tile
+   colour comes from the inline `style={{background: cat.bg}}` set
+   by `classifyTool` in the React component. */
+.tw-msg-icon-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 0;
+  flex-shrink: 0;
+  margin-right: 6px;
+  box-shadow: none;
+  background: transparent !important;
+}
+.tw-msg-icon-svg {
+  color: inherit !important;
+  display: block;
+}
+
+/* ── Result peek — one-line summary shown between primary arg and
+   status. Muted monospace, truncated with ellipsis on narrow rows.
+   Only shown for completed tools that produced output. Error
+   results use the tw-msg-err-hint block instead (below). */
+.tw-msg-result-peek {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 11px;
+  min-width: 0;
+  flex-shrink: 10;
+  margin-left: 5px;
+  padding-left: 5px;
+  border-left: 1px solid var(--color-border-secondary);
+}
+
+/* Icon — plain outline glyph, no coloured chip, no background.
+   Colour comes from the row's `data-state` (running/ok/error).
+   Kept for backward compatibility with non-tool icon usage. */
+.tw-msg-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin-right: 6px;
+  color: var(--color-text-faint);
+}
+.tw-msg-row[data-state="run"] .tw-msg-icon { color: var(--color-accent); }
+.tw-msg-row[data-state="ok"]  .tw-msg-icon { color: var(--color-text-muted); }
+.tw-msg-row[data-state="err"] .tw-msg-icon { color: var(--color-error); }
+.tw-msg-row:hover .tw-msg-verb,
+.tw-msg-row:focus-visible .tw-msg-verb,
+.tw-msg-row:hover .tw-msg-primary,
+.tw-msg-row:focus-visible .tw-msg-primary {
+  color: var(--color-text-primary);
+}
+.tw-msg-row:hover .tw-msg-icon-tile,
+.tw-msg-row:focus-visible .tw-msg-icon-tile {
+  filter: saturate(0.8) brightness(0.8);
+}
+.tw-msg-main {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Inline separator `|` between command and result peek. */
+.tw-msg-sep {
+  color: var(--color-border-secondary);
+  flex-shrink: 0;
+  font-size: 11px;
+  user-select: none;
+  margin: 0 2px;
+}
+
+/* Result peek — truncated first line of tool output, muted. */
+.tw-msg-peek {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 12.5px;
+  min-width: 0;
+  flex-shrink: 10;
+}
+
+.tw-msg-spin {
+  color: var(--color-accent);
+  animation: tw-spin 1s linear infinite;
+}
+@keyframes tw-spin { to { transform: rotate(360deg); } }
+
+/* Verb label (e.g. "已执行命令") — secondary text weight so it
+   reads as a category tag rather than competing with the
+   command itself. */
+.tw-msg-verb {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  margin-right: 5px;
+  letter-spacing: 0;
+  flex-shrink: 0;
+}
+
+/* Run-count badge for coalesced tool calls (LLM retry loop indicator).
+   Renders as "×3" right after the verb — neutral colour, small font, no
+   background. Loud enough to draw the eye, quiet enough not to fight the
+   primary command on the row. */
+.tw-msg-xn {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-faint, #8b949e);
+  margin-right: 4px;
+  flex-shrink: 0;
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+}
+
+/* Primary arg — normal weight, regular proportion font (NOT
+   monospace, NOT bold).  Paths render as link-styled spans
+   (--link colour, hover underline) so users see they are
+   clickable.
+   用户反馈: flex: 1 把命令撑满整行, 导致 | 和
+   peek 被推到右侧, "不是左对齐". 改 flex: 0 1 auto 让 primary
+   保持自然宽度, peek 紧跟其后左对齐. primary 仍可通过
+   flex-shrink + text-overflow 截断, 但优先级高于 peek (10x). */
+.tw-msg-primary {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+  font-family: inherit;
+  direction: ltr;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+}
+.tw-msg-primary--link {
+  color: var(--color-link);
+}
+
+/* Compact chip — e.g. the memory auto-archive marker ("已归档N条" /
+   "整理记忆"). Neutral zinc/gray, never a success/error colour, so it
+   reads as an informational tag and respects the no-blue/purple theme. */
+.tw-msg-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: 4px;
+  border: 1px solid var(--color-border, #2e2e34);
+  background: var(--color-surface-2, #1c1c20);
+  color: var(--color-text-secondary, #c9c9d1);
+}
+.tw-msg-archive-chip {
+  /* distinguished only by a faint accent border; keeps the
+     "整理记忆" action noticeable without shouting */
+  border-color: var(--color-border-strong, #3a3a42);
+}
+.tw-msg-primary--link:hover {
+  text-decoration: underline;
+  color: var(--color-link-hover);
+}
+
+/* Inline status note attached to a running tool row (e.g. "正在处理").
+   Renders as muted prose right after the primary arg, so the user
+   sees "已读取 path · 正在处理" on a single line instead of a
+   separate card. */
+.tw-msg-note {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  font-style: italic;
+  margin-right: 4px;
+}
+
+/* Right-side meta group (duration / stats / state / chevron).
+   `padding-left` keeps the badge from colliding with the
+   truncated command when the row is narrow. */
+.tw-msg-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: 8px;
+  padding-left: 0;
+}
+
+/* Duration shown on the right of the row, before the status badge.
+   Tiny monospace so it aligns with the badge baseline. */
+.tw-msg-dur {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--color-text-faint);
+  letter-spacing: -0.01em;
+}
+
+/* (): thin progress strip rendered under a
+   running tool row. The fill width is set inline from
+   `progressFraction()` in ToolEventCard.tsx; this stylesheet
+   just provides the rail + fill colour so the bar reads as
+   "this tool is in flight" without competing with the spinner
+   icon for attention. Width fills the row's horizontal extent
+   minus the existing 8px inset. */
+.tw-msg-progress {
+  height: 2px;
+  margin: 4px 12px 0;
+  border-radius: 1px;
+  background: var(--color-bg-inset, rgba(0, 0, 0, 0.06));
+  overflow: hidden;
+}
+
+.tw-msg-progress-fill {
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    var(--color-accent, #475569) 0%,
+    var(--color-accent-soft, rgba(71, 85, 105, 0.10)) 100%
+  );
+  /* Soft shimmer so the bar feels "alive" instead of frozen
+     when the underlying interval ticks. Disabled under
+     prefers-reduced-motion for accessibility. */
+  transition: width 0.6s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tw-msg-progress-fill {
+    transition: none;
+  }
+}
+
+/* Status text — small icon + label, NO background, NO border, NO pill.
+   用户反馈: 蓝/红色字符很难看, 改为图标 + 文字.
+     - 已完成 → ✓ + 绿色 (success, 不用 info 蓝)
+     - 失败   → ⚠ + 琥珀色 (warning, 不用 error 红)
+     - 运行中 → ⏵ + 转圈 + accent (品牌色, 不变)
+     - 已中断 → ⚠ + warning 琥珀色
+   Color 只作用图标 + 文字, 没有 chip 背景. */
+.tw-msg-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+  letter-spacing: 0;
+  color: var(--color-text-faint);
+}
+.tw-msg-state--done { color: var(--color-success); }
+.tw-msg-state--run  { color: var(--color-accent); }
+.tw-msg-state--err  { color: var(--color-warning); }
+
+/* Status pill — used in the ACUI right panel (ToolEventCard) to
+   surface the run state in a small icon+text chip. 用户反馈: 蓝/红色字符很难看, 改为图标 + 文字 chip, 颜色统一
+   调到 muted/success/warning (蓝/红色字符完全不渲染). 已完成 →
+   Check + 绿色; 失败 → AlertTriangle + warning 琥珀; 运行中 →
+   Loader2 + accent (品牌色, 不变); 已中断 → AlertTriangle +
+   warning 琥珀. */
+.tw-msg-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: nowrap;
+  font-family: var(--font-sans, system-ui);
+  /* Subtle, color-only differentiation. No border, no gradient. */
+}
+.tw-msg-run-badge {
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+.tw-msg-err-badge {
+  /* 用户反馈: 红色字符刺眼, 改 warning 琥珀. */
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+}
+.tw-msg-done-badge {
+  /* 用户反馈: 蓝色字符难看, 改 success 绿 (中性"工具
+     执行完毕", 仍不断言 success, 真正的 success/failure 状态由
+     结果内容决定, e.g. exit code 1, 错误文本). */
+  color: var(--color-success);
+  background: var(--color-success-soft);
+}
+
+/* ── Git-style diff stats (+62 / −3) ─────────────────────────────
+   Shown between the primary arg and the status badge for write /
+   patch / edit tools so the user can see at a glance how much the
+   tool changed. Green = additions, red = deletions, monospace so
+   the +/- sign aligns cleanly across rows. Numbers are NOT bold. */
+.tw-msg-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1;
+  margin-right: 2px;
+}
+.tw-msg-stat {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  letter-spacing: -0.02em;
+  font-weight: 400;
+}
+.tw-msg-stat--add { color: #22c55e; }
+.tw-msg-stat--del { color: #ef4444; }
+
+[data-theme="light"] .tw-msg-stat--add { color: #16a34a; }
+[data-theme="light"] .tw-msg-stat--del { color: #dc2626; }
+
+/* Chevron expand — square button, brighter on row hover so the
+   affordance is discoverable but doesn't visually compete at rest. */
+.tw-msg-chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--color-text-faint);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+.tw-msg-row:hover .tw-msg-chev,
+.tw-msg-row:focus-visible .tw-msg-chev {
+  background: transparent;
+  color: var(--color-text-primary);
+}
+
+/* Body (tool result panel) — animated container, no decorative
+   border. The visual separation between the row and the panel
+   below comes from the panel's own subtle background color
+   (`.tw-msg-output` uses `var(--color-bg-secondary)`), not a
+   hairline. Animates in on expand; collapses immediately when
+   hidden (no exit animation — saves layout thrash on the rapid
+   sequence of tool calls during a turn). */
+.tw-msg-body {
+  background: transparent;
+  overflow: hidden;
+  margin: 0 0 0 22px;
+  animation: tw-msg-body-in 180ms var(--ease-out);
+}
+@keyframes tw-msg-body-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Error hint row (inline, auto-collapsible) ───────────────────
+   v5: 错误表达 = 浅红底 + 图标，无边框无标题栏。
+   浅红底与外层 tool 行的 data-state="err" 联动，仅靠底色区分。
+   ─────────────────────────────────────────────────────────────── */
+.tw-msg-err-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 8px;
+  margin: 2px 0 0 0;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-error);
+  font-size: 11.5px;
+  line-height: 1.4;
+  border: 0;  /* v5: 无边框 */
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);  /* v5: 浅红底 */
+  transition: background var(--duration-fast) ease;
+}
+.tw-msg-err-hint:hover {
+  background: color-mix(in srgb, var(--color-error) 16%, transparent);
+}
+.tw-msg-err-hint > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tw-msg-chev-err {
+  color: var(--color-error);
+  opacity: 0.5;
+  transition: opacity var(--duration-fast) ease;
+}
+.tw-msg-err-hint:hover .tw-msg-chev-err {
+  opacity: 1;
+}
+
+/* ── Approval card (role="approval") ──────────────────────────────
+   设计意图：一个真正的「卡片」——中性微妙边框 + 柔和投影撑起
+   立体感，决定状态只用极淡底色晕染 + 彩色状态徽章表达，绝不靠
+   描边或左侧色条。历史包袱：
+     · 按钮默认实色（拒绝=红底白字，允许=绿底白字），不依赖 hover
+     · expired 状态（灰色 badge + 灰色底色）
+     · 倒计时 pill（<=30s 变红 + pulse）
+     · resolved footer 文字
+   旧的「左侧 3px accent 色条 + 彩色边框」已被移除（用户反馈太丑）。
+   ─────────────────────────────────────────────────────────────── */
+/* Card surface — a *real* elevated card, not a line-framed box.
+   A neutral subtle border + soft layered shadow give it "card"
+   presence; decision state is shown by a faint tinted wash + the
+   colored status pill, never by painting the card's edges. The old
+   left accent bar (.approval-accent) is gone — user feedback called
+   it out as the ugly part. */
+.approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border-subtle, #ececef);
+  background: var(--color-bg-elevated, #ffffff);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.05),
+    0 2px 10px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.dark .approval-card {
+  background: var(--color-bg-card, #1c1c20);
+  border-color: var(--color-border-subtle, #2c2c32);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 2px 12px rgba(0, 0, 0, 0.28);
+}
+.approval-card:hover {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 4px 16px rgba(0, 0, 0, 0.07);
+}
+.dark .approval-card:hover {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.40),
+    0 6px 20px rgba(0, 0, 0, 0.32);
+}
+
+/* Inner content wrapper (the single child now that the accent bar
+   is removed; the card itself owns the padding). */
+.approval-inner {
+  min-width: 0;
+}
+
+/* Header row: icon + body + actions on one line */
+.approval-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+
+/* Icon badge — 24×24 rounded square, status-tinted */
+.approval-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+/* Body: tool name + description */
+.approval-body {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.approval-tool {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+.approval-desc {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Countdown pill (pending only) */
+.approval-countdown-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--color-text-secondary, #4a4a50);
+  background: var(--color-bg-tertiary, #ededee);
+  border: 1px solid var(--color-border-subtle, #ececef);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.dark .approval-countdown-pill {
+  color: var(--color-text-secondary, #c8c8cc);
+  border-color: var(--color-border-subtle, #2c2c32);
+}
+.approval-countdown-pill.is-danger {
+  color: var(--color-error, #dc2626);
+  background: color-mix(in srgb, var(--color-error, #dc2626) 12%, transparent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.approval-countdown-pill.is-danger svg {
+  animation: approval-countdown-pulse 1s ease-in-out infinite;
+}
+@keyframes approval-countdown-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.25); opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .approval-countdown-pill.is-danger svg { animation: none; }
+}
+
+/* Right-side: decision badge or action buttons */
+.approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+/* Decision state text (after user responds) */
+.approval-decision {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.approval-decision.is-ok {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+.approval-decision.is-err {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+}
+.approval-decision.is-expired {
+  color: var(--color-text-muted, #888);
+  background: var(--color-bg-tertiary, #ededee);
+}
+
+/* ── Action buttons (pending state) ──
+   重做：按钮默认就有实色，不依赖 hover。
+   · 拒绝：浅红底 + 红字，hover 加深为实心红
+   · 允许：绿色实色底 + 白字，hover 加深
+   两个按钮同等大小、同等醒目，让"红色按钮"本身作为视觉警示。 */
+.approval-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 30px;
+  min-width: 72px;
+  padding: 0 16px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  font-family: inherit;
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+.approval-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.approval-btn:focus-visible {
+  outline: 2px solid var(--color-accent, #475569);
+  outline-offset: 2px;
+}
+.approval-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Deny — soft red wash, always visible */
+.approval-btn--deny {
+  background: color-mix(in srgb, var(--color-error, #dc2626) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-error, #dc2626) 30%, transparent);
+  color: var(--color-error, #dc2626);
+}
+.approval-btn--deny:hover:not(:disabled) {
+  background: var(--color-error, #dc2626);
+  border-color: var(--color-error, #dc2626);
+  color: #ffffff;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-error, #dc2626) 15%, transparent);
+}
+
+/* Approve — solid green fill, always visible */
+.approval-btn--ok {
+  background: var(--color-success, #16a34a);
+  border-color: var(--color-success, #16a34a);
+  color: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.approval-btn--ok:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-success, #16a34a) 85%, #000);
+  border-color: color-mix(in srgb, var(--color-success, #16a34a) 85%, #000);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.10),
+              0 0 0 3px color-mix(in srgb, var(--color-success, #16a34a) 15%, transparent);
+}
+
+/* ── Decision-state card tints — subtle wash ONLY, no colored edge ──
+   The decision is already signalled by the colored status pill
+   ("已允许" / "已拒绝" / "已超时") and the tinted icon badge, so the
+   card surface itself stays neutral. A faint 7-9% wash is enough to
+   register "this one resolved green/red" without drawing a border. */
+.approval-card--ok {
+  background: color-mix(in srgb, var(--color-success) 7%, var(--color-bg-elevated, #ffffff));
+}
+.dark .approval-card--ok {
+  background: color-mix(in srgb, var(--color-success) 9%, var(--color-bg-card, #1c1c20));
+}
+.approval-card--deny {
+  background: color-mix(in srgb, var(--color-error) 7%, var(--color-bg-elevated, #ffffff));
+}
+.dark .approval-card--deny {
+  background: color-mix(in srgb, var(--color-error) 9%, var(--color-bg-card, #1c1c20));
+}
+.approval-card--expired {
+  background: color-mix(in srgb, var(--color-text-muted, #888) 5%, var(--color-bg-elevated, #ffffff));
+}
+.dark .approval-card--expired {
+  background: color-mix(in srgb, var(--color-text-muted, #888) 8%, var(--color-bg-card, #1c1c20));
+}
+
+/* ── Resolved footer text — spacing only, NO divider line ──
+   The old 1px dashed border-top read as a "stitched box". The card's
+   own surface + the gap above the footer are enough separation. */
+.approval-footer {
+  margin-top: 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--color-text-muted, #888);
+}
+.dark .approval-footer {
+  color: var(--color-text-muted, #999);
+}
+
+/* ── Thinking dots (processing gap) ───────────────────────────────
+   Three animated dots with staggered delay. Inline flow, sits at
+   the bottom of the current assistant message as a "still working"
+   hint. ─────────────────────────────────────────────────────────── */
+.tdots {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 0;
+}
+.tdots-label {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  margin-right: 2px;
+}
+.tdots-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-text-faint);
+  animation: tdots-bounce 1.4s ease-in-out infinite;
+}
+@keyframes tdots-bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+  40%           { transform: scale(1);   opacity: 1; }
+}
+
+/* ── Old tool message classes (legacy, kept for backward compat) ── */
+.tool-msg {
+  margin: 2px 0;
+}
+.tool-msg-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  padding: 3px 8px 3px 6px;
+  border-radius: var(--radius-sm);
+  border: 0;
+  background: transparent;
+  text-align: left;
+  transition: background var(--duration-fast) ease;
+  line-height: 1;
+}
+.tool-msg-row:hover:not(:disabled) { background: var(--color-bg-tertiary); }
+.tool-msg-row:disabled:hover { background: transparent; }
+.tool-msg--running .tool-msg-row {
+  position: relative;
+  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
+  padding-left: 10px;
+  margin-left: -2px;
+}
+.tool-msg--running .tool-msg-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-accent);
+  animation: tool-row-pulse-bar 1.4s ease-in-out infinite;
+}
+@keyframes tool-row-pulse-bar {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+/* ── Status note (chip) ── */
+.status-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  margin-left: 16px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+}
+.status-note svg { color: var(--color-text-faint); flex-shrink: 0; }
+

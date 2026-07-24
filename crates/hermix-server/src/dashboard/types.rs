@@ -277,7 +277,7 @@ pub struct AnalyticsDailyEntry {
     pub day: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    /// 2026-07-14: now sourced from `token_usage.cache_read_tokens`
+    /// now sourced from `token_usage.cache_read_tokens`
     /// instead of being hardcoded to 0. Lets the daily curve layer
     /// cache-hit as a stacked band on top of input/output.
     pub cache_read_tokens: u64,
@@ -285,7 +285,7 @@ pub struct AnalyticsDailyEntry {
     pub reasoning_tokens: u64,
     pub estimated_cost: f64,
     pub actual_cost: f64,
-    /// 2026-07-16 (Phase 5): when the provider reports 0 cache reads
+    /// (Phase 5): when the provider reports 0 cache reads
     /// but is *known* to support caching, this holds the estimated hit
     /// rate (from provider config `cache_hit_rate_estimate`). `None`
     /// means "use the real `cache_read_tokens` value" (which may be 0).
@@ -299,14 +299,14 @@ pub struct AnalyticsModelEntry {
     pub model: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    /// 2026-07-14: per-model cache + reasoning totals so each row
+    /// per-model cache + reasoning totals so each row
     /// can show its own cache hit rate.
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub reasoning_tokens: u64,
     pub estimated_cost: f64,
     pub sessions: u32,
-    /// 2026-07-16 (Phase 5): estimated cache hit rate when the
+    /// (Phase 5): estimated cache hit rate when the
     /// provider under-reports cache usage. `None` ⇒ use real data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cache_hit_rate: Option<f64>,
@@ -316,7 +316,7 @@ pub struct AnalyticsModelEntry {
 pub struct AnalyticsTotals {
     pub total_input: u64,
     pub total_output: u64,
-    /// 2026-07-14: now aggregated from real `token_usage` rows.
+    /// now aggregated from real `token_usage` rows.
     /// Distinct from `total_cache_creation` so we can chart "saved"
     /// vs "spent-on-caching" separately.
     pub total_cache_read: u64,
@@ -325,11 +325,11 @@ pub struct AnalyticsTotals {
     pub total_estimated_cost: f64,
     pub total_actual_cost: f64,
     pub total_sessions: u32,
-    /// 2026-07-16 (Phase 5): estimated overall cache hit rate when
+    /// (Phase 5): estimated overall cache hit rate when
     /// the active providers under-report cache usage. `None` ⇒ real.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cache_hit_rate: Option<f64>,
-    /// 2026-07-14 (Phase 3 / E4): compression telemetry.
+    /// (Phase 3 / E4): compression telemetry.
     /// `total_compactions` = number of compression child sessions
     /// spawned in the window; `total_archived_turns` = the preserved
     /// (not lost) history folded into those summaries.
@@ -384,7 +384,7 @@ pub struct AnalyticsSkillsResponse {
     pub top_skills: Vec<AnalyticsSkillEntry>,
 }
 
-/// 2026-07-16 (Phase 1): structured error body returned by
+/// (Phase 1): structured error body returned by
 /// `GET /api/analytics/usage` when the underlying aggregation fails
 /// (DB unavailable, query error, …). Replaces the old behaviour of
 /// swallowing the error into an all-zero `200 OK` response, so the
@@ -397,7 +397,7 @@ pub struct AnalyticsErrorResponse {
     pub cause: String,
 }
 
-/// 2026-07-16 (Phase 2): diagnostic payload for `GET /api/analytics/debug`.
+/// (Phase 2): diagnostic payload for `GET /api/analytics/debug`.
 /// Surfaces the DB path, per-table existence/row-count/sample, and the
 /// applied migration list so a user can pinpoint where the stats
 /// pipeline is broken without poking at SQLite manually.

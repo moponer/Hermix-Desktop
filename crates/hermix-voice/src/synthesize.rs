@@ -169,7 +169,6 @@ mod tests {
     // the real `MultiTtsBackend`, those assertions no longer hold —
     // the backend will try to make HTTP calls to OpenAI / ElevenLabs
     // and fail if no API key is set.
-    //
     // We keep only the empty-text guard test (which short-circuits
     // before any HTTP call) and the serde round-trip test. The
     // provider-resolution logic is tested implicitly by the

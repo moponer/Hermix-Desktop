@@ -315,8 +315,7 @@ impl SessionManager {
     }
 
     /// Get or create a session for the given platform, chat, and user.
-    ///
-    /// If a session exists for this (platform, chat_id, user_id) triple,
+    /// /// If a session exists for this (platform, chat_id, user_id) triple,
     /// return it (after checking whether it should be reset).
     /// Otherwise, create a new session.
     pub async fn get_or_create_session(
@@ -495,8 +494,7 @@ impl SessionManager {
     }
 
     /// Flush all in-memory sessions (e.g., before shutdown or persistence).
-    ///
-    /// Returns all sessions that were flushed.
+    /// /// Returns all sessions that were flushed.
     pub async fn flush_memories(&self) -> Vec<Session> {
         let mut sessions = self.sessions.write().await;
         let all: Vec<Session> = sessions.values().cloned().collect();
@@ -509,8 +507,7 @@ impl SessionManager {
     }
 
     /// Expire idle sessions according to their reset policy.
-    ///
-    /// Returns the number of removed sessions.
+    /// /// Returns the number of removed sessions.
     pub async fn expire_idle_sessions(&self) -> usize {
         let mut sessions = self.sessions.write().await;
         let before = sessions.len();

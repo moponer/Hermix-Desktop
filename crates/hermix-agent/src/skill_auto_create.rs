@@ -100,11 +100,11 @@ pub fn skill_slug(input: &str) -> String {
 /// into a skill. A sequence qualifies when it:
 ///
 /// - has **>= [`AUTO_SKILL_MIN_TOOL_STEPS`] distinct calls** — below
-///   that the "pattern" is just a single answer.
+/// that the "pattern" is just a single answer.
 /// - has **>= 2 distinct tool names** — a single-tool count of 5 is
-///   not a sequence, it's just repeated retrying.
+/// not a sequence, it's just repeated retrying.
 /// - the dominant tool does not exceed 80 % of the calls — extreme
-///   repetition usually means the agent loop is stuck.
+/// repetition usually means the agent loop is stuck.
 pub fn should_auto_create_skill(tool_names: &[String]) -> bool {
     if tool_names.len() < AUTO_SKILL_MIN_TOOL_STEPS {
         return false;

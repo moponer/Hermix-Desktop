@@ -51,29 +51,31 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw new Error("retry exhausted"); // unreachable, just for TS
 }
 
-async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+async function fetchApi<T = void>(path: string, init?: RequestInit, { parseJson = true }: { parseJson?: boolean } = {}): Promise<T> {
   return withRetry(async () => {
     const response = await fetch(apiUrl(path), init);
     if (!response.ok) {
       const text = await response.text().catch(() => response.statusText);
       throw new Error(text || `HTTP ${response.status}`);
     }
-    return response.json() as T;
+    if (parseJson) {
+      return response.json() as T;
+    }
+    return undefined as T;
   });
 }
 
+/** Fetch a JSON response from the API. */
+async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  return fetchApi<T>(path, init, { parseJson: true });
+}
+
+/** Fetch without parsing the response body. */
 async function fetchVoid(path: string, init?: RequestInit): Promise<void> {
-  return withRetry(async () => {
-    const response = await fetch(apiUrl(path), init);
-    if (!response.ok) {
-      const text = await response.text().catch(() => response.statusText);
-      throw new Error(text || `HTTP ${response.status}`);
-    }
-  });
+  return fetchApi<void>(path, init, { parseJson: false });
 }
 
 // ── Orchestration Engine: Task CRUD (Phase 1 / P1-5) ────────
-//
 // Task is the top-level work unit in the orchestration engine.
 // POST /v1/tasks creates a task, GET /v1/tasks lists them,
 // GET /v1/tasks/:id fetches one, PATCH /v1/tasks/:id/status
@@ -171,7 +173,6 @@ export async function listChildTasks(
 }
 
 // ── Product Delivery (Phase 7 / P7-1) ───────────────────────
-//
 // POST /v1/tasks/:id/results registers deliverable artifacts
 // for a Task, classifies them by type, and emits ResultDelivered
 // event via the orchestration bus.
@@ -192,7 +193,6 @@ export async function deliverResults(
 }
 
 // ── Automation Engine (Phase 5/6 — P5-5, P6-5) ───────────────
-//
 // The new three-table automation engine: /v1/automations endpoints
 // backed by hermix-automation crate. Triggers go through the unified
 // agent_service.send_message() dispatch path (铁律 DD).
@@ -298,16 +298,14 @@ export async function triggerAutomation(
 }
 
 // ── Todo (task list) ─────────────────────────────────────────
-//
-// The TodoPanel was retired in v2 (2026-07-07) in favor of inline
+// The TodoPanel was retired in in favor of inline
 // TodoListCard components rendered into the message stream. Card
 // state is fed by three WS events:
-//   - `todo_group_started` — LLM declared a new plan
-//   - `todo_item_upserted`  — create / update / depend / record_execution
-//   - `todo_item_removed`   — delete
+// - `todo_group_started` — LLM declared a new plan
+// - `todo_item_upserted`  — create / update / depend / record_execution
+// - `todo_item_removed`   — delete
 // See `useStreamChat.ts` for the parser. WS is the single source of
 // truth (铁律 H).
-//
 // `patchTodo` is what the user's manual checkbox click calls — the
 // server dispatches the update through the same `todo` tool the
 // LLM uses, the WS forwarder fires, every connected client sees
@@ -331,11 +329,11 @@ export interface TodoItem {
 }
 
 /**
- * @deprecated since 2026-07-13 — the TodoPanel that consumed this
+ * @deprecated since — the TodoPanel that consumed this
  * was replaced by per-message TodoListCard components fed by WS.
  * Front-end callers vanished with the panel. The HTTP endpoint is
  * kept server-side for legacy CLI / script users; the UI no longer
- * polls it. Tracked by Frontend Audit 2026-07-13 (P0-T3).
+ * polls it. Tracked by Frontend Audit (P0-T3).
  */
 export async function listTodos(): Promise<{ todos: TodoItem[]; total: number }> {
   return fetchJSON(`/v1/todos`);
@@ -508,7 +506,6 @@ export const restoreSession = async (
 };
 
 // ── Archive refs (v2 short-term context unload, 2026-06-21) ─────
-//
 // Mirrors `hermix_agent::ArchiveRef` (rust) — see
 // `crates/hermix-agent/src/archive.rs`. The server writes one
 // JSON-Lines row per archived message under
@@ -516,13 +513,11 @@ export const restoreSession = async (
 // reads the whole file and returns the list. Empty when the session
 // has never triggered a compression round (the common case for
 // short sessions), in which case the chat banner is hidden.
-//
 // We surface `filePath` exactly as the server returns it (a
 // platform-native absolute path). The chat banner hands it to
 // `read_artifact_file` to open the anchor in CodeView — that
 // helper enforces the allowed-roots whitelist, so a malicious
 // `filePath` cannot escape the sandbox.
-//
 // `lineRange` is `[start, end]` inclusive 1-based line numbers
 // pointing at the `<a id="node:..."></a>` anchor line inside the
 // markdown file. CodeView passes it as `#L42` so the markdown
@@ -549,7 +544,7 @@ export const getSessionArchiveRefs = async (
   }
 };
 
-// T2026-06-21 P1: dynamic tool discovery. The server's
+// TP1: dynamic tool discovery. The server's
 // `GET /v1/tools` is the single source of truth — adding a tool to
 // the `ToolRegistry` makes it appear here automatically, with no
 // front-end code change required. The front-end keeps a 30s
@@ -874,14 +869,12 @@ export const rescanPlugins = async (): Promise<number> => {
 };
 
 // ── MCP connectors (McpServerEntry) ─────────────────────────
-//
 // These are user-configured MCP (Model Context Protocol) servers. Each entry
 // is one of:
-//   * stdio transport — `command` set, hermix-agent spawns the process and
-//     speaks JSON-RPC over its stdin/stdout.
-//   * http transport — `url` set, hermix-agent talks JSON-RPC over HTTP/SSE
-//     to a remote MCP endpoint.
-//
+// * stdio transport — `command` set, hermix-agent spawns the process and
+// speaks JSON-RPC over its stdin/stdout.
+// * http transport — `url` set, hermix-agent talks JSON-RPC over HTTP/SSE
+// to a remote MCP endpoint.
 // hermix-mcp (crates/hermix-mcp) provides the client/server; hermix-config
 // defines the McpServerEntry model. Until /api/mcp/servers is wired in
 // hermix-server we keep the list in localStorage so the UI is testable.
@@ -958,18 +951,15 @@ const OFFICIAL_MCP_SEEDS: McpServerEntry[] = [
 ];
 
 // ── MCP server CRUD (backend-first, localStorage fallback) ─────────
-//
 // As of `feat(server): seed 18 official plugin manifests + /api/mcp/servers
 // CRUD` (commit 47cd006), the Rust server is the source of truth for MCP
 // server config — persisted at `$HERMES_HOME/mcp_servers.json` and seeded
 // with 5 official entries on first list. We talk to it via the HTTP routes
 // exposed by `crates/hermix-server/src/dashboard/mcp.rs`.
-//
 // We keep a localStorage mirror as a *cache* so the UI keeps working when
 // the backend is offline (typical when the user is in the middle of starting
 // or restarting the sidecar). The cache is only ever populated FROM the
 // backend's response — never user-edited — so the two never disagree for long.
-//
 // If the backend is unreachable, we fall back to the OFFICIAL_MCP_SEEDS
 // (same 5 entries the backend seeds with) so the UI is still functional.
 
@@ -1138,7 +1128,7 @@ export const getLogs = async (file = "agent", lines = 100): Promise<{ lines: str
 export const searchSessions = async (q: string): Promise<{ results: Array<{ session_id: string; snippet: string }> }> =>
   fetchJSON(`/v1/sessions/search?q=${encodeURIComponent(q)}`);
 
-/** 2026-07-05: list skills from the dashboard for cron-job skill assignment. */
+/** list skills from the dashboard for cron-job skill assignment. */
 export const getSkillsList = async (): Promise<Array<{ name: string; description: string; category: string }>> => {
   try {
     return await fetchJSON<Array<{ name: string; description: string; category: string }>>("/api/skills");
@@ -1269,7 +1259,6 @@ export const deleteEnvVar = async (key: string): Promise<boolean> => {
 };
 
 // ── Auto-correct model (config.model → configured provider) ─────
-//
 // Backend runs `hermix_config::auto_correct_model`: if the user
 // configured a key (e.g. for MiniMax) but the default model still
 // points at a provider without a key (e.g. `openai:gpt-4o`), the
@@ -1277,7 +1266,6 @@ export const deleteEnvVar = async (key: string): Promise<boolean> => {
 // `config.yaml`, and pushes the new live config into the running
 // `AgentService` — so the next chat uses the right model with no
 // desktop-app restart.
-//
 // `message` is a Chinese summary suitable for a toast; `report` is
 // `null` when no correction was needed.
 export interface AutoCorrectReport {
@@ -1459,19 +1447,15 @@ export const registerExperts = async (
 };
 
 // ── Persona management (settings → 画像) ─────────────────────────
-//
 // The agent loop reads four files at session start (see
 // `crates/hermix-agent/src/agent_loop.rs::build_system_prompt`):
-//
-//   • `~/.hermix/SOUL.md`                  — soul / core philosophy
-//   • `~/.hermix/personalities/<name>.md`  — named personas
-//   • `~/.hermix/memories/MEMORY.md`       — agent's persistent notes
-//   • `~/.hermix/memories/USER.md`         — user profile / preferences
-//
+// • `~/.hermix/SOUL.md`                  — soul / core philosophy
+// • `~/.hermix/personalities/<name>.md`  — named personas
+// • `~/.hermix/memories/MEMORY.md`       — agent's persistent notes
+// • `~/.hermix/memories/USER.md`         — user profile / preferences
 // Plus a JSON override file at `~/.hermix/persona_overrides.json`
 // (system_prompt + free-form preferences) — currently informational
 // for the UI; the agent loop will read it in a focused follow-up.
-//
 // The endpoints are file-backed on the Rust side, so "save" is just
 // `PUT` and the next session sees the change. There is no caching layer.
 
@@ -1579,7 +1563,6 @@ export const deletePersonality = async (name: string): Promise<boolean> => {
 };
 
 // ── Persona overrides (system_prompt + preferences) ────────────
-//
 // `system_prompt` is the full override that replaces the agent's
 // default system message. `preferences` is open-ended JSON the agent
 // can read into the prompt. The agent loop currently reads

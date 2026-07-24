@@ -105,20 +105,20 @@ impl ChromeManager {
         let initial_url = opts.initial_url.as_deref().unwrap_or("about:blank");
 
         // Build the argument list. We always pass:
-        //  - `--user-data-dir=<profile>`  → isolation
-        //  - `--remote-debugging-port=N`   → CDP endpoint
-        //  - `--remote-debugging-address=127.0.0.1`
-        //                                    → loopback only (don't
-        //                                      expose to LAN)
-        //  - `--no-first-run`              → skip first-run wizard
-        //  - `--no-default-browser-check`  → skip default-browser nag
-        //  - `--disable-extensions`         → hermix profile,
-        //                                      no user extensions
-        //  - `--disable-background-networking`
-        //                                    → no captive-portal probes
-        //  - `--disable-component-update`   → no background updater
-        //  - `--disable-features=Translate,InfiniteSessionRestore`
-        //                                    → no surprise side-effects
+        // - `--user-data-dir=<profile>`  → isolation
+        // - `--remote-debugging-port=N`   → CDP endpoint
+        // - `--remote-debugging-address=127.0.0.1`
+        // → loopback only (don't
+        // expose to LAN)
+        // - `--no-first-run`              → skip first-run wizard
+        // - `--no-default-browser-check`  → skip default-browser nag
+        // - `--disable-extensions`         → hermix profile,
+        // no user extensions
+        // - `--disable-background-networking`
+        // → no captive-portal probes
+        // - `--disable-component-update`   → no background updater
+        // - `--disable-features=Translate,InfiniteSessionRestore`
+        // → no surprise side-effects
         let mut args: Vec<String> = vec![
             format!("--user-data-dir={}", profile_dir.display()),
             format!("--remote-debugging-port={port}"),
@@ -227,8 +227,7 @@ impl ChromeManager {
     }
 
     /// Sentinel value: a manager with no owned child process.
-    ///
-    /// Used by [`BrowserHandle::attach`] (in `mod.rs`) when we
+    /// /// Used by [`BrowserHandle::attach`] (in `mod.rs`) when we
     /// connect to an externally-started Chrome — `Drop` then
     /// does nothing, and `is_alive` returns `false`.
     pub(crate) fn sentinel(port: u16) -> Self {
@@ -253,13 +252,11 @@ impl Drop for ChromeManager {
 // ---------------------------------------------------------------------------
 
 /// Default profile dir.
-///
-/// Windows: `%LOCALAPPDATA%\hermix\cua\chrome-profile\`
+/// /// Windows: `%LOCALAPPDATA%\hermix\cua\chrome-profile\`
 /// (the LOCALAPPDATA env var is always set on Win10/11, even
 /// in service contexts where the `directories` crate would
 /// fall back to roaming profile paths that are read-only.)
-///
-/// Non-Windows: `$XDG_DATA_HOME/hermix/cua/chrome-profile/` or
+/// /// Non-Windows: `$XDG_DATA_HOME/hermix/cua/chrome-profile/` or
 /// `$HOME/.local/share/hermix/cua/chrome-profile/`. Hermix-cua is
 /// Windows-only in practice; the non-Windows branch exists only
 /// so `cargo check --target x86_64-unknown-linux-gnu` succeeds
@@ -423,7 +420,6 @@ struct VersionPayload {
 // ---------------------------------------------------------------------------
 // Local error type so we don't need to thread reqwest/std errors
 // into the public CuaError surface.
-//
 // The `From<CdpError> for CuaError` impl lives in `cdp.rs` —
 // keeping it there means the orphan rule is satisfied exactly
 // once and both modules can `?`-lift CdpError into CuaError.

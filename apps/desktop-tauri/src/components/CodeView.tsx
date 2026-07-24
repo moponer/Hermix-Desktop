@@ -27,7 +27,7 @@
  */
 import { useMemo, useRef, useState, useEffect, useLayoutEffect, useCallback } from "react";
 import { clsx } from "clsx";
-// 2026-07-15: refractor 3.x is CJS — module.exports = refract, then
+// refractor 3.x is CJS — module.exports = refract, then
 // properties are added at runtime (refract.highlight = highlight, etc.).
 // Vite/esbuild's static analysis of named exports can't detect these
 // runtime property assignments, so `import { highlight, register } from
@@ -41,7 +41,7 @@ import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 
 // 按需注册常用语言。refractor 把所有语言打到 core，要哪个手动 register。
-// 见 node_modules/refractor/lang/，下面是主人预览面板最常见的几种。
+// 见 node_modules/refractor/lang/，下面是用户预览面板最常见的几种。
 import python from "refractor/lang/python";
 import typescript from "refractor/lang/typescript";
 import javascript from "refractor/lang/javascript";
@@ -283,7 +283,6 @@ function VirtualGutter({ lineCount, activeLine, onLineClick }: GutterProps) {
   // spans get unmounted and remounted. We also re-measure on viewport
   // resize (the existing ResizeObserver effect handles that case via the
   // lineCount dep below).
-  //
   // Why measure instead of hardcode: the body's font-size × line-height is
   // 11 * 1.55 = 17.05px in the current CSS, but font availability on the
   // user's machine, sub-pixel rounding, and any future CSS tweaks can

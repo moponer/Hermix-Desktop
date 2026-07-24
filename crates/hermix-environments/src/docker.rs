@@ -44,8 +44,7 @@ pub struct DockerBackend {
 
 impl DockerBackend {
     /// Construct a new Docker backend.
-    ///
-    /// `container` must be the name or id of an already-running
+    /// /// `container` must be the name or id of an already-running
     /// container. We do *not* auto-create one — that's a
     /// lifecycle concern (`docker run -d ...`) that belongs to the
     /// user or an orchestration layer.

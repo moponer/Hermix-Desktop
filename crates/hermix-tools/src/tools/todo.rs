@@ -19,8 +19,7 @@ pub const TODO_EVENT_CHANNEL_CAPACITY: usize = 256;
 /// (defined in `hermix_transport`) — but we keep it as `serde_json::Value`
 /// here to avoid hermix-tools depending on hermix-transport (that would
 /// form a cycle hermix-server → hermix-tools → hermix-transport).
-///
-/// `session_id` is `None` for "no active session" (e.g. CLI mode) and
+/// /// `session_id` is `None` for "no active session" (e.g. CLI mode) and
 /// the WS layer must filter it out before forwarding to clients.
 #[derive(Debug, Clone)]
 pub struct TodoChange {
@@ -57,8 +56,7 @@ pub enum TodoChangeKind {
     /// fetch, and so the WS layer can fan out the same shape on
     /// `Connected` (hydration). Items are already filtered by
     /// session_id at the backend level (`list_for_session`).
-    ///
-    /// `serde_json::Value` here instead of `TodoSnapshotItem`
+    /// /// `serde_json::Value` here instead of `TodoSnapshotItem`
     /// because `hermix-tools` deliberately does NOT depend on
     /// `hermix-transport` (that would form a cycle
     /// `hermix-server → hermix-tools → hermix-transport`). The
@@ -110,8 +108,7 @@ pub fn register(
 #[async_trait]
 pub trait TodoBackend: Send + Sync {
     /// Create a new todo item.
-    ///
-    /// `group_id` and `group_title` let the LLM attach this task to an
+    /// /// `group_id` and `group_title` let the LLM attach this task to an
     /// existing plan (`group_id`) or start a new one (`group_title`).
     /// When neither is provided, the backend synthesizes a fresh
     /// group_id so each call lands in its own plan card.
@@ -125,7 +122,7 @@ pub trait TodoBackend: Send + Sync {
         // Session id this todo belongs to. `None` for CLI / legacy
         // paths that have no session context. Persisted on the
         // `TodoItem` so `todo_snapshot` WS hydrate can serve
-        // per-session lists. FRONTEND_AUDIT_TODO_2026-07-13.
+        // per-session lists. .
         session_id: Option<&str>,
         // Wire-format id of the assistant message that emitted the
         // `todo.create` tool call (`${session_id}-${rowIdx}`).
@@ -261,8 +258,7 @@ impl TodoHandler {
     /// from the backend and emit a `Snapshot` event. This is what the
     /// WS layer forwards as `StreamEvent::TodoSnapshot` so reconnecting
     /// clients get full state without a separate HTTP fetch.
-    ///
-    /// No-op if no session is active (CLI mode) or if the backend
+    /// /// No-op if no session is active (CLI mode) or if the backend
     /// `list_for_session` fails — the per-item `Upsert` / `Delete`
     /// already published, so the UI still gets *something*. Commit C.
     async fn publish_snapshot(&self) {
@@ -291,8 +287,7 @@ impl TodoHandler {
     /// row matching `target_id`. This guarantees the broadcast carries
     /// the **authoritative current state** (including side effects
     /// from `record_execution` like `last_result` / `execution_count`).
-    ///
-    /// Returns `None` if the backend rejected the action or the row
+    /// /// Returns `None` if the backend rejected the action or the row
     /// can't be found (callers should still publish a best-effort
     /// upsert from the input params in that case).
     async fn snapshot_after_mutation(
@@ -361,7 +356,7 @@ impl TodoHandler {
             execution_count: 0,
             group_id: params.get("group_id").and_then(|v| v.as_str()).map(String::from).unwrap_or_default(),
             group_title: params.get("group_title").and_then(|v| v.as_str()).map(String::from),
-            // FRONTEND_AUDIT_TODO_2026-07-13 / Commit A: stamp
+            // / Commit A: stamp
             // session/message context from the active stamper so the
             // fallback snapshot still carries the anchor + session id.
             session_id: active_session_id,
@@ -428,7 +423,7 @@ impl ToolHandler for TodoHandler {
                 let priority = params.get("priority").and_then(|v| v.as_str());
                 let group_id = params.get("group_id").and_then(|v| v.as_str());
                 let group_title = params.get("group_title").and_then(|v| v.as_str());
-                // FRONTEND_AUDIT_TODO_2026-07-13 / Commit A: stamp the
+                // / Commit A: stamp the
                 // active session + assistant-message id so the new
                 // TodoItem is owned by the current conversation and
                 // anchored to the message that produced it.

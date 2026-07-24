@@ -4,13 +4,13 @@
 // (struct + small policy function + tests); orchestration lives
 // elsewhere.
 //
-//   P5-T1 SourceRegistry         - registered external sources
-//   P5-T2 MechanismRegistry      - mechanism hypotheses
-//   P5-T3 ClaimProvenance        - claim <-> source links
-//   P5-T4 CorpusIndex            - FTS5-friendly document index
-//   P5-T5 RunStateMachine        - background run lifecycle
-//   P5-T6 AdversarialBenchmark   - adversarial regression cases
-//   P5-T7 ContinuousLoop         - the orchestrator signature
+// P5-T1 SourceRegistry         - registered external sources
+// P5-T2 MechanismRegistry      - mechanism hypotheses
+// P5-T3 ClaimProvenance        - claim <-> source links
+// P5-T4 CorpusIndex            - FTS5-friendly document index
+// P5-T5 RunStateMachine        - background run lifecycle
+// P5-T6 AdversarialBenchmark   - adversarial regression cases
+// P5-T7 ContinuousLoop         - the orchestrator signature
 //
 // All public surfaces return Result. The agent loop MUST swallow
 // errors at the call site so a partial research state can never

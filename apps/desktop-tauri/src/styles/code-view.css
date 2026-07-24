@@ -1,7 +1,7 @@
 /* ════════════════════════════════════════════════════════════════════
    code-view.css — v7 彻底重写
    ──────────────────────────────────────────────────────────────────
-   v6 → v7 的关键变化（主人："渲染的方式肯定要重写，给我删除重写"）：
+   v6 → v7 的关键变化（用户："渲染的方式肯定要重写，给我删除重写"）：
      · 抛弃 <table><tr><td> 结构
      · 抛弃每行一个 <SyntaxHighlighter> 的 N×调用
      · 新结构：1 个滚动容器 + 1 个 flex 行容器
@@ -104,7 +104,7 @@
 .preview-pane .preview-head-spacer { flex: 1 1 auto !important; min-width: 8px; }
 
 /* 文件名 — 升级到 14px / 600，对齐 VS Code 标签栏字号
-   保留字重对比但不再"小字"——主人要"显示的标题信息都美化" */
+   保留字重对比但不再"小字"——用户要"显示的标题信息都美化" */
 .preview-pane .preview-filename {
   font-size: 14px !important;
   font-weight: 600 !important;
@@ -682,10 +682,10 @@
   margin: 8px 0;
 }
 
-/* 2026-07-14: Reset plain-markdown pre styles when CodeBlock's
+/* Reset plain-markdown pre styles when CodeBlock's
    SyntaxHighlighter is used inside the preview panel. Previously
    targeted `pre.code-block-body` (class set via preTagProps), but
-   preTagProps was removed in 2026-07-15 because it caused a React
+   preTagProps was removed in because it caused a React
    warning. Now we target `pre` inside the CodeBlock wrapper div
    (.not-prose) which is the same element SyntaxHighlighter renders. */
 .preview-pane .preview-md-body .not-prose pre {

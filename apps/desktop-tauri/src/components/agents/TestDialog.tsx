@@ -117,7 +117,7 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
             </div>
           ) : (
             messages.map((m, i) => (
-              <div key={i} className={clsx("flex", m.role === "user" ? "justify-end" : "justify-start")}>
+              <div key={`msg-${m.role}-${i}`} className={clsx("flex", m.role === "user" ? "justify-end" : "justify-start")}>
                 <div
                   className={clsx(
                     "max-w-[80%] rounded-xl px-3 py-2 text-[12.5px] leading-relaxed",

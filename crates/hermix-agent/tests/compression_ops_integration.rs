@@ -1,7 +1,7 @@
 //! Integration tests for the compression pipeline entry point.
 //!
 //! Verifies threshold gating and NoOp engine pass-through.
-//! Moved from `src/compression_ops.rs` integration_tests module (N-10).
+//! Moved from `src/compression_ops.rs` integration_tests module ().
 
 use std::sync::Arc;
 use std::sync::Mutex;

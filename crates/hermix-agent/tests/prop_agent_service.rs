@@ -54,7 +54,6 @@ fn make_service() -> LocalAgentService {
     // then breaks length-based invariants like `messages.len() >= 2`
     // and triggers proptest regression seeds (see
     // `prop_agent_service.proptest-regressions`).
-    //
     // The guard restores `HERMIX_HOME` (or clears it) on drop so
     // subsequent test cases run in a clean environment.
     let _home_guard = HermixHomeGuard::set(&home);
@@ -107,7 +106,6 @@ impl Drop for HermixHomeGuard {
 
 proptest! {
     // Feature: unified-runtime-architecture, Property 3: send_message appends user message and assistant reply
-    //
     // Invariant: after a successful `send_message`, the *last* user
     // message in the returned message stream equals the caller's input,
     // and the *last* assistant message equals the model's reply. We

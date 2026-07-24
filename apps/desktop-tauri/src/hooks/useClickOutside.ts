@@ -8,7 +8,7 @@ import { useEffect, type RefObject } from "react";
  * Only listens while `active` is true so we don't pay the global cost when
  * nothing is open.
  *
- * 2026-06-25 主人反馈 "对话框的专家，每次都选择好几次好才能显示"：
+ * 用户反馈 "对话框的专家，每次都选择好几次好才能显示"：
  *   根因是 pointerdown 在 click 之前触发。当 open 翻为 true：
  *     - 旧版 useEffect 在 active=true 时立刻注册 listener
  *     - 这一次注册的 listener 不会处理"导致开的那次 pointerdown"

@@ -33,8 +33,7 @@ pub struct SkillCommandInfo {
 }
 
 /// Parsed SKILL.md frontmatter.
-///
-/// P2-8 (2026-06-27): extended with the agentskills.io open-standard
+/// /// P2-8 (2026-06-27): extended with the agentskills.io open-standard
 /// fields so we can ingest community SKILL.md files verbatim. Only
 /// `name` and `description` are still required to be present — the
 /// others are optional and gracefully degrade to `None`.
@@ -58,8 +57,7 @@ pub struct SkillFrontmatter {
 // ---------------------------------------------------------------------------
 
 /// Parse YAML frontmatter from a SKILL.md file.
-///
-/// Expects the file to start with `---\n...\n---\n` followed by the body.
+/// /// Expects the file to start with `---\n...\n---\n` followed by the body.
 /// Returns (frontmatter, body).
 pub fn parse_frontmatter(content: &str) -> (SkillFrontmatter, &str) {
     let trimmed = content.trim_start();
@@ -84,23 +82,20 @@ pub fn parse_frontmatter(content: &str) -> (SkillFrontmatter, &str) {
 }
 
 /// Minimal YAML frontmatter parser (no full YAML dependency needed).
-///
-/// P2-8 (2026-06-27): extended to ingest the agentskills.io open
+/// /// P2-8 (2026-06-27): extended to ingest the agentskills.io open
 /// standard. We handle these shapes:
-///
-/// ```yaml
+/// /// ```yaml
 /// name: foo                       # scalar
 /// description: bar                # scalar (no quotes required)
 /// tags: [a, b, c]                 # inline YAML list
 /// tags:                           # block YAML list
-///   - a
-///   - b
+/// - a
+/// - b
 /// allowed-tools:                  # kebab-case alias
-///   - bash
-///   - read_file
+/// - bash
+/// - read_file
 /// ```
-///
-/// Comments (`# ...`) and blank lines are skipped. Empty values
+/// /// Comments (`# ...`) and blank lines are skipped. Empty values
 /// become `None` rather than `Some("")` so callers can detect the
 /// missing case without a separate `is_empty()` check.
 fn parse_yaml_frontmatter(yaml: &str) -> SkillFrontmatter {
@@ -276,8 +271,7 @@ impl SkillOrchestrator {
     }
 
     /// Create an orchestrator using the default `<HERMIX_HOME>/skills/` directory.
-    ///
-    /// Delegates to `hermix_config::paths::hermix_home()` so
+    /// /// Delegates to `hermix_config::paths::hermix_home()` so
     /// `$HERMIX_HOME` and portable mode both work. The previous
     /// implementation only read `$HOME`, which on Windows is often
     /// unset (cmd.exe), causing skills to be silently loaded from
@@ -342,8 +336,7 @@ impl SkillOrchestrator {
 
     /// Recursively scan a directory for SKILL.md files, scoring
     /// each one's health for log diagnostics.
-    ///
-    /// `dir` is the directory to scan now (we process it
+    /// /// `dir` is the directory to scan now (we process it
     /// unconditionally, regardless of its name). Subsequent
     /// recursion skips hidden subdirectories so a malicious /
     /// junk sibling like `.git/` can't smuggle in stray SKILL.md
@@ -432,7 +425,7 @@ impl SkillOrchestrator {
         skill_md_path: &Path,
         seen_names: &mut std::collections::HashSet<String>,
     ) {
-        // 2026-06-07 hardening: path-boundary check. The scanner
+        // hardening: path-boundary check. The scanner
         // walks `self.skills_dir` recursively, but a malicious
         // sibling within `skills_dir/` could be a symlink that
         // points outside the tree — `entry.path()` would follow
@@ -533,8 +526,7 @@ impl SkillOrchestrator {
     }
 
     /// Resolve a user-typed `/command` to its canonical key.
-    ///
-    /// Hyphens and underscores are treated interchangeably.
+    /// /// Hyphens and underscores are treated interchangeably.
     pub fn resolve_skill_command_key(&self, command: &str) -> Option<String> {
         if command.is_empty() {
             return None;
@@ -584,8 +576,7 @@ impl SkillOrchestrator {
     }
 
     /// Load multiple skills for session-wide preloading.
-    ///
-    /// Returns (prompt_text, loaded_skill_names, missing_identifiers).
+    /// /// Returns (prompt_text, loaded_skill_names, missing_identifiers).
     pub fn build_preloaded_skills_prompt(
         &self,
         identifiers: &[String],

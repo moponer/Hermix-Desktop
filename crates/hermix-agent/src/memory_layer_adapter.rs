@@ -64,7 +64,7 @@ pub fn all_plugins_as_router(session_id: &str, hermix_home: &str) -> MemoryRoute
 mod tests {
     use super::*;
 
-    /// 2026-06-26: use the OS-native temp dir instead of hardcoded
+    /// use the OS-native temp dir instead of hardcoded
     /// `/tmp/...` Unix paths.
     fn temp_home_dir(label: &str) -> String {
         let mut p = std::env::temp_dir();
@@ -131,8 +131,7 @@ mod tests {
     /// permission-denied path) must NOT silently produce an empty
     /// router — it must log loudly. Before this fix the
     /// `if let Ok(embedded) = ...` arm dropped the failure silently.
-    ///
-    /// 2026-06-26: on Windows there's no `/dev/null` equivalent.
+    /// /// on Windows there's no `/dev/null` equivalent.
     /// Use a real file path (not a directory) — `create_dir_all`
     /// on a path whose parent is a regular file fails with
     /// `NotADirectory` on Linux and `AccessDenied`/`AlreadyExists`

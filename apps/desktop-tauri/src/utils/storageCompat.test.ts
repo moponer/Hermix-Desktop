@@ -1,7 +1,5 @@
 /**
  * storageCompat unit tests — hermix/hermes dual-namespace migration.
- *
- * Covers the 4 recommended core tests from P2-1 of FRONTEND_AUDIT_2026-07-13.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { storage, STORAGE_KEYS, KNOWN_KEYS, sessionKey } from "./storageCompat";

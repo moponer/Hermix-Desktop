@@ -14,13 +14,11 @@ use serde_json::Value;
 use tracing::debug;
 
 /// Default disk cache path: `<HERMIX_HOME>/models_dev_cache.json`.
-///
-/// Resolution order (delegated to `hermix_config::paths::hermix_home`):
+/// /// Resolution order (delegated to `hermix_config::paths::hermix_home`):
 /// 1. `$HERMIX_PORTABLE_DATA_DIR` (portable mode)
 /// 2. `$HERMIX_HOME` env var
 /// 3. `<user_home>/.hermix`
-///
-/// Note: this is a *cache* (re-fetchable from models.dev on next run),
+/// /// Note: this is a *cache* (re-fetchable from models.dev on next run),
 /// so even if it points to the wrong place it cannot cause data loss —
 /// the worst case is a slow startup while we re-download the registry.
 pub fn default_cache_path() -> PathBuf {
@@ -28,8 +26,7 @@ pub fn default_cache_path() -> PathBuf {
 }
 
 /// Load a registry snapshot from disk; returns `None` on any failure.
-///
-/// "Failure" is broad on purpose to match the Python try/except that
+/// /// "Failure" is broad on purpose to match the Python try/except that
 /// silently returns `{}`: missing file, permission errors, malformed JSON,
 /// I/O errors are all treated as "no cache available".
 pub fn load(path: &Path) -> Option<Value> {
@@ -56,13 +53,11 @@ pub fn load(path: &Path) -> Option<Value> {
 }
 
 /// Atomically save a registry snapshot to disk.
-///
-/// Steps:
+/// /// Steps:
 /// 1. Create parent directory if missing.
 /// 2. Write to a `tempfile::NamedTempFile` in the same directory.
 /// 3. `persist()` (rename) over the destination.
-///
-/// On any error returns `Err`; callers may choose to log and continue.
+/// /// On any error returns `Err`; callers may choose to log and continue.
 pub fn save(path: &Path, data: &Value) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {

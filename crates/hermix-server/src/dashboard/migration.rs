@@ -42,7 +42,7 @@ pub struct MigrationStatusResponse {
     /// - no legacy data is found
     /// - the user previously picked "don't ask again"
     /// - the user previously picked "skip for now" less than
-    ///   `re_ask_after_days` ago
+    /// `re_ask_after_days` ago
     pub should_show_dialog: bool,
     /// Why the dialog is or isn't showing. Useful for the "Why am I
     /// seeing this?" hover tooltip.
@@ -328,8 +328,7 @@ mod tests {
 
     /// `/api/migration/probe` returns `should_show_dialog: false`
     /// when there's no legacy data.
-    ///
-    /// `HERMIX_MIGRATION_PROBE_CANDIDATES` is pinned to an empty
+    /// /// `HERMIX_MIGRATION_PROBE_CANDIDATES` is pinned to an empty
     /// `nonexistent_/.hermes` path so the probe ignores the
     /// developer's real `~/.hermes` (otherwise this test would
     /// spuriously "find" the developer's data and fail).

@@ -40,8 +40,7 @@ use crate::HttpServerState;
 /// samples as they arrive. The first message after upgrade is always
 /// a JSON snapshot so the client has a baseline; subsequent messages
 /// are individual samples.
-///
-/// Message format (JSON, one per WS text frame):
+/// /// Message format (JSON, one per WS text frame):
 /// ```json
 /// { "kind": "snapshot", "state": "...", "vitals": {...}, "total_emitted": 0 }
 /// ```

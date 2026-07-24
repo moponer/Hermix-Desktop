@@ -1,10 +1,9 @@
 // src/components/PolishButton.tsx
-//
-// v1 (2026-06-22): PLAN_UI_ENHANCEMENT §1.3 — 对话润色按钮。
+// PLAN_UI_ENHANCEMENT §1.3 — 对话润色按钮。
 // 位置：语音按钮右侧。
 // 行为：点击后调 polishChat() API，**覆盖**当前 inputValue。
 // 上下文策略：润色前的原文只活在 React state 里，发送时被 state 覆写，
-//            因此**润色前原文自然不计入对话上下文**——零额外字段。
+// 因此**润色前原文自然不计入对话上下文**——零额外字段。
 
 import { useState, useCallback } from "react";
 import { Sparkles, Loader2 } from "lucide-react";

@@ -86,8 +86,7 @@ impl Default for VadConfig {
 }
 
 /// Simple energy + zero-crossing VAD.
-///
-/// This is intentionally lightweight. For production use, consider Silero VAD
+/// /// This is intentionally lightweight. For production use, consider Silero VAD
 /// or WebRTC VAD via ONNX. This implementation is sufficient for filtering
 /// obvious silence and noise.
 #[derive(Debug, Clone)]
@@ -291,6 +290,18 @@ fn pcm_to_wav(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<u8> {
     buf
 }
 
+/// Extract response body text for error reporting, logging if extraction fails.
+/// Takes ownership of the response since `resp.text()` consumes `self`.
+async fn fetch_error_body(resp: reqwest::Response) -> String {
+    match resp.text().await {
+        Ok(body) => body,
+        Err(e) => {
+            tracing::warn!("Failed to read error response body: {e}");
+            String::from("<unreadable response body>")
+        }
+    }
+}
+
 async fn transcribe_whisper(wav_bytes: &[u8], config: &SttConfig) -> Result<String, ToolError> {
     let api_key = std::env::var("OPENAI_API_KEY")
         .or_else(|_| std::env::var("VOICE_TOOLS_OPENAI_KEY"))
@@ -325,7 +336,7 @@ async fn transcribe_whisper(wav_bytes: &[u8], config: &SttConfig) -> Result<Stri
         .map_err(|e| ToolError::ExecutionFailed(format!("Whisper API: {e}")))?;
 
     if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
+        let body = fetch_error_body(resp).await;
         return Err(ToolError::ExecutionFailed(format!("Whisper error: {body}")));
     }
 
@@ -373,7 +384,7 @@ async fn transcribe_deepgram(wav_bytes: &[u8], config: &SttConfig) -> Result<Str
         .map_err(|e| ToolError::ExecutionFailed(format!("Deepgram: {e}")))?;
 
     if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
+        let body = fetch_error_body(resp).await;
         return Err(ToolError::ExecutionFailed(format!(
             "Deepgram error: {body}"
         )));
@@ -412,7 +423,7 @@ async fn transcribe_custom(
         .map_err(|e| ToolError::ExecutionFailed(format!("Custom STT: {e}")))?;
 
     if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
+        let body = fetch_error_body(resp).await;
         return Err(ToolError::ExecutionFailed(format!(
             "Custom STT error: {body}"
         )));
@@ -512,8 +523,7 @@ impl VoicePipeline {
     }
 
     /// Run the recording→VAD→STT pipeline for a single utterance.
-    ///
-    /// This collects audio from the source until VAD detects end-of-speech
+    /// /// This collects audio from the source until VAD detects end-of-speech
     /// or the max duration is reached, then transcribes the collected audio.
     pub async fn record_and_transcribe(
         &self,

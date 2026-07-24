@@ -1,0 +1,510 @@
+/* ════════════════════════════════════════════════════════════════════
+   § 8.  BUTTONS
+   ════════════════════════════════════════════════════════════════════ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease,
+              border-color var(--duration-fast) ease,
+              color var(--duration-fast) ease;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-md { padding: 7px 14px; font-size: 13px; }
+.btn-lg { padding: 10px 18px; font-size: 14px; }
+
+.btn-primary {
+  background: var(--color-btn-primary-bg);
+  color: var(--color-btn-primary-text);
+  border-color: var(--color-btn-primary-bg);
+}
+.btn-primary:hover:not(:disabled) { background: var(--color-btn-primary-hover); border-color: var(--color-btn-primary-hover); }
+
+.btn-secondary {
+  background: var(--color-btn-secondary-bg);
+  color: var(--color-btn-secondary-text);
+  border-color: var(--color-border-primary);
+}
+.btn-secondary:hover:not(:disabled) { background: var(--color-btn-secondary-hover); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--color-bg-hover); color: var(--color-text-primary); }
+
+.btn-danger {
+  background: var(--color-bg-elevated);
+  color: var(--color-error);
+  border-color: var(--color-border-primary);
+}
+.btn-danger:hover:not(:disabled) { background: var(--color-error-soft); }
+
+/* ── Icon button (square, no text) ── */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.icon-btn:hover  { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.icon-btn-active { color: var(--color-accent); background: var(--color-accent-soft); }
+
+/* ════════════════════════════════════════════════════════════════════
+   § 9.  FORM FIELDS
+   ════════════════════════════════════════════════════════════════════ */
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field-label { font-size: 11.5px; font-weight: 500; color: var(--color-text-primary); }
+.field-hint  { font-size: 10.5px; color: var(--color-text-muted); margin-top: 2px; }
+
+.input, .textarea, .select {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color var(--duration-fast) ease;
+}
+.input:focus, .textarea:focus, .select:focus,
+.input:focus-visible, .textarea:focus-visible, .select:focus-visible {
+  outline: none;
+  border-color: var(--color-border-secondary);
+}
+.textarea { min-height: 70px; resize: vertical; line-height: 1.5; font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace; }
+
+/* Strip chrome for fields embedded in a parent (e.g. chat composer) */
+[data-no-border] {
+  border: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 10.  PANE HEADER (right sidebar / empty state / etc.)
+   ════════════════════════════════════════════════════════════════════ */
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+  padding: 0 16px;
+  flex-shrink: 0;
+}
+.pane-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.pane-subtitle {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+.pane-content {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.divider {
+  height: 1px;
+  background: var(--color-border-primary);
+  border: 0;
+  margin: 0;
+}
+.divider-v {
+  width: 1px;
+  background: var(--color-border-primary);
+  align-self: stretch;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 11.  TAGS & STATUS DOTS
+   ════════════════════════════════════════════════════════════════════ */
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 10.5px;
+  font-weight: 500;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+.tag-primary  { background: var(--color-accent-soft-strong); color: var(--color-text-primary); }
+.tag-success  { background: var(--color-success-soft); color: var(--color-success); }
+.tag-warning  { background: var(--color-warning-soft); color: var(--color-warning); }
+.tag-error    { background: var(--color-error-soft);   color: var(--color-error); }
+.tag-info     { background: var(--color-info-soft);    color: var(--color-info); }
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-text-faint);
+  flex-shrink: 0;
+}
+.status-dot-online  { background: var(--color-success); }
+.status-dot-offline { background: var(--color-text-faint); }
+.status-dot-error   { background: var(--color-error); }
+.status-dot-running { background: var(--color-warning); animation: status-pulse 1.6s ease-in-out infinite; }
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.status-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 12.  PILLS (status inline, no bg)
+   ════════════════════════════════════════════════════════════════════ */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: transparent;
+  border: 0;
+}
+.pill-success { color: var(--color-success); }
+.pill-error   { color: var(--color-error); }
+.pill-warning { color: var(--color-warning); }
+.pill-info    { color: var(--color-info); }
+.pill-muted   { color: var(--color-text-muted); }
+
+/* ════════════════════════════════════════════════════════════════════
+   § 13.  COMPOSER (chat input area)
+   ════════════════════════════════════════════════════════════════════ */
+
+.composer {
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  overflow: visible;
+}
+.composer-textarea {
+  display: block;
+  width: 100%;
+  padding: 14px 16px 8px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  resize: none;
+  font-family: inherit;
+  max-height: 192px;
+  overflow-y: auto;
+}
+.composer-textarea::placeholder { color: var(--color-text-faint); }
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px 10px;
+}
+
+.composer-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-lg);
+  background: var(--color-btn-primary-bg);
+  color: var(--color-btn-primary-text);
+  border: 0;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, transform var(--duration-fast) ease;
+}
+.composer-send:hover:not(:disabled) { background: var(--color-btn-primary-hover); transform: scale(1.05); }
+.composer-send:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+/* ════════════════════════════════════════════════════════════════════
+   § 14.  EMPTY STATES
+   ════════════════════════════════════════════════════════════════════ */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+.empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-2xl);
+  background: var(--color-bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+  color: var(--color-text-muted);
+}
+.empty-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 8px;
+  letter-spacing: -0.01em;
+}
+.empty-desc {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  line-height: 1.6;
+  max-width: 380px;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 15.  POPOVER (v2 design: white card / 1px border / soft shadow)
+   ════════════════════════════════════════════════════════════════════ */
+
+.popover {
+  position: absolute;
+  z-index: 50;
+  margin-top: 6px;
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-modal);
+  border: 1px solid var(--color-border-primary);
+  padding: 6px;
+  min-width: 200px;
+}
+.popover-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  padding: 6px 10px 4px;
+}
+.popover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+.popover-item:hover  { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.popover-item.active { color: var(--color-text-primary); background: var(--color-bg-hover); font-weight: 500; }
+
+/* ════════════════════════════════════════════════════════════════════
+   § 16.  MODAL (V2 设计语言: 纯白 / 1px 边 / 浮起阴影)
+   ════════════════════════════════════════════════════════════════════ */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: modal-fade-in var(--duration-fast) ease-out both;
+}
+@keyframes modal-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modal-scale-in { from { opacity: 0; transform: scale(0.96) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+
+.modal-card {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-modal);
+  width: 100%;
+  max-width: 420px;
+  overflow: hidden;
+  animation: modal-scale-in var(--duration-base) var(--ease-out) both;
+}
+.modal-card-sm { max-width: 380px; }
+.modal-card-lg { max-width: 560px; }
+
+.modal-header { display: flex; align-items: flex-start; gap: 12px; padding: 20px 20px 12px; }
+.modal-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 18px;
+}
+.modal-icon-warn  { background: var(--color-warning-soft); color: var(--color-warning); }
+.modal-icon-info  { background: var(--color-bg-tertiary);  color: var(--color-text-primary); }
+.modal-icon-error { background: var(--color-error-soft);   color: var(--color-error); }
+
+.modal-title-block { flex: 1; min-width: 0; }
+.modal-title    { font-size: 14.5px; font-weight: 600; color: var(--color-text-primary); line-height: 1.3; }
+.modal-subtitle { font-size: 12px; color: var(--color-text-muted); margin-top: 4px; line-height: 1.5; }
+
+.modal-close {
+  color: var(--color-text-muted);
+  padding: 4px;
+  margin: -4px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.modal-close:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
+
+.modal-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 20px 12px; }
+.modal-args {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+  margin: 0 20px 16px;
+}
+.modal-body  { padding: 0 20px 16px; font-size: 12.5px; color: var(--color-text-primary); line-height: 1.5; }
+.modal-form  { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 12px; max-height: 50vh; overflow-y: auto; }
+.modal-footer {
+  display: flex;
+  gap: 8px;
+  padding: 12px 20px 20px;
+  border-top: 1px solid var(--color-bg-tertiary);
+}
+.modal-footer .btn { flex: 1; }
+
+/* ── Modal form fields (used by AutomationView / PluginsView editors) ── */
+.modal-field     { display: flex; flex-direction: column; gap: 3px; }
+.modal-field-label { font-size: 11.5px; font-weight: 500; color: var(--color-text-secondary); }
+.modal-field-hint { font-size: 10.5px; color: var(--color-text-faint); line-height: 1.45; margin-top: 1px; }
+
+.modal-input,
+.modal-textarea {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+  font-family: inherit;
+}
+.modal-input:focus,
+.modal-textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-soft);
+}
+.modal-textarea { resize: vertical; min-height: 60px; }
+
+.modal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 16px;
+  font-size: 12.5px;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.modal-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.modal-btn-primary {
+  background: var(--color-accent);
+  color: var(--color-bg-primary);
+  border-color: var(--color-accent);
+}
+.modal-btn-primary:hover:not(:disabled) { background: var(--color-accent-hover); border-color: var(--color-accent-hover); }
+.modal-btn-secondary {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  border-color: var(--color-border-primary);
+}
+.modal-btn-secondary:hover:not(:disabled) { background: var(--color-bg-hover); }
+.modal-btn-danger {
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  border-color: transparent;
+}
+.modal-btn-danger:hover:not(:disabled) { background: var(--color-error); color: var(--color-bg-primary); }
+
+
+/* ════════════════════════════════════════════════════════════════════
+   § 17.  CARDS
+   ════════════════════════════════════════════════════════════════════ */
+
+.card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-xl);
+  padding: 16px;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+.card-interactive { cursor: pointer; }
+.card-interactive:hover { background: var(--color-bg-card-hover); border-color: var(--color-border-secondary); }
+
+.card-title    { font-size: 13.5px; font-weight: 600; color: var(--color-text-primary); margin-bottom: 4px; }
+.card-subtitle { font-size: 11.5px; color: var(--color-text-muted); margin-bottom: 12px; }
+.card-body     { font-size: 12.5px; color: var(--color-text-secondary); line-height: 1.6; }
+

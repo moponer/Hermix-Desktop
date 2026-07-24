@@ -6,12 +6,11 @@
 
 /// Split markdown text into chunks that fit within `max_len`, preserving
 /// formatting integrity.
-///
-/// Rules:
+/// /// Rules:
 /// - Never split inside a code block (``` ... ```)
 /// - Never split inside a link `[text](url)`
 /// - Close unclosed formatting marks (**, *, `, etc.) at split point
-///   and reopen in next chunk
+/// and reopen in next chunk
 /// - Prefer splitting at paragraph boundaries (\n\n), then line boundaries (\n)
 #[allow(unused_assignments)]
 pub fn split_markdown(text: &str, max_len: usize) -> Vec<String> {

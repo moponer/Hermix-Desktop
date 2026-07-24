@@ -72,8 +72,7 @@ pub struct RoomMember {
 // ---------------------------------------------------------------------------
 
 /// Placeholder for end-to-end encryption operations.
-///
-/// Real E2EE requires `vodozemac` or `matrix-sdk-crypto` for Olm/Megolm
+/// /// Real E2EE requires `vodozemac` or `matrix-sdk-crypto` for Olm/Megolm
 /// session management, device key verification, and room key sharing.
 /// This struct logs warnings and returns `Ok` so the adapter compiles and
 /// runs without encryption support.
@@ -81,8 +80,7 @@ pub struct E2eePlaceholder;
 
 impl E2eePlaceholder {
     /// Check whether a room is marked as encrypted.
-    ///
-    /// Always returns `false`; real implementation would query the
+    /// /// Always returns `false`; real implementation would query the
     /// `m.room.encryption` state event.
     pub fn is_encrypted_room(&self, room_id: &str) -> bool {
         warn!(
@@ -119,8 +117,7 @@ impl E2eePlaceholder {
 // ---------------------------------------------------------------------------
 
 /// Convert basic Markdown to Matrix `org.matrix.custom.html` format.
-///
-/// Handles: **bold**, *italic*, `inline code`, ```code blocks```,
+/// /// Handles: **bold**, *italic*, `inline code`, ```code blocks```,
 /// and `[text](url)` links. This is intentionally simple; a full
 /// CommonMark parser (e.g. `pulldown-cmark`) can replace it later.
 pub fn markdown_to_html(md: &str) -> String {
@@ -178,8 +175,7 @@ pub fn markdown_to_html(md: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Convert an `mxc://` content URI to an HTTP(S) download URL.
-///
-/// `mxc://server_name/media_id` → `{homeserver}/_matrix/media/v3/download/{server_name}/{media_id}`
+/// /// `mxc://server_name/media_id` → `{homeserver}/_matrix/media/v3/download/{server_name}/{media_id}`
 pub fn mxc_to_http(homeserver_url: &str, mxc_uri: &str) -> Option<String> {
     let stripped = mxc_uri.strip_prefix("mxc://")?;
     let (server, media_id) = stripped.split_once('/')?;
@@ -905,13 +901,11 @@ impl MatrixAdapter {
     }
 
     /// Long-running sync loop with exponential backoff on errors.
-    ///
-    /// Calls `sync_once` repeatedly, passing the `since` token from each
+    /// /// Calls `sync_once` repeatedly, passing the `since` token from each
     /// response. On transient errors the loop sleeps with exponential backoff
     /// (2s → 5s → 10s → 30s → 60s). Auth errors (401/403) cause an
     /// immediate stop.
-    ///
-    /// The `callback` receives each batch of messages. The loop runs until
+    /// /// The `callback` receives each batch of messages. The loop runs until
     /// `stop()` is called.
     pub async fn sync_loop<F>(&self, mut callback: F) -> Result<(), GatewayError>
     where
@@ -974,8 +968,7 @@ impl MatrixAdapter {
     // -----------------------------------------------------------------------
 
     /// Extract messages from joined room timelines in a `/sync` response.
-    ///
-    /// Handles `m.room.message`, `m.reaction`, and `m.room.encrypted`
+    /// /// Handles `m.room.message`, `m.reaction`, and `m.room.encrypted`
     /// (placeholder) events.
     fn parse_sync_events(&self, sync_response: &serde_json::Value) -> Vec<IncomingMatrixMessage> {
         let mut messages = Vec::new();

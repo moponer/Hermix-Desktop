@@ -20,7 +20,7 @@
 /// Behaviour:
 /// - `s.len() <= max_chars` → returns `s` unchanged.
 /// - `s.len() > max_chars` → returns the longest prefix whose
-///   `chars().count()` equals `max_chars`.
+/// `chars().count()` equals `max_chars`.
 /// - `max_chars == 0` → returns `""`.
 ///
 /// This is the safe replacement for `&s[..n]` byte slicing. The two
@@ -135,14 +135,14 @@ pub fn format_token_count(n: usize) -> String {
 /// false-positive classes the dispatch hot path was hitting:
 ///
 /// 1. `{"error_count": 3}` — first key is `error_count`, not `error`,
-///    but starts_with sees the prefix and reports an error.
+/// but starts_with sees the prefix and reports an error.
 /// 2. `{"errors": [...]}` — same problem at scale.
 /// 3. Whitespace-prefixed envelopes (`\n  {"error": ...}`) used by some
-///    hand-rolled handlers — silently misses.
+/// hand-rolled handlers — silently misses.
 ///
 /// And one false-negative class:
 /// 4. `{"success": false, "error": "..."}` — error is not the first
-///    key, but starts_with reports success.
+/// key, but starts_with reports success.
 ///
 /// This function still recognises case (4) as success (error is *not*
 /// the first key), matching what callers actually want: "is the

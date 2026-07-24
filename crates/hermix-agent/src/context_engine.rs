@@ -1,14 +1,12 @@
 // P8 - Context management & compression algorithm primitives.
-//
 // Seven cooperating sub-primitives for the context-engine:
-//   P8-T1 ContextHealth       - degradation diagnosis
-//   P8-T2 IncrementalSummary  - append-style summary deltas
-//   P8-T3 MaskingStrategy     - redact PII / secrets
-//   P8-T4 FrozenSnapshot      - immutable KV-cache snapshot
-//   P8-T5 ContextFence        - protected section markers
-//   P8-T6 HeaderProtection    - lock the first N messages
-//   P8-T7 FlushIntegration    - bind the flush sentinel + diagnostics
-//
+// P8-T1 ContextHealth       - degradation diagnosis
+// P8-T2 IncrementalSummary  - append-style summary deltas
+// P8-T3 MaskingStrategy     - redact PII / secrets
+// P8-T4 FrozenSnapshot      - immutable KV-cache snapshot
+// P8-T5 ContextFence        - protected section markers
+// P8-T6 HeaderProtection    - lock the first N messages
+// P8-T7 FlushIntegration    - bind the flush sentinel + diagnostics
 // Each is a small data type + a small policy function. The actual
 // loader / unloader lives in compression.rs.
 

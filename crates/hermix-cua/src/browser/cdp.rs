@@ -57,8 +57,7 @@ impl CdpClient {
     /// Open a WebSocket connection to Chrome's
     /// `webSocketDebuggerUrl` (typically
     /// `ws://127.0.0.1:9222/devtools/browser/<uuid>`).
-    ///
-    /// Spins up a dedicated `current_thread` tokio runtime and
+    /// /// Spins up a dedicated `current_thread` tokio runtime and
     /// launches two background tasks: one that pumps frames from
     /// the socket into the pending/event maps, one that exposes
     /// the write half for `call` to push commands through.

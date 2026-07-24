@@ -11,7 +11,7 @@ use hermix_core::console_decode::decode_console_output;
 use hermix_core::{AgentError, CommandOutput, TerminalBackend};
 
 // `decode_console_output` is re-exported by `hermix-core::console_decode`
-// since the 2026-06-07 Windows-first hardening pass. The local
+// since the Windows-first hardening pass. The local
 // backend used to own its own GBK-aware decoder; that's now centralized
 // in `hermix-core` so the code-execution backend and Python agent
 // glue can share the same logic.

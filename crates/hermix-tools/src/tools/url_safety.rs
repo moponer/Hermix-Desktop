@@ -132,7 +132,13 @@ impl WebsitePolicy {
         let path = path.into();
         let config = if path.exists() {
             match std::fs::read_to_string(&path) {
-                Ok(content) => serde_yaml::from_str(&content).unwrap_or_default(),
+                Ok(content) => match serde_yaml::from_str::<WebsitePolicyConfig>(&content) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("Failed to parse website policy config at {}: {e}", path.display());
+                        WebsitePolicyConfig::default()
+                    }
+                },
                 Err(_) => WebsitePolicyConfig::default(),
             }
         } else {
@@ -320,8 +326,7 @@ fn domain_glob_matches(pattern: &str, domain: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Default path to the user-editable Tirith rules file.
-///
-/// Resolved relative to `$HERMIX_HOME` (default `~/.hermix`) and
+/// /// Resolved relative to `$HERMIX_HOME` (default `~/.hermix`) and
 /// falls back to `~/.hermix/tirith_rules.yaml` when neither the
 /// env var nor the home dir override is set. The `tirith`
 /// subsystem is the canonical **tool-call** policy layer (the
@@ -342,20 +347,17 @@ pub fn default_tirith_rules_path() -> std::path::PathBuf {
 /// their own `tirith_rules.yaml`. The goal is *not* to be a
 /// comprehensive security policy; it's to catch the common
 /// LLM-fabrication cases that have been observed in production:
-///
-/// - Windows raw path namespace (`\\?\`, `\\.\`, `\\?\UNC\`)
+/// /// - Windows raw path namespace (`\\?\`, `\\.\`, `\\?\UNC\`)
 /// - Reads of system directories the LLM has no business touching
-///   (`C:\Windows\System32`, `C:\Windows\SysWOW64`,
-///   `C:\Windows\WinSxS`)
+/// (`C:\Windows\System32`, `C:\Windows\SysWOW64`,
+/// `C:\Windows\WinSxS`)
 /// - The classic "weird first char" shell injection patterns
-///   (leading `-n` / `-e` / `-o` / backtick)
+/// (leading `-n` / `-e` / `-o` / backtick)
 /// - `find` / `rm` / `chmod` on the system root (defense in
-///   depth — `approval` already catches `rm -rf` variants)
-///
-/// Rules are evaluated first-match-wins, so the explicit
+/// depth — `approval` already catches `rm -rf` variants)
+/// /// Rules are evaluated first-match-wins, so the explicit
 /// `\\?\`-prefix block sits at the top.
-///
-/// Pattern syntax: each `pattern` is a regex evaluated against
+/// /// Pattern syntax: each `pattern` is a regex evaluated against
 /// the JSON-serialized form of the tool-call parameters. To keep
 /// the regex readable we use YAML **single-quoted** scalars, so
 /// `\\` is two literal characters in the regex and `\\?` in the
@@ -443,22 +445,20 @@ rules:
 "#;
 
 /// Tirith security policy — tool-call-level pre-check engine.
-///
-/// Evaluates rules before any tool call to decide whether to allow, block,
+/// /// Evaluates rules before any tool call to decide whether to allow, block,
 /// or require approval. Rules are loaded from `~/.hermix/tirith_rules.yaml`.
-///
-/// Rule format:
+/// /// Rule format:
 /// ```yaml
 /// rules:
-///   - tool: "terminal"
-///     pattern: "rm -rf"
-///     action: block
-///     reason: "Destructive command"
-///   - tool: "send_message"
-///     condition: "platform == 'production'"
-///     action: require_approval
-///   - tool: "*"
-///     action: allow
+/// - tool: "terminal"
+/// pattern: "rm -rf"
+/// action: block
+/// reason: "Destructive command"
+/// - tool: "send_message"
+/// condition: "platform == 'production'"
+/// action: require_approval
+/// - tool: "*"
+/// action: allow
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TirithRule {
@@ -508,14 +508,13 @@ pub struct TirithSecurity {
 
 impl TirithSecurity {
     /// Load with a user override on top of the bundled defaults.
-    ///
-    /// Resolution order:
+    /// /// Resolution order:
     /// 1. If `~/.hermix/tirith_rules.yaml` exists → load it as-is
-    ///    (user takes full control; no defaults merged).
+    /// (user takes full control; no defaults merged).
     /// 2. Else fall back to the bundled [`DEFAULT_TIRITH_RULES_YAML`]
-    ///    so a fresh install still gets structural protection
-    ///    (`\\?\` blocks, system-dir blocks, etc.) without
-    ///    requiring the user to copy a file first.
+    /// so a fresh install still gets structural protection
+    /// (`\\?\` blocks, system-dir blocks, etc.) without
+    /// requiring the user to copy a file first.
     pub fn from_default_or_bundled() -> Self {
         let path = default_tirith_rules_path();
         if path.exists() {
@@ -550,7 +549,13 @@ impl TirithSecurity {
         let path = path.into();
         let config = if path.exists() {
             match std::fs::read_to_string(&path) {
-                Ok(content) => serde_yaml::from_str(&content).unwrap_or_default(),
+                Ok(content) => match serde_yaml::from_str::<TirithConfig>(&content) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("Failed to parse tirith config at {}: {e}", path.display());
+                        TirithConfig::default()
+                    }
+                },
                 Err(_) => TirithConfig::default(),
             }
         } else {
@@ -610,7 +615,19 @@ impl TirithSecurity {
         self.maybe_reload();
 
         let config = self.config.read().expect("url_safety rwlock not poisoned");
-        let params_str = serde_json::to_string(params).unwrap_or_default();
+        let params_str = match serde_json::to_string(params) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("Failed to serialize tool call params for security check: {e}");
+                return TirithCheckResult {
+                    tool_name: tool_name.to_string(),
+                    action: TirithAction::Allow,
+                    allowed: true,
+                    reason: format!("Security check skipped: params serialization failed ({e})"),
+                    matched_rule: None,
+                };
+            }
+        };
 
         for (i, rule) in config.rules.iter().enumerate() {
             // Match tool name (glob)
@@ -619,11 +636,9 @@ impl TirithSecurity {
             }
 
             // Match pattern against params.
-            //
             // Primary path: match against the JSON-serialized form of
             // the params (`{"command":"rm -rf /"}`). Most rules don't
             // use anchors, so this is fine.
-            //
             // Fallback for `terminal`: also try matching against the
             // unwrapped `command` / `cmd` string field. This restores
             // the *original intent* of bundled rules that use `^...$`
@@ -718,20 +733,17 @@ impl Default for TirithSecurity {
 // ---------------------------------------------------------------------------
 // SSRF blocklist
 // ---------------------------------------------------------------------------
-//
 // Server-Side Request Forgery protection for tools that fetch URLs on the
 // LLM's behalf (`web_extract`, `browser_navigate`, …). The guard rejects:
-//
 // - Schemes other than http/https (file://, gopher://, dict://, ftp://)
 // - Loopback (127.0.0.0/8, ::1)
 // - Link-local (169.254.0.0/16, fe80::/10) — includes the AWS/GCP/Azure
-//   instance metadata endpoint at 169.254.169.254
+// instance metadata endpoint at 169.254.169.254
 // - RFC 1918 private (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
 // - IPv6 unique-local (fc00::/7)
 // - IPv4-mapped IPv6 (::ffff:0:0/96 — bypasses naive v4-only checks)
 // - Multicast (224.0.0.0/4, ff00::/8) and broadcast (255.255.255.255)
 // - Reserved 240.0.0.0/4 and unspecified (0.0.0.0, ::)
-//
 // Hostname-based checks are done literally for the well-known names
 // (`localhost`, `*.internal`, `*.local`, `metadata.google.internal`); DNS
 // resolution to IP is the **caller's** responsibility. The HTTP backend is
@@ -808,8 +820,7 @@ impl SsrfGuard {
     }
 
     /// Check a URL against the SSRF blocklist.
-    ///
-    /// Returns `Ok(())` if the URL is safe to dispatch to a fetcher,
+    /// /// Returns `Ok(())` if the URL is safe to dispatch to a fetcher,
     /// `Err(SsrfViolation)` otherwise. **No DNS resolution is
     /// performed** — hostnames pass through; IP literals are
     /// classified. See the module-level docs.
@@ -831,10 +842,10 @@ impl SsrfGuard {
         }
 
         // 2. Host classification. `url::Host` is a typed enum, so we
-        //    don't have to round-trip through `host_str().parse()` —
-        //    that path was unreliable for IPv6 (the `url` crate
-        //    historically returned the bracketed form, which doesn't
-        //    parse as `IpAddr`).
+        // don't have to round-trip through `host_str().parse()` —
+        // that path was unreliable for IPv6 (the `url` crate
+        // historically returned the bracketed form, which doesn't
+        // parse as `IpAddr`).
         let host = parsed.host().ok_or_else(|| SsrfViolation {
             url: url.to_string(),
             reason: "URL has no host".into(),
@@ -881,8 +892,8 @@ impl SsrfGuard {
                     });
                 }
                 // 3b. Hostname passes through. DNS resolution +
-                //     re-check on the resolved IP is the **caller's**
-                //     responsibility (see module-level docs).
+                // re-check on the resolved IP is the **caller's**
+                // responsibility (see module-level docs).
             }
         }
 
@@ -890,8 +901,7 @@ impl SsrfGuard {
     }
 
     /// Classify a single IPv4 address against the SSRF blocklist.
-    ///
-    /// Public so HTTP backends that do their own DNS resolution can
+    /// /// Public so HTTP backends that do their own DNS resolution can
     /// re-check the resolved IP with the same rules `check` applies
     /// to literal IPv4 hosts in URLs.
     pub fn classify_v4(url: &str, v4: Ipv4Addr) -> Result<(), SsrfViolation> {
@@ -1498,7 +1508,6 @@ mod tests {
     // -----------------------------------------------------------------
     // Bundled-rule coverage matrix
     // -----------------------------------------------------------------
-    //
     // These tests assert that the default `tirith_rules.yaml`
     // (the one shipped with the binary and used by `TirithSecurity::from_default_or_bundled`)
     // behaves the way `DEFAULT_TIRITH_RULES_YAML`'s inline
@@ -1595,7 +1604,6 @@ mod tests {
         // JSON-serialized form of the tool-call params, so
         // those anchors used to be unreachable (the `^` was
         // preceded by `{"command":"`).
-        //
         // `check_tool_call` now falls back to matching the
         // pattern against the unwrapped `command` / `cmd`
         // field value for the `terminal` tool, which restores
@@ -1628,22 +1636,20 @@ mod tests {
         // `(find|rm|chmod)\s.*\s(/|[A-Za-z]:\\?)\s*$` ends
         // with `\s*$`, which used to be unreachable because
         // the JSON envelope put `"}` after the command.
-        //
         // `check_tool_call` now falls back to matching the
         // pattern against the unwrapped `command` / `cmd`
         // value for the `terminal` tool. This restores the
         // original intent of the rule.
-        //
         // Note: the rule is `<cmd>\s.*\s<root>\s*$` — it
         // needs at least three whitespace-separated tokens
         // (command, middle, root), and the root token must
         // be preceded by whitespace. So:
-        //   - `find /`         → 2 tokens, no middle — N/A
-        //   - `find D:\`       → 2 tokens, no whitespace before root — N/A
-        //   - `rm -rf /`       → 3 tokens, whitespace before `/` — matches
-        //   - `chmod 777 /`    → 3 tokens — matches
-        //   - `chmod -R 777 /` → 3 tokens — matches
-        //   - `rm -rf C:\`     → 3 tokens — matches
+        // - `find /`         → 2 tokens, no middle — N/A
+        // - `find D:\`       → 2 tokens, no whitespace before root — N/A
+        // - `rm -rf /`       → 3 tokens, whitespace before `/` — matches
+        // - `chmod 777 /`    → 3 tokens — matches
+        // - `chmod -R 777 /` → 3 tokens — matches
+        // - `rm -rf C:\`     → 3 tokens — matches
         // The 2-token shapes are caught elsewhere (e.g. the
         // `ApprovalManager` semantic layer) and aren't the
         // target of this rule.
@@ -1747,7 +1753,6 @@ mod tests {
     // -----------------------------------------------------------------
     // SSRF blocklist tests
     // -----------------------------------------------------------------
-    //
     // Coverage matrix for `SsrfGuard::check`. Every category in
     // `SsrfCategory` has at least one positive and one negative
     // (where applicable) probe. The test names mirror the

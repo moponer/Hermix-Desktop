@@ -27,8 +27,7 @@ use crate::gateway::Gateway;
 // ---------------------------------------------------------------------------
 
 /// [`MessagingBackend`] that forwards to a live [`Gateway::send_message`].
-///
-/// `platform` must match a registered adapter (`telegram`, `discord`,
+/// /// `platform` must match a registered adapter (`telegram`, `discord`,
 /// `slack`, `email`, ...) — otherwise the underlying gateway returns an
 /// error which is propagated as [`ToolError::ExecutionFailed`].
 pub struct GatewayMessagingBackend {
@@ -73,8 +72,7 @@ const DEFAULT_CLARIFY_TIMEOUT_SECS: u64 = 300;
 
 /// [`ClarifyBackend`] that blocks the tool call on a tokio `oneshot`
 /// receiver, letting the TUI / gateway respond asynchronously.
-///
-/// The caller side owns a cloned [`ClarifyDispatcher`] which it uses to
+/// /// The caller side owns a cloned [`ClarifyDispatcher`] which it uses to
 /// fulfil the pending request (see [`ClarifyDispatcher::respond`]). If no
 /// response arrives within the configured timeout, the tool returns an
 /// `ExecutionFailed` error so the agent loop can retry or abandon.
@@ -138,8 +136,7 @@ impl PendingClarify {
 }
 
 /// Handle shared between the backend (producer) and the UI layer (consumer).
-///
-/// Internally it holds a mutex-guarded queue of [`PendingClarify`] requests;
+/// /// Internally it holds a mutex-guarded queue of [`PendingClarify`] requests;
 /// the UI/TUI drains them via [`ClarifyDispatcher::take_next`] and calls
 /// [`PendingClarify::respond`] when the user has answered.
 #[derive(Clone, Default)]

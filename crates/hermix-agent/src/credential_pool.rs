@@ -66,8 +66,7 @@ impl CredentialPool {
     }
 
     /// Get the best available API key.
-    ///
-    /// Uses round-robin selection, skipping rate-limited keys.
+    /// /// Uses round-robin selection, skipping rate-limited keys.
     /// If all keys are rate-limited, returns the one that will be
     /// available soonest.
     pub fn get_key(&self) -> String {

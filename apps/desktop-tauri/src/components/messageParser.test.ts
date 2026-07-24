@@ -194,7 +194,7 @@ function toolEvent(over: Partial<ExecutionTimelineEvent>): ExecutionTimelineEven
   } as ExecutionTimelineEvent;
 }
 
-describe("groupTimeline stranded-pass (2026-07-22 FIX)", () => {
+describe("groupTimeline stranded-pass (FIX)", () => {
   it("keeps stranded groups as `running` while the turn is still streaming", () => {
     // Tool `tool_start` arrives, no `tool_complete` yet. Live WS is
     // still feeding events. The renderer should keep showing the

@@ -63,8 +63,7 @@ pub struct ExperienceArchive {
 
 impl ExperienceArchive {
     /// Open the archive at the given root directory.
-    ///
-    /// Creates the directory if it doesn't exist.
+    /// /// Creates the directory if it doesn't exist.
     pub fn open(root: impl Into<PathBuf>) -> std::io::Result<Self> {
         let root = root.into();
         fs::create_dir_all(&root)?;
@@ -123,8 +122,7 @@ impl ExperienceArchive {
     }
 
     /// Search for experiences matching a query.
-    ///
-    /// Searches in `what_happened`, `correction`, and `tools` fields.
+    /// /// Searches in `what_happened`, `correction`, and `tools` fields.
     pub fn search(&self, query: &str) -> std::io::Result<Vec<ExperienceEntry>> {
         let query_lower = query.to_lowercase();
         let all = self.load_all()?;
@@ -162,8 +160,7 @@ impl ExperienceArchive {
     }
 
     /// Render the N most recent experiences as a system-prompt block.
-    ///
-    /// Returns `None` if there are no experiences or if the budget is 0.
+    /// /// Returns `None` if there are no experiences or if the budget is 0.
     pub fn render_prompt_block(
         &self,
         char_budget: usize,
@@ -252,8 +249,7 @@ pub struct ExperienceSummary {
 // ---------------------------------------------------------------------------
 
 /// Hook called after a researcher step to record any experience.
-///
-/// Reads the experience directory and returns a prompt block if
+/// /// Reads the experience directory and returns a prompt block if
 /// there are relevant experiences for the given tools.
 pub fn experience_prompt_for_tools(
     archive: &ExperienceArchive,
@@ -311,8 +307,7 @@ pub fn daily_experience_report(
 }
 
 /// Hook called during discover to ingest external experience files.
-///
-/// Reads JSON files from the `in_external` directory and imports them
+/// /// Reads JSON files from the `in_external` directory and imports them
 /// as experience entries. Returns the number of entries imported.
 pub fn ingest_external_experiences(
     archive: &ExperienceArchive,

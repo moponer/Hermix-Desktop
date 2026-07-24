@@ -90,24 +90,22 @@ pub async fn toggle_skill(
 }
 
 /// GET /api/tools/toolsets
-///
-/// Returns the **toolset categories** actually registered in the
+/// /// Returns the **toolset categories** actually registered in the
 /// in-process `ToolRegistry` (e.g. `web`, `terminal`, `file`,
 /// `memory`, `browser`, ...), not individual tool definitions —
 /// the previous implementation conflated the two and the UI
 /// displayed one entry per tool. For each category we attach:
-///
-/// * `tools` — the list of tool names belonging to it
-///   (filtered by `e.toolset == category`),
+/// /// * `tools` — the list of tool names belonging to it
+/// (filtered by `e.toolset == category`),
 /// * `enabled` — the persisted + runtime current state (we read
-///   the per-tool `is_enabled` flag and AND-reduce across the
-///   toolset; if any tool in the group is disabled the whole
-///   toolset is reported as disabled, since the LLM will not see
-///   the disabled ones and we want the toggle to reflect that),
+/// the per-tool `is_enabled` flag and AND-reduce across the
+/// toolset; if any tool in the group is disabled the whole
+/// toolset is reported as disabled, since the LLM will not see
+/// the disabled ones and we want the toggle to reflect that),
 /// * `configured` — always `true` for built-in toolsets (the
-///   "needs configuration" badge is reserved for plugin-style
-///   optional adapters that the upstream has but we do not
-///   surface here yet).
+/// "needs configuration" badge is reserved for plugin-style
+/// optional adapters that the upstream has but we do not
+/// surface here yet).
 pub async fn list_toolsets(State(state): State<HttpServerState>) -> Json<Vec<ToolsetInfo>> {
     // Use `list_tools()` (not `get_definitions()`) so we see
     // *every* registered tool, including the ones whose
@@ -244,8 +242,7 @@ pub fn load_toolset_state_for_home(hermix_home: &Path) -> EnabledToolsetState {
 /// show the user's saved preferences on the *Settings* tab but
 /// the LLM would see the default (everything-on) state until the
 /// user re-toggled every toolset.
-///
-/// Toolset names not present in the persisted file are flipped
+/// /// Toolset names not present in the persisted file are flipped
 /// to `is_enabled=false` so a *new* toolset added in a later
 /// binary version starts out off (acceptable — the user has not
 /// seen it in the UI yet, and toggling it on costs one click).
@@ -354,8 +351,7 @@ fn canonical_enabled_set(toggle: &ToolsetToggle) -> HashSet<String> {
 }
 
 /// PUT /api/tools/toolsets/enabled
-///
-/// Apply the user's toolset enable/disable choices to the
+/// /// Apply the user's toolset enable/disable choices to the
 /// in-process `ToolRegistry` *and* persist them to
 /// `enabled_toolsets.json`. Idempotent: re-sending the same
 /// payload is a no-op. Unknown toolset names (typos, removed
@@ -384,8 +380,7 @@ pub async fn set_enabled_toolsets(
     // is in `enabled` is on; everything else is off. This
     // makes the call a "set absolute state" rather than a
     // diff, which is the contract the UI expects.
-    //
-    // 2026-07-02 (P1.7): the helper `apply_toggle_with_floor` (defined
+    // (P1.7): the helper `apply_toggle_with_floor` (defined
     // below) does the toggle *and* re-asserts the essential toolset
     // floor in one pass. Without the floor re-assert, a user can
     // use the Settings UI to toggle `terminal` off; the in-process
@@ -432,8 +427,7 @@ pub async fn set_enabled_toolsets(
 /// the canonical enabled list (sorted, with the floor folded in)
 /// that the caller should both report to the UI and persist to
 /// `enabled_toolsets.json`.
-///
-/// Why one helper, not two? The floor re-assertion is part of the
+/// /// Why one helper, not two? The floor re-assertion is part of the
 /// toggle contract: a user-facing toggle of `terminal` to "off"
 /// is overridden by the floor, and that override has to be
 /// reflected in **both** the in-process state *and* the persisted
@@ -441,8 +435,7 @@ pub async fn set_enabled_toolsets(
 /// path silently drop the floor (P1.7 bug) — the floor was
 /// applied at startup but not at toggle time, and the toggle
 /// path did not see a reason to consult the floor.
-///
-/// Splitting out a helper also makes the toggle logic testable
+/// /// Splitting out a helper also makes the toggle logic testable
 /// without spinning up the full `HttpServerState` (which the
 /// test module in this file already does for the seed path).
 fn apply_toggle_with_floor(
@@ -482,12 +475,10 @@ fn apply_toggle_with_floor(
 }
 
 // ── Builtin skill seeding ────────────────────────────────────────────
-//
 // The 15 .md files in `dashboard/skills/` are bundled into the binary at
 // compile time. On first start we materialise them into the user's skills
 // directory (`~/.hermix/skills/<category>/<name>/SKILL.md`) so the front-end
 // "扩展 → 技能" tab has a populated list right away.
-//
 // This is **idempotent** — we never overwrite a SKILL.md the user has
 // already customised. To restore a builtin skill, the user must delete its
 // directory first.
@@ -577,7 +568,7 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         "web-novel",
         include_str!("skills/web-novel.md"),
     ),
-    // office-cli: re-enabled 2026-07-02 (P1.8) — the `office_cli` builtin
+    // office-cli: re-enabled (P1.8) — the `office_cli` builtin
     // tool was re-registered in register_builtins.rs and the desktop preview
     // (render_office_preview) shells out to the bundled `officecli` binary,
     // so this skill is live again. See hermix-tools register_builtins.rs.
@@ -590,8 +581,7 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
 
 /// Materialise the bundled builtin skills into `skills_dir`. Returns the
 /// number of files actually written (i.e. fresh installs on first run).
-///
-/// Idempotent: a SKILL.md that already exists is left alone so user edits
+/// /// Idempotent: a SKILL.md that already exists is left alone so user edits
 /// survive. To re-seed a specific skill, the user must delete its
 /// `<category>/<name>/SKILL.md` file first.
 pub fn seed_builtin_skills(skills_dir: &Path) -> std::io::Result<usize> {
@@ -714,7 +704,6 @@ mod tests {
     }
 
     // ── P1.7: essential-floor override at runtime ────────────────────
-    //
     // Regression: the floor was applied at startup (twice: once in
     // `register_builtin_tools` and once in
     // `apply_persisted_toolset_state`) but NOT in
@@ -726,7 +715,6 @@ mod tests {
     // it. The fix: `apply_toggle_with_floor` re-asserts the floor
     // and folds the re-enabled toolsets into the returned list, so
     // a restart sees the same effective state.
-    //
     // Test strategy: `ToolRegistry` is a closed shape (no public
     // `is_toolset_enabled` getter; `set_toolset_enabled` returns
     // the *number of flipped entries*, not the new state). We

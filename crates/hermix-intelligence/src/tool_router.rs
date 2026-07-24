@@ -56,8 +56,7 @@ pub struct TurnContext {
     /// 最多返回多少个 tool schema(默认 5,Phase 7 §验收 给定)
     pub max_tools: usize,
     /// L1 Domain Mode 优先工具列表。
-    ///
-    /// 来自 `DomainPreset::priority_tools`，
+    /// /// 来自 `DomainPreset::priority_tools`，
     /// 在路由打分后给这些工具加分(+5.0)。
     /// 空列表 = 无优先工具(默认)。
     pub priority_tools: Vec<String>,
@@ -122,8 +121,7 @@ pub struct RoutedSchema {
 
 pub trait ToolSchemaRouter: Send + Sync {
     /// Route a set of candidate tool schemas down to a top-N list.
-    ///
-    /// Implementations must:
+    /// /// Implementations must:
     /// 1. Return at most `ctx.max_tools` items.
     /// 2. Return *no more* than the input candidate set (subset).
     /// 3. Preserve order is not required, but results should be sorted by score desc.
@@ -206,9 +204,9 @@ fn is_cjk(ch: char) -> bool {
 /// Scoring formula (per tool):
 /// - +2 for every occurrence of the tool's name in the user message
 /// - +1 for every token of the user message that also appears in the tool's
-///   name or description
+/// name or description
 /// - +5 if the tool appears in the LRU history (the user has called it
-///   recently — likely still relevant)
+/// recently — likely still relevant)
 /// - +0.5 if the tool belongs to one of the active toolsets
 ///
 /// Returns the top `ctx.max_tools` candidates, with ties broken by
@@ -373,8 +371,7 @@ impl VectorRouter {
     }
 
     /// L1.4: Build a vector router from an async [`EmbeddingProvider`].
-    ///
-    /// The provider's `dimension()` is recorded at construction so
+    /// /// The provider's `dimension()` is recorded at construction so
     /// `index_tool` can verify each tool embedding has the right shape
     /// (mismatched dims silently score 0 — they would otherwise poison
     /// the cosine calculation). The closure does an **async** `embed`
@@ -671,8 +668,8 @@ impl ToolSchemaRouter for AlwaysInclude {
         let mut routed = self.inner.route(ctx, candidates.clone());
 
         // 2. For each always-include name, find its schema in the
-        //    candidate set. If found and not already in `routed`,
-        //    append it with score=∞ and force_included=true.
+        // candidate set. If found and not already in `routed`,
+        // append it with score=∞ and force_included=true.
         let always: HashSet<String> = self.always.iter().cloned().collect();
         let routed_names: HashSet<String> =
             routed.iter().map(|r| r.schema.name.clone()).collect();
@@ -715,9 +712,9 @@ impl ToolSchemaRouter for AlwaysInclude {
 /// ```ignore
 /// let router = PriorityBoost::new(Arc::new(KeywordRouter::new()), 5.0);
 /// let ctx = TurnContext::from_user_message("fix main.rs")
-///     .with_priority_tools(vec!["read_file".into(), "write_file".into()]);
+/// .with_priority_tools(vec!["read_file".into(), "write_file".into()]);
 /// let routed = router.route(&ctx, all_tools);
-/// // read_file and write_file will have +5.0 score boost
+/// read_file and write_file will have +5.0 score boost
 /// ```
 pub struct PriorityBoost {
     inner: Arc<dyn ToolSchemaRouter>,
@@ -1237,7 +1234,7 @@ mod tests {
         let routed = router.route(&ctx, make_tools());
         // After boost, read_file should rank higher than it would without boost
         // (weather still wins because keyword match is strong, but read_file
-        //  should be in the top 5 due to +5.0 boost)
+        // should be in the top 5 due to +5.0 boost)
         assert!(routed.iter().any(|r| r.schema.name == "read_file"),
             "read_file should be in top-5 after priority boost");
     }

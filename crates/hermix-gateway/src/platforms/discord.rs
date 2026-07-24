@@ -141,8 +141,7 @@ pub enum GatewayAction {
 }
 
 /// Manages the client-side state for a single Discord Gateway connection.
-///
-/// This is a pure state machine: feed it [`GatewayPayload`]s received from
+/// /// This is a pure state machine: feed it [`GatewayPayload`]s received from
 /// the WebSocket and it will return a list of [`GatewayAction`]s that the
 /// driver should execute. The struct never performs I/O itself, making it
 /// easy to test and compose with any WebSocket library.
@@ -348,8 +347,7 @@ pub struct IncomingDiscordMessage {
 // ---------------------------------------------------------------------------
 
 /// Parsed data from a `MESSAGE_UPDATE` dispatch event.
-///
-/// Discord may send partial updates — only `id` and `channel_id` are
+/// /// Discord may send partial updates — only `id` and `channel_id` are
 /// guaranteed; other fields are optional.
 #[derive(Debug, Clone)]
 pub struct MessageUpdateEvent {
@@ -827,8 +825,7 @@ impl DiscordAdapter {
     // -----------------------------------------------------------------------
 
     /// Add a reaction to a message.
-    ///
-    /// `emoji` should be a URL-encoded unicode emoji (e.g. `%F0%9F%91%8D`)
+    /// /// `emoji` should be a URL-encoded unicode emoji (e.g. `%F0%9F%91%8D`)
     /// or a custom emoji in the form `name:id`.
     pub async fn add_reaction(
         &self,
@@ -948,8 +945,7 @@ impl DiscordAdapter {
     // -----------------------------------------------------------------------
 
     /// Register (overwrite) global application commands.
-    ///
-    /// This uses the bulk-overwrite endpoint which replaces all existing
+    /// /// This uses the bulk-overwrite endpoint which replaces all existing
     /// global commands with the ones provided.
     pub async fn register_slash_commands(
         &self,
@@ -1365,8 +1361,7 @@ impl DiscordAdapter {
     }
 
     /// Route a dispatch event by name to the appropriate parser.
-    ///
-    /// Returns a [`DispatchEvent`] for known event types, or `None`.
+    /// /// Returns a [`DispatchEvent`] for known event types, or `None`.
     pub fn parse_dispatch(event_name: &str, data: &serde_json::Value) -> Option<DispatchEvent> {
         match event_name {
             "MESSAGE_CREATE" => Self::parse_message_create(data).map(DispatchEvent::MessageCreate),

@@ -103,7 +103,13 @@ impl ToolHandler for SlackHandler {
         })?;
 
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let body = match resp.text().await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("Failed to read Slack API response body: {e}");
+                String::from("<unreadable response body>")
+            }
+        };
 
         if status.is_success() {
             Ok(format!("✅ Message sent to Slack (status {status})"))

@@ -129,12 +129,11 @@ fn patterns() -> &'static Vec<(&'static str, Regex)> {
 /// Redact PII / secrets from `text`. The returned string
 /// contains placeholders in place of any matched secret;
 /// surrounding text is preserved verbatim.
-///
-/// This is the primary entry point. Call it on:
-///   - `Message::content` before INSERT into the sessions DB
-///   - `Message::tool_calls` JSON before INSERT
-///   - Any error message logged to disk that originated from
-///     user input or upstream LLM/tool output
+/// /// This is the primary entry point. Call it on:
+/// - `Message::content` before INSERT into the sessions DB
+/// - `Message::tool_calls` JSON before INSERT
+/// - Any error message logged to disk that originated from
+/// user input or upstream LLM/tool output
 pub fn redact_secrets(text: &str) -> String {
     redact_secrets_with(text, &REDACTED)
 }
@@ -153,7 +152,7 @@ fn redact_secrets_with(text: &str, default_marker: &str) -> String {
         // For url-credentials we need a 2-step rewrite:
         // 1) strip everything between scheme:// and the next @
         // 2) re-insert the URL_AUTH marker so the host is
-        //    preserved
+        // preserved
         if *label == "url-credentials" {
             out = re
                 .replace_all(&out, |caps: &regex::Captures| {
@@ -171,12 +170,11 @@ fn redact_secrets_with(text: &str, default_marker: &str) -> String {
 /// parse the input as JSON, redact the *string leaves*, and
 /// re-serialise. This is much more reliable than running the
 /// regex over the raw JSON, because:
-///   1. We won't accidentally redact substrings that happen
-///      to live inside a JSON string key.
-///   2. The output is canonical (sorted keys, no whitespace)
-///      so it's stable for hashing / dedup.
-///
-/// Non-JSON input is returned unchanged after a
+/// 1. We won't accidentally redact substrings that happen
+/// to live inside a JSON string key.
+/// 2. The output is canonical (sorted keys, no whitespace)
+/// so it's stable for hashing / dedup.
+/// /// Non-JSON input is returned unchanged after a
 /// `redact_secrets` pass.
 pub fn redact_tool_calls_json(json_str: &str) -> String {
     if json_str.is_empty() {

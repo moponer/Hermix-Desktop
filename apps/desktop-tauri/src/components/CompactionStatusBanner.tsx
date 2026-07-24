@@ -17,7 +17,7 @@ export type CompactionState =
   | "open"          // breaker tripped: LLM compaction skipped, no fallback
   | "fallback"      // breaker open + lightweight-prune engaged (recommended)
   | "pressure"      // pressure-only signal (no breaker trip yet): just warn
-  | "quota_exhausted"; // 2026-07-19: compression-model Token Plan quota hit 0
+  | "quota_exhausted"; // compression-model Token Plan quota hit 0
 
 /**
  * Compression-process phase, surfaced by the Rust backend
@@ -29,7 +29,7 @@ export type CompactionState =
  * `compression_ops::auto_compress_if_over_threshold` (starting →
  * in_progress_{fast,llm} → complete | failed).
  *
- * 2026-07-22: introduced to fix the "警告卡片 → 突然完成" UX gap
+ * introduced to fix the "警告卡片 → 突然完成" UX gap
  * the user reported — `phase === "idle"` (or missing) keeps the
  * pre-existing static copy.
  */
@@ -69,7 +69,7 @@ export interface CompactionStatus {
   /** Wall-clock time of the last state change (Unix ms). */
   lastChangedAt?: number;
   /**
-   * 2026-07-22: compression-process phase (see [`CompactionPhase`])
+   * compression-process phase (see [`CompactionPhase`])
    * — optional so older snapshots without the field still render.
    * When present and not `"idle"`, the banner switches to a
    * phase-specific icon + title + body so the user sees the
@@ -86,7 +86,7 @@ interface CompactionStatusBannerProps {
 }
 
 /**
- * 2026-07-22: phase-specific banner copy. Overrides `STATE_COPY` for
+ * phase-specific banner copy. Overrides `STATE_COPY` for
  * the duration of a single compression attempt so the user sees the
  * "正在准备压缩" → "正在压缩中" → "压缩完成" transitions instead
  * of jumping straight from the pressure warning to the post-attempt
@@ -204,7 +204,7 @@ export function CompactionStatusBanner({ status, onDismiss }: CompactionStatusBa
     status.usedTokens >= status.thresholdTokens;
 
   const effectiveState = isOverThreshold ? "pressure" : status.state;
-  // 2026-07-22: when the backend reports a non-`"idle"` phase we
+  // when the backend reports a non-`"idle"` phase we
   // override the breaker-state copy with the phase-specific copy so
   // the banner shows the user that compression is actively in flight
   // (spinner + "正在压缩中") or has just landed ("压缩完成" /

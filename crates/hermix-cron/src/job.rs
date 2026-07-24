@@ -178,8 +178,7 @@ impl CronJob {
     }
 
     /// Validate the cron job definition.
-    ///
-    /// Checks:
+    /// /// Checks:
     /// - The schedule is a valid cron expression
     /// - The prompt is non-empty (or a script is provided)
     /// - The repeat value is not zero
@@ -218,8 +217,7 @@ impl CronJob {
     }
 
     /// Parse a cron expression and return the next fire time after `after`.
-    ///
-    /// The `cron` crate requires 7-field format (sec min hour dom month dow year).
+    /// /// The `cron` crate requires 7-field format (sec min hour dom month dow year).
     /// If the user provides a 5-field expression (min hour dom month dow), we
     /// automatically prepend "0 " (run at second 0) and append " *" (any year).
     fn parse_next_run(schedule: &str, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -234,8 +232,7 @@ impl CronJob {
     }
 
     /// Normalize a cron expression to 7-field format.
-    ///
-    /// - 5 fields: `min hour dom month dow` -> `0 min hour dom month dow *`
+    /// /// - 5 fields: `min hour dom month dow` -> `0 min hour dom month dow *`
     /// - 6 fields: `sec min hour dom month dow` -> `sec min hour dom month dow *`
     /// - 7 fields: already correct, return as-is
     fn normalize_cron_expr(expr: &str) -> String {

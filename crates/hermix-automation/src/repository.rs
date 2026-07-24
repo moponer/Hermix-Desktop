@@ -51,8 +51,7 @@ fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AutomationReposito
 // ---------------------------------------------------------------------------
 
 /// SQLite-backed repository for automation entities.
-///
-/// Stateless — each method opens a fresh connection to the DB.
+/// /// Stateless — each method opens a fresh connection to the DB.
 pub struct AutomationRepository {
     db_path: PathBuf,
 }

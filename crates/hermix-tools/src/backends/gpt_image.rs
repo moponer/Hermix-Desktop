@@ -35,8 +35,7 @@ impl OpenAiGptImageBackend {
     }
 
     /// Resolve from environment.
-    ///
-    /// Priority: direct `OPENAI_API_KEY` unless `gpt_image.use_gateway: true`,
+    /// /// Priority: direct `OPENAI_API_KEY` unless `gpt_image.use_gateway: true`,
     /// then Nous-managed gateway → `Err` with a hint.
     pub fn from_env_or_managed() -> Result<Self, ToolError> {
         let force_gateway = prefers_gateway("gpt_image");

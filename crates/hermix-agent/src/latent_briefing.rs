@@ -114,13 +114,11 @@ impl LatentBriefBuilder {
 // ---------------------------------------------------------------------------
 
 /// Compress a full conversation trajectory into a compact summary.
-///
-/// This is a simple heuristic compression that:
+/// /// This is a simple heuristic compression that:
 /// 1. Takes the last N messages (configurable)
 /// 2. Truncates each to a max line count
 /// 3. Adds a summary header
-///
-/// In production, this would call an LLM to generate a proper
+/// /// In production, this would call an LLM to generate a proper
 /// summary. For now, this heuristic achieves the 30% target
 /// without API cost.
 pub fn compress_trajectory(

@@ -58,8 +58,7 @@ impl RoomAgentContract {
 }
 
 /// Leader's structured decision output — replaces regex-parsed `TaskPlan`.
-///
-/// The leader LLM is asked to emit this as strict JSON. The parser is
+/// /// The leader LLM is asked to emit this as strict JSON. The parser is
 /// tolerant of ```json fences and surrounding prose (see
 /// [`parse_leader_decision`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,13 +124,11 @@ pub enum HandoffDirective {
 }
 
 /// Tolerant JSON parser for `LeaderDecision`.
-///
-/// Survives:
+/// /// Survives:
 /// - ```json ... ``` code fences
 /// - leading/trailing prose (uses first `{` to last `}`)
 /// - missing optional fields (defaults applied via `#[serde(default)]`)
-///
-/// Returns `Err` with a human-readable message on hard parse failure so the
+/// /// Returns `Err` with a human-readable message on hard parse failure so the
 /// runtime can surface it as a `SoftError` instead of silently falling back.
 pub fn parse_leader_decision(raw: &str) -> Result<LeaderDecision, String> {
     let trimmed = raw.trim();
@@ -141,6 +138,14 @@ pub fn parse_leader_decision(raw: &str) -> Result<LeaderDecision, String> {
         return Ok(d);
     }
 
+    // Tolerant path: strip ```json ... ``` (or bare ``` ... ```) code
+    // fences if present. The leader prompt asks for strict JSON, but the
+    // model often wraps it in a markdown fence plus surrounding prose such
+    // as "好的，我来分析一下。 ... ```json { ... } ```  希望对你有帮助。".
+    // Without this step, the streaming deserializer below hits the leading
+    // Chinese prose and bails out before reaching the JSON object.
+    let body = strip_code_fence(trimmed);
+
     // Tolerant path (M8): use the streaming deserializer so surrounding
     // prose — including a trailing `}` inside commentary after the JSON
     // object — doesn't break parsing. The old `find('{')` + `rfind('}')`
@@ -148,7 +153,7 @@ pub fn parse_leader_decision(raw: &str) -> Result<LeaderDecision, String> {
     // any JSON value or trailing text containing a brace. The streaming
     // deserializer reads exactly one value and stops, ignoring trailing
     // tokens (and correctly handles `}` inside JSON string values).
-    let mut de = serde_json::Deserializer::from_str(trimmed).into_iter();
+    let mut de = serde_json::Deserializer::from_str(&body).into_iter();
     match de.next() {
         Some(Ok(d)) => Ok(d),
         Some(Err(e)) => Err(format!("failed to parse leader decision JSON: {}", e)),
@@ -156,9 +161,37 @@ pub fn parse_leader_decision(raw: &str) -> Result<LeaderDecision, String> {
     }
 }
 
-/// Build the prompt that asks the leader to return a `LeaderDecision` JSON.
+/// Extract the inner content of a fenced code block
+/// (`` ```json ... ``` `` or `` ``` ... ``` ``) if present. Returns the
+/// trimmed inner content, or the original input when no fence is found.
 ///
-/// This replaces both `build_leader_prompt` (system prompt) and
+/// Handles both the language-tagged form (```json, ```javascript, etc.)
+/// and the bare ```` ``` ```` form (skipping a single-line language tag on
+/// the same line as the opening fence). Multi-line bodies and braces
+/// inside JSON string values are preserved — we only match the *first*
+/// opening fence and the *first* closing fence after it, which mirrors
+/// how the leader model is expected to emit blocks.
+fn strip_code_fence(s: &str) -> String {
+    let open = match s.find("```") {
+        Some(i) => i,
+        None => return s.to_string(),
+    };
+    let after_open = open + 3;
+    // Skip the optional language tag on the same line as the opening
+    // fence (e.g. ```json). If the opener sits on the same line as the
+    // content, fall back to the byte right after the opener.
+    let after_lang = s[after_open..]
+        .find('\n')
+        .map(|p| after_open + p + 1)
+        .unwrap_or(after_open);
+    if let Some(close_rel) = s[after_lang..].find("```") {
+        return s[after_lang..after_lang + close_rel].trim().to_string();
+    }
+    s.to_string()
+}
+
+/// Build the prompt that asks the leader to return a `LeaderDecision` JSON.
+/// /// This replaces both `build_leader_prompt` (system prompt) and
 /// `build_announcement_decision_prompt` (separate LLM call) — the leader
 /// emits analysis + subtasks + announcement in one structured response.
 pub fn build_leader_decision_prompt(

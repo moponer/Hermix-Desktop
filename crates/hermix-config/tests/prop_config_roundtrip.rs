@@ -10,11 +10,12 @@ use std::collections::HashMap;
 
 use hermix_config::{
     AdvancedSettingsConfig, AgentLoopBehaviorConfig, ApprovalConfig, CompactionConfig,
-    DailyReset, GatewayConfig, IdleReset, PlatformConfig, ProfileConfig, SessionConfig,
-    SessionResetPolicy, SkillsSettings, SmartModelRoutingConfig, StreamingConfig,
-    TerminalConfig, ToolCapabilityConfig, ToolsSettings, UnauthorizedDmBehavior,
+    DailyReset, GatewayConfig, IdleReset, ModelSelectorConfig, PlatformConfig, ProfileConfig,
+    SessionConfig, SessionResetPolicy, SkillsSettings, SmartModelRoutingConfig,
+    StreamingConfig, TerminalConfig, ToolCapabilityConfig, ToolsSettings,
+    UnauthorizedDmBehavior,
 };
-use hermix_core::BudgetConfig;
+use hermix_core::{BudgetConfig, PermissionProfile};
 
 // ---------------------------------------------------------------------------
 // Strategies
@@ -136,6 +137,8 @@ fn arb_gateway_config() -> impl Strategy<Value = GatewayConfig> {
                 agent: AgentLoopBehaviorConfig::default(),
                 autonomous_mode: false,
                 home_dir: None,
+                model_selector: None,
+                permission_profile: PermissionProfile::default(),
             },
         )
 }
@@ -206,7 +209,6 @@ proptest! {
 
 // -----------------------------------------------------------------
 // P0-1: skills.auto_extraction + agent.auto_skill_extraction
-//
 // These are deterministic rather than proptest because the
 // `default = "..."` serde attribute only kicks in for *missing*
 // fields, and proptest would either always populate the field

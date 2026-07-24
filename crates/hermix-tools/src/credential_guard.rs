@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use hermix_core::ToolError;
 use regex::Regex;
 
-// 2026-07-14 (P1-1): Helper to compile static regex patterns without
+// (P1-1): Helper to compile static regex patterns without
 // .unwrap(). Uses .expect() with a semantic message as required by
 // the code hardening plan (static init cannot use `?`).
 fn re(pattern: &'static str) -> Regex {
@@ -155,8 +155,7 @@ impl CredentialGuard {
     }
 
     /// Check whether reading a file is allowed.
-    ///
-    /// Returns `Err(ToolError)` if the file is a protected credential file.
+    /// /// Returns `Err(ToolError)` if the file is a protected credential file.
     pub fn check_read_access(&self, path: &Path) -> Result<(), ToolError> {
         if self.is_protected_file(path) {
             return Err(ToolError::ExecutionFailed(format!(
@@ -168,8 +167,7 @@ impl CredentialGuard {
     }
 
     /// Check whether writing to a file is allowed.
-    ///
-    /// Returns `Err(ToolError)` if the target is a protected file or if the
+    /// /// Returns `Err(ToolError)` if the target is a protected file or if the
     /// content contains detectable secrets (when content scanning is enabled).
     pub fn check_write_access(&self, path: &Path, content: &str) -> Result<(), ToolError> {
         // Check path first

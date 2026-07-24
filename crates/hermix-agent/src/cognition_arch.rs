@@ -1,9 +1,9 @@
 // P7 - Cognitive architecture upgrades.
 //
 // Three cooperating modules:
-//   P7-T1 BdiModel          - beliefs / desires / intentions state
-//   P7-T2 LatentBriefing    - delegate_task KV-cache friendly
-//   P7-T3 FilesystemContext - multi-file memory addressed by path
+// P7-T1 BdiModel          - beliefs / desires / intentions state
+// P7-T2 LatentBriefing    - delegate_task KV-cache friendly
+// P7-T3 FilesystemContext - multi-file memory addressed by path
 //
 // All are pure data + small policy helpers. They live here so the
 // agent loop can hold the *shape* of cognition without depending on

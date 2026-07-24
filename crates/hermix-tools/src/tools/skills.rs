@@ -330,14 +330,12 @@ impl ToolHandler for SkillManageHandler {
                 // already-summarized conversation and writes a
                 // skill *without* a second LLM round-trip,
                 // guaranteeing the learning-loop closure rate.
-                //
                 // Args:
-                //   name:       short slug, e.g. "commit-msg-style"
-                //   category:   "auto-extracted" (default)
-                //   summary:    one-paragraph "what was learned"
-                //   steps:      ordered list of "do X then Y then Z"
-                //   rationale:  why this is worth saving (optional)
-                //
+                // name:       short slug, e.g. "commit-msg-style"
+                // category:   "auto-extracted" (default)
+                // summary:    one-paragraph "what was learned"
+                // steps:      ordered list of "do X then Y then Z"
+                // rationale:  why this is worth saving (optional)
                 // Note: `name` validation mirrors `auto_create`'s
                 // quality gate above. If validation fails here,
                 // we surface the same error to the caller so the
@@ -434,15 +432,13 @@ impl ToolHandler for SkillManageHandler {
                 // P2-8 (2026-06-27): ingest a community SKILL.md from
                 // a URL, parse the agentskills.io open-standard
                 // frontmatter, write it to ~/.hermix/skills/<slug>/SKILL.md.
-                //
                 // Why HTTP fetch and not just `download_skill` from
                 // hermix-skills::hub? Because:
-                //   1. The URL might be a raw GitHub gist/blob, not a
-                //      hub API endpoint.
-                //   2. It also lets the LLM pull a single skill from
-                //      `agentskills.io/<slug>/SKILL.md` without
-                //      knowing the hub protocol.
-                //
+                // 1. The URL might be a raw GitHub gist/blob, not a
+                // hub API endpoint.
+                // 2. It also lets the LLM pull a single skill from
+                // `agentskills.io/<slug>/SKILL.md` without
+                // knowing the hub protocol.
                 // We deliberately do NOT shell out to `curl` or
                 // `Invoke-WebRequest` — `reqwest` is already a
                 // workspace dep and handles proxies / TLS / retries
@@ -560,7 +556,7 @@ impl ToolHandler for SkillManageHandler {
                 }
                 Ok(format!("Installed {} built-in skills", created))
             }
-            // ── 2026-07-05: offline .hermes-skill file format ──
+            // ── offline .hermes-skill file format ──
             "export_to_file" => {
                 let name = params.get("name")
                     .and_then(|v| v.as_str())
@@ -696,7 +692,7 @@ impl ToolHandler for SkillManageHandler {
                 "description": "Optional 'why this works' paragraph for auto_extract_from_conversation"
             }),
         );
-        // 2026-07-05: .hermes-skill offline file share format.
+        // .hermes-skill offline file share format.
         props.insert(
             "file_path".into(),
             json!({

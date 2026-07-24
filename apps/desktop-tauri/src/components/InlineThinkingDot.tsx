@@ -4,7 +4,7 @@ import "../styles/inline-thinking-dot.css";
 /**
  * InlineThinkingDot — "模型思考中" 指示器
  *
- * 2026-07-07 redesign: 从呼吸光点改为三脉冲点。
+ * redesign: 从呼吸光点改为三脉冲点。
  *  - 三个小圆点依次脉冲（opacity stagger），经典加载模式
  *  - 可选 hint 文字
  *  - warning 变体（慢响应/重连）

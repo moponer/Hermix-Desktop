@@ -5,7 +5,6 @@ import * as api from "../api";
 import type { AgentPersona } from "./agents/types";
 
 // ── Task engine event types (mirror RoomEvent in Rust) ────────
-//
 // These arrive over the WS stream once S5 wiring is live. Each event
 // is appended to a transient timeline so the user can see exactly
 // what the engine did.
@@ -132,7 +131,7 @@ export function TaskPanel({
       >
         {/* Header */}
         <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border-subtle">
-          <ListChecks size={16} style={{ color: "hsl(43, 96%, 48%)" }} />
+          <ListChecks size={16} style={{ color: "var(--color-warning)" }} />
           <div className="flex-1 min-w-0">
             <h2 className="text-[14px] font-bold text-text-primary truncate">
               任务面板
@@ -200,7 +199,7 @@ export function TaskPanel({
                   className="max-h-[200px] overflow-y-auto px-2 py-2 space-y-1 border-t border-border-subtle"
                 >
                   {timeline.map((e, i) => (
-                    <TimelineRow key={i} event={e} agentById={agentById} />
+                    <TimelineRow key={`${e.created_at}-${e.type}-${i}`} event={e} agentById={agentById} />
                   ))}
                 </div>
               )}
@@ -220,7 +219,7 @@ export function TaskPanel({
                 ) : (
                   <ChevronRight size={12} className="text-text-muted" />
                 )}
-                <Scale size={12} style={{ color: "hsl(43, 96%, 48%)" }} />
+                <Scale size={12} style={{ color: "var(--color-warning)" }} />
                 <span className="text-[11.5px] font-semibold text-text-secondary">
                   阎罗审计
                 </span>
@@ -231,7 +230,7 @@ export function TaskPanel({
               {showAudit && (
                 <div className="px-3 py-2 space-y-1.5 border-t border-border-subtle">
                   {audit.map((e, i) => (
-                    <AuditRow key={i} event={e} agentById={agentById} roomId={roomId} />
+                    <AuditRow key={`${e.created_at}-${e.type}-${i}`} event={e} agentById={agentById} roomId={roomId} />
                   ))}
                 </div>
               )}
@@ -446,8 +445,8 @@ function ReviewBlock({
   // red for failed, reviewer id in a muted tone. Comment below.
   const passed = review.passed;
   const accent = passed
-    ? "hsl(150, 60%, 45%)"
-    : "hsl(0, 70%, 55%)";
+? "var(--color-success)"
+: "var(--color-error)";
   const bg = passed
     ? "hsla(150, 60%, 45%, 0.10)"
     : "hsla(0, 70%, 55%, 0.10)";
@@ -496,7 +495,7 @@ function EmptyState() {
         className="w-14 h-14 rounded-full flex items-center justify-center mb-3"
         style={{ background: "hsla(43, 96%, 56%, 0.10)" }}
       >
-        <ListChecks size={24} style={{ color: "hsl(43, 96%, 48%)" }} />
+        <ListChecks size={24} style={{ color: "var(--color-warning)" }} />
       </div>
       <h3 className="text-[13px] font-semibold text-text-primary mb-1">
         当前无活跃任务
@@ -543,17 +542,17 @@ const STATUS_CONFIG: Record<
   { label: string; bg: string; text: string; icon: typeof Clock }
 > = {
   // Task statuses
-  pending: { label: "待开始", bg: "hsla(220, 0%, 50%, 0.15)", text: "hsl(220, 0%, 40%)", icon: Clock },
-  decomposing: { label: "分解中", bg: "hsla(220, 0%, 50%, 0.15)", text: "hsl(220, 0%, 40%)", icon: Loader2 },
-  executing: { label: "执行中", bg: "hsla(200, 70%, 50%, 0.15)", text: "hsl(200, 70%, 38%)", icon: Loader2 },
-  aggregating: { label: "汇总中", bg: "hsla(200, 70%, 50%, 0.15)", text: "hsl(200, 70%, 38%)", icon: Loader2 },
-  awaiting_approval: { label: "待审批", bg: "hsla(43, 96%, 56%, 0.20)", text: "hsl(43, 96%, 32%)", icon: AlertCircle },
-  approved: { label: "已批准", bg: "hsla(140, 50%, 50%, 0.15)", text: "hsl(140, 50%, 32%)", icon: CheckCircle2 },
-  completed: { label: "已完成", bg: "hsla(140, 60%, 50%, 0.15)", text: "hsl(140, 60%, 32%)", icon: CheckCircle2 },
-  failed: { label: "失败", bg: "hsla(0, 60%, 55%, 0.15)", text: "hsl(0, 60%, 40%)", icon: AlertCircle },
+  pending: { label: "待开始", bg: "var(--color-info-soft)", text: "var(--color-info)", icon: Clock },
+  decomposing: { label: "分解中", bg: "var(--color-info-soft)", text: "var(--color-info)", icon: Loader2 },
+  executing: { label: "执行中", bg: "var(--color-info-soft)", text: "var(--color-info)", icon: Loader2 },
+  aggregating: { label: "汇总中", bg: "var(--color-info-soft)", text: "var(--color-info)", icon: Loader2 },
+  awaiting_approval: { label: "待审批", bg: "var(--color-warning-soft)", text: "var(--color-warning)", icon: AlertCircle },
+  approved: { label: "已批准", bg: "var(--color-success-soft)", text: "var(--color-success)", icon: CheckCircle2 },
+  completed: { label: "已完成", bg: "var(--color-success-soft)", text: "var(--color-success)", icon: CheckCircle2 },
+  failed: { label: "失败", bg: "var(--color-error-soft)", text: "var(--color-error)", icon: AlertCircle },
   // Subtask statuses (subset above)
-  running: { label: "运行中", bg: "hsla(200, 70%, 50%, 0.15)", text: "hsl(200, 70%, 38%)", icon: Loader2 },
-  done: { label: "完成", bg: "hsla(140, 60%, 50%, 0.15)", text: "hsl(140, 60%, 32%)", icon: CheckCircle2 },
+  running: { label: "运行中", bg: "var(--color-info-soft)", text: "var(--color-info)", icon: Loader2 },
+  done: { label: "完成", bg: "var(--color-success-soft)", text: "var(--color-success)", icon: CheckCircle2 },
 };
 
 function OverrideButton({
@@ -589,7 +588,7 @@ function OverrideButton({
       )}
       style={
         active
-          ? { background: success ? "hsl(140, 60%, 45%)" : danger ? "hsl(0, 60%, 50%)" : "hsl(200, 70%, 45%)" }
+          ? { background: success ? "var(--color-success)" : danger ? "var(--color-error)" : "var(--color-info)" }
           : undefined
       }
     >
@@ -656,7 +655,7 @@ function TimelineRow({
     case "room_completed":
       return (
         <div className="flex items-center gap-2 px-1.5 py-1 text-[11px] text-text-secondary font-semibold">
-          <CheckCircle2 size={11} style={{ color: "hsl(140, 60%, 50%)" }} />
+          <CheckCircle2 size={11} style={{ color: "var(--color-success)" }} />
           房间任务全部完成
         </div>
       );
@@ -677,7 +676,7 @@ function AuditRow({
   if (event.kind === "agent_expelled") {
     return (
       <div className="flex items-start gap-2 px-1.5 py-1.5 rounded-sm bg-bg-tertiary/60 border-l-2 border-border-strong">
-        <Skull size={12} style={{ color: "hsl(0, 70%, 60%)" }} className="mt-0.5 flex-shrink-0" />
+        <Skull size={12} style={{ color: "var(--color-error)" }} className="mt-0.5 flex-shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="text-[11px] font-bold text-text-primary">
             {event.agent_id} 被开除
@@ -694,10 +693,10 @@ function AuditRow({
   const isSevere = event.level.toLowerCase() === "severe";
   const accent =
     isRedLine || isCritical
-      ? "hsl(0, 70%, 60%)"
+      ? "var(--color-error)"
       : isSevere
-      ? "hsl(28, 90%, 55%)"
-      : "hsl(43, 96%, 48%)";
+      ? "var(--color-warning)"
+      : "var(--color-warning)";
   const sign = event.score_delta > 0 ? "+" : "";
   return (
     <div
@@ -745,11 +744,9 @@ function AuditRow({
 }
 
 // ── Announcement Section (P2 — moved from GroupChatView) ────
-//
 // Inlined here (rather than imported) because the section is tiny
 // and it lets us share the agentHsl/relative-time helpers without
 // a separate module boundary.
-//
 // States:
 // - **Idle** (text set): collapsed single-line with expand button.
 // - **Expanded** (text set): full multi-line content.
@@ -859,7 +856,7 @@ function AnnouncementSection({
         }}
       >
         <div className="flex items-center gap-2 text-[11px] font-semibold text-text-secondary">
-          <Megaphone size={13} style={{ color: "hsl(43, 96%, 40%)" }} />
+          <Megaphone size={13} style={{ color: "var(--color-warning)" }} />
           <span>编辑群公告</span>
         </div>
         <textarea
@@ -888,7 +885,7 @@ function AnnouncementSection({
               "text-white transition-opacity",
               busy ? "opacity-50" : "hover:opacity-90",
             )}
-            style={{ background: "hsl(43, 96%, 48%)" }}
+            style={{ background: "var(--color-warning)" }}
           >
             <Check size={11} />
             发布
@@ -931,7 +928,7 @@ function AnnouncementSection({
       <Megaphone
         size={12}
         className="shrink-0 mt-0.5"
-        style={{ color: "hsl(43, 96%, 40%)" }}
+        style={{ color: "var(--color-warning)" }}
       />
       <div className="flex-1 min-w-0">
         <p

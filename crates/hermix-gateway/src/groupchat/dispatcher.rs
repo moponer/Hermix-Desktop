@@ -31,8 +31,7 @@ pub trait AgentDispatcher: Send + Sync {
     /// arrives, so the runtime can publish a `RoomEvent::AgentThinkingChunk`
     /// per chunk and render a typing/streaming indicator on the frontend.
     /// The final `Result<String, String>` is the assembled reply text.
-    ///
-    /// `role` is a free-form tag (`"leader"` / `"member"`) the frontend
+    /// /// `role` is a free-form tag (`"leader"` / `"member"`) the frontend
     /// can use to pick an avatar tint or badge; the dispatcher itself
     /// does not interpret it.
     async fn dispatch_subtask_stream(

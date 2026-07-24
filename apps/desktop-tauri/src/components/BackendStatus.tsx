@@ -3,6 +3,7 @@ import { Cpu, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import * as api from "../api";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { toastError } from "../hooks/useToast";
 
 export function BackendStatus() {
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -24,19 +25,28 @@ export function BackendStatus() {
 
   useEffect(() => {
     check();
-    const interval = setInterval(check, 30000);
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") check();
+    }, 30000);
     return () => clearInterval(interval);
   }, [check]);
 
   // Listen for backend lifecycle events from the Tauri sidecar watchdog.
   useEffect(() => {
-    const unlistenRestarting = listen<number>("hermix:server-restarting", () => {
+    let unlistenRestarting: (() => void) | undefined;
+    let unlistenGaveUp: (() => void) | undefined;
+    let cancelled = false;
+
+    listen<number>("hermix:server-restarting", () => {
+      if (cancelled) return;
       setConnected(false);
       setRestarting(true);
       // After restart, poll health to detect recovery.
       const poll = async () => {
         for (let i = 0; i < 10; i++) {
+          if (cancelled) return;
           await new Promise((r) => setTimeout(r, 1000));
+          if (cancelled) return;
           try {
             const ok = await api.checkBackendHealth();
             if (ok) {
@@ -49,16 +59,24 @@ export function BackendStatus() {
         setRestarting(false);
       };
       poll();
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlistenRestarting = fn;
     });
 
-    const unlistenGaveUp = listen("hermix:server-gave-up", () => {
+    listen("hermix:server-gave-up", () => {
+      if (cancelled) return;
       setGaveUp(true);
       setRestarting(false);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlistenGaveUp = fn;
     });
 
     return () => {
-      unlistenRestarting.then((fn) => fn());
-      unlistenGaveUp.then((fn) => fn());
+      cancelled = true;
+      unlistenRestarting?.();
+      unlistenGaveUp?.();
     };
   }, []);
 
@@ -72,6 +90,7 @@ export function BackendStatus() {
       await check();
     } catch (e) {
       console.error("[Hermix] sidecar restart failed:", e);
+toastError("后端服务重启失败，请尝试手动重启");
     } finally {
       setRestarting(false);
     }

@@ -242,7 +242,7 @@ function SheetTable({ header, data }: SheetTableProps) {
           <tr>
             {/* Row number column — Excel-style 1-based row numbers */}
             <th
-              className="sticky top-0 z-20 text-center font-semibold"
+              className="sticky top-0 z-20 text-center font-semibold cell-border-subtle"
               style={{
                 width: 38,
                 minWidth: 38,
@@ -250,8 +250,6 @@ function SheetTable({ header, data }: SheetTableProps) {
                 height: ROW_HEIGHT,
                 background: "var(--color-bg-tertiary)",
                 color: "var(--color-text-muted)",
-                borderBottom: "1px solid var(--color-border-subtle)",
-                borderRight: "1px solid var(--color-border-subtle)",
                 position: "sticky",
                 left: 0,
                 top: 0,
@@ -275,8 +273,6 @@ function SheetTable({ header, data }: SheetTableProps) {
                     textAlign: "left",
                     position: "sticky",
                     top: 0,
-                    borderBottom: "1px solid var(--color-border-subtle)",
-                    borderRight: "1px solid var(--color-bg-code-border)",
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -340,7 +336,7 @@ function DataRow({ rowIdx, row, colCount }: { rowIdx: number; row: string[]; col
       style={{ height: ROW_HEIGHT }}
     >
       <td
-        className="sticky text-center text-text-faint font-mono text-[10.5px]"
+        className="sticky text-center text-text-faint font-mono text-[10.5px] cell-border-right-subtle"
         style={{
           left: 0,
           position: "sticky",
@@ -348,7 +344,6 @@ function DataRow({ rowIdx, row, colCount }: { rowIdx: number; row: string[]; col
           minWidth: 38,
           padding: "0 6px",
           background: "var(--color-bg-primary)",
-          borderRight: "1px solid var(--color-border-subtle)",
         }}
       >
         {rowIdx + 2}
@@ -359,13 +354,11 @@ function DataRow({ rowIdx, row, colCount }: { rowIdx: number; row: string[]; col
         return (
           <td
             key={ci}
-            className="text-text-primary"
+            className="text-text-primary cell-border-right-code cell-border-bottom-code"
             style={{
               minWidth: 100,
               maxWidth: 320,
               padding: "0 10px",
-              borderRight: "1px solid var(--color-bg-code-border)",
-              borderBottom: "1px solid var(--color-bg-code-border)",
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",

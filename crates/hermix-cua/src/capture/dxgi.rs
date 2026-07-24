@@ -83,9 +83,9 @@ pub fn dxgi_capture(config: CaptureConfig) -> CuaResult<ScreenshotResult> {
 
 unsafe fn dxgi_capture_inner(config: CaptureConfig) -> CuaResult<ScreenshotResult> {
     // 1. Create the D3D11 device + immediate context. We request
-    //    BGRA support implicitly via the BGRA output format
-    //    (`DXGI_FORMAT_B8G8R8A8_UNORM`) — `D3D11CreateDevice`
-    //    fails if the GPU/driver combo cannot produce that.
+    // BGRA support implicitly via the BGRA output format
+    // (`DXGI_FORMAT_B8G8R8A8_UNORM`) — `D3D11CreateDevice`
+    // fails if the GPU/driver combo cannot produce that.
     let mut device: Option<ID3D11Device> = None;
     let mut context: Option<ID3D11DeviceContext> = None;
     let feature_levels = [
@@ -136,16 +136,16 @@ unsafe fn dxgi_capture_inner(config: CaptureConfig) -> CuaResult<ScreenshotResul
         .map_err(|e| CuaError::Dxgi(format!("IDXGIOutput.cast::<IDXGIOutput1>: {e}")))?;
 
     // 3. Create the duplication. This call can fail with
-    //    DXGI_ERROR_NOT_CURRENTLY_AVAILABLE when the session
-    //    is in a transition (lock screen, UAC, RDP attach) —
-    //    fall back to BitBlt in that case.
+    // DXGI_ERROR_NOT_CURRENTLY_AVAILABLE when the session
+    // is in a transition (lock screen, UAC, RDP attach) —
+    // fall back to BitBlt in that case.
     let duplication: IDXGIOutputDuplication = output1
         .DuplicateOutput(&device)
         .map_err(|e| CuaError::Dxgi(format!("IDXGIOutput1::DuplicateOutput: {e}")))?;
 
     // 4. Acquire the next frame. 100ms is short enough to keep
-    //    the agent loop snappy and long enough that the very
-    //    first call (no cached frame) gets a real surface.
+    // the agent loop snappy and long enough that the very
+    // first call (no cached frame) gets a real surface.
     let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
     let mut desktop_resource: Option<IDXGIResource> = None;
     duplication
@@ -170,9 +170,9 @@ unsafe fn dxgi_capture_inner(config: CaptureConfig) -> CuaResult<ScreenshotResul
     let _releaser = FrameReleaser(duplication);
 
     // 5. Downcast the desktop resource to a texture and read its
-    //    dimensions / format. DXGI Output Duplication always
-    //    hands back a `ID3D11Texture2D` in
-    //    `DXGI_FORMAT_B8G8R8A8_UNORM`.
+    // dimensions / format. DXGI Output Duplication always
+    // hands back a `ID3D11Texture2D` in
+    // `DXGI_FORMAT_B8G8R8A8_UNORM`.
     let texture: ID3D11Texture2D = desktop_resource
         .cast()
         .map_err(|e| CuaError::Dxgi(format!("desktop_resource.cast::<ID3D11Texture2D>: {e}")))?;
@@ -188,10 +188,10 @@ unsafe fn dxgi_capture_inner(config: CaptureConfig) -> CuaResult<ScreenshotResul
     }
 
     // 6. Build a CPU-readable staging texture that mirrors the
-    //    desktop texture's geometry. Staging textures must have
-    //    `D3D11_USAGE_STAGING` and `D3D11_CPU_ACCESS_READ`; they
-    //    cannot be bound to the pipeline, but they CAN be the
-    //    target of `CopyResource` and `Map`.
+    // desktop texture's geometry. Staging textures must have
+    // `D3D11_USAGE_STAGING` and `D3D11_CPU_ACCESS_READ`; they
+    // cannot be bound to the pipeline, but they CAN be the
+    // target of `CopyResource` and `Map`.
     let staging_desc = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
@@ -216,14 +216,14 @@ unsafe fn dxgi_capture_inner(config: CaptureConfig) -> CuaResult<ScreenshotResul
     let staging = staging.ok_or_else(|| CuaError::Dxgi("staging texture is null".into()))?;
 
     // 7. CopyResource moves the desktop pixels into the staging
-    //    texture. This is a GPU-side DMA — no CPU involvement
-    //    yet, which is why DXGI is so much faster than BitBlt.
+    // texture. This is a GPU-side DMA — no CPU involvement
+    // yet, which is why DXGI is so much faster than BitBlt.
     context.CopyResource(&staging, &texture);
 
     // 8. Map the staging texture. After this returns the GPU
-    //    has finished writing (or it failed, in which case the
-    //    Map's Err return tells us why). The mapped pointer is
-    //    valid until Unmap.
+    // has finished writing (or it failed, in which case the
+    // Map's Err return tells us why). The mapped pointer is
+    // valid until Unmap.
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
     context
         .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
@@ -251,7 +251,7 @@ unsafe fn dxgi_capture_inner(config: CaptureConfig) -> CuaResult<ScreenshotResul
         while i + 4 <= row.len() {
             rgba.push(row[i + 2]); // R = src.B
             rgba.push(row[i + 1]); // G = src.G
-            rgba.push(row[i]); //     B = src.R
+            rgba.push(row[i]); // B = src.R
             rgba.push(row[i + 3]); // A = src.A
             i += 4;
         }
@@ -263,9 +263,9 @@ unsafe fn dxgi_capture_inner(config: CaptureConfig) -> CuaResult<ScreenshotResul
     context.Unmap(&staging, 0);
 
     // 9. Encode RGBA8 → PNG. The encoder is the same one
-    //    `bitblt_capture` uses, so the wire format is identical
-    //    to Phase 1 and downstream consumers don't notice the
-    //    backend swap.
+    // `bitblt_capture` uses, so the wire format is identical
+    // to Phase 1 and downstream consumers don't notice the
+    // backend swap.
     let mut png_buf: Vec<u8> = Vec::with_capacity(width_us * height_us);
     {
         use image::{codecs::png::PngEncoder, ImageEncoder};

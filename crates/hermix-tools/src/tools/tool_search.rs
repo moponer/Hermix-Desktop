@@ -9,8 +9,7 @@ use crate::tool_meta::{ToolMetaRegistry, DEFAULT_RESIDENT_TOOLS};
 
 /// Tools that are ALWAYS visible to the LLM (never deferred).
 /// Anything not in this list becomes a candidate for tool_search bridge.
-///
-/// P6-1: This constant is kept for backwards compatibility with
+/// /// P6-1: This constant is kept for backwards compatibility with
 /// `classify_tools`. The canonical source is now
 /// [`crate::tool_meta::DEFAULT_RESIDENT_TOOLS`] (same contents).
 const CORE_TOOLS: &[&str] = DEFAULT_RESIDENT_TOOLS;
@@ -33,8 +32,7 @@ pub fn is_bridge(name: &str) -> bool {
 
 /// Classify tools into (visible, deferred) using the hard-coded
 /// `CORE_TOOLS` list. Maintained for backwards compatibility.
-///
-/// Prefer [`classify_tools_with_meta`] when a [`ToolMetaRegistry`] is
+/// /// Prefer [`classify_tools_with_meta`] when a [`ToolMetaRegistry`] is
 /// available — it uses per-tool metadata instead of a hard-coded list.
 pub fn classify_tools(schemas: &[ToolSchema]) -> (Vec<&ToolSchema>, Vec<&ToolSchema>) {
     let mut visible = Vec::new();
@@ -50,13 +48,11 @@ pub fn classify_tools(schemas: &[ToolSchema]) -> (Vec<&ToolSchema>, Vec<&ToolSch
 }
 
 /// Classify tools into (visible, deferred) using a [`ToolMetaRegistry`].
-///
-/// P6-1: This is the metadata-driven replacement for [`classify_tools`].
+/// /// P6-1: This is the metadata-driven replacement for [`classify_tools`].
 /// Tools registered as `LoadingStrategy::Deferred` in the metadata
 /// registry are placed in the deferred bucket; all others (including
 /// unregistered tools and bridge tools) are visible.
-///
-/// When the metadata registry is empty or a tool is not registered,
+/// /// When the metadata registry is empty or a tool is not registered,
 /// the function falls back to the `CORE_TOOLS` list so behaviour is
 /// preserved for callers that haven't migrated yet.
 pub fn classify_tools_with_meta<'a>(

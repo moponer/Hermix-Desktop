@@ -34,8 +34,7 @@ fn io_to_config_error(e: std::io::Error) -> ConfigError {
 // ---------------------------------------------------------------------------
 
 /// Load variables from `$HERMIX_HOME/.env` into the process environment.
-///
-/// Only sets a variable if it is not already present in the environment,
+/// /// Only sets a variable if it is not already present in the environment,
 /// so real env vars always win. Supports `#` comments, blank lines, and
 /// optional single/double quoting of values.
 pub fn load_dotenv() {
@@ -80,21 +79,17 @@ fn strip_quotes(s: &str) -> &str {
 // ---------------------------------------------------------------------------
 
 /// Load the full configuration, applying the priority chain:
-///
-///   env vars  >  .env  >  cli-config.yaml > config.yaml > gateway.json > defaults
-///
-/// If `home_dir` is provided it overrides the `HERMIX_HOME` env var.
+/// /// env vars  >  .env  >  cli-config.yaml > config.yaml > gateway.json > defaults
+/// /// If `home_dir` is provided it overrides the `HERMIX_HOME` env var.
 pub fn load_config(home_dir: Option<&str>) -> Result<GatewayConfig, ConfigError> {
     // Load .env before anything else so env overrides see those values.
     load_dotenv();
 
     // Determine effective hermes home
-    //
     // Resolution order (highest → lowest):
-    //   1. `home_dir` parameter (explicit caller override)
-    //   2. `HERMIX_HOME` env var (user-set)
-    //   3. `paths::hermix_home()` which honours `HERMIX_PORTABLE_DATA_DIR` → `HERMIX_HOME` → `~/.hermix`
-    //
+    // 1. `home_dir` parameter (explicit caller override)
+    // 2. `HERMIX_HOME` env var (user-set)
+    // 3. `paths::hermix_home()` which honours `HERMIX_PORTABLE_DATA_DIR` → `HERMIX_HOME` → `~/.hermix`
     // NOTE: we deliberately do NOT fall back to `HERMES_HOME` in `load_config`.
     // `paths::hermix_home()` already does portable > HERMIX_HOME > ~/.hermix
     // with zero HERMES_HOME dependency.
@@ -194,8 +189,7 @@ fn mask_secret(s: &str) -> String {
 }
 
 /// Apply a single scalar field used by `hermes config set` (does not touch other keys).
-///
-/// Supports dotted keys aligned with `GatewayConfig`:
+/// /// Supports dotted keys aligned with `GatewayConfig`:
 /// - `budget.max_result_size_chars`, `budget.max_aggregate_chars`
 /// - `proxy.http` / `proxy.http_proxy`, `proxy.socks` / `proxy.socks_proxy`
 /// - `llm.<provider>.api_key`, `llm.<provider>.base_url`, `llm.<provider>.model`
@@ -516,30 +510,28 @@ pub fn load_from_json(path: &Path) -> Result<GatewayConfig, ConfigError> {
 // ---------------------------------------------------------------------------
 
 /// Override configuration fields from environment variables.
-///
-/// Environment variable mapping:
-///   HERMES_MODEL           -> config.model
-///   HERMES_PERSONALITY     -> config.personality
-///   HERMIX_HOME            -> config.home_dir
-///   HERMES_MAX_TURNS       -> config.max_turns
-///   HERMES_SYSTEM_PROMPT   -> config.system_prompt
-///   HERMES_PROXY_HTTP      -> config.proxy.http_proxy
-///   HERMES_PROXY_SOCKS     -> config.proxy.socks_proxy
-///   HERMES_LLM_API_KEY     -> all llm_providers[*].api_key
-///   HERMES_BUDGET_MAX_RESULT_CHARS -> config.budget.max_result_size_chars
-///   HERMES_BUDGET_MAX_AGGREGATE_CHARS -> config.budget.max_aggregate_chars
-///   OPENAI_API_KEY             -> llm_providers["openai"].api_key
-///   ANTHROPIC_API_KEY          -> llm_providers["anthropic"].api_key
-///   OPENROUTER_API_KEY         -> llm_providers["openrouter"].api_key
-///   OPENROUTER_BASE_URL        -> llm_providers["openrouter"].base_url
-///   DASHSCOPE_API_KEY          -> llm_providers["qwen"].api_key
-///   MOONSHOT_API_KEY           -> llm_providers["kimi"].api_key
-///   MINIMAX_API_KEY            -> llm_providers["minimax"].api_key
-///   NOUS_API_KEY               -> llm_providers["nous"].api_key
-///   GITHUB_COPILOT_TOKEN       -> llm_providers["copilot"].api_key
-///   HERMES_BASE_URL            -> all llm_providers[*].base_url
-///
-/// 另见 [`crate::python_platform_env::apply_python_named_platform_env`]：
+/// /// Environment variable mapping:
+/// HERMES_MODEL           -> config.model
+/// HERMES_PERSONALITY     -> config.personality
+/// HERMIX_HOME            -> config.home_dir
+/// HERMES_MAX_TURNS       -> config.max_turns
+/// HERMES_SYSTEM_PROMPT   -> config.system_prompt
+/// HERMES_PROXY_HTTP      -> config.proxy.http_proxy
+/// HERMES_PROXY_SOCKS     -> config.proxy.socks_proxy
+/// HERMES_LLM_API_KEY     -> all llm_providers[*].api_key
+/// HERMES_BUDGET_MAX_RESULT_CHARS -> config.budget.max_result_size_chars
+/// HERMES_BUDGET_MAX_AGGREGATE_CHARS -> config.budget.max_aggregate_chars
+/// OPENAI_API_KEY             -> llm_providers["openai"].api_key
+/// ANTHROPIC_API_KEY          -> llm_providers["anthropic"].api_key
+/// OPENROUTER_API_KEY         -> llm_providers["openrouter"].api_key
+/// OPENROUTER_BASE_URL        -> llm_providers["openrouter"].base_url
+/// DASHSCOPE_API_KEY          -> llm_providers["qwen"].api_key
+/// MOONSHOT_API_KEY           -> llm_providers["kimi"].api_key
+/// MINIMAX_API_KEY            -> llm_providers["minimax"].api_key
+/// NOUS_API_KEY               -> llm_providers["nous"].api_key
+/// GITHUB_COPILOT_TOKEN       -> llm_providers["copilot"].api_key
+/// HERMES_BASE_URL            -> all llm_providers[*].base_url
+/// /// 另见 [`crate::python_platform_env::apply_python_named_platform_env`]：
 /// `WEIXIN_*`、`DINGTALK_*` 等与 Python `gateway/platforms/*.py` 一致的键写入 `platforms`。
 pub fn apply_env_overrides(config: &mut GatewayConfig) {
     if let Some(v) = env_compat("HERMIX_MODEL", "HERMES_MODEL") {
@@ -593,15 +585,13 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
     }
 
     // ---- Compaction / context-pressure (Day 3+) ----
-    //
     // Backward-compatible: every override is optional and only writes the
     // field when the env var is present. `None` in CompactionConfig lets
     // the runtime fall back to `CompressorConfig::default()`.
-    //
     // Source priority (highest → lowest):
-    //   1. env vars below
-    //   2. config.yaml [compaction] section
-    //   3. CompressorConfig::default() at runtime
+    // 1. env vars below
+    // 2. config.yaml [compaction] section
+    // 3. CompressorConfig::default() at runtime
 
     if let Some(v) = env_compat("HERMIX_COMPACT_PRESSURE_THRESHOLD", "HERMES_COMPACT_PRESSURE_THRESHOLD") {
         if let Ok(n) = v.parse::<f64>() {
@@ -784,9 +774,9 @@ pub struct AutoCorrectReport {
     /// Why the correction was needed. One of:
     /// - `"unset"`: `config.model` was `None` and we picked a configured provider.
     /// - `"no_key"`: `config.model` pointed to a provider with no API key, so we
-    ///    routed to a configured provider instead.
+    /// routed to a configured provider instead.
     /// - `"unknown_provider"`: `config.model` referenced a provider that has no
-    ///    branch in `build_provider` and would have errored.
+    /// branch in `build_provider` and would have errored.
     pub reason: String,
     /// The full list of providers that *do* have a key. Useful for the desktop
     /// UI to render "we auto-routed to minimax because you have keys for
@@ -798,13 +788,11 @@ pub struct AutoCorrectReport {
 /// key, or references an unknown provider. The function is idempotent: if
 /// `config.model` already points to a configured provider it returns `None`
 /// and makes no change.
-///
-/// Used at server startup and after the desktop Settings UI saves a new key
+/// /// Used at server startup and after the desktop Settings UI saves a new key
 /// (the latter via the `/api/config/auto-correct` REST endpoint), so the
 /// common "I configured a key but the chat still asks for openai" failure
 /// mode can't bite twice.
-///
-/// The return value is `Some(report)` only when a change was actually made.
+/// /// The return value is `Some(report)` only when a change was actually made.
 pub fn auto_correct_model(config: &mut GatewayConfig) -> Option<AutoCorrectReport> {
     // Build a stable, deduplicated list of providers that DO have a key
     // (config or env). This is the universe we are allowed to pick from.
@@ -914,9 +902,9 @@ pub fn auto_correct_model(config: &mut GatewayConfig) -> Option<AutoCorrectRepor
         }
         Some(model) => {
             // 2. config.model set but its provider has no key → switch to a
-            //    configured one. The original error the user would have seen
-            //    is "missing API key for X", which is exactly the symptom we
-            //    are trying to prevent.
+            // configured one. The original error the user would have seen
+            // is "missing API key for X", which is exactly the symptom we
+            // are trying to prevent.
             let provider = model.split_once(':').map(|(p, _)| p).unwrap_or(model);
             if provider_has_key(config, provider) {
                 return None; // already good
@@ -952,8 +940,7 @@ pub fn auto_correct_model(config: &mut GatewayConfig) -> Option<AutoCorrectRepor
 // ---------------------------------------------------------------------------
 
 /// Validate a fully-loaded configuration.
-///
-/// Checks:
+/// /// Checks:
 /// - max_turns > 0
 /// - SessionResetPolicy::Daily at_hour in 0..=23
 /// - All LLM providers with an api_key set have a non-empty value

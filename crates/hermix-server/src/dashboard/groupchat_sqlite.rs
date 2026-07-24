@@ -50,8 +50,7 @@ use rusqlite::params;
 use hermix_gateway::groupchat::persistence::*;
 
 /// SQLite implementation of [`RoomPersistence`].
-///
-/// Construct via [`SqliteRoomPersistence::new(hermix_home)`] — this resolves
+/// /// Construct via [`SqliteRoomPersistence::new(hermix_home)`] — this resolves
 /// the database path under `<hermix_home>/data/groupchat.db` and runs
 /// `ensure_db()` to create tables/indexes if missing.
 pub struct SqliteRoomPersistence {

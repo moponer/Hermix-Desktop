@@ -69,8 +69,7 @@ pub struct PythonSearchEntry {
 
 /// Resolve a usable Python interpreter at `python_override` if provided,
 /// else probe the sibling slot + PATH.
-///
-/// Returns `Some(PathBuf)` if any candidate exists, else `None`. The
+/// /// Returns `Some(PathBuf)` if any candidate exists, else `None`. The
 /// same path is reported by [`python_search_paths`] — use that for a
 /// diagnostic listing.
 pub fn find_python_bin(python_override: Option<&Path>) -> Option<PathBuf> {
@@ -81,8 +80,7 @@ pub fn find_python_bin(python_override: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// Return every Python interpreter candidate tried, in priority order.
-///
-/// Does **not** fall back to `None` on errors — every tier is reported
+/// /// Does **not** fall back to `None` on errors — every tier is reported
 /// even if missing, so the Settings UI can show "tried these paths".
 /// The first entry whose `exists == true` is the one that would be used.
 pub fn python_search_paths(python_override: Option<&Path>) -> Vec<PythonSearchEntry> {
@@ -117,8 +115,8 @@ pub fn python_search_paths(python_override: Option<&Path>) -> Vec<PythonSearchEn
     }
 
     // 3. Sibling of the running hermix binary. Reserved slot for the
-    //    bundled-Python feature (gated on `bundle.resources`). If the
-    //    file isn't there we silently skip — no error.
+    // bundled-Python feature (gated on `bundle.resources`). If the
+    // file isn't there we silently skip — no error.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             #[cfg(windows)]
@@ -189,13 +187,12 @@ fn leak_str(s: &str) -> &'static str {
 
 /// Format the "no Python interpreter found" error message listing the
 /// real search paths we tried.
-///
-/// The output is intended for two audiences:
+/// /// The output is intended for two audiences:
 /// - The LLM (sees it via tool error): emits a tighter message
-///   telling it to switch to the `bash` tool with `python3 -c ...`
-///   or to ask the user to configure the override.
+/// telling it to switch to the `bash` tool with `python3 -c ...`
+/// or to ask the user to configure the override.
 /// - The Settings UI (renders the same listing): shows the user
-///   exactly which paths were probed so they can fix the missing one.
+/// exactly which paths were probed so they can fix the missing one.
 pub fn format_missing_python_error(entries: &[PythonSearchEntry]) -> String {
     if entries.is_empty() {
         return "No Python interpreter configured. Set one in Settings (Backend tab) or install python3 and add it to PATH.".into();
@@ -222,8 +219,7 @@ pub fn format_missing_python_error(entries: &[PythonSearchEntry]) -> String {
 impl CodeExecutionBackend for LocalCodeExecutionBackend {
     /// Which languages can we run *right now* (i.e. on this machine, with
     /// the current PATH)?
-    ///
-    /// Used by [`crate::tools::code_execution::ExecuteCodeHandler::schema`]
+    /// /// Used by [`crate::tools::code_execution::ExecuteCodeHandler::schema`]
     /// to expose `language: enum: [actual, runtime, list]` to the LLM,
     /// so it doesn't keep calling `language="typescript"` on a host
     /// without `npx` and getting an error every turn.

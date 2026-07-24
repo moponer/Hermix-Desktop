@@ -343,15 +343,14 @@ pub async fn fetch_models(
                 let text = resp.text().await.unwrap_or_default();
                 match serde_json::from_str::<ModelsApiResponse>(&text) {
                     Ok(data) => {
-                        // 2026-06-25 主人反馈：自定义 provider "成功获取 5 个模型" 后
+                        // 用户反馈：自定义 provider "成功获取 5 个模型" 后
                         // 列表仍为空。根因：fetch_models 拿到列表只返回给前端，从不写
                         // 回 config.yaml 的 `model` 字段 → 下次 GET /api/custom-providers
                         // list_custom_providers 读 cfg.model 还是空 → 前端 customModels
                         // 永远是空 map → "自定义模型 (N)" 区块不渲染。
                         // 修法：拿到 models 后，把 id 对应 provider 的 model 字段写为
                         // 逗号分隔字符串，save_config_yaml 持久化。
-                        //
-                        // 2026-06-28 增量：同步把每个 model 的 context_window 写回
+                        // 增量：同步把每个 model 的 context_window 写回
                         // `LlmProviderConfig.model_contexts`，让
                         // `ContextManager::for_model_with_providers` 能解析出真实
                         // 阈值（避免误用 128k fallback 频繁触发压缩）。

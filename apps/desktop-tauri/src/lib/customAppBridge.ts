@@ -1,5 +1,4 @@
 // Custom App Bridge — Tauri IPC bridge for custom app operations
-//
 // This provides a fallback path that goes directly through Tauri IPC
 // instead of the HTTP API, useful when the HTTP server is not running
 // or for operations that need direct filesystem access.

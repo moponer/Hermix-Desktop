@@ -31,6 +31,19 @@ use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, t
 
 use crate::ToolRegistry;
 
+/// Get the USERPROFILE path, logging a warning if the env var is missing.
+/// Returns empty string as fallback (matching previous behavior) but makes
+/// the failure observable.
+fn user_profile() -> String {
+    match std::env::var("USERPROFILE") {
+        Ok(p) if !p.is_empty() => p,
+        _ => {
+            tracing::warn!("USERPROFILE env var is missing or empty; storage paths may be invalid");
+            String::new()
+        }
+    }
+}
+
 /// Recycle-bin FFI (shell32 is always present on Windows).
 #[cfg(windows)]
 #[repr(C)]
@@ -91,7 +104,7 @@ pub struct CleanReport {
 
 /// Roots we never touch, no matter what.
 fn blacklist_roots() -> Vec<PathBuf> {
-    let profile = std::env::var("USERPROFILE").unwrap_or_default();
+    let profile = user_profile();
     let local = std::env::var("LOCALAPPDATA")
         .unwrap_or_else(|_| format!("{}\\AppData\\Local", profile));
     let roots = vec![
@@ -109,7 +122,7 @@ fn blacklist_roots() -> Vec<PathBuf> {
 
 /// Roots where junk (caches, temps, installer residue) legitimately lives.
 fn safelist_roots() -> Vec<PathBuf> {
-    let profile = std::env::var("USERPROFILE").unwrap_or_default();
+    let profile = user_profile();
     let local = std::env::var("LOCALAPPDATA")
         .unwrap_or_else(|_| format!("{}\\AppData\\Local", profile));
     let temp = std::env::var("TEMP").unwrap_or_else(|_| format!("{}\\Temp", local));
@@ -201,6 +214,8 @@ fn send_to_recycle_bin(path: &Path) -> Result<(), String> {
         h_name_mappings: std::ptr::null_mut(),
         lpsz_progress_title: std::ptr::null(),
     };
+    // SAFETY: `wide` is a valid double-null-terminated wide string.
+    // All pointers in `ShFileOpStructW` are derived from `wide` or null.
     let rc = unsafe { SHFileOperationW(&mut op) };
     if rc == 0 {
         Ok(())

@@ -12,8 +12,7 @@ use hermix_core::ToolError;
 // ---------------------------------------------------------------------------
 
 /// Real file patch backend using fuzzy string matching.
-///
-/// Implements an 8-strategy matching chain (ported from Python `fuzzy_match.py`):
+/// /// Implements an 8-strategy matching chain (ported from Python `fuzzy_match.py`):
 /// 1. Exact match
 /// 2. Line-trimmed (strip leading/trailing whitespace per line)
 /// 3. Whitespace normalized (collapse multiple spaces/tabs)

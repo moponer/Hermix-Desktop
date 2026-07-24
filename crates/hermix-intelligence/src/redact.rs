@@ -171,8 +171,7 @@ impl Redactor {
     }
 
     /// Redact sensitive data from a message, returning a new message.
-    ///
-    /// Only redacts the content field; preserves role, tool_calls, etc.
+    /// /// Only redacts the content field; preserves role, tool_calls, etc.
     pub fn redact_message(&self, message: &Message) -> Message {
         Message {
             role: message.role,
@@ -183,7 +182,7 @@ impl Redactor {
             name: message.name.clone(),
             reasoning_content: message.reasoning_content.as_ref().map(|c| self.redact(c)),
             cache_control: message.cache_control.clone(),
-            // v4 (2026-06-22): preserve execution_timeline across
+            // preserve execution_timeline across
             // redaction. The timeline events can carry tool output
             // (terminal stdout etc.) which DOES need redaction —
             // but we currently redact only `content` /

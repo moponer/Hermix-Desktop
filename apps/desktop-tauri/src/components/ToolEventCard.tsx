@@ -75,7 +75,7 @@ function detectToolError(content?: string): string | null {
 /**
  * Heuristic completion check for browser tools whose results are
  * never followed by a `tool_complete` event in the timeline
- * stream. Added 2026-06-18 after the "browser_vision / browser_navigate
+ * stream. Added after the "browser_vision / browser_navigate
  * 永久显示运行中" regression (see MEMORY.md §"image-placeholder
  * residue"). The Rust backend `BrowserVisionHandler` and
  * `BrowserGetImagesHandler` emit a JSON envelope with a `status`
@@ -215,12 +215,12 @@ function groupEvents(events: ExecutionTimelineEvent[]): ToolGroup[] {
   for (const idx of active.values()) {
     const grp = groups[idx];
     if (grp && grp.status === "running") {
-      // 2026-07-22 FIX: Do not automatically mark as error when there
+      // FIX: Do not automatically mark as error when there
       // is stdout output. Some tools stream data without a formal close
       // event (e.g., OCR/image reading that stops due to LLM API error).
       // If the tool produced output, treat it as done rather than interrupted.
       const hasOutput = grp.events.some(
-        (e: any) => e.type === "tool_stdout" && e.content && e.content.trim().length > 0,
+        (e: { type?: string; content?: string }) => e.type === "tool_stdout" && e.content && e.content.trim().length > 0,
       );
       if (hasOutput) {
         grp.status = "done";
@@ -248,7 +248,7 @@ function durationOf(group: ToolGroup): string {
   return formatDuration(Math.max(0, t1 - t0));
 }
 
-/// 2026-07-05 (N-04): for a tool that's still running, return
+/// (): for a tool that's still running, return
 /// the elapsed time as a fraction of a 30-second "soft target".
 /// Clamped to [0, 1] so the progress bar doesn't overflow past
 /// 100% for genuinely long-running tools. Once the tool ends,
@@ -525,7 +525,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
   const [open, setOpen] = useState(false);
   const label = group.tool && group.tool.trim() ? group.tool : toolVerb(group.tool);
 
-  // 2026-07-05 (N-04, Hermes 对标): when a tool is still
+  // (, Hermes 对标): when a tool is still
   // running, the duration chip previously stayed frozen at
   // "0ms" until the `complete` event arrived. We now tick a
   // `now` state once per second so the user sees the elapsed
@@ -550,7 +550,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
         .join(""),
     [group.events],
   );
-  // 2026-07-21: for code_execution, show only the LAST stdout line while
+  // for code_execution, show only the LAST stdout line while
   // running — each new line overwrites the previous one, giving a
   // single-line live progress indicator. Once complete, fall back to
   // the full stdout.
@@ -562,7 +562,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
   }, [stdout, isCodeExec]);
   const primary = primaryArg(group.tool, group.args, stdout);
   const dur = durationOf(group);
-  // 2026-07-05 (N-04): live progress fraction for currently
+  // (): live progress fraction for currently
   // running tools. `None` once the tool ends, so the bar
   // disappears instead of staying at 100%.
   const progress = progressFraction(group);
@@ -586,7 +586,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
 
   // Inline result peek — first meaningful line, truncated to ~60 chars.
   // Shown as `| peek` after the tool name when the card is collapsed.
-  // 2026-07-21: for code_execution while running, use lastStdoutLine
+  // for code_execution while running, use lastStdoutLine
   // (overwriting-style progress) instead of first line.
   const peek = useMemo(() => {
     if (!hasBody) return "";
@@ -673,7 +673,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
             </span>
           ) : isError ? (
             <span className="tw-msg-badge tw-msg-err-badge">
-              {/* 2026-06-30 主人反馈: 红色字符太刺眼, 改 warning 琥珀 +
+              {/* 用户反馈: 红色字符太刺眼, 改 warning 琥珀 +
                   三角警告图标, 中性"工具执行中断"语义, 不再用 error 红。 */}
               <AlertTriangle size={10} className="shrink-0" />
               {group.statusNote?.startsWith("执行已中断") ? "已中断" : "失败"}
@@ -693,7 +693,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
             </span>
           ) : (
             <span className="tw-msg-badge tw-msg-done-badge">
-              {/* 2026-06-30 主人反馈: 蓝色字符难看, 改 success 绿 +
+              {/* 用户反馈: 蓝色字符难看, 改 success 绿 +
                   Check 对勾图标, 仍是中性"工具执行完毕"语义, 不再
                   断言 success (success/failure 由结果内容决定). */}
               <Check size={10} className="shrink-0" />
@@ -713,7 +713,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
         </span>
       </button>
 
-      {/* 2026-07-05 (N-04): thin progress strip that fills left-to-right
+      {/* (): thin progress strip that fills left-to-right
           while the tool is running. `progressFraction` returns null
           once the tool ends, so the strip disappears rather than
           lingering at 100%. Width is set via inline style because
@@ -738,7 +738,7 @@ function ToolRow({ group }: { group: ToolGroup }) {
           same rationale as the chevron above. The error is
           already shown in the statusNote/peek on the summary
           line; expanding to a red body is just noise.
-          2026-07-21: for code_execution while running, show
+          for code_execution while running, show
           only the last stdout line (single-line overwriting
           progress) instead of the full output. */}
       {hasBody && open && !isError && (

@@ -19,8 +19,7 @@ pub struct AssistantToolCallRow {
 }
 
 /// Fetches the raw rows the insights engine needs.
-///
-/// Implementations are expected to be cheap and synchronous (the underlying
+/// /// Implementations are expected to be cheap and synchronous (the underlying
 /// store is local SQLite or in-memory). Returning `Vec` rather than an
 /// iterator keeps the engine portable and matches the Python reference.
 pub trait SessionDataSource {
@@ -42,8 +41,7 @@ pub trait SessionDataSource {
 // ---------------------------------------------------------------------------
 
 /// In-memory [`SessionDataSource`] implementation.
-///
-/// Sessions and per-tool counts are stored verbatim. A separate vector of
+/// /// Sessions and per-tool counts are stored verbatim. A separate vector of
 /// assistant tool-call rows lets us replicate the Python "two-source merge"
 /// behaviour deterministically.
 #[derive(Debug, Default, Clone)]

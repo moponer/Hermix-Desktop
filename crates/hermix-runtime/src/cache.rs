@@ -62,8 +62,7 @@ where
     /// Cache metrics for monitoring.
     metrics: Arc<Mutex<CacheMetrics>>,
     /// Live entry count, tracked in the wrapper.
-    ///
-    /// moka 0.12's `future::Cache::entry_count()` returns a stale estimate
+    /// /// moka 0.12's `future::Cache::entry_count()` returns a stale estimate
     /// until `run_pending_tasks()` is awaited. Tracking here gives callers
     /// an exact, lock-free count that reflects wrapper-mediated insert /
     /// remove / invalidate operations.
@@ -147,8 +146,7 @@ where
     }
 
     /// Get the number of entries in the cache.
-    ///
-    /// This is a wrapper-tracked exact count, updated on every `insert`,
+    /// /// This is a wrapper-tracked exact count, updated on every `insert`,
     /// `remove`, and `invalidate_all` call (see `live_count`). It is
     /// preferred over the underlying moka `entry_count()`, which only
     /// returns an accurate value after `run_pending_tasks()` is awaited.
@@ -207,8 +205,7 @@ where
     V: Clone + Send + Sync + 'static,
 {
     /// Warm the cache with initial data.
-    ///
-    /// This is called during the awakening phase to pre-populate
+    /// /// This is called during the awakening phase to pre-populate
     /// the cache with frequently accessed data.
     async fn warm(&self, cache: &CacheManager<K, V>) -> WarmingResult;
 

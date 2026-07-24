@@ -108,8 +108,7 @@ pub enum RoomEvent {
     /// — the frontend flips its typing indicator on when it sees the
     /// first chunk for a previously-quiet agent_id, no separate Started
     /// event needed.
-    ///
-    /// `agent_name` and `role` are sent on the **first** chunk only
+    /// /// `agent_name` and `role` are sent on the **first** chunk only
     /// (i.e. they are empty strings on subsequent chunks) so the
     /// frontend can set up the avatar tint / display name once.
     AgentThinkingChunk {
@@ -483,8 +482,8 @@ impl TaskEngineRuntime {
                                 }
 
                                 // 1. Persist announcement (merged into
-                                //    the same LLM call — saves a round
-                                //    trip vs. the old separate call).
+                                // the same LLM call — saves a round
+                                // trip vs. the old separate call).
                                 if let Some(ref ann) = announcement {
                                     if let Err(e) = rt_self
                                         .manager
@@ -496,7 +495,7 @@ impl TaskEngineRuntime {
                                 }
 
                                 // 2. Resolve handoff directive
-                                //    (openai-agents-python Handoff pattern).
+                                // (openai-agents-python Handoff pattern).
                                 let mut handoff_subtask: Option<SubtaskSpec> = None;
                                 let mut handoff_kind: Option<HandoffKind> = None;
                                 if let Some(ref directive) = handoff {
@@ -997,8 +996,7 @@ impl TaskEngineRuntime {
     }
 
     /// Inbound review verdict from leader / human reviewer.
-    ///
-    /// P1 reward hook: passing/failing a review moves the *assigned*
+    /// /// P1 reward hook: passing/failing a review moves the *assigned*
     /// agent's rank by ±5 (设计 §一). The delta is applied after the
     /// scheduler runs so we can read the node's `assigned_agent` from
     /// the room state without re-querying the DB. The score write is
@@ -1400,8 +1398,7 @@ mod tests {
     /// `on_review_verdict`; we synthesize a node with a real
     /// assigned_agent, send a review verdict, and assert the
     /// post-hook rank readback.
-    ///
-    /// adjust_member_score upserts at `default_for()` (score 10) on
+    /// /// adjust_member_score upserts at `default_for()` (score 10) on
     /// first touch, so the post-pass score is 10+5=15, not 5.
     #[tokio::test]
     async fn review_pass_credits_assigned_agent() {

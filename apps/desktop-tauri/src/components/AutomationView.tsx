@@ -331,7 +331,7 @@ function TaskEditor({
   const update = <K extends keyof AutomationTask>(k: K, v: AutomationTask[K]) =>
     setDraft((p) => ({ ...p, [k]: v }));
 
-  // 2026-07-05: fetch skill list for cron-job assignment.
+  // fetch skill list for cron-job assignment.
   useEffect(() => {
     let cancelled = false;
     api.getSkillsList().then((skills) => {
@@ -495,7 +495,7 @@ function TaskEditor({
               </select>
             </Field>
           </div>
-          {/* 2026-07-05: skills multi-select for cron-job execution */}
+          {/* skills multi-select for cron-job execution */}
           {availableSkills.length > 0 && (
             <Field label="技能（可选）" hint="勾选的技能会在任务执行时自动加载">
               <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">

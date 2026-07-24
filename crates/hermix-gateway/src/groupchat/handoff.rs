@@ -22,8 +22,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A resolved handoff directive ready for the runtime to execute.
-///
-/// Built from [`super::agent_contract::HandoffDirective`] after validating
+/// /// Built from [`super::agent_contract::HandoffDirective`] after validating
 /// that the target agent exists in the room.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedHandoff {
@@ -41,8 +40,7 @@ pub struct ResolvedHandoff {
 pub enum HandoffKind {
     /// The target agent takes over the conversation. The leader steps back
     /// until the target hands back or the task completes.
-    ///
-    /// NOTE (M9): the control transfer is currently **per-turn** — the
+    /// /// NOTE (M9): the control transfer is currently **per-turn** — the
     /// runtime does not yet persist a durable "active controller", so the
     /// next user message still routes to `__leader__`. This is a known
     /// limitation, not a bug; a full takeover would require recording the
@@ -56,8 +54,7 @@ pub enum HandoffKind {
 
 impl ResolvedHandoff {
     /// Build a human-readable separator label for the chat UI.
-    ///
-    /// Rendered as a centered divider when the handoff happens so the user
+    /// /// Rendered as a centered divider when the handoff happens so the user
     /// can see the conversation changed hands.
     pub fn separator_label(&self, target_display_name: &str) -> String {
         match self.kind {
@@ -72,8 +69,7 @@ impl ResolvedHandoff {
 }
 
 /// Validate that a handoff target exists in the room's agent roster.
-///
-/// Returns `Some(ResolvedHandoff)` if the target is a real member, or
+/// /// Returns `Some(ResolvedHandoff)` if the target is a real member, or
 /// `None` if the target agent_id is not in the room (the runtime treats
 /// this as a no-op and the leader keeps control).
 pub fn resolve_handoff(

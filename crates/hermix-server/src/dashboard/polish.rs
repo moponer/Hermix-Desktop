@@ -1,7 +1,7 @@
 //! POST /api/polish/{chat, automation} — stateless LLM-driven text
 //! rewriting for the desktop "润色" / "改写" affordances.
 //!
-//! v1 (2026-07-02): TODO.md §2 — `docs/TODO.md`. The web side
+//! TODO.md §2 — `docs/TODO.md`. The web side
 //! (`apps/desktop-tauri/src/api/polish.ts`) already calls these
 //! endpoints; before this commit the fetch fell through to a
 //! whitespace-only fallback because the backend returned 404.
@@ -312,8 +312,7 @@ mod tests {
     /// export becomes a stale read-only mirror while the live call
     /// uses the server copy (or vice-versa), and the user-visible
     /// rewrite quality regresses without an obvious error.
-    ///
-    /// If the snapshot tests in `apps/desktop-tauri` ever fail in
+    /// /// If the snapshot tests in `apps/desktop-tauri` ever fail in
     /// CI, edit both copies in the same PR — never one side only.
     #[test]
     fn chat_prompt_template_locked() {

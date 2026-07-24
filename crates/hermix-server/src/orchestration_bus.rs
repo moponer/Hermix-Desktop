@@ -155,8 +155,7 @@ impl OrchestrationEvent {
 }
 
 /// Broadcast bus for orchestration events.
-///
-/// Cheap to clone (`Arc` inner). Call [`Self::subscribe`] to get a
+/// /// Cheap to clone (`Arc` inner). Call [`Self::subscribe`] to get a
 /// receiver; call [`Self::emit`] to publish. Lagging receivers miss
 /// messages — the HTTP API is the source of truth for full state.
 #[derive(Clone)]

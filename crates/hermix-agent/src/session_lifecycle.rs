@@ -43,8 +43,7 @@ use crate::plugins::PluginManager;
 
 /// Populate [`AgentConfig::stored_system_prompt`] from SQLite
 /// (`sessions.system_prompt`) for session continuation.
-///
-/// Call before [`AgentLoop::run`] when resuming a gateway/CLI session
+/// /// Call before [`AgentLoop::run`] when resuming a gateway/CLI session
 /// so Anthropic prefix cache matches Python.
 pub fn hydrate_stored_system_prompt_from_hermes_home(
     config: &mut AgentConfig,
@@ -137,16 +136,15 @@ pub fn emit_mute_transition(
 /// the assistant content came bundled with tool calls (used by the
 /// codex-ack continuation logic on the next turn), and reports
 /// whether any prior tool result exists in the history.
-///
-/// Returns the three locals the caller needs:
+/// /// Returns the three locals the caller needs:
 /// - `history_includes_tool`: did any earlier turn leave a `Tool`
-///   message in the context? Used by
-///   `decide_empty_response` to know whether tool execution
-///   is part of the protocol context.
+/// message in the context? Used by
+/// `decide_empty_response` to know whether tool execution
+/// is part of the protocol context.
 /// - `assistant_msg`: the LLM's response, freshly appended to the
-///   context.
+/// context.
 /// - `tool_calls`: the LLM's claimed tool calls, cloned for the
-///   caller to dispatch / dedup.
+/// caller to dispatch / dedup.
 #[allow(clippy::type_complexity)]
 pub fn prepare_assistant_turn(
     ctx: &mut ContextManager,
@@ -162,17 +160,15 @@ pub fn prepare_assistant_turn(
     ctx.add_message(assistant_msg.clone());
 
     // ── Image base64 lifecycle (2026-07-23, revised) ──────
-    //
     // Safety-net cleanup for image base64. Under the zero-context-
-    // overhead model (2026-07-23 v2), `read_image` is never called
+    // overhead model (v2), `read_image` is never called
     // directly in the main context — all image analysis is delegated
     // to sub-agents via `delegate_task`. The sub-agent's isolated
     // context absorbs the base64 cost and is destroyed when done.
-    //
     // This strip call is retained as a safety net in case:
-    //  - A user pastes/attaches an inline image (which enters the
-    //    main context as a `user_with_image` message).
-    //  - A legacy code path injects an image message.
+    // - A user pastes/attaches an inline image (which enters the
+    // main context as a `user_with_image` message).
+    // - A legacy code path injects an image message.
     // Under normal operation with the new model, there should be
     // nothing to strip here.
     let stripped = crate::tool_result_processor::strip_previous_image_urls(ctx);
@@ -209,8 +205,7 @@ assistant_msg
 /// arm — the only difference between the two call sites was the
 /// tracing message text. This helper centralises the match and
 /// parameterises the stream-mode log suffix.
-///
-/// Returns `true` when a `ContinueWithUserMsg` or
+/// /// Returns `true` when a `ContinueWithUserMsg` or
 /// `ContinueWithSystemNudge` variant injected a message into the
 /// context — the caller should `continue;` to restart the loop with
 /// the injected message. Returns `false` when the variant was
@@ -249,25 +244,21 @@ EmptyResponseAction::Finalize => false,
 /// to the configured cheap model), and decides between
 /// `Finalize` (no tool calls → caller returns) and `Continue`
 /// (tool calls → caller falls through to `execute_tool_calls`).
-///
-/// `stream_mode` is `true` for `run_stream()` — the helper uses
+/// /// `stream_mode` is `true` for `run_stream()` — the helper uses
 /// this to emit a stream-specific `tracing` line and to forward
 /// the `finish_reason` through the finalize path.
-///
-/// Phase 5 (2026-07-03): 7 mutable scalar args collapsed to
+/// /// Phase 5 (2026-07-03): 7 mutable scalar args collapsed to
 /// `&mut CostGuard` + `&mut Option<String>` (4 args shrunk to 1
 /// struct). `record_usage` / `evaluate_thresholds` / `install_downgrade`
 /// on [`CostGuard`] absorb the 4-field atomic-mutation, so the
 /// helper signature dropped from 11 args to 7.
-///
-/// Phase 5 (2026-07-04 follow-up): `&mut Option<String>` for
+/// /// Phase 5 (follow-up): `&mut Option<String>` for
 /// `last_content_with_tools` collapsed to `&mut MessageCache`,
 /// dropping the helper to 6 mutable args (the `Option<String>` is
 /// now reached via `cache.store_content_with_tools(...)` inside
 /// the helper). The companion helper `prepare_assistant_turn`
 /// also takes `&mut MessageCache` for the same reason.
-///
-/// Phase 2.x (2026-07-04): extracted to this module so `agent_loop.rs`
+/// /// Phase 2.x (2026-07-04): extracted to this module so `agent_loop.rs`
 /// can shrink. Callers pass `cost_degrade_model` and
 /// `turn_route_cost_guard` closures that capture `&AgentLoop`,
 /// since those helpers still live on the type.
@@ -291,7 +282,7 @@ where
     F: FnOnce() -> Option<String>,
     G: FnOnce(String) -> crate::agent_loop::TurnRuntimeRoute,
 {
-    // 2026-07-08: check for tool calls with NON-EMPTY function names.
+    // check for tool calls with NON-EMPTY function names.
     // MiniMax M2.7 streaming can create placeholder tool call entries
     // whose `name` field is empty (the name delta never arrived, or
     // the tool call XML was already stripped by the sanitizer). Without
@@ -307,7 +298,7 @@ where
         .is_some_and(|tc| tc.iter().any(|t| !t.function.name.is_empty()));
 
     if stream_mode {
-        // 2026-07-21 (diagnostic): the previous single-line
+        // (diagnostic): the previous single-line
         // `llm_response_received` only logged `has_tool_calls` (a boolean
         // derived from "any name non-empty") which is ambiguous when
         // MiniMax streaming leaves behind placeholder entries with
@@ -436,18 +427,16 @@ response
 
 /// Phase 2.x (2026-07-04): consolidate the session-end side effects
 /// that fire at the end of every `run()` / `run_stream()` invocation:
-///
-/// 1. Build the session-end `Value` and fire `OnSessionEnd`.
+/// /// 1. Build the session-end `Value` and fire `OnSessionEnd`.
 /// 2. Optionally fire `OnSessionReset` when the last user message was
-///    a `/reset` or `/new` command.
+/// a `/reset` or `/new` command.
 /// 3. Route `memory_on_session_end` (persist session-level
-///    `FocusConclusion`, drain pending conclusions, call
-///    `MemoryRouter::on_session_end`).
+/// `FocusConclusion`, drain pending conclusions, call
+/// `MemoryRouter::on_session_end`).
 /// 4. Fire `OnSessionFinalize` (final turn count + cost snapshot).
 /// 5. P1-3: persist accumulated token usage so `/insights` can chart
-///    real numbers. Best-effort; failure logged but non-fatal.
-///
-/// All hooks are fire-and-forget (`let _ =`); failures never break
+/// real numbers. Best-effort; failure logged but non-fatal.
+/// /// All hooks are fire-and-forget (`let _ =`); failures never break
 /// the response. The same `finalize_agent_result` is also called by
 /// `graceful_interrupt_result` for non-natural exits.
 #[allow(clippy::too_many_arguments)]
@@ -559,8 +548,7 @@ pub fn finalize_agent_result(
 /// Per-attempt classification inside the retry loop (shared by
 /// `run()` and `run_stream()`). Decides whether the LLM response
 /// warrants a retry (empty content) or breaks out.
-///
-/// 2026-07-09: Removed `RetryReasoning` (thinking-only inner-loop
+/// /// Removed `RetryReasoning` (thinking-only inner-loop
 /// retry). When the LLM returns only `reasoning_content` with no
 /// visible text and no tool calls, we break immediately and let
 /// the outer loop's `decide_empty_response` handle it with a
@@ -617,8 +605,7 @@ pub(crate) fn classify_post_llm_response(
 }
 
 /// Ask the LLM for a final summary when the turn budget is exhausted.
-///
-/// If the summary LLM call itself fails (e.g. context too long, rate
+/// /// If the summary LLM call itself fails (e.g. context too long, rate
 /// limit, provider error), we gracefully return `None` instead of
 /// propagating the error. This prevents the max-turns guard from
 /// turning into a hard error that the frontend misinterprets as

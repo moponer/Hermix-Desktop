@@ -1,6 +1,6 @@
 //! OAuth token refresh for runtime providers.
 //!
-//! Splits out of `agent_loop.rs` on 2026-07-04 to consolidate the on-disk
+//! Splits out of `agent_loop.rs` on to consolidate the on-disk
 //! credential store, the `reqwest` token-exchange POST, and the
 //! per-provider backoff window in one module. `OAuthStoreCredential` is
 //! the row shape persisted to `auth_tokens.json`; `OAuthRefresh` owns

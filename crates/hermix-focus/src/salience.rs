@@ -62,7 +62,7 @@ pub struct SalienceComponents {
 /// - `touch_count`: how many times it has been touched total
 /// - `pin_count`: how many times it has been pinned total
 /// - `now`: reference time (pass `Utc::now()` in production; tests pass a
-///   fixed time for determinism)
+/// fixed time for determinism)
 pub fn salience(
     last_touch: DateTime<Utc>,
     touch_count: u32,

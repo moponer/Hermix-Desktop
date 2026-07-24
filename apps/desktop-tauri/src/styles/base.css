@@ -37,7 +37,7 @@ body {
   color: var(--color-text-primary);
 }
 
-/* ── Focus (主人强规则:无焦点边框色) ────────────────────────────── */
+/* ── Focus (no focus border color) ─────────────────────────────── */
 :focus,
 :focus-visible {
   outline: none;
@@ -54,3 +54,58 @@ body {
 /* ── Tauri drag region helpers ──────────────────────────────────── */
 [data-tauri-drag-region] { -webkit-app-region: drag; }
 [data-tauri-no-drag] { -webkit-app-region: no-drag; }
+
+/* ── ErrorBoundary fallback ────────────────────────────────────── */
+.error-boundary-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  padding: 32px;
+  background: var(--color-bg-app);
+  color: var(--color-text-muted);
+  font-family: system-ui, sans-serif;
+}
+.error-boundary-fallback__icon { font-size: 48px; margin-bottom: 16px; }
+.error-boundary-fallback__title { font-size: 18px; font-weight: 600; margin: 0 0 8px; color: var(--color-text-primary); }
+.error-boundary-fallback__desc { font-size: 14px; margin: 0 0 24px; text-align: center; max-width: 480px; line-height: 1.5; }
+.error-boundary-fallback__actions { display: flex; gap: 12px; }
+.error-boundary-fallback__btn { padding: 8px 20px; border-radius: var(--radius-md); cursor: pointer; font-size: 14px; }
+.error-boundary-fallback__btn--primary { border: none; background: var(--color-bg-tertiary); color: var(--color-text-primary); font-weight: 500; }
+.error-boundary-fallback__btn--secondary { border: 1px solid var(--color-border-secondary); background: transparent; color: var(--color-text-muted); }
+.error-boundary-fallback__details { margin-top: 24px; max-width: 560px; width: 100%; }
+.error-boundary-fallback__summary { cursor: pointer; font-size: 12px; color: var(--color-text-faint); }
+.error-boundary-fallback__pre { margin-top: 8px; padding: 12px; background: var(--color-bg-secondary); border-radius: var(--radius-md); font-size: 12px; overflow: auto; max-height: 200px; white-space: pre-wrap; word-break: break-word; color: var(--color-error); }
+
+/* ── Toast notifications ────────────────────────────────────────── */
+.toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: var(--radius-md); font-size: var(--font-size-meta); max-width: 420px; cursor: pointer; pointer-events: auto; box-shadow: var(--shadow-pop); animation: toast-in 0.2s var(--ease-out); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.toast--error { background: var(--color-error-soft); color: var(--color-error); border: 1px solid var(--color-error); }
+.toast--warning { background: var(--color-warning-soft); color: var(--color-warning); border: 1px solid var(--color-warning); }
+.toast--info { background: var(--color-info-soft); color: var(--color-text-secondary); border: 1px solid var(--color-border-secondary); }
+.toast--success { background: var(--color-success-soft); color: var(--color-success); border: 1px solid var(--color-success); }
+.toast__icon { flex-shrink: 0; font-size: 14px; }
+.toast__msg { flex: 1; line-height: 1.4; }
+.toast__close { flex-shrink: 0; background: none; border: none; cursor: pointer; font-size: 16px; color: inherit; opacity: 0.6; padding: 0 2px; }
+.toast__close:hover { opacity: 1; }
+
+/* ── Spreadsheet cell borders ─────────────────────────────────── */
+.cell-border-subtle {
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-right: 1px solid var(--color-border-subtle);
+}
+.cell-border-right-subtle {
+  border-right: 1px solid var(--color-border-subtle);
+}
+.cell-border-bottom-subtle {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.cell-border-right-code {
+  border-right: 1px solid var(--color-bg-code-border);
+}
+.cell-border-bottom-code {
+  border-bottom: 1px solid var(--color-bg-code-border);
+}

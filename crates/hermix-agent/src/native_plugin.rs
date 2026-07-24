@@ -53,24 +53,24 @@ use hermix_core::{ToolError, ToolHandler, ToolSchema};
 /// process is responsible for upholding these invariants:
 ///
 /// 1. The plugin's C ABI (`PluginVtable` + `ToolVtable` functions) must
-///    be thread-safe. The host cannot enforce this at load time; a
-///    plugin author who ships non-reentrant vtable functions will
-///    cause data races when two threads call `execute()` concurrently.
-///    This mirrors the contract of any FFI boundary: the host trusts
-///    the plugin, but a future tool dispatcher can wrap calls with a
-///    per-instance `Mutex` if we need to harden against bad plugins.
+/// be thread-safe. The host cannot enforce this at load time; a
+/// plugin author who ships non-reentrant vtable functions will
+/// cause data races when two threads call `execute()` concurrently.
+/// This mirrors the contract of any FFI boundary: the host trusts
+/// the plugin, but a future tool dispatcher can wrap calls with a
+/// per-instance `Mutex` if we need to harden against bad plugins.
 /// 2. The `PluginDescriptor*` returned by `hermix_plugin_init()` must
-///    remain valid for the lifetime of the loaded `Library`. We
-///    guarantee this by holding `lib: libloading::Library` (via
-///    `_lib: libloading::Library`) which keeps the .so/.dll mapped
-///    until `Drop` runs. **Do not** drop `_lib` while `descriptor` is
-///    still dereferenced.
+/// remain valid for the lifetime of the loaded `Library`. We
+/// guarantee this by holding `lib: libloading::Library` (via
+/// `_lib: libloading::Library`) which keeps the .so/.dll mapped
+/// until `Drop` runs. **Do not** drop `_lib` while `descriptor` is
+/// still dereferenced.
 /// 3. `ToolInstance*` pointers created via `desc.create_tool(i)` are
-///    owned by the plugin and must outlive any `NativeToolAdapter`
-///    borrowing them. The adapter's `Drop` calls `vtable.destroy`
-///    which the plugin must implement as the matching deallocator
-///    (`free()` for `malloc()`, Rust's `[T]::drop` for `Box<[T]>`,
-///    etc.). A mismatched allocator will cause heap corruption.
+/// owned by the plugin and must outlive any `NativeToolAdapter`
+/// borrowing them. The adapter's `Drop` calls `vtable.destroy`
+/// which the plugin must implement as the matching deallocator
+/// (`free()` for `malloc()`, Rust's `[T]::drop` for `Box<[T]>`,
+/// etc.). A mismatched allocator will cause heap corruption.
 pub struct LoadedNativePlugin {
     pub name: String,
     pub kind: PluginKind,
@@ -82,9 +82,9 @@ pub struct LoadedNativePlugin {
 
 // SAFETY: see the "Safety invariants" section on `LoadedNativePlugin`.
 // 1. The C ABI contract (per plugin) makes the exported vtable
-//    thread-safe. 2. `descriptor` borrows from `lib`, which is held
-//    for the lifetime of `self`. 3. The plugin owns the pointer; we
-//    only ever dereference through its declared vtable.
+// thread-safe. 2. `descriptor` borrows from `lib`, which is held
+// for the lifetime of `self`. 3. The plugin owns the pointer; we
+// only ever dereference through its declared vtable.
 unsafe impl Send for LoadedNativePlugin {}
 unsafe impl Sync for LoadedNativePlugin {}
 
@@ -98,8 +98,7 @@ impl Drop for LoadedNativePlugin {
 
 impl LoadedNativePlugin {
     /// # Safety
-    ///
-    /// Caller must ensure `dll_path` points to a valid shared library
+    /// /// Caller must ensure `dll_path` points to a valid shared library
     /// that exports `hermix_plugin_init` with the correct C ABI signature.
     /// The returned pointer from the init function must remain valid for
     /// the lifetime of the `LoadedNativePlugin`.
@@ -164,8 +163,7 @@ impl LoadedNativePlugin {
     /// Create tool handler #0 (present if `self.kind == Tools && tool_count > 0`).
     /// For multi-tool plugins, callers can pass `index` 0..tool_count.
     /// # Safety
-    ///
-    /// Caller must ensure `index < self.tool_count` and that the plugin
+    /// /// Caller must ensure `index < self.tool_count` and that the plugin
     /// remains loaded (i.e. the originating `LoadedNativePlugin` is not
     /// dropped) for the lifetime of the returned handler.
     pub unsafe fn create_tool_handler(
@@ -194,8 +192,7 @@ impl LoadedNativePlugin {
     }
 
     /// # Safety
-    ///
-    /// Caller must ensure the returned pointer is properly managed
+    /// /// Caller must ensure the returned pointer is properly managed
     /// by the plugin's memory provider contract.
     pub unsafe fn create_memory_provider(&self) -> Option<*mut std::ffi::c_void> {
         // SAFETY: `self.descriptor` is valid for the lifetime of `self._lib`.
@@ -216,19 +213,19 @@ impl LoadedNativePlugin {
 ///
 /// Mirrors `LoadedNativePlugin`'s contract:
 /// 1. `raw: *mut ToolInstance` is owned by the plugin; the host does
-///    not allocate or free it. The adapter's `Drop` calls
-///    `vtable.destroy(user_data)` which must be a valid deallocator.
+/// not allocate or free it. The adapter's `Drop` calls
+/// `vtable.destroy(user_data)` which must be a valid deallocator.
 /// 2. All vtable function pointers (`schema_json`, `execute`,
-///    `free_string`) must be thread-safe — concurrent `execute()`
-///    calls on the same `ToolInstance` are permitted and expected.
-///    If a plugin is non-reentrant, it must serialise inside its
-///    own `user_data` (e.g. with a `Mutex`).
+/// `free_string`) must be thread-safe — concurrent `execute()`
+/// calls on the same `ToolInstance` are permitted and expected.
+/// If a plugin is non-reentrant, it must serialise inside its
+/// own `user_data` (e.g. with a `Mutex`).
 /// 3. `raw` is borrowed from the plugin, so the adapter is
-///    logically tied to the `LoadedNativePlugin` lifetime. We hold
-///    a `_plugin: ()` marker (no actual reference — `LoadedNativePlugin`
-///    holds `Library` not a borrow) because the plugin is expected
-///    to outlive any adapter it produces; dropping the adapter
-///    without dropping the plugin is a usage bug.
+/// logically tied to the `LoadedNativePlugin` lifetime. We hold
+/// a `_plugin: ()` marker (no actual reference — `LoadedNativePlugin`
+/// holds `Library` not a borrow) because the plugin is expected
+/// to outlive any adapter it produces; dropping the adapter
+/// without dropping the plugin is a usage bug.
 struct NativeToolAdapter {
     raw: *mut ToolInstance,
     /// Phantom marker: the adapter's lifetime is logically tied to

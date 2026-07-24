@@ -22,8 +22,7 @@ use hermix_intelligence::{AlwaysInclude, KeywordRouter, ToolSchemaRouter};
 use crate::agent_helpers::AgentCallbacks;
 
 /// Fire an `AcuiDirective` through `AgentCallbacks::on_acui_directive`.
-///
-/// This function never blocks and never returns an error — the ACUI
+/// /// This function never blocks and never returns an error — the ACUI
 /// pipeline is best-effort. A failure in the callback is logged and
 /// swallowed (the agent keeps running).
 pub fn emit_acui(callbacks: &AgentCallbacks, directive: AcuiDirective) {
@@ -65,20 +64,18 @@ pub fn emit_acui_hide(callbacks: &AgentCallbacks, id: impl Into<String>) {
 /// Build a default router (KeywordRouter + AlwaysInclude).
 /// Construct the canonical tool schema router (`KeywordRouter +
 /// AlwaysInclude`). The whitelist is the **union** of:
-///
-/// 1. **System-level always-forward tools** (hardcoded): tool families
-///    the LLM must always see because `KeywordRouter`'s scoring on
-///    CJK-heavy or generic-language queries can score them ≈ 0. Without
-///    always-forwarding, the agent falls back to `terminal cd/ls` to
-///    "find" a file the user already gave a path for, or never sees
-///    the browser tools when the user asks "open the website". This
-///    list is intentionally not user-configurable — it's a safety /
-///    capability gate, not a routing preference.
-///
-/// 2. **User-configurable `always_include` whitelist**: caller-supplied
-///    via `AgentLoop::always_include` (e.g. user adds `"delegate_task"`
-///    via `.with_always_include()`). Plumbed in 2026-07-04: previously
-///    the field existed but the router ignored it.
+/// /// 1. **System-level always-forward tools** (hardcoded): tool families
+/// the LLM must always see because `KeywordRouter`'s scoring on
+/// CJK-heavy or generic-language queries can score them ≈ 0. Without
+/// always-forwarding, the agent falls back to `terminal cd/ls` to
+/// "find" a file the user already gave a path for, or never sees
+/// the browser tools when the user asks "open the website". This
+/// list is intentionally not user-configurable — it's a safety /
+/// capability gate, not a routing preference.
+/// /// 2. **User-configurable `always_include` whitelist**: caller-supplied
+/// via `AgentLoop::always_include` (e.g. user adds `"delegate_task"`
+/// via `.with_always_include()`). Plumbed in previously
+/// the field existed but the router ignored it.
 pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchemaRouter> {
     let mut whitelist: Vec<String> = vec![
         // System-level always-forward (see doc above).
@@ -122,7 +119,7 @@ pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchema
 
 #[cfg(test)]
 mod tests {
-    //! 2026-07-04 regression coverage for the `always_include` field
+    //! regression coverage for the `always_include` field
     //! plumbing. Prior to this fix the field on `AgentLoop` existed
     //! but `default_tool_router()` ignored it, so user-configured
     //! always-include names were silently dropped on the floor.
@@ -152,8 +149,7 @@ mod tests {
     /// inner router's `max_tools = 5` truncation by name drops the
     /// user-supplied entry — then `AlwaysInclude` re-adds it with
     /// `force_included = true`.
-    ///
-    /// Pre-2026-07-04 the `AgentLoop::always_include` field was
+    /// /// Pre-the `AgentLoop::always_include` field was
     /// never wired into `default_tool_router`, so this assertion
     /// would have failed for any non-system default entry.
     #[test]

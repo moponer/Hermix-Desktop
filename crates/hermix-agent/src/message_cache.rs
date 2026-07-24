@@ -14,8 +14,7 @@
 use hermix_core::Message;
 
 /// Per-loop message bookkeeping cache.
-///
-/// The two fields stay co-located on `self.message_cache` and mutate
+/// /// The two fields stay co-located on `self.message_cache` and mutate
 /// in place via the `store_*` / `take_*` / `checkpoint` methods.
 /// Reset / `Default` produce the same all-`None` state as before,
 /// so `LoopState::default()` semantics are unchanged.

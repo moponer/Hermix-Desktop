@@ -18,12 +18,10 @@ use async_trait::async_trait;
 
 /// Marker trait: a tool that wants to know the currently-executing
 /// session id before each tool-call batch.
-///
-/// The session id is **transient** — set before the batch, reset
+/// /// The session id is **transient** — set before the batch, reset
 /// after. Tools must never store it; they read it inside `publish()`
 /// or analogous fan-out paths.
-///
-/// Now `#[async_trait]` so tools can also expose a session-scoped
+/// /// Now `#[async_trait]` so tools can also expose a session-scoped
 /// snapshot builder (Commit B). The only currently-overridden
 /// async method is `build_snapshot_json`; all the sync stampers are
 /// unaffected.
@@ -35,8 +33,7 @@ pub trait SessionStamper: Send + Sync {
     /// Stamp or clear the active **assistant message id** for the
     /// current tool-call batch. Returns the previous id so callers
     /// can restore it on scope exit.
-    ///
-    /// Why this exists (P0-T1 Frontend Audit 2026-07-13): the
+    /// /// Why this exists (P0-T1 Frontend Audit 2026-07-13): the
     /// `todo` tool emits a `TodoGroupStarted` event the first time
     /// it sees a fresh `group_id`. The front-end renders that
     /// group's inline card anchored to the assistant message that
@@ -45,8 +42,7 @@ pub trait SessionStamper: Send + Sync {
     /// assistant message older than first item.created_at" which
     /// works in practice but is fragile under tool-call-after-
     /// tool-call patterns.
-    ///
-    /// The id is the **wire-format** id (`${session_id}-${rowIdx}`)
+    /// /// The id is the **wire-format** id (`${session_id}-${rowIdx}`)
     /// that `hermix_server::dashboard::...::get_session_messages`
     /// already uses on read. Computing it once at the top of the
     /// turn (`rowIdx = messages.len()` since the user message was
@@ -59,14 +55,12 @@ pub trait SessionStamper: Send + Sync {
     /// tools pay zero cost. The `todo` tool overrides this so the
     /// WS layer can hydrate the front-end todo panel on connect
     /// and after every mutation.
-    ///
-    /// Returns `None` for tools that don't have session-scoped
+    /// /// Returns `None` for tools that don't have session-scoped
     /// state, `Some(items)` for tools that do. The shape of each
     /// item is tool-specific (the `todo` tool returns TodoItem-
     /// shaped JSON); the caller (`hermix-server`) is responsible
     /// for converting into the wire-format `TodoSnapshotItem`.
-    ///
-    /// FRONTEND_AUDIT_TODO_2026-07-13 / Commit B.
+    /// /// / Commit B.
     async fn build_snapshot_json(&self, _session_id: &str) -> Option<Vec<serde_json::Value>> {
         None
     }

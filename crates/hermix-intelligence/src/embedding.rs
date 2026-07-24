@@ -66,8 +66,7 @@ pub enum EmbeddingError {
 pub type EmbeddingResult<T> = std::result::Result<T, EmbeddingError>;
 
 /// The async contract every embedding backend must implement.
-///
-/// The agent loop and the `VectorRouter` only see this trait, never a
+/// /// The agent loop and the `VectorRouter` only see this trait, never a
 /// concrete provider — same pattern as `MemoryLayer`.
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
@@ -92,8 +91,7 @@ pub trait EmbeddingProvider: Send + Sync {
     /// Compute cosine similarity between two same-dimension vectors.
     /// Provided as a default method since the formula is the same
     /// regardless of backend.
-    ///
-    /// `where Self: Sized` excludes this from the trait's dyn vtable —
+    /// /// `where Self: Sized` excludes this from the trait's dyn vtable —
     /// callers using `dyn EmbeddingProvider` should call `cosine`
     /// through a concrete type or via a free helper.
     fn cosine(a: &[f32], b: &[f32]) -> f32
@@ -120,17 +118,15 @@ pub trait EmbeddingProvider: Send + Sync {
 
 /// In-process embedding provider using the **hashing trick** (sklearn's
 /// `HashingVectorizer` with `alternate_sign=True`).
-///
-/// Algorithm:
+/// /// Algorithm:
 /// 1. Lowercase + Unicode-normalize input.
 /// 2. Slide a character n-gram window (default n=3) over the text,
-///    padding with `^` / `$` boundary markers so leading and trailing
-///    n-grams behave like interior ones.
+/// padding with `^` / `$` boundary markers so leading and trailing
+/// n-grams behave like interior ones.
 /// 3. For each n-gram, FNV-1a hash → `bucket = h % dim`,
-///    `sign = (h >> 63) as f32` (±1).
+/// `sign = (h >> 63) as f32` (±1).
 /// 4. Accumulate signs into a `dim`-sized `Vec<f32>`, L2-normalize.
-///
-/// **Why this replaces the old byte-mixing stub:**
+/// /// **Why this replaces the old byte-mixing stub:**
 /// The old `StubEmbeddingProvider` was a stable pseudo-random mapping
 /// with no semantic signal — `cosine(similar_strings)` was only *roughly*
 /// higher than `cosine(unrelated_strings)`. Character n-gram hashing
@@ -138,16 +134,14 @@ pub trait EmbeddingProvider: Send + Sync {
 /// trigrams, English strings share character trigrams, code identifiers
 /// share token-level trigrams. Cosine between similar strings is
 /// consistently > 0.2 in practice, between unrelated strings ~0.0.
-///
-/// **No model, no ONNX, no download.** FNV-1a is a 5-line hash that's
+/// /// **No model, no ONNX, no download.** FNV-1a is a 5-line hash that's
 /// stable across Rust versions and platforms (unlike `std::hash::Hasher`
 /// which is randomized per-process by default).
-///
-/// **Properties:**
+/// /// **Properties:**
 /// - Deterministic: identical input → identical vector (across runs).
 /// - Order-preserving at the n-gram level: `"Rust"` and `"rust"` produce
-///   the same vector (lowercased); `"Rust language"` and `"language Rust"`
-///   produce the same multiset of n-grams (modulo the bucket collisions).
+/// the same vector (lowercased); `"Rust language"` and `"language Rust"`
+/// produce the same multiset of n-grams (modulo the bucket collisions).
 /// - Dim-stable: same `dim` → vectors are comparable across sessions.
 /// - Cheap: O(N) per embed, no allocation beyond the output vector.
 pub struct HashingEmbeddingProvider {
@@ -293,14 +287,12 @@ mod fastembed_impl {
     use std::path::PathBuf;
 
     /// Local ONNX-backed embedding provider wrapping `fastembed::TextEmbedding`.
-    ///
-    /// `try_new` is the **eager** constructor that loads the model
+    /// /// `try_new` is the **eager** constructor that loads the model
     /// immediately (downloading on first run). For agent startup paths
     /// where the model load is on the hot path, prefer
     /// [`FastEmbedEmbeddingProvider::try_new_lazy`] which defers loading
     /// to the first `embed` call.
-    ///
-    /// Internally the `TextEmbedding` is held behind a `Mutex` because
+    /// /// Internally the `TextEmbedding` is held behind a `Mutex` because
     /// `embed(&mut self, ...)` requires `&mut self` on the fastembed side
     /// (the underlying ONNX session is not `Sync`).
     pub struct FastEmbedEmbeddingProvider {
@@ -652,7 +644,6 @@ mod tests {
     }
 
     // ----- FastEmbedEmbeddingProvider (only with feature) ------------
-    //
     // We only test the cheap, side-effect-free methods. `try_new` /
     // `try_default` actually download the model and are gated behind
     // `#[ignore]` so unit-test CI runs don't need network or HF

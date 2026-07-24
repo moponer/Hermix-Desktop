@@ -229,8 +229,7 @@ pub async fn run_app(
 }
 
 /// GET /api/custom-apps/{id}/icon — serve the app's custom icon as PNG.
-///
-/// Returns 404 if the app has no custom icon.
+/// /// Returns 404 if the app has no custom icon.
 pub async fn get_app_icon(
     State(state): State<HttpServerState>,
     Path(id): Path<String>,

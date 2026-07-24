@@ -45,8 +45,7 @@ pub fn should_inject_tool_enforcement(model: &str) -> bool {
 /// Short format hint string that nudges the model toward the
 /// appropriate output style for the active platform (CLI / chat / email / SMS).
 /// Returns `None` when no platform-specific hint applies.
-///
-/// When `AgentConfig::platform_hint_override` is set:
+/// /// When `AgentConfig::platform_hint_override` is set:
 /// - If the override starts with `+`, it is **appended** to the built-in hint.
 /// - Otherwise it **replaces** the built-in hint entirely.
 pub fn platform_hint_text(config: &AgentConfig) -> Option<String> {
@@ -262,7 +261,7 @@ pub fn extract_provider_and_model<'a>(
 /// 1. Inject `ephemeral_system_prompt` (per-turn override) if non-empty.
 /// 2. Normalize messages (merge consecutive same-role, strip stale errors, etc.)
 /// 3. Strip `reasoning_content` from all but the most recent assistant
-///    message — old thinking blocks are noise once the LLM has moved on.
+/// message — old thinking blocks are noise once the LLM has moved on.
 /// 4. Apply Anthropic prompt-cache markers.
 pub fn messages_for_api_call(config: &AgentConfig, ctx: &ContextManager) -> Vec<Message> {
     let mut messages = ctx.get_messages().to_vec();
@@ -386,12 +385,10 @@ pub fn apply_prompt_cache_markers(config: &AgentConfig, messages: &mut [Message]
 }
 
 /// Build the per-turn dynamic suffix of the system prompt.
-///
-/// This is the only part of the system prompt that changes every turn:
-///   - the timestamp block (model + provider name)
-///   - the optional session_id line (when `pass_session_id` is on)
-///
-/// The rest of the prompt is split into two independently cached
+/// /// This is the only part of the system prompt that changes every turn:
+/// - the timestamp block (model + provider name)
+/// - the optional session_id line (when `pass_session_id` is on)
+/// /// The rest of the prompt is split into two independently cached
 /// layers (`build_stable_layer` and `build_context_layer`) so that a
 /// mutation to one layer does not force the other to re-render.
 pub fn build_dynamic_suffix(config: &AgentConfig, model_for_prompt: &str) -> String {
@@ -445,14 +442,14 @@ pub fn build_system_prompt_with_tool_errors(
     );
 
     // ★ directions[] — evaluated per-turn with the REAL tool_call_count so
-    //   HadAnyToolUse / MultiStepTask routes fire correctly. This block
-    //   lives OUTSIDE the cached stable layer (keyed on
-    //   model/personality/system_prompt/workspace only) because
-    //   tool_call_count changes every turn. Previously directions were
-    //   baked into the stable cache with tool_call_count=0, so
-    //   HadAnyToolUse never fired — summary/stopping guidance was
-    //   silently skipped, leaving the LLM with no "stop after real work"
-    //   constraint and producing filler + repeated tool calls.
+    // HadAnyToolUse / MultiStepTask routes fire correctly. This block
+    // lives OUTSIDE the cached stable layer (keyed on
+    // model/personality/system_prompt/workspace only) because
+    // tool_call_count changes every turn. Previously directions were
+    // baked into the stable cache with tool_call_count=0, so
+    // HadAnyToolUse never fired — summary/stopping guidance was
+    // silently skipped, leaving the LLM with no "stop after real work"
+    // constraint and producing filler + repeated tool calls.
     let mut directions_text = {
         use crate::context::{RouteContext, SystemPromptBuilder};
         let route_ctx = RouteContext {
@@ -521,8 +518,8 @@ pub fn build_system_prompt_with_tool_errors(
     tracing::Span::current().record("out_chars", prompt.len());
 
     // ★ Cache-effectiveness summary (2026-07-05): one info event per
-    //   turn so operators can compare token usage before vs after the
-    //   three-tier cache was enabled.  Token estimates use chars ÷ 4.
+    // turn so operators can compare token usage before vs after the
+    // three-tier cache was enabled.  Token estimates use chars ÷ 4.
     let stable_est = stable_text.len() / 4;
     let context_est = context_text.len() / 4;
     let volatile_est = suffix_text.len() / 4;
@@ -553,22 +550,20 @@ pub fn build_system_prompt_with_tool_errors(
 }
 
 /// Build the full system prompt including identity, memory, and plugin context.
-///
-/// Aligns with Python behavior:
+/// /// Aligns with Python behavior:
 /// - prefer `~/.hermix/SOUL.md` as identity
 /// - fallback to `DEFAULT_AGENT_IDENTITY`
 /// - then append optional configured `system_prompt`
-///
-/// Three-tier cache layout (2026-07-04):
+/// /// Three-tier cache layout (2026-07-04):
 /// - **stable**  — soul, configured system_prompt, directions, tools
-///   section, personality profile, alibaba hint, platform hint,
-///   workspace block. Invalidates on model / personality /
-///   system_prompt / workspace change.
+/// section, personality profile, alibaba hint, platform hint,
+/// workspace block. Invalidates on model / personality /
+/// system_prompt / workspace change.
 /// - **context** — built-in memory snapshot, memory router blocks,
-///   skills prompt, context files. Invalidates on memory / skills /
-///   context-files mutation (signalled by an `epoch` u64 tick).
+/// skills prompt, context files. Invalidates on memory / skills /
+/// context-files mutation (signalled by an `epoch` u64 tick).
 /// - **volatile** — timestamp + session_id. Rebuilt every turn; not
-///   cached.
+/// cached.
 #[allow(clippy::too_many_arguments)]
 pub fn build_system_prompt(
     config: &AgentConfig,
@@ -594,14 +589,14 @@ pub fn build_system_prompt(
     );
 
     // ★ directions[] — evaluated per-turn with the REAL tool_call_count so
-    //   HadAnyToolUse / MultiStepTask routes fire correctly. This block
-    //   lives OUTSIDE the cached stable layer (keyed on
-    //   model/personality/system_prompt/workspace only) because
-    //   tool_call_count changes every turn. Previously directions were
-    //   baked into the stable cache with tool_call_count=0, so
-    //   HadAnyToolUse never fired — summary/stopping guidance was
-    //   silently skipped, leaving the LLM with no "stop after real work"
-    //   constraint and producing filler + repeated tool calls.
+    // HadAnyToolUse / MultiStepTask routes fire correctly. This block
+    // lives OUTSIDE the cached stable layer (keyed on
+    // model/personality/system_prompt/workspace only) because
+    // tool_call_count changes every turn. Previously directions were
+    // baked into the stable cache with tool_call_count=0, so
+    // HadAnyToolUse never fired — summary/stopping guidance was
+    // silently skipped, leaving the LLM with no "stop after real work"
+    // constraint and producing filler + repeated tool calls.
     let directions_text = {
         use crate::context::{RouteContext, SystemPromptBuilder};
         let route_ctx = RouteContext {
@@ -655,8 +650,8 @@ pub fn build_system_prompt(
     tracing::Span::current().record("out_chars", prompt.len());
 
     // ★ Cache-effectiveness summary (2026-07-05): one info event per
-    //   turn so operators can compare token usage before vs after the
-    //   three-tier cache was enabled.  Token estimates use chars ÷ 4.
+    // turn so operators can compare token usage before vs after the
+    // three-tier cache was enabled.  Token estimates use chars ÷ 4.
     let stable_est = stable_text.len() / 4;
     let context_est = context_text.len() / 4;
     let volatile_est = suffix_text.len() / 4;
@@ -736,21 +731,21 @@ fn build_stable_layer(
     }
 
     // ★ directions[] moved to the per-turn dynamic layer in
-    //   `build_system_prompt` (2026-07-08). Previously directions were
-    //   baked into the stable cache with tool_call_count=0, which meant
-    //   HadAnyToolUse / MultiStepTask routes never fired — summary and
-    //   stopping guidance were silently skipped every turn, leaving the
-    //   LLM with no "stop after real work" constraint and producing
-    //   filler + repeated tool calls. Evaluating directions per-turn with
-    //   the real tool_call_count fixes this. The stable layer must NOT
-    //   depend on per-turn state (tool_call_count) so the cache key stays
-    //   stable across turns.
+    // `build_system_prompt` (2026-07-08). Previously directions were
+    // baked into the stable cache with tool_call_count=0, which meant
+    // HadAnyToolUse / MultiStepTask routes never fired — summary and
+    // stopping guidance were silently skipped every turn, leaving the
+    // LLM with no "stop after real work" constraint and producing
+    // filler + repeated tool calls. Evaluating directions per-turn with
+    // the real tool_call_count fixes this. The stable layer must NOT
+    // depend on per-turn state (tool_call_count) so the cache key stays
+    // stable across turns.
 
     // ★ Inject the active tool list as a `<tools>` text block so the model
-    //   is *always* aware of what it can call — even if the native
-    //   OpenAI/Anthropic `tools` API field is ignored, filtered out by
-    //   the router, or the model is a text-only fine-tune that has no
-    //   notion of tool-calling wire protocols.
+    // is *always* aware of what it can call — even if the native
+    // OpenAI/Anthropic `tools` API field is ignored, filtered out by
+    // the router, or the model is a text-only fine-tune that has no
+    // notion of tool-calling wire protocols.
     builder = builder.with_tools_section(tool_schemas);
 
     if let Some(ref personality) = config.personality {
@@ -915,8 +910,7 @@ fn build_context_layer(
 /// `tool_error_counts == None` falls back to the legacy build path;
 /// `Some(map)` triggers the `[Tool Failure Hints]` block via
 /// [`build_system_prompt_with_tool_errors`].
-///
-/// All other behavior — cached prompt restoration, SectionGate audit,
+/// /// All other behavior — cached prompt restoration, SectionGate audit,
 /// M2 protocol-completeness — is byte-identical to
 /// [`resolve_initial_system_prompt`].
 pub fn resolve_initial_system_prompt_with_tool_errors(
@@ -931,13 +925,13 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
     context_epoch: u64,
     force_rebuild: bool,
 ) -> (String, bool) {
-    // ★ 2026-07-23: `force_rebuild` is set by the AgentLoop when a
-    //   memory/skill/context-file store mutated since
-    //   `config.stored_system_prompt` was frozen at
-    //   `stored_prompt_epoch`. When set, we bypass the reuse path and
-    //   re-read the Context layer from disk so in-session `memory` tool
-    //   edits (add/replace/remove) take effect on the next user message
-    //   instead of only after a session restart.
+    // ★ `force_rebuild` is set by the AgentLoop when a
+    // memory/skill/context-file store mutated since
+    // `config.stored_system_prompt` was frozen at
+    // `stored_prompt_epoch`. When set, we bypass the reuse path and
+    // re-read the Context layer from disk so in-session `memory` tool
+    // edits (add/replace/remove) take effect on the next user message
+    // instead of only after a session restart.
     let (prompt, restored) = if !force_rebuild {
         if let Some(ref s) = config.stored_system_prompt {
             let t = s.trim();
@@ -992,11 +986,11 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
         )
     };
     // ★ M2: protocol-completeness single choke point. Audit the
-    //   produced prompt against the section gate; if any required
-    //   marker is missing, splice in the default body. This is the
-    //   *only* function in `agent_loop` that mutates the system
-    //   prompt for completeness — every other code path that builds
-    //   a prompt must funnel through here.
+    // produced prompt against the section gate; if any required
+    // marker is missing, splice in the default body. This is the
+    // *only* function in `agent_loop` that mutates the system
+    // prompt for completeness — every other code path that builds
+    // a prompt must funnel through here.
     let (final_prompt, _report) = {
         use crate::context::{RouteContext, Section};
         let tool_names_set: HashSet<&str> =
@@ -1027,7 +1021,7 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
                 report.pending.len()
             );
         }
-        // 2026-06-29 (C3 marker protocol): forward the audit report
+        // (C3 marker protocol): forward the audit report
         // to the upstream `on_section_gate` callback so the trace
         // panel can render "SectionGate patched Identity, Timestamp"
         // in real time.
@@ -1073,13 +1067,12 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    /// 2026-07-04 regression: the `prompt_cache.stable` slot used to be
+    /// regression: the `prompt_cache.stable` slot used to be
     /// write-only — `build_system_prompt` would render `prefix_text` on
     /// every call, *then* store it in the slot, but still use the
     /// freshly-rendered text for the prompt. The cache never actually
     /// short-circuited the second-call computation.
-    ///
-    /// 2026-07-04 (round 5): split into two layers (stable + context);
+    /// /// (round 5): split into two layers (stable + context);
     /// pin that the **stable** slot is still read-before-write and the
     /// second call with identical config does not re-render the
     /// stable layer.

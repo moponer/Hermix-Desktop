@@ -52,12 +52,11 @@ pub enum CronPersistenceError {
 // ---------------------------------------------------------------------------
 
 /// File-based job persistence. Stores each job as a JSON file in `data_dir`.
-///
-/// Directory structure:
+/// /// Directory structure:
 /// ```text
 /// data_dir/
-///   <job-id>.json
-///   <job-id>.json
+/// <job-id>.json
+/// <job-id>.json
 /// ```
 #[derive(Debug, Clone)]
 pub struct FileJobPersistence {
@@ -66,8 +65,7 @@ pub struct FileJobPersistence {
 
 impl FileJobPersistence {
     /// Create a new file persistence instance using the default data directory.
-    ///
-    /// Resolved via `hermix_config::paths::hermix_home()` which honours
+    /// /// Resolved via `hermix_config::paths::hermix_home()` which honours
     /// `HERMIX_PORTABLE_DATA_DIR` → `HERMIX_HOME` → `~/.hermix`. The final
     /// directory is `<hermix_home>/cron` in all modes.
     pub fn new() -> Self {
@@ -152,8 +150,7 @@ impl JobPersistence for FileJobPersistence {
 }
 
 /// Return the user's data directory for the cron job store.
-///
-/// Resolves to `$HERMIX_PORTABLE_DATA_DIR/cron`, `$HERMIX_HOME/cron`,
+/// /// Resolves to `$HERMIX_PORTABLE_DATA_DIR/cron`, `$HERMIX_HOME/cron`,
 /// or `~/.hermix/cron` — same precedence chain as `hermix_home()`.
 fn default_data_dir() -> PathBuf {
     hermix_config::paths::hermix_home().join("cron")
@@ -164,8 +161,7 @@ fn default_data_dir() -> PathBuf {
 // ---------------------------------------------------------------------------
 
 /// SQLite-based job persistence. Stores all jobs in a single `cron_jobs` table.
-///
-/// This is more robust than file-based persistence for concurrent access
+/// /// This is more robust than file-based persistence for concurrent access
 /// and provides atomic operations.
 #[derive(Debug)]
 pub struct SqliteJobPersistence {

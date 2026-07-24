@@ -31,17 +31,15 @@ export interface Artifact {
 }
 
 // Path-shaped strings. Three flavors are accepted:
-//   1. Windows absolute: F:\a\b.c            — drive letter + ≥1 segment + filename
-//   2. POSIX    absolute: /a/b/c.py          — leading slash   + ≥1 segment + filename
-//   3. Multi-seg relative: foo\bar.py        — ≥2 segments (one separator) + filename
-//
+// 1. Windows absolute: F:\a\b.c            — drive letter + ≥1 segment + filename
+// 2. POSIX    absolute: /a/b/c.py          — leading slash   + ≥1 segment + filename
+// 3. Multi-seg relative: foo\bar.py        — ≥2 segments (one separator) + filename
 // We intentionally do NOT match single-segment relative paths like `\foo.py`
 // or `foo.py` because they carry no directory information — common in LLM
 // bash commands like `cat \loop_demo.py` where the working directory is
 // implicit. Anchoring these against a workspace root would silently point
 // at the wrong file, so we drop them as ambiguous.
-//
-// 2026-07-14: Switched from [\w.\-\u4e00-\u9fff] to [\p{L}\p{N}_\-.\s()（）【】\[\]]
+// Switched from [\w.\-\u4e00-\u9fff] to [\p{L}\p{N}_\-.\s()（）【】\[\]]
 // with the `u` flag so paths with spaces (e.g. "My Documents"), parentheses,
 // and non-CJK Unicode (Korean, Japanese, accented Latin) are matched.
 // The extension character class also switched from [a-z0-9] to [\p{L}\p{N}]
@@ -77,7 +75,7 @@ function classify(name: string): ArtifactKind {
  * > `data` > `image` > `office` > `file` (e.g. a `.json` is `data`, never
  * `code`; a `.pdf` is `doc`, never `file`).
  *
- * 2026-07-17: extracted from `InlinePathPreview.tsx` and the inline
+ * extracted from `InlinePathPreview.tsx` and the inline
  * classifier in `App.tsx`. Both duplicates had drifted extension sets
  * (one missed `.sql`/`.pdf`/`.ico`/`.odt`/`.bmp`/`.tiff`), causing
  * different preview branches and icons for the same file depending on
@@ -200,21 +198,20 @@ const IGNORE_PATTERNS = [
 ];
 
 // Patterns that mark a path-shaped string as noise from context:
-//   • Python traceback lines:    `File "C:\foo.py", line 5`
-//   • Python frozen importlib:   `<frozen importlib._bootstrap>`
-//   • Rust panic locations:      `at C:\foo.rs:42:5` (and `:42:5` line/col)
-//   • "hypothetical" example paths the LLM invents in prose
-//
+// • Python traceback lines:    `File "C:\foo.py", line 5`
+// • Python frozen importlib:   `<frozen importlib._bootstrap>`
+// • Rust panic locations:      `at C:\foo.rs:42:5` (and `:42:5` line/col)
+// • "hypothetical" example paths the LLM invents in prose
 // Two windows are checked:
-//   • 40 chars BEFORE the match — for `File "`, `<frozen …`, `at ` markers
-//   • 12 chars AFTER the match — for `:42:5` line/col tail (panic only)
+// • 40 chars BEFORE the match — for `File "`, `<frozen …`, `at ` markers
+// • 12 chars AFTER the match — for `:42:5` line/col tail (panic only)
 const NOISE_BEFORE_PATTERNS = [
   /File\s*["<][^"<>]*$/i,        // ends with `File "…`
   /<frozen\s+\w*$/i,             // ends with `<frozen importlib`
 ];
 // Path-suffix patterns that only appear in error messages:
-//   • `:42:5`  — Rust panic (file:line:col)
-//   • `", line 5` — Python traceback (file", line N)
+// • `:42:5`  — Rust panic (file:line:col)
+// • `", line 5` — Python traceback (file", line N)
 const NOISE_AFTER_PATTERNS = [
   /:\d+:\d+$/,                   // `:42:5` Rust panic tail
   /['"],\s*line\s+\d+/i,         // `", line 5` Python traceback tail
@@ -281,7 +278,7 @@ export function extractArtifacts(
       if (!isArtifactPath(path)) { rejected++; continue; }
       // Skip paths that are part of an error message / traceback
       // (e.g. Python: `File "C:\foo.py", line 5`,
-      //       Rust:   `at C:\foo.rs:42:5`).
+      // Rust:   `at C:\foo.rs:42:5`).
       if (!isContextuallyReal(raw, m.index, m[0].length)) { rejected++; continue; }
       kept++;
       const name = basename(path);
@@ -301,7 +298,7 @@ export function extractArtifacts(
     }
   };
 
-  // 2026-07-14: Direct path extraction from file_change events.
+  // Direct path extraction from file_change events.
   // Instead of relying on PATH_RE to match the file_path inside a
   // concatenated string (which fails for paths with spaces or
   // unusual Unicode), we directly create an artifact from the
@@ -404,15 +401,15 @@ export function extractArtifacts(
   }
 
   // ── Tool-call write targets (any tool where the LLM invoked a
-  //    "write/append/create a file" action) ──────────────────────
-  //    `m.tool_calls[*]` is the source of truth for what the LLM asked
-  //    the backend to do. Even if the assistant's reply text doesn't
-  //    echo the path, and even if execution_timeline / tool-result
-  //    message hasn't landed yet, the tool_call is the canonical
-  //    "I intend to write this file" intent. We harvest a synthetic
-  //    string for each known writer tool so users see the artifact
-  //    *immediately* in the panel as soon as the assistant decides
-  //    to write it — not only after the tool finishes.
+  // "write/append/create a file" action) ──────────────────────
+  // `m.tool_calls[*]` is the source of truth for what the LLM asked
+  // the backend to do. Even if the assistant's reply text doesn't
+  // echo the path, and even if execution_timeline / tool-result
+  // message hasn't landed yet, the tool_call is the canonical
+  // "I intend to write this file" intent. We harvest a synthetic
+  // string for each known writer tool so users see the artifact
+  // *immediately* in the panel as soon as the assistant decides
+  // to write it — not only after the tool finishes.
   for (const m of messages) {
     if (m.role !== "assistant") continue;
     for (const tc of m.tool_calls ?? []) {

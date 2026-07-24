@@ -40,13 +40,12 @@ pub struct ContextPressureMonitor {
 impl ContextPressureMonitor {
     /// Returns true if we should emit a context-pressure warning for the
     /// current `progress_ratio` (0.0..=1.0) at the given `tier`.
-    ///
-    /// Rules (unchanged from the pre-extraction free function):
+    /// /// Rules (unchanged from the pre-extraction free function):
     /// - `tier <= 0.0` is a no-op (caller suppressed this tier).
     /// - Emit when the tier increased OR (cooldown elapsed AND
-    ///   progress advanced by ≥ `WARN_PERCENT_STEP` since last warn).
+    /// progress advanced by ≥ `WARN_PERCENT_STEP` since last warn).
     /// - On emit: store `tier` (only when it changed), `now`,
-    ///   and `progress_percent`.
+    /// and `progress_percent`.
     pub fn should_emit_warning(&mut self, progress_ratio: f64, tier: f64) -> bool {
         if tier <= 0.0 {
             return false;

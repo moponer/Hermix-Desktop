@@ -302,8 +302,8 @@ pub(crate) fn resolve_smart_runtime_route(
 /// 1. Explicit `cost_guard_degrade_model` config field (if set).
 /// 2. Generic `retry.fallback_model` config field (if set).
 /// 3. Hard-coded `openai:gpt-4o-mini`, unless the primary model
-///    already is `openai:gpt-4o-mini` (in which case there's no
-///    cheaper model to pick — return `None`).
+/// already is `openai:gpt-4o-mini` (in which case there's no
+/// cheaper model to pick — return `None`).
 pub(crate) fn resolve_cost_degrade_model(config: &AgentConfig) -> Option<String> {
     if let Some(ref m) = config.cost_guard_degrade_model {
         if !m.trim().is_empty() {

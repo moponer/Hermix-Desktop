@@ -93,7 +93,7 @@ export interface ChatOverrides {
   personality?: string;
   /** Permission level — "default" (ask on risky) | "full" (no ask). */
   permissionLevel?: "default" | "full";
-  /** 2026-06-26: 模型路由 — 形如 "minimax:MiniMax-M2.7" 的 "provider:model" 串。
+  /** 模型路由 — 形如 "minimax:MiniMax-M2.7" 的 "provider:model" 串。
    *  来自 ChatView 的 selectedModel（用户在模型下拉里切换的结果）。
    *  透传到 backend `SendMessageRequest.model` → `AgentOverrides.model` →
    *  `effective_model` → `resolve_provider()`，最终决定这次请求走哪个 provider。
@@ -105,12 +105,13 @@ export interface ChatOverrides {
    *  `skills_system_prompt` on top of any server-enabled skills. */
   skills?: string[];
   /** Free-form overrides for future use; backend ignores unknown keys. */
-  /** 2026-06-25: 多图支持 — binary bytes 直传，不走 base64。 */
+  /** 多图支持 — binary bytes 直传，不走 base64。 */
   images?: { bytes: number[]; mimeType: string; name?: string }[];
   image?: string;  // legacy single-image base64 (backward compat)
   imageMimeType?: string;  // mime type for legacy single image
   /** 非图片本地文件路径（拖放/粘贴时获取），后端直接用 read_file/read_pdf 读取 */
   attachedFilePaths?: string[];
+  /** Extensibility index — backend ignores unknown keys. */
   [key: string]: unknown;
 }
 
@@ -227,7 +228,7 @@ interface StreamCallbacks {
     riskLevel?: string;
     /** Wall-clock deadline (Unix ms) when the server will auto-deny
      *  this request. Drives the front-end countdown UI. `null` /
-     *  `undefined` for pre-2026-06-14 servers that predate the
+     *  `undefined` for pre-servers that predate the
      *  countdown feature — the card falls back to a no-countdown
      *  state in that case. */
     expiresAt?: number | null;
@@ -263,7 +264,7 @@ interface StreamCallbacks {
    */
   onReasoningChunk?: (piece: string) => void;
   /**
-   * 2026-06-29 (C3 marker protocol): the backend's `SectionGate`
+   * (C3 marker protocol): the backend's `SectionGate`
    * ran on `resolve_initial_system_prompt` and forwarded the
    * resulting `SectionGateReport` to the `on_section_gate`
    * callback, which serialised it as a `section_gate` WS event.
@@ -314,21 +315,20 @@ export function useStreamChat(activeSessionId: string | null) {
   // Per-session streaming state. We track the *session id* (not just a
   // boolean) so the UI can scope the "正在思考…" indicator and the
   // composer-disabled state to the specific session that's mid-stream.
-  //
   // A global `boolean` was the previous design and it had two
   // pathologies:
-  //   1. Switching to another session mid-stream would leak the
-  //      "thinking" state into the new session's ChatView (false
-  //      positive — the new session isn't actually streaming).
-  //   2. After `cancel()` closed the active WS, React batching of the
-  //      state update could let the Composer stay disabled across
-  //      session switches, blocking new sends until a full
-  //      re-render cycle.
+  // 1. Switching to another session mid-stream would leak the
+  // "thinking" state into the new session's ChatView (false
+  // positive — the new session isn't actually streaming).
+  // 2. After `cancel()` closed the active WS, React batching of the
+  // state update could let the Composer stay disabled across
+  // session switches, blocking new sends until a full
+  // re-render cycle.
   // The id-typed state fixes both: ChatView only shows the indicator
   // when `streamingSessionId === activeSessionId`, and `null` is the
   // unambiguous "no stream in flight" sentinel.
   const [streamingSessionId, setStreamingSessionId] = useState<string | null>(null);
-  // 2026-07-17: synchronous mirror of `streamingSessionId`. The stable
+  // synchronous mirror of `streamingSessionId`. The stable
   // `send` callback closes over the INITIAL state value, so it can't
   // read the live `streamingSessionId` inside `dedup`. This ref lets the
   // dedup check ask "is a stream currently in flight for this session?"
@@ -342,12 +342,12 @@ export function useStreamChat(activeSessionId: string | null) {
   // ChatView can render the banner without further plumbing work later.
   const [compactionStatus, setCompactionStatus] =
     useState<import("../components/CompactionStatusBanner").CompactionStatus | null>(null);
-  // 2026-07-12: context window usage. Updated every turn via the
+  // context window usage. Updated every turn via the
   // `context_usage` WS event. Displayed as a small bar in the chat
   // footer so the user always knows how much context budget remains.
   const [contextUsage, setContextUsage] =
     useState<{ usedTokens: number; maxTokens: number; thresholdTokens: number; percent: number } | null>(null);
-  // 2026-07-14: per-turn token usage snapshot — pushed by the
+  // per-turn token usage snapshot — pushed by the
   // backend as a `usage_update` WS event after every successful LLM
   // response. Drives the live "cache hit %" chip next to the
   // context-usage bar. Accumulated session-wide so the chip shows
@@ -361,7 +361,7 @@ export function useStreamChat(activeSessionId: string | null) {
       reasoningTokens: number;
     } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  // 2026-07-19 type-B observability + direct-send: send a raw WS text
+  // type-B observability + direct-send: send a raw WS text
   // frame on the live socket. Returns false (no-op) if the socket is
   // missing or not OPEN, so callers can distinguish "sent" from
   // "dropped". Used by the approval flow so the click handler can
@@ -385,7 +385,7 @@ export function useStreamChat(activeSessionId: string | null) {
   const pendingRejectRef = useRef<((error: Error) => void) | null>(null);
   const pendingCallbacksRef = useRef<StreamCallbacks | null>(null);
   const disarmTimeoutsRef = useRef<(() => void) | null>(null);
-  // 2026-07-18 (storage-analyzer stale_stream bug fix): while a tool is
+  // (storage-analyzer stale_stream bug fix): while a tool is
   // executing on the server (between `tool_start` and `tool_complete`),
   // suspend the STALE_STREAM_TIMEOUT countdown. spawn_blocking tools like
   // storage_analyzer can take 60-90s on big trees without emitting any
@@ -405,7 +405,7 @@ export function useStreamChat(activeSessionId: string | null) {
   // Client-side dedup: track last sent (hash, timestamp) to prevent
   // the same content from being sent multiple times within the window.
   const lastSendRef = useRef<{ hash: string; ts: number } | null>(null);
-  // 2026-07-10: Per-send isolation via a monotonically increasing ID.
+  // Per-send isolation via a monotonically increasing ID.
   // Each `send()` call increments `activeSendIdRef.current` and captures
   // its own `mySendId`. All WS event handlers (onmessage, onerror, onclose)
   // and the `settle` function check `activeSendIdRef.current === mySendId`
@@ -413,26 +413,25 @@ export function useStreamChat(activeSessionId: string | null) {
   // asynchronously after `wsRef.current?.close()`) from interfering with
   // a new `send()` that has already reset `doneRef` and swapped
   // `wsRef.current` to a new WebSocket.
-  //
   // The race condition this fixes:
-  //   1. send1's onDone → settle1() → close WS1 → resolve promise
-  //   2. Queue drain fires → send2 starts → doneRef=false, wsRef=WS2
-  //   3. WS1's onclose fires (async macro task) → settle1() runs again
-  //      → closes wsRef.current (WS2!) → send2 shows "disconnected"
+  // 1. send1's onDone → settle1() → close WS1 → resolve promise
+  // 2. Queue drain fires → send2 starts → doneRef=false, wsRef=WS2
+  // 3. WS1's onclose fires (async macro task) → settle1() runs again
+  // → closes wsRef.current (WS2!) → send2 shows "disconnected"
   const activeSendIdRef = useRef(0);
-  // 2026-07-21: track the currently-active session id so per-session
+  // track the currently-active session id so per-session
   // context_usage / usage_update events can be filtered — drop stale
   // events from a background session once the user switches away.
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
   // Session id of the WS connection currently held in wsRef.current.
   const wsSessionIdRef = useRef<string | null>(null);
-  // 2026-07-07: shared per-send state via refs so that WS reconnection
+  // shared per-send state via refs so that WS reconnection
   // (doConnect retry) shares the same `done` / `sentToServer` flags
   // instead of creating fresh local variables each time.
   const doneRef = useRef(false);
   const sentToServerRef = useRef(false);
-  // 2026-07-16: Per-send wall-clock start. Captured at the moment the
+  // Per-send wall-clock start. Captured at the moment the
   // user fires `send()` (i.e. the assistant turn begins). Read at
   // `onDone` to compute `durationMs` and pass it on to App.tsx, where
   // it's stamped onto the assistant message. Reloaded history has no
@@ -479,7 +478,7 @@ export function useStreamChat(activeSessionId: string | null) {
         pendingRejectRef.current = reject;
         pendingCallbacksRef.current = callbacks;
         sendSettledRef.current = false;
-        // 2026-07-16: Mark the start of this assistant turn so `onDone`
+        // Mark the start of this assistant turn so `onDone`
         // can compute how long the LLM took. Set BEFORE dedup so a
         // deduped call doesn't pollute the timing of the next real
         // send. (A deduped call resolves immediately without firing
@@ -488,14 +487,13 @@ export function useStreamChat(activeSessionId: string | null) {
         sendStartedAtRef.current = Date.now();
 
         // ── Client-side message dedup (runs BEFORE setStreamingSessionId) ──
-        // 2026-07-08 (HH) root-cause fix: the previous code did `return;`
+        // (HH) root-cause fix: the previous code did `return;`
         // from inside this Promise executor on a duplicate. That left the
         // Promise un-resolved, so `await sendStream(...)` hung forever and
         // the caller's `setSending(false)` (in `finally`) never ran. While
         // `streaming` stayed true, the next Enter was routed to the message
         // queue, whose auto-drain effect (`!streaming` guard) could never
         // fire — looping identical content into the backend.
-        //
         // Direct fix: resolve cleanly (no error, no UI glitch) instead of
         // `return;`, and run this check BEFORE `setStreamingSessionId` so a
         // duplicate never flips `streaming` on. No mutex / reject needed —
@@ -511,7 +509,7 @@ export function useStreamChat(activeSessionId: string | null) {
           lastSendRef.current &&
           lastSendRef.current.hash === contentHash &&
           now - lastSendRef.current.ts < DEDUP_WINDOW_MS &&
-          // 2026-07-17: only coalesce a same-content re-send WHILE this
+          // only coalesce a same-content re-send WHILE this
           // session is actively streaming. Once the stream has settled
           // (LLM self-interrupted / user stopped / stale-timeout),
           // `streamingSessionId` is cleared, so a re-send of the
@@ -528,7 +526,7 @@ export function useStreamChat(activeSessionId: string | null) {
         }
         lastSendRef.current = { hash: contentHash, ts: now };
 
-        // 2026-07-10: Increment the active send ID so any stale WS
+        // Increment the active send ID so any stale WS
         // event handlers from a previous `send()` call become no-ops.
         // The previous send should have already settled (via the `await`
         // and queue mechanism in App.tsx), but this is a safety net for
@@ -549,14 +547,12 @@ export function useStreamChat(activeSessionId: string | null) {
         // sessions×messages tree (`prev.map`/`s.messages.map`) and
         // re-rendering the whole App subtree. On a long conversation
         // this is the dominant CPU sink while streaming.
-        //
         // Collapse N chunks into one batch per rAF tick (≤16ms on a
         // 60Hz display). The "正在打字…" cursor still animates every
         // frame; we just stop forcing a full React reconciliation on
         // every token. The on-hook `fullText` accumulator is still
         // updated synchronously so `onDone` (settle) gets the full
         // server text regardless of when rAF last fired.
-        //
         // Scoped to the `send` closure (not module-level refs) so a
         // second `send` call can't accidentally fire a stale rAF with
         // the previous send's `callbacks` closure.
@@ -574,7 +570,7 @@ export function useStreamChat(activeSessionId: string | null) {
         };
 
         // ── Per-send retry state ─────────────────────────────────
-        // 2026-07-06: auto-retry when the WS fails before any content
+        // auto-retry when the WS fails before any content
         // has arrived. After the first chunk, we settle immediately
         // (no retry — the agent loop is already running and duplicating
         // it would produce duplicate tool results).
@@ -590,7 +586,7 @@ export function useStreamChat(activeSessionId: string | null) {
         const updatePhase = (next: StreamPhase) => { phase = next; callbacks.onPhaseChange?.(next); };
         let firstChunkReceived = false;
         let hasContent = false;
-        // 2026-07-07: true once `ws.send(payload)` succeeds in the
+        // true once `ws.send(payload)` succeeds in the
         // `connected` handler. If the WS closes before any content
         // arrives but AFTER the message was sent to the server, we
         // MUST NOT retry — the server already received it and will
@@ -606,23 +602,21 @@ export function useStreamChat(activeSessionId: string | null) {
         // terminated, flipping `phase` back to "slow" right after the user
         // already saw "completed".
         let slowHintTimer: ReturnType<typeof setTimeout> | null = null;
-        // 2026-07-12: Changed from a 120s TOTAL timeout to a 300s IDLE
+        // Changed from a 120s TOTAL timeout to a 300s IDLE
         // timeout. The old total timeout killed long-running tasks (code
         // review, plan generation) that legitimately take >120s of wall
         // clock time even while actively streaming. The idle timeout
         // resets on every received WS event (text, thinking, tool_start,
         // tool_complete, status, etc.), so as long as the agent is
         // making progress the stream stays alive.
-        //
-        // 2026-07-14 (P0-2 stale-stream hang fix): added a 90s STALE
+        // (P0-2 stale-stream hang fix): added a 90s STALE
         // idle timeout independent from the 300s IDLE. When the backend
         // agent loop exits silently (Finalize without sending Done, e.g.
         // MiniMax empty-tool-call dead-end), the 90s guard settles the
         // stream as "partial" so the user sees the interrupted result
         // instead of staring at a frozen "thinking..." UI. The 300s
         // timeout remains as the ultimate safety net.
-        //
-        // 2026-07-18 (storage_analyzer 81s regression): bumped STALE to
+        // (storage_analyzer 81s regression): bumped STALE to
         // 300s so spawn_blocking tools (storage_analyzer walks C:\
         // which can take 60-90s) get the same 5-min buffer as IDLE.
         // Combined with `toolRunningRef` suspending the timer between
@@ -632,6 +626,14 @@ export function useStreamChat(activeSessionId: string | null) {
         const IDLE_TIMEOUT_MS = 300_000;
         const STALE_STREAM_TIMEOUT_MS = 300_000;
         let staleStreamTimer: ReturnType<typeof setTimeout> | null = null;
+        // 2026-07-25: when an approval card is pending, the agent
+        // loop is blocked waiting for the user's click. No WS events
+        // will arrive during this time, so the idle/stale timers would
+        // fire and settle the stream as "timeout" / "partial" — killing
+        // the approval wait prematurely. This flag suspends both timers
+        // while an approval is in flight. It's set to true when
+        // `request_approval` arrives and cleared when the user clicks.
+        let approvalPending = false;
 
         const armTimeouts = () => {
           resetIdleTimeout();
@@ -700,7 +702,7 @@ export function useStreamChat(activeSessionId: string | null) {
 
         const settle = (text: string, err?: string, reason?: string, phaseHint?: StreamPhase) => {
           if (doneRef.current) return;
-          // 2026-07-10: Guard against stale WS event handlers. If a new
+          // Guard against stale WS event handlers. If a new
           // `send()` has started (incrementing `activeSendIdRef`), this
           // `settle` belongs to an old send and must be a no-op —
           // otherwise it would close the new WS and corrupt the new
@@ -742,7 +744,7 @@ export function useStreamChat(activeSessionId: string | null) {
             // been nulled (e.g. on a second settle call).
             (pendingRejectRef.current ?? reject)(new Error(err));
           } else {
-            // 2026-07-16: Measure how long this assistant turn took
+            // Measure how long this assistant turn took
             // (Date.now() at send() → Date.now() at Done). Sent to
             // App.tsx so it can stamp the duration onto the message.
             // Clamp at 0 to defend against clock skew (send before
@@ -764,11 +766,11 @@ export function useStreamChat(activeSessionId: string | null) {
         };
         settleRef.current = settle;
 
-        // 2026-07-06: extracted WS creation into a callable so the
+        // extracted WS creation into a callable so the
         // auto-retry path (before any content arrives) can create a
         // fresh WS without duplicating the ~200 lines of handler setup.
         const doConnect = () => {
-        // 2026-07-10: Stale retry guard — if a new `send()` has started
+        // Stale retry guard — if a new `send()` has started
         // during the retry delay, abort the reconnection attempt so we
         // don't overwrite the new send's WS in `wsRef.current`.
         if (activeSendIdRef.current !== mySendId) return;
@@ -789,15 +791,26 @@ export function useStreamChat(activeSessionId: string | null) {
           // settles or the session changes).
 
           ws.onmessage = (evt) => {
-            // 2026-07-10: Stale WS guard — if a new send has started,
+            // Stale WS guard — if a new send has started,
             // ignore events from the old WS.
             if (activeSendIdRef.current !== mySendId) return;
-            // 2026-07-12: Reset the idle timeout on every received
+            // Reset the idle timeout on every received
             // event. As long as the agent is actively producing data
             // (text, thinking, tool events, status), the stream stays
             // alive. Only when no event arrives for IDLE_TIMEOUT_MS
             // does the timeout fire.
-            if (idleTimeout !== null) {
+            // 2026-07-25: skip timer reset when an approval is pending —
+            // the agent is blocked waiting for the user's click, so no
+            // WS events will arrive. Without this guard, the idle timer
+            // would fire after 300s and kill the approval wait.
+            if (approvalPending) {
+              // Still clear any existing timer so it doesn't fire
+              // from before the approval was pending.
+              if (idleTimeout !== null) {
+                clearTimeout(idleTimeout);
+                idleTimeout = null;
+              }
+            } else if (idleTimeout !== null) {
               clearTimeout(idleTimeout);
               idleTimeout = setTimeout(() => {
                 if (!doneRef.current) {
@@ -806,10 +819,12 @@ export function useStreamChat(activeSessionId: string | null) {
                 }
               }, IDLE_TIMEOUT_MS);
             }
-            // 2026-07-14: also arm the stale timer on every WS event.
+            // also arm the stale timer on every WS event.
             // This gives the stream 90s of "no text" before auto-settle.
             // Tool execution pauses don't extend it (text events do).
-            resetStaleTimer();
+            // 2026-07-25: skip when an approval is pending — same
+            // reasoning as the idle timeout guard above.
+            if (!approvalPending) resetStaleTimer();
             try {
               const data = JSON.parse(String(evt.data));
 
@@ -825,7 +840,7 @@ export function useStreamChat(activeSessionId: string | null) {
                 if (overrides.tools && overrides.tools.length > 0) {
                   payload.tools = overrides.tools;
                 }
-                // 2026-06-26: 把 selectedModel（形如 "minimax:MiniMax-M2.7"）
+                // 把 selectedModel（形如 "minimax:MiniMax-M2.7"）
                 // 透传到 backend，让 effective_model 真的能切到用户选的 provider。
                 // 没设 = backend 用 config.yaml 默认 model。bug 历史：UI 显示切了
                 // 但 backend 永远在跑默认模型。
@@ -909,7 +924,7 @@ export function useStreamChat(activeSessionId: string | null) {
                 const tool = data?.tool || data?.event?.tool || "tool";
                 const toolCallId =
                   data?.tool_call_id || data?.event?.tool_call_id || `legacy-${tool}`;
-                // 2026-07-18 (A+C product fix): a user-facing denial
+                // (A+C product fix): a user-facing denial
                 // (user拒绝 / 超时 / 连接中断) carries `denial_kind`.
                 // Forward it so App.tsx can show a "this call was
                 // blocked" banner that matches the agent's injected
@@ -1029,13 +1044,12 @@ export function useStreamChat(activeSessionId: string | null) {
               }
 
               // Todo (task list) mutations. Wire format:
-              //   { type: "todo_snapshot",       event: { session_id, items: [...] } }
-              //   { type: "todo_group_started",  event: { session_id, group_id, group_title, message_id } }
-              //   { type: "todo_item_upserted",  event: { session_id, item: {...} } }
-              //   { type: "todo_item_removed",   event: { session_id, id: "..." } }
+              // { type: "todo_snapshot",       event: { session_id, items: [...] } }
+              // { type: "todo_group_started",  event: { session_id, group_id, group_title, message_id } }
+              // { type: "todo_item_upserted",  event: { session_id, item: {...} } }
+              // { type: "todo_item_removed",   event: { session_id, id: "..." } }
               // Routing is straight to onTodoChange; no message-bubble
               // side effects (the TodoListCard subscribes directly).
-              //
               // P0-T2 (Frontend Audit 2026-07-13): the `todo_snapshot`
               // branch was missing — reload / reconnect / multi-client
               // hydration silently dropped. Now handled: caller rebuilds
@@ -1107,6 +1121,16 @@ export function useStreamChat(activeSessionId: string | null) {
               // high-risk tool. Forward to caller; when they answer, send the
               // response back via the same socket.
               if (evtType === "request_approval" || evtType === "RequestApproval") {
+                // 2026-07-25: Suspend idle/stale timers while the
+                // approval card is shown. The agent loop is blocked
+                // waiting for the user's click — no WS events will
+                // arrive, so without suspending the timers the stream
+                // would settle as "timeout" after 300s and kill the
+                // approval wait. Timers are re-armed in the .then()
+                // and .catch() callbacks below.
+                approvalPending = true;
+                if (idleTimeout !== null) { clearTimeout(idleTimeout); idleTimeout = null; }
+                if (staleStreamTimer !== null) { clearTimeout(staleStreamTimer); staleStreamTimer = null; }
                 const ev = data?.event ?? data;
                 const requestId = ev?.request_id ?? ev?.requestId;
                 const tool = ev?.tool ?? "tool";
@@ -1126,6 +1150,11 @@ export function useStreamChat(activeSessionId: string | null) {
                   callbacks
                     .onApprovalRequest({ requestId, tool, args, riskLevel, expiresAt, sessionId })
                     .then((resp) => {
+                      // 2026-07-25: Re-arm idle/stale timers — the
+                      // agent loop is about to resume, so the stream
+                      // watchdog needs to be active again.
+                      approvalPending = false;
+                      armTimeouts();
                       // The `expired` decision means the user
                       // clicked after the resolver was already
                       // gone (e.g. the server's 5-minute
@@ -1142,7 +1171,7 @@ export function useStreamChat(activeSessionId: string | null) {
                       console.error(`[APPROVAL-THEN] firing decision=${resp.decision} id=${requestId} t=${Date.now()} wsState=${wsRef.current?.readyState}`);
                       wsSendRaw(JSON.stringify({ type: "__diag", tag: "THEN", id: String(requestId), decision: String(resp.decision), ws: wsRef.current?.readyState ?? -1 }));
                       if (resp.decision === "expired") return;
-                      // 2026-07-19: stale-click bug fix.
+                      // stale-click bug fix.
                       // The closure-captured `ws` was the WS that
                       // delivered `request_approval`, which may have
                       // been replaced by a reconnect by the time the
@@ -1184,6 +1213,9 @@ export function useStreamChat(activeSessionId: string | null) {
                       }
                     })
                     .catch(() => {
+                      // 2026-07-25: Re-arm idle/stale timers.
+                      approvalPending = false;
+                      armTimeouts();
                       // Same hardening on the deny path.
                       const liveWs = wsRef.current;
                       if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
@@ -1215,7 +1247,7 @@ export function useStreamChat(activeSessionId: string | null) {
                   callbacks
                     .onClarifyRequest({ requestId, question, choices, sessionId })
                     .then((resp) => {
-                      // 2026-07-19: stale-click hardening — same as
+                      // stale-click hardening — same as
                       // approval_response above. Use wsRef.current so
                       // a reconnect between `clarify_request` arrival
                       // and the user's answer doesn't silently drop
@@ -1261,7 +1293,7 @@ export function useStreamChat(activeSessionId: string | null) {
 // Context usage snapshot — fired after every agent-loop turn.
 // Used to render a persistent context-usage bar in the chat footer.
               if (evtType === "context_usage" || evtType === "ContextUsage") {
-                // 2026-07-21: drop events whose WS session != active session
+                // drop events whose WS session != active session
                 // (a background session's context_usage must not pollute the
                 // bar of the session the user switched to). See commit d28f76e.
                 if (activeSessionIdRef.current && wsSessionIdRef.current
@@ -1284,21 +1316,20 @@ export function useStreamChat(activeSessionId: string | null) {
                 return;
               }
 
-              // 2026-07-14: per-turn usage snapshot — backend fires
+              // per-turn usage snapshot — backend fires
               // this after every successful LLM response so the chat
               // header can show a live "cache hit %" chip next to
               // the context-usage bar. Mirrors `context_usage`
               // shape (top-level OR nested under `event`). We keep
               // the raw counts; the chip computes its own rate so
               // the formula stays in one place (the consumer).
-              //
               // Wire shape:
-              //   { "type": "usage_update",
-              //     "event": { prompt_tokens, completion_tokens,
-              //                cache_read_tokens, cache_creation_tokens,
-              //                reasoning_tokens } }
+              // { "type": "usage_update",
+              // "event": { prompt_tokens, completion_tokens,
+              // cache_read_tokens, cache_creation_tokens,
+              // reasoning_tokens } }
               if (evtType === "usage_update" || evtType === "UsageUpdate") {
-                // 2026-07-21: same session filter as context_usage above.
+                // same session filter as context_usage above.
                 if (activeSessionIdRef.current && wsSessionIdRef.current
                     && activeSessionIdRef.current !== wsSessionIdRef.current) {
                   return;
@@ -1316,16 +1347,15 @@ export function useStreamChat(activeSessionId: string | null) {
                 return;
               }
 
-              // 2026-06-29: compaction-pipeline status snapshot
+              // compaction-pipeline status snapshot
               // forwarded from the backend's `BreakerSnapshot`. The
               // server emits it both on pressure-detected and after
               // every compression attempt; the `CompactionStatusBanner`
               // derives its 5-state UI from `state` and renders the
               // "145k / 160k tokens (90%)" footer from
               // `used_tokens` / `threshold_tokens`.
-              //
               // Wire shape (top-level OR nested under `event`):
-              //   { "event": "compaction_status", "snapshot": { state, ... } }
+              // { "event": "compaction_status", "snapshot": { state, ... } }
               if (evtType === "compaction_status" || evtType === "CompactionStatus") {
                 const snapRaw =
                   data?.snapshot ?? data?.event?.snapshot ?? null;
@@ -1374,7 +1404,7 @@ export function useStreamChat(activeSessionId: string | null) {
                     typeof snap.last_changed_at_unix_ms === "number"
                       ? (snap.last_changed_at_unix_ms as number)
                       : undefined;
-                  // 2026-07-22: forward the compression-process phase
+                  // forward the compression-process phase
                   // so `CompactionStatusBanner` can render the
                   // "starting / in_progress / complete / failed"
                   // transitions instead of jumping straight from the
@@ -1410,7 +1440,7 @@ export function useStreamChat(activeSessionId: string | null) {
                 return;
               }
 
-              // 2026-06-29 (C3 marker protocol): the backend's
+              // (C3 marker protocol): the backend's
               // `SectionGate` runs on every `resolve_initial_system_prompt`
               // and forwards the resulting `SectionGateReport` to the
               // `on_section_gate` callback, which serialises it as a
@@ -1419,15 +1449,14 @@ export function useStreamChat(activeSessionId: string | null) {
               // render "SectionGate patched 2 required sections:
               // Working directory, Current time" inline with the
               // tool cards the user already sees.
-              //
               // Wire shape (top-level OR nested under `event`):
-              //   {
-              //     "event": "section_gate",
-              //     "report": {
-              //       "patched": [{ "section": "working_dir", "applied": true, "reason": "..." }],
-              //       "pending": [{ "section": "tool_list", "applied": false, "reason": "..." }]
-              //     }
-              //   }
+              // {
+              // "event": "section_gate",
+              // "report": {
+              // "patched": [{ "section": "working_dir", "applied": true, "reason": "..." }],
+              // "pending": [{ "section": "tool_list", "applied": false, "reason": "..." }]
+              // }
+              // }
               if (evtType === "section_gate" || evtType === "SectionGate") {
                 const reportRaw =
                   data?.report ?? data?.event?.report ?? null;
@@ -1489,7 +1518,7 @@ export function useStreamChat(activeSessionId: string | null) {
                 const text = (typeof evtContent === "string" && evtContent.length > 0)
                   ? evtContent
                   : fullText;
-                // 2026-07-19: a `done` whose finish_reason is one of
+                // a `done` whose finish_reason is one of
                 // the watchdog / timeout signals is *not* a clean
                 // completion. The server gave up because nothing
                 // useful happened (e.g. `turn_transition_stall`,
@@ -1542,10 +1571,10 @@ export function useStreamChat(activeSessionId: string | null) {
           };
 
           ws.onerror = () => {
-            // 2026-07-10: Stale WS guard.
+            // Stale WS guard.
             if (activeSendIdRef.current !== mySendId) return;
             if (!doneRef.current) {
-              // 2026-07-06 (rev): if we've ever received any content
+              // (rev): if we've ever received any content
               // (text or status), we MUST NOT retry — the agent
               // loop is already running server-side and a fresh WS
               // would trigger a second `send_message_stream` call
@@ -1556,7 +1585,7 @@ export function useStreamChat(activeSessionId: string | null) {
                 settle(fullText, undefined, undefined, "partial");
                 return;
               }
-              // 2026-07-07: if the message was already sent to the
+              // if the message was already sent to the
               // server (we received `connected` and called
               // `ws.send(payload)`), DO NOT retry — the server is
               // already processing it. A new WS would re-send the
@@ -1580,7 +1609,7 @@ export function useStreamChat(activeSessionId: string | null) {
             }
           };
           ws.onclose = () => {
-            // 2026-07-10: Stale WS guard — this is the critical fix.
+            // Stale WS guard — this is the critical fix.
             // When settle() closes the WS, the `onclose` event is
             // queued as a macro task. By the time it fires, a new
             // `send()` may have already started (resetting doneRef
@@ -1593,14 +1622,14 @@ export function useStreamChat(activeSessionId: string | null) {
               if (hasContent && fullText.length > 0) {
                 settle(fullText, undefined, undefined, "partial");
               } else {
-                // 2026-07-06 (rev): same hardening as onerror above.
+                // (rev): same hardening as onerror above.
                 // If anything arrived (status, thinking, anything),
                 // never retry — the agent loop is already running.
                 if (hasContent) {
                   settle(fullText, undefined, undefined, "partial");
                   return;
                 }
-                // 2026-07-07: same hardening as onerror — if the
+                // same hardening as onerror — if the
                 // message was already sent, don't retry.
                 if (sentToServerRef.current) {
                   settle("", "Connection closed while server was processing the message", undefined, "error");

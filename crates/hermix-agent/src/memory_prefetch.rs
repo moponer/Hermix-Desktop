@@ -164,8 +164,7 @@ pub fn emit_memory_update_event(
 
 /// Run the memory prefetch pipeline and return a markdown block
 /// (`"## Memory\n\n..."`) sized to the configured char budget.
-///
-/// Honours `config.skip_memory` (returns empty), `config.memory_min_salience`
+/// /// Honours `config.skip_memory` (returns empty), `config.memory_min_salience`
 /// (drops low-signal hits), `config.memory_char_budget` (clamps total chars),
 /// and `config.memory_recall_limit_{first,subsequent}` (caps hit count).
 pub async fn memory_prefetch(
@@ -365,7 +364,6 @@ pub async fn memory_prefetch(
     // reflections so the agent's next turn starts with the lessons
     // learned last session. Disabled when config.prior_reflection_max_items
     // is 0 or no embedded backend is wired.
-    //
     // The block clamps itself to char_budget so we never exceed the
     // total budget. Errors are swallowed — the rest of the `## Memory`
     // block stays intact and the user sees noise-free degradation.
@@ -434,9 +432,9 @@ pub async fn memory_prefetch(
 /// Run the memory sync side-effects for one turn:
 /// 1. Route to `MemoryRouter::sync_turn`.
 /// 2. Extract facts from the user turn and upsert them into the embedded
-///    backend's `facts` table.
+/// backend's `facts` table.
 /// 3. Run `user_style::detect_user_style` and write a `user.style:<style>`
-///    fact if a style was detected with sufficient confidence.
+/// fact if a style was detected with sufficient confidence.
 #[tracing::instrument(
     name = "memory_sync",
     level = "debug",
@@ -513,7 +511,6 @@ pub fn memory_sync(
     // LLM never has to ask the user "are you direct or
     // exploratory?" — we infer it from the prompt shape and
     // surface it as a fact row that future turns can pull in.
-    //
     // Best-effort: a `detect_user_style` miss (no rule hits
     // threshold) just means we don't write anything, which is
     // safer than a noisy tag competing for salience.
@@ -570,8 +567,7 @@ pub fn memory_sync(
 /// and on `on_session_end`. The `frame_ids` and `summary` are
 /// extracted from the router's embedded backend so this method
 /// is a no-op when the embedded backend is absent.
-///
-/// Designed to be cheap: the embedded SQLite path is O(visible
+/// /// Designed to be cheap: the embedded SQLite path is O(visible
 /// frames) on `total_turns.is_multiple_of(N)` boundary calls,
 /// and O(1) on all other turns.
 pub fn maybe_freeze_snapshot(
@@ -774,8 +770,7 @@ pub fn memory_pre_compress_note(
 /// Drain pending `FocusConclusion`s from the focus stack and forward
 /// them to the long-term memory backend. Returns the number of
 /// conclusions processed.
-///
-/// No-op when no router is attached — conclusions are still drained
+/// /// No-op when no router is attached — conclusions are still drained
 /// from the focus stack so they don't pile up. Each conclusion is
 /// persisted via `router.upsert_conclusion` (async, fan-out to all
 /// backends) and, when the embedded backend is present, a
@@ -815,7 +810,6 @@ pub fn drain_focus_conclusions(
     // Sync (SQLite is sub-ms) — done before spawning the async
     // persistence so the fact row lands in the same SQLite
     // connection window as the conclusion row.
-    //
     // Only on the embedded backend (the only one that owns the
     // `facts` table); the router-level `upsert_conclusion` already
     // fans out to every backend.
@@ -853,12 +847,11 @@ pub fn drain_focus_conclusions(
 
 /// Session-end side-effects:
 /// 1. Persist a session-level `FocusConclusion` to the embedded
-///    SQLite (memory.db) so cross-session recall works even when the
-///    session never used `delegate_task`.
+/// SQLite (memory.db) so cross-session recall works even when the
+/// session never used `delegate_task`.
 /// 2. Drain any pending focus conclusions from the focus stack.
 /// 3. Route `on_session_end` through `MemoryRouter`.
-///
-/// No-op when `skip_memory` is set. The session-level conclusion is
+/// /// No-op when `skip_memory` is set. The session-level conclusion is
 /// spawned on the runtime so the agent loop doesn't block on SQLite
 /// writes; errors are logged and swallowed.
 #[allow(clippy::too_many_arguments)]
@@ -927,7 +920,7 @@ pub fn memory_on_session_end(
         );
     }
 
-    // 2026-07-14: surface the session-end summary so the user can
+    // surface the session-end summary so the user can
     // see that the agent "remembered" this session. Emit before the
     // async persistence completes — we already know synchronously
     // whether a summary was produced and how many conclusions drained.
@@ -962,12 +955,11 @@ pub fn memory_on_session_end(
         .collect();
     router_owned.on_session_end(&as_values);
 
-    // 2026-07-14 (Phase 19 E): emit per-session reflections
+    // (Phase 19 E): emit per-session reflections
     // (what_went_well / what_to_improve / user_preferences_observed /
     // next_session_hint). No LLM — pure template aggregation over
     // facts + tool_errors + user.style. The user sees these in chat
     // via `StreamEvent::MemoryUpdate { kind: "reflection" }`.
-    //
     // We aggregate synchronously because the inputs are small and
     // we want the UI to render them in the same frame as the
     // session-end summary emit above.
@@ -1007,11 +999,10 @@ pub fn memory_on_session_end(
 /// Dispatch delegation tool-call results through the memory subsystem:
 /// 1. Fan out `on_delegation` hooks through `MemoryRouter`.
 /// 2. Pop the matching `Delegation` frame on the focus stack so a
-///    `FocusConclusion` is buffered for the next drain.
+/// `FocusConclusion` is buffered for the next drain.
 /// 3. Drain pending focus conclusions to long-term memory.
 /// 4. Broadcast the live focus depth to the consciousness tracker.
-///
-/// M1 wires (1)–(3); M1.6.3 added (4). The push side
+/// /// M1 wires (1)–(3); M1.6.3 added (4). The push side
 /// (`note_delegation_start`) is invoked from the tool-dispatch
 /// path; the pop side here is a safe no-op when no matching frame
 /// is on the stack.
@@ -1145,10 +1136,10 @@ fn extract_task_context(messages: &[Message]) -> TaskContext {
     }
 }
 
-// 2026-07-05 (N-05): integration tests covering the
+// (): integration tests covering the
 // memory-recall → pre-compress → persist round-trip that the
 // agent loop relies on. Previously only `compression::tests`
 // had end-to-end coverage; memory_prefetch was completely
 // uncovered. These tests pin the contract from the outside
 // Integration tests for the boundary functions in this module
-// live in `tests/memory_prefetch_integration.rs` (N-10).
+// live in `tests/memory_prefetch_integration.rs` ().

@@ -31,8 +31,7 @@ pub struct AutomationScheduler {
 
 impl AutomationScheduler {
     /// Start the background tick loop.
-    ///
-    /// - `service`: the automation service for querying + updating state
+    /// /// - `service`: the automation service for querying + updating state
     /// - `trigger`: callback invoked for each due automation
     /// - `tick_interval`: how often to check for due automations (default 30s)
     pub fn start(

@@ -1,4 +1,4 @@
-//! Approval outcome taxonomy (2026-07-18 — A+C product fix).
+//! Approval outcome taxonomy (— A+C product fix).
 //!
 //! Replaces the previous flat `oneshot::Receiver<bool>` pair with a
 //! structured outcome that distinguishes **why** a tool-call approval

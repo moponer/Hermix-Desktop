@@ -92,7 +92,7 @@ pub fn register(registry: &ToolRegistry) {
     register_one("cua_ui_focus", "🎯", CoreRisk::Dangerous, Arc::new(CuaUiFocusHandler::new()));
     register_one("cua_ui_invoke", "⚙️", CoreRisk::Dangerous, Arc::new(CuaUiInvokeHandler::new()));
     register_one("cua_ocr_recognize", "🔤", CoreRisk::Safe, Arc::new(CuaOcrRecognizeHandler::new()));
-    // Phase 3 mouse handlers (2026-07-18 audit fix): these three were
+    // Phase 3 mouse handlers (audit fix): these three were
     // previously defined in `all_handlers()` factory but never wired into
     // `register()`, so the LLM could not actually invoke them despite
     // the 17/17 "CUA tests pass" green light (tests only verified the
@@ -151,8 +151,7 @@ where
 /// `ToolError` the dispatcher expects. The `kind()` short string
 /// is preserved in the message so the desktop UI can render a
 /// stable error code.
-///
-/// `ToolError` does not have a dedicated `PermissionDenied`
+/// /// `ToolError` does not have a dedicated `PermissionDenied`
 /// variant — denied actions map to `ExecutionFailed` with a
 /// `denied by safety:` prefix so the dispatcher-side error
 /// filter can still match on it.
@@ -192,8 +191,7 @@ fn extract_session_id(params: &Value) -> String {
 /// Capture the primary monitor and return a JSON envelope
 /// containing the PNG bytes (base64) and the captured frame's
 /// dimensions.
-///
-/// The handler does **not** add a top-level wrapper around the
+/// /// The handler does **not** add a top-level wrapper around the
 /// `ScreenshotResult` struct — the inner `png_base64` field is
 /// already JSON-safe (standard base64, no `\n` padding noise)
 /// and the desktop UI reads the same shape for `computer_use`'s
@@ -608,14 +606,13 @@ impl ToolHandler for CuaPressKeyHandler {
 // ---------------------------------------------------------------------------
 
 /// Enumerate the desktop's top-level windows. Filters (all optional):
-///
-/// - `title` — case-insensitive substring match against the window
-///   title. Empty / missing → match all titles.
+/// /// - `title` — case-insensitive substring match against the window
+/// title. Empty / missing → match all titles.
 /// - `visible_only` — default `true`; excludes hidden / owner-drawn
-///   tool windows. Set `false` to enumerate everything.
+/// tool windows. Set `false` to enumerate everything.
 /// - `max_results` — default `100`. The full desktop enumeration
-///   rarely exceeds a few dozen visible windows; the cap is a safety
-///   belt for the LLM context window, not a performance limit.
+/// rarely exceeds a few dozen visible windows; the cap is a safety
+/// belt for the LLM context window, not a performance limit.
 pub struct CuaListWindowsHandler;
 
 impl CuaListWindowsHandler {
@@ -753,8 +750,7 @@ impl ToolHandler for CuaListWindowsHandler {
 /// Return the top-level window under screen coordinate `(x, y)`.
 /// Uses `WindowFromPoint` + a `IsWindow` validity check so a
 /// stale / closed window cannot leak through.
-///
-/// Result is `null` when the point hits no window (e.g. outside
+/// /// Result is `null` when the point hits no window (e.g. outside
 /// the virtual desktop).
 pub struct CuaWindowAtPointHandler;
 
@@ -861,8 +857,7 @@ impl ToolHandler for CuaWindowAtPointHandler {
 /// makes the target window the foreground so the click lands
 /// somewhere meaningful instead of being routed to whatever app
 /// the user happened to be in.
-///
-/// The click coordinate is **always** the centre of the window's
+/// /// The click coordinate is **always** the centre of the window's
 /// `GetWindowRect` — explicit `(x, y)` overrides would defeat the
 /// "click into the window" abstraction and re-introduce blind
 /// coordinate clicking. Use `cua_left_click` for coordinate-precise
@@ -1055,6 +1050,8 @@ impl ToolHandler for CuaUiTreeHandler {
 
         let started = std::time::Instant::now();
         let elements = uia_blocking!(|uia: &hermix_cua::uia::UiaAutomation| {
+        // SAFETY: `uia` was constructed via `UiaAutomation::new()` which
+            // initialises COM on this blocking thread.
             let tree = unsafe {
                 uia.get_control_view_tree(max_depth)
                     .map_err(|e| ToolError::ExecutionFailed(format!("UIA tree walk: {e}")))?
@@ -1172,6 +1169,8 @@ impl ToolHandler for CuaUiFindHandler {
                 UiaCondition::And(parts)
             };
 
+            // SAFETY: `uia` was constructed on this thread and owns a valid
+            // COM apartment. `find_all` is a read-only query.
             let found = unsafe {
                 uia.find_all(&cond)
                     .map_err(|e| ToolError::ExecutionFailed(format!("UIA find: {e}")))?
@@ -1272,8 +1271,10 @@ impl ToolHandler for CuaUiClickHandler {
         let closure_name = name.clone();
         let result: Result<(i32, i32), ToolError> = run_blocking(move || {
             // Step 1 — init UIA on this thread (COM apartment).
+            // SAFETY: COM apartment initialised by `UiaAutomation::new()`
+            // on this blocking thread.
             let uia = unsafe { hermix_cua::uia::UiaAutomation::new()? };
-            // Step 2 — find element by name and get clickable point.
+            // SAFETY: same thread, same COM apartment.
             let (cx, cy) =
                 unsafe { hermix_cua::uia::click_by_name(&uia, &closure_name)? };
             // Step 3 — issue the click through SendInput.
@@ -1362,7 +1363,9 @@ impl ToolHandler for CuaUiFocusHandler {
         let started = std::time::Instant::now();
         let closure_name = name.clone();
         run_blocking(move || {
+            // SAFETY: COM apartment initialised on this blocking thread.
             let uia = unsafe { hermix_cua::uia::UiaAutomation::new()? };
+            // SAFETY: same thread, same COM apartment.
             unsafe { hermix_cua::uia::focus_by_name(&uia, &closure_name)? };
             Ok(())
         })
@@ -1435,7 +1438,9 @@ impl ToolHandler for CuaUiInvokeHandler {
         let started = std::time::Instant::now();
         let closure_name = name.clone();
         run_blocking(move || {
+            // SAFETY: COM apartment initialised on this blocking thread.
             let uia = unsafe { hermix_cua::uia::UiaAutomation::new()? };
+            // SAFETY: same thread, same COM apartment.
             unsafe { hermix_cua::uia::invoke_by_name(&uia, &closure_name)? };
             Ok(())
         })
@@ -2016,7 +2021,6 @@ mod tests {
         // common case. We can't verify the *contents* (depends on
         // the live desktop), but we can verify the handler doesn't
         // reject the empty payload.
-        //
         // We assert via parsed JSON rather than substring contains
         // — `serde_json::json!` uses a BTreeMap-keyed Map so the
         // wire key order is alphabetical, which makes

@@ -60,14 +60,12 @@ pub trait ToolHandler: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Abstraction for sending messages to external platforms.
-///
-/// Implemented by gateway adapters. CronRunner and other components use this
+/// /// Implemented by gateway adapters. CronRunner and other components use this
 /// to deliver results to platforms without depending directly on hermix-gateway.
 #[async_trait]
 pub trait PlatformSender: Send + Sync {
     /// Send a text message to a platform chat.
-    ///
-    /// `platform` is the adapter name (e.g. "telegram", "discord", "dingtalk").
+    /// /// `platform` is the adapter name (e.g. "telegram", "discord", "dingtalk").
     /// `chat_id` is the platform-specific chat/channel identifier.
     async fn send_message(
         &self,
@@ -129,8 +127,7 @@ pub trait PlatformAdapter: Send + Sync {
     fn platform_name(&self) -> &str;
 
     /// Periodic maintenance: prune token caches, dedup maps, etc.
-    ///
-    /// Default is a no-op. Adapters with long-lived in-memory caches should
+    /// /// Default is a no-op. Adapters with long-lived in-memory caches should
     /// override this so gateway cleanup watchers can reclaim memory.
     async fn maintenance_prune(&self) {}
 }
@@ -220,13 +217,11 @@ pub trait SkillProvider: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Permission policy for a single agent request.
-///
-/// - `Default` — risk-bearing tool calls (file write, shell command, network mutation)
-///   need explicit user confirmation before dispatch. The agent emits a
-///   `StreamEvent::RequestApproval` and blocks until a decision arrives.
+/// /// - `Default` — risk-bearing tool calls (file write, shell command, network mutation)
+/// need explicit user confirmation before dispatch. The agent emits a
+/// `StreamEvent::RequestApproval` and blocks until a decision arrives.
 /// - `Full` — no confirmation gate; all tools may be dispatched immediately.
-///
-/// Frontend default is `Default`. `Full` is opt-in per-session and should be
+/// /// Frontend default is `Default`. `Full` is opt-in per-session and should be
 /// surfaced with a clear "skip safety prompts" affordance in the UI.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -239,13 +234,12 @@ pub enum PermissionLevel {
 /// Risk classification for a single tool. Used by the pre-execution
 /// approval hook to decide whether a tool call needs user confirmation
 /// when the session is in [`PermissionLevel::Default`] mode.
-///
-/// - `Safe` — read-only, no observable side effect. Always dispatched.
+/// /// - `Safe` — read-only, no observable side effect. Always dispatched.
 /// - `Caution` — may write local files / make outbound network calls.
-///   Reversible. Asks for confirmation by default.
+/// Reversible. Asks for confirmation by default.
 /// - `Dangerous` — destructive or hard-to-reverse actions (delete files,
-///   run shell commands with side effects, push to remote, etc.). Always
-///   asks for confirmation in `Default` mode and is the strongest gate.
+/// run shell commands with side effects, push to remote, etc.). Always
+/// asks for confirmation in `Default` mode and is the strongest gate.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskLevel {
@@ -271,8 +265,7 @@ impl RiskLevel {
 // ---------------------------------------------------------------------------
 
 /// Permission level for tool execution (inspired by claw-code design).
-///
-/// Determines what operations a tool is allowed to perform:
+/// /// Determines what operations a tool is allowed to perform:
 /// - `ReadOnly`: Only read operations (file read, search, web fetch)
 /// - `WorkspaceWrite`: Read + write within workspace boundaries
 /// - `DangerFullAccess`: Full access including shell commands, network, etc.
@@ -338,7 +331,7 @@ pub struct AgentOverrides {
     /// Permission policy for risk-bearing tool calls in this turn.
     #[serde(default)]
     pub permission: Option<PermissionLevel>,
-    /// Optional images for vision-enabled models (2026-06-25: 多图支持).
+    /// Optional images for vision-enabled models (多图支持).
     /// Each entry carries base64-encoded data + MIME type. The agent
     /// prepends image content parts so the LLM can "see" them.
     #[serde(default)]
@@ -381,8 +374,7 @@ pub struct AgentOverrides {
     /// — the user previously picked "Always Allow" (persistent) or
     /// "Allow for this session" for the same shape. If `None`, the
     /// agent always goes through the WS prompt.
-    ///
-    /// The HTTP server wires this to
+    /// /// The HTTP server wires this to
     /// `UserAllowlist::matches(command)` (loaded from
     /// `$HERMIX_HOME/approval_allowlist.json`) plus a per-session
     /// in-memory bypass set. The agent crate has no direct
@@ -395,7 +387,7 @@ pub struct AgentOverrides {
     /// Payload is a JSON string: `{ intent, confidence, results }`.
     #[serde(skip)]
     pub on_prefetch_intent: Option<Arc<dyn Fn(&str) + Send + Sync>>,
-    /// 2026-07-19 (type-B root-cause): Soft-shutdown signal for the
+    /// (type-B root-cause): Soft-shutdown signal for the
     /// agent task. The server fires `notify_one()` when the WebSocket
     /// disconnects mid-turn (or on user retry). The agent loop's
     /// pre-tool-dispatch resolution races this against the approval
@@ -470,9 +462,9 @@ pub struct AgentReply {
     /// Why the stream ended. Possible values:
     /// - `"stop"` — the model emitted a natural `stop` and the turn is done
     /// - `"tool_calls"` — the model returned tool calls; the caller should
-    ///   inspect the persisted message to dispatch them
+    /// inspect the persisted message to dispatch them
     /// - `"length"` — the response was cut off by the provider's token cap
-    ///   (a truncation, not a normal completion)
+    /// (a truncation, not a normal completion)
     /// - `"interrupted"` — the user cancelled the stream
     /// - `None` — the agent did not surface a reason (e.g. an error path)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -531,7 +523,7 @@ pub trait AgentService: Send + Sync {
         None
     }
 
-    /// 2026-07-19: consume a previously-stored compression-quota warning
+    /// consume a previously-stored compression-quota warning
     /// (set by a one-shot startup health check when it hit a 429 / quota
     /// error). Returns `Some(msg)` at most once before being repopulated
     /// by the next health check (e.g. after a process restart). The
@@ -548,44 +540,37 @@ pub trait AgentService: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Trait for context window management engines.
-///
-/// Implementations compress conversation history when approaching the
+/// /// Implementations compress conversation history when approaching the
 /// model's context limit. The default implementation uses LLM-powered
 /// summarization; alternative implementations could use sliding windows,
 /// token counting, or other strategies.
-///
-/// This trait enables pluggable context management — the agent loop
+/// /// This trait enables pluggable context management — the agent loop
 /// can swap compression strategies without changing its core logic.
 #[async_trait]
 pub trait CoreContextEngine: Send + Sync {
     /// Check if the current context should be compressed.
-    ///
-    /// `current_tokens` is the estimated token count of the current
+    /// /// `current_tokens` is the estimated token count of the current
     /// prompt. Returns `true` if compression should be triggered.
     fn should_compress(&self, current_tokens: u64) -> bool;
 
     /// Compress the conversation history.
-    ///
-    /// Takes the full message list and returns a compressed version.
+    /// /// Takes the full message list and returns a compressed version.
     /// The implementation decides what to keep, summarize, or drop.
     async fn compress(&mut self, messages: Vec<Message>) -> Vec<Message>;
 
     /// Compress without blocking on the LLM summariser.
-    ///
-    /// Used when context pressure is moderate (e.g. 50–85% of the
+    /// /// Used when context pressure is moderate (e.g. 50–85% of the
     /// window) and blocking one turn on an LLM summary call is not
     /// yet justified. The fast path still runs the archive + dedup
     /// + score-drop passes, but replaces the LLM summary with a
     /// static fallback marker — the original turns are archived to
     /// disk first, so nothing is lost, the LLM just doesn't get a
     /// semantic handoff for the removed turns.
-    ///
-    /// When pressure crosses the high-water mark (e.g. >= 85%) the
+    /// /// When pressure crosses the high-water mark (e.g. >= 85%) the
     /// caller should switch back to [`Self::compress`] so the LLM
     /// gets a real summary before the window is at risk of
     /// overflowing.
-    ///
-    /// Default falls back to [`Self::compress`] for engines that
+    /// /// Default falls back to [`Self::compress`] for engines that
     /// don't distinguish (e.g. `NoOpCompressionEngine`).
     async fn compress_fast(&mut self, messages: Vec<Message>) -> Vec<Message> {
         self.compress(messages).await
@@ -601,7 +586,7 @@ pub trait CoreContextEngine: Send + Sync {
     fn on_session_end(&mut self, _session_id: &str) {}
 }
 
-/// 2026-07-05 (N-03, Hermes 对标): a richer trait layered on top
+/// (, Hermes 对标): a richer trait layered on top
 /// of [`CoreContextEngine`] that exposes the *post-compression*
 /// bookkeeping the agent loop needs to drive the
 /// `CompactionStatusBanner`, persist the snapshot, and feed the
@@ -610,8 +595,7 @@ pub trait CoreContextEngine: Send + Sync {
 /// supplying its own `CompressionEngine` implementation and
 /// handing it to the agent loop via
 /// `AgentLoop::set_compression_engine`.
-///
-/// Anything that *only* needs the basic compress-loop semantics
+/// /// Anything that *only* needs the basic compress-loop semantics
 /// can stay with [`CoreContextEngine`]; the agent loop reaches
 /// for [`CompressionEngine`] only at the
 /// `auto_compress_if_over_threshold` boundary where the
@@ -639,8 +623,7 @@ pub trait CompressionEngine: CoreContextEngine {
     /// state. `current_tokens` and `threshold_tokens` describe
     /// the live budget pressure; `failure_reason` is `Some`
     /// when this snapshot represents a failed attempt.
-    ///
-    /// Takes `&mut self` because the built-in `ContextCompressor`
+    /// /// Takes `&mut self` because the built-in `ContextCompressor`
     /// derives cooldown timing from `Instant::now()` relative to
     /// a stored deadline; a purely shared-receiver would force
     /// an `unsafe` shim. Plugins are free to ignore the
@@ -653,12 +636,11 @@ pub trait CompressionEngine: CoreContextEngine {
         failure_reason: Option<String>,
     ) -> CompressionEngineSnapshot;
 
-    /// 2026-07-22: same as [`Self::breaker_snapshot`] but lets the
+    /// same as [`Self::breaker_snapshot`] but lets the
     /// caller stamp the compression `phase` explicitly so the
     /// front-end `CompactionStatusBanner` can render the
     /// "starting / in_progress / complete / failed" transitions.
-    ///
-    /// Default impl is `breaker_snapshot(...)` with `phase` forced
+    /// /// Default impl is `breaker_snapshot(...)` with `phase` forced
     /// to `"idle"` so existing plugin implementors continue to
     /// compile without changes. The agent loop's built-in
     /// `ContextCompressor` overrides this to forward the phase
@@ -693,7 +675,7 @@ pub struct CompressionEngineSnapshot {
     pub threshold_tokens: u64,
     pub max_tokens: u64,
     pub failure_reason: Option<String>,
-    /// 2026-07-22: Process phase of the most recent compression
+    /// Process phase of the most recent compression
     /// attempt, surfaced to the front-end `CompactionStatusBanner`
     /// so it can render "正在压缩中…" / "压缩完成" / "压缩失败"
     /// transitions instead of jumping straight from "即将触发自动
@@ -727,17 +709,17 @@ pub struct CompressionEngineMetrics {
     pub tokens_saved: u64,
     pub summary_errors: u64,
     pub compression_count: u64,
-    /// 2026-07-17 (Phase A1): number of adjacent user-text dedups
+    /// (Phase A1): number of adjacent user-text dedups
     /// in the most recent compress() call (Pass 0). 0 means none.
     pub user_dedup_count: u64,
-    /// 2026-07-17 (Phase A2): number of messages preserved by
+    /// (Phase A2): number of messages preserved by
     /// the pin filter in the most recent compress() call.
     pub pin_count: u64,
-    /// 2026-07-17 (Phase B6): number of messages dropped by
+    /// (Phase B6): number of messages dropped by
     /// `TokenScorer` because the score was below the configured
     /// `drop_score_threshold`.
     pub dropped_count: u64,
-    /// 2026-07-17 (Phase A4): what triggered the compression —
+    /// (Phase A4): what triggered the compression —
     /// `"threshold"`, `"explicit"`, etc. Empty means unknown.
     /// Boxed String keeps the struct layout-compatible for
     /// existing fields even when serde renames this on the wire.

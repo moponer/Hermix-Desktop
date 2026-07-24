@@ -62,7 +62,7 @@ pub const UNRECOVERABLE_BLOCKLIST: &[HardlineRule] = &[
         // the filesystem root, with no further path components.
         // POSIX root:   `rm -rf /`, `rm -rf /*`, `rm -rf /.` etc.
         // Windows root: `rm -rf C:\`, `rm -rf D:\`, `rm -rf Z:\foo` is NOT
-        //               a root wipe (it has a child), so we use `[A-Za-z]:\\(\s|$)`.
+        // a root wipe (it has a child), so we use `[A-Za-z]:\\(\s|$)`.
         // The trailing `(\s|$)` is what prevents `rm -rf /tmp` from matching.
         pattern: r"rm\s+(-\w+\s+)*(-\w*r\w*\s+)*(\^|\s)*(/?$|/(\s|\*|\.|$))|(?i)rm\s+(-\w+\s+)*[A-Za-z]:\\(\s|$)",
         reason: "Recursive removal of filesystem root is unrecoverable",

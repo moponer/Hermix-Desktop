@@ -94,6 +94,7 @@ export function PopoverShell({
       window.removeEventListener("resize", compute);
       window.removeEventListener("scroll", compute, true);
     };
+    // compute is a closure over the deps listed below; no additional deps needed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [triggerRef, align, side, width]);
 

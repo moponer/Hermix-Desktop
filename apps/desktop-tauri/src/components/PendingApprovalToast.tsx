@@ -4,10 +4,10 @@ import { useEffect, useState } from "react";
 /**
  * PendingApprovalToast
  * ─────────────────────────────────────────────────────────────────
- * 右下角气泡 — 主人 2026-07-18 反馈"差点没看见"后加的提醒机制。
+ * 右下角气泡 — 用户 反馈"差点没看见"后加的提醒机制。
  *
  * 为什么需要:
- *   · `InlineApprovalCard` 嵌在聊天流中间位置。主人如果:
+ *   · `InlineApprovalCard` 嵌在聊天流中间位置。用户如果:
  *       (a) 在看别人的回复 / 在 Reading Sidebar 看 artifact
  *       (b) 切到其他 session 找了东西
  *       (c) 单纯的 chrome alt-tab 走了
@@ -29,11 +29,11 @@ import { useEffect, useState } from "react";
  *             同步成 state 后传入)
  *   - urgent: 是否有任意卡片的剩余时间 ≤ 30s — 用于切换红框 pulse
  *   - onActivate: 单击气泡 → 滚动到最早未决定卡 + 2s 黄色高亮闪烁
- *   - onDismiss: 点 X → 隐藏直到下一张新卡到来(主人主动静默)
+ *   - onDismiss: 点 X → 隐藏直到下一张新卡到来(用户主动静默)
  *
  * 设计原则:
  *   · 永远不调用 onApprove/onDeny — 这是**提醒组件**,不是决策组件。
- *     主人必须回主聊天区看上下文、审 args、再点。这避免误触。
+ *     用户必须回主聊天区看上下文、审 args、再点。这避免误触。
  *   · 体积小,圆角胶囊,跟 macOS / Windows 11 通知中心同一象限:
  *     bottom-right 24px,主角色 warning,urgent 时红。
  *   · 不依赖 portal — 已挂在 app-shell root,fixed 即可定位。

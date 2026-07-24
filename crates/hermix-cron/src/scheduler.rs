@@ -21,8 +21,7 @@ use crate::persistence::JobPersistence;
 use crate::runner::CronRunner;
 
 /// Background poll interval for due jobs. Default **60** seconds.
-///
-/// Override with **`HERMES_CRON_TICK_SECS`** (integer **1–300**) for integration tests
+/// /// Override with **`HERMES_CRON_TICK_SECS`** (integer **1–300**) for integration tests
 /// or local debugging; values outside the range are clamped.
 fn cron_poll_interval() -> Duration {
     let secs = env_compat("HERMIX_CRON_TICK_SECS", "HERMES_CRON_TICK_SECS")
@@ -123,8 +122,7 @@ impl CronScheduler {
     /// directory that contains the SQLite `cron_jobs.db` (or
     /// the per-job JSON files for `FileJobPersistence`). The
     /// lock file is created at `<cron_dir>/.tick.lock`.
-    ///
-    /// Without a file lock, the scheduler is vulnerable to
+    /// /// Without a file lock, the scheduler is vulnerable to
     /// `SQLITE_BUSY` when two processes touch the same DB
     /// concurrently. The default behaviour is to **not** take
     /// a lock so unit tests that share a tempdir don't
@@ -193,8 +191,7 @@ impl CronScheduler {
     }
 
     /// Load persisted jobs into the scheduler.
-    ///
-    /// Call this before `start()` to re-register jobs from the previous session.
+    /// /// Call this before `start()` to re-register jobs from the previous session.
     pub async fn load_persisted_jobs(&self) -> Result<(), CronError> {
         let jobs = self
             .with_lock(|| async {
@@ -220,8 +217,7 @@ impl CronScheduler {
     }
 
     /// Start the scheduler loop in the background.
-    ///
-    /// The loop sleeps (see [`cron_poll_interval`]) then dispatches due jobs.
+    /// /// The loop sleeps (see [`cron_poll_interval`]) then dispatches due jobs.
     /// Returns immediately; the loop runs as a spawned tokio task.
     pub async fn start(&self) {
         let mut running = self.running.lock().await;
@@ -374,8 +370,7 @@ impl CronScheduler {
     }
 
     /// Create a new cron job.
-    ///
-    /// Validates the job, generates a UUID if needed, computes the next run
+    /// /// Validates the job, generates a UUID if needed, computes the next run
     /// time, persists it, and registers it in memory.
     pub async fn create_job(&self, mut job: CronJob) -> Result<String, CronError> {
         // Validate
@@ -553,8 +548,7 @@ impl CronScheduler {
     }
 
     /// Manually trigger a cron job to run immediately.
-    ///
-    /// The job is executed regardless of its schedule or status (except
+    /// /// The job is executed regardless of its schedule or status (except
     /// Completed jobs). The run count is not incremented for manual triggers.
     pub async fn run_job(&self, id: &str) -> Result<AgentResult, CronError> {
         let job = {

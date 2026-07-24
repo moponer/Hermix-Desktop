@@ -73,8 +73,7 @@ pub struct ResolvedChannel {
 }
 
 /// Parse a channel reference string into a `ResolvedChannel`.
-///
-/// Supported formats:
+/// /// Supported formats:
 /// - `"telegram:12345"` — explicit platform:id
 /// - `"discord:channel_id"` — explicit platform:id
 /// - `"email:user@example.com"` — email address
@@ -192,8 +191,7 @@ pub enum DeliveryStatus {
 }
 
 /// Backend for sending messages across platforms.
-///
-/// The gateway layer provides a real implementation backed by `DeliveryRouter`
+/// /// The gateway layer provides a real implementation backed by `DeliveryRouter`
 /// and platform adapters. The tool layer only sees this trait.
 #[async_trait]
 pub trait MessagingBackend: Send + Sync {

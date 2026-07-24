@@ -17,9 +17,9 @@
 /// - `bump_*` saturating-increments and returns the new value.
 /// - `reset_*` clears the counter (called on the success path).
 /// - The `< max` / `>= max` comparison stays at the call site because
-///   the action on max differs between the three (finalize vs.
-///   continue-with-error vs. fall-through) — folding that decision
-///   into the helper would force one path on all three.
+/// the action on max differs between the three (finalize vs.
+/// continue-with-error vs. fall-through) — folding that decision
+/// into the helper would force one path on all three.
 #[derive(Debug, Clone, Default)]
 pub struct RetryCounters {
     /// Retries against invalid tool names.

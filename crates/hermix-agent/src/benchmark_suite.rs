@@ -4,10 +4,10 @@
 // Each one is a small data type + a couple of policy functions;
 // the actual workload drivers live in `tests/` directories.
 //
-//   P6-T1 AdversarialHarness - harness-level attack replay
-//   P6-T2 SkillHealthScoreboard - skill health trend over time
-//   P6-T3 RouterAccuracyBenchmark - routing Top-1 / Top-3 accuracy
-//   P6-T4 EffectivenessBenchmark - end-to-end task completion
+// P6-T1 AdversarialHarness - harness-level attack replay
+// P6-T2 SkillHealthScoreboard - skill health trend over time
+// P6-T3 RouterAccuracyBenchmark - routing Top-1 / Top-3 accuracy
+// P6-T4 EffectivenessBenchmark - end-to-end task completion
 //
 // Pure data + pure functions. No I/O unless explicitly required.
 

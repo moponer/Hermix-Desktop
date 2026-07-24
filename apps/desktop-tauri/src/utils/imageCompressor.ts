@@ -1,14 +1,12 @@
 // apps/desktop-tauri/src/utils/imageCompressor.ts
-//
-// 2026-06-25: 客户端图片压缩。
-// 主人哲学：rust 项目核心是快 + 稳定，前端不能拖后腿。
-//
+// 客户端图片压缩。
+// 用户哲学：rust 项目核心是快 + 稳定，前端不能拖后腿。
 // 设计原则：
-//   1. **缩尺寸 100% 无损**（只减像素数，不改像素值）
-//   2. **lossless WebP** 优先（比 PNG 小 25-30%，像素级完全相同）
-//   3. **JPEG quality ≥ 0.80** 才作为兜底（保 LLM 识别率 ≥95%）
-//   4. **原图兜底**——压缩失败/质量不达标时不发不出去
-//   5. **零依赖**——纯浏览器 API（OffscreenCanvas + convertToBlob）
+// 1. **缩尺寸 100% 无损**（只减像素数，不改像素值）
+// 2. **lossless WebP** 优先（比 PNG 小 25-30%，像素级完全相同）
+// 3. **JPEG quality ≥ 0.80** 才作为兜底（保 LLM 识别率 ≥95%）
+// 4. **原图兜底**——压缩失败/质量不达标时不发不出去
+// 5. **零依赖**——纯浏览器 API（OffscreenCanvas + convertToBlob）
 
 export interface CompressConfig {
   /** 最长边像素上限。LLM 后端本就做这件事，我们提前做省传输。 */
@@ -156,7 +154,7 @@ export async function compressImage(
 
       // 6b. PNG 太大 → lossless WebP
       // 注：标准 ImageEncodeOptions 没有 lossless 字段，
-      //     chromium 扩展支持但 TS 类型没声明。用 quality=1 + 类型断言。
+      // chromium 扩展支持但 TS 类型没声明。用 quality=1 + 类型断言。
       const webpBlob = await canvas.convertToBlob({
         type: "image/webp",
         quality: 1.0,

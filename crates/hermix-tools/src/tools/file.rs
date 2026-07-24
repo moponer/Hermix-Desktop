@@ -24,14 +24,13 @@ use crate::ToolRegistry;
 /// `search_files`. The same `terminal_backend` shared with the terminal
 /// tool is reused so that read/write go through the same path the
 /// shell uses; patch/search get their own local backends.
-///
-/// The handler registration mirrors the toolset tag + risk levels that
+/// /// The handler registration mirrors the toolset tag + risk levels that
 /// `register_builtins.rs` had before the migration:
 /// - `read_file` → Safe (read-only, no env deps)
 /// - `write_file` → Caution (writes to disk)
 /// - `patch` → Caution (mutating edits)
 /// - `search_files` → Caution (no destructive power, but the file-
-///   toolset is uniformly Caution for consistency)
+/// toolset is uniformly Caution for consistency)
 pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBackend>) {
     use crate::backends::file::{LocalPatchBackend, LocalSearchBackend};
 
@@ -113,8 +112,7 @@ pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBacke
 /// Resolve a path to an absolute string for display in LLM-visible tool
 /// output. The rule is **literal pass-through**: the path the user typed or
 /// configured is the path we report. We deliberately do NOT canonicalize.
-///
-/// Why no canonicalize: on Windows, `std::fs::canonicalize` follows
+/// /// Why no canonicalize: on Windows, `std::fs::canonicalize` follows
 /// junctions / symlinks AND prepends the `\\?\` long-path prefix. So if the
 /// user is in `D:\data` (a junction) and the LLM calls `read_file("D:\\qcc\\foo")`,
 /// the OS opens the file fine, but `canonicalize` would surface
@@ -123,18 +121,14 @@ pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBacke
 /// subsequent reasoning and tool calls, and `subdirectory_hints` /
 /// `_files.txt` would all drift. The user's configured workspace root and
 /// the path they typed are the source of truth.
-///
-/// For relative paths we still need a base directory to make the result
+/// /// For relative paths we still need a base directory to make the result
 /// absolute, so we fall back to:
-///
-/// 1. `TERMINAL_CWD` env var (set by `LocalAgentService::send_message_stream`
-///    from the per-turn `AgentOverrides::workspace`, i.e. the desktop
-///    "工作区" picker).
+/// /// 1. `TERMINAL_CWD` env var (set by `LocalAgentService::send_message_stream`
+/// from the per-turn `AgentOverrides::workspace`, i.e. the desktop
+/// "工作区" picker).
 /// 2. Server process current working directory.
-///
-/// The cwd itself is not canonicalized — same reason.
-///
-/// Trade-off: `..` segments are not resolved in the display string. This is
+/// /// The cwd itself is not canonicalized — same reason.
+/// /// Trade-off: `..` segments are not resolved in the display string. This is
 /// fine; the OS resolves `..` on actual file open, and the LLM-visible
 /// header doesn't need to be "lexically resolved".
 pub fn to_absolute_path(path: &str) -> String {
@@ -523,6 +517,32 @@ fn mime_from_ext(path: &str) -> &'static str {
     else { "application/octet-stream" }
 }
 
+/// Read an image file from disk and return `(mime_type, base64_data)`.
+///
+/// This is the shared helper used by both the `read_image` tool and
+/// `sub_agent_orchestrator::attach_images` so the resize/encode logic
+/// lives in exactly one place.
+///
+/// `detail` is currently unused but reserved for future image-resize logic.
+pub fn read_image_for_llm(
+    path: &str,
+    _detail: &str,
+) -> Result<(String, String), String> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| format!("cannot read image file '{path}': {e}"))?;
+
+    if bytes.len() > 50 * 1024 * 1024 {
+        return Err(format!(
+            "file '{path}' is {} bytes — too large for image reading (max 50 MB)",
+            bytes.len()
+        ));
+    }
+
+    let mime = mime_from_ext(path).to_string();
+    let b64 = general_purpose::STANDARD.encode(&bytes);
+    Ok((mime, b64))
+}
+
 pub struct ReadImageHandler;
 
 impl ReadImageHandler {
@@ -751,7 +771,6 @@ mod tests {
     }
 
     // -- to_absolute_path: literal pass-through contract -----------------
-    //
     // The path the user typed (or configured as workspace root) is the
     // path that must appear in LLM-visible tool output. No junction
     // resolution, no `\\?\` prefix, no `..` resolution.

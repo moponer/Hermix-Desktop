@@ -146,8 +146,7 @@ pub struct McpProbeResult {
 // ---------------------------------------------------------------------------
 
 /// Configuration for connecting to an MCP server.
-///
-/// Supports two connection modes:
+/// /// Supports two connection modes:
 /// - **stdio**: Launch a local process and communicate via stdin/stdout (JSON-RPC)
 /// - **HTTP**: Connect to a remote MCP server via HTTP/SSE
 #[derive(Clone, Serialize, Deserialize)]
@@ -288,8 +287,7 @@ struct ResourcesListResponse {
 // ---------------------------------------------------------------------------
 
 /// A client connection to a single MCP server.
-///
-/// Handles the full lifecycle of communicating with one MCP server:
+/// /// Handles the full lifecycle of communicating with one MCP server:
 /// connecting, initializing, discovering tools, calling tools, reading
 /// resources, and disconnecting.
 pub struct McpClient {
@@ -363,8 +361,7 @@ impl McpClient {
     }
 
     /// Discover (or re-discover) the tools this server exposes.
-    ///
-    /// Sends a `tools/list` JSON-RPC request and parses the response into
+    /// /// Sends a `tools/list` JSON-RPC request and parses the response into
     /// a `Vec<ToolSchema>`. The result is also cached internally.
     pub async fn list_tools(&mut self) -> Result<Vec<ToolSchema>, McpError> {
         let result = self
@@ -389,8 +386,7 @@ impl McpClient {
     }
 
     /// Call a tool on this server by name with the given arguments.
-    ///
-    /// Sends a `tools/call` JSON-RPC request and returns the result. Text
+    /// /// Sends a `tools/call` JSON-RPC request and returns the result. Text
     /// content items are joined into a single string value; other content
     /// types are returned as raw JSON.
     pub async fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value, McpError> {
@@ -519,8 +515,7 @@ impl McpClient {
     // -----------------------------------------------------------------------
 
     /// Handle a sampling request from the MCP server.
-    ///
-    /// The server can ask the client to invoke an LLM on its behalf.
+    /// /// The server can ask the client to invoke an LLM on its behalf.
     /// The `llm_callback` performs the actual LLM call.
     pub async fn handle_sampling_request(
         &self,
@@ -825,8 +820,7 @@ impl ToolHandler for McpToolHandler {
     }
 }
 
-///
-/// The manager can:
+/// /// The manager can:
 /// - Connect to local (stdio) or remote (HTTP/SSE) MCP servers
 /// - Discover available tools on each server
 /// - Call tools on connected servers
@@ -853,8 +847,7 @@ pub struct McpManager {
 /// Constructor helper for `McpManager`. Use this instead of
 /// `McpManager::new` because the manager internally needs an
 /// `Arc<McpManager>` to produce `Weak` references for its handlers.
-///
-/// Example:
+/// /// Example:
 /// ```ignore
 /// let manager = ArcMcpManager::new(tool_registry.clone());
 /// manager.connect("fetch", cfg).await?;
@@ -875,8 +868,7 @@ impl ArcMcpManager {
 
 impl McpManager {
     /// Construct a manager *without* the cyclic back-reference.
-    ///
-    /// Prefer [`ArcMcpManager::new`]. This constructor is kept for
+    /// /// Prefer [`ArcMcpManager::new`]. This constructor is kept for
     /// compatibility (some tests construct an `McpManager` directly to
     /// exercise non-`connect` paths). If you call [`McpManager::connect`]
     /// on a value built this way it will panic at runtime — the manager
@@ -890,12 +882,10 @@ impl McpManager {
     }
 
     /// Connect to an MCP server.
-    ///
-    /// Creates an `McpClient`, connects it, and registers the discovered
+    /// /// Creates an `McpClient`, connects it, and registers the discovered
     /// tools in the shared tool registry with names prefixed by the server
     /// name (e.g. `"server_name__tool_name"`).
-    ///
-    /// **Caller contract**: the manager must be wrapped in an
+    /// /// **Caller contract**: the manager must be wrapped in an
     /// `Arc<McpManager>` (use [`ArcMcpManager::new`]). Otherwise the
     /// handler closures will get dead `Weak` references and every
     /// tool call will fail at runtime.
@@ -1037,8 +1027,7 @@ impl McpManager {
     }
 
     /// Handle a `tools/list_changed` notification from a server.
-    ///
-    /// Re-discovers tools from the server and returns the new schema
+    /// /// Re-discovers tools from the server and returns the new schema
     /// list. The caller is responsible for diffing against the registry
     /// and re-registering entries that changed.
     pub async fn handle_tools_changed(

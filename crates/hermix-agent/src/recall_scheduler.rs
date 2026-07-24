@@ -304,7 +304,7 @@ mod tests {
         let plan = RecallPlan {
             items: vec![RecallItem {
                 canonical_key: "fact:owner_rust".into(),
-                payload_text: "主人喜欢 Rust".into(),
+                payload_text: "用户喜欢 Rust".into(),
                 salience: 0.8,
             }],
             total_chars: 8,
@@ -312,7 +312,7 @@ mod tests {
         };
         let s = render_prompt_block(&plan);
         assert!(s.contains("fact:owner_rust"));
-        assert!(s.contains("主人喜欢 Rust"));
+        assert!(s.contains("用户喜欢 Rust"));
         assert!(s.contains("salience=0.80"));
     }
 

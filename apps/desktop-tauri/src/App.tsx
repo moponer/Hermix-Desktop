@@ -19,19 +19,20 @@ import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
 import { diagLog, nextDiagId } from "./lib/diag";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ToastContainer } from "./components/ToastContainer";
 import { useAcuiState, type AcuiDecisionBus } from "./acui";
 import type { Artifact } from "./utils/artifacts";
 import { classifyArtifactKind } from "./utils/artifacts";
 import * as api from "./api";
 import { registerBuiltinsToBackend } from "./data/builtinExperts";
 import type { NavPage, Session, ChatMessage, ApprovalDecision, TimelineStep, ExecutionTimelineEvent, QueuedMessage, QueuedImage, ChatMessageImage } from "./types";
-// 2026-07-10: expandTimelineToMessages and detectToolError imports removed —
+// expandTimelineToMessages and detectToolError imports removed —
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
 import { storage, STORAGE_KEYS, KNOWN_KEYS, sessionKey } from "./utils/storageCompat";
 import { PendingApprovalToast } from "./components/PendingApprovalToast";
 
-// 2026-07-12: Welcome-state draft workspace. Read at App-level so
+// Welcome-state draft workspace. Read at App-level so
 // both `handleNewChat` (新建对话 button) and `handleSendMessage`
 // (first send in an empty session) can pass it to
 // `api.createSession(title, project)` — that way the server records
@@ -106,7 +107,7 @@ function localizeStreamError(err: string): string {
   if (/(rate\s*limit|429|too\s+many\s+requests)/i.test(extracted)) {
     return extracted;
   }
-  // 2026-07-22: Provider overloaded / service unavailable (529 / 503)
+  // Provider overloaded / service unavailable (529 / 503)
   if (/(529|overloaded|负载较高|service\s+unavailable|503)/i.test(extracted)) {
     return extracted;
   }
@@ -147,7 +148,7 @@ const LEFT_MAX = 360;
 // 已存在会话的 localStorage width 不会自动升级（用户拖动过的尊重保留），仅默认提高。
 const LEFT_DEFAULT = 280;
 // v11: 右列默认 640, 拖动范围 360-840.
-// 主人反馈 480 装不下"节假日危险品重大危险源..."这样的中文长标题分类,
+// 用户反馈 480 装不下"节假日危险品重大危险源..."这样的中文长标题分类,
 // 标题被截断成"节假日危险品重大危险源是级管控专题培训会...".
 // 640 = 480 + 160, 足以显示完整中文文件名 + 扩展 chip, 不挤压主列.
 const RIGHT_MIN = 360;
@@ -156,15 +157,12 @@ const RIGHT_DEFAULT = 640;
 
 // 对话主列的"舒适最小宽度"。当主列宽度 ≥ MAIN_MIN_WIDTH 时，chat 气泡的
 // 内容（消息头像 + 文本 + 内边距）有充裕的呼吸感，气泡不显拥挤。
-//
-// v11: 主人反馈右列 480 装不下中文长文件名分类, 改 RIGHT_DEFAULT 480→640.
+// v11: 用户反馈右列 480 装不下中文长文件名分类, 改 RIGHT_DEFAULT 480→640.
 // 为避免 1440 视口三列总宽溢出 (200+720+640=1560>1440), 同步把
 // MAIN_MIN_WIDTH 720→580. 主列 580 仍能装 50+ 中文字符, 平衡两端.
-//
 // 三列共存临界视口 (v11): LEFT_MIN(200) + MAIN_MIN_WIDTH(580) + RIGHT_MIN(360) = 1140.
 // 默认视口 1440 时: 左 200 + 主 580 + 右 640 = 1420 (剩 20 给 splitter, OK).
 // 默认视口 1680 时: 左 200 + 主 840 + 右 640 = 1680.
-//
 // v23: "想看右栏就自动给空间" — 视口 < 1140 + 用户点 TitleBar 产物按钮想开右栏
 // 时, 把 Tauri 窗口 outer 宽扩到 DEFAULT_WINDOW_WIDTH (1280 = tauri.conf.json
 // 默认), 高度保留当前 outer. 装下三列后 setRightOpen(true). 跟 v22 的
@@ -208,7 +206,7 @@ function computeLeftMin(vw: number): number {
 /**
  * Append reasoning text to the last reasoning step, or push a new one.
  *
- * 2026-07-15: When the LLM (e.g. MiniMax M3) sends `reasoning_content`
+ * When the LLM (e.g. MiniMax M3) sends `reasoning_content`
  * and `content` in the same SSE chunk, the server forwards them as
  * separate `StreamEvent::Thinking` and `StreamEvent::Text` events.
  * The text event creates a "text" step that breaks reasoning accumulation,
@@ -306,7 +304,7 @@ export default function App() {
   const [mainMinWidth, setMainMinWidth] = useState(() => computeMainMinWidth(window.innerWidth));
   const [leftMin, setLeftMin] = useState(() => computeLeftMin(window.innerWidth));
   // 包装 setPage: 切到非 chat 页时主动关闭产物栏 (右栏是 chat 专属 UI)
-  // 2026-06-18 主人要求: 在右栏展开时切到 agents/experts/settings/plugins/
+  // 用户要求: 在右栏展开时切到 agents/experts/settings/plugins/
   // automation/search/groupchat 任何非对话页 → 自动 setRightOpen(false)
   const setPage = useCallback((p: NavPage) => {
     setPageRaw(p);
@@ -327,7 +325,7 @@ setPage("chat");
 // image preview, spreadsheet rendering, etc.) can display it.
 const [computerPreviewArtifact, setComputerPreviewArtifact] = useState<Artifact | null>(null);
 const handlePreviewFileFromExplorer = useCallback((path: string, name: string) => {
-  // 2026-07-17: this used to define its own (long) extension sets inline,
+  // this used to define its own (long) extension sets inline,
   // which drifted from InlinePathPreview.tsx's classify() — same file
   // could pick a different icon / preview branch depending on which side
   // of the app opened it. Now uses the shared canonical classifier in
@@ -345,10 +343,9 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
 }, []);
   // Queue mutation handlers — kept memoized so ChatComposer doesn't
   // re-render on every keystroke in the main textarea.
-  // 2026-06-28: added per-item remove / edit / send-now callbacks
+  // added per-item remove / edit / send-now callbacks
   // alongside the pre-existing bulk `onClearQueue`, so the queue
   // panel can show its contents and let the user act on each row.
-  //
   // NOTE: `sendFromQueue` closes over `streaming` and
   // `handleSendMessage`, both defined further down, so it's
   // declared after them (see below).
@@ -379,7 +376,6 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   // 上窗口底部 92px 落到屏幕外。启动时检测窗口高度是否超出屏幕可用高度，
   // 超出则缩到刚好适配。注意：outerSize 返回的是物理像素，需要除以 scaleFactor
   // 换算成逻辑像素再跟 screen.availHeight 比较。
-  //
   // 同时处理 Windows 任务栏/系统栏占用的情况（availHeight < screen.height）。
   // 不阻塞启动流程 — 失败了也不影响 app 正常运行。
   useEffect(() => {
@@ -409,15 +405,15 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     // not migrated, to avoid cross-restart residue in the welcome UI.
     storage.migrateLegacyKeys(KNOWN_KEYS);
 
-    // 主人反馈：重启后欢迎界面的「目录/专家」选择状态不应保留。
+    // 用户反馈：重启后欢迎界面的「目录/专家」选择状态不应保留。
     // draft 槽位（hermix.desktop.draft.*）用于无 session 时的欢迎界面，
     // 持久化会导致上次的选择跨重启残留。每次启动时清除，让用户
     // 在新会话中从头选择。
     try { storage.removeItem(STORAGE_KEYS.draftExpertId); } catch {}
     try { storage.removeItem(STORAGE_KEYS.draftWorkspace); } catch {}
 
-    // 2026-06-25 主人反馈"进历史对话，目录/模型/默认模型都消失"诊断。
-    // 临时挂一个启动诊断：把所有 hermix.* key 打到 console，方便主人在
+    // 用户反馈"进历史对话，目录/模型/默认模型都消失"诊断。
+    // 临时挂一个启动诊断：把所有 hermix.* key 打到 console，方便用户在
     // devtools 直接看 localStorage 实际状态 — 区分是"数据没写"还是
     // "数据写了没读"。**仅在 dev build 跑**（import.meta.env.DEV）：
     // 生产构建时 Vite 直接 dead-code-eliminate，不影响产物。
@@ -459,7 +455,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     try { id ? storage.setItem(ACTIVE_SESSION_KEY, id) : storage.removeItem(ACTIVE_SESSION_KEY); } catch {}
   }, []);
 
-  // v31 (2026-06-29): sessions 的最新值镜像到 ref，给异步回调（onDone 后的
+  // sessions 的最新值镜像到 ref，给异步回调（onDone 后的
   // 500ms re-fetch）一个同步读 sessions 的入口。setState 之后 useEffect
   // 链上的 closure 会拿到陈旧值，但 ref 永远跟最新值同步。
   const sessionsRef = useRef<typeof sessions>([]);
@@ -473,7 +469,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   const activeSessionIdRef = useRef(activeSessionId);
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
 
-  // 2026-07-21: 切换会话时（新建对话 / 选择左侧会话）立即把上下文用量
+  // 切换会话时（新建对话 / 选择左侧会话）立即把上下文用量
   // 显示重置为 null，避免上一个会话的后台 stream 事件或残留值污染当前
   // 会话的 context-usage 进度条。用户报告「新对话进入后/发首句就显示 53k」
   // 的根因之一就是 contextUsage / usageSnapshot 这两个 state 从不在会话
@@ -494,7 +490,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     try { storage.setItem(RIGHT_OPEN_KEY, String(rightOpen)); } catch {}
   }, [rightOpen]);
 
-  // 2026-07-08 (user): 右栏当前标签，可被外部控制（点目录 chip 直接切到「电脑」）。
+  // (user): 右栏当前标签，可被外部控制（点目录 chip 直接切到「电脑」）。
   const [rightTab, setRightTab] = useState<RightTab>("products");
 
   // v23: 三列临界视口 + 默认窗口宽. 见上方注释块.
@@ -504,12 +500,10 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
 
   // v24: 切换右栏时, 视口 < 1140 + 用户在"开"动作上 → 先 await 扩窗到能装三列,
   // 扩窗完成后再 setRightOpen(true). resize 路径仍然走 v22 (装不下关右栏).
-  //
   // v23 死循环修复: 之前是 await setSize + 同步 setRightOpen((v)=>!v), 但 setSize
   // 异步完成期间 window.innerWidth 仍是 < 1140, line 415 的 viewport-aware effect
   // 看到 rightOpen=true + vw<1140 立刻 setRightOpen(false), 用户视觉上"点一下抖
   // 一下". 现在 await setSize 完成后再开, 那时 vw 已经是 ≥1140, effect 不会再掐.
-  //
   // setSize 失败处理: 不再降级到 v22 退化路径 (v22 退化 = setRightOpen(true) 后
   // 立刻被 effect 掐 = 还是抖). setSize 失败就保持 rightOpen 不变 + console.warn.
   // 用户能再点一次, 或先手动拉宽窗口.
@@ -537,7 +531,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     setRightOpen(true);
   }, [rightOpen]);
 
-  // 2026-06-25 主人反馈："欢迎页默认是关闭产物栏的"。
+  // 用户反馈："欢迎页默认是关闭产物栏的"。
   // 当 ChatView 从有消息 / 有 session 切到 empty state（欢迎页）时，
   // 由 ChatView 通过 onEnterWelcome 回调通知此 handler — 此处只做
   // 幂等的关闭动作。ChatView 内部用 lastIsWelcomeRef 保证只在
@@ -570,7 +564,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   });
   const { streaming, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat(activeSessionId);
 
-  // 2026-07-22: Session message eviction — clear the *previous* session's
+  // Session message eviction — clear the *previous* session's
   // messages array (keeping message_count) when switching away. This solves
   // the "A→B smooth, B→A laggy" asymmetry: when A has many messages, React
   // must render all react-markdown + Prism.js instances, causing lag. After
@@ -717,7 +711,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   // backend already auto-denied at 30s and the agent moved on.
   const approvalTimeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   /**
-   * 2026-07-18 主人反馈"请求的按钮不够突出啊，差点没看见,而且
+   * 用户反馈"请求的按钮不够突出啊，差点没看见,而且
    * 我认为需要一个提醒机制,比如右下角的气泡提醒等待你确认"。
    * 这里把 Map.size 镜像成 state,触发 `<PendingApprovalToast>` 重
    * 渲染。**不在 ref 上直接 render** 是因为 useRef 变化不引起
@@ -727,7 +721,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
    */
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   /**
-   * 2026-07-18 (A+C product fix): short-lived top banner shown when a
+   * (A+C product fix): short-lived top banner shown when a
    * tool call is *denied* (user拒绝 / 超时 / 连接中断). Mirrors the
    * agent's injected "tell the user" system note with a visible cue
    * so the user isn't left guessing why a call didn't run. Auto-
@@ -775,7 +769,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
    * at the right time. Reset to null at the start of each stream.
    */
   const streamPhaseRef = useRef<"reasoning" | "tools" | "text" | null>(null);
-  // v2 (2026-07-07): one TodoListCard per plan / group. State
+  // one TodoListCard per plan / group. State
   // (not ref) so ChatView re-renders when a new plan arrives.
   // Ordered: groups are stored in the order their group_started
   // event arrived. Items are keyed by id so upsert is a single
@@ -797,13 +791,13 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
    * preventing rapid-toggle races (Bug #1 fix, 2026-07-08).
    */
   const justPatchedTodoRef = useRef<Set<string>>(new Set());
-// 2026-07-10: needsNewAssistantRef removed. All text chunks in an
+// needsNewAssistantRef removed. All text chunks in an
 // agent loop now go to the SAME assistant message. Tool calls are
 // tracked in the assistant's `execution_timeline` (rendered as a
 // collapsible block inside the bubble) instead of separate
 // `role: "tool"` messages. This makes streaming and reload
 // paths produce identical visuals:
-//   [avatar] [text] [collapsible tools] [more text]
+// [avatar] [text] [collapsible tools] [more text]
 // instead of the old split where tools appeared above the avatar
 // because empty assistant placeholders were filtered out.
   /**
@@ -819,14 +813,14 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   >(new Map());
   const { workspaceRoot, setWorkspaceRoot } = useWorkspaceRoot();
 
-  // 2026-07-07 主人反馈："选了工作区 Computer 面板不显示文件夹 / 对话没归到对应工作区分组"。
-  //   根因：Composer chip 走 useSessionWorkspace（per-session localStorage + 后端 PATCH），
-  //   但 ComputerTab 读的是 useWorkspaceRoot（global），Sidebar 的 useMemo 只依赖
-  //   sessions/workspaces state —— 两边都不感知 chip 的修改。本回调把变更广播到两个
-  //   出口：(1) setWorkspaceRoot 推 global，(2) setSessions 改 session.workspace
-  //   让 Sidebar useMemo 重算。
-  //   当 path=null（用户点"不绑定目录"）时也清掉 global workspaceRoot，避免下次开
-  //   新 session 时还残留上次的根目录。
+  // 用户反馈："选了工作区 Computer 面板不显示文件夹 / 对话没归到对应工作区分组"。
+  // 根因：Composer chip 走 useSessionWorkspace（per-session localStorage + 后端 PATCH），
+  // 但 ComputerTab 读的是 useWorkspaceRoot（global），Sidebar 的 useMemo 只依赖
+  // sessions/workspaces state —— 两边都不感知 chip 的修改。本回调把变更广播到两个
+  // 出口：(1) setWorkspaceRoot 推 global，(2) setSessions 改 session.workspace
+  // 让 Sidebar useMemo 重算。
+  // 当 path=null（用户点"不绑定目录"）时也清掉 global workspaceRoot，避免下次开
+  // 新 session 时还残留上次的根目录。
   const onWorkspaceChange = useCallback((sessionId: string | null | undefined, path: string | null) => {
     if (path) {
       setWorkspaceRoot(path);
@@ -838,8 +832,8 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     }
   }, [setWorkspaceRoot]);
 
-  // 2026-07-08 (user): 点目录 chip（已选工作区时）→ 打开右栏并切到「电脑」标签，
-  //   直接把文件浏览器切到所选工作区目录，不再弹 chooser 列表。
+  // (user): 点目录 chip（已选工作区时）→ 打开右栏并切到「电脑」标签，
+  // 直接把文件浏览器切到所选工作区目录，不再弹 chooser 列表。
   const openComputer = useCallback(() => {
     setRightTab("computer");
     setRightOpen(true);
@@ -860,7 +854,6 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   // already filters per-session, but stale state from a same-tab
   // session switch would persist). The new session is re-hydrated
   // by the next `todo_snapshot` WS event (P0-T2).
-  //
   // Note: this only triggers when `activeSessionId` actually
   // changes, not on every render. The `todoGroupsByIdRef` mirror is
   // cleared in the same pass so the dedup set never sees ghosts.
@@ -873,16 +866,13 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   }, [activeSessionId]);
 
   // Viewport-aware layout: 三列共存阈值从 state 读取, 不再硬编码 1140.
-  //
-  // 主人反馈 v20: "拖动边框缩小时右栏换行/弹遮罩". 改用最简方案 —
+  // 用户反馈 v20: "拖动边框缩小时右栏换行/弹遮罩". 改用最简方案 —
   // 视口装不下三列就关掉右栏, 不挤不变形, 也不弹 modal 遮罩 (跟 workbuddy
   // "三列就三列, 装不下就少一列" 的行为一致). 拉宽后不会自动重开 —
   // 用户需要手动点 TitleBar 上的右栏按钮.
-  //
   // v27: 阈值从 state (leftMin + mainMinWidth + RIGHT_MIN) 实时计算,
   // 不再硬编码 1140. 窗口缩小时主列和左列最小宽度都会缩, 临界阈值随之降低,
   // 右栏可以在更小的窗口下保持打开.
-  //
   // recompute 触发条件: window.resize / rightOpen 切换 / 用户拖动 resizer.
   // 三列共存时再 clamp 各自列到静态边界 (LEFT_MAX / RIGHT_MIN..RIGHT_MAX).
   const leftWidthRef = useRef(left.width);
@@ -921,10 +911,9 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   // Register built-in experts to backend ExpertRegistry on app start.
   // Best-effort: the UI fetches the catalog on first mount and falls back
   // to BUILTIN_EXPERTS if the backend is down, so a failure here is non-fatal.
-  useEffect(() => { registerBuiltinsToBackend().catch(() => {}); }, []);
+  useEffect(() => { registerBuiltinsToBackend().catch((e) => { console.warn("[App] registerBuiltinsToBackend failed:", e); }); }, []);
 
   // Load messages for active session.
-  //
   // Why no `loadedSessionMessagesRef` here: a previous version added the
   // sessionId to a Set *before* dispatching the fetch, then `.catch(() => {})`
   // swallowed the error. If the first fetch failed (typical during a backend
@@ -939,25 +928,23 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
   // a previous mount of this effect from clobbering fresher data.
   useEffect(() => {
     if (!activeSessionId) return;
-    // 2026-07-10: use sessionsRef to avoid re-running this effect on
+    // use sessionsRef to avoid re-running this effect on
     // every sessions change (e.g. during streaming). The previous deps
     // included `sessions`, which meant every streaming chunk re-triggered
     // this effect. Although the `messages.length > 0` guard prevented
     // re-fetching, the effect cleanup (`cancelled = true`) would fire
     // on every chunk, potentially cancelling an in-flight fetch from
     // a different session that had just been switched to.
-    //
-    // 2026-07-11: Added `sessions.length` to deps to fix a startup race
+    // Added `sessions.length` to deps to fix a startup race
     // condition. On app launch, `activeSessionId` is restored from
     // localStorage BEFORE `getSessions()` completes. The effect fires
     // immediately, but `sessionsRef.current` is empty, so it returns
     // without loading messages. When `getSessions()` completes later,
     // `sessions.length` changes from 0 to N, which re-triggers this
     // effect and loads the messages for the active session.
-    //
     // During streaming, `sessions.length` doesn't change (only the
     // messages within existing sessions change), so this effect doesn't
-    // re-fire on every chunk — preserving the 2026-07-10 fix.
+    // re-fire on every chunk — preserving the fix.
     if (sessions.length === 0) return;
     const session = sessionsRef.current.find((s) => s.id === activeSessionId);
     if (!session) { if (sessionsRef.current.length > 0) setActiveSessionId(null); return; }
@@ -1012,7 +999,7 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
    * Auto-generate a session title from the FIRST user message of the
    * conversation, unless the existing title is already a meaningful one.
    *
-   * 2026-07-23 fix: previously the title was recomputed whenever
+   * fix: previously the title was recomputed whenever
    * `(s.message_count ?? s.messages.length) === 0`. But in-memory
    * `message_count` for in-app-created sessions stays 0 forever (it is only
    * ever set from the backend), so that condition was true on EVERY send —
@@ -1037,9 +1024,9 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
 
 const handleNewChat = useCallback(async () => {
 if (isCreatingSessionRef.current) return;
-// 2026-07-14: Do NOT cancel the active stream when creating a new chat.
+// Do NOT cancel the active stream when creating a new chat.
 // The stream on the previous session should continue in the background.
-try { clearStreamError(); } catch (_) { /* swallow */ }
+try { clearStreamError(); } catch (e) { console.warn("[App] clearStreamError failed:", e); }
 
     // Read sessions from ref instead of closure — this callback must NOT
     // depend on `sessions` in its dep array. If it does, every streaming
@@ -1092,7 +1079,7 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
     isCreatingSessionRef.current = true;
     setIsCreatingSession(true);
     try {
-      // 2026-07-12: send the welcome-state draft workspace to the
+      // send the welcome-state draft workspace to the
       // server on creation so it lands in `sessions.workspace`
       // (not just localStorage). Without this, the desktop sidebar
       // bucketed every restarted session under "未分组" — the
@@ -1111,7 +1098,7 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
   }, [clearStreamError, setActiveSessionId]);
 
   const handleSelectSession = useCallback(async (id: string) => {
-    // 2026-07-14: Do NOT cancel the active stream when switching sessions.
+    // Do NOT cancel the active stream when switching sessions.
     // The previous implementation called `cancelStream()` which closed the
     // WebSocket, killing any in-flight agent task on the old session.
     // Now the stream continues in the background — useStreamChat already
@@ -1119,7 +1106,7 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
     // indicator and phase chip to whichever session is actually streaming.
     // The Sidebar pulse dot also uses streamingSessionId so the user can
     // see that the old session is still working even after switching away.
-    try { clearStreamError(); } catch (_) { /* swallow */ }
+    try { clearStreamError(); } catch (e) { console.warn("[App] clearStreamError failed:", e); }
     // Clear the phase chip — it belongs to the old session. If the
     // active stream is on the new session, onPhaseChange will
     // re-set it immediately; otherwise we dont want a stale chip.
@@ -1133,14 +1120,13 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
     // duplicate the fetch here — the effect is the single source of
     // truth for loading session messages, which avoids race conditions
     // between two concurrent fetches overwriting each other's results.
-    //
     // v29 preserved: if the session already has in-memory messages
     // (e.g. from a just-ended streaming conversation), the effect
     // skips the fetch and uses the in-memory state directly.
   }, [clearStreamError, setActiveSessionId, setPage]);
 
   const handleDeleteSession = useCallback(async (id: string) => {
-    // 2026-06-26: the previous implementation called `api.deleteSession`
+    // the previous implementation called `api.deleteSession`
     // with no `try/catch`, so a 5xx from the backend (e.g. the
     // `FOREIGN KEY constraint failed` we hit on sessions with
     // `compression_archives` rows) would propagate as an unhandled
@@ -1178,7 +1164,7 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
    * already auto-denied via the timeout, and showing
    * "已允许" on a card whose decision the agent never
    * received is the exact race the owner reported on
-   * 2026-06-14 ("I clicked allow, the card said 已允许, but
+   * ("I clicked allow, the card said 已允许, but
    * the LLM said denied"). Instead we surface a distinct
    * `expired` state so the user can see that their click
    * was a no-op and re-issue the prompt if they still want
@@ -1205,7 +1191,7 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
           clearTimeout(timeoutTimer);
           approvalTimeoutTimersRef.current.delete(requestId);
         }
-        // 2026-07-18: mirror the resolver map size to the toast state.
+        // mirror the resolver map size to the toast state.
         pendingApprovalSessionsRef.current.delete(requestId);
         setPendingApprovalCount(approvalResolversRef.current.size);
         setSessions((prev) =>
@@ -1268,7 +1254,7 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
       const now = Date.now();
       console.error(`[APPROVAL-CLICK] id=${requestId} t=${now}`);
 
-      // 2026-07-21: removed the App.tsx `wsSendRaw(payload)` step that used
+      // removed the App.tsx `wsSendRaw(payload)` step that used
       // to live here. It was REDUNDANT with the main WS path in
       // `useStreamChat.ts:1175 liveWs.send(payload)`, which fires when the
       // `resolveApproval()` Promise below settles and which already guards
@@ -1279,27 +1265,25 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
       // `matched=false` (idempotent miss) and surfaced as a confusing
       // red `[APPROVAL-REST] matched=false` in the console, which users
       // read as "the approval failed".
-      //
       // We now keep only:
-      //   1. resolveApproval() → triggers the main WS path (liveWs.send
-      //      with proper wsRef OPEN guard)
-      //   2. REST fallback 1s later → guarantees delivery even if the WS
-      //      silently dropped the message (the original "double insurance"
-      //      design intent). ApprovalRegistry::resolve() is idempotent so
-      //      REST-after-WS is harmless; REST-only success (matched=true
-      //      here) signals WS likely dropped the message and we want
-      //      that to be visible in logs so we can grep for it.
-      //
-      // 2026-07-20: fixed two bugs in the REST path:
-      //  1. PORT: was hardcoded to 9518 (wrong); the server listens on 3000
-      //     (api.ts:API_BASE). The old port was never in the Tauri CSP either,
-      //     so the fetch was silently blocked. Using api.apiUrl() guarantees the
-      //     correct host+port and stays in sync if the port ever changes.
-      //  2. SESSION ID: was using activeSessionId (the session currently visible
-      //     in the chat pane), but the approval might belong to a different
-      //     session if the user switched tabs. Now reads the authoritative
-      //     session from pendingApprovalSessionsRef (set when the card was
-      //     created by onApprovalRequest), with activeSessionId as fallback.
+      // 1. resolveApproval() → triggers the main WS path (liveWs.send
+      // with proper wsRef OPEN guard)
+      // 2. REST fallback 1s later → guarantees delivery even if the WS
+      // silently dropped the message (the original "double insurance"
+      // design intent). ApprovalRegistry::resolve() is idempotent so
+      // REST-after-WS is harmless; REST-only success (matched=true
+      // here) signals WS likely dropped the message and we want
+      // that to be visible in logs so we can grep for it.
+      // fixed two bugs in the REST path:
+      // 1. PORT: was hardcoded to 9518 (wrong); the server listens on 3000
+      // (api.ts:API_BASE). The old port was never in the Tauri CSP either,
+      // so the fetch was silently blocked. Using api.apiUrl() guarantees the
+      // correct host+port and stays in sync if the port ever changes.
+      // 2. SESSION ID: was using activeSessionId (the session currently visible
+      // in the chat pane), but the approval might belong to a different
+      // session if the user switched tabs. Now reads the authoritative
+      // session from pendingApprovalSessionsRef (set when the card was
+      // created by onApprovalRequest), with activeSessionId as fallback.
       const restPayload = JSON.stringify({
         request_id: requestId,
         decision: "approved",
@@ -1317,15 +1301,15 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
             });
             const data = await res.json();
             // matched=true  → REST was the path that actually delivered
-            //                  (WS likely dropped the message — worth
-            //                  keeping the loud console.error so we can
-            //                  grep hermix-fresh.log / WebView2 console
-            //                  to detect a recurrence).
+            // (WS likely dropped the message — worth
+            // keeping the loud console.error so we can
+            // grep hermix-fresh.log / WebView2 console
+            // to detect a recurrence).
             // matched=false → idempotent miss, the WS path already
-            //                  resolved the registry entry first. NOT
-            //                  an error — log at info level so it
-            //                  stops looking like a red failure in the
-            //                  console.
+            // resolved the registry entry first. NOT
+            // an error — log at info level so it
+            // stops looking like a red failure in the
+            // console.
             if (data.matched) {
               console.error(
                 `[APPROVAL-REST] id=${requestId} matched=true — REST delivered (WS path likely dropped the message)`,
@@ -1352,7 +1336,7 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
     (requestId: string) => {
       console.error(`[APPROVAL-DENY] id=${requestId} t=${Date.now()}`);
 
-      // 2026-07-21: mirror the approve-path cleanup — drop the redundant
+      // mirror the approve-path cleanup — drop the redundant
       // wsSendRaw() step here too. The main WS path in useStreamChat.ts
       // (the `.then(resp => ...)` after `resolveApproval()`) handles
       // sending `approval_response` over the live WS, with a proper
@@ -1398,7 +1382,7 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
   );
 
   /**
-   * 2026-07-18: Activate the bottom-right `PendingApprovalToast` —
+   * Activate the bottom-right `PendingApprovalToast` —
    * switch to the session that owns the oldest pending request,
    * ensure the chat pane is visible, and scroll the matching inline
    * approval card into view + pulse it briefly so the eye lands there.
@@ -1417,24 +1401,23 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
     const [firstReqId, firstSessionId] = firstEntry.value;
 
     // 1. Make sure the chat pane is showing. The user may be on
-    //    Automations / Settings / Persona — without this jump the
-    //    scroll target isn't mounted and the bubble is a dead link.
+    // Automations / Settings / Persona — without this jump the
+    // scroll target isn't mounted and the bubble is a dead link.
     if (page !== "chat") setPage("chat");
 
     // 2. Switch to the session the request lives in.
     if (firstSessionId !== activeSessionId) setActiveSessionId(firstSessionId);
 
     // 3. After React commits (active session → messages render →
-    //    InlineApprovalCard mounts with data-pending-approval-id),
-    //    scroll into view + flash. Two RAFs ensures ChatView has
-    //    rendered before the querySelector runs. The setTimeout
-    //    fallback handles the edge where the session list itself
-    //    is mid-transition.
-    //
-    //    Request IDs are agent-issued UUIDs, so they're safe inside a
-    //    CSS attribute selector *without* CSS.escape() — they only
-    //    contain `[0-9a-f-]`. Wrapping anyway as a belt-and-braces
-    //    guard if the upstream format ever changes.
+    // InlineApprovalCard mounts with data-pending-approval-id),
+    // scroll into view + flash. Two RAFs ensures ChatView has
+    // rendered before the querySelector runs. The setTimeout
+    // fallback handles the edge where the session list itself
+    // is mid-transition.
+    // Request IDs are agent-issued UUIDs, so they're safe inside a
+    // CSS attribute selector *without* CSS.escape() — they only
+    // contain `[0-9a-f-]`. Wrapping anyway as a belt-and-braces
+    // guard if the upstream format ever changes.
     const safeId =
       typeof CSS !== "undefined" && typeof CSS.escape === "function"
         ? CSS.escape(firstReqId)
@@ -1485,12 +1468,10 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
   }, []);
 
   // ── M5: ACUI directive state + decision bus ─────────────────────
-  //
   // The agent emits ACUI (Agent-Controlled UI) directives over the
   // streaming WebSocket (`{ type: "acui", directive: {...} }`). We
   // collect them into `acui.state`, then `ChatView` renders the active
   // cards via `<AcuiPanel state={acui.state} decide={acuiBus} />`.
-  //
   // The decision bus bridges approval/clarify card clicks back into
   // the same code path as inline cards: when an ACUI approval card is
   // clicked, `bus.approve(requestId)` calls `handleApproveApproval`,
@@ -1539,7 +1520,7 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
       const title = content.slice(0, 40) + (content.length > 40 ? "..." : "");
       let session;
       try {
-        // 2026-07-12: pass the welcome-state draft workspace so the
+        // pass the welcome-state draft workspace so the
         // server records it on the session row from creation
         // (instead of relying on a localStorage-only fallback that
         // vanishes on desktop restart).
@@ -1578,7 +1559,7 @@ try { clearStreamError(); } catch (_) { /* swallow */ }
       } catch {}
     }
 
-// 2026-07-10: Reset per-turn state.
+// Reset per-turn state.
 runningToolRef.current.clear();
 streamPhaseRef.current = null;
 
@@ -1647,7 +1628,7 @@ streamPhaseRef.current = null;
     }
 
     // Real-time stream: append each chunk to the *currently active*
-    // assistant message. 2026-07-10: removed needsNewAssistantRef
+    // assistant message. removed needsNewAssistantRef
     // turn-split logic — all text in an agent loop now goes to ONE
     // assistant message. Tool calls are tracked in the assistant's
     // `execution_timeline` (rendered as a collapsible block) instead
@@ -1671,7 +1652,7 @@ streamPhaseRef.current = null;
       }));
     };
 
-    // 2026-07-10: finalizeToolMessage removed. Tool completion is now
+    // finalizeToolMessage removed. Tool completion is now
     // tracked via `tool_complete` events in the assistant's
     // `execution_timeline`, not via separate `role: "tool"` messages.
 
@@ -1762,7 +1743,7 @@ streamPhaseRef.current = null;
 
     return new Promise<{ decision: ApprovalDecision }>((resolve) => {
       approvalResolversRef.current.set(req.requestId, (decision) => resolve({ decision }));
-      // 2026-07-18: sync to PendingApprovalToast state + record which
+      // sync to PendingApprovalToast state + record which
       // session this request lives in so the toast's activate action
       // can flip to the right session without iterating `sessions`.
       pendingApprovalSessionsRef.current.set(req.requestId, sessionId);
@@ -1832,8 +1813,7 @@ streamPhaseRef.current = null;
             // config error, etc.) — React may batch the
             // setStreamingSessionId(sessionId)+null into one render
             // so the catch block below may be too late. Handle here.
-            //
-            // 2026-07-22 (React 18 batching bug fix): capture
+            // (React 18 batching bug fix): capture
             // currentAssistantIdRef.current into a local variable
             // BEFORE calling setSessions. React 18's automatic
             // batching defers the setSessions updater to the next
@@ -1863,13 +1843,13 @@ streamPhaseRef.current = null;
             }
           },
           onToolStart: ({ toolCallId, tool, content }) => {
-            // 2026-07-10: Tool events are now appended to the
+            // Tool events are now appended to the
             // assistant's `execution_timeline` instead of creating
             // separate `role: "tool"` messages. This ensures:
-            //   1. Tools always render BELOW the avatar (inside the
-            //      assistant bubble, not as separate messages above it)
-            //   2. Streaming and reload produce identical visuals
-            //   3. Tools can be rendered as a collapsible block
+            // 1. Tools always render BELOW the avatar (inside the
+            // assistant bubble, not as separate messages above it)
+            // 2. Streaming and reload produce identical visuals
+            // 3. Tools can be rendered as a collapsible block
             if (runningToolRef.current.has(toolCallId)) {
               return;
             }
@@ -1905,7 +1885,7 @@ streamPhaseRef.current = null;
             }));
           },
           onToolChunk: ({ toolCallId, content }) => {
-            // 2026-07-10: Append stdout to the assistant's
+            // Append stdout to the assistant's
             // execution_timeline. We accumulate into a single
             // `tool_stdout` event per tool_call_id for efficiency.
             if (!content) return;
@@ -1947,14 +1927,14 @@ streamPhaseRef.current = null;
             }));
           },
           onToolComplete: ({ toolCallId, tool, content, denialKind }) => {
-            // 2026-07-18 (A+C product fix): a user-facing denial
+            // (A+C product fix): a user-facing denial
             // (user拒绝 / 超时 / 连接中断) surfaces a top banner that
             // mirrors the agent's injected "tell the user" note.
             // `"policy"` is a silent hardline gate — skip it.
             if (denialKind && denialKind !== "policy") {
               showDenialBanner(denialKind, tool);
             }
-            // 2026-07-10: Append a `tool_complete` event to the
+            // Append a `tool_complete` event to the
             // assistant's execution_timeline. No separate tool message,
             // no needsNewAssistantRef — all text stays in the same
             // assistant bubble.
@@ -2031,7 +2011,7 @@ streamPhaseRef.current = null;
             // the id is informational only here.
             void toolCallId;
           },
-          // 2026-07-14: append a `memory_update` event to the active
+          // append a `memory_update` event to the active
           // assistant message's `execution_timeline` (falling back to
           // the last assistant message when none is active — e.g. at
           // session end). The chat UI (MemoryUpdateBlock in
@@ -2127,7 +2107,7 @@ return {
               };
             }));
           },
-          // 2026-06-29 (C3 marker protocol): append a
+          // (C3 marker protocol): append a
           // `section_gate` event to the active assistant
           // message's `execution_timeline` so the trace panel
           // can render the `SectionGateRow` inline with the
@@ -2207,7 +2187,6 @@ return {
             // filter, the wrong session's groups would land in
             // `todoGroups` and the inline plan card would render
             // on the wrong assistant message.
-            //
             // `change.sessionId` is empty for legacy / non-todo
             // events — accept those (matches the server's
             // "None = legacy fan-out, always accept" policy).
@@ -2328,18 +2307,16 @@ return {
           onDone: (text, stopReason, durationMs) => {
             setPrefetchIntent(null);
             setStreamPhase(null);
-            // 2026-07-09: Multi-turn agent loop fix.
-            //
+            // Multi-turn agent loop fix.
             // `text` here is `fullText` from useStreamChat — the
             // accumulated text from ALL `text` events across ALL LLM
             // turns in this stream. But `appendChunk` has already
             // routed text to the correct per-turn assistant
             // placeholders (via needsNewAssistantRef). Using `text`
             // to overwrite the last assistant's content would:
-            //   - Duplicate turn 1's text into the last assistant
-            //   - Or replace correctly-streamed text with a garbled
-            //     concatenation of all turns' text
-            //
+            // - Duplicate turn 1's text into the last assistant
+            // - Or replace correctly-streamed text with a garbled
+            // concatenation of all turns' text
             // New approach: trust the in-memory state built by
             // appendChunk. Only use `text` as a FALLBACK when the
             // last assistant's content is empty (e.g. the LLM
@@ -2369,7 +2346,7 @@ return {
                           ...m,
                           content: needsFallbackText ? text : m.content,
                           stopReason,
-                          // 2026-07-16: Wall-clock time the LLM took
+                          // Wall-clock time the LLM took
                           // for this turn. Only set if we got a value
                           // (live stream always does; reloaded history
                           // never does, so we leave it undefined and
@@ -2399,9 +2376,8 @@ return {
                 return { ...s, messages: msgs };
               }));
             }
-            // 2026-07-09: Removed the 500ms re-fetch that replaced the
+            // Removed the 500ms re-fetch that replaced the
             // entire messages array with server-persisted data.
-            //
             // Root cause of "工具结果突然消失" bug:
             // During streaming, onToolStart/onToolChunk/onToolComplete
             // build complete tool messages in memory. When onDone fires,
@@ -2410,13 +2386,12 @@ return {
             // condition), or if the execution_timeline was incomplete,
             // expandTimelineToMessages produced fewer tool messages than
             // what was already in memory — making tool results vanish.
-            //
             // The in-memory state from streaming callbacks IS the source
             // of truth for the active session. The server's persisted
             // data will be loaded on the next session switch
             // (getSessionMessages in the activeSessionId effect).
 
-            // 2026-07-21: Mark any still-running tool groups as
+            // Mark any still-running tool groups as
             // "interrupted" in the execution_timeline. When the stream
             // settles (done/error/partial), any tool that received
             // `tool_start` but never `tool_complete` is stranded —
@@ -2501,7 +2476,7 @@ return {
             // Clean up frontend timeout timers
             approvalTimeoutTimersRef.current.forEach((timer) => clearTimeout(timer));
             approvalTimeoutTimersRef.current.clear();
-            // 2026-07-18: clear the toast trackers too — every pending
+            // clear the toast trackers too — every pending
             // approval just got force-denied by the cleanup, so the
             // bubble has nothing to remind about. Without this the
             // bottom-right bubble would stick around after stream end.
@@ -2522,7 +2497,7 @@ return {
         finalOverrides,
       );
     } catch (e) {
-      // 2026-07-22 (React 18 batching bug fix): same capture pattern
+      // (React 18 batching bug fix): same capture pattern
       // as onError above. By the time catch runs, onError may have
       // already set currentAssistantIdRef.current = null. Capture
       // first, use inside setSessions updater.
@@ -2551,17 +2526,16 @@ return {
     }
   }, [activeSessionId, sessions, sendStream]);
 
-  // 2026-06-28: pop a queued item out of turn and dispatch it
+  // pop a queued item out of turn and dispatch it
   // immediately. Defined here (after `handleSendMessage`) so the
   // useCallback deps array can reference it without tripping TSC's
   // "used before declaration" check.
-  //
-  //   !streaming → call handleSendMessage directly, then drop the
-  //                row from the queue. If the send throws, re-prepend
-  //                so the user can retry.
-  //   streaming  → drop the row, then re-prepend. The drain effect
-  //                below (keyed on `[streaming, messageQueue]`) will
-  //                pick it up the next tick `streaming` settles.
+  // !streaming → call handleSendMessage directly, then drop the
+  // row from the queue. If the send throws, re-prepend
+  // so the user can retry.
+  // streaming  → drop the row, then re-prepend. The drain effect
+  // below (keyed on `[streaming, messageQueue]`) will
+  // pick it up the next tick `streaming` settles.
   const sendFromQueue = useCallback(
     async (idx: number) => {
       // Snapshot the queue item atomically inside the updater so we
@@ -2603,14 +2577,12 @@ return {
   );
 
   // Auto-send queued messages when streaming completes.
-  //
   // Lives here (after `handleSendMessage` is declared) because the
   // effect captures it in its closure and TSC's lexical analysis
   // would otherwise flag "used before declaration" — the React
   // runtime order is fine (useCallback runs before the effect's first
   // execution) but tsc only sees the source-order TDZ.
-  //
-  // 2026-06-26 v2 fix: was originally placed above `handleSendMessage`
+  // v2 fix: was originally placed above `handleSendMessage`
   // without `handleSendMessage` in the deps array, relying on the
   // `[streaming, messageQueue]` triggers to re-bind the closure. That
   // happens to work for `messageQueue` (a React state read by index)
@@ -2618,8 +2590,7 @@ return {
   // dep that changes without `streaming`/`messageQueue` changing
   // (e.g. `activeSessionId` flip mid-stream), the effect would call
   // a stale closure and drop the queued message.
-  //
-  // 2026-06-26 v3 fix: .catch() re-enqueue on failure (previously
+  // v3 fix: .catch() re-enqueue on failure (previously
   // silently dropped the message). Max 3 retries via ref-based
   // fallback tracker to prevent infinite drain loop.
   const queueRetriesRef = useRef<Record<string, number>>({});
@@ -2682,7 +2653,7 @@ return {
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
       />
       {/*
-        2026-07-18: bottom-right reminder for pending approval requests.
+        bottom-right reminder for pending approval requests.
         `position: fixed` lives entirely on the toast side — it floats
         above every pane below it via the toast's own `z-index`. We
         intentionally mount it BEFORE <div className="app-body"> so
@@ -2742,6 +2713,7 @@ return {
         <div
           className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"} transition-transform duration-200 absolute md:relative z-20 h-full min-h-0 overflow-hidden`}
         >
+          <ErrorBoundary name="侧边栏">
           <Sidebar
             page={page}
             onPageChange={setPage}
@@ -2754,6 +2726,7 @@ return {
             isCreatingSession={isCreatingSession}
             onRoomSelect={setSelectedRoomId}
           />
+          </ErrorBoundary>
           <div
             data-tauri-no-drag
             onMouseDown={left.onMouseDown}
@@ -2775,7 +2748,7 @@ return {
               session={activeSession}
               onSendMessage={handleSendMessage}
               onNewChat={handleNewChat}
-              // v2 (2026-07-07): inline todo cards in the message stream.
+              // inline todo cards in the message stream.
               // App owns the groups store; ChatView renders one card per
               // group right after the originating assistant message.
               todoGroups={todoGroups}
@@ -2858,6 +2831,7 @@ contextUsage={contextUsage}
               onMouseDown={right.onMouseDown}
               className="pane-resizer pane-resizer-right hidden md:block"
             />
+            <ErrorBoundary name="右侧栏">
             <RightSidebar
               open={rightOpen}
               onClose={() => setRightOpen(false)}
@@ -2871,17 +2845,15 @@ contextUsage={contextUsage}
               onAddFileToChat={handleAddFileToChat}
               onPreviewFile={handlePreviewFileFromExplorer}
             />
+            </ErrorBoundary>
           </div>
         )}
       </div>
 
-      {/* ─── Artifact preview modal (主人原话 2026-06-22) ───
-          "阅读界面直接弹出界面显示吧,遮罩主界面。
-           不要对产物栏有任何关联,包括返回按钮什么的,
-           直接显示一个窗口。"
-          当用户在产物栏点文件 / 在 markdown 里点产物链接,
-          这里渲染一个全屏 modal,完全遮罩整个 App,
-          与右栏没有任何视觉关联——关闭只看 X / ESC / 遮罩点击。 */}
+      {/* ─── Artifact preview modal ───
+          Full-screen modal that overlays the entire App. Completely
+          independent of the artifact sidebar — closing only via X / ESC /
+          backdrop click. */}
       {/* Artifact preview from the "产物" tab */}
       {selectedArtifactId && !computerPreviewArtifact && (() => {
         const artifact = artifacts.find((a) => a.id === selectedArtifactId) ?? null;
@@ -2902,6 +2874,7 @@ contextUsage={contextUsage}
           onClose={() => setComputerPreviewArtifact(null)}
         />
       )}
+      <ToastContainer />
     </div>
   );
 }
@@ -2963,15 +2936,15 @@ function ArtifactPreviewModal({
     >
       <div
         // Modal box — premium frame:
-        //  • width: 1100px cap (92vw on narrow screens)
-        //  • height: 88vh so the desktop titlebar is still visible
-        //    for drag/resize affordance
-        //  • 16px radius (xl) + 1px border + 2px outline (subtle
-        //    light-mode highlight) + heavy shadow
-        //  • background uses theme bg-primary (auto light/dark)
-        //  • outline gives the panel a hairline highlight that
-        //    survives any bg color, so light mode reads "lifted off"
-        //    not "floating void"
+        // • width: 1100px cap (92vw on narrow screens)
+        // • height: 88vh so the desktop titlebar is still visible
+        // for drag/resize affordance
+        // • 16px radius (xl) + 1px border + 2px outline (subtle
+        // light-mode highlight) + heavy shadow
+        // • background uses theme bg-primary (auto light/dark)
+        // • outline gives the panel a hairline highlight that
+        // survives any bg color, so light mode reads "lifted off"
+        // not "floating void"
         className="flex flex-col shadow-2xl
                    w-[min(1100px,92vw)] h-[88vh] mt-[5vh] mb-[5vh]
                    rounded-2xl overflow-hidden

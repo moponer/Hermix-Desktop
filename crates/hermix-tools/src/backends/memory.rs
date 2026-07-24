@@ -1,7 +1,7 @@
 //! Real memory backend: read/write MEMORY.md and USER.md in
 //! `~/.hermix/memories/`.
 //!
-//! # 2026-06-07 hardening pass
+//! # hardening pass
 //!
 //! The previous version of this file had three problems that
 //! produced user-visible "the memory system is buggy" symptoms in
@@ -99,17 +99,16 @@ const ARCHIVE_INDEX_PREFIX: &str = "<!-- archived:";
 
 /// Real memory backend that stores entries in
 /// `<hermix_home>/memories/MEMORY.md` and `<hermix_home>/memories/USER.md`.
-///
-/// Concurrency:
+/// /// Concurrency:
 /// - **`write_lock`** (process-level): prevents two in-process
-///   `add`/`replace`/`remove` calls from racing through their
-///   read-modify-write sections. Cheap (no syscall). Always
-///   acquired first.
+/// `add`/`replace`/`remove` calls from racing through their
+/// read-modify-write sections. Cheap (no syscall). Always
+/// acquired first.
 /// - **OS file lock on `<file>.lock`** (cross-process): prevents
-///   a second `hermix` instance (e.g. dev + production sidecar
-///   running side by side, or the CLI invoked from a script
-///   while the desktop app is open) from simultaneously
-///   writing the same file. Acquired right after `write_lock`.
+/// a second `hermix` instance (e.g. dev + production sidecar
+/// running side by side, or the CLI invoked from a script
+/// while the desktop app is open) from simultaneously
+/// writing the same file. Acquired right after `write_lock`.
 pub struct FileMemoryBackend {
     /// Directory the memory files live in. Wrapped in a
     /// `std::sync::Mutex` so `set_profile_dir` can swap it at
@@ -130,17 +129,16 @@ pub struct FileMemoryBackend {
     /// re-pays the cache-miss cost. Mirrors the upstream
     /// `nousresearch/hermes-agent` "frozen snapshot"
     /// semantics.
-    ///
-    /// Contract:
+    /// /// Contract:
     /// - `read_file()` does **not** consult the snapshot; it
-    ///   reads from disk (so the LLM's *next* turn sees fresh
-    ///   data). The snapshot is the protected input to the
-    ///   *current* turn.
+    /// reads from disk (so the LLM's *next* turn sees fresh
+    /// data). The snapshot is the protected input to the
+    /// *current* turn.
     /// - `add`/`replace`/`remove` write to disk but do **not**
-    ///   mutate the snapshot. The next call to
-    ///   `current_snapshot()` will re-pin from disk.
+    /// mutate the snapshot. The next call to
+    /// `current_snapshot()` will re-pin from disk.
     /// - `current_snapshot()` returns the current snapshot,
-    ///   initializing it lazily on the first call.
+    /// initializing it lazily on the first call.
     snapshot: Arc<StdMutex<MemorySnapshot>>,
 }
 
@@ -199,8 +197,7 @@ impl FileMemoryBackend {
     /// calls write to disk but do not change this snapshot;
     /// this is the property that protects the LLM's prefix
     /// cache.
-    ///
-    /// Returns `(memory_md, user_md)`. Either may be empty
+    /// /// Returns `(memory_md, user_md)`. Either may be empty
     /// string if the file doesn't exist yet.
     pub fn current_snapshot(&self) -> (String, String) {
         self.snapshot
@@ -305,16 +302,15 @@ impl FileMemoryBackend {
 
     /// Atomically write `content` to `path` with the following
     /// guarantees:
-    ///
-    /// 1. **Process-level mutex** held for the whole
-    ///    read-modify-write section (caller's responsibility).
+    /// /// 1. **Process-level mutex** held for the whole
+    /// read-modify-write section (caller's responsibility).
     /// 2. **OS-level `lock_exclusive` on `<path>.lock`** held
-    ///    while we write — covers the cross-process case.
+    /// while we write — covers the cross-process case.
     /// 3. **Pre-write drift check**: re-read `path`, compare
-    ///    bytes to the bytes we read at the start. If they
-    ///    differ, refuse + drop a `.bak.<ts>` snapshot.
+    /// bytes to the bytes we read at the start. If they
+    /// differ, refuse + drop a `.bak.<ts>` snapshot.
     /// 4. **Atomic rename**: write to `<path>.tmp.<uuid>`, fsync,
-    ///    rename over `path`. Crash-safe.
+    /// rename over `path`. Crash-safe.
     /// Atomically write `content` to `path`. `pub(super)` so the
     /// `tests` submodule (and the wider crate integration tests)
     /// can exercise the drift detector directly. Production
@@ -479,14 +475,12 @@ impl FileMemoryBackend {
     /// entry with its `[idx]` and an 80-char preview. The LLM can
     /// then either pick a more precise substring, or — once we wire
     /// a `memory_list` tool — fetch the list again before retrying.
-    ///
-    /// Without this, the LLM was flying blind on every `replace` /
+    /// /// Without this, the LLM was flying blind on every `replace` /
     /// `remove` miss: it had to guess what the right `old_text` was
     /// based on its own (often stale) snapshot of the file, and
     /// usually re-guessed wrong. Surfacing the index list turns
     /// the failure into a self-service retry path.
-    ///
-    /// `target` is "memory" or "user" (used in the message body for
+    /// /// `target` is "memory" or "user" (used in the message body for
     /// clarity — the LLM shouldn't have to know which file a given
     /// target maps to).
     fn format_no_match_error(
@@ -558,8 +552,7 @@ impl FileMemoryBackend {
     /// (success / not-found / ambiguous) share this shape so the chat
     /// UI can render one consistent card: an action verb, the memory
     /// file path (clickable → preview), and an explicit `status`.
-    ///
-    /// `success:false` outcomes (no-match, ambiguous) are returned as
+    /// /// `success:false` outcomes (no-match, ambiguous) are returned as
     /// `Ok(...)` — they are NOT execution errors, so they must not
     /// show a red "失败" badge.
     fn success_response(
@@ -636,8 +629,7 @@ impl FileMemoryBackend {
     /// [`MemoryBackend::add`] *before* refusing a new write —
     /// if the archive trims enough room, the new entry goes
     /// through instead of being rejected.
-    ///
-    /// `target_kept_size` is the maximum chars (after the
+    /// /// `target_kept_size` is the maximum chars (after the
     /// archive runs) the kept entries may occupy in the
     /// memory file. The caller (`add`) computes it as
     /// `limit - new_entry_chars - delimiter_cost`, which
@@ -645,33 +637,28 @@ impl FileMemoryBackend {
     /// entries. External callers (tests, future ops) can pass
     /// any value ≤ `char_limit_for(target)` to control how
     /// aggressively to trim.
-    ///
-    /// Returns `Some((archive_path, archived_count))` if any entries
+    /// /// Returns `Some((archive_path, archived_count))` if any entries
     /// were moved, where `archived_count` is how many entries were
     /// rotated out of the live memory file, and `None` if the kept
     /// entries already fit within `target_kept_size` (the common
     /// no-op path).
-    ///
-    /// # Mechanics
-    ///
-    /// - Keeps the **newest** entries (the ones the LLM most
-    ///   likely needs to recall), trims the oldest.
+    /// /// # Mechanics
+    /// /// - Keeps the **newest** entries (the ones the LLM most
+    /// likely needs to recall), trims the oldest.
     /// - The frozen snapshot (which feeds the LLM's prefix
-    ///   cache) stays ≤ `char_limit_for(target)` — this is
-    ///   the whole point. archive.md is **not** part of the
-    ///   snapshot.
+    /// cache) stays ≤ `char_limit_for(target)` — this is
+    /// the whole point. archive.md is **not** part of the
+    /// snapshot.
     /// - `archive.md` grows up to [`ARCHIVE_LIMIT`] (= 8000)
-    ///   chars, then rotates to `archive/YYYY-MM.md` (or
-    ///   `archive/YYYY-MM-<unix_ts>.md` if the month file
-    ///   already exists from an earlier rotation in the same
-    ///   calendar month — defensive against the case where
-    ///   the LLM blasts the file system in a single session).
+    /// chars, then rotates to `archive/YYYY-MM.md` (or
+    /// `archive/YYYY-MM-<unix_ts>.md` if the month file
+    /// already exists from an earlier rotation in the same
+    /// calendar month — defensive against the case where
+    /// the LLM blasts the file system in a single session).
     /// - `archive/YYYY-MM.md` is append-only by month, so a
-    ///   user can grep across months for a forgotten fact.
-    ///
-    /// # Concurrency
-    ///
-    /// Must be called **inside** `add`'s `write_lock` guard.
+    /// user can grep across months for a forgotten fact.
+    /// /// # Concurrency
+    /// /// Must be called **inside** `add`'s `write_lock` guard.
     /// This function does not take the lock itself — it
     /// composes with `atomic_write`'s per-file OS lock, which
     /// is enough because the process Mutex already serializes
@@ -884,7 +871,6 @@ impl MemoryBackend for FileMemoryBackend {
             // the new entry fits and we continue. Otherwise
             // we surface a clear "still over the limit" error
             // so the LLM knows to split the entry.
-            //
             // target_kept_size is the maximum size *after* the
             // archive runs: we leave room for the incoming
             // entry plus its delimiter, plus 1 char of safety
@@ -1169,8 +1155,12 @@ impl MemoryBackend for FileMemoryBackend {
             None,
         ))
     }
+}
 
-    async fn read(&self, target: &str) -> Result<String, ToolError> {
+// Inherent method (not part of the MemoryBackend trait — read is
+// FileMemoryBackend-specific, other backends may not need it).
+impl FileMemoryBackend {
+    pub async fn read(&self, target: &str) -> Result<String, ToolError> {
         let path = self.path_for(target)?;
         self.ensure_within_dir(&path)?;
         let content = self.read_file(&path).await?;
@@ -1211,8 +1201,7 @@ impl MemoryBackend for FileMemoryBackend {
 // --- helpers ----------------------------------------------------------------
 
 /// Whitespace / markdown / quote-normalize a string for fuzzy matching.
-///
-/// Lets `old_text` match even when the LLM's copy of an entry differs
+/// /// Lets `old_text` match even when the LLM's copy of an entry differs
 /// in spacing, `*emphasis*` markers, or curly-vs-straight quotes — the
 /// most common cause of "no match" on `replace` / `remove`. We keep
 /// `contains` semantics (so a unique phrase still locates the entry)
@@ -1344,7 +1333,7 @@ mod tests {
     #[tokio::test]
     async fn file_total_limit_enforced() {
         // Pre-archive behavior: adding past the cap was
-        // rejected. Now (post-2026-06-21 auto-archive), the
+        // rejected. Now (post-auto-archive), the
         // limit is enforced by moving older entries to
         // archive.md rather than refusing. Verify that path:
         // three 1000-char entries push us past the 2200 cap,
@@ -1471,7 +1460,7 @@ mod tests {
     #[tokio::test]
     async fn parse_entries_skips_archive_index_line() {
         let content = format!(
-            "first entry\n§\nsecond entry\n§\n{} 2 entries to archive.md at 2026-06-21 08:00:00 -->",
+            "first entry\n§\nsecond entry\n§\n{} 2 entries to archive.md at 08:00:00 -->",
             ARCHIVE_INDEX_PREFIX
         );
         let entries = FileMemoryBackend::parse_entries(&content);
@@ -1631,12 +1620,11 @@ mod tests {
         assert!(format!("{}", err).contains("Invalid target"));
     }
 
-    // ---- 2026-07-23: 'No entry matched' error must list available
-    //      entries so the LLM can self-correct without flying blind.
-    //      Regression: 主人截图 2026-07-23 显示 LLM 看到 "No entry
-    //      matched '比如行驶证、营运证进行重命名'" 后没拿到可用列表，
-    //      反复猜 old_text 失败 → 放弃任务。---- //
-    #[tokio::test]
+    // ---- 'No entry matched' error must list available
+    // entries so the LLM can self-correct without flying blind.
+    // Regression: 用户截图 显示 LLM 看到 "No entry
+    // matched '比如行驶证、营运证进行重命名'" 后没拿到可用列表，
+    // 反复猜 old_text 失败 → 放弃任务。---- // #[tokio::test]
     async fn no_match_replace_lists_available_entries() {
         let (_tmp, backend) = make_backend();
         backend

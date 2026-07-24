@@ -180,7 +180,7 @@ export function AnalyticsView() {
           <h2 className="text-lg font-semibold">使用统计</h2>
           {!hasRealTokens && totals.total_sessions > 0 && (
             <span className="text-xs text-text-faint ml-2">
-              (token 数据从 2026-06-27 起收集)
+              (token 数据从 起收集)
             </span>
           )}
         </div>

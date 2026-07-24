@@ -63,12 +63,10 @@ pub(crate) struct ValidatorConfig<'a> {
 
 /// Validate a batch of tool calls. Mutates `tool_calls` in place
 /// (normalizes arguments). Mutates `retry_counters` (bumps/resets as needed).
-///
-/// **Pre-condition**: callers must repair + hydrate tool calls BEFORE
+/// /// **Pre-condition**: callers must repair + hydrate tool calls BEFORE
 /// calling this function (the mute/housekeeping check in `run_stream`
 /// needs to see repaired names).
-///
-/// Returns the outcome — the caller is responsible for side effects
+/// /// Returns the outcome — the caller is responsible for side effects
 /// (pushing error results, popping messages, loop control).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn validate(
@@ -163,8 +161,7 @@ pub(crate) enum ApplyResult {
 
 /// Apply a `ValidationOutcome` to the context, performing the side
 /// effects (pushing error results, adding system messages).
-///
-/// Returns an [`ApplyResult`] telling the caller exactly what to do.
+/// /// Returns an [`ApplyResult`] telling the caller exactly what to do.
 pub(crate) fn apply_outcome(
     ctx: &mut ContextManager,
     tool_calls: &[ToolCall],

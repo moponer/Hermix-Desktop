@@ -48,8 +48,7 @@ pub struct McpPromptInfo {
 // ---------------------------------------------------------------------------
 
 /// MCP server that exposes hermes-agent tools as MCP tools to external clients.
-///
-/// The server:
+/// /// The server:
 /// - Starts listening on the given transport
 /// - Handles incoming JSON-RPC requests according to the MCP protocol
 /// - Converts hermes-agent ToolSchema to MCP tool format
@@ -138,8 +137,7 @@ impl McpServer {
     }
 
     /// Handle an incoming JSON-RPC request.
-    ///
-    /// This is the main request dispatch method. It routes requests to
+    /// /// This is the main request dispatch method. It routes requests to
     /// the appropriate handler based on the method name.
     pub async fn handle_request(&self, method: &str, params: Value) -> Result<Value, McpError> {
         debug!("Handling MCP request: {}", method);
@@ -177,8 +175,7 @@ impl McpServer {
     }
 
     /// Handle tools/list request.
-    ///
-    /// Returns all available tools from the registry in MCP format.
+    /// /// Returns all available tools from the registry in MCP format.
     async fn handle_tools_list(&self, _params: Value) -> Result<Value, McpError> {
         let definitions = self.tool_registry.get_definitions();
         let mcp_tools: Vec<McpToolInfo> =
@@ -190,8 +187,7 @@ impl McpServer {
     }
 
     /// Handle tools/call request.
-    ///
-    /// Dispatches the tool call through the shared tool registry.
+    /// /// Dispatches the tool call through the shared tool registry.
     async fn handle_tools_call(&self, params: Value) -> Result<Value, McpError> {
         if !self.capability_policy.allow_tool_invoke {
             return Err(McpError::Forbidden(
@@ -301,8 +297,7 @@ impl McpServer {
     }
 
     /// Start the MCP server on the given transport.
-    ///
-    /// The server will listen for incoming JSON-RPC messages and dispatch
+    /// /// The server will listen for incoming JSON-RPC messages and dispatch
     /// them to the appropriate handler.
     pub async fn start(&self, mut transport: Box<dyn McpTransport>) -> Result<(), McpError> {
         info!("Starting MCP server");

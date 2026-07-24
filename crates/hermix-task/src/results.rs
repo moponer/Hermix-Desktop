@@ -8,8 +8,7 @@
 use hermix_core::{TaskArtifactType, TaskResultRef};
 
 /// Helper wrapper for managing a collection of `TaskResultRef`.
-///
-/// Provides deduplication, type filtering, and summary generation
+/// /// Provides deduplication, type filtering, and summary generation
 /// for the frontend's "产物" tab.
 #[derive(Debug, Clone, Default)]
 pub struct TaskResults {

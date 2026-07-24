@@ -37,8 +37,7 @@ impl RateLimitTracker {
     }
 
     /// Check if we should wait before making the next request.
-    ///
-    /// Returns `Some(duration)` if we need to wait, `None` if we can proceed.
+    /// /// Returns `Some(duration)` if we need to wait, `None` if we can proceed.
     pub fn should_wait(&self) -> Option<Duration> {
         let state = self.state.lock().ok()?;
         let now = Instant::now();
@@ -68,8 +67,7 @@ impl RateLimitTracker {
     }
 
     /// Update rate limit state from HTTP response headers.
-    ///
-    /// Parses the following headers:
+    /// /// Parses the following headers:
     /// - `x-ratelimit-remaining`: remaining requests in current window
     /// - `x-ratelimit-reset`: Unix timestamp when the window resets
     /// - `retry-after`: seconds to wait before retrying (from 429 responses)

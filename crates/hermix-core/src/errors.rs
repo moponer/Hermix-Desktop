@@ -63,8 +63,7 @@ pub enum ToolError {
     /// agent loop scans for to inject a "ask the user to grant access"
     /// guidance instead of letting the LLM treat it as a generic IO failure
     /// (or downgrade to a fabricated generic checklist).
-    ///
-    /// Hermix runs on a real Windows machine: we never probe for a sandbox,
+    /// /// Hermix runs on a real Windows machine: we never probe for a sandbox,
     /// we just surface the restriction clearly and hand the "request
     /// permission" action back to the user / runtime.
     #[error("[PERMISSION_DENIED] {0}")]
@@ -157,8 +156,7 @@ impl ToolError {
     /// permission / access-denied phrasing to [`ToolError::PermissionDenied`]
     /// so the agent loop can surface a "request permission from the runtime"
     /// guidance. Everything else stays [`ToolError::ExecutionFailed`].
-    ///
-    /// Covers the cross-platform shapes an OS emits when access is refused:
+    /// /// Covers the cross-platform shapes an OS emits when access is refused:
     /// `Access is denied (os error 5)`, `Permission denied`, raw
     /// `ERROR_ACCESS_DENIED`, etc. This is the single choke-point used by
     /// every tool's `map_err` so permission failures are uniformly tagged.

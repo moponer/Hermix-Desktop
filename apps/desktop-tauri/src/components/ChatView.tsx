@@ -12,10 +12,10 @@ import type { CompressMethod } from "../utils/imageCompressor";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
 import type { CompactionStatus } from "./CompactionStatusBanner";
 
-// 2026-06-25: pendingImages 数据结构。
-//  - file: 浏览器 File 句柄（几 KB），不存 base64（8MB+）
-//  - blobUrl: 浏览器内部引用，src= 直接用，零拷贝
-//  - isCompressed / method: UI 角标提示压缩状态
+// pendingImages 数据结构。
+// - file: 浏览器 File 句柄（几 KB），不存 base64（8MB+）
+// - blobUrl: 浏览器内部引用，src= 直接用，零拷贝
+// - isCompressed / method: UI 角标提示压缩状态
 export interface PendingImage {
   file: File;
   blobUrl: string;
@@ -102,7 +102,7 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
       j += 1;
     }
     // Filter out empty placeholders.
-    // 2026-07-11: Added `reasoningContent` check — rows that only
+    // Added `reasoningContent` check — rows that only
     // have reasoning (no content, no tools, no timeline) were being
     // silently dropped, causing thinking blocks and body text (when
     // the LLM didn't close its <think> tag, the server stores
@@ -121,7 +121,7 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
       continue;
     }
     if (nonEmpty.length === 1) {
-      // 2026-07-11: Build unified_steps even for single-row cases
+      // Build unified_steps even for single-row cases
       // so the rendering path is identical between single-row and
       // multi-row merges. Without this, resolveSteps falls back to
       // buildFallbackSteps which may produce a different step order.
@@ -179,13 +179,11 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
     // Each assistant row represents one LLM iteration with its own
     // reasoning / tools / text. By iterating in order and pushing
     // steps per-row, we preserve the chronological flow:
-    //   [reasoning 1] → [tools 1] → [reasoning 2] → [tools 2] → [text]
-    //
+    // [reasoning 1] → [tools 1] → [reasoning 2] → [tools 2] → [text]
     // CRITICAL: For intermediate rows, reasoning → reasoning block and
     // content → text block are INDEPENDENT. Do NOT show intermediate
     // rows' reasoning as body text — that would display thinking
     // fragments as body text (the "思考过程的片段" bug).
-    //
     // Only for the LAST row: if content is empty but reasoning has text,
     // the LLM didn't close its <think> tag so all text (including body)
     // is in reasoningContent. Show it as body text (matching the
@@ -258,7 +256,7 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
 /**
  * Should the assistant bubble at `idx` render its avatar + meta line?
  *
- * v18 (2026-06-17) — 主人原话：
+ * — 用户原话：
  *   "所有的消息应该是在模型名称下面的，也就是说每次 agentloop
  *    都应该只在一个模型头像名称下显示，中间不会再出现，除非下一次
  *    的对话或下一次用户发送消息后，才会转入在一个 agentloop"
@@ -286,7 +284,7 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
  * 之前用 `(effectivePrev === null || effectivePrev.role !== "assistant")`
  * 会把 approval / clarify 误判成新 loop 起点，让"刚刚 + 头像 + 名称"
  * 在同一个 user→assistant 链里重复出现两到三次。这条函数把边界收
- * 紧到"只有 user 才算" — 跟主人 v18 描述一致。
+ * 紧到"只有 user 才算" — 跟用户 v18 描述一致。
  *
  * @param idx   index into `messages` (raw session.messages order)
  * @param messages  full ordered chat history
@@ -297,7 +295,6 @@ function shouldShowAssistantHeader(idx: number, messages: ReadonlyArray<{ role?:
   if (!msg || msg.role !== "assistant") return false;
   // Skip backward over ALL messages that belong to the same agent-loop
   // turn: assistant (empty or not), tool, approval, clarify.
-  //
   // The server persists one assistant row per LLM iteration. A single
   // user turn can produce: [user, assistant1(tool_calls), tool,
   // assistant2(final text)]. After wireArrayToChatMessages merges the
@@ -307,7 +304,6 @@ function shouldShowAssistantHeader(idx: number, messages: ReadonlyArray<{ role?:
   // up assistant2 in session.messages, its prev is assistant1 — not a
   // user — so the header would be suppressed. Skipping ALL assistant
   // messages (not just empty ones) ensures we find the turn boundary.
-  //
   // The `role?` shape is structural: `ChatMessage[]` (raw reload)
   // matches, and so does the P0-T1 `streamRow` (each element carries
   // either a `msg.role` or no `role` for todo rows). Todo rows with
@@ -385,26 +381,25 @@ function useModelSelector() {
   // `minimax:MiniMax-M2` badge the user reported. We still keep a local
   // `selectedModel` so the user can override the default per-session
   // without mutating the persisted default.
-  //
-  // v2 (2026-06-25): 修"模型不见了"bug。
-  // 主人反馈：已配置好的模型在 ChatView 弹窗里不显示。
+  // 修"模型不见了"bug。
+  // 用户反馈：已配置好的模型在 ChatView 弹窗里不显示。
   // 根因：mount 时 useEffect 一次性读 localStorage 后，`config` 状态就被冻结了。
-  //       SettingsView 改 defaultModel 时只触发 `MODEL_CONFIG_CHANGED_EVENT`，
-  //       `useCurrentModel` 重新读了 defaultModel 字符串，但 useModelSelector
-  //       的 config 状态没重读 → 弹窗显示"暂无可用模型"（虽然 selectedModel 不空）。
+  // SettingsView 改 defaultModel 时只触发 `MODEL_CONFIG_CHANGED_EVENT`，
+  // `useCurrentModel` 重新读了 defaultModel 字符串，但 useModelSelector
+  // 的 config 状态没重读 → 弹窗显示"暂无可用模型"（虽然 selectedModel 不空）。
   // 修法：把"读 localStorage"和"同步 selectedModel"合并到一个事件订阅里。
-  //       收到事件就重读完整的 localStorage → 重设 config + selectedModel。
+  // 收到事件就重读完整的 localStorage → 重设 config + selectedModel。
   const { defaultModel } = useCurrentModel();
   // Lazy init: read localStorage synchronously on first render so the
   // model picker is populated immediately, no useEffect round-trip.
   // Fallback chain:
-  //   1) hermix.desktop.model_config (the authoritative list)
-  //   2) hermix.desktop.model_cache + defaultModel (rebuild from cache
-  //      when the persisted config has been wiped — this is the bug we
-  //      keep hitting in dev: HMR rewrites wipe state, cache survives)
-  //   3) backend /api/model/info (last-resort: ask the Rust server what
-  //      model it's actually running with, synthesize a single entry so
-  //      the picker isn't permanently empty)
+  // 1) hermix.desktop.model_config (the authoritative list)
+  // 2) hermix.desktop.model_cache + defaultModel (rebuild from cache
+  // when the persisted config has been wiped — this is the bug we
+  // keep hitting in dev: HMR rewrites wipe state, cache survives)
+  // 3) backend /api/model/info (last-resort: ask the Rust server what
+  // model it's actually running with, synthesize a single entry so
+  // the picker isn't permanently empty)
   const [config, setConfig] = useState<ModelConfigData>(() => {
     try {
       const raw = storage.getItem(MODEL_CONFIG_KEY);
@@ -598,11 +593,10 @@ function useModelSelector() {
     return config.enabled.map((m) => ({ id: `${m.providerId}:${m.modelId}`, display: m.modelId, provider: m.providerId }));
   }, [config]);
 
-  // Group models by provider for the picker popover. 2026-06-26:
-  //   replaced the previous "builtin / custom" two-section flat list
-  //   with a single per-provider collapse tree. Custom providers default
-  //   to collapsed so a 5-model `custom-agnes` doesn't push builtin
-  //   providers off-screen; builtin providers default to expanded.
+  // Group models by provider for the picker popover. // replaced the previous "builtin / custom" two-section flat list
+  // with a single per-provider collapse tree. Custom providers default
+  // to collapsed so a 5-model `custom-agnes` doesn't push builtin
+  // providers off-screen; builtin providers default to expanded.
   const byProvider = useMemo(() => {
     const map = new Map<string, { provider: string; models: typeof models; isCustom: boolean }>();
     for (const m of models) {
@@ -617,7 +611,7 @@ function useModelSelector() {
     return Array.from(map.values());
   }, [models]);
 
-  // v2 (2026-06-25): "已配置的模型列表" 兜底 — 如果 enabled 几乎没有，
+  // "已配置的模型列表" 兜底 — 如果 enabled 几乎没有，
   // 但 model_cache 里有用户加过的 provider 的所有模型，则把 cache
   // 里"enabled 没有"的模型作为"其它可用"分组暴露出来，避免用户
   // 配了 provider 但没勾选 enabled 时弹窗一片空。明确标记为"其它"
@@ -643,7 +637,7 @@ function useModelSelector() {
   }, [models]);
 
   const currentDisplay = useMemo(() => {
-    // v2 (2026-06-29): 未配置模型时显示明确的中文提示 + 给用户
+    // 未配置模型时显示明确的中文提示 + 给用户
     // 一个清晰的行动入口（点击 → 跳设置 → 模型管理）。之前显示
     // "选择模型" 用户以为只是个 placeholder，没有"未配置"的紧迫感，
     // 也不知道点哪里去配。
@@ -658,23 +652,19 @@ function useModelSelector() {
 }
 
 // ── ModelStatusBar — top-of-chat status strip ─────────
-//
 // Surfaces the currently-active default model and whether its provider
 // has been configured (env var set). Three states:
-//   • green:  configured and matches
-//   • amber:  current default uses a provider without a key
-//   • red:    no default model at all → "go to Settings"
-//
+// • green:  configured and matches
+// • amber:  current default uses a provider without a key
+// • red:    no default model at all → "go to Settings"
 // Without this bar the user only sees the mismatch when they hit
 // "send" and get a "missing API key for openai" error, which is too
 // late to be actionable.
 // ── ModelStatusBar — top-of-chat title strip ───────────
-//
-// v3 主人反馈：标题要加粗；标题和正文中间不要再有分割线（border-b
+// v3 用户反馈：标题要加粗；标题和正文中间不要再有分割线（border-b
 // 去掉）。所以现在是干净的纯文字标题区，跟下面 MessageBubble 的
 // 第一条消息之间是自然间距，没有任何视觉上的"切割"。
-//
-// v4 主人反馈：右栏展开按钮只在该对话有产物时才显示，且放在标题栏
+// v4 用户反馈：右栏展开按钮只在该对话有产物时才显示，且放在标题栏
 // 右侧、不放在主窗口 TitleBar 上（其他页面没有产物，不需要这个按钮）。
 function ModelStatusBar({
   title,
@@ -688,13 +678,13 @@ function ModelStatusBar({
   if (!title) return null;
   // Truncate long titles to keep the bar compact.
   const displayTitle = title.length > 80 ? title.slice(0, 77) + "…" : title;
-  // 对话界面默认就显示右栏按钮，跟有没有产物无关 — 主人原话：
+  // 对话界面默认就显示右栏按钮，跟有没有产物无关 — 用户原话：
   // "对话界面默认就是有展开的按钮就行了，你管他有没有产物？"
   // 其他页面（agents/experts/settings）没传 onToggleRight，自然不显示。
   const showRightToggle = !!onToggleRight;
   return (
     <div
-      className="px-4 sm:px-6 pt-3 pb-2 flex items-center gap-2 rounded-t-xl"
+      className="px-4 sm:px-6 pt-3 pb-2 flex items-center gap-2 rounded-t-xl shrink-0"
       style={{ color: "var(--color-text-primary)" }}
     >
       <span
@@ -727,7 +717,7 @@ interface ChatViewProps {
   onSendMessage: (content: string, projectId?: string, overrides?: ChatOverrides, attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[] }) => Promise<void>;
   onNewChat?: () => void;
   /**
-   * v2 (2026-07-07): inline todo cards in the message stream. App.tsx
+   * inline todo cards in the message stream. App.tsx
    * owns the groups store; ChatView renders one card per plan right
    * after the originating assistant message (or at the end of the
    * stream when the server did not stamp a message_id).
@@ -771,7 +761,7 @@ interface ChatViewProps {
   onOpenExperts?: () => void;
   /** 跳转到「设置」页（模型未配置时点击 chip 用） */
   onOpenSettings?: () => void;
-  /** 2026-07-08 (user): 已选工作区时点目录 → 打开右栏文件浏览器切到该目录 */
+  /** (user): 已选工作区时点目录 → 打开右栏文件浏览器切到该目录 */
   onOpenComputer?: () => void;
   onUndo?: () => void;
   onRestore?: () => void;
@@ -822,7 +812,7 @@ interface ChatViewProps {
   /** Reset the stream error in the parent after the user has seen it. */
   onClearStreamError?: () => void;
   /**
-   * 2026-06-25 主人反馈："欢迎页默认是关闭产物栏的"。
+   * 用户反馈："欢迎页默认是关闭产物栏的"。
    * 进入欢迎态（`!session || session.messages.length === 0`）时通知父级
    * 关闭右栏。仅在 false → true 切换时触发：用户在欢迎页手动开右栏不
    * 会被反复掐。该回调依赖 `props.onEnterWelcome` 引用稳定性 — 用
@@ -866,7 +856,7 @@ compactionStatus?: CompactionStatus | null;
 onDismissCompaction?: () => void;
 /** Context window usage from backend's `context_usage` WS event. */
 contextUsage?: { usedTokens: number; maxTokens: number; thresholdTokens: number; percent: number } | null;
-/** 2026-07-14: per-turn token usage snapshot from the backend's
+/** per-turn token usage snapshot from the backend's
  *  `usage_update` WS event. Drives the live cache-hit chip next
  *  to the context-usage bar. */
 usageSnapshot?: {
@@ -948,7 +938,7 @@ contextUsage = null,
 }: ChatViewProps) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  // 2026-07-23: in-conversation-flow compaction progress card.
+  // in-conversation-flow compaction progress card.
   // Local dismiss flag so closing the inline card during an active
   // compression does NOT wipe the composer-above banner (and does not
   // hide the live phase — it just hides this one inline copy). Reset
@@ -962,12 +952,12 @@ contextUsage = null,
     }
   }, [compactionStatus?.phase]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  // 2026-07-06: ref to the scrollable message container for
+  // ref to the scrollable message container for
   // user-scroll detection. Only auto-scroll if the user is near
   // the bottom, so browsing history doesn't get interrupted by
   // new streaming chunks.
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  // 2026-07-22 (Bug #5): the previous `isNearBottom` callback lived
+  // (Bug #5): the previous `isNearBottom` callback lived
   // here, but with the scrollIntoView → scrollTop rewrite the value
   // is now read directly inside `handleContainerScroll` (same
   // threshold: 150px). Keeping the helper would just be dead code.
@@ -1042,11 +1032,11 @@ contextUsage = null,
     if (id) markRecentUsed(id);
     recordCutoff(id);
     if (sessionId) {
-      updateSessionMetadata(sessionId, { expert_id: id }).catch(() => {});
+      updateSessionMetadata(sessionId, { expert_id: id }).catch((e) => { console.warn("[ChatView] sync expert_id failed:", e); });
     }
   };
 
-  // T2026-06-21 P1: dynamic tool discovery. We pull the master list
+  // TP1: dynamic tool discovery. We pull the master list
   // from `GET /v1/tools` on mount and refresh it whenever the window
   // regains focus — the registry is the single source of truth, so
   // new tools show up without any front-end change. The cache in
@@ -1068,37 +1058,33 @@ contextUsage = null,
   }, []);
   const [permissionLevel, setPermissionLevel] = usePermissionLevel();
   const { workspace, setWorkspace: setWorkspaceRaw } = useSessionWorkspace(sessionId);
-  // 2026-06-26 主人反馈：「目录进入对话界面后就无法设置了，在进入前没有设置过」。
-  //
+  // 用户反馈：「目录进入对话界面后就无法设置了，在进入前没有设置过」。
   // v1 根因：原 useMemo 靠 localStorage 读 `hermix.session.{id}.workspace`，但
-  //   useSessionWorkspace 的 useState 初始化时机 vs useEffect 同步 vs session.workspace
-  //   回填（line 1119-1133）三个时序不一致，useMemo 重算时机不可控。
+  // useSessionWorkspace 的 useState 初始化时机 vs useEffect 同步 vs session.workspace
+  // 回填（line 1119-1133）三个时序不一致，useMemo 重算时机不可控。
   // v1 修法：直接用 React state `workspace` 作为唯一真相源，与 line 1759 的
-  //   `<Composer workspaceLocked>` prop 共享同一判定 `Boolean(workspace)`，
-  //   保证 setWorkspace 包装层与 Composer 渲染走同一锁。v1 只解决了"state
-  //   来源不统一"的问题，没有解决"锁了之后如何解锁"。
-  //
+  // `<Composer workspaceLocked>` prop 共享同一判定 `Boolean(workspace)`，
+  // 保证 setWorkspace 包装层与 Composer 渲染走同一锁。v1 只解决了"state
+  // 来源不统一"的问题，没有解决"锁了之后如何解锁"。
   // v2 二次根因：v1 的"workspaceLocked = Boolean(workspace)"在以下场景会让
-  //   按钮看起来"没设过但又锁着"——chip 文字是 activeWorkspace.name || "目录"
-  //   占位符，workspaceLocked 却 = true（workspace state 是 non-null 但
-  //   activeWorkspace=null 找不到匹配条目）。可能来源：
-  //     (a) 上次 session 留下的 `hermix.session.<id>.workspace` 还在
-  //         localStorage，新 sessionId 命中旧值；
-  //     (b) backend session.workspace 被旧测试 set 过，line 1119-1133 的
-  //         restore effect 把它写回了 state；
-  //     (c) 欢迎态下 useSessionWorkspace 读 DRAFT_WORKSPACE_KEY，draft 有值。
-  //   用户视觉上看到"目录"占位符 → 以为没设过 → 点不动 → 「进入对话界面后
-  //   就无法设置了」的体感。
-  //   而且就算去掉 button 的 disabled，v1 的 setWorkspace 包装器也会
-  //   `if (workspaceLocked) return;` 静默拒绝 ——popover 里点"不绑定目录"无效。
-  //
-  // v3 修法（2026-07-08 最终版）: 取消"按 session 锁死"和"按已选锁死"。
-  //   欢迎界面无论是否选过工作区，按钮都可点 → 弹 popover 列表
-  //   （可重新选择/不绑定）。只有「对话已有消息 / 发送中 / 流式」时
-  //   才锁定——即 Msg1+ 之后不可再改工作区。
-  //   "添加新工作区"选完后 popover 自动关闭（setProjOpen(false)）。
-  //
-  // 2026-07-07 workspaceLocked + onWorkspaceChange
+  // 按钮看起来"没设过但又锁着"——chip 文字是 activeWorkspace.name || "目录"
+  // 占位符，workspaceLocked 却 = true（workspace state 是 non-null 但
+  // activeWorkspace=null 找不到匹配条目）。可能来源：
+  // (a) 上次 session 留下的 `hermix.session.<id>.workspace` 还在
+  // localStorage，新 sessionId 命中旧值；
+  // (b) backend session.workspace 被旧测试 set 过，line 1119-1133 的
+  // restore effect 把它写回了 state；
+  // (c) 欢迎态下 useSessionWorkspace 读 DRAFT_WORKSPACE_KEY，draft 有值。
+  // 用户视觉上看到"目录"占位符 → 以为没设过 → 点不动 → 「进入对话界面后
+  // 就无法设置了」的体感。
+  // 而且就算去掉 button 的 disabled，v1 的 setWorkspace 包装器也会
+  // `if (workspaceLocked) return;` 静默拒绝 ——popover 里点"不绑定目录"无效。
+  // v3 修法（最终版）: 取消"按 session 锁死"和"按已选锁死"。
+  // 欢迎界面无论是否选过工作区，按钮都可点 → 弹 popover 列表
+  // （可重新选择/不绑定）。只有「对话已有消息 / 发送中 / 流式」时
+  // 才锁定——即 Msg1+ 之后不可再改工作区。
+  // "添加新工作区"选完后 popover 自动关闭（setProjOpen(false)）。
+  // workspaceLocked + onWorkspaceChange
   const workspaceLocked =
     (session?.messages?.length ?? 0) > 0 || sending || isStreaming;
 
@@ -1107,7 +1093,7 @@ contextUsage = null,
       if (workspaceLocked) return;
       setWorkspaceRaw(path);
       if (sessionId) {
-        updateSessionMetadata(sessionId, { workspace: path }).catch(() => {});
+        updateSessionMetadata(sessionId, { workspace: path }).catch((e) => { console.warn("[ChatView] sync workspace failed:", e); });
       }
       onWorkspaceChange?.(sessionId, path);
     },
@@ -1136,7 +1122,7 @@ contextUsage = null,
     () => (workspace ? workspaces.find((w) => w.path === workspace) ?? null : null),
     [workspace, workspaces],
   );
-  // 2026-06-25 主人反馈："进历史对话，目录不显示了"。
+  // 用户反馈："进历史对话，目录不显示了"。
   // 根因：useSessionWorkspace 读到的 path 在 useWorkspaces 全局列表里没记录
   // （可能是 hermes→hermix 升级时 session key 走了 legacy fallback，
   // 或者之前是别的入口写入）。修法：发现这种孤儿 path 时把它自动写回
@@ -1153,23 +1139,23 @@ contextUsage = null,
 
 const { models, byProvider, selectedModel, setSelectedModel, currentDisplay } = useModelSelector();
 
-// 2026-06-25 包装 setSelectedModel：用户切换模型后也持久化到后端 session。
+// 包装 setSelectedModel：用户切换模型后也持久化到后端 session。
 const setSelectedModelAndPersist = useCallback(
   (id: string) => {
     setSelectedModel(id);
     if (sessionId) {
-      updateSessionMetadata(sessionId, { model: id }).catch(() => {});
+      updateSessionMetadata(sessionId, { model: id }).catch((e) => { console.warn("[ChatView] sync model failed:", e); });
     }
   },
   [setSelectedModel, sessionId],
 );
 
-// 2026-06-25 主人反馈："进历史对话，目录/模型/默认模型都消失"。
+// 用户反馈："进历史对话，目录/模型/默认模型都消失"。
 // 根因：SessionSummary 现在带 workspace/expert_id/model 字段，但 ChatView
-//       加载 session 时没把这些值写回 localStorage，导致 useSessionWorkspace /
-//       useSessionExpert / useModelSelector 读到的还是上一次的（或空的）状态。
+// 加载 session 时没把这些值写回 localStorage，导致 useSessionWorkspace /
+// useSessionExpert / useModelSelector 读到的还是上一次的（或空的）状态。
 // 修法：session 变化时，把后端返回的值同步到 localStorage。
-//       用 useRef 防重入：同一 sessionId 只恢复一次，避免每次 render 都写盘。
+// 用 useRef 防重入：同一 sessionId 只恢复一次，避免每次 render 都写盘。
 const restoredRef = useRef<string | null>(null);
 useEffect(() => {
   if (!session?.id) { restoredRef.current = null; return; }
@@ -1185,7 +1171,7 @@ useEffect(() => {
   if (session.model) {
     setSelectedModel(session.model);
   }
-// v2 (2026-06-29): 主人反馈「对话中 agent 不看工作区目录」。
+// 用户反馈「对话中 agent 不看工作区目录」。
 // 同时监听 session.workspace 字段本身变化（user 在其他 tab 选了目录 →
 // 后端 PATCH 改了 session.workspace → 但 React state 不会自动更新），
 // 把后端最新值拉回前端 state。否则会出现"后端显示绑了目录，但前端
@@ -1260,7 +1246,7 @@ const handleFilesAttach = useCallback(
       const paths: string[] = [];
       for (const f of nonImages) {
         // Tauri WebView2 暴露 file.path 属性（非标准 Chromium API）
-        const filePath = (f as any).path;
+        const filePath = (f as File & { path?: string }).path;
         if (filePath && typeof filePath === "string") {
           paths.push(filePath);
         }
@@ -1325,7 +1311,7 @@ const clearPendingImages = useCallback(() => {
       Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
     const hasTimeline =
       Array.isArray(m.execution_timeline) && m.execution_timeline.length > 0;
-    // 2026-07-11: Also check reasoningContent — when the LLM doesn't
+    // Also check reasoningContent — when the LLM doesn't
     // close its <think> tag, the body text is routed to
     // reasoning_content and content is empty. Without this check,
     // such messages are silently dropped on reload, causing the
@@ -1345,27 +1331,24 @@ const clearPendingImages = useCallback(() => {
   // streaming. Each firing creates a new closure, schedules rAF,
   // and tears down the previous effect. The rAF coalescing handled
   // the scroll frequency, but the closure churn was wasteful.
-  //
   // New approach: a ref tracks "scroll pending", and a single rAF
   // loop runs for the lifetime of the streaming session. Non-streaming
   // message additions use a separate lightweight effect.
-  //
-  // 2026-07-22 (owner-reported bug, Bug #5): the previous
+  // (owner-reported bug, Bug #5): the previous
   // implementation called `messagesEndRef.scrollIntoView({ block:
   // "end" })` for both streaming and post-submit scrolls. Two
   // failure modes that this rewrite fixes:
-  //   (a) `scrollIntoView` is a no-op when the target node is
-  //       already inside the viewport. Streaming chunks that grow
-  //       the container above the visible area (e.g. an inline tool
-  //       timeline expanding) leave `scrollTop` unmoved because the
-  //       sentinel `messagesEndRef` stays inside the viewport and
-  //       the browser does nothing. Symptom: "内容会在某个位置停住，
-  //       手动下拉才能看到下面的继续输出的内容".
-  //   (b) Submitting a new message while the user has scrolled up
-  //       used to respect `hasUserScrolledUpRef`, leaving the user
-  //       stranded in history. Symptom: "往上翻看对话内容后...发送
-  //       消息出去不会自动滚动到用户消息的这个位置".
-  //
+  // (a) `scrollIntoView` is a no-op when the target node is
+  // already inside the viewport. Streaming chunks that grow
+  // the container above the visible area (e.g. an inline tool
+  // timeline expanding) leave `scrollTop` unmoved because the
+  // sentinel `messagesEndRef` stays inside the viewport and
+  // the browser does nothing. Symptom: "内容会在某个位置停住，
+  // 手动下拉才能看到下面的继续输出的内容".
+  // (b) Submitting a new message while the user has scrolled up
+  // used to respect `hasUserScrolledUpRef`, leaving the user
+  // stranded in history. Symptom: "往上翻看对话内容后...发送
+  // 消息出去不会自动滚动到用户消息的这个位置".
   // Fix: replace `scrollIntoView` with an explicit `scrollTop =
   // scrollHeight - clientHeight` write (re-runs even when the
   // sentinel is already visible). Add a `forceScrollSeq` state —
@@ -1416,19 +1399,19 @@ const clearPendingImages = useCallback(() => {
     };
   }, [isStreaming, scrollToBottom, forceScrollSeq]);
 
-  // 2026-07-12: Restore-conversation auto-scroll.
+  // Restore-conversation auto-scroll.
   // On initial mount / F5 reload / session switch, the recovered
   // history must land with the viewport scrolled to the last message.
   // The pre-existing effect relied on `isNearBottom()`, but a freshly
   // mounted container has `scrollTop = 0` and `messagesEndRef.current`
   // is null until React commits — so the call fired before the DOM
   // existed and the scroll never happened. Two changes:
-  //   (a) `justRestoredRef` latches true on every session id change
-  //       and forces a single unconditional scroll on the next message
-  //       count change.
-  //   (b) `hasUserScrolledUpRef` (driven by `onScroll` below) blocks
-  //       the force-scroll once the user has navigated into history,
-  //       so we don't yank them back to the bottom on every new chunk.
+  // (a) `justRestoredRef` latches true on every session id change
+  // and forces a single unconditional scroll on the next message
+  // count change.
+  // (b) `hasUserScrolledUpRef` (driven by `onScroll` below) blocks
+  // the force-scroll once the user has navigated into history,
+  // so we don't yank them back to the bottom on every new chunk.
   const prevSessionIdRef = useRef<string | undefined>(undefined);
   const justRestoredRef = useRef(false);
   const hasUserScrolledUpRef = useRef(false);
@@ -1453,13 +1436,13 @@ const clearPendingImages = useCallback(() => {
 
   // Non-streaming: scroll on message count change (new message, session switch).
   // Three branches:
-  //   1. `justRestoredRef` true (initial mount / reload / session switch)
-  //      OR `forceScrollSeq > 0` (handleSubmit bumped the counter):
-  //      unconditional force-scroll, ignore user's prior scroll position.
-  //      The submit case was the owner-reported bug #5 — the user
-  //      expects to see the message they just sent.
-  //   2. User has scrolled up to browse history: stay put, do not disturb.
-  //   3. Otherwise (user is still near bottom): follow the new content.
+  // 1. `justRestoredRef` true (initial mount / reload / session switch)
+  // OR `forceScrollSeq > 0` (handleSubmit bumped the counter):
+  // unconditional force-scroll, ignore user's prior scroll position.
+  // The submit case was the owner-reported bug #5 — the user
+  // expects to see the message they just sent.
+  // 2. User has scrolled up to browse history: stay put, do not disturb.
+  // 3. Otherwise (user is still near bottom): follow the new content.
   useEffect(() => {
     if (isStreaming) return;
     const force = justRestoredRef.current || forceScrollSeq > 0;
@@ -1549,7 +1532,6 @@ const clearPendingImages = useCallback(() => {
   // whose timestamp ≤ that" which is good enough in practice: the
   // group_started event fires during the same streaming turn that
   // produced the assistant message, so the timing is tight.
-  //
   // Once the server threads real message_id through (future patch),
   // anchorMessageId will be non-null and the explicit lookup below
   // wins. Both paths share the same downstream renderer, so the
@@ -1660,7 +1642,7 @@ const clearPendingImages = useCallback(() => {
             attachedFilePaths: attachedPaths.length > 0 ? attachedPaths : undefined,
           }
         : undefined;
-    // 2026-07-22 (Bug #5): bump the force-scroll counter so the user's
+    // (Bug #5): bump the force-scroll counter so the user's
     // own submit event overrides the sticky-bottom guard. Without this,
     // a user who had scrolled up to read history would not see the
     // message they just sent — the viewport would stay where it was.
@@ -1685,7 +1667,6 @@ const clearPendingImages = useCallback(() => {
     // `useEffect` ([streaming, messageQueue, handleSendMessage]) will
     // pull the queued message and call `handleSendMessage(next)` once
     // the streaming turn completes.
-    //
     // Both `sending` (local React state, set synchronously) and
     // `isStreaming` (derived from the WS hook) must be checked: a
     // rapid double-Enter before the hook has committed
@@ -1712,7 +1693,7 @@ const clearPendingImages = useCallback(() => {
     setSending(true);
     try {
       const overrides: ChatOverrides = { permissionLevel };
-      // 2026-06-26: 把用户在下拉里选的模型塞进 overrides，让 backend 真的切到
+      // 把用户在下拉里选的模型塞进 overrides，让 backend 真的切到
       // 那个 provider（之前 bug：UI 看着切了，但 payload 不带 model，backend
       // 永远在跑 config.yaml 默认模型）。格式 "provider:model"。
       if (selectedModel) overrides.model = selectedModel;
@@ -1720,7 +1701,7 @@ const clearPendingImages = useCallback(() => {
         overrides.systemPromptOverride = expert.systemPrompt;
         markRecentUsed(expert.id);
       }
-      // T2026-06-21 P1 (rev): dynamic tool allow-list, single source of
+      // TP1 (rev): dynamic tool allow-list, single source of
       // truth. We derive the tool list from the live `GET /v1/tools`
       // response — no hard-coded names anywhere on the front-end. The
       // expert's `toolset` tag is **advisory metadata** (shown in the
@@ -1740,17 +1721,16 @@ const clearPendingImages = useCallback(() => {
       }
       void expert?.toolset; // expert.toolset is shown in UI / used by
                             // backend routing but not as a filter here.
-      // v2 (2026-06-29): 主人反馈「选了目录对话时 agent 还是只找 C 盘」。
+      // 用户反馈「选了目录对话时 agent 还是只找 C 盘」。
       // 根因：useSessionWorkspace 的 state 在 session 切换、welcome ↔ chat 切换、
       // HMR 重置等时机下可能短暂为 null，但 localStorage / session.workspace / draft 槽位
       // 已经有真实路径。state 为空时直接放过 → overrides.workspace 没传 → 后端
       // 落回 server process CWD（C 盘）。
-      //
       // 修法：state 为空时，按优先级回退到最权威的"该用哪个目录"信号：
-      //   1. useSessionWorkspace 自己的 state（最优先，UI 即时反馈）
-      //   2. session?.workspace （后端持久化值，可能比 localStorage 更新）
-      //   3. window.localStorage 直接读（兜底，应对 useState 初始化竞态）
-      //   4. useWorkspaceRoot 全局值（用户顶部导航设过的工作区）
+      // 1. useSessionWorkspace 自己的 state（最优先，UI 即时反馈）
+      // 2. session?.workspace （后端持久化值，可能比 localStorage 更新）
+      // 3. window.localStorage 直接读（兜底，应对 useState 初始化竞态）
+      // 4. useWorkspaceRoot 全局值（用户顶部导航设过的工作区）
       // 任意一个非空就传给后端，让 LLM 在系统 prompt 看到 "## Active Workspace"，
       // 文件/终端工具也走 `TERMINAL_CWD` 而不是 server CWD。
       const fallbackWorkspace =
@@ -1845,19 +1825,18 @@ const clearPendingImages = useCallback(() => {
     );
   }
 
-  // v2 (2026-06-29): 主人反馈「点停止跳到欢迎页，回不去」。
+  // 用户反馈「点停止跳到欢迎页，回不去」。
   // 根因：停止流后 500ms re-fetch 在 server 那边偶尔返回空数组（cancel
   // 时机太早 user_msg 还没持久化），setSessions 把内存 messages 替换成
   // 空数组 → `session.messages.length === 0` → 下面那个 Empty State
   // 判断条件满足 → ChatView 渲染吉祥物欢迎页。视觉上像"被踢出去"。
-  //
   // Loading guard: only show spinner when an EXISTING session (with
   // message_count > 0 in the backend) has messages that haven't loaded
   // into memory yet. New sessions (message_count === 0 or undefined)
   // should show the welcome page, not the spinner.
   const isLoadingExisting = session
     && session.messages.length === 0
-    && ((session as any).message_count ?? 0) > 0;
+    && ((session as Session & { message_count?: number }).message_count ?? 0) > 0;
   if (isLoadingExisting) {
     return (
       <div
@@ -1997,7 +1976,6 @@ const clearPendingImages = useCallback(() => {
               // would render its own avatar + "正在生成…" header and
               // produce the "header pops in twice for one user turn"
               // bug the user reported on 2026-06-17.
-              //
               // The streaming placeholder is *not* in `messagesWithStream`
               // at this index (it's spliced in from session.messages),
               // so we compute its header by its raw position in
@@ -2026,7 +2004,6 @@ const clearPendingImages = useCallback(() => {
             // tool, an approval card, or a clarify card — share the
             // same header and the body text just continues below the
             // first bubble's avatar column.
-            //
             // We compute shouldShowAssistantHeader from streamRow
             // (the merged array) and find the position of the current
             // message in it. Since shouldShowAssistantHeader now
@@ -2051,7 +2028,7 @@ const clearPendingImages = useCallback(() => {
             );
           })}
 
-          {/* 2026-07-23: in-conversation-flow compaction progress card.
+          {/* in-conversation-flow compaction progress card.
               Surfaces the live compression attempt INSIDE the message
               stream (not just the composer-above banner) so the user
               sees the "正在压缩上下文" action where the conversation
@@ -2086,7 +2063,7 @@ const clearPendingImages = useCallback(() => {
             />
           )}
 
-          {/* v19 / 2026-06-19: Race-safe streaming fallback.
+          {/* v19 / Race-safe streaming fallback.
               The normal path renders the streaming assistant row inside
               the `messagesWithStream.map(...)` loop above (via
               `<StreamingBubble>`). That works whenever
@@ -2102,7 +2079,7 @@ const clearPendingImages = useCallback(() => {
               The previous version of this block rendered a SECOND
               indicator (`<ThoughtStreamCard>` with its own EKG + hint)
               in that race, which produced the "正在生成… / 正在思考…"
-              duplication the user reported on 2026-06-19 (a separate
+              duplication the user reported on (a separate
               `<StreamingBubble>` was already rendering in the loop
               below because the placeholder row had been picked up by
               the time the map ran). To eliminate the double indicator
@@ -2200,7 +2177,7 @@ and red at ≥95% of the window. */}
       const pct = Math.min(100, (contextUsage.usedTokens / contextUsage.maxTokens) * 100);
       const color = pct >= 95 ? "bg-rose-500" : pct >= 85 ? "bg-amber-500" : "bg-emerald-500";
       const textColor = pct >= 95 ? "text-rose-600 dark:text-rose-400" : pct >= 85 ? "text-amber-600 dark:text-amber-400" : "";
-      // 2026-07-14: derive the live cache-hit rate from the most
+      // derive the live cache-hit rate from the most
       // recent `usage_update` snapshot. Anthropic-style semantics —
       // hit rate = cache_read / (cache_read + uncached prompt). The
       // chip only renders when there's at least one snapshot, so
@@ -2258,7 +2235,7 @@ and red at ≥95% of the window. */}
     })()}
   </div>
 ) : !isStreaming && (
-  // 2026-07-16: 恢复的会话（非流式）没有活跃 WS 流，后端不推送
+  // 恢复的会话（非流式）没有活跃 WS 流，后端不推送
   // context_usage，因此显示占位而非整块静默消失，避免与 live 会话
   // 行为不一致。一旦用户发送消息、收到首个 context_usage 事件即被
   // 上面的真实进度条替换。
@@ -2343,7 +2320,7 @@ interface ComposerProps {
   onOpenExperts?: () => void;
   /** 跳转到「设置」页（模型未配置时点击 chip 用） */
   onOpenSettings?: () => void;
-  /** 2026-07-08 (user): 已选工作区时点目录 → 打开右栏文件浏览器切到该目录 */
+  /** (user): 已选工作区时点目录 → 打开右栏文件浏览器切到该目录 */
   onOpenComputer?: () => void;
   onPickRecent?: (id: string) => void;
   onUndo?: () => void;
@@ -2385,7 +2362,6 @@ function Composer(p: ComposerProps) {
   }, []);
 
   // ── Toolbar layout (v23: 坚决不允许两行) ───────────────────────────
-  //
   // v22 通过 ResizeObserver + toolbarCompact 折叠部分文字标签来防止换行，
   // 但极端窄宽度下仍可能换行。v23: toolbar 强制 flex-nowrap + whitespace-nowrap，
   // 配合更激进的折叠阈值，彻底杜绝第二行。
@@ -2505,7 +2481,7 @@ function Composer(p: ComposerProps) {
       )}
 
       {/* Queue display — shown when messages are queued.
-       * 2026-06-28: redesigned from "N 条消息 + 清空" stub into a
+       * redesigned from "N 条消息 + 清空" stub into a
        * full per-item list with edit / send-now / remove affordances.
        * The textarea below remains the primary input; queued items
        * are auto-drained by App.tsx's `useEffect` once `streaming`
@@ -2587,10 +2563,10 @@ function Composer(p: ComposerProps) {
 
       {/* Tool chips row + actions row.
         *
-        * v4 (主人反馈: "输入框下面的功能按钮给我回复成文字+图标的啊")
+        * v4 (用户反馈: "输入框下面的功能按钮给我回复成文字+图标的啊")
         * ─────────────────────────────────────────────────
         * 之前在主列 < 580px 时会切到 compact 模式，把所有文字标签隐
-        * 藏只显示图标。主人认为纯图标是反产品方向 —— 用户无法识
+        * 藏只显示图标。用户认为纯图标是反产品方向 —— 用户无法识
         * 别按钮用途。
         *
         * 修复策略:
@@ -2645,7 +2621,7 @@ function Composer(p: ComposerProps) {
             </button>
           </div>
 
-          {/* Workspace chip — v4 (2026-07-08)：
+          {/* Workspace chip — ：
               · 未锁定（welcome / 新会话，无论是否已选工作区）：accent 色 +
                 名字，可点开 popover（"添加新工作区 / 工作目录列表 / 不绑定目录"）。
                 选完工作区后再次点击仍弹此列表，可重新选择或不绑定。
@@ -2658,7 +2634,7 @@ function Composer(p: ComposerProps) {
               ref={projTriggerRef as React.RefObject<HTMLButtonElement>}
               onClick={() => {
                 if (p.workspaceLocked) return;
-                // 2026-07-08 (user, 修订 v3): 无论是否已选工作区，点目录都弹
+                // (user, 修订 v3): 无论是否已选工作区，点目录都弹
                 // chooser 列表（可重新选/不绑定）。只在「对话已开始」时
                 // workspaceLocked=true 禁用。
                 projToggle();

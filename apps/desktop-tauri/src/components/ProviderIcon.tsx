@@ -7,12 +7,12 @@
 // - Mono 用 currentColor → 容器 color 决定前景色，dark mode 自动反色
 //
 // ⚠️ v22 修复：
-//   - minimax: null as any（硬编码齿轮） → 改用 lobehub Minimax Mono
-//   - var(--pi-bg, rgba(0,0,0,0.04)) 软底（0 处 set 过） → inline 12% alpha 软底
+// - minimax: null as any（硬编码齿轮） → 改用 lobehub Minimax Mono
+// - var(--pi-bg, rgba(0,0,0,0.04)) 软底（0 处 set 过） → inline 12% alpha 软底
 //
 // 解析规则：
-//   minimax/openai/anthropic/deepseek/... → 对应 lobehub 组件
-//   custom-*  / 未识别                   → 内置 Gear 图标
+// minimax/openai/anthropic/deepseek/... → 对应 lobehub 组件
+// custom-*  / 未识别                   → 内置 Gear 图标
 
 import React from "react";
 import {

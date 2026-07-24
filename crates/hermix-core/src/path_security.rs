@@ -89,13 +89,11 @@ pub fn forbidden_win32_prefix(s: &str) -> Option<&'static str> {
 /// that might not be in the pattern list.
 pub fn detect_shell_metacharacters(command: &str) -> Option<&'static str> {
     // Defense-in-depth for shell *injection* vectors only.
-    //
     // We intentionally do NOT flag ordinary shell syntax such as `&&`,
     // `||`, `;`, backticks, `$(...)`, or `<(...)`/`>(...)` — those are
     // everyday command construction (e.g. `npm run build && npm test`,
     // `echo "today is $(date)"`) and confirming on every one would fire
     // on almost every real command, destroying terminal UX.
-    //
     // The one pattern we always stop and ask about is piping a string
     // into a shell interpreter (`... | sh`, `... | bash`, `... | cmd`,
     // etc.) — the classic "data becomes code" injection vector. That is

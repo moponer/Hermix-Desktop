@@ -1,5 +1,4 @@
 // useArtifacts — artifact extraction and path verification
-//
 // Extracted from App.tsx (2026-07-13, P1-7 God Object split).
 // Inputs: activeSession (messages) + workspaceRoot
 // Outputs: verified artifact list + selected artifact + path-click handler
@@ -60,7 +59,7 @@ export function useArtifacts({
   useEffect(() => {
     const raw = rawArtifacts;
     if (raw.length === 0) {
-      // 2026-07-15: Don't wipe verifiedArtifacts when rawArtifacts is
+      // Don't wipe verifiedArtifacts when rawArtifacts is
       // empty — synthetic artifacts added by handlePathClick (e.g. a
       // user clicks a path link the LLM mentioned in prose that the
       // regex extractor missed) would be immediately cleared, causing
@@ -78,7 +77,7 @@ export function useArtifacts({
     ).then((results) => {
       if (cancelled) return;
       const next = results.filter((r) => r.exists).map((r) => r.a);
-      // 2026-07-14: Preserve synthetic artifacts added by
+      // Preserve synthetic artifacts added by
       // handlePathClick. Without this, the async verification
       // effect would overwrite verifiedArtifacts and silently
       // drop artifacts the user just clicked — causing the
@@ -106,7 +105,7 @@ export function useArtifacts({
 
   const artifacts = verifiedArtifacts;
 
-  // 2026-07-14: Keep a ref to the latest artifacts so
+  // Keep a ref to the latest artifacts so
   // handlePathClick doesn't need artifacts in its dependency
   // array. This avoids recreating the callback (and busting
   // MemoMessageBubble's memo) every time the verification

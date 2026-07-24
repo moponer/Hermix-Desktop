@@ -1,5 +1,5 @@
 //! End-to-end coverage for the "image placeholder residue" regression
-//! reported by 主人 on 2026-06-18. See MEMORY.md §"image-placeholder
+//! reported by 用户 on 2026-06-18. See MEMORY.md §"image-placeholder
 //! residue" for the full report.
 //!
 //! Symptom:
@@ -129,7 +129,7 @@ fn strip_is_idempotent() {
 
 #[test]
 fn user_active_request_keyword_round_trips_through_compactor_summary() {
-    // 主人's repro: "用浏览器访问百度查一下明天上海天气" got
+    // 用户's repro: "用浏览器访问百度查一下明天上海天气" got
     // compressed away because the active-request keywords were not
     // in the critical-input list. The user input must survive into
     // the compressor's tail-protect window verbatim — even after the

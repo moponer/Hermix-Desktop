@@ -36,8 +36,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// A first-class work unit in the orchestration engine.
-///
-/// Maps to the `tasks` table in `sessions.db`. Created by the user
+/// /// Maps to the `tasks` table in `sessions.db`. Created by the user
 /// (via HTTP API or the frontend task creation flow), processed by
 /// the agent loop, and tracked through its lifecycle via
 /// [`TaskStatus`].

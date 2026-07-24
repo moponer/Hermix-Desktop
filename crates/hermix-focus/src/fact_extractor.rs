@@ -77,13 +77,11 @@ impl ExtractedFact {
 }
 
 /// (regex, base_kind, min_chars, language) trigger definition.
-///
-/// `regex` is matched against `user_lower` (English) or `user_trim`
+/// /// `regex` is matched against `user_lower` (English) or `user_trim`
 /// (Chinese — regex still works, just less common). When the regex
 /// matches, the substring AFTER the trigger word(s) becomes the
 /// `content`.
-///
-/// `language` is `Zh` for CJK-only triggers (require clause-boundary
+/// /// `language` is `Zh` for CJK-only triggers (require clause-boundary
 /// semantics) or `En` for ASCII triggers (use regex `\b`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Lang {
@@ -150,10 +148,8 @@ const TRIGGERS: &[Trigger] = &[
 ];
 
 /// Pre-compiled regexes — one per trigger, cached process-wide.
-///
-/// ### Why this still panics on a bad pattern (and why it's safe)
-///
-/// `TRIGGER_REGEXES` is built from a static, hand-curated `TRIGGERS`
+/// /// ### Why this still panics on a bad pattern (and why it's safe)
+/// /// `TRIGGER_REGEXES` is built from a static, hand-curated `TRIGGERS`
 /// table — never from user data. Each entry's pattern is reviewed
 /// by hand; a typo in the source table is a programming bug that
 /// must fail loudly at first use rather than silently drop the
@@ -161,8 +157,7 @@ const TRIGGERS: &[Trigger] = &[
 /// a bad pattern will crash the agent on startup instead of
 /// corrupting memory — both are bugs, but the loud failure is
 /// debuggable.
-///
-/// For **runtime** (user-supplied) patterns, see
+/// /// For **runtime** (user-supplied) patterns, see
 /// `CompiledRuleSet::try_compile` which returns a `Result`.
 static TRIGGER_REGEXES: Lazy<Vec<(Regex, &Trigger)>> = Lazy::new(|| {
     TRIGGERS
@@ -208,14 +203,12 @@ fn is_punctuation(c: char) -> bool {
 
 /// After the trigger, take the next content run until the first
 /// punctuation. **Whitespace handling rule:**
-///
-/// - Pure-ASCII content: whitespace ends the window (`I like Rust`
-///   → content = `Rust`).
+/// /// - Pure-ASCII content: whitespace ends the window (`I like Rust`
+/// → content = `Rust`).
 /// - Mixed / CJK content: if the next non-whitespace char after a
-///   space is CJK, treat the space as intra-phrase and keep going
-///   (`我喜欢 Rust 编程` → content = `Rust 编程`, not just `Rust`).
-///
-/// This matches the previous behaviour the test suite expects
+/// space is CJK, treat the space as intra-phrase and keep going
+/// (`我喜欢 Rust 编程` → content = `Rust 编程`, not just `Rust`).
+/// /// This matches the previous behaviour the test suite expects
 /// (`preference_extraction_zh` asserts `Rust 编程`) while also
 /// cleanly bounding pure-ASCII recall so a sentence like `I like
 /// Rust and I love Tauri` doesn't produce a single giant blob.
@@ -247,8 +240,7 @@ fn find_content_window(user: &str, trigger_end: usize) -> Option<(usize, usize)>
 
 /// Check whether `position` (byte offset in `user`) is immediately
 /// preceded by a Chinese negation token (不/没/无/非/未/别).
-///
-/// "Immediately" means: scan backwards from `position`, skipping
+/// /// "Immediately" means: scan backwards from `position`, skipping
 /// whitespace. If the next non-whitespace character is one of the
 /// negation single chars, OR a two-char combo like "我不" / "我没",
 /// return `true`. For longer phrases ("我并不"/"我从未") we still
@@ -314,12 +306,11 @@ fn preceded_by_en_negation(user_lower: &str, match_start: usize) -> bool {
 }
 
 /// 主入口：从 user message 抽取所有事实。
-///
-/// 设计要点：
+/// /// 设计要点：
 /// - 同一 turn 内多个 trigger 都会抽取，但 `canonical_key` 去重，
-///   第二次出现相同 key 时 `upsert_fact` 会 bump `access_count`。
+/// 第二次出现相同 key 时 `upsert_fact` 会 bump `access_count`。
 /// - 否定检测：trigger 前有"我不/我没/我从不/我不爱"等否定词 → kind 翻转
-///   到 `negated_kind`（通常是 dislike），或完全跳过该 fact。
+/// 到 `negated_kind`（通常是 dislike），或完全跳过该 fact。
 /// - 返回 `Vec` 让 caller 知道抽到几个（用于 debug 日志）。
 /// - 空 user / 空 content → 返回 `vec![]`。
 pub fn extract_facts_from_turn(
@@ -358,7 +349,6 @@ pub fn extract_facts_from_turn(
             // start of a clause. We allow it after any punctuation OR at
             // offset 0 OR after whitespace. Without this, "我喜欢你 我喜欢你"
             // would double-fire from "喜欢" too.
-            //
             // EXCEPTION: when the match is negated, we want to capture
             // it regardless of clause position — "我不喜欢 Rust" must
             // produce a dislike fact even though "我喜欢" sits in the
@@ -532,8 +522,7 @@ mod tests {
     /// M3 (主报告 #5): "我不喜欢 Rust" must NOT be stored as a
     /// preference. Old code stored `user.preference:Rust` (wrong);
     /// new code either drops or flips to `user.dislike:Rust`.
-    ///
-    /// **Content window caveat:** the CJK verb "喜欢" extends past
+    /// /// **Content window caveat:** the CJK verb "喜欢" extends past
     /// the "不喜欢" trigger, so the captured content may begin with
     /// the trailing 欢 (verb complement). We don't require exact
     /// content match — only the *kind* must flip and the object

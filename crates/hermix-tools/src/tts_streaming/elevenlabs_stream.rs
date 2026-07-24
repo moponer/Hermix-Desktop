@@ -164,7 +164,13 @@ impl StreamingTtsBackend for ElevenLabsStreamingClient {
 
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = match resp.text().await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!("Failed to read ElevenLabs error response body: {e}");
+                    String::from("<unreadable response body>")
+                }
+            };
             return Err(ToolError::ExecutionFailed(format!(
                 "ElevenLabs stream HTTP {status}: {body}"
             )));

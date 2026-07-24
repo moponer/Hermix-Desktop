@@ -41,13 +41,11 @@ use crate::tool_router::TurnContext;
 // ---------------------------------------------------------------------------
 
 /// High-level user intent the prefetcher recognizes.
-///
-/// New intents are added by:
+/// /// New intents are added by:
 /// 1. Extending this enum.
 /// 2. Adding a `KeywordRule` for them in `KeywordPrefetcher::new()`.
 /// 3. (Optionally) providing args in `default_args_for()`.
-///
-/// `Unknown` is the catch-all — the prefetcher still runs
+/// /// `Unknown` is the catch-all — the prefetcher still runs
 /// `LearnedPrefetcher`'s history lookups on it, but never fans
 /// out tool calls speculatively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -97,8 +95,7 @@ impl PrefetchIntent {
 // ---------------------------------------------------------------------------
 
 /// A single speculative tool call the prefetcher will dispatch.
-///
-/// `args` is a JSON object matching the tool's parameter schema.
+/// /// `args` is a JSON object matching the tool's parameter schema.
 /// Slot placeholders that couldn't be filled from the user message
 /// (e.g. city for "今天天气怎么样" with no city) are left as
 /// `null` and the plan entry is **dropped** before dispatch — the
@@ -344,8 +341,7 @@ impl KeywordPrefetcher {
     }
 
     /// Classify the user message and emit a plan.
-    ///
-    /// `available_tools` is the set of tool names the agent loop
+    /// /// `available_tools` is the set of tool names the agent loop
     /// has registered this turn. Plan entries that reference a
     /// tool not in this set are dropped — without this filter the
     /// prefetcher would happily try to call `weather` on an agent
@@ -623,8 +619,7 @@ impl SafeToolExecutor {
     /// entry's result is recorded with its wall-clock duration
     /// for telemetry. Entries that reference a non-Safe tool are
     /// silently skipped (the executor refuses them up front).
-    ///
-    /// We use `futures::future::join_all` for true concurrency:
+    /// /// We use `futures::future::join_all` for true concurrency:
     /// `SafeToolExecutor::execute` is async, so the futures are
     /// polled together and individual tool calls overlap. In
     /// practice most plans have 1 entry (a single `weather` or
@@ -781,8 +776,7 @@ impl Prefetcher {
 /// `hermix_core::ToolSchema`). Convenience for the agent loop,
 /// which already has the routed tool schemas in scope and wants
 /// to hand the prefetcher just the names it cares about.
-///
-/// The generic form avoids a hard dependency on `ToolSchema` (the
+/// /// The generic form avoids a hard dependency on `ToolSchema` (the
 /// field is `pub name: String` on every schema-like type in the
 /// codebase, so we read it reflectively via a small trait).
 pub fn tool_names<S: NamedSchema>(schemas: &[S]) -> Vec<String> {

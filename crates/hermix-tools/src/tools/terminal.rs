@@ -19,13 +19,11 @@ use crate::ToolRegistry;
 // ---------------------------------------------------------------------------
 
 /// Register the `terminal` tool with the registry (P1.2 migration).
-///
-/// Pass the same `terminal_workspace` handle used by other terminal-touching
+/// /// Pass the same `terminal_workspace` handle used by other terminal-touching
 /// tools (and the agent service) so per-turn workspace updates propagate
 /// here too. Test-only callers without a registry workspace can pass
 /// `Arc::new(RwLock::new(None))`.
-///
-/// Pass the registry's shared `terminal_approval_ctx` handle
+/// /// Pass the registry's shared `terminal_approval_ctx` handle
 /// (`registry.terminal_approval_ctx_handle()`) so `LocalAgentService`
 /// can wire the WS approval hook per turn without re-registering the
 /// tool. The handle starts as `default()` (both fields `None`); the
@@ -88,8 +86,7 @@ impl TerminalHandler {
     /// update the per-turn workspace without holding a direct reference to
     /// this handler. Tests that don't care about workspace semantics can
     /// pass `Arc::new(RwLock::new(None))`.
-    ///
-    /// Pass a shared `terminal_approval_ctx` handle from
+    /// /// Pass a shared `terminal_approval_ctx` handle from
     /// [`ToolRegistry::terminal_approval_ctx_handle`] so the agent
     /// service can swap the WS approval hook per request without
     /// re-registering the tool. Tests / headless callers can pass
@@ -115,23 +112,22 @@ impl TerminalHandler {
         }
     }
 
-    /// 2026-07-17 — When the agent service wired a `TerminalApprovalContext`
+    /// — When the agent service wired a `TerminalApprovalContext`
     /// for this turn (it captures the active WS `ApprovalRegistry` + the
     /// `on_event` channel), emit a `request_approval` event on the WS
     /// stream and `.await` the user's `approved` / `denied` click via
     /// the registry's oneshot receiver.
-    ///
-    /// Returns:
+    /// /// Returns:
     /// - `Some(ApprovalOutcome::Approved)` — user approved; caller
-    ///   should fall through and execute. We also `approve_for_session`
-    ///   so the same command string is implicit-allow for the rest of
-    ///   the session (mirrors the user clicking "Allow for this
-    ///   session" in the InlineApprovalCard).
+    /// should fall through and execute. We also `approve_for_session`
+    /// so the same command string is implicit-allow for the rest of
+    /// the session (mirrors the user clicking "Allow for this
+    /// session" in the InlineApprovalCard).
     /// - `Some(other)` — user denied / timed out / channel closed;
-    ///   caller should error out.
+    /// caller should error out.
     /// - `None`        — no WS context wired (default state); caller
-    ///   falls back to the legacy `HERMIX_CONFIRM=1` text flow so
-    ///   headless / unit-test callers keep working.
+    /// falls back to the legacy `HERMIX_CONFIRM=1` text flow so
+    /// headless / unit-test callers keep working.
     async fn request_ws_approval(&self, effective_cmd: &str) -> Option<ApprovalOutcome> {
         // Snapshot the context so we don't hold the mutex across
         // `.await` (the requester/on_event clones are cheap; the
@@ -247,15 +243,13 @@ impl ToolHandler for TerminalHandler {
         // namespace, used by low-level system / kernel code; it has
         // no business appearing in a user-facing shell command. We
         // also block:
-        //
-        //   - `\\.\` (Win32 device namespace, e.g. `\\.\COM1`,
-        //     `\\.\PhysicalDrive0`)
-        //   - `\\?\UNC\...` (Win32 UNC namespace) — when an agent
-        //     actually needs to reach a UNC share it should use the
-        //     normal `\\server\share\...` form; the `\\?\UNC\` form
-        //     is the long-path escape hatch and adds no value
-        //     over standard syntax for typical agent workloads.
-        //
+        // - `\\.\` (Win32 device namespace, e.g. `\\.\COM1`,
+        // `\\.\PhysicalDrive0`)
+        // - `\\?\UNC\...` (Win32 UNC namespace) — when an agent
+        // actually needs to reach a UNC share it should use the
+        // normal `\\server\share\...` form; the `\\?\UNC\` form
+        // is the long-path escape hatch and adds no value
+        // over standard syntax for typical agent workloads.
         // These are *not* deny-by-policy decisions (which fire the
         // user-approval flow) — they are hard invalid-argument
         // errors. The LLM never asked the user whether to run
@@ -308,7 +302,12 @@ impl ToolHandler for TerminalHandler {
                             &format!("approval timed out after {timeout_secs}s")
                         }
                         ApprovalOutcome::ChannelClosed => "connection closed before response",
-                        ApprovalOutcome::Approved => unreachable!(),
+                        ApprovalOutcome::Approved => {
+                            // Guarded by !matches!(decision, Approved) above;
+                            // reaching here is a logic error, not unreachable.
+                            tracing::error!("ApprovalOutcome::Approved reached inside denial branch");
+                            "approved (unexpected)"
+                        }
                     };
                     return Err(ToolError::ExecutionFailed(format!(
                         "Command {reason}: {}",
@@ -360,7 +359,7 @@ impl ToolHandler for TerminalHandler {
                     .request_ws_approval(effective_cmd)
                     .await
                 {
-                    // 2026-07-18: WS path. The agent service wired
+                    // WS path. The agent service wired
                     // `TerminalApprovalContext` for this turn; we emit
                     // a `request_approval` event and `.await` the
                     // user's verdict. `Approved` ⇒ fall through and
@@ -374,12 +373,17 @@ impl ToolHandler for TerminalHandler {
                                 &format!("approval timed out after {timeout_secs}s")
                             }
                             ApprovalOutcome::ChannelClosed => "connection closed before response",
-                            ApprovalOutcome::Approved => unreachable!(),
-                        };
-                        return Err(ToolError::ExecutionFailed(format!(
-                            "Command {reason}: {}",
-                            effective_cmd
-                        )));
+                        ApprovalOutcome::Approved => {
+                            // Guarded by !matches!(decision, Approved) above;
+                            // reaching here is a logic error, not unreachable.
+                            tracing::error!("ApprovalOutcome::Approved reached inside denial branch");
+                            "approved (unexpected)"
+                        }
+                    };
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "Command {reason}: {}",
+                        effective_cmd
+                    )));
                     }
                     tracing::info!(
                         command = %effective_cmd,
@@ -505,7 +509,7 @@ impl ToolHandler for TerminalHandler {
 impl TerminalHandler {
     // The `forbidden_path_prefix` private helper used to live here;
     // it was extracted to `hermix_core::path_security` during the
-    // 2026-06-07 Windows-first hardening pass so memory / skills /
+    // Windows-first hardening pass so memory / skills /
     // cron / credentials tools can all share the same check.
 }
 

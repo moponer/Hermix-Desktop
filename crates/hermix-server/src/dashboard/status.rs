@@ -31,6 +31,8 @@ pub async fn get_status(State(state): State<HttpServerState>) -> Json<StatusResp
                 if let Ok(pid_str) = fs::read_to_string(&pid_file_path) {
                     if let Ok(pid) = pid_str.trim().parse::<u32>() {
                         // Check if process is alive (Unix-specific)
+                        // SAFETY: Signal 0 does not send any signal — it only
+                        // checks process existence and permissions.
                         #[cfg(unix)]
                         let is_alive = unsafe { libc::kill(pid as i32, 0) == 0 };
                         #[cfg(not(unix))]

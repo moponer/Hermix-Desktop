@@ -1040,7 +1040,6 @@ async fn list_skills_endpoint_returns_seeded_skills() {
 }
 
 // ── /api/persona/* — file-backed persona management ─────────────────
-//
 // Each test uses a fresh temp HERMIX_HOME so file writes don't leak
 // between tests. The test app is a one-shot Router clone, so each
 // `oneshot` call is independent. The shared `delete_json` helper above
@@ -1254,15 +1253,13 @@ async fn persona_overrides_roundtrip() {
 }
 
 // ── DELETE /v1/sessions/{id} — cascade to compression_* + fts ────────
-//
-// Regression for the 2026-06-26 bug: `delete_session` only deleted
+// Regression for the bug: `delete_session` only deleted
 // `messages` + `sessions`, so any session with a `compression_archives`
 // row (which every long conversation accumulates after the first
 // context-window overflow) failed with HTTP 500
 // `FOREIGN KEY constraint failed` and the session was stuck in the
 // Sidebar forever — the frontend's `handleDeleteSession` had no
 // `try/catch`, so the user just saw a dead click.
-//
 // These tests use `test_app_with_hermes_home` so we can plant rows in
 // the real `compression_archives` / `compression_summary_history` /
 // `messages_fts` tables (which all have FKs to `sessions.id`) and then
@@ -1335,7 +1332,7 @@ fn plant_session_with_all_children(home: &std::path::Path) -> String {
 
 #[tokio::test]
 async fn delete_session_cascades_to_all_related_tables() {
-    // Regression for the 2026-06-26 "无法删除 你好" bug. Pre-fix this
+    // Regression for the "无法删除 你好" bug. Pre-fix this
     // returned 500 FK constraint failed because `compression_archives`
     // / `compression_summary_history` were never deleted.
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -1382,7 +1379,7 @@ async fn delete_session_cascades_to_all_related_tables() {
     assert_eq!(
         res.status(),
         StatusCode::OK,
-        "DELETE must succeed (was 500 FK before 2026-06-26 fix)"
+        "DELETE must succeed (was 500 FK before fix)"
     );
 
     // Post-delete: every related row must be gone, not orphaned.
@@ -1415,7 +1412,7 @@ async fn delete_session_cascades_to_all_related_tables() {
 
 #[tokio::test]
 async fn delete_session_returns_404_for_unknown_id() {
-    // New behaviour on 2026-06-26: deleting a nonexistent id used to
+    // New behaviour on deleting a nonexistent id used to
     // return 200 OK with `{"ok":true}` — silently doing nothing. Now
     // it returns 404 so the client can show a clear "session not
     // found" instead of pretending the operation succeeded.

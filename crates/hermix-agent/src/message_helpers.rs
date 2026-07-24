@@ -34,14 +34,13 @@ pub fn emit_status(
     }
 }
 
-/// 2026-06-29: forward a `BreakerSnapshot` to whoever wired
+/// forward a `BreakerSnapshot` to whoever wired
 /// `AgentCallbacks::on_compaction_status`. The snapshot already
 /// carries every field the front-end `CompactionStatusBanner`
 /// needs (state, pressure, failure reason, change timestamp)
 /// so the upstream layer just JSON-serialises it and emits the
 /// `compaction_status` WS event.
-///
-/// `quiet_mode` does NOT short-circuit this path: the banner is
+/// /// `quiet_mode` does NOT short-circuit this path: the banner is
 /// a UI affordance, and suppressing it would hide legitimate
 /// "context is overflowing" / "compression has been disabled"
 /// signals from the user.
@@ -60,7 +59,7 @@ pub fn emit_compaction_status(
             threshold_tokens: snapshot.threshold_tokens,
             max_tokens: snapshot.max_tokens,
             last_failure_reason: snapshot.failure_reason.clone(),
-            // 2026-07-22: forward the compression-process phase so the
+            // forward the compression-process phase so the
             // front-end `CompactionStatusBanner` can render
             // "正在准备压缩" → "正在压缩中" → "压缩完成" / "压缩失败"
             // transitions instead of jumping straight from the
@@ -113,12 +112,11 @@ pub fn normalize_tool_call_arguments(tc: &mut ToolCall) -> Result<(), String> {
 }
 
 /// Derive the `extra_body` map for the active API mode.
-///
-/// - `CodexResponses` mode passes the user-supplied body through unchanged.
+/// /// - `CodexResponses` mode passes the user-supplied body through unchanged.
 /// - For every other mode, inject `strict_api=true` unless the user
-///   already set `strict_tool_calls`, `strict_api`, or `provider_strict`.
+/// already set `strict_tool_calls`, `strict_api`, or `provider_strict`.
 /// - Returns `None` when the user supplied a non-object `extra_body`
-///   (the upstream provider would just reject it anyway).
+/// (the upstream provider would just reject it anyway).
 pub fn extra_body_for_api_mode(config: &AgentConfig, api_mode: &ApiMode) -> Option<Value> {
     let mut body = config
         .extra_body

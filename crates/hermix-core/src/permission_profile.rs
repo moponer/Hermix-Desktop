@@ -1,4 +1,4 @@
-//! Declarative permission profile (2026-07-20 — P6 direction 1).
+//! Declarative permission profile (— P6 direction 1).
 //!
 //! The agent runs directly on the real Windows host with **no container /
 //! VM sandbox**, so OS-level `access denied` (EDR blocks, protected
@@ -51,7 +51,6 @@ fn normalize_path(p: &str) -> String {
     // `c:/users/alice/../foo` against `c:/users/alice` (which would
     // otherwise pass the prefix check and let the agent escape the
     // granted directory root).
-    //
     // We canonicalise against the literal string form (no
     // `fs::canonicalize`) because the agent must be able to ask about
     // paths that don't yet exist on disk — creating `c:/new/proj/...`
@@ -215,8 +214,7 @@ pub struct PermissionProfile {
 
 impl PermissionProfile {
     /// True if `path` lives under one of the granted directory roots.
-    ///
-    /// Both `path` and the granted prefix are normalised through
+    /// /// Both `path` and the granted prefix are normalised through
     /// [`normalize_path`] (which collapses `.`/`..`), so a granted
     /// `c:/users/alice` cannot be bypassed via
     /// `c:/users/alice/../../windows/...` — that request canonicalises
@@ -231,8 +229,7 @@ impl PermissionProfile {
     }
 
     /// True if `command` begins with one of the granted command prefixes.
-    ///
-    /// A prefix only matches at a **word boundary** — so `git` matches
+    /// /// A prefix only matches at a **word boundary** — so `git` matches
     /// `git status` but not `gitx init`. After the prefix matches we
     /// also reject any command that would let the agent chain
     /// additional shell actions past the granted prefix (`;`, `&&`,
@@ -304,16 +301,14 @@ pub struct PendingGrant {
 
 impl PendingGrant {
     /// Extract a sensible grant from a tool call's parsed arguments.
-    ///
-    /// For file tools we strip the file name and keep only the leading
+    /// /// For file tools we strip the file name and keep only the leading
     /// directory components — granting access to
     /// `C:\Users\alice\file.txt` should not implicitly grant
     /// `C:\Windows\System32`, but should grant everything under
     /// `C:\Users\alice`. Same rationale for Git Bash roots.
     /// For terminal/code_execution we keep the first whitespace
     /// token as the command prefix.
-    ///
-    /// Bulk-path tools (`disk_cleanup`, etc.) accept a `paths` array
+    /// /// Bulk-path tools (`disk_cleanup`, etc.) accept a `paths` array
     /// instead of a single `path`. We grant the directory root of the
     /// **first** non-empty entry — refusing to grant the whole array
     /// would be too narrow (the user clearly approved cleaning those
@@ -372,16 +367,16 @@ impl PendingGrant {
 /// `extract_path_root` and `allows_path` cannot drift apart.
 fn extract_path_root(path: &str) -> String {
     // 1. Apply the same case-/separator-/Git-Bash normalisation
-    //    `allows_path` uses, so the trailing segment we look at is
-    //    in the canonical form the matcher expects.
+    // `allows_path` uses, so the trailing segment we look at is
+    // in the canonical form the matcher expects.
     let normalised = normalize_path(path);
     if normalised.is_empty() {
         return path.to_string();
     }
 
     // 2. Pull the leading components as `[prefix?, root?, seg..., seg]`
-    //    using std::path::components so we get the right Windows
-    //    drive handling for free.
+    // using std::path::components so we get the right Windows
+    // drive handling for free.
     let comps: Vec<Component> = Path::new(&normalised).components().collect();
     let mut drive: Option<String> = None;
     let mut unc_root: Option<String> = None;
@@ -431,10 +426,10 @@ fn extract_path_root(path: &str) -> String {
     }
 
     // 4. Assemble up to 2 leading directory segments. UNC paths
-    //    keep the `\\server\share` part intact as the root, then
-    //    append one additional child segment for symmetry with the
-    //    drive case (so the share name + one directory below it
-    //    becomes the granted root).
+    // keep the `\\server\share` part intact as the root, then
+    // append one additional child segment for symmetry with the
+    // drive case (so the share name + one directory below it
+    // becomes the granted root).
     if let Some(unc) = unc_root {
         let take = segs.len().min(1);
         let extra = if segs.is_empty() {

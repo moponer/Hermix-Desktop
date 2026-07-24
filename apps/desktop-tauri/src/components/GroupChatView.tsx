@@ -25,6 +25,7 @@ import { RoomHeader } from "./groupchat/RoomHeader";
 import { MessageList } from "./groupchat/MessageList";
 import { useGroupChatWebSocket } from "./groupchat/useGroupChatWebSocket";
 import { agentTone, type ChatRoom } from "./groupchat/types";
+import { toastError } from "../hooks/useToast";
 
 /* ── Agent loading helpers ── */
 
@@ -273,6 +274,7 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
       setMessages((prev) => prev.filter((m) => m.roomId !== id));
     } catch (e) {
       console.error("Failed to delete room:", e);
+toastError("删除聊天室失败");
     }
   }, []);
 

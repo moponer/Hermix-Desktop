@@ -153,8 +153,7 @@ pub fn description_has_trigger(desc: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Validate a SKILL.md file's structure.
-///
-/// `path` is used for log/diagnostic context only.
+/// /// `path` is used for log/diagnostic context only.
 /// `content` is the full text of the SKILL.md file.
 pub fn validate_skill_md(path: &Path, content: &str) -> ValidationResult {
     let mut findings = Vec::new();

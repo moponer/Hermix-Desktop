@@ -348,7 +348,6 @@ fn is_safe_slug(s: &str) -> bool {
 }
 
 // ── BUILT-IN PERSONALITIES (single source of truth) ──────────────
-//
 // 规范定义位于 `hermix_agent::context`(运行时经 `resolve_personality`
 // 注入的同一组常量)。此处直接复用,确保前端目录展示与 agent 实际运行的
 // 系统提示完全一致,不再有双份常量漂移。
@@ -363,7 +362,6 @@ fn builtin_personality_body(slug: &str) -> Option<&'static str> {
 }
 
 // ── PERSONA OVERRIDES (system_prompt + preferences) ──────────────
-//
 // Stored at `$HERMIX_HOME/persona_overrides.json`. Currently the agent
 // loop reads `system_prompt` from `HermesConfig` rather than this
 // override file — that wiring is intentionally left as a follow-up.

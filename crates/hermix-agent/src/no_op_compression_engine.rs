@@ -1,4 +1,4 @@
-//! 2026-07-05 (N-03): pluggable ContextEngine registry.
+//! (): pluggable ContextEngine registry.
 //!
 //! The agent loop can swap the built-in LLM-powered compressor for
 //! any [`CompressionEngine`] implementation. The simplest case is
@@ -19,10 +19,10 @@ use hermix_core::{
 ///
 /// Use this when:
 /// - the auxiliary LLM is unavailable and you'd rather skip
-///   compression than ship broken summaries (see N-08,
-///   `startup_compression_llm_health_check`),
+/// compression than ship broken summaries (see ,
+/// `startup_compression_llm_health_check`),
 /// - the operator explicitly disabled compression via
-///   `agent.compression.engine = "noop"` in config,
+/// `agent.compression.engine = "noop"` in config,
 /// - tests need deterministic message preservation.
 pub struct NoOpCompressionEngine {
     last_metrics: Mutex<CompressionEngineMetrics>,
@@ -90,7 +90,7 @@ impl CompressionEngine for NoOpCompressionEngine {
             threshold_tokens,
             max_tokens,
             failure_reason,
-            // 2026-07-22: `breaker_snapshot` (no phase) defaults
+            // `breaker_snapshot` (no phase) defaults
             // to `"idle"`. The NoOp engine never produces real
             // compression events so no in-progress phases are
             // ever surfaced from this code path.

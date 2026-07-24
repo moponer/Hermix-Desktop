@@ -58,8 +58,7 @@ impl SubdirectoryHintTracker {
     }
 
     /// Check tool call arguments for new directories and load any hint files.
-    ///
-    /// Returns formatted hint text to append to the tool result, or `None`.
+    /// /// Returns formatted hint text to append to the tool result, or `None`.
     pub fn check_tool_call(
         &mut self,
         tool_name: &str,

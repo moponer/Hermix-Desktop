@@ -52,8 +52,7 @@ impl GroupChatManager {
     }
 
     /// Set the agent dispatcher for real agent responses.
-    ///
-    /// Also constructs the idle chat manager that piggy-backs on the
+    /// /// Also constructs the idle chat manager that piggy-backs on the
     /// same dispatcher. The two are kept on separate `Arc`s so the
     /// idle manager can spawn long-lived timer tasks without
     /// borrowing `&mut self` afterwards.
@@ -287,14 +286,12 @@ impl GroupChatManager {
 
     /// Persist `settings` to the DB, then reflect the new `allow_idle_chat`
     /// state on the in-memory idle timer.
-    ///
-    /// Behavior matrix:
+    /// /// Behavior matrix:
     /// - `allow_idle_chat=true`  AND `idle_interval_secs > 0` AND idle is
-    ///   constructed → spawn (or restart) the room's timer using the
-    ///   current member list as candidates.
+    /// constructed → spawn (or restart) the room's timer using the
+    /// current member list as candidates.
     /// - otherwise → stop any running timer for this room.
-    ///
-    /// The member list is **snapshotted at call time** — agents invited
+    /// /// The member list is **snapshotted at call time** — agents invited
     /// later will not retroactively join the timer until `update_settings`
     /// is called again (e.g. the user toggles something in the UI).
     /// This keeps the timer loop's `&agents` borrow trivially safe.
@@ -542,8 +539,7 @@ impl GroupChatManager {
     }
 
     /// Build the structured `LeaderDecision` JSON prompt for a specific room.
-    ///
-    /// Replaces the legacy markdown `build_leader_prompt_for` on the leader
+    /// /// Replaces the legacy markdown `build_leader_prompt_for` on the leader
     /// dispatch path so the structured features (announcement / handoff /
     /// needs_user_confirmation) actually populate. The legacy prompt only
     /// ever produced `- task → agent` markdown that the regex fallback could

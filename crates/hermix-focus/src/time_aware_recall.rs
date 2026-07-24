@@ -19,7 +19,7 @@
 //!    can honour.
 //! 3. **Stable span description** for logging / debug overlays —
 //!    `RecallSpan::description()` returns "last 7 days" or "since
-//!    2026-06-01 00:00 UTC" depending on the precision we recovered.
+//!    00:00 UTC" depending on the precision we recovered.
 //! 4. **Multi-match** — a single query may contain two time
 //!    expressions ("上周的 plan，本周三 review"). The first is the
 //!    primary filter; secondary ones are kept for hinting the agent
@@ -76,14 +76,13 @@ impl RecallIntent {
     }
 
     /// Heuristic classifier from a time expression.
-    ///
-    /// Mapping:
-    ///   - [`TimeExpression::JustNow`] / `JustNow` text markers
-    ///     ("earlier", "a moment ago") → `Resume`
-    ///   - [`TimeExpression::Today`] with a `Summarize` keyword in
-    ///     the query → `Summarize`, else `Recall`
-    ///   - everything else with a time expression → `Recall`
-    ///   - no time expression → `Unfiltered`
+    /// /// Mapping:
+    /// - [`TimeExpression::JustNow`] / `JustNow` text markers
+    /// ("earlier", "a moment ago") → `Resume`
+    /// - [`TimeExpression::Today`] with a `Summarize` keyword in
+    /// the query → `Summarize`, else `Recall`
+    /// - everything else with a time expression → `Recall`
+    /// - no time expression → `Unfiltered`
     fn from_query(query: &str, expr: Option<&TimeExpression>) -> Self {
         let lower = query.to_lowercase();
         let summarize_kw = ["总结", "summary", "summarize", "小结"];
@@ -116,11 +115,11 @@ pub struct RecallSpan {
 
 impl RecallSpan {
     /// Precision score in [0.0, 1.0]:
-    ///   - 1.0 for absolute dates (none yet — we don't parse those)
-    ///   - 0.9 for exact "N days/hours ago"
-    ///   - 0.8 for named day boundaries ("昨天", "今天")
-    ///   - 0.6 for named week boundaries ("上周", "本周")
-    ///   - 0.4 for named month boundaries ("上个月", "本月")
+    /// - 1.0 for absolute dates (none yet — we don't parse those)
+    /// - 0.9 for exact "N days/hours ago"
+    /// - 0.8 for named day boundaries ("昨天", "今天")
+    /// - 0.6 for named week boundaries ("上周", "本周")
+    /// - 0.4 for named month boundaries ("上个月", "本月")
     pub fn confidence(&self) -> f32 {
         match self.expression {
             TimeExpression::DaysAgo(_) | TimeExpression::HoursAgo(_) => 0.9,
@@ -229,8 +228,7 @@ impl TimeAwareRecall {
     }
 
     /// Extract all time expressions from a free-form query.
-    ///
-    /// Order of returned spans matches order of appearance in the
+    /// /// Order of returned spans matches order of appearance in the
     /// query. The first span is the *primary* filter; the rest are
     /// kept for context (e.g. an agent that wants to mention "also
     /// saw something last week") but are not used for filtering.
@@ -289,15 +287,14 @@ impl TimeAwareRecall {
     /// pass to its backends. This is the canonical entry point —
     /// `MemoryRouter::recognize` calls this and threads the hint
     /// through.
-    ///
-    /// Behaviour:
-    ///   - No time expression → `RecallHint::unfiltered()` with
-    ///     `Recall` intent.
-    ///   - Time expression present → window + classified intent +
-    ///     description.
-    ///   - If classification yields `Summarize`, the window is
-    ///     widened by 1 day on each side: summaries usually span
-    ///     "the day that just ended" → "yesterday and today".
+    /// /// Behaviour:
+    /// - No time expression → `RecallHint::unfiltered()` with
+    /// `Recall` intent.
+    /// - Time expression present → window + classified intent +
+    /// description.
+    /// - If classification yields `Summarize`, the window is
+    /// widened by 1 day on each side: summaries usually span
+    /// "the day that just ended" → "yesterday and today".
     pub fn analyze(&self, query: &str) -> RecallHint {
         let primary = match self.primary_span(query) {
             Some(p) => p,
@@ -346,7 +343,6 @@ impl TimeAwareRecall {
 }
 
 // --- internal: walk-the-string extractor --------------------------------
-//
 // We need every match in order, not just the first one. The existing
 // `time_recall::extract_first` only returns one. The regex set is
 // duplicated here (kept private) so we can scan in a loop without
@@ -412,7 +408,7 @@ mod tests {
     use chrono::{Duration, TimeZone, Utc};
 
     fn fixed_now() -> DateTime<Utc> {
-        // 2026-06-09 12:00:00 UTC (a Tuesday — start_of_week = 2026-06-08)
+        // 12:00:00 UTC (a Tuesday — start_of_week = 2026-06-08)
         Utc.with_ymd_and_hms(2026, 6, 9, 12, 0, 0).unwrap()
     }
 

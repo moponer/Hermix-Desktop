@@ -263,10 +263,8 @@ impl TickLoop {
     }
 
     /// Run the TickLoop forever (or until the shutdown signal is received).
-    ///
-    /// This is the main entry point. Callers spawn this as a background task:
-    ///
-    /// ```ignore
+    /// /// This is the main entry point. Callers spawn this as a background task:
+    /// /// ```ignore
     /// let handle = tokio::spawn(loop.run(shutdown_rx));
     /// ```
     pub async fn run(
@@ -362,8 +360,7 @@ impl TickLoop {
 
     /// Handle an awakening tick (first N ticks after startup).
     /// Performs exploration: checks connectivity and warms caches.
-    ///
-    /// Tick schedule:
+    /// /// Tick schedule:
     /// - Tick 1: Warm caches (memory router + registered warmers)
     /// - Tick 2: FS health check
     /// - Tick 3: LLM connectivity check
@@ -537,26 +534,22 @@ impl TickLoop {
     }
 
     /// Check LLM provider connectivity via a lightweight probe.
-    ///
-    /// Tries two probes in order:
+    /// /// Tries two probes in order:
     /// 1. `GET {base}/models` — OpenAI-compatible metadata endpoint, exposed
-    ///    by virtually every modern provider (openai, agnes, deepseek,
-    ///    openrouter, siliconflow, qwen, zhipu, volcengine, moonshot, nous,
-    ///    ollama, vllm, localai, …). Some providers reject this probe with
-    ///    404 even when the server is healthy.
+    /// by virtually every modern provider (openai, agnes, deepseek,
+    /// openrouter, siliconflow, qwen, zhipu, volcengine, moonshot, nous,
+    /// ollama, vllm, localai, …). Some providers reject this probe with
+    /// 404 even when the server is healthy.
     /// 2. `HEAD {base}` — fallback for providers whose root responds
-    ///    differently (anthropic, github copilot, custom proxies).
-    ///
-    /// Returns `Pass` when:
+    /// differently (anthropic, github copilot, custom proxies).
+    /// /// Returns `Pass` when:
     /// - No URL configured (nothing to check), or
     /// - Any probe returns a 2xx/3xx.
-    ///
-    /// Returns `Warn` when:
+    /// /// Returns `Warn` when:
     /// - All probes return non-success (server reachable but health unclear),
     /// - Network error (DNS / TCP / TLS), or
     /// - HTTP client build failure.
-    ///
-    /// The probe deliberately omits credentials — we're verifying *transport*,
+    /// /// The probe deliberately omits credentials — we're verifying *transport*,
     /// not auth. A valid-but-revoked API key will still produce `Pass`, which
     /// is the correct semantics for a connectivity probe (the auth check
     /// happens on the first real chat completion).

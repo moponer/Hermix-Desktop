@@ -12,7 +12,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
 
-use hermix_core::{ContentPart, Message, ToolCall, ToolResult};
+use hermix_core::{types::ContentPart, Message, ToolCall, ToolResult};
 
 use crate::context::ContextManager;
 use crate::terminal_filter;
@@ -78,20 +78,17 @@ pub fn push_tool_result_from_struct(
 }
 
 /// Strip base64 image data from a `read_image` tool result JSON.
-///
-/// After the image has been injected as multimodal content
+/// /// After the image has been injected as multimodal content
 /// (`Message::user_with_image`) by `run_loop.rs`, the base64 data
 /// remaining in the tool result message is **pure redundancy** — the
 /// same blob is stored twice in context, easily doubling the token
 /// count for each image read (5 images × ~80 KB base64 × 2 copies
 /// ≈ 800 K chars ≈ 200 K tokens of wasted context).
-///
-/// This function replaces `_image_meta._image_data_b64` (new nested
+/// /// This function replaces `_image_meta._image_data_b64` (new nested
 /// format) and `_image_data` (legacy flat format) with a short
 /// placeholder, preserving all other metadata (path, dimensions,
 /// mime_type, etc.) so the LLM still knows what image was loaded.
-///
-/// Returns the original content unchanged if:
+/// /// Returns the original content unchanged if:
 /// - The content is not valid JSON
 /// - The JSON doesn't contain image data keys
 pub fn strip_image_base64(content: &str) -> String {
@@ -131,39 +128,30 @@ pub fn strip_image_base64(content: &str) -> String {
 
 /// Strip `ImageUrl` from all existing multimodal user messages in the
 /// context, keeping only their `Text` parts.
-///
-/// # First-principles rationale
-///
-/// An image's base64 payload (20–80 KB) has **zero marginal information
+/// /// # First-principles rationale
+/// /// An image's base64 payload (20–80 KB) has **zero marginal information
 /// value** once the LLM has analysed it — the analysis text already lives
 /// in the assistant message that followed. Keeping the base64 is
 /// information-theoretically equivalent to keeping a raw bitmap after
 /// saving a JPEG: pure waste of the scarcest resource (context window).
-///
-/// # When to call
-///
-/// Called in `prepare_assistant_turn()` (session_lifecycle.rs) **after**
+/// /// # When to call
+/// /// Called in `prepare_assistant_turn()` (session_lifecycle.rs) **after**
 /// the LLM has produced its response. By this point the LLM has already
 /// analysed every image in context, so all `ImageUrl` base64 payloads
 /// have zero marginal information value. The analysis lives in the
 /// assistant reply; file paths are preserved in the `Text` parts so the
 /// LLM can `read_image` again if it needs more detail.
-///
-/// # Parallel tool calls
-///
-/// When multiple `read_image` calls execute in the same batch, all
+/// /// # Parallel tool calls
+/// /// When multiple `read_image` calls execute in the same batch, all
 /// images are injected into context (without stripping each other) so
 /// the LLM can see them all simultaneously. After the LLM responds,
 /// this function strips ALL of them at once.
-///
-/// # Token accounting
-///
-/// After stripping, `ctx.recompute_total_tokens()` is called so the
+/// /// # Token accounting
+/// /// After stripping, `ctx.recompute_total_tokens()` is called so the
 /// cached running total reflects the removed base64. Without this the
 /// pressure threshold would remain artificially high until the next
 /// `add_message` call.
-///
-/// Returns the number of image URLs stripped.
+/// /// Returns the number of image URLs stripped.
 pub fn strip_previous_image_urls(ctx: &mut ContextManager) -> usize {
     let mut stripped_count = 0usize;
     let mut any_changed = false;
@@ -231,7 +219,7 @@ pub fn push_tool_result(
     let filtered = apply_terminal_filter(content, tool_name, tool_calls, tool_call_id);
 
     // Strip base64 from read_image tool results. Under the zero-
-    // context-overhead model (2026-07-23 v2), the main agent must
+    // context-overhead model (v2), the main agent must
     // NEVER see image base64 — it should delegate analysis to a
     // sub-agent via `delegate_task`. The base64 in the raw tool
     // result would bloat the main context, so we strip it here.
@@ -246,7 +234,7 @@ pub fn push_tool_result(
     ctx.add_message(Message::tool_result(tool_call_id, &final_content, tool_name));
 }
 
-/// 2026-07-18 (A+C product fix): when a tool call was **denied** (not
+/// (A+C product fix): when a tool call was **denied** (not
 /// merely failed on execution) — user拒绝 / 超时 / 连接中断 — inject a
 /// structured `system` note right after the `tool_result` so the LLM's
 /// next turn is forced to (1) tell the user the call was blocked, (2)
@@ -255,8 +243,7 @@ pub fn push_tool_result(
 /// (`denial_kind == "policy"`) are intentionally skipped — the LLM
 /// already knows the policy gate fired from the `reason` string and a
 /// second note would be noise.
-///
-/// No-op for normal results (`denial_kind == None`) and execution
+/// /// No-op for normal results (`denial_kind == None`) and execution
 /// errors (those are real failures, not refusals).
 pub fn inject_denial_note_if_needed(
     ctx: &mut ContextManager,
@@ -300,7 +287,7 @@ pub fn inject_denial_note_if_needed(
     ctx.add_message(Message::system(note));
 }
 
-/// 2026-07-20 (sandbox-permission fix P3): when a tool failed with a
+/// (sandbox-permission fix P3): when a tool failed with a
 /// `PERMISSION_DENIED` error (filesystem ACL / sandbox virtualization /
 /// missing admin / missing Windows OCR language pack / no interactive desktop
 /// session, tagged `[PERMISSION_DENIED]` by `ToolError::from_message`), inject
@@ -310,8 +297,7 @@ pub fn inject_denial_note_if_needed(
 /// access in the runtime — instead of silently retrying, treating virtualized
 /// data as real, or fabricating a generic "Windows cleanup checklist" to paper
 /// over the failure.
-///
-/// This enforces the boss philosophy: Hermix runs on a real Windows machine;
+/// /// This enforces the boss philosophy: Hermix runs on a real Windows machine;
 /// we never probe for a sandbox and never downgrade to a generic checklist — we
 /// surface the restriction and hand the "request permission" action back to the
 /// user. No-op for normal results and non-permission errors.
@@ -345,15 +331,14 @@ pub fn inject_permission_note_if_needed(
     ctx.add_message(Message::system(note));
 }
 
-/// v34 (2026-07-09): push a `tool_result` message that exists **only**
+/// push a `tool_result` message that exists **only**
 /// in the in-memory context — it is never persisted to the DB.
 /// Used by the replay path where the tool wasn't actually re-executed;
 /// the message is needed to satisfy the provider API's `tool_call_id`
 /// pairing requirement, but the original execution's `tool_result` is
 /// already persisted. Creating a second non-ephemeral row would produce
 /// duplicate cards on the frontend after a session reload.
-///
-/// v35 (2026-07-09): the content is prefixed with a `[CACHED]` marker
+/// /// the content is prefixed with a `[CACHED]` marker
 /// so the LLM can clearly see this is a replay of a previous call —
 /// not a new execution. Without this marker, the LLM has no way to
 /// distinguish a fresh tool result from a cached one, and may re-issue

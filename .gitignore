@@ -102,6 +102,10 @@ apps/desktop-tauri/src-tauri/$null
 /check_api.mjs
 /query_db.sql
 /tmp_msgs.json
+_count_lines.ps1
+
+# tsc / typecheck temp logs dropped during runs
+**/tmp_tsc*.txt
 
 # Tauri sidecar binaries (build outputs, NOT source — never commit)
 apps/desktop-tauri/src-tauri/binaries/

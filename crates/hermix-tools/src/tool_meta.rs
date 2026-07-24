@@ -39,8 +39,7 @@ use hermix_core::ToolSchema;
 // ---------------------------------------------------------------------------
 
 /// Loading strategy for a tool.
-///
-/// Determines whether the tool's schema is included directly in the
+/// /// Determines whether the tool's schema is included directly in the
 /// system prompt (`Resident`) or discovered on demand via the bridge
 /// tools (`Deferred`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -71,8 +70,7 @@ impl LoadingStrategy {
 // ---------------------------------------------------------------------------
 
 /// Metadata for a single tool.
-///
-/// Stored in [`ToolMetaRegistry`] alongside the [`ToolRegistry`].
+/// /// Stored in [`ToolMetaRegistry`] alongside the [`ToolRegistry`].
 /// The `loading_strategy` field drives the deferred-loading mechanism.
 #[derive(Debug, Clone)]
 pub struct ToolMeta {
@@ -123,8 +121,7 @@ impl ToolMeta {
 // ---------------------------------------------------------------------------
 
 /// Registry of tool metadata, keyed by tool name.
-///
-/// Thread-safe (`RwLock<HashMap>`). Cheap to clone — the inner map is
+/// /// Thread-safe (`RwLock<HashMap>`). Cheap to clone — the inner map is
 /// behind an `Arc`.
 #[derive(Clone)]
 pub struct ToolMetaRegistry {
@@ -230,8 +227,7 @@ impl ToolMetaRegistry {
     /// Partition a list of tool schemas into (resident, deferred) based
     /// on the registered metadata. Tools not in the registry default
     /// to `Resident`.
-    ///
-    /// This replaces the old `classify_tools` function in `tool_search.rs`
+    /// /// This replaces the old `classify_tools` function in `tool_search.rs`
     /// which used a hard-coded `CORE_TOOLS` list.
     pub fn partition(&self, schemas: &[ToolSchema]) -> (Vec<ToolSchema>, Vec<ToolSchema>) {
         let mut resident = Vec::new();
@@ -264,8 +260,7 @@ impl ToolMetaRegistry {
     }
 
     /// Build a default metadata registry from a list of tool schemas.
-    ///
-    /// Tools whose names appear in the `DEFAULT_RESIDENT_TOOLS` list are
+    /// /// Tools whose names appear in the `DEFAULT_RESIDENT_TOOLS` list are
     /// marked as `Resident`; all others are marked as `Deferred`.
     /// This is the bridge between the old hard-coded list and the new
     /// metadata-driven approach.
@@ -302,8 +297,7 @@ impl Default for ToolMetaRegistry {
 /// Tools that are resident by default. This list mirrors the old
 /// `CORE_TOOLS` constant in `tool_search.rs` and serves as the seed
 /// for `from_schemas_with_defaults`.
-///
-/// Tools not in this list are deferred by default — they're discoverable
+/// /// Tools not in this list are deferred by default — they're discoverable
 /// via `tool_search` and invokable via `tool_call`.
 pub const DEFAULT_RESIDENT_TOOLS: &[&str] = &[
     // File I/O

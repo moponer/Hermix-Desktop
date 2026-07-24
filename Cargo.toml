@@ -173,7 +173,7 @@ arboard = { version = "3", default-features = false }
 # `image` is re-exported by xcap; we declare it as a workspace dep so
 # hermix-tools can use the PNG encoder APIs directly without depending
 # on the xcap surface. Pinned to match xcap's vendored version.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # ----------------------------------------------------------------------
 # Build profiles — 2026-06-24

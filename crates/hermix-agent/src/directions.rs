@@ -184,13 +184,11 @@ use `browser_*` tools — NOT `web_fetch`. The two are not interchangeable:\n\
 5. Same tool returning identical output 2x in a row = stuck.";
 
 /// Injected when `AgentConfig::autonomous_mode = true`.
-///
-/// Streamlined (2026-07-08): the original 8 rules collapsed into a single
+/// /// Streamlined (2026-07-08): the original 8 rules collapsed into a single
 /// stopping-condition principle + execution bias.  The nudge loop
 /// (`re-inject keep going`) still complements this block when the model
 /// outputs plain text without tool calls.
-///
-/// Reference: prompt-comparison-report.md § 四·十一, openclaw Execution Bias.
+/// /// Reference: prompt-comparison-report.md § 四·十一, openclaw Execution Bias.
 const AUTONOMOUS_EXECUTION_GUIDANCE: &str = "\
 # Autonomous execution
 
@@ -213,12 +211,10 @@ A task is complete only when you have produced a **verified outcome**:
 - Non-final turns: advance with tool calls, not promises.";
 
 /// Safety guardrail — always-on, independent of autonomous mode.
-///
-/// Injected unconditionally. Does not replace the tool-level approval engine;
+/// /// Injected unconditionally. Does not replace the tool-level approval engine;
 /// it serve as a prompt-level backstop for models that ignore tool-side
 /// guards (especially fine-tunes and non-OpenAI providers).
-///
-/// Reference: prompt-comparison-report.md § 九, openclaw Safety block.
+/// /// Reference: prompt-comparison-report.md § 九, openclaw Safety block.
 const SAFETY_GUIDANCE: &str = "\
 # Safety
 
@@ -230,23 +226,20 @@ const SAFETY_GUIDANCE: &str = "\
   actions that could cause harm.";
 
 /// System-prompt block injected for MiniMax / MiniMax-style models.
-///
-/// ## Why this exists
-///
-/// MiniMax-M2, MiniMax / Hermes fine-tunes, and several other
+/// /// ## Why this exists
+/// /// MiniMax-M2, MiniMax / Hermes fine-tunes, and several other
 /// tool-call-friendly open-weight models expect tool calls to be
 /// emitted as raw XML wrapped in `<minimax:tool_call>…</minimax:tool_call>`
 /// (the model's native format) rather than through the OpenAI `tools`
 /// API field. If we don't tell the model to use a recognised shape, it
 /// either:
-///   (a) emits the tool call as unstyled text the user can see, then
-///       stalls while the agent loop retries the unparseable response,
-///       or
-///   (b) falls back to its own internal "tool format" that the
-///       `HermesToolCallParser` doesn't recognise, leaving the
-///       tool call unexecuted.
-///
-/// This block is appended after the standard tool-use guidance for
+/// (a) emits the tool call as unstyled text the user can see, then
+/// stalls while the agent loop retries the unparseable response,
+/// or
+/// (b) falls back to its own internal "tool format" that the
+/// `HermesToolCallParser` doesn't recognise, leaving the
+/// tool call unexecuted.
+/// /// This block is appended after the standard tool-use guidance for
 /// models that match `minimax`, `m2`, or `hermes-3` in
 /// `should_inject_tool_enforcement` (see below). It points the model at
 /// the **standard** Hermes XML format (`<function_calls><invoke …>`)
@@ -344,8 +337,7 @@ happen.
 ask the user.";
 
 /// Environment awareness + Shell compatibility + tool fallback priority.
-///
-/// Always-on: tells the model what OS/shell it runs on, how to call
+/// /// Always-on: tells the model what OS/shell it runs on, how to call
 /// PowerShell correctly from a Git Bash layer, and that shell failures
 /// should trigger a switch to structured tools — not more shell retries.
 /// Directly addresses the "C 盘清理" failure mode where the agent
@@ -575,8 +567,7 @@ Bad (after no real work):
 the user's question — turn off this guide for turns that did no tool work)";
 
 /// Always-on discipline: how a reply ends.
-///
-/// Applies to EVERY turn, including trivial conversational turns that
+/// /// Applies to EVERY turn, including trivial conversational turns that
 /// did no tool work. Counter-balances `STOPPING_SUMMARY_GUIDANCE` and
 /// `TOOL_EXECUTION_SUMMARY_GUIDANCE`, which can otherwise pressure
 /// MiniMax / M2.7 / Hermes fine-tunes into emitting multi-paragraph
@@ -785,7 +776,7 @@ Hard rules:\n\
         ));
     }
     // Task focus guidance for multi-step tasks.
-    // v35 (2026-07-09): lowered the short-form threshold from 2 to 1
+    // lowered the short-form threshold from 2 to 1
     // so that even single-tool-use turns get the "do not repeat
     // completed work" guidance. Previously, turns with only 1 tool
     // call got no focus guidance, which was a root cause of the LLM
@@ -963,12 +954,10 @@ Hard rules:\n\
 /// `AGENTS.md`. Returns `None` when there is no workspace, no
 /// `AGENTS.md`, or no conventions section — in which case the universal
 /// core prompt is used unchanged.
-///
-/// The conventions section is matched by a heading containing any of
+/// /// The conventions section is matched by a heading containing any of
 /// `项目约定` / `project conventions` / `conventions` (case-insensitive),
 /// at `#` or `##` level. Everything up to the next heading is returned.
-///
-/// This is the data-injection hook that keeps the agent's *universal*
+/// /// This is the data-injection hook that keeps the agent's *universal*
 /// behaviour (see `docs/HERMIX_AGENT_SYSTEM_PROMPT.md`) separate from
 /// any single deployment's tuning. A different user / workspace simply
 /// gets a different `AGENTS.md` — the core never changes.

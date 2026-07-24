@@ -1,6 +1,7 @@
 // Tauri IPC bridge — replaces Electron preload
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { toastError } from "./hooks/useToast";
 
 export async function pickDirectory(): Promise<string | null> {
   const selected = await open({ directory: true, title: "选择目录" });
@@ -36,6 +37,7 @@ export async function openExternalUrl(url: string): Promise<void> {
     await invoke("open_external_url", { url });
   } catch (e) {
     console.error("[desktopBridge] openExternalUrl failed:", url, e);
+toastError("打开外部链接失败");
   }
 }
 
@@ -49,17 +51,14 @@ export async function getServerStatus(): Promise<{ running: boolean; healthy: bo
 
 /// Read a file from the local filesystem (used by the artifact preview pane
 /// AND the in-chat inline preview popover).
-///
-/// The Tauri command validates the path is under `HERMES_DESKTOP_ARTIFACT_ROOTS`
+/// /// The Tauri command validates the path is under `HERMES_DESKTOP_ARTIFACT_ROOTS`
 /// (defaults to the user's home directory), caps at 2 MiB, and detects binary
 /// content via UTF-8 decoding.
-///
-/// If `path` is relative, the backend anchors it against `workspaceRoot`
+/// /// If `path` is relative, the backend anchors it against `workspaceRoot`
 /// (or `HERMES_DESKTOP_WORKSPACE_ROOT` env, or the first allowed root, or
 /// `~/`, in that order). This is what fixes the "tmp\xx\方案.md" bug: the
 /// LLM often speaks in relative paths, and we now have a way to find them.
-///
-/// `resolvedPath` is the canonical absolute path the backend actually read —
+/// /// `resolvedPath` is the canonical absolute path the backend actually read —
 /// the front-end stores this in the artifact record so subsequent opens
 /// always succeed.
 export async function readArtifactFile(
@@ -135,7 +134,6 @@ export async function listDirectory(
 }
 
 // Aliases for SettingsView compatibility
-//
 // `openSettingsDirectory` is the legacy name used by SettingsView.
 // It's a deprecated alias for `openDataDir`; callers should migrate
 // to `openDataDir` directly.

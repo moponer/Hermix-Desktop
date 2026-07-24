@@ -27,8 +27,7 @@ use crate::HttpServerState;
 /// are leaked (intentionally — `HttpServerState` owns the path,
 /// and a Drop impl would race with the test ending in a
 /// non-deterministic way).
-///
-/// Why the nested layout: many dashboard endpoints compute
+/// /// Why the nested layout: many dashboard endpoints compute
 /// "user home" from `hermix_home.parent()`. If every test shared
 /// the same `%TEMP%` parent, parallel tests would race on the
 /// global temp dir. Nesting `hermix_home` under a per-test
@@ -93,13 +92,13 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         // helper; the rest don't touch the manager.
         mcp_manager: hermix_mcp::ArcMcpManager::new(Arc::new(ToolRegistry::new())),
         task_engine: None,
-        // 2026-07-06: production build path added this; mirror
+        // production build path added this; mirror
         // here so the dashboard test fixtures stay in sync.
         recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
-        // 2026-07-17: mirror production `active_handles` registry so
+        // mirror production `active_handles` registry so
         // tests compile against the expanded `HttpServerState`.
         active_handles: Arc::new(std::sync::Mutex::new(HashMap::new())),
-        // 2026-07-07: Todo event bus. Test fixtures don't exercise
+        // Todo event bus. Test fixtures don't exercise
         // the WS forwarder, so None is fine.
         todo_event_tx: None,
         orchestration_bus: crate::OrchestrationEventBus::new(),

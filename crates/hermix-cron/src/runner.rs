@@ -84,11 +84,9 @@ impl CronRunner {
     }
 
     /// Run a cron job.
-    ///
-    /// Creates a fresh agent loop context, loads skills per the job's config,
+    /// /// Creates a fresh agent loop context, loads skills per the job's config,
     /// and delivers results to the configured target platform.
-    ///
-    /// The agent is run with a restricted tool set that excludes the
+    /// /// The agent is run with a restricted tool set that excludes the
     /// `cronjob` tool to prevent recursive scheduling.
     pub async fn run_job(&self, job: &CronJob) -> Result<AgentResult, CronError> {
         tracing::info!(
@@ -175,8 +173,7 @@ impl CronRunner {
     }
 
     /// Deliver the agent result to the configured target.
-    ///
-    /// Uses the injected `PlatformSender` when available. Falls back to
+    /// /// Uses the injected `PlatformSender` when available. Falls back to
     /// logging for Origin/Local targets or when no sender is configured.
     async fn deliver_result(
         &self,

@@ -7,12 +7,12 @@
 // LLM acts on past lessons without re-deriving them.
 //
 // Storage:
-//   ~/.hermix/self_rules.jsonl  (append-only JSONL)
+// ~/.hermix/self_rules.jsonl  (append-only JSONL)
 //
 // Triggers:
-//   1. Tool failure burst: same tool errors >= 3 turns in a row.
-//   2. Repeated negative feedback: >= 3 FeedbackEntry rows with
-//      the same action prefix and success=false.
+// 1. Tool failure burst: same tool errors >= 3 turns in a row.
+// 2. Repeated negative feedback: >= 3 FeedbackEntry rows with
+// the same action prefix and success=false.
 //
 // This module provides store + render primitives. The trigger
 // wiring sits in run_loop.rs.

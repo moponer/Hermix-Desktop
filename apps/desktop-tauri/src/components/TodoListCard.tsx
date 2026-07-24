@@ -1,32 +1,30 @@
 // Inline task list card rendered in the message stream.
-//
-// v2 (2026-07-07): one card per plan / group. The agent emits a
+// one card per plan / group. The agent emits a
 // `group_started` event when it begins a new plan (first `todo.create`
 // for a fresh group_id) and subsequent `upsert` / `remove` events for
 // items in that plan update this card in place. Multiple plans coexist
 // in the same session; each card is anchored to the assistant message
 // that declared it (or to the end of the stream when the server did
 // not stamp a message_id).
-//
 // Replaces the v1 global TodoPanel which collapsed every todo in the
 // session into a single flat list. The flat view was wrong for the
 // multi-turn use case: a user starting a new conversation mid-session
 // about a different topic would see the old plan in the same panel
 // alongside the new one, with no visual separation.
-//
 // Design constraints (matching the master design spec):
-//   - "无蓝紫" — gray/zinc family only, no slate/blue/violet.
-//   - Plain click to toggle done <-> pending; no drag-reorder.
-//   - Priority visual = a 4px left bar (gray for medium, brighter
-//     for high, dimmer for low). No badges.
-//   - Group title row above the items when set (LLM-provided label
-//     like "rename all files").
+// - "无蓝紫" — gray/zinc family only, no slate/blue/violet.
+// - Plain click to toggle done <-> pending; no drag-reorder.
+// - Priority visual = a 4px left bar (gray for medium, brighter
+// for high, dimmer for low). No badges.
+// - Group title row above the items when set (LLM-provided label
+// like "rename all files").
 
 import { useState, useCallback, useMemo, type MutableRefObject } from "react";
 import { ChevronDown, ChevronRight, ListTodo, Loader2 } from "lucide-react";
 import { clsx } from "clsx";
 import * as api from "../api";
 import type { TodoItem } from "../api";
+import { toastError } from "../hooks/useToast";
 
 const PRIORITY_BAR_COLOR: Record<string, string> = {
   high: "var(--color-text-primary)",
@@ -97,6 +95,7 @@ export function TodoListCard({ groupId, groupTitle, itemsById, onPatch, justPatc
         }
       } catch (e) {
         console.error("[TodoListCard] patch failed", e);
+toastError("任务状态更新失败");
         // Clean up so the server's eventual echo for this item is
         // NOT skipped — otherwise rapid-toggle retry is silently lost.
         justPatchedRef?.current.delete(item.id);

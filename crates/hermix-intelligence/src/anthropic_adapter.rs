@@ -156,8 +156,7 @@ pub struct ReasoningConfig {
 // ---------------------------------------------------------------------------
 
 /// Normalize a model name for the Anthropic API.
-///
-/// Strips `anthropic/` prefix and converts dots to hyphens unless
+/// /// Strips `anthropic/` prefix and converts dots to hyphens unless
 /// `preserve_dots` is true.
 pub fn normalize_model_name(model: &str, preserve_dots: bool) -> String {
     let mut result = model.to_string();
@@ -269,8 +268,7 @@ pub fn image_source_from_openai_url(url: &str) -> ImageSource {
 // ---------------------------------------------------------------------------
 
 /// Convert OpenAI-format messages to Anthropic format.
-///
-/// Returns `(system_prompt, anthropic_messages)`.
+/// /// Returns `(system_prompt, anthropic_messages)`.
 /// System messages are extracted since Anthropic takes them as a separate param.
 pub fn convert_messages_to_anthropic(
     messages: &[Value],
@@ -759,8 +757,7 @@ pub fn common_betas_for_base_url(base_url: Option<&str>) -> Vec<&'static str> {
 }
 
 /// Beta list for `default_headers["anthropic-beta"]` when constructing an Anthropic client.
-///
-/// Mirrors Python: common betas for the endpoint, plus OAuth-only betas when using Bearer
+/// /// Mirrors Python: common betas for the endpoint, plus OAuth-only betas when using Bearer
 /// (setup-tokens, managed keys, JWTs) on native Anthropic.
 pub fn default_anthropic_beta_list(base_url: Option<&str>, is_oauth: bool) -> Vec<&'static str> {
     let mut betas = common_betas_for_base_url(base_url);
@@ -778,8 +775,7 @@ pub fn default_anthropic_beta_header_value(base_url: Option<&str>, is_oauth: boo
 /// Full beta list for a per-request `extra_headers` override when enabling fast mode
 /// (`speed: "fast"`). Only valid for native Anthropic — third-party proxies reject the
 /// unknown fast-mode beta.
-///
-/// Returns `None` when fast mode must not be used (third-party endpoint).
+/// /// Returns `None` when fast mode must not be used (third-party endpoint).
 pub fn fast_mode_request_beta_list(
     base_url: Option<&str>,
     is_oauth: bool,

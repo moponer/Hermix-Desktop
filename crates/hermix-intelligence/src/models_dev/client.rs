@@ -98,8 +98,7 @@ pub struct SearchHit {
 }
 
 /// Client for the models.dev registry.
-///
-/// Construction is cheap; one client per process is normally enough. Use
+/// /// Construction is cheap; one client per process is normally enough. Use
 /// [`crate::models_dev::default_client`] for the global singleton.
 pub struct ModelsDevClient {
     base_url: String,
@@ -288,11 +287,10 @@ impl ModelsDevClient {
     }
 
     /// Fuzzy search across the registry.
-    ///
-    /// Algorithm matches Python's `search_models_dev`:
+    /// /// Algorithm matches Python's `search_models_dev`:
     /// 1. Substring matches first (case-insensitive), in declaration order.
     /// 2. Fill remaining slots via normalized-levenshtein matches with a
-    ///    similarity ≥ 0.4 (Python's `difflib.cutoff=0.4`).
+    /// similarity ≥ 0.4 (Python's `difflib.cutoff=0.4`).
     pub fn search(&self, query: &str, provider: Option<&str>, limit: usize) -> Vec<SearchHit> {
         if limit == 0 {
             return Vec::new();

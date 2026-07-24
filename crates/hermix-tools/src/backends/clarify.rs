@@ -24,8 +24,7 @@ use hermix_core::ToolError;
 
 /// Provides the current `session_id` so a [`ChannelClarifyBackend`] can
 /// stamp each [`PendingClarify`] with the session it belongs to.
-///
-/// The agent loop pulls a fresh value at the moment `clarify` is called,
+/// /// The agent loop pulls a fresh value at the moment `clarify` is called,
 /// so session switches are reflected immediately.
 pub trait ClarifySessionProvider: Send + Sync {
     fn current_session_id(&self) -> String;
@@ -73,8 +72,7 @@ const DEFAULT_CLARIFY_TIMEOUT_SECS: u64 = 300;
 
 /// [`ClarifyBackend`] that blocks the tool call on a tokio `oneshot`
 /// receiver, letting the UI layer respond asynchronously.
-///
-/// The caller side owns a cloned [`ClarifyDispatcher`] which it uses to
+/// /// The caller side owns a cloned [`ClarifyDispatcher`] which it uses to
 /// fulfil the pending request (see [`ClarifyDispatcher::respond`]). If no
 /// response arrives within the configured timeout, the tool returns an
 /// `ExecutionFailed` error so the agent loop can retry or abandon.
@@ -198,8 +196,7 @@ impl PendingClarifySnapshot {
 }
 
 /// Handle shared between the backend (producer) and the UI layer (consumer).
-///
-/// Internally it holds a `session_id → Vec<PendingClarify>` map plus a
+/// /// Internally it holds a `session_id → Vec<PendingClarify>` map plus a
 /// `tokio::sync::Notify` so a UI subscriber can wake the moment a new
 /// request is enqueued for its session. Producers use [`Self::enqueue`]
 /// to push a request (the session id is carried on the

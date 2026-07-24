@@ -214,8 +214,7 @@ async fn gw_pump_inbound(gateway: Arc<Gateway>, mut rx: mpsc::Receiver<IncomingM
 }
 
 /// Central orchestrator for all platform adapters.
-///
-/// The `Gateway` owns a collection of named `PlatformAdapter` instances,
+/// /// The `Gateway` owns a collection of named `PlatformAdapter` instances,
 /// a `SessionManager`, a `DmManager`, and a `StreamManager`. It provides
 /// a unified interface to start/stop adapters and route messages.
 pub struct Gateway {
@@ -377,12 +376,10 @@ impl Gateway {
 
     /// Register a platform adapter and spawn a background task that reads
     /// inbound messages from `rx` and routes them through [`Self::route_message`].
-    ///
-    /// Polling-based adapters (weixin, dingtalk, webhook) produce inbound
+    /// /// Polling-based adapters (weixin, dingtalk, webhook) produce inbound
     /// messages on an `mpsc::Sender`.  Pass the corresponding `Receiver` here
     /// so the gateway can deliver them to the agent loop.
-    ///
-    /// Requires `Arc<Self>` because the spawned pump task must hold a strong
+    /// /// Requires `Arc<Self>` because the spawned pump task must hold a strong
     /// reference to the gateway.
     pub async fn register_adapter_with_inbound(
         self: &Arc<Self>,

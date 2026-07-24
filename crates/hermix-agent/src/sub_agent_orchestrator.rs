@@ -50,15 +50,13 @@ pub const SUB_AGENT_MAX_TURNS_CAP: u32 = 12;
 /// would inject that entire text as a single `tool_result` into
 /// the parent's `ContextManager`, causing context explosion — the
 /// very problem `delegate_task` is meant to prevent.
-///
-/// 8,000 chars ≈ 2,000 tokens, which is the same order as a single
+/// /// 8,000 chars ≈ 2,000 tokens, which is the same order as a single
 /// `read_image` blob. This is large enough for a detailed structured
 /// analysis but small enough to keep the parent context lean.
 pub const SUB_AGENT_RESULT_MAX_CHARS: usize = 8_000;
 
 /// Lineage record persisted to disk for each spawned sub-agent.
-///
-/// One record is written at `started` and rewritten at terminal state. The file
+/// /// One record is written at `started` and rewritten at terminal state. The file
 /// layout stays intentionally flat so it can also be inspected / tailed by
 /// other tooling (Python baseline uses a similar per-sub-agent JSON file).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,17 +112,15 @@ pub enum SubAgentStatus {
 pub const DEFAULT_DELEGATION_MAX_ITERATIONS: u32 = 50;
 
 /// Role for a sub-agent. Determines the toolset and system prompt.
-///
-/// (Phase 6 — P6-4)
-///
-/// - **General** — full toolset, general-purpose task execution.
-///   Suitable for most delegation scenarios.
+/// /// (Phase 6 — P6-4)
+/// /// - **General** — full toolset, general-purpose task execution.
+/// Suitable for most delegation scenarios.
 /// - **Explore** — read-only toolset. Used for information gathering,
-///   code exploration, web search. Cannot modify files or execute
-///   shell commands that write.
+/// code exploration, web search. Cannot modify files or execute
+/// shell commands that write.
 /// - **Plan** — planning toolset. Used for producing plans and
-///   strategies. Has access to read tools + todo/task tools but
-///   not write tools.
+/// strategies. Has access to read tools + todo/task tools but
+/// not write tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SubAgentRole {
@@ -207,14 +203,13 @@ const PLAN_ROLE_TOOLS: &[&str] = &[
 ];
 
 /// Image (or other attachment) passed from parent to sub-agent.
-///
-/// The orchestrator reads the file from disk, base64-encodes it, and
+/// /// The orchestrator reads the file from disk, base64-encodes it, and
 /// injects it as a multimodal `ContentPart::ImageUrl` into the
 /// child's first user message so the child LLM can actually SEE it
 /// via native vision. Without this, the child would only receive a
 /// text description of the path — and the `read_image` results that
 /// the parent already saw are not automatically carried over.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct ImageAttachment {
     /// Local filesystem path to the image (PNG/JPEG/GIF/WEBP/BMP).
     pub path: String,
@@ -246,14 +241,14 @@ pub struct SubAgentRequest {
     /// P6-4: Parent task ID for linking sub-agents to the task tree.
     /// When set, the sub-agent's results are attributed to this task.
     pub parent_task_id: Option<String>,
-    /// 2026-07-23: Image / file attachments forwarded from the parent.
+    /// Image / file attachments forwarded from the parent.
     /// Each path is read, base64-encoded, and injected into the
     /// child's first user message as a multimodal `ImageUrl` part.
     /// This is what makes image analysis through `delegate_task`
     /// actually work — previously the child only got a text path
     /// string and had no way to see the pixels.
     pub attachments: Vec<ImageAttachment>,
-    /// 2026-07-23: Optional JSON schema (or human-readable shape
+    /// Optional JSON schema (or human-readable shape
     /// description) for the structured output the parent expects
     /// the child to return. Injected into the child's system
     /// message so the child formats its final answer accordingly.
@@ -283,8 +278,7 @@ impl SubAgentOrchestrator {
     }
 
     /// Default orchestrator that mirrors the current `AgentLoop`'s wiring.
-    ///
-    /// The returned orchestrator inherits the parent's tool registry, provider
+    /// /// The returned orchestrator inherits the parent's tool registry, provider
     /// and interrupt handle so cancellation propagates from the parent to any
     /// actively running child.
     pub fn from_parent(parent: &AgentLoop, hermix_home: PathBuf) -> Self {
@@ -303,11 +297,9 @@ impl SubAgentOrchestrator {
 
     /// Execute a `delegate_task` request synchronously from the perspective of
     /// the caller, returning a JSON string suitable for use as the tool result.
-    ///
-    /// The returned JSON always contains `sub_agent_id` at the top level so
+    /// /// The returned JSON always contains `sub_agent_id` at the top level so
     /// existing delegation-event wiring in [`AgentLoop`] continues to work.
-    ///
-    /// Returning `BoxSendFuture` (rather than an `async fn`) is load-bearing:
+    /// /// Returning `BoxSendFuture` (rather than an `async fn`) is load-bearing:
     /// the parent `AgentLoop::execute_tool_calls` awaits this future, and the
     /// child may eventually call back into an orchestrator of its own. A
     /// concrete `impl Future` type would force the compiler to recursively
@@ -457,7 +449,6 @@ impl SubAgentOrchestrator {
         // call). `tokio::spawn` requires `Send + 'static`, which forces child
         // `AgentLoop::run` to already be Send — this is also what the existing
         // `spawn_background_review` relies on.
-        //
         // Phase 18+ safety: strip the sub-agent blocklist
         // (delegate_task, clarify, memory, send_message,
         // cronjob) from the child's tool registry. This is
@@ -602,17 +593,15 @@ impl std::fmt::Display for SubAgentError {
 }
 
 /// Build the initial messages for a child agent.
-///
-/// The child receives:
+/// /// The child receives:
 /// 1. A **system message** with sub-agent-specific guidance — most importantly
-///    the hard ban on `delegate_task` (overrides any parent prompt that says
-///    "use delegate_task for images") and the batching strategy that prevents
-///    the child from blowing its own context.
+/// the hard ban on `delegate_task` (overrides any parent prompt that says
+/// "use delegate_task for images") and the batching strategy that prevents
+/// the child from blowing its own context.
 /// 2. A **user message** with the task description, optional context, optional
-///    `output_schema` hint, and any image attachments as multimodal content
-///    (text + `ImageUrl` parts so the child LLM can actually SEE the images).
-///
-/// The system message is critical because the child's `AgentLoop` builds its
+/// `output_schema` hint, and any image attachments as multimodal content
+/// (text + `ImageUrl` parts so the child LLM can actually SEE the images).
+/// /// The system message is critical because the child's `AgentLoop` builds its
 /// system prompt via `build_system_prompt` (which includes the full
 /// `directions.rs`), but that prompt is generic — it doesn't know the child
 /// is a sub-agent with specific constraints (no `delegate_task`, limited
@@ -629,7 +618,7 @@ async fn initial_messages(
 
     // Sub-agent-specific guidance — injected as a system message so the
     // child LLM always sees it, regardless of the parent's directions.
-    // 2026-07-23: rewritten to be a HARD OVERRIDE of any parent-side
+    // rewritten to be a HARD OVERRIDE of any parent-side
     // instruction that says "use delegate_task for image analysis" or
     // similar. The parent prompt is built before the child runs and
     // gets copied into the child's context, so without this explicit
@@ -745,7 +734,11 @@ async fn initial_messages(
     let user_msg = if image_parts.is_empty() {
         Message::user(&content)
     } else {
-        Message::user_with_images_owned(&content, image_parts)
+        let img_refs: Vec<(&str, &str)> = image_parts
+            .iter()
+            .map(|(m, b)| (m.as_str(), b.as_str()))
+            .collect();
+        Message::user_with_images(&content, &img_refs)
     };
     messages.push(user_msg);
 
@@ -1065,7 +1058,7 @@ mod tests {
         assert!(guidance.contains("delegate_task"));
         assert!(guidance.contains("Batching strategy"));
         assert!(guidance.contains("3-5"));
-        // 2026-07-23: new override line confirming the parent prompt's
+        // new override line confirming the parent prompt's
         // "use delegate_task" directive is overridden.
         assert!(guidance.contains("HARD OVERRIDE"));
         // Second message is user task.

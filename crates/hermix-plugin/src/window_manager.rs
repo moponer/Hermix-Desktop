@@ -26,8 +26,7 @@ impl PluginWindowManager {
     }
 
     /// Open a custom app in a standalone window by launching the shell.
-    ///
-    /// This spawns the precompiled `app-shell.exe` with the app's
+    /// /// This spawns the precompiled `app-shell.exe` with the app's
     /// `dist/` directory as the working directory. The shell reads
     /// `resources/manifest.json` and renders the UI.
     pub async fn open_plugin(&self, entry: &PluginEntry) -> Result<(), PluginError> {
@@ -74,8 +73,7 @@ impl PluginWindowManager {
     }
 
     /// Get the preview URL for in-app preview.
-    ///
-    /// Returns a file:// URL pointing to the app's bundled index.html
+    /// /// Returns a file:// URL pointing to the app's bundled index.html
     /// (or the shell's index.html if the app doesn't have one).
     pub fn get_preview_url(&self, entry: &PluginEntry) -> Result<String, PluginError> {
         let dist_dir = entry.dir.join("dist");

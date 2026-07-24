@@ -39,8 +39,7 @@ use crate::ToolRegistry;
 #[async_trait]
 pub trait TaskTrackerBackend: Send + Sync {
     /// Create a new Task.
-    ///
-    /// Returns the task ID.
+    /// /// Returns the task ID.
     async fn create(
         &self,
         title: &str,
@@ -72,8 +71,7 @@ pub trait TaskTrackerBackend: Send + Sync {
     ) -> Result<Vec<TaskTrackerInfo>, ToolError>;
 
     /// Add a deliverable artifact to a Task (Phase 7 / P7-1).
-    ///
-    /// `path` is the absolute path or URL to the artifact.
+    /// /// `path` is the absolute path or URL to the artifact.
     /// `artifact_type` is one of: html, image, report, video, file, directory.
     /// `summary` is an optional one-line description.
     async fn add_result(

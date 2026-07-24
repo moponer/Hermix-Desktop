@@ -379,11 +379,10 @@ pub fn max_output_tokens(model: &str) -> Option<u64> {
 }
 
 /// Get the context window for a model using the hardcoded fallback table.
-///
-/// Resolution order:
-///   1. `known_models()` static catalog (covers Claude / OpenAI / Gemini / DeepSeek / etc.)
-///   2. `DEFAULT_CONTEXT_LENGTHS` fuzzy fallback table
-///   3. `DEFAULT_FALLBACK_CONTEXT` (128_000) for unknown / custom provider models
+/// /// Resolution order:
+/// 1. `known_models()` static catalog (covers Claude / OpenAI / Gemini / DeepSeek / etc.)
+/// 2. `DEFAULT_CONTEXT_LENGTHS` fuzzy fallback table
+/// 3. `DEFAULT_FALLBACK_CONTEXT` (128_000) for unknown / custom provider models
 pub fn get_model_context_length(model: &str) -> u64 {
     let model_lower = model.to_lowercase();
 
@@ -414,15 +413,13 @@ pub fn get_model_context_length(model: &str) -> u64 {
 }
 
 /// Get the context window for a model, honouring per-provider overrides.
-///
-/// Resolution order:
-///   1. If `providers` is supplied AND `model` matches `custom-{id}:{model_id}`
-///      AND `LlmProviderConfig.model_contexts[model_id]` is set → that value.
-///   2. Same path with `LlmProviderConfig.context_window` (provider-wide default).
-///   3. Static catalog (`known_models()` + `DEFAULT_CONTEXT_LENGTHS`).
-///   4. `DEFAULT_FALLBACK_CONTEXT` (128_000) for unknown / custom provider models.
-///
-/// This lets the agent loop honour `custom-{provider_id}:{model}` overrides
+/// /// Resolution order:
+/// 1. If `providers` is supplied AND `model` matches `custom-{id}:{model_id}`
+/// AND `LlmProviderConfig.model_contexts[model_id]` is set → that value.
+/// 2. Same path with `LlmProviderConfig.context_window` (provider-wide default).
+/// 3. Static catalog (`known_models()` + `DEFAULT_CONTEXT_LENGTHS`).
+/// 4. `DEFAULT_FALLBACK_CONTEXT` (128_000) for unknown / custom provider models.
+/// /// This lets the agent loop honour `custom-{provider_id}:{model}` overrides
 /// set in `config.yaml` (or auto-populated by `POST /api/custom-providers/{id}/fetch-models`)
 /// without forcing every custom provider model into the static catalog.
 pub fn get_model_context_length_with(

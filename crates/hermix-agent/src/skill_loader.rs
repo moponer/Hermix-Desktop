@@ -52,8 +52,7 @@ pub struct SkillMatch {
 // ---------------------------------------------------------------------------
 
 /// Auto-matches user messages to skills and produces injection text.
-///
-/// Wraps a [`SkillOrchestrator`] and adds keyword-based matching on top of
+/// /// Wraps a [`SkillOrchestrator`] and adds keyword-based matching on top of
 /// the slash-command resolution. The orchestrator handles discovery (scanning
 /// `~/.hermix/skills/` for SKILL.md files); the loader adds the matching
 /// layer.
@@ -121,13 +120,11 @@ impl SkillLoader {
     }
 
     /// Match a user message to skills.
-    ///
-    /// Returns up to `max_matches` skills whose name, description, or tags
+    /// /// Returns up to `max_matches` skills whose name, description, or tags
     /// contain keywords from the message. The score is based on the ratio
     /// of matched keywords to total message keywords. P2-T2 added a
     /// fuzzy subscore on top.
-    ///
-    /// Effective threshold scales with query length: a single-token
+    /// /// Effective threshold scales with query length: a single-token
     /// query needs ≥ 0.3 (rich signal required), a multi-token query
     /// only needs ≥ 0.15 (because 1 hit / 6 stop-words is a real
     /// relevance signal that a fixed 0.3 threshold would suppress).
@@ -290,8 +287,7 @@ impl SkillLoader {
     }
 
     /// Build the injection text for matched skills.
-    ///
-    /// Returns `None` if no skills matched. The returned text is suitable
+    /// /// Returns `None` if no skills matched. The returned text is suitable
     /// for appending to the system prompt.
     pub fn build_injection(&self, message: &str) -> Option<String> {
         let matches = self.match_message(message);
@@ -318,8 +314,7 @@ impl SkillLoader {
     }
 
     /// Find skills for a capability gap.
-    ///
-    /// When the LLM can't complete a task with the available tools, it can
+    /// /// When the LLM can't complete a task with the available tools, it can
     /// describe what it needs and this function returns skills that might
     /// help. This is the "find-skills 能力缺口兜底" from 铁律 agent_skills.
     pub fn find_skills_for_capability_gap(&self, description: &str) -> Vec<SkillMatch> {
@@ -329,8 +324,7 @@ impl SkillLoader {
     }
 
     /// Build the find-skills response text for the LLM.
-    ///
-    /// Returns a JSON string listing matching skills with their names,
+    /// /// Returns a JSON string listing matching skills with their names,
     /// descriptions, and command keys. The LLM can then use `skill_view`
     /// to inspect a skill's full content.
     pub fn find_skills_response(&self, description: &str) -> String {
@@ -395,13 +389,11 @@ const STOPWORDS: &[&str] = &[
 /// in order, with adjacent matches no more than 5 characters apart.
 /// This is the cheap fuzzy backbone the keyword pass falls back to
 /// when exact word-overlap misses.
-///
-/// The 5-char gap budget is what separates a real fuzzy hit ("compres"
+/// /// The 5-char gap budget is what separates a real fuzzy hit ("compres"
 /// spans the inside of "compression") from a sparse false positive
 /// ("world" picks up w/o/r/l/d from "review code for quality and best
 /// practices" each separated by 2-12 unrelated characters).
-///
-/// Example: subsequence_match("compres", "context compression")
+/// /// Example: subsequence_match("compres", "context compression")
 /// returns true; subsequence_match("momeression", "context
 /// compression") returns false. It is intentionally *cheap* — no
 /// Levenshtein, no embeddings — so it stays deterministic and
@@ -409,8 +401,7 @@ const STOPWORDS: &[&str] = &[
 /// Returns true if `needle`'s characters all appear **inside a
 /// single word** of `haystack`, in order, with adjacent matches no
 /// more than 3 characters apart.
-///
-/// Word-boundary split is what separates a real typo-bridge from
+/// /// Word-boundary split is what separates a real typo-bridge from
 /// the historical false positive where `needle="world"` substring-
 /// matched "review code for quality and best practices" (w / o / r /
 /// l / d each picked up from unrelated words). Restricting the
@@ -486,13 +477,11 @@ fn subsequence_match_within_word(needle: &str, word: &str, max_gap: usize) -> bo
 /// tokens align with a skill description. We blend two cheap
 /// signals so a richly-described skill beats a thinly-described
 /// skill for the same query:
-///
-///   - exact-token-overlap (count of shared tokens / total message
-///     tokens)
-///   - subsequence coverage (fraction of message tokens with at
-///     least one descriptor-character subsequence hit)
-///
-/// The blend weights are picked to favour the cheaper signal but
+/// /// - exact-token-overlap (count of shared tokens / total message
+/// tokens)
+/// - subsequence coverage (fraction of message tokens with at
+/// least one descriptor-character subsequence hit)
+/// /// The blend weights are picked to favour the cheaper signal but
 /// still reward descriptions that *contain* the user's intent even
 /// when word boundaries differ (e.g. "memory" vs "memory-systems"
 /// vs "persistent memory across sessions").
@@ -527,12 +516,11 @@ pub fn description_fuzzy_score(message_tokens: &[&str], description_lower: &str)
     // not as good as a clean word overlap). The combined ratio
     // stays in 0.0–1.0. We then take the max with `exact_score`
     // so descriptions with strong whole-word matches always win.
-    //
     // Examples with default `min_score = 0.3`:
-    //   "compres" 1 token 1 subseq → 0.5/1 = 0.5  ✓ activate
-    //   "memory and compres" 3 tokens (memory exact + compres
-    //     subseq) → (1 + 0.5) / 3 ≈ 0.5 ✓ activate
-    //   "hello world" 2 tokens 1 subseq → 0.5 / 2 = 0.25 ✗ reject
+    // "compres" 1 token 1 subseq → 0.5/1 = 0.5  ✓ activate
+    // "memory and compres" 3 tokens (memory exact + compres
+    // subseq) → (1 + 0.5) / 3 ≈ 0.5 ✓ activate
+    // "hello world" 2 tokens 1 subseq → 0.5 / 2 = 0.25 ✗ reject
     let weighted = exact_hits as f32 + subseq_hits as f32 * 0.5;
     let weighted_score = (weighted / message_tokens.len() as f32).min(1.0);
 
@@ -584,8 +572,7 @@ fn cjk_bigrams(s: &str) -> Vec<String> {
 /// Returns true if the user message's CJK bigrams overlap the
 /// skill's curated CJK trigger `tags`/`name` by at least 2 distinct
 /// bigrams.
-///
-/// We match against the skill's *tags* and *name* (hand-authored by
+/// /// We match against the skill's *tags* and *name* (hand-authored by
 /// the skill author), NOT the whole description prose — this bounds
 /// the false-positive surface to the tag vocabulary. The ≥2-bigram
 /// threshold suppresses single-common-word false positives (e.g.
@@ -980,10 +967,10 @@ mod tests {
     fn p2_fuzzy_score_single_subseq_hit_passes_default_threshold() {
         // "compres" against "compression of conversation history"
         // (within-word, no cross-word gap):
-        //   → exact_hits = 0 (no whole-word `compres` in desc)
-        //   → subseq_hits = 1, len = 1
-        //   → exact_score = 0, weighted = 0.5, weighted_score = 0.5/1 = 0.5
-        //   → max(0, 0.5) = 0.5 ≥ default `min_score` of 0.3
+        // → exact_hits = 0 (no whole-word `compres` in desc)
+        // → subseq_hits = 1, len = 1
+        // → exact_score = 0, weighted = 0.5, weighted_score = 0.5/1 = 0.5
+        // → max(0, 0.5) = 0.5 ≥ default `min_score` of 0.3
         let score = description_fuzzy_score(
             &["compres"],
             "compression of conversation history",

@@ -40,11 +40,9 @@ interface ChatRoom {
 }
 
 /* ── Session list item (chat / workspace child) ── */
-//
-// 主人 v3 反馈：列表项只保留标题，去掉「多少条」「几小时前」「几天前」
+// 用户 v3 反馈：列表项只保留标题，去掉「多少条」「几小时前」「几天前」
 // 这类冗余 metadata。视觉噪声越多，扫视列表越慢。判定一个对话是否在
 // 跑模型用右侧的小脉冲点就够了。
-//
 // PLAN_UI_ENHANCEMENT §3.3 (2026-06-22): 激活项用小圆点 + 不显示时间；
 // 非激活项显示相对时间（"2 天前" / "15 分钟前"）。这是激活态的最高
 // 视觉信号，避免和"正在生成"脉冲点混淆。
@@ -101,7 +99,7 @@ function SessionItem({
       <button
         onClick={(e) => {
           e.stopPropagation();
-          // 2026-06-26: the trash button used to fire `onDelete` with
+          // the trash button used to fire `onDelete` with
           // zero confirmation. One stray click on the wrong row and
           // the conversation was gone — and the user had no idea
           // because the backend's 500 was swallowed by
@@ -224,7 +222,7 @@ export function Sidebar({
         agentIds: r.agent_ids,
         createdAt: new Date(r.created_at).getTime(),
       })));
-    }).catch(() => {});
+    }).catch((e) => { console.warn("[Sidebar] fetch rooms failed:", e); });
   }, []);
 
   const handleAddWorkspace = async () => {

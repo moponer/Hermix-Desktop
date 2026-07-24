@@ -1,6 +1,6 @@
 //! E2E test for the dangerous-tool approval chain.
 //!
-//! 2026-07-19: written after user-reported "允许了后面为什么不进行" type-B bug
+//! written after user-reported "允许了后面为什么不进行" type-B bug
 //! (run_stream hangs after tool approved, turn=2 never starts). This test
 //! wires the full approval chain:
 //!
@@ -284,7 +284,7 @@ impl EventLog {
 // The test.
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approval_chain_approved_tool_runs_and_loop_completes() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().to_path_buf();
@@ -346,6 +346,12 @@ async fn approval_chain_approved_tool_runs_and_loop_completes() {
         approval_requester: Some(registry.requester()),
         on_event: Some(log.callback()),
         permission: Some(PermissionLevel::Default),
+        // Pin a concrete model so `resolve_effective_model` returns
+        // `Ok(...)` and routes through the `provider_factory` — without
+        // this, `fallback_model` returns `None` (no `llm_providers` +
+        // no env keys in the test process) and the loop bails out
+        // before producing any events.
+        model: Some("mock:model".to_string()),
         ..Default::default()
     };
 
@@ -406,6 +412,7 @@ async fn approval_chain_approved_tool_runs_and_loop_completes() {
 
     // -- 8. Collect the agent result (now that approval unblocked turn 2). --
     let result = agent_task
+        .await
         .expect("agent task panicked")
         .expect("agent loop should succeed after approval");
     eprintln!(
@@ -420,10 +427,16 @@ async fn approval_chain_approved_tool_runs_and_loop_completes() {
     );
 
     // Turn 2's messages should contain a tool message with our dangerous_echo output.
+    // The tool dispatcher wraps the handler's plain-string return in a JSON
+    // envelope (`{"result":"..."}`) so the LLM can parse it on the next turn,
+    // so we match on substring rather than exact equality.
     let turn2_messages = provider.last_turn_messages.lock().unwrap().clone();
-    let saw_tool_result = turn2_messages
-        .iter()
-        .any(|m| m.role == MessageRole::Tool && m.content.as_deref() == Some("dangerous_echo_ok:hello"));
+    let saw_tool_result = turn2_messages.iter().any(|m| {
+        m.role == MessageRole::Tool
+            && m.content
+                .as_deref()
+                .map_or(false, |c| c.contains("dangerous_echo_ok:hello"))
+    });
     assert!(
         saw_tool_result,
         "turn 2 must see the dangerous_echo tool result in its messages; got: {:#?}",

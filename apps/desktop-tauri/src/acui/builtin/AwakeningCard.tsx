@@ -121,7 +121,7 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
           const isCurrent = i === tick - 1 && !completed;
           return (
             <div
-              key={i}
+              key={`tick-${i}`}
               className={`h-1 rounded-full transition-colors duration-200 ${
                 isCurrent
                   ? "w-3 bg-purple-300"

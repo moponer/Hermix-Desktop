@@ -74,8 +74,7 @@ impl Watchdog {
 
     /// Start a tool-call timer. Returns a guard that must be held for the
     /// duration of the call; dropping the guard cancels the timer.
-    ///
-    /// The watchdog does NOT cancel `tokio` tasks — it only sends a signal.
+    /// /// The watchdog does NOT cancel `tokio` tasks — it only sends a signal.
     /// The caller is responsible for checking `abort_rx` and stopping work.
     pub fn watch_tool(&self) -> WatchdogGuard {
         let abort_tx = self.abort_tx.clone();

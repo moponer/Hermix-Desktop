@@ -35,8 +35,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// L1 工作域模式 — 检测用户当前在做哪类工作。
-///
-/// 与 `TaskMode` (L2) 和 `ThinkingMode` (L3) 正交组合使用。
+/// /// 与 `TaskMode` (L2) 和 `ThinkingMode` (L3) 正交组合使用。
 /// 每个 Domain Mode 配置一组"预设"：工具优先级、系统提示词
 /// 附加块、安全约束微调、输出风格引导、收敛策略权重。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -116,8 +115,7 @@ impl std::fmt::Display for DomainMode {
 // ---------------------------------------------------------------------------
 
 /// 该模式下"任务完成"的判定信号。
-///
-/// 用于 `ConvergenceDetector` 的 advisory warning 逻辑：
+/// /// 用于 `ConvergenceDetector` 的 advisory warning 逻辑：
 /// 当检测器发现 stall 时，检查是否已满足收敛信号，
 /// 如果满足则不触发 warning（任务确实完成了）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,8 +138,7 @@ pub enum ConvergenceSignal {
 // ---------------------------------------------------------------------------
 
 /// 一个 Domain Mode 的完整预设。
-///
-/// 在 per-turn 级别由 `ModeComposition::compose()` 生成，
+/// /// 在 per-turn 级别由 `ModeComposition::compose()` 生成，
 /// 注入到工具路由、系统提示词、安全门控、收敛检测。
 #[derive(Debug, Clone)]
 pub struct DomainPreset {
@@ -215,8 +212,7 @@ pub const OPERATE_DOMAIN_DIRECTIVE: &str = "\
 // ---------------------------------------------------------------------------
 
 /// 获取指定域模式的预设配置。
-///
-/// 返回 `&'static` 引用，因为所有预设都是编译期常量。
+/// /// 返回 `&'static` 引用，因为所有预设都是编译期常量。
 pub fn preset_for(mode: DomainMode) -> &'static DomainPreset {
     match mode {
         DomainMode::Code => &CODE_PRESET,
@@ -332,8 +328,7 @@ pub static CHAT_PRESET: DomainPreset = DomainPreset {
 // ---------------------------------------------------------------------------
 
 /// 根据工具名推断它属于哪个工作域。
-///
-/// 用于 L1 上下文信号：如果最近使用的工具属于某个域，
+/// /// 用于 L1 上下文信号：如果最近使用的工具属于某个域，
 /// 则当前输入可能也在同一个域。
 pub fn tool_to_domain(tool_name: &str) -> Option<DomainMode> {
     match tool_name {
@@ -355,8 +350,7 @@ pub fn tool_to_domain(tool_name: &str) -> Option<DomainMode> {
 }
 
 /// 判断 workspace 路径是否是代码项目。
-///
-/// 通过检查常见代码项目标识文件来推断。
+/// /// 通过检查常见代码项目标识文件来推断。
 pub fn is_code_workspace(path: &str) -> bool {
     let indicators = [
         "Cargo.toml",

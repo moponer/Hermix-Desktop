@@ -1,11 +1,9 @@
 // src/prompts/polish.automation.ts
-//
-// v1 (2026-06-22): PLAN_UI_ENHANCEMENT §7.1 — 自动化 PROMPT 改写 prompt。
+// PLAN_UI_ENHANCEMENT §7.1 — 自动化 PROMPT 改写 prompt。
 // 与 §1.3 对话润色 prompt **互不共用**，分别维护。
 // 区别：
-//   - 自动化 PROMPT 改写：结构化、保留变量占位符、强调可执行性
-//   - 对话润色：自然语言流畅、意图清晰、避免重复
-//
+// - 自动化 PROMPT 改写：结构化、保留变量占位符、强调可执行性
+// - 对话润色：自然语言流畅、意图清晰、避免重复
 // 输入：用户的草稿描述（可能很口语）
 // 输出：结构化、可被自动化执行引擎理解的 PROMPT
 

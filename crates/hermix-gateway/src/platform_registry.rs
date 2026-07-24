@@ -81,8 +81,7 @@ pub struct RegistrationSummary {
 }
 
 /// Register all platform adapters based on configuration.
-///
-/// This function registers all enabled platform adapters from the configuration
+/// /// This function registers all enabled platform adapters from the configuration
 /// into the gateway. It supports all 17 platform adapters + ApiServer + Webhook.
 pub async fn register_platforms(
     gateway: &Arc<Gateway>,

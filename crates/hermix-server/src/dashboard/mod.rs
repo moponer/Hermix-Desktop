@@ -36,8 +36,7 @@ use axum::Router;
 use crate::HttpServerState;
 
 /// Build the dashboard API router.
-///
-/// All routes are prefixed with `/api/` and share the same `HttpServerState`.
+/// /// All routes are prefixed with `/api/` and share the same `HttpServerState`.
 pub fn router() -> Router<HttpServerState> {
     Router::new()
         // Status
@@ -72,7 +71,7 @@ pub fn router() -> Router<HttpServerState> {
                 .delete(env::delete_env_var),
         )
         // Reveal a single env var's value (POST so the key doesn't end up in URL/access logs).
-        // 2026-06-25 修复：之前忘了注册这个 route → SettingsView mount 时
+        // 修复：之前忘了注册这个 route → SettingsView mount 时
         // `POST /api/env/reveal` 直接 404 → 全部 provider fetch 静默失败
         // → localStorage 的 model_config.enabled 永远是空 → ChatView 弹窗
         // 只剩后端当前在跑的默认模型（fallback 合成的那 1 个）。

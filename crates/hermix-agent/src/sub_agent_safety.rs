@@ -54,35 +54,35 @@ use hermix_core::ToolSchema;
 /// ## Rationale per entry
 ///
 /// - `delegate_task` — recursion guard. Without this, a
-///   misbehaving child could chain `delegate_task` calls
-///   infinitely. The depth cap covers accidental recursion;
-///   the explicit block covers the case where a child is
-///   configured with `max_depth = 0` (so the LLM might
-///   believe the constraint is "no grandchildren" and try
-///   to chain).
+/// misbehaving child could chain `delegate_task` calls
+/// infinitely. The depth cap covers accidental recursion;
+/// the explicit block covers the case where a child is
+/// configured with `max_depth = 0` (so the LLM might
+/// believe the constraint is "no grandchildren" and try
+/// to chain).
 /// - `clarify` — interaction guard. A child must NEVER ask
-///   the user a question. The parent's user-interaction
-///   permission was granted to the parent, not delegated
-///   to the child. If the child needs clarification, it
-///   must surface that need in its final text and let the
-///   parent decide.
+/// the user a question. The parent's user-interaction
+/// permission was granted to the parent, not delegated
+/// to the child. If the child needs clarification, it
+/// must surface that need in its final text and let the
+/// parent decide.
 /// - `memory` — write guard. The parent's `memory` tool
-///   mutates the long-term memory store. Allowing a child
-///   to write would mean the child can corrupt the
-///   parent's persistent state. The child CAN read memory
-///   through the `MemoryLayer`/`MemoryRouter` recall path,
-///   it just can't write through the `memory` tool.
+/// mutates the long-term memory store. Allowing a child
+/// to write would mean the child can corrupt the
+/// parent's persistent state. The child CAN read memory
+/// through the `MemoryLayer`/`MemoryRouter` recall path,
+/// it just can't write through the `memory` tool.
 /// - `send_message` — outbound-IO guard. A child must NEVER
-///   post messages to Telegram/Discord/Slack/etc. The
-///   parent's `PermissionLevel` did not authorise the
-///   child to talk on the user's behalf to third parties.
+/// post messages to Telegram/Discord/Slack/etc. The
+/// parent's `PermissionLevel` did not authorise the
+/// child to talk on the user's behalf to third parties.
 /// - `cronjob` — scheduling guard. A child must NEVER
-///   schedule new jobs. The child runs to completion; it
-///   does not get to leave background timers behind.
+/// schedule new jobs. The child runs to completion; it
+/// does not get to leave background timers behind.
 /// - `delegate_task` is duplicated here as a string for
-///   explicit clarity in error messages. The deny-list is
-///   a const slice of `&'static str` so it's safe to embed
-///   in error messages without allocation.
+/// explicit clarity in error messages. The deny-list is
+/// a const slice of `&'static str` so it's safe to embed
+/// in error messages without allocation.
 pub const BLOCKED_TOOLS_FOR_SUBAGENT: &[&str] = &[
     "delegate_task",
     "clarify",

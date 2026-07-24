@@ -85,8 +85,7 @@ pub struct PluginManager {
 
 impl PluginManager {
     /// Create a new plugin manager.
-    ///
-    /// `shell_path` is the path to the precompiled `app-shell.exe`.
+    /// /// `shell_path` is the path to the precompiled `app-shell.exe`.
     /// `esbuild_path` is the path to the bundled `esbuild.exe`.
     pub fn new(plugins_dir: PathBuf, shell_path: PathBuf, esbuild_path: PathBuf) -> Self {
         let packager = Arc::new(EsbuildPackager::new(shell_path.clone(), esbuild_path));
@@ -130,8 +129,7 @@ impl PluginManager {
     }
 
     /// Install a new plugin from LLM-generated code.
-    ///
-    /// `icon_data` is an optional base64-encoded PNG image that will be
+    /// /// `icon_data` is an optional base64-encoded PNG image that will be
     /// saved as `icon.png` in the plugin directory and referenced from
     /// the manifest's `icon_file` field.
     pub fn install_plugin(
@@ -255,8 +253,7 @@ impl PluginManager {
     }
 
     /// Package a plugin as a standalone EXE.
-    ///
-    /// This uses esbuild to bundle the TypeScript code and copies the
+    /// /// This uses esbuild to bundle the TypeScript code and copies the
     /// precompiled app shell — no Rust/Tauri toolchain needed.
     pub async fn package_plugin(&self, id: &str) -> Result<PathBuf, PluginError> {
         let entry = self

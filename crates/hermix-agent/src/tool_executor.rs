@@ -1,5 +1,5 @@
 //! Parallel tool-call batch executor — physically split out of
-//! `agent_loop.rs` on 2026-07-04 so the 6k-line loop file can focus
+//! `agent_loop.rs` on so the 6k-line loop file can focus
 //! on the orchestration primitives (`run` / `run_stream` /
 //! `process_post_response`).
 //!
@@ -238,6 +238,26 @@ impl AgentLoop {
                     // P6-4: Parse parent_task_id from args if present.
                     parent_task_id: parsed
                         .get("parent_task_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    // Parse image/file attachments from args.
+                    attachments: parsed
+                        .get("attachments")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|a| {
+                                    serde_json::from_value::<
+                                        crate::sub_agent_orchestrator::ImageAttachment,
+                                    >(a.clone())
+                                    .ok()
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    // Parse optional output_schema hint.
+                    output_schema: parsed
+                        .get("output_schema")
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
                 };
@@ -585,12 +605,12 @@ impl AgentLoop {
             }
         }
 
-        // ★ 2026-07-23: if any tool call mutated a memory store, bump the
-        //   context epoch so the next `resolve_initial_system_prompt` (on the
-        //   next user message) force-rebuilds the Context layer from disk
-        //   instead of reusing the frozen `stored_system_prompt`. Without
-        //   this, `memory` tool edits (add/replace/remove) would be invisible
-        //   to the LLM until the next session restart.
+        // ★ if any tool call mutated a memory store, bump the
+        // context epoch so the next `resolve_initial_system_prompt` (on the
+        // next user message) force-rebuilds the Context layer from disk
+        // instead of reusing the frozen `stored_system_prompt`. Without
+        // this, `memory` tool edits (add/replace/remove) would be invisible
+        // to the LLM until the next session restart.
         if tool_calls.iter().any(is_memory_store_mutation) {
             self.bump_context_epoch();
             tracing::debug!(
@@ -635,8 +655,7 @@ impl AgentLoop {
 
 /// Detect whether a tool call mutates a memory store whose change must be
 /// reflected in the next system-prompt rebuild.
-///
-/// The `memory` tool rewrites `memories/MEMORY.md` / `memories/USER.md` on
+/// /// The `memory` tool rewrites `memories/MEMORY.md` / `memories/USER.md` on
 /// disk for `action in {add, replace, remove}` (the frozen context snapshot
 /// in the system prompt is sourced from those files). Bumping the context
 /// epoch after such a call makes `build_context_layer` (`PromptCache`-keyed

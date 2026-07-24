@@ -36,13 +36,11 @@ enum PreTurnAction {
 // ---------------------------------------------------------------------------
 
 /// Build the `<active-skills>` block to inject into ctx this turn.
-///
-/// Returns `None` when no skills match or when `user_text` is empty.
+/// /// Returns `None` when no skills match or when `user_text` is empty.
 /// The block lists up to 3 skill names with their bodies (each body
 /// capped at 500 lines by the loader, plus a total `char_budget`
 /// cap here so even many skills can't blow the context).
-///
-/// Failure modes — none. We never panic or error out: missing
+/// /// Failure modes — none. We never panic or error out: missing
 /// `skills_dir`, empty matches, FS errors all degrade to `None`.
 pub fn build_active_skills_block(
     skills_dir: &std::path::Path,
@@ -74,8 +72,7 @@ pub fn build_active_skills_block(
 
 /// Outcome of [`AgentLoop::do_tool_turn`] — tells the caller what
 /// to do after the tool execution block completes.
-///
-/// 2026-07-22 (P1-3): extracted from the duplicated tool-execution
+/// /// (P1-3): extracted from the duplicated tool-execution
 /// blocks in `run()` and `run_stream()` (~120 lines saved).
 enum ToolTurnOutcome {
     /// Rollback threshold was hit; the caller should `continue`
@@ -101,7 +98,7 @@ impl AgentLoop {
         persist_user_idx: Option<usize>,
         finish_reason: Option<&str>,
     ) -> Result<PreTurnAction, AgentError> {
-        // 2026-07-19 (type-B diagnostic): INFO log every pre-turn setup
+        // (type-B diagnostic): INFO log every pre-turn setup
         // entry so a future hang between turns shows up in stdout.
         // Without this, the only signal between `PostToolExec` and the
         // `PreTurnSetup` phase is a `tracing::debug!` that the default
@@ -210,7 +207,7 @@ impl AgentLoop {
         // --- Memory turn-start notification ---
         self.memory_on_turn_start(state.total_turns, "");
 
-        // 2026-07-09: Removed Memory review hint (every 20 turns).
+        // Removed Memory review hint (every 20 turns).
         // The system prompt already contains memory management guidance.
         // Injecting "review and consolidate" hints pollutes the context
         // and distracts the LLM from the user's actual task.
@@ -453,14 +450,14 @@ impl AgentLoop {
         let mut results = results;
         budget::enforce_budget(&mut results, &self.config.budget);
 
-        // 2026-07-09: Removed verification notes injection and budget
+        // Removed verification notes injection and budget
         // pressure injection into tool results. These were polluting the
         // context with system-level messages that interfered with the
         // LLM's natural reasoning. The tool results themselves already
         // contain execution status. Cost guard warnings go to the UI,
         // not into the LLM's context.
 
-        // 2026-07-19 (type-B diagnostic): emit an INFO log *before* the
+        // (type-B diagnostic): emit an INFO log *before* the
         // post-tool writeback loop consumes `results` via `into_iter()`
         // — the count + error count would otherwise be unavailable.
         // Pair this with the `do_pre_turn_setup: entering` INFO at the
@@ -477,7 +474,7 @@ impl AgentLoop {
             "do_post_tool_iteration: post-tool results accepted, entering writeback & auto-compress"
         );
 
-        // 2026-07-23 (v2 — zero-context-overhead model, inspired by
+        // (v2 — zero-context-overhead model, inspired by
         // Hermes Agent's delegate_task design): When the LLM calls
         // `read_image` in the main context, NO image base64 is ever
         // injected into the main context. All base64 is stripped from
@@ -486,7 +483,6 @@ impl AgentLoop {
         // injected telling the LLM to use `delegate_task` for image
         // analysis — the sub-agent's isolated context absorbs the
         // base64 cost and destroys it when done.
-        //
         // This is the "zero-context-overhead" model: the main context
         // NEVER contains image base64, period. Even a single image
         // costs 2,000–8,000 tokens that are paid on every subsequent
@@ -541,7 +537,7 @@ impl AgentLoop {
 
         for result in results {
             push_tool_result(ctx, tool_calls, &result.tool_call_id, &result.content);
-            // 2026-07-18: if the result is a *denial* (user拒绝 /
+            // if the result is a *denial* (user拒绝 /
             // 超时 / 连接中断), inject the structured "tell the user"
             // system note right after the tool_result so the LLM's
             // next turn obeys it instead of going quiet or silently
@@ -551,7 +547,7 @@ impl AgentLoop {
                 tool_calls,
                 &result,
             );
-            // 2026-07-20 (sandbox-permission fix P3): if the tool failed with
+            // (sandbox-permission fix P3): if the tool failed with
             // a PERMISSION_DENIED error, inject the "ask the user to grant
             // access" guidance right after the denial note (the two are
             // orthogonal — a denial is a user refusal, a permission error is a
@@ -563,7 +559,7 @@ impl AgentLoop {
             );
         }
         self.post_tool_apply_pending_steer(ctx);
-        // 2026-07-09: Removed execute_code turn-counter deduction hack.
+        // Removed execute_code turn-counter deduction hack.
         // It was compensating for execute_code not counting as a "real"
         // turn, but this conflated turn accounting with tool semantics.
         // Trust the turn counter — every loop iteration is a turn.
@@ -597,7 +593,7 @@ impl AgentLoop {
             } else {
                 0.0
             };
-            // 2026-07-14: Include cumulative cache hit/miss data from
+            // Include cumulative cache hit/miss data from
             // the CostGuard so the frontend can display "缓存命中 45k"
             // alongside the context usage bar.
             let (cache_read, cache_creation) = state
@@ -681,12 +677,12 @@ impl AgentLoop {
         // parameter was hoisted into `LoopState`); no copy-back needed.
     }
 
-    // 2026-07-22 (P1-3): shared tool-execution + post-tool + convergence +
+    // (P1-3): shared tool-execution + post-tool + convergence +
     // TurnReport block. Both `run()` and `run_stream()` had identical
     // ~60-line copies of this code. The only real differences are:
-    //   - log level (info vs debug for phase notification)
-    //   - `finalize_agent_result` params (is_stream flag + last_finish_reason)
-    //   - `do_post_tool_iteration` stream params (None vs Some)
+    // - log level (info vs debug for phase notification)
+    // - `finalize_agent_result` params (is_stream flag + last_finish_reason)
+    // - `do_post_tool_iteration` stream params (None vs Some)
     // All three are parameterized here.
     #[allow(clippy::too_many_arguments)]
     async fn do_tool_turn(
@@ -907,7 +903,6 @@ let mut post_tool_nudge_count: u32 = 0;
         // loop-local mutable would eventually live in `state` so a future
         // `run_shared_loop(state, llm_caller)` helper could take only
         // `&mut LoopState` instead of the original 11+ locals.
-        //
         // Phase 5 (2026-07-03..2026-07-04) collapsed the bridge to its
         // minimum: 4 manager structs (`cost_guard` / `retry_counters` /
         // `context_pressure` / `timings` / `message_cache`) own the
@@ -919,13 +914,13 @@ let mut post_tool_nudge_count: u32 = 0;
         // LoopState owns total_turns; aliased here for hot-path readability.
         let mut total_turns: u32 = state.total_turns;
 
-        // 2026-07-19: armed by `do_post_tool_iteration` once a turn
+        // armed by `do_post_tool_iteration` once a turn
         // finishes tool execution; checked at the top of the next
         // iteration of this loop. Mirrors the run_stream() watchdog.
         let mut transition_started_at: Option<Instant> = None;
 
         loop {
-            // 2026-07-19: turn transition watchdog (issue: tool approved
+            // turn transition watchdog (issue: tool approved
             // → next turn never starts). Records the timestamp right
             // after `do_post_tool_iteration` returns. If the next
             // iteration of this loop has not crossed the next
@@ -1042,7 +1037,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                     turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
                 }
 
-                // 2026-07-14: push the per-turn usage snapshot so
+                // push the per-turn usage snapshot so
                 // the front-end cache-hit chip updates in real time.
                 // Emitted *after* merge so the chip reflects the
                 // running total across the current turn, not just
@@ -1081,7 +1076,6 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
             // call.
             tracing::debug!(phase = %LoopPhase::PostLlmCall, turn = total_turns, "run: post-LLM response processing");
 self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
-            //
             // Round 28 follow-up: both `CostGuardTripped` and `Finalize`
             // must short-circuit here. The previous version only matched
             // `CostGuardTripped` and silently fell through to the
@@ -1121,7 +1115,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                     if Self::assistant_visible_text_after_think_blocks(
                         &response.message
                     ) {
-                        // 2026-07-15: In autonomous_mode, if the LLM produced
+                        // In autonomous_mode, if the LLM produced
                         // visible text but no tool calls and no tools have
                         // been used yet, fall through to decide_empty_response
                         // instead of finalizing. The autonomous nudge will push
@@ -1139,7 +1133,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                                 || total_turns < self.config.max_turns)
                             && !tool_schemas.is_empty();
                         if !should_autonomous_nudge {
-                            // 2026-07-12 WW: persist the final assistant
+                            // WW: persist the final assistant
                             // message into ctx BEFORE terminal persist. The
                             // Continue branch falls through to
                             // `prepare_assistant_turn` below, but the
@@ -1198,7 +1192,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
             // and duplicated in `run()`. C2 consolidated that logic
             // into `crate::empty_response_handler::decide_empty_response`
             // so both call sites use the same single authority.
-            // 2026-07-08: filter out empty-named tool calls (same fix as
+            // filter out empty-named tool calls (same fix as
             // run_stream). MiniMax streaming can create placeholder entries.
             let tool_calls_filtered: Vec<ToolCall> = tool_calls
                 .unwrap_or_default()
@@ -1370,7 +1364,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
             // Cap concurrent delegate_task calls
             self.cap_delegates(&mut tool_calls);
 
-            // 2026-07-09: Removed cross-turn tool-call deduplication.
+            // Removed cross-turn tool-call deduplication.
             // It was caching tool results and skipping re-execution, which
             // prevented legitimate re-checks (e.g. re-reading a file after
             // modifying it). The LLM has full context and can decide for
@@ -1435,7 +1429,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 ToolTurnOutcome::Converge(result) => return result,
                 ToolTurnOutcome::Continue => {}
             }
-            // 2026-07-19: arm the turn-transition watchdog. Mirrors
+            // arm the turn-transition watchdog. Mirrors
             // the run_stream() side. The next loop iteration's
             // top-of-loop check will fire if we don't reach the
             // pre-turn-setup checkpoint within
@@ -1563,13 +1557,13 @@ self.notify_phase(&LoopPhase::Init, 0);
         // timings live on `state.timings` (mutated in place).
         let mut total_turns: u32 = state.total_turns;
 
-        // 2026-07-19: armed by `do_post_tool_iteration` once a turn
+        // armed by `do_post_tool_iteration` once a turn
         // finishes tool execution; checked at the top of the next
         // iteration of this loop. See watchdog block below.
         let mut transition_started_at: Option<Instant> = None;
 
         loop {
-            // 2026-07-19: turn transition watchdog (issue: tool approved
+            // turn transition watchdog (issue: tool approved
             // → next turn never starts). Records the timestamp right
             // after `do_post_tool_iteration` returns. If the next
             // iteration of this loop has not crossed the next
@@ -1757,7 +1751,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                     turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
                 }
 
-                // 2026-07-14: per-turn usage push for the cache-hit
+                // per-turn usage push for the cache-hit
                 // chip. Mirrors the run() side above; emitted on
                 // every streaming chunk so the chip updates
                 // continuously while the response streams in.
@@ -1803,7 +1797,6 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
             // `Finalize` when there are no tool calls in the response — its
             // doc-comment (agent_loop/types.rs:156-165) explicitly says
             // "the caller should `return` Ok(self.finalize_agent_result(...))".
-            //
             // The previous version of this site only matched on
             // `CostGuardTripped`, silently falling through into the empty-
             // tool-calls block at line ~1247 below. That block then runs
@@ -1816,7 +1809,6 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
             // because the nudge tells the model "you have not yet
             // completed the user's task". Observed live in the
             // 沪EB5805/沪EB5885 \"看下目录\" session.
-            //
             // Fix: honor the `Finalize` return — drop straight into the
             // terminal finalize path with `from_post_response=true` so
             // the persistence hook still runs.
@@ -1852,7 +1844,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                     if Self::assistant_visible_text_after_think_blocks(
                         &response.message
                     ) {
-                        // 2026-07-15: In autonomous_mode, if the LLM produced
+                        // In autonomous_mode, if the LLM produced
                         // visible text but no tool calls and no tools have
                         // been used yet, fall through to decide_empty_response
                         // instead of finalizing. The autonomous nudge will push
@@ -1870,7 +1862,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                                 || total_turns < self.config.max_turns)
                             && !tool_schemas.is_empty();
                         if !should_autonomous_nudge {
-                            // 2026-07-12 WW: persist the final assistant
+                            // WW: persist the final assistant
                             // message into ctx BEFORE terminal persist. The
                             // Continue branch falls through to
                             // `prepare_assistant_turn` below, but the
@@ -1881,7 +1873,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                             // disk `.md` only stored up to the tool result
                             // and the reload view came back truncated. Owner
                             // saw this live on the 沪EB5805 "看下目录" session:
-                            // streaming showed the full "老大，目录共 198 条..."
+                            // streaming showed the full "用户，目录共 198 条..."
                             // text but reload was truncated to assistant1+tool.
                             let _ = self.prepare_assistant_turn(
                                 &mut ctx,
@@ -1991,7 +1983,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                         last_finish_reason.clone(),
                     ));
                 }
-                // 2026-07-14 (P1-3 streaming hang fix): when the LLM
+                // (P1-3 streaming hang fix): when the LLM
                 // returned tool_calls but all were filtered out AND the
                 // turn history already contains tool results, the
                 // decide_empty_response path can loop forever —
@@ -2175,7 +2167,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
             }
             self.cap_delegates(&mut tool_calls);
 
-            // 2026-07-09: Removed cross-turn tool-call deduplication.
+            // Removed cross-turn tool-call deduplication.
             // The LLM has full context and can decide for itself whether
             // to re-call a tool. Caching prevented legitimate re-checks.
 
@@ -2233,7 +2225,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 ToolTurnOutcome::Converge(result) => return result,
                 ToolTurnOutcome::Continue => {}
             }
-            // 2026-07-19: arm the turn-transition watchdog. The next
+            // arm the turn-transition watchdog. The next
             // loop iteration's top-of-loop check will fire if we
             // don't reach the pre-turn-setup checkpoint within
             // `turn_transition_deadline_secs` of now.
@@ -2246,8 +2238,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
     // -----------------------------------------------------------------------
 
     /// Verify tool execution results and inject verification status.
-    ///
-    /// This is the "verify work" step from Claude Code's gather→act→verify pattern.
+    /// /// This is the "verify work" step from Claude Code's gather→act→verify pattern.
     /// Checks file modifications, terminal exit codes, and tool errors.
     pub fn verify_tool_results(
         &self,

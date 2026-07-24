@@ -287,8 +287,7 @@ impl LegacyMigrator {
     /// Scan the candidate legacy homes and return the first one that
     /// exists. Then enumerate which of [`LegacyArtifact::ALL`] are
     /// present there.
-    ///
-    /// `target_home` is the current hermix home (we do NOT auto-
+    /// /// `target_home` is the current hermix home (we do NOT auto-
     /// resolve it from the env inside this method, so the caller —
     /// i.e. the Tauri launcher — controls where the imported data
     /// lands). We accept `target_home` explicitly so portable mode
@@ -339,14 +338,12 @@ impl LegacyMigrator {
 
     /// Copy every listed artifact from `snapshot.legacy_home` to
     /// `snapshot.target_home`.
-    ///
-    /// We **never** delete or rename the legacy home — the user
+    /// /// We **never** delete or rename the legacy home — the user
     /// explicitly chose this over the auto-rename path precisely
     /// because they want to keep the original around (e.g. for
     /// rollback, or because they're also running the original
     /// NousResearch hermes-agent).
-    ///
-    /// Existing files at the target are **not** overwritten unless
+    /// /// Existing files at the target are **not** overwritten unless
     /// `overwrite` is true (the dialog should default to false and
     /// only flip it after the user confirms "yes, blow away the
     /// existing copy"). Files that would be overwritten are reported

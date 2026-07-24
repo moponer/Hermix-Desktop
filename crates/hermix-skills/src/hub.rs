@@ -106,8 +106,7 @@ struct HubClaims {
 // ---------------------------------------------------------------------------
 
 /// HTTP client for the Skills Hub at agentskills.io.
-///
-/// Uses JWT-based authentication for upload / privileged operations.
+/// /// Uses JWT-based authentication for upload / privileged operations.
 /// Download and search are unauthenticated (public).
 pub struct SkillsHubClient {
     base_url: String,
@@ -203,8 +202,7 @@ impl SkillsHubClient {
     }
 
     /// Download a skill from the hub by its ID.
-    ///
-    /// Verifies source integrity if a signature is provided.
+    /// /// Verifies source integrity if a signature is provided.
     #[instrument(skip(self))]
     pub async fn download_skill(&self, skill_id: &str) -> Result<Skill, SkillError> {
         debug!("Downloading skill from hub: {}", skill_id);
@@ -244,8 +242,7 @@ impl SkillsHubClient {
 
     /// Check if any of the given locally-installed skills have newer
     /// versions available on the hub.
-    ///
-    /// Sends the local skill names + version hashes to the hub's
+    /// /// Sends the local skill names + version hashes to the hub's
     /// `/skills/check-updates` endpoint and returns the list of skills
     /// that have updates available.
     #[instrument(skip(self, installed))]
@@ -341,8 +338,7 @@ impl SkillsHubClient {
 // ---------------------------------------------------------------------------
 
 /// Verify the integrity of a downloaded skill against its source signature.
-///
-/// The signature is an HMAC-SHA256 of the skill's content, keyed with the
+/// /// The signature is an HMAC-SHA256 of the skill's content, keyed with the
 /// hub's public key fingerprint. In this implementation we do a simple
 /// check; production deployments should use proper public-key verification.
 fn verify_skill_signature(skill: &Skill, signature: &str) -> Result<(), SkillError> {

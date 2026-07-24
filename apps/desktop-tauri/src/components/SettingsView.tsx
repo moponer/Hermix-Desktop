@@ -5,8 +5,10 @@ import { PersonaView } from "./PersonaView";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { useCurrentModel, writeModelConfigAndNotify } from "../hooks/useCurrentModel";
 import { ProviderIcon } from "./ProviderIcon";
+import { useSafeTimeout } from "../hooks/useSafeTimeout";
 
 import { apiUrl } from "../api";
+import { toastError } from "../hooks/useToast";
 
 // ── Provider definitions ───────────────────────────
 
@@ -91,6 +93,7 @@ function TabBtn({ active, onClick, icon, children }: { active: boolean; onClick:
 // ── Model Tab ──────────────────────────────────────
 
 function ModelTab() {
+  const safeSetTimeout = useSafeTimeout();
   const [config, setConfig] = useState<ModelConfigData>(loadModelConfig);
   const [selectedProvider, setSelectedProvider] = useState<ProviderDef | null>(null);
   const [keyInput, setKeyInput] = useState("");
@@ -106,7 +109,7 @@ function ModelTab() {
   // because it reads config.yaml directly, unlike GET /api/env which
   // may read the wrong path before the backend is recompiled.
   const [customIdsWithKey, setCustomIdsWithKey] = useState<Set<string>>(new Set());
-  // 2026-06-26 主人反馈：原 providersList state 用于中间栏"自定义"分组下的 light 卡片列表
+  // 用户反馈：原 providersList state 用于中间栏"自定义"分组下的 light 卡片列表
   // （与右栏 CustomProviderSection 的"已配置的提供商"重复），已删除该 list 的渲染。
   // 同步删 state 声明 + 两处 setProvidersList 调用（mount + refresh 时），不留 dead code。
 
@@ -144,7 +147,7 @@ function ModelTab() {
       // Always sync has_key state (even if no models — provider may exist
       // with a key but zero models fetched yet).
       setCustomIdsWithKey(withKey);
-    }).catch(() => {});
+    }).catch((e) => { console.warn("[SettingsView] custom provider fetch failed:", e); });
   }, []);
 
   useEffect(() => {
@@ -170,7 +173,7 @@ function ModelTab() {
       }
       setActiveKeys(keys);
 
-      // 2026-06-25 修复：mount 时先从 localStorage 缓存恢复模型列表。
+      // 修复：mount 时先从 localStorage 缓存恢复模型列表。
       // 之前完全不读缓存 → 如果 API fetch 静默失败（网络/TLS/DNS），
       // fetchedModels 永远为空 → UI 不显示任何模型 → 用户看到"暂无可用模型"。
       const cached = loadModelCache();
@@ -239,12 +242,12 @@ function ModelTab() {
       });
       await Promise.allSettled(fetchPromises);
 
-      // 2026-06-25 延迟重试：如果 fetch 全失败（后端可能还没 ready），
+      // 延迟重试：如果 fetch 全失败（后端可能还没 ready），
       // 3 秒后再试一次。Tauri 启动时 Rust server 初始化需要几秒，
       // SettingsView mount 时 3000 端口可能还没 accept connections。
       const configuredProviderIds = PROVIDERS.filter((p) => keys[p.id]).map((p) => p.id);
       if (configuredProviderIds.length > 0) {
-        setTimeout(async () => {
+        safeSetTimeout(async () => {
           try {
             const envVars2 = await api.getEnvVars();
             const keys2: Record<string, boolean> = {};
@@ -318,7 +321,7 @@ function ModelTab() {
         const newEnabled = [...prev.enabled];
         models.forEach((modelId) => { if (!existing.has(`${selectedProvider.id}:${modelId}`)) newEnabled.push({ providerId: selectedProvider.id, modelId }); });
         const next = { ...prev, enabled: newEnabled };
-        // 2026-06-25 主人反馈："进历史对话，模型不见了"+SettingsView 顶部"尚未设置默认模型"。
+        // 用户反馈："进历史对话，模型不见了"+SettingsView 顶部"尚未设置默认模型"。
         // 根因：setConfig 只更新 React state，从不写 localStorage；modelConfig 永远空 → ChatView 弹窗也空。
         // 修法：和 toggleModel / setDefault 一样，setConfig 之后立即 writeModelConfigAndNotify。
         writeModelConfigAndNotify(next);
@@ -343,7 +346,7 @@ function ModelTab() {
       const defaultCleared = exists && prev.defaultModel === key;
       const newConfig: ModelConfigData = { enabled: newEnabled, defaultModel: defaultCleared ? "" : prev.defaultModel, modelContexts: prev.modelContexts ?? {} };
       // Auto-save every toggle immediately — no separate "save" step.
-      setTimeout(async () => {
+      safeSetTimeout(async () => {
         writeModelConfigAndNotify(newConfig);
         // If the default model was just disabled, sync the cleared
         // default to the backend so the agent loop doesn't keep
@@ -365,7 +368,7 @@ function ModelTab() {
   const setDefault = useCallback((fullId: string) => {
     setConfig((prev) => {
       const newConfig = { ...prev, defaultModel: fullId };
-      setTimeout(async () => {
+      safeSetTimeout(async () => {
         writeModelConfigAndNotify(newConfig);
         // Also sync the model to the backend so the agent loop
         // uses it immediately — otherwise the frontend localStorage
@@ -427,7 +430,7 @@ function ModelTab() {
         writeModelConfigAndNotify(next);
         return next;
       });
-    }).catch(() => {});
+    }).catch((e) => { console.warn("[SettingsView] auto-correct sync failed:", e); });
     // Also refresh env-var state so activeKeys (including CUSTOM_*_API_KEY)
     // reflects the latest backend state without a full page refresh.
     api.getEnvVars().then((envVars) => {
@@ -442,7 +445,7 @@ function ModelTab() {
         }
       }
       setActiveKeys(keys);
-    }).catch(() => {});
+    }).catch((e) => { console.warn("[SettingsView] env keys fetch failed:", e); });
   }, []);
 
   // ── Status banner ──
@@ -535,7 +538,7 @@ function ModelTab() {
               </div>
               <ChevronRight size={12} className="text-text-muted shrink-0" />
             </button>
-            {/* 2026-06-26 主人反馈：中间栏 "自定义" 分组下面曾渲染每个 custom provider 的 light 卡片
+            {/* 用户反馈：中间栏 "自定义" 分组下面曾渲染每个 custom provider 的 light 卡片
                 （cp.display_name + 模型数 + 绿点），与右栏 CustomProviderSection 的"已配置的提供商"
                 完全重复——同一份 custom-agnes 在两处都出现。删除此 block：custom provider 管理
                 只走右栏 CustomProviderSection 的"已配置的提供商"section（line 880-907）。
@@ -627,7 +630,7 @@ function ModelTab() {
                                   // Sync to backend for custom providers
                                   if (selectedProvider?.id.startsWith("custom-")) {
                                     const allCtx = { ...config.modelContexts, [fullId]: v ? Number(v) : 0 };
-                                    api.updateCustomProviderModelContexts(selectedProvider.id, allCtx).catch(() => {});
+                                    api.updateCustomProviderModelContexts(selectedProvider.id, allCtx).catch((e) => { console.warn("[SettingsView] modelContext sync failed:", e); });
                                   }
                                 }}
                                 className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[10px] text-text-muted outline-none"
@@ -694,7 +697,7 @@ function CustomProviderSection({
   const [, setProviderModels] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
-    api.getCustomProviders().then((list) => setProviders(list)).catch(() => {});
+    api.getCustomProviders().then((list) => setProviders(list)).catch((e) => { console.warn("[SettingsView] getCustomProviders failed:", e); });
   }, []);
 
   const safeId = name.trim()
@@ -712,9 +715,9 @@ function CustomProviderSection({
       setProviderModels((prev) => ({ ...prev, [id]: models }));
       onModelsFetched(id, models);
       onRefresh();
-      // 2026-06-25 主人反馈：获取 N 个模型后，下方应该有 N 行可勾选/设默认的模型列表。
+      // 用户反馈：获取 N 个模型后，下方应该有 N 行可勾选/设默认的模型列表。
       // 根因：之前 handleFetchModelsForSavedProvider 只更新 providerModels / fetchedModels state，
-      //       不会把 modelId 加进 config.enabled，也不会持久化 → ChatView 弹窗看不到。
+      // 不会把 modelId 加进 config.enabled，也不会持久化 → ChatView 弹窗看不到。
       // 修法：和内置 provider 的 fetchModels 一样，把新模型 merge 进 config.enabled 并写盘。
       setConfig((prev) => {
         const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
@@ -917,7 +920,7 @@ function CustomProviderSection({
       )}
 
       {/* ── Custom provider models (enable/disable + set-default) ──
-          2026-06-26 主人反馈：5 个 model 一行一个 + "设为默认" 按钮 占了 200+px，
+          用户反馈：5 个 model 一行一个 + "设为默认" 按钮 占了 200+px，
           看不到下面"新建提供商"表单。改为 2 列 grid + 紧行高 + 紧 max-h，
           5 个 model 排 3 行只占 ~96px（约原 1/2）。"设为默认"按钮仍在每行右侧
           （仅 enabled 时显示），保持原交互语义不变。 */}
@@ -955,7 +958,7 @@ function CustomProviderSection({
                               // Sync to backend
                               if (providerId.startsWith("custom-")) {
                                 const ctx = { ...config.modelContexts, [fullId]: v ? Number(v) : 0 };
-                                api.updateCustomProviderModelContexts(providerId, ctx).catch(() => {});
+                                api.updateCustomProviderModelContexts(providerId, ctx).catch((e) => { console.warn("[SettingsView] modelContext sync failed:", e); });
                               }
                             }}
                             className="bg-bg-tertiary border border-border-secondary rounded px-1 py-0.5 text-[9px] text-text-muted outline-none"
@@ -1079,8 +1082,8 @@ function BackendTab() {
   const [tickLoopLoading, setTickLoopLoading] = useState(false);
 
   useEffect(() => {
-    api.checkBackendHealth().then(setHealth).catch(() => {});
-    api.getTickLoopStatus().then((s) => setTickLoopRunning(s.running)).catch(() => {});
+    api.checkBackendHealth().then(setHealth).catch((e) => { console.warn("[SettingsView] health check failed:", e); });
+    api.getTickLoopStatus().then((s) => setTickLoopRunning(s.running)).catch((e) => { console.warn("[SettingsView] tickloop status failed:", e); });
   }, []);
 
   const handleToggleTickLoop = useCallback(async () => {
@@ -1091,6 +1094,7 @@ function BackendTab() {
       setTickLoopRunning(status.running);
     } catch (e) {
       console.error("TickLoop toggle failed", e);
+      toastError("TickLoop 切换失败");
     } finally {
       setTickLoopLoading(false);
     }
@@ -1175,6 +1179,7 @@ const DEFAULT_ADVANCED_CONFIG: AdvancedConfig = {
 };
 
 function AdvancedTab() {
+  const safeSetTimeout = useSafeTimeout();
   const [config, setConfig] = useState<AdvancedConfig>(() => {
     try {
       const raw = storage.getItem(STORAGE_KEYS.advancedConfig);
@@ -1214,9 +1219,10 @@ function AdvancedTab() {
       } as unknown as api.HermesConfig);
       storage.setItem(STORAGE_KEYS.advancedConfig, JSON.stringify(config));
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      safeSetTimeout(() => setSaved(false), 2000);
     } catch (e) {
       console.error("Failed to save advanced config:", e);
+      toastError("保存高级设置失败");
       setSaved(false);
     }
   };
@@ -1314,7 +1320,6 @@ function AdvancedTab() {
 }
 
 // ── Python Runtime Panel (Phase L1.4, 2026-06-29) ──────────────────────
-//
 // Probe only — does NOT auto-bundle Python. The sister slot reserved by
 // `python_detect` (`<hermix-dir>/python/`) is left empty by default; the
 // installer can opt into bundling later via `build-tauri.bat BUNDLED=1`
@@ -1365,6 +1370,7 @@ function PythonRuntimePanel() {
   }, [overrideInput]);
 
   // Probe once on mount so the user sees the truth without clicking.
+  // Intentionally empty deps — runProbe reads stable refs, not state.
   useEffect(() => {
     runProbe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1433,7 +1439,7 @@ function PythonRuntimePanel() {
         <div className="mt-3 space-y-1">
           {probe.entries.map((e, i) => (
             <div
-              key={i}
+              key={`${e.path}-${i}`}
               className={`flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] font-mono ${
                 probe.selected === e.path
                   ? "bg-accent/10 border border-accent/30"

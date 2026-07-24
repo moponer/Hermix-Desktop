@@ -66,22 +66,21 @@
 /// The essential toolset floor. The constant is `pub` so other
 /// crates (`hermix-server`, `hermix-agent`) can reference the
 /// canonical list without copy-pasting the strings.
-///
-/// P1.8 (2026-07-02) — alignment pass with the runtime registry:
+/// /// P1.8 (2026-07-02) — alignment pass with the runtime registry:
 /// - `"computer_use"` removed. There is no tool tagged
-///   `"computer_use"`. The previous `register_one(name, name, ...)`
-///   pattern in `tools::cua::register` put every CUA handler under
-///   its own per-tool name, so the `set_toolset_enabled("computer_use", true)`
-///   call was a silent no-op. CUA coverage is now provided by the
-///   `"cua"` toolset entry (added in the same pass: see
-///   `tools::cua::register`).
+/// `"computer_use"`. The previous `register_one(name, name, ...)`
+/// pattern in `tools::cua::register` put every CUA handler under
+/// its own per-tool name, so the `set_toolset_enabled("computer_use", true)`
+/// call was a silent no-op. CUA coverage is now provided by the
+/// `"cua"` toolset entry (added in the same pass: see
+/// `tools::cua::register`).
 /// - `"security_guidance"` added. `url_safety` is tagged `"security"`
-///   and re-asserted by the floor, but `security_guidance` (the
-///   runtime guard's policy file reader) was its own toolset that the
-///   floor missed. Without this entry a hand-edited
-///   `enabled_toolsets.json` containing only `["file", "web"]` would
-///   leave the LLM unable to read or update the security policy
-///   mid-session.
+/// and re-asserted by the floor, but `security_guidance` (the
+/// runtime guard's policy file reader) was its own toolset that the
+/// floor missed. Without this entry a hand-edited
+/// `enabled_toolsets.json` containing only `["file", "web"]` would
+/// leave the LLM unable to read or update the security policy
+/// mid-session.
 pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "terminal",
     "file",
@@ -101,8 +100,7 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
 /// Re-enable the essential toolsets on a [`ToolRegistry`]. Idempotent;
 /// safe to call multiple times. Returns the number of
 /// (toolset, count) flips actually performed, useful for tracing.
-///
-/// The function does **not** disable anything the user explicitly
+/// /// The function does **not** disable anything the user explicitly
 /// enabled in the whitelist — it only re-asserts the floor. If
 /// the user toggled `terminal` off and the next reconciliation
 /// pass turned it off, calling this re-enables it; if `terminal`

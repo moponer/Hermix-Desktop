@@ -189,8 +189,7 @@ impl AcceptanceGate {
     // -----------------------------------------------------------------------
 
     /// Evaluate an LLM output through both splits.
-    ///
-    /// - `visible_text`: The visible (non-thinking) text produced by the LLM.
+    /// /// - `visible_text`: The visible (non-thinking) text produced by the LLM.
     /// - `tool_calls_json`: Raw JSON strings of any tool calls made.
     /// - `thinking_blocks`: The content of thinking blocks (for structural check).
     /// - `has_user_query`: Whether there was a user query in this turn.
@@ -247,7 +246,7 @@ impl AcceptanceGate {
         }
 
         // 3. Very short response that seems like an acknowledgment but
-        //    should contain more substance (heuristic: < 20 chars).
+        // should contain more substance (heuristic: < 20 chars).
         if has_user_query && text.trim().len() < 20 && !text.trim().is_empty() {
             return GateVerdict::Warn {
                 split: GateSplit::Behavioral,

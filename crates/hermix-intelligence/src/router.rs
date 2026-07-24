@@ -96,13 +96,12 @@ impl SmartModelRouter {
     }
 
     /// Select the best model for the given prompt and requirements.
-    ///
-    /// Scoring strategy:
+    /// /// Scoring strategy:
     /// 1. Filter out models that don't match **all** required capabilities.
     /// 2. Filter out models whose context window is smaller than `max_context`.
     /// 3. Estimate cost for the prompt and filter out models that exceed `max_cost`.
     /// 4. Among remaining candidates, pick the one with the lowest cost
-    ///    (or the fastest, when `prefer_fast` is set).
+    /// (or the fastest, when `prefer_fast` is set).
     pub fn route(
         &self,
         prompt: &str,
@@ -158,7 +157,7 @@ impl SmartModelRouter {
         }
 
         // 4. Rank — lowest cost wins; if prefer_fast, break ties by provider
-        //    heuristics (prefer "gpt" over "claude" as a proxy for speed).
+        // heuristics (prefer "gpt" over "claude" as a proxy for speed).
         let best = if requirements.prefer_fast {
             candidates.into_iter().min_by(|a, b| {
                 let cost_a = a.cost_per_input_token * prompt_tokens as f64;

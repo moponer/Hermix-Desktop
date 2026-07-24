@@ -97,7 +97,7 @@ describe("CompactionStatusBanner", () => {
     expect(screen.getByText(/当前用量:120k \/ 205k tokens/)).toBeInTheDocument();
   });
 
-  // 2026-07-22: phase-specific copy overrides the breaker-state copy
+  // phase-specific copy overrides the breaker-state copy
   // so the user sees "正在准备压缩" / "正在压缩中" / "压缩完成" /
   // "压缩失败" transitions instead of a single static warning card
   // jumping straight to the post-attempt result.

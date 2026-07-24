@@ -12,8 +12,7 @@ use crate::platform_requirements::{
 
 /// Return human-readable issues for any **enabled** platform that is missing
 /// required fields. Empty list means the static credential check passed.
-///
-/// Each block is behind the same `feature` flag as
+/// /// Each block is behind the same `feature` flag as
 /// [`crate::platform_registry::register_platforms`].
 pub fn gateway_requirement_issues(config: &GatewayConfig) -> Vec<String> {
     evaluate_gateway_requirements(config, RequirementScope::RuntimeStart)

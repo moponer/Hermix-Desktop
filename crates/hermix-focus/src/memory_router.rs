@@ -143,8 +143,7 @@ impl MemoryRouter {
     /// one. The agent loop uses this to call embedded-specific
     /// methods (`backfill_compression_fact`, `upsert_fact`)
     /// without going through the trait object.
-    ///
-    /// We clone the inner `Arc<EmbeddedMemoryBackend>` so we can
+    /// /// We clone the inner `Arc<EmbeddedMemoryBackend>` so we can
     /// hand out a concrete pointer. The backend was originally
     /// wrapped in `Arc::new(embedded) as DynMemoryLayer`; we keep
     /// a parallel `Arc<EmbeddedMemoryBackend>` in the router
@@ -225,11 +224,11 @@ impl MemoryLayer for MemoryRouter {
     async fn recognize(&self, query: &MemoryQuery) -> Result<Vec<MemoryHit>> {
         let _span_start = std::time::Instant::now();
         // 0. H4: if the caller didn't attach a time window, do it for
-        //    them. This is the single chokepoint that makes "昨天" /
-        //    "last week" queries filter by time across all 8 backends
-        //    uniformly. Backends that already honour the window keep
-        //    their behaviour; backends that ignore it are at worst
-        //    doing extra work that's then dedup'd by the router.
+        // them. This is the single chokepoint that makes "昨天" /
+        // "last week" queries filter by time across all 8 backends
+        // uniformly. Backends that already honour the window keep
+        // their behaviour; backends that ignore it are at worst
+        // doing extra work that's then dedup'd by the router.
         let mut query = query.clone();
         let mut auto_window = false;
         if query.time_window.is_none() {
@@ -354,8 +353,7 @@ impl MemoryLayer for MemoryRouter {
     /// `NotImplemented` are silently skipped — they don't grow a
     /// write surface they don't need. Returns the number of
     /// backends that actually persisted the conclusion.
-    ///
-    /// Honours `config.tolerate_errors` — when false, a single
+    /// /// Honours `config.tolerate_errors` — when false, a single
     /// backend failure surfaces as `MemoryError::Other` instead
     /// of being silently logged.
     async fn upsert_conclusion(&self, c: &crate::focus_stack::FocusConclusion) -> Result<()> {
@@ -407,11 +405,11 @@ impl MemoryLayer for MemoryRouter {
     // ------------------------------------------------------------------
     // Write-path fanout — overrides of the trait's default no-op hooks.
     // These are trait method overrides, NOT inherent methods, so:
-    //   - no `pub` qualifier (trait items share the trait's visibility)
-    //   - bodies iterate `self.backends` and dispatch to each backend's
-    //     own implementation. The trait dispatch is automatic — Rust
-    //     calls *our* fan-out version when an external caller invokes
-    //     `router.sync_turn(...)` and then we forward to every backend.
+    // - no `pub` qualifier (trait items share the trait's visibility)
+    // - bodies iterate `self.backends` and dispatch to each backend's
+    // own implementation. The trait dispatch is automatic — Rust
+    // calls *our* fan-out version when an external caller invokes
+    // `router.sync_turn(...)` and then we forward to every backend.
     // ------------------------------------------------------------------
 
     /// Fan-out `sync_turn` to all backends. Synchronous — each backend

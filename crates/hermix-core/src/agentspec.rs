@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSpecData {
     /// Stable id for this agent (the same value used as `sessions.session_id`
-    /// after the 2026-07-19 canonical-UUID refactor).
+    /// after the canonical-UUID refactor).
     pub agent_id: String,
 
     /// Human-readable name. Defaults to `agent_id` when the upstream

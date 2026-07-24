@@ -339,12 +339,10 @@ impl Default for AgentLoopBehaviorConfig {
 // ---------------------------------------------------------------------------
 
 /// Compaction / context-pressure tuning knobs.
-///
-/// **Backward compatibility**: every field uses `#[serde(default)]` so
+/// /// **Backward compatibility**: every field uses `#[serde(default)]` so
 /// existing `~/.hermix/config.yaml` files load unchanged. New fields can
 /// be added in any order without breaking deployments.
-///
-/// Mirrors `hermix_agent::compression::CompressorConfig` (the runtime
+/// /// Mirrors `hermix_agent::compression::CompressorConfig` (the runtime
 /// single-source-of-truth), but is intentionally an independent struct so
 /// the hermix-config crate does not depend on hermix-agent. The agent
 /// loop bridges them via `CompressorConfig::from(compaction: CompactionConfig)`.
@@ -419,8 +417,7 @@ pub struct CompactionConfig {
 /// Sits at `advanced.sub_agent_*` / `advanced.delegation_*` in
 /// config.yaml. Defaults match `hermix_agent::agent_config::AgentConfig`
 /// so existing deployments without this block still behave identically.
-///
-/// P0-1 (Frontend Audit 2026-07-13): exposed by the desktop
+/// /// P0-1 (Frontend Audit 2026-07-13): exposed by the desktop
 /// Settings → Advanced tab. The values are forwarded to the live
 /// agent service via `agent_service.set_config`; the agent
 /// re-reads them on every turn.
@@ -469,7 +466,6 @@ fn default_tools() -> Vec<String> {
     // tool, so a fresh install with this default whitelist ended up
     // with ZERO core tools visible to the LLM after the
     // `enabled_toolsets.json` reconcile pass.
-    //
     // The names below are the canonical tool IDs defined in
     // `register_builtins.rs`. Empty vector means "no whitelist" —
     // every registered tool is eligible. We deliberately ship a
@@ -561,9 +557,9 @@ pub struct LlmProviderConfig {
     /// Per-model context window overrides (tokens). Keyed by the bare model
     /// name (no provider prefix). Resolution order when looking up
     /// `custom-{id}:{model_name}`:
-    ///   1. `model_contexts[model_name]` (most specific)
-    ///   2. `context_window` (provider-wide default)
-    ///   3. static catalog → `DEFAULT_FALLBACK_CONTEXT`
+    /// 1. `model_contexts[model_name]` (most specific)
+    /// 2. `context_window` (provider-wide default)
+    /// 3. static catalog → `DEFAULT_FALLBACK_CONTEXT`
     /// Populated automatically by `POST /api/custom-providers/{id}/fetch-models`
     /// when the upstream `/models` endpoint exposes a context length, and
     /// can also be set by hand in `config.yaml`.
@@ -595,8 +591,7 @@ pub struct ModelSelectorEntry {
 }
 
 /// Durable, backend-persisted mirror of the desktop model-selector UI state.
-///
-/// See `GatewayConfig::model_selector` for why this exists: `localStorage`
+/// /// See `GatewayConfig::model_selector` for why this exists: `localStorage`
 /// is volatile, so the chat switcher can "forget" configured models after a
 /// restart. This lets `GET /api/model/list` serve the full enabled list as
 /// the authoritative source of truth.

@@ -11,8 +11,10 @@ import {
 } from "../lib/customAppApi";
 import { AppCard } from "./custom-apps/AppCard";
 import { AppDetailModal } from "./custom-apps/AppDetailModal";
+import { useSafeTimeout } from "../hooks/useSafeTimeout";
 
 export function CustomAppsView() {
+  const safeSetTimeout = useSafeTimeout();
   const [apps, setApps] = useState<CustomAppSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +47,7 @@ export function CustomAppsView() {
       const result = await packageCustomApp(id);
       setSuccessMsg(result.message);
       await loadApps();
-      setTimeout(() => setSuccessMsg(null), 3000);
+      safeSetTimeout(() => setSuccessMsg(null), 3000);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -58,7 +60,7 @@ export function CustomAppsView() {
     try {
       await runCustomApp(id);
       setSuccessMsg("应用已启动");
-      setTimeout(() => setSuccessMsg(null), 2000);
+      safeSetTimeout(() => setSuccessMsg(null), 2000);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -71,7 +73,7 @@ export function CustomAppsView() {
       await deleteCustomApp(id);
       setSuccessMsg("应用已删除");
       await loadApps();
-      setTimeout(() => setSuccessMsg(null), 2000);
+      safeSetTimeout(() => setSuccessMsg(null), 2000);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

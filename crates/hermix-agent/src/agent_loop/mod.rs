@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex};
 use hermix_focus::{FocusStack, SessionFrame, SessionFrameStatus};
 #[cfg(test)]
 use hermix_focus::MemoryLayer;
-// `chrono` (DateTime/Utc) dropped on 2026-07-04 when `OAuthStoreCredential`
+// `chrono` (DateTime/Utc) dropped on when `OAuthStoreCredential`
 // moved to `crate::oauth_refresh`.
-// serde::Serialize / serde::Deserialize were dropped on 2026-07-04 when
+// serde::Serialize / serde::Deserialize were dropped on when
 // `OAuthStoreCredential` moved to `crate::oauth_refresh`; this file no
 // longer holds any #[derive(Serialize, Deserialize)] structs.
 #[cfg(test)]
@@ -50,17 +50,15 @@ pub(crate) use crate::cost_guard::WarnKind;
 // ---------------------------------------------------------------------------
 // Backwards-compat re-exports (P2.2.4, 2026-06-30)
 // ---------------------------------------------------------------------------
-//
 // `AgentConfig`, `RetryConfig`, and `RuntimeProviderConfig` moved to
-// `crate::agent_config` on 2026-06-30 (REFACTOR_PLAN §4). Two test files
+// `crate::agent_config` on (REFACTOR_PLAN §4). Two test files
 // still import via `hermix_agent::agent_loop::AgentConfig`, so we keep
 // these `pub use` aliases live — same source-of-truth, just a thinner
 // alias to the new module.
-//
 // `ToolEntry`, `ToolRegistry`, `TurnMetrics`, `EvolutionCounters`,
 // `ToolDispatchDecision`, `AgentCallbacks`, `ErrorClass`, the helper
 // functions, and `TOOL_RESULT_CHAR_LIMIT` were extracted to
-// `crate::agent_helpers` on 2026-06-30 (P2.2.5). Same source-of-truth,
+// `crate::agent_helpers` on (P2.2.5). Same source-of-truth,
 // re-exported below so existing callers (e.g.
 // `hermix_agent::agent_loop::ToolRegistry` in hermix-cron and the test
 // files) keep working unchanged.
@@ -76,7 +74,6 @@ pub use crate::agent_helpers::{
 // ---------------------------------------------------------------------------
 // OAuth credential + refresh manager (extracted 2026-07-04)
 // ---------------------------------------------------------------------------
-//
 // `OAuthRefresh` + `OAuthStoreCredential` moved to `crate::oauth_refresh`.
 // Kept as `pub use` aliases so `hermix_agent::agent_loop::OAuthRefresh`
 // remains a valid import path for any external consumer (e.g. hermix-cron,
@@ -96,20 +93,16 @@ mod types;
 
 // ---------------------------------------------------------------------------
 /// The main agent loop.
-///
-/// Owns the configuration, a tool registry, and an LLM provider.
+/// /// Owns the configuration, a tool registry, and an LLM provider.
 /// Call `run()` or `run_stream()` to begin an autonomous loop.
-///
-/// ## Lock ordering
-///
-/// When acquiring multiple locks, always follow this order to prevent deadlocks:
+/// /// ## Lock ordering
+/// /// When acquiring multiple locks, always follow this order to prevent deadlocks:
 /// 1. `tool_registry` (RwLock)
 /// 2. `plugin_manager` (Mutex)
 /// 3. `focus_stack` (Mutex)
 /// 4. `compression` (Mutex)
 /// 5. Other Mutex fields (evolution_counters, tool_error_counter, etc.)
-///
-/// Never hold a lock from a later tier while calling code that acquires
+/// /// Never hold a lock from a later tier while calling code that acquires
 /// an earlier-tier lock.
 pub struct AgentLoop {
     pub config: AgentConfig,
@@ -137,8 +130,7 @@ pub struct AgentLoop {
     /// Optional in-process sub-agent orchestrator. When set, `delegate_task`
     /// tool calls are executed by the orchestrator (spawn/timeout/cancel/
     /// lineage) instead of simply returning a signal envelope.
-    ///
-    /// `pub(crate)` so `tool_executor.rs` can read it from the moved
+    /// /// `pub(crate)` so `tool_executor.rs` can read it from the moved
     /// `execute_tool_calls` method (2026-07-04). The field stays
     /// crate-private — external callers must use the agent builder API.
     pub(crate) sub_agent_orchestrator: Option<Arc<crate::sub_agent_orchestrator::SubAgentOrchestrator>>,
@@ -156,8 +148,7 @@ pub struct AgentLoop {
     /// blocks as a `## Memory` section of the system prompt. This is
     /// the **only** read path; the legacy `MemoryManager::prefetch_all`
     /// markdown path was removed in Phase 16.
-    ///
-    /// Phase 17: the **write** path is also wired through this
+    /// /// Phase 17: the **write** path is also wired through this
     /// struct's sibling `plugin_manager: PluginManager`. The seven
     /// write-path helpers (`memory_sync`, `notify_memory_writes`,
     /// `notify_delegations`, `memory_on_turn_start`,
@@ -182,8 +173,7 @@ pub struct AgentLoop {
     /// it on completion; a `FocusConclusion` is auto-generated and
     /// fed to the memory router for long-term indexing. See
     /// `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §2.2 + M1.
-    ///
-    /// The stack starts empty; callers push the session root
+    /// /// The stack starts empty; callers push the session root
     /// (one frame per session) at `run()` start via
     /// `note_session_started`, and sub-agents push/pop via
     /// `note_delegation_start` / `note_delegation_end`.
@@ -203,7 +193,7 @@ pub struct AgentLoop {
     /// Latest compressed context summary from the most recent compaction.
     /// Stored here so it can be included in AgentResult for persistence.
     latest_compressed_summary: std::sync::Mutex<Option<String>>,
-    /// 2026-06-26 (A): raw `turns_to_summarize` from the most recent
+    /// (A): raw `turns_to_summarize` from the most recent
     /// compression, captured by `ContextCompressor::compress` before
     /// it mutated the conversation. `local_agent_service` reads this
     /// in the same `persist_session_with_summary` transaction that
@@ -211,7 +201,7 @@ pub struct AgentLoop {
     /// `SessionPersistence::archive_compressed_turns` so the
     /// original wording is durable in `compression_archives`.
     latest_compression_archived_turns: std::sync::Mutex<Option<Vec<Message>>>,
-    /// 2026-06-26 (B): metrics from the most recent compression
+    /// (B): metrics from the most recent compression
     /// (original/compressed turns + tokens + savings). Forwarded
     /// alongside the archived turns so `save_session_atomic` can
     /// write `compression_summary_history` in the same transaction.
@@ -232,8 +222,7 @@ pub struct AgentLoop {
     /// the old slot (the spawned task keeps running in the
     /// background but its outcome is discarded — see
     /// `CompressionInFlight` design notes in `types.rs`).
-    ///
-    /// `std::sync::Mutex` because the slot is only ever touched from
+    /// /// `std::sync::Mutex` because the slot is only ever touched from
     /// the single-threaded agent loop body — no contention, so we
     /// avoid the `Send`/`Sync` tax of `tokio::sync::Mutex` here.
     compression_in_flight: std::sync::Mutex<Option<types::CompressionInFlight>>,
@@ -260,7 +249,7 @@ pub struct AgentLoop {
     /// `resolve_initial_system_prompt` compares this against `context_epoch`
     /// to detect that a memory/skill/context-file store mutated since the
     /// stored prompt was frozen, forcing a rebuild instead of reusing the
-    /// stale frozen string. (2026-07-23: makes `memory` tool edits take
+    /// stale frozen string. (makes `memory` tool edits take
     /// effect in-session instead of only after a session restart.)
     stored_prompt_epoch: std::sync::atomic::AtomicU64,
     /// Optional embedding provider for vector recall in memory prefetch.
@@ -290,13 +279,11 @@ impl Drop for AgentLoop {
 /// logic uses. Lifted out of [`LoopState`] so the cooldown/throttle
 /// rules live in one place (and can be unit-tested without spinning
 /// up an `AgentLoop`).
-///
-/// Phase 5 (2026-07-03): replaces 3 fields (`context_pressure_warned_at`,
+/// /// Phase 5 (2026-07-03): replaces 3 fields (`context_pressure_warned_at`,
 /// `context_pressure_last_warn_at`, `context_pressure_last_warn_percent`)
 /// scattered across `LoopState`. The shared [`should_emit_warning`]
 /// method now owns the cooldown + tier-upgrade + percent-step rules.
-///
-/// Physically split to `context_pressure.rs` (2026-07-04); re-exported
+/// /// Physically split to `context_pressure.rs` (2026-07-04); re-exported
 /// here so existing `state.context_pressure.*` call paths compile unchanged.
 pub use crate::context_pressure::ContextPressureMonitor;
 
@@ -308,17 +295,15 @@ pub use crate::context_pressure::ContextPressureMonitor;
 /// them into one struct:
 /// - shrinks `LoopState` from 14 to 10 fields,
 /// - shrinks `process_post_response` from 7 to 3 mutable args (3 scalars
-///   stay as primitives; the bookkeeping is now `&mut CostGuard`),
+/// stay as primitives; the bookkeeping is now `&mut CostGuard`),
 /// - keeps the 4-field atomic-mutation at the cost-guard code path
-///   where it belongs (a single helper can read + write the state),
+/// where it belongs (a single helper can read + write the state),
 /// - lets `publish_from` drop another 4 args.
-///
-/// The 4 fields stay co-located on `self.cost_guard` and mutate in
+/// /// The 4 fields stay co-located on `self.cost_guard` and mutate in
 /// place via the `record_usage` / `apply_route_downgrade` methods.
 /// Reset / `Default` produce the same all-zeros state as before, so
 /// `LoopState::default()` semantics are unchanged.
-///
-/// Physically split to `cost_guard.rs` (2026-07-04); re-exported here
+/// /// Physically split to `cost_guard.rs` (2026-07-04); re-exported here
 /// so existing `state.cost_guard.*` call paths compile unchanged.
 /// `TurnRuntimeRoute` was lifted to `pub(crate)` so the new module
 /// can name it; the field visibility stays `pub(crate)` so the
@@ -330,21 +315,19 @@ pub(crate) use crate::cost_routing::RouteState;
 /// Phase 5 (2026-07-03): per-loop retry counters consolidated into one
 /// struct so `LoopState` doesn't have to carry 3 sibling `u32` fields and
 /// `publish_from` doesn't have to take 3 sibling `u32` arguments.
-///
-/// All three counters follow the same shape:
+/// /// All three counters follow the same shape:
 /// - `bump_*` saturating-increments and returns the new value.
 /// - `reset_*` clears the counter (called on the success path).
 /// - The `< max` / `>= max` comparison stays at the call site because
-///   the action on max differs between the three (finalize vs.
-///   continue-with-error vs. fall-through) — folding that decision
-///   into the helper would force one path on all three.
-///
-/// Physically split to `retry_counters.rs` (2026-07-04); re-exported
+/// the action on max differs between the three (finalize vs.
+/// continue-with-error vs. fall-through) — folding that decision
+/// into the helper would force one path on all three.
+/// /// Physically split to `retry_counters.rs` (2026-07-04); re-exported
 /// here so existing `state.retry_counters.*` call paths compile
 /// unchanged.
 pub use crate::retry_counters::RetryCounters;
 
-/// Phase 5 (2026-07-04 follow-up): per-run LLM-result caches consolidated
+/// Phase 5 (follow-up): per-run LLM-result caches consolidated
 /// into one struct. The two sibling `Option` fields
 /// (`last_checkpoint_messages`, `last_content_with_tools`) used to live
 /// directly on `LoopState` and were bridged back from `run()`'s
@@ -352,24 +335,22 @@ pub use crate::retry_counters::RetryCounters;
 /// into one struct:
 /// - shrinks `LoopState` by 2 fields (8 → 6),
 /// - shrinks `publish_from` from 3 args to 1 arg (only `total_turns`
-///   remains bridged),
+/// remains bridged),
 /// - lets `run()` mutate the caches in place via
-///   `store_checkpoint` / `store_content_with_tools` /
-///   `take_content_with_tools` instead of accumulating to a local
-///   alias and re-publishing each iteration,
+/// `store_checkpoint` / `store_content_with_tools` /
+/// `take_content_with_tools` instead of accumulating to a local
+/// alias and re-publishing each iteration,
 /// - collapses 2 helper-arg slots (`&mut Option<String>` for
-///   `last_content_with_tools`) to 1 (`&mut MessageCache`).
-///
-/// The 2 fields stay co-located on `self.message_cache` and mutate
+/// `last_content_with_tools`) to 1 (`&mut MessageCache`).
+/// /// The 2 fields stay co-located on `self.message_cache` and mutate
 /// in place. Reset / `Default` produce the same all-`None` state as
 /// before, so `LoopState::default()` semantics are unchanged.
-///
-/// Physically split to `message_cache.rs` (2026-07-04); re-exported
+/// /// Physically split to `message_cache.rs` (2026-07-04); re-exported
 /// here so existing `state.message_cache.*` call paths compile
 /// unchanged.
 pub use crate::message_cache::MessageCache;
 
-/// Phase 5 (2026-07-04 follow-up): turn-level timing bookkeeping consolidated
+/// Phase 5 (follow-up): turn-level timing bookkeeping consolidated
 /// into one struct. The two sibling `u64` fields (`total_api_time_ms`,
 /// `total_tool_time_ms`) used to live directly on `LoopState` and were
 /// bridged back from `run()`'s loop-locals via 2 sibling arguments in
@@ -377,18 +358,16 @@ pub use crate::message_cache::MessageCache;
 /// - shrinks `LoopState` by 2 fields (10 → 8),
 /// - shrinks `publish_from` from 5 args to 3 args,
 /// - lets `run()` mutate the timings in place via `record_api` /
-///   `record_tool` instead of accumulating to a local `_total_*` and
-///   re-publishing each iteration (the local accumulation was the
-///   pre-extraction pattern that the Phase 1.1 bridge set up for
-///   `total_turns`; timings don't need that bridge because nothing
-///   reads `state.timings` from outside this file — they're just
-///   collected for future inspection / metrics).
-///
-/// The 2 fields stay co-located on `self.timings` and mutate in
+/// `record_tool` instead of accumulating to a local `_total_*` and
+/// re-publishing each iteration (the local accumulation was the
+/// pre-extraction pattern that the Phase 1.1 bridge set up for
+/// `total_turns`; timings don't need that bridge because nothing
+/// reads `state.timings` from outside this file — they're just
+/// collected for future inspection / metrics).
+/// /// The 2 fields stay co-located on `self.timings` and mutate in
 /// place. Reset / `Default` produce the same all-zeros state as
 /// before, so `LoopState::default()` semantics are unchanged.
-///
-/// Physically split to `turn_timings.rs` (2026-07-04); re-exported
+/// /// Physically split to `turn_timings.rs` (2026-07-04); re-exported
 /// here so existing `state.timings.*` call paths compile unchanged.
 pub use crate::turn_timings::TurnTimings;
 
@@ -398,8 +377,7 @@ pub use crate::turn_timings::TurnTimings;
 
 impl AgentLoop {
     /// Populate [`AgentConfig::stored_system_prompt`] from SQLite (`sessions.system_prompt`) for session continuation.
-    ///
-    /// Call before [`AgentLoop::run`] when resuming a gateway/CLI session so Anthropic prefix cache matches Python.
+    /// /// Call before [`AgentLoop::run`] when resuming a gateway/CLI session so Anthropic prefix cache matches Python.
     pub fn hydrate_stored_system_prompt_from_hermes_home(
         config: &mut AgentConfig,
         hermix_home: &std::path::Path,
@@ -432,8 +410,7 @@ impl AgentLoop {
     }
 
     /// P3-2: Notify upstream listeners that the loop entered a new phase.
-    ///
-    /// Calls the `on_loop_phase_changed` callback if set. The callback
+    /// /// Calls the `on_loop_phase_changed` callback if set. The callback
     /// receives `(phase_name, stage_name, turn)` as `&str, &str, u32`.
     /// The upstream layer (e.g. `LocalAgentService`) bridges this into
     /// a `LoopPhaseChanged` WS event via the orchestration bus.
@@ -453,8 +430,7 @@ impl AgentLoop {
     }
 
     /// P3-5: Notify upstream listeners that the agent loop is finalizing.
-    ///
-    /// Calls the `on_task_complete` callback if set. The callback
+    /// /// Calls the `on_task_complete` callback if set. The callback
     /// receives `(success, task_id)` where `success` is true for
     /// natural completion and false for errors/interrupts.
     /// The upstream layer uses this to transition the Task status
@@ -516,12 +492,10 @@ impl AgentLoop {
     /// to the configured cheap model), and decides between
     /// `Finalize` (no tool calls → caller returns) and `Continue`
     /// (tool calls → caller falls through to `execute_tool_calls`).
-    ///
-    /// `stream_mode` is `true` for `run_stream()` — the helper uses
+    /// /// `stream_mode` is `true` for `run_stream()` — the helper uses
     /// this to emit a stream-specific `tracing` line and to forward
     /// the `finish_reason` through the finalize path.
-    ///
-    /// Phase 5 (2026-07-03): 7 mutable scalar args collapsed to
+    /// /// Phase 5 (2026-07-03): 7 mutable scalar args collapsed to
     /// `&mut CostGuard` + `&mut Option<String>` (4 args shrunk to 1
     /// struct). `record_usage` / `evaluate_thresholds` / `install_downgrade`
     /// on [`CostGuard`] absorb the 4-field atomic-mutation, so the
@@ -530,8 +504,7 @@ impl AgentLoop {
     /// helper signature because they're stored on `LoopState` (used by
     /// the codex-ack continuation logic on the next turn) and not on
     /// `CostGuard`.
-    ///
-    /// Phase 5 (2026-07-04 follow-up): `&mut Option<String>` for
+    /// /// Phase 5 (follow-up): `&mut Option<String>` for
     /// `last_content_with_tools` collapsed to `&mut MessageCache`,
     /// dropping the helper to 6 mutable args (the `Option<String>` is
     /// now reached via `cache.store_content_with_tools(...)` inside
@@ -574,16 +547,15 @@ impl AgentLoop {
     /// the assistant content came bundled with tool calls (used by the
     /// codex-ack continuation logic on the next turn), and reports
     /// whether any prior tool result exists in the history.
-    ///
-    /// Returns the three locals the caller needs:
+    /// /// Returns the three locals the caller needs:
     /// - `history_includes_tool`: did any earlier turn leave a `Tool`
-    ///   message in the context? Used by
-    ///   `decide_empty_response` to know whether tool
-    ///   execution is part of the protocol context.
+    /// message in the context? Used by
+    /// `decide_empty_response` to know whether tool
+    /// execution is part of the protocol context.
     /// - `assistant_msg`: the LLM's response, freshly appended to
-    ///   the context.
+    /// the context.
     /// - `tool_calls`: the LLM's claimed tool calls, cloned for the
-    ///   caller to dispatch / dedup.
+    /// caller to dispatch / dedup.
     #[allow(clippy::type_complexity)]
     pub(crate) fn prepare_assistant_turn(
         &self,
@@ -618,8 +590,7 @@ impl AgentLoop {
     /// match arm — the only difference between the two call sites
     /// was the tracing message text. This helper centralises the
     /// match and parameterises the stream-mode log suffix.
-    ///
-    /// Returns `true` when a `ContinueWithUserMsg` or
+    /// /// Returns `true` when a `ContinueWithUserMsg` or
     /// `ContinueWithSystemNudge` variant injected a message into the
     /// context — the caller should `continue;` to restart the loop
     /// with the injected message. Returns `false` when the variant
@@ -642,7 +613,7 @@ impl AgentLoop {
         )
     }
 
-    /// v2 (2026-06-21): most recent archive refs produced by
+    /// most recent archive refs produced by
     /// `auto_compress_if_over_threshold`. Empty when the context has
     /// never crossed the 80% pressure threshold. Frontend uses this
     /// to render the "see archived context" affordance.
@@ -883,13 +854,11 @@ impl AgentLoop {
     // -- M5 ACUI emit ------------------------------------------------------
 
     /// Emit an ACUI directive to upstream listeners (if any).
-    ///
-    /// No-op if no `on_acui_directive` callback was wired (e.g. unit
+    /// /// No-op if no `on_acui_directive` callback was wired (e.g. unit
     /// tests, batched runs). The directive is JSON-serialized and passed
     /// to the callback as a string; the upstream layer is responsible
     /// for deserializing and forwarding it as a `StreamEvent::Acui`.
-    ///
-    /// This method never blocks and never returns an error — the ACUI
+    /// /// This method never blocks and never returns an error — the ACUI
     /// pipeline is best-effort. A failure in the callback is logged
     /// and swallowed (the agent keeps running).
     pub fn emit_acui(&self, directive: AcuiDirective) {
@@ -919,21 +888,20 @@ impl AgentLoop {
     /// Build a default router (KeywordRouter + AlwaysInclude).
     /// Threads `self.always_include` through so user-configured
     /// always-include names actually reach the `AlwaysInclude` wrapper.
-    /// Pre-2026-07-04: this method took no `self` and ignored the
+    /// Pre-this method took no `self` and ignored the
     /// field — `always_include` was a write-only field.
     pub fn default_tool_router(&self) -> Arc<dyn ToolSchemaRouter> {
         crate::acui_dispatch::default_tool_router(&self.always_include)
     }
 
     /// Resolve the tool schemas to send to the LLM this turn.
-    ///
-    /// Behavior:
+    /// /// Behavior:
     /// - If `tool_router` is `None`: return `candidates` unchanged.
     /// - If `tool_router` is `Some`: build a [`TurnContext`] from the
-    ///   last user message + recent history, call `route`, and return
-    ///   the routed schemas. The `always_include` whitelist is enforced
-    ///   by the router itself if the caller wrapped it with
-    ///   [`AlwaysInclude`]; this method does not re-wrap.
+    /// last user message + recent history, call `route`, and return
+    /// the routed schemas. The `always_include` whitelist is enforced
+    /// by the router itself if the caller wrapped it with
+    /// [`AlwaysInclude`]; this method does not re-wrap.
     pub fn route_tools(
         &self,
         candidates: Vec<ToolSchema>,
@@ -984,8 +952,7 @@ impl AgentLoop {
 
     /// Queue mid-run user guidance (Python `AIAgent.steer`).
     /// Queue mid-run user guidance (Python `AIAgent.steer`).
-    ///
-    /// Returns `false` when the text is empty/whitespace-only.
+    /// /// Returns `false` when the text is empty/whitespace-only.
     pub fn steer(&self, text: &str) -> bool {
         crate::steer::steer(&self.pending_steer, text)
     }
@@ -996,7 +963,6 @@ impl AgentLoop {
     }
 
     // ── M1: FocusStack plumbing ────────────────────────────────────
-    //
     // The agent loop owns a per-session `FocusStack<SessionFrame>`.
     // Tool-dispatch paths can call `note_delegation_start` to push a
     // frame for each `delegate_task` invocation and
@@ -1017,8 +983,7 @@ impl AgentLoop {
     /// `sub_agent_id` is the UUID the orchestrator / sub-agent
     /// returns; pass an empty string if not yet known (it will be
     /// matched by depth in `note_delegation_end`).
-    ///
-    /// Returns the frame id, or `None` if the lock is poisoned.
+    /// /// Returns the frame id, or `None` if the lock is poisoned.
     pub fn note_delegation_start(
         &self,
         task: impl Into<String>,
@@ -1036,8 +1001,7 @@ impl AgentLoop {
     /// `sub_agent_id` (or the topmost delegation frame if
     /// `sub_agent_id` is empty). The popped frame is `mark_clear`-ed
     /// first so the next `pop` generates a `FocusConclusion`.
-    ///
-    /// Returns the depth the popped frame was at, or `None` if no
+    /// /// Returns the depth the popped frame was at, or `None` if no
     /// matching frame was on the stack.
     pub fn note_delegation_end(
         &self,
@@ -1058,11 +1022,9 @@ impl AgentLoop {
     /// Drain pending `FocusConclusion`s from the focus stack and
     /// forward them to the long-term memory backend. Returns the
     /// number of conclusions processed.
-    ///
-    /// No-op if `memory_router` is `None` (conclusions are still
+    /// /// No-op if `memory_router` is `None` (conclusions are still
     /// drained from the focus stack — they don't pile up).
-    ///
-    /// M1.6.4: this now actually persists via the router's
+    /// /// M1.6.4: this now actually persists via the router's
     /// `upsert_conclusion` fan-out. Backends that don't implement
     /// the write surface (8 HTTPS plugins) return
     /// `MemoryError::NotImplemented` and the router skips them
@@ -1075,7 +1037,7 @@ impl AgentLoop {
             self.memory_router.as_ref(),
             &session_id,
         );
-        // 2026-07-14: surface drained focus conclusions as "总结" rows.
+        // surface drained focus conclusions as "总结" rows.
         if count > 0 && !self.config.quiet_mode {
             self.emit_memory_update(&crate::memory_prefetch::MemoryWriteRecord {
                 action: crate::memory_prefetch::MemoryAction::Summarize,
@@ -1132,7 +1094,7 @@ impl AgentLoop {
             assistant,
             session_id,
         );
-        // 2026-07-14: surface per-turn fact/style writes as a single
+        // surface per-turn fact/style writes as a single
         // batched "记住了 N 条事实/偏好" chat row so the user can see
         // what the agent is remembering without flooding the stream.
         if !records.is_empty() && !self.config.quiet_mode {
@@ -1163,8 +1125,7 @@ impl AgentLoop {
     /// and on `on_session_end`. The `frame_ids` and `summary` are
     /// extracted from the router's embedded backend so this method
     /// is a no-op when the embedded backend is absent.
-    ///
-    /// Designed to be cheap: the embedded SQLite path is O(visible
+    /// /// Designed to be cheap: the embedded SQLite path is O(visible
     /// frames) on `total_turns.is_multiple_of(N)` boundary calls,
     /// and O(1) on all other turns.
     pub(crate) fn maybe_freeze_snapshot(&self, session_id: &str, turn_number: u32) {
@@ -1187,7 +1148,7 @@ impl AgentLoop {
             self.memory_router.as_deref(),
             turn_number,
         );
-        // 2026-07-14: surface the cleanup so the user sees stale memory
+        // surface the cleanup so the user sees stale memory
         // being pruned (the "删除" half of their request).
         if hidden > 0 && !self.config.quiet_mode {
             self.emit_memory_update(&crate::memory_prefetch::MemoryWriteRecord {
@@ -1207,7 +1168,7 @@ impl AgentLoop {
             tool_calls,
             results,
         );
-        // 2026-07-14: surface explicit `memory` tool add/replace/remove
+        // surface explicit `memory` tool add/replace/remove
         // as precise write/update/delete chat rows.
         for rec in &records {
             self.emit_memory_update(rec);
@@ -1223,7 +1184,7 @@ impl AgentLoop {
             results,
             self.consciousness_tracker.as_ref(),
         );
-        // 2026-07-14: surface delegation summaries (sub-task conclusions
+        // surface delegation summaries (sub-task conclusions
         // archived to long-term memory) as "总结" chat rows.
         if drained > 0 && !self.config.quiet_mode {
             self.emit_memory_update(&crate::memory_prefetch::MemoryWriteRecord {
@@ -1249,14 +1210,12 @@ impl AgentLoop {
     /// scheduler that decides whether to emit a `memory_recall`
     /// event this turn (so the user sees "the agent thought of N
     /// related facts"), and updates the next-turn drift baseline.
-    ///
-    /// The caller (`run_loop::do_pre_turn_setup`) injects the
+    /// /// The caller (`run_loop::do_pre_turn_setup`) injects the
     /// rendered `RecallPlan` into message history as a system
     /// message via `ctx.add_message(Message::system(...))`, so the
     /// LLM can actually use the recalled facts. We also emit the
     /// visibility event so the user sees "thought of N items".
-    ///
-    /// Returns `Some(RecallPlan)` if a recall was emitted; the
+    /// /// Returns `Some(RecallPlan)` if a recall was emitted; the
     /// caller stores the keys in `state.last_recall_keys` for the
     /// next drift check.
     pub(crate) fn maybe_recall(
@@ -1291,7 +1250,7 @@ impl AgentLoop {
             None => return None,
         };
 
-        // 2026-07-14: emit `memory_recall` so the user sees the
+        // emit `memory_recall` so the user sees the
         // agent thought of something. The transport event carries
         // a small preview (top-3 keys + char count); the full plan
         // is only injected into the system prompt by
@@ -1342,16 +1301,16 @@ impl AgentLoop {
     ) -> (String, bool) {
         let snapshot = self.tool_error_counter.lock().ok().map(|c| c.snapshot());
         let context_epoch = self.context_epoch.load(std::sync::atomic::Ordering::SeqCst);
-        // ★ 2026-07-23: a memory/skill/context-file store mutated since the
-        //   frozen `config.stored_system_prompt` was built (epoch mismatch),
-        //   so force a fresh build instead of reusing the stale frozen string.
-        //   `config` is owned and the run-loop is `&self`, so we cannot update
-        //   `stored_system_prompt` in place. Instead the rebuild re-reads the
-        //   Context layer from disk via the `PromptCache` epoch key; the stable
-        //   + volatile layers remain cache hits, so the only real cost is two
-        //   small file reads on the first turn after the mutation, then
-        //   negligible. The LLM provider still prefix-caches by prompt content,
-        //   so rebuilds across turns do not invalidate the upstream cache.
+        // ★ a memory/skill/context-file store mutated since the
+        // frozen `config.stored_system_prompt` was built (epoch mismatch),
+        // so force a fresh build instead of reusing the stale frozen string.
+        // `config` is owned and the run-loop is `&self`, so we cannot update
+        // `stored_system_prompt` in place. Instead the rebuild re-reads the
+        // Context layer from disk via the `PromptCache` epoch key; the stable
+        // + volatile layers remain cache hits, so the only real cost is two
+        // small file reads on the first turn after the mutation, then
+        // negligible. The LLM provider still prefix-caches by prompt content,
+        // so rebuilds across turns do not invalidate the upstream cache.
         let has_frozen_prompt = self
             .config
             .stored_system_prompt
@@ -1405,19 +1364,16 @@ impl AgentLoop {
     }
 
     /// Compress when total chars exceed 80% of the context budget (Python auto-compaction).
-    ///
-    /// Uses the advanced LLM-powered compressor when available (set via
+    /// /// Uses the advanced LLM-powered compressor when available (set via
     /// `with_compressor`), falling back to the simple character-based
     /// compressor otherwise.
-    ///
-    /// v2 (2026-06-21): before the LLM compressor replaces the middle
+    /// /// before the LLM compressor replaces the middle
     /// of the conversation with a summary, we **archive** the same
     /// slice to disk via [`archive_context_section`]. The summary
     /// becomes lossy-by-design; the archive file is the lossless
     /// evidence the user can re-open from the chat UI. The archive
     /// refs are stashed in `last_archive_refs` for the frontend.
-    ///
-    /// v3 (2026-06-29): also emit `compaction_status` snapshots at
+    /// /// also emit `compaction_status` snapshots at
     /// the pressure-detected and post-attempt boundaries so the
     /// `CompactionStatusBanner` can render in real time. We clone
     /// the snapshot before dropping the compressor lock so the
@@ -1446,20 +1402,19 @@ impl AgentLoop {
     /// summary call**: the heavy work runs in a `tokio::spawn` task
     /// and the result is rolled in by
     /// [`poll_in_flight_compression`] on the next turn.
-    ///
-    /// Decision matrix:
+    /// /// Decision matrix:
     /// - pressure < 50% — no-op (return immediately).
     /// - pressure >= 50% and compressor wired and slot empty —
-    ///   `tokio::spawn` a full compress; the agent loop body
-    ///   returns immediately.
+    /// `tokio::spawn` a full compress; the agent loop body
+    /// returns immediately.
     /// - pressure >= 85% (red line) — fall through to the
-    ///   synchronous fast-compress path so the pressure drops
-    ///   before the next LLM call. Cancels any in-flight spawn
-    ///   by overwriting the slot with `None`.
+    /// synchronous fast-compress path so the pressure drops
+    /// before the next LLM call. Cancels any in-flight spawn
+    /// by overwriting the slot with `None`.
     /// - pressure >= 50% and slot already populated — do not
-    ///   double-spawn. Fall through to the synchronous fast path
-    ///   only if we're at the red line; otherwise just return so
-    ///   the existing spawn can finish on its own.
+    /// double-spawn. Fall through to the synchronous fast path
+    /// only if we're at the red line; otherwise just return so
+    /// the existing spawn can finish on its own.
     pub(crate) async fn maybe_spawn_compression(&self, ctx: &mut ContextManager) {
         let total_tokens = ctx.total_tokens();
         let max_c = ctx.max_context_tokens().max(1);
@@ -1552,8 +1507,7 @@ impl AgentLoop {
     /// finished. Called at the top of every `do_pre_turn_setup` so
     /// the agent loop sees the compressed state by the time it
     /// builds the next LLM request.
-    ///
-    /// `wait_for_finish` controls whether we await the join handle
+    /// /// `wait_for_finish` controls whether we await the join handle
     /// with a timeout. The high-pressure red-line path
     /// ([`maybe_spawn_compression`]) sets it to `true` after
     /// cancelling the spawn, but in practice the high-pressure path
@@ -1570,7 +1524,6 @@ impl AgentLoop {
         // The apply path inside `try_collect_in_flight` splices the
         // messages; this method forwards the rest of the outcome
         // into the agent loop's persistence-bound slots.
-        //
         // We do this by re-locking the compressor: the spawn task
         // already wrote the engine-side fields, and the apply path
         // is on the same thread as the agent loop body, so a brief
@@ -1651,7 +1604,7 @@ impl AgentLoop {
         // because the spawn task already ran `record_outcome` on
         // the same engine.
         let tokens_saved = guard.last_metrics().tokens_saved;
-        // 2026-07-22: derive `phase` from the engine's own metrics
+        // derive `phase` from the engine's own metrics
         // — the spawn path doesn't get an explicit "complete"/"failed"
         // label from the caller, so we infer it. `summary_errors == 0`
         // means success (matches the post-snap logic in
@@ -1666,7 +1619,7 @@ impl AgentLoop {
         crate::message_helpers::emit_status(&self.config, &self.callbacks, event_type, message)
     }
 
-    /// 2026-07-14: emit a `usage_update` status event carrying the
+    /// emit a `usage_update` status event carrying the
     /// per-turn token breakdown (cache hits / cache writes /
     /// reasoning / prompt / completion) so the front-end cache-hit
     /// chip can update in real time. Bridges through the same
@@ -1674,8 +1627,7 @@ impl AgentLoop {
     /// hermix-server handler in `lib.rs` can convert it to the
     /// `StreamEvent::UsageUpdate` variant without needing a new
     /// callback type.
-    ///
-    /// Honors `quiet_mode` like `emit_status` so log-replay jobs
+    /// /// Honors `quiet_mode` like `emit_status` so log-replay jobs
     /// don't spam the WS stream with usage chips.
     pub(crate) fn emit_usage_update(&self, usage: &hermix_core::UsageStats) {
         if self.config.quiet_mode {
@@ -1693,7 +1645,7 @@ impl AgentLoop {
         }
     }
 
-    /// 2026-07-14: emit a `memory_update` status event carrying one
+    /// emit a `memory_update` status event carrying one
     /// memory mutation (write/update/delete/summarize/cleanup) so the
     /// front-end can render it inline in the conversation. Bridges
     /// through the same `status_callback` path that `usage_update`
@@ -1761,14 +1713,12 @@ impl AgentLoop {
     }
 
     /// Apply one streaming [`StreamChunk`] during [`Self::collect_stream_llm_response`].
-    ///
-    /// `think_parser` is a stateful splitter that pulls `<think>...</think>` text
+    /// /// `think_parser` is a stateful splitter that pulls `<think>...</think>` text
     /// out of the visible content stream in real time and routes it to
     /// `reasoning_content` instead. Without this, providers that embed their
     /// reasoning in `delta.content` (MiniMax M2.7, Qwen, DeepSeek-R1) would
     /// leak the whole thinking monologue into the user-visible reply.
-    ///
-    /// `tool_call_sanitizer` is a stateful redactor that pulls raw
+    /// /// `tool_call_sanitizer` is a stateful redactor that pulls raw
     /// `<minimax:tool_call>…</minimax:tool_call>` /
     /// `<invoke name="…">…</invoke>` blocks out of the *clean* (post-think)
     /// text. Without it, providers that emit tool calls as raw XML inside
@@ -1966,8 +1916,7 @@ impl AgentLoop {
 
 
     /// Run the agent loop with streaming.
-    ///
-    /// Uses the LLM provider's streaming API and invokes `on_chunk` for each
+    /// /// Uses the LLM provider's streaming API and invokes `on_chunk` for each
     /// incremental delta. The stream is collected into a complete response
     /// before tool execution proceeds.
     /// Remove duplicate tool calls that share the same function name and arguments.
@@ -2023,34 +1972,28 @@ impl AgentLoop {
     /// Build a per-tool hint that we append to a user-denial reason so the
     /// LLM, on its next turn, has a concrete suggestion for *which* tool
     /// would have been more appropriate.
-    ///
-    /// ## Why this exists
-    ///
-    /// Regression (2026-06-14): user said "看下 D:\data 下有啥". The model
+    /// /// ## Why this exists
+    /// /// Regression (2026-06-14): user said "看下 D:\data 下有啥". The model
     /// chose `computer_use` with `action=screenshot`. The user denied.
     /// The model then claimed "I have no terminal / list_files / read_file
     /// tool" — even though all three are registered and pinned to the top
     /// of the `<tools>` block.
-    ///
-    /// Two layers of defense had been added (descriptions + system-prompt
+    /// /// Two layers of defense had been added (descriptions + system-prompt
     /// reminder) but neither was anchored to the deny path. By the time
     /// the user hits Deny, the model has already committed to its choice;
     /// a plain "User denied the tool call." gives it no signal to re-pick.
     /// The hint below is the *third* defense: when the user rejects,
     /// surface the right next move in the very tool-result message the
     /// model will read.
-    ///
-    /// ## Design constraints
-    ///
-    /// - **Short** — the tool-result string is fed back to the LLM, and
-    ///   every extra token here competes with the user's original prompt
-    ///   in the next turn. We aim for one sentence, not a paragraph.
+    /// /// ## Design constraints
+    /// /// - **Short** — the tool-result string is fed back to the LLM, and
+    /// every extra token here competes with the user's original prompt
+    /// in the next turn. We aim for one sentence, not a paragraph.
     /// - **Tool-specific** — generic "consider another tool" hints are
-    ///   too vague. We map the most-mis-picked tools to the right
-    ///   replacement so the LLM has a concrete noun to call.
+    /// too vague. We map the most-mis-picked tools to the right
+    /// replacement so the LLM has a concrete noun to call.
     /// Resolve the pre-tool-dispatch hook for every tool call up front.
-    ///
-    /// When `AgentCallbacks::on_pre_tool_dispatch` is set, this invokes the
+    /// /// When `AgentCallbacks::on_pre_tool_dispatch` is set, this invokes the
     /// hook once per tool call. `Allow` and `Deny` decisions resolve
     /// synchronously; `AwaitApproval` blocks on a `oneshot::Receiver` until
     /// the upstream layer (e.g. `LocalAgentService`) sends a verdict. The
@@ -2245,14 +2188,12 @@ pub(crate) struct FileChangeInfo {
 /// exhausted. Extracted here so the two retry loops can keep their
 /// own transport (sync vs stream-first) and call sites can `match`
 /// on the resulting action.
-///
-/// The helper takes `r` by value because the caller is going to
+/// /// The helper takes `r` by value because the caller is going to
 /// hand ownership of the response to either a downstream consumer
 /// (`Break(r)`) or the context (the reasoning-retry branch already
 /// pushed `r.message` onto `ctx` before returning `RetryReasoning`,
 /// so `r` itself is dropped on the caller side).
-///
-/// `pub(crate)` so the `mod tests` block below can `match` on the
+/// /// `pub(crate)` so the `mod tests` block below can `match` on the
 /// variants; an impl-block-local enum would be private to the
 /// `AgentLoop` impl and unreachable from tests.
 #[derive(Debug)]
@@ -2262,8 +2203,7 @@ pub(crate) enum PostLlmAction {
     Break(hermix_core::LlmResponse),
     /// Reasoning-only response; the message has been pushed onto
     /// `ctx` and the caller should re-enter the retry loop.
-    ///
-    /// 2026-07-09: No longer constructed — reasoning-only responses
+    /// /// No longer constructed — reasoning-only responses
     /// now Break immediately. Kept for pattern-match exhaustiveness
     /// and future use.
     #[allow(dead_code)]
@@ -2430,7 +2370,6 @@ mod tests {
         // Phase 1 (2026-07-03): `LoopState::default` must produce a
         // zero-initialized struct that is `#[derive(Default)]` so the
         // refactor of `run()` / `run_stream()` can keep using `..Default::default()`.
-        //
         // Phase 5 (2026-07-04): `total_api_time_ms` / `total_tool_time_ms`
         // moved into `state.timings`; access path now `s.timings.*`.
         // `last_checkpoint_messages` / `last_content_with_tools` moved
@@ -2460,7 +2399,6 @@ mod tests {
         // Sanity: the per-turn counters can be updated without touching
         // unrelated state — required because `run()` and `run_stream()`
         // will both mutate these fields on every turn.
-        //
         // Phase 5 (2026-07-04): timings now use `state.timings.record_*`
         // (saturating-add) instead of a top-level `+= 1`. We exercise
         // the new path here and assert it doesn't bleed into other
@@ -2552,26 +2490,22 @@ mod tests {
         // locals back into `state` is what makes the future
         // `run_shared_loop(state, llm_caller)` extraction possible
         // (the shared body only sees `&mut LoopState`).
-        //
         // Phase 5 (2026-07-03): the `publish_from` bridge shrank from
         // 9 args to 5 args. The 4 cost-guard args (accumulated_usage /
         // session_cost_usd / cost_warned / forced_runtime_route) are
         // owned by `state.cost_guard` and are no longer bridged. The 3
         // retry-counter args and the 3 context-pressure args were
         // already removed in earlier Phase 5 sub-commits.
-        //
         // Phase 5 (2026-07-04, 1st follow-up): shrank from 5 args to
         // 3 args. The 2 timing args (`total_api_time_ms` /
         // `total_tool_time_ms`) are owned by `state.timings` and
         // mutated in place by `record_api` / `record_tool`.
-        //
         // Phase 5 (2026-07-04, 2nd follow-up): shrank from 3 args to
         // 1 arg. The 2 message-cache args
         // (`last_checkpoint_messages` / `last_content_with_tools`) are
         // owned by `state.message_cache` and mutated in place by
         // `store_checkpoint` / `store_content_with_tools`. We
         // exercise all 4 in-place paths in this test.
-        //
         // Phase 5 (2026-07-04, 3rd follow-up): the `publish_from`
         // helper is removed entirely. The single remaining arg
         // (`total_turns`) is written directly to `state.total_turns`
@@ -2630,7 +2564,7 @@ mod tests {
     #[test]
     pub(crate) fn test_agent_config_default() {
         let config = AgentConfig::default();
-        // 2026-07-13 (claude-era regression): `default_max_turns()`
+        // (claude-era regression): `default_max_turns()`
         // changed to 0 (= "unlimited", governed by ErrorLoop hard
         // stop / Cost Guard / LLM natural stop). Test was still
         // asserting 30. Aligning the assertion with the new contract;
@@ -2656,7 +2590,6 @@ mod tests {
     }
 
     // ── M1.6.5: build_session_summary regression tests ──
-    //
     // These exercise the helper that produces the session-level
     // FocusConclusion written to memory.db at session end. Without
     // this, single-shot sessions (no delegate_task) leave memory.db
@@ -3012,7 +2945,7 @@ mod tests {
         assert_eq!(seen.as_deref(), Some("deepseek/deepseek-v3.2"));
     }
 
-    /// 2026-06-29: end-to-end check that
+    /// end-to-end check that
     /// `auto_compress_if_over_threshold` emits at least one
     /// `compaction_status` snapshot (pre- and post-attempt) and that
     /// the snapshot carries the live pressure numbers. Mirrors the
@@ -3090,7 +3023,13 @@ mod tests {
                 .build(),
         );
         let mut cfg = CompressorConfig::default();
-        cfg.context_length = 1000;
+        // Match `context_length` to the ctx max below (100 tokens) so the
+        // engine's own `threshold_tokens` (100 * 0.8 = 80) agrees with the
+        // outer `ContextManager.pressure_threshold_tokens()` (also 80). When
+        // they disagreed (cfg 1000 vs ctx 100) the post-2026-07-22
+        // `should_compress` opt-out in `auto_compress_if_over_threshold`
+        // short-circuited before the post-attempt snapshot fired.
+        cfg.context_length = 100;
         cfg.threshold_percent = 0.8;
         cfg.quiet_mode = true;
         let compressor = ContextCompressor::new(cfg, aux);
@@ -3112,7 +3051,6 @@ mod tests {
         // threshold is the documented 80 tokens. The user message
         // needs to tokenise to > 80 — `estimate_tokens` divides by
         // 4, so 400 chars yields 100 tokens, comfortably above.
-        //
         // `compress()` requires `n_messages > protect_first_n + 4`
         // (7 messages by default), so we add several user+assistant
         // pairs to give the compressor real middle-turns to summarise.
@@ -3536,7 +3474,7 @@ mod tests {
         );
         let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.prompt_cache, agent.memory_router.as_deref(), "", &[], "gpt-4o", 0);
         assert!(prompt.contains("## Active Personality (coder)"));
-        // 2026-07-12: Localized to Chinese — verify the role label is present.
+        // Localized to Chinese — verify the role label is present.
         assert!(prompt.contains("工程师"));
     }
 
@@ -3849,8 +3787,8 @@ mod tests {
         );
 
         // 1. Exploration-efficiency guidance present on the FIRST turn (empty
-        //    user message => FirstTurn route), regardless of model/toolset.
-        //    This is what fixes the "list dir then read" recon anti-pattern.
+        // user message => FirstTurn route), regardless of model/toolset.
+        // This is what fixes the "list dir then read" recon anti-pattern.
         let first_turn = crate::prompt_assembly::build_system_prompt(
             &agent.config,
             &agent.prompt_cache,
@@ -3879,9 +3817,9 @@ mod tests {
         );
 
         // 2. Parallel-execution guidance must be model-family-agnostic (Always
-        //    route) — previously it was only inside GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
-        //    so non-Google models serialized every call. Assert it shows up for a
-        //    model NOT in the tool-enforcement whitelist.
+        // route) — previously it was only inside GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
+        // so non-Google models serialized every call. Assert it shows up for a
+        // model NOT in the tool-enforcement whitelist.
         assert!(
             !crate::prompt_assembly::should_inject_tool_enforcement("claude-sonnet-4"),
             "precondition: claude must be outside the whitelist for this test to be meaningful"
@@ -5106,7 +5044,6 @@ let u = UsageStats {
     }
 
     // ── ContextPressureMonitor unit tests (2026-07-03) ──
-    //
     // The helper is the gate that decides whether `run()` / `run_stream()`
     // should fire a `lifecycle` warning when the context window fills up.
     // It had no direct unit tests — coverage only came through the
@@ -5179,7 +5116,6 @@ let u = UsageStats {
     }
 
     // ── Phase 5 (2026-07-03): RetryCounters unit tests ──
-    //
     // The 3 sibling retry counters on LoopState (invalid_tool_retries,
     // invalid_json_retries, truncated_tool_call_retries) collapsed into
     // a single RetryCounters struct. These tests pin the bump + reset
@@ -5259,7 +5195,6 @@ let u = UsageStats {
     }
 
     // ── Phase 5 (2026-07-03): CostGuard struct + evaluate_thresholds ──
-    //
     // The 4 cost-guard fields that used to be 4 sibling `&mut` args on
     // `process_post_response` now live on a single `CostGuard` struct.
     // `evaluate_thresholds` returns an enum (NoAction / Downgrade /
@@ -5415,7 +5350,6 @@ let u = UsageStats {
     }
 
     // ── Phase 1.3a (2026-07-03): process_post_response unit tests ──
-    //
     // The shared post-LLM helper extracted in 1.3a replaces ~200 lines
     // of duplication between `run()` and `run_stream()`. These tests
     // exercise the two return paths (Finalize / Continue) and the
@@ -5970,18 +5904,17 @@ let u = UsageStats {
         assert_eq!(v["id"], "c1");
     }
 
-    /// 2026-07-12 WW regression: `PostResponseAction::Finalize` (the
+    /// WW regression: `PostResponseAction::Finalize` (the
     /// visible-text branch) used to call `persist_session_terminal(&ctx, …)`
     /// and `finalize_agent_result(&ctx, …)` **without** first appending the
     /// final assistant message into `ctx`. The `Continue` branch had a
     /// `prepare_assistant_turn` fallback path; `Finalize` did not. The
     /// symptom in production: owner reloaded the
     /// "看下目录下的文件" session and the post-tool final reply
-    /// ("老大，目录共 198 条...") was gone — only user + assistant1(tool_call)
+    /// ("用户，目录共 198 条...") was gone — only user + assistant1(tool_call)
     /// + tool landed in the DB. Streaming had shown the text live via WS
     /// chunks but the server-side ctx / persist call had skipped it.
-    ///
-    /// The fix in `run_loop.rs`: call `prepare_assistant_turn` inside the
+    /// /// The fix in `run_loop.rs`: call `prepare_assistant_turn` inside the
     /// `Finalize → has_visible_text` branch **before** the terminal
     /// persist / finalize. This regression test simulates exactly that
     /// two-turn shape and asserts the final assistant message survives
@@ -6030,7 +5963,7 @@ let u = UsageStats {
                     // the owner saw live in the chat but that *used to*
                     // not be persisted into ctx on the Finalize branch).
                     Message::assistant(
-                        "老大，目录共 198 条(含 3 个 .py 脚本 + 17 个主车文件夹)。",
+                        "用户，目录共 198 条(含 3 个 .py 脚本 + 17 个主车文件夹)。",
                     )
                 };
                 Ok(LlmResponse {
@@ -6087,16 +6020,15 @@ let u = UsageStats {
         // disk `.md`). Before the fix the ctx used to terminate
         // *before* `prepare_assistant_turn`, so the final assistant
         // bubble was lost on persist and reload came back truncated.
-        //
         // We don't pin the total message count — the system prompt
         // injection and cost-guard may insert extra System rows —
         // but we assert the shape that survives:
-        //   * at least one Tool role (the list_files result)
-        //   * the LAST Assistant row is the post-tool final reply
-        //     (i.e. it was appended AFTER the tool result, in the
-        //     Finalize→has_visible_text branch we just fixed)
-        //   * an earlier Assistant row carried the tool_call so
-        //     the chat view renders the tool pill correctly
+        // * at least one Tool role (the list_files result)
+        // * the LAST Assistant row is the post-tool final reply
+        // (i.e. it was appended AFTER the tool result, in the
+        // Finalize→has_visible_text branch we just fixed)
+        // * an earlier Assistant row carried the tool_call so
+        // the chat view renders the tool pill correctly
         use hermix_core::MessageRole;
         let roles: Vec<_> = result.messages.iter().map(|m| m.role).collect();
         assert!(
@@ -6113,7 +6045,7 @@ let u = UsageStats {
             .expect("expected a final Assistant message — the regression");
         let final_content = last_assistant.content.as_deref().unwrap_or("");
         assert!(
-            final_content.contains("老大，目录共 198 条"),
+            final_content.contains("用户，目录共 198 条"),
             "final assistant message must contain the post-tool reply; got: {:?}",
             final_content
         );
@@ -6295,7 +6227,7 @@ mod stub_provider {
 
     #[test]
     pub(crate) fn p4_1_classify_reasoning_only_breaks_immediately() {
-        // 2026-07-09: Reasoning-only responses (no visible text, no tools)
+        // Reasoning-only responses (no visible text, no tools)
         // now Break immediately instead of retrying. The outer loop's
         // `decide_empty_response` handles the post-tool nudge.
         let (mut loop_, mut ctx) = make_loop_for_classify();

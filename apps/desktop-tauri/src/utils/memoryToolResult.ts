@@ -3,13 +3,13 @@
 // The memory backend (crates/hermix-tools/src/backends/memory.rs)
 // returns a JSON envelope on EVERY outcome:
 //
-//   { success, status, action, target, path, message, entries, entry_count, ... }
+// { success, status, action, target, path, message, entries, entry_count, ... }
 //
 // `status` is one of:
-//   - "success"   — entry written / replaced / removed / read OK
-//   - "not_found" — remove/replace couldn't locate old_text (NOT a failure)
-//   - "ambiguous" — remove/replace matched multiple entries (be more specific)
-//   - "error"     — genuine execution error (disk write failed, lock, etc.)
+// - "success"   — entry written / replaced / removed / read OK
+// - "not_found" — remove/replace couldn't locate old_text (NOT a failure)
+// - "ambiguous" — remove/replace matched multiple entries (be more specific)
+// - "error"     — genuine execution error (disk write failed, lock, etc.)
 //
 // The chat UI renders these as a single row: <动作> <记忆文件路径> <状态>,
 // and the path is clickable to open a preview. no-match / ambiguous are

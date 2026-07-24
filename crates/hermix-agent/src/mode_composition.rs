@@ -37,8 +37,7 @@ use hermix_intelligence::{
 // ---------------------------------------------------------------------------
 
 /// 三层模式的组合结果 — 每个 turn 生成一次。
-///
-/// 在 `AgentLoop::run()` 的 Prefetch 阶段由 `compose()` 生成，
+/// /// 在 `AgentLoop::run()` 的 Prefetch 阶段由 `compose()` 生成，
 /// 注入到后续的系统提示词构建、工具路由、安全门控、收敛检测。
 #[derive(Debug, Clone)]
 pub struct ModeComposition {
@@ -55,8 +54,7 @@ pub struct ModeComposition {
 
 impl ModeComposition {
     /// 在 `AgentLoop::run()` 的 Prefetch 阶段生成三层模式组合。
-    ///
-    /// # 参数
+    /// /// # 参数
     /// - `detector`: 域模式检测器（可变借用，会更新内部历史）
     /// - `query`: 用户最新输入文本
     /// - `history_len`: 对话历史轮数
@@ -95,8 +93,7 @@ impl ModeComposition {
     }
 
     /// 根据 Domain 推荐执行模式。
-    ///
-    /// 当 Task 层没有显式设置 mode 时，由 Domain 自动推荐：
+    /// /// 当 Task 层没有显式设置 mode 时，由 Domain 自动推荐：
     /// - Code → Craft（代码通常直接干）
     /// - Research → Ask（研究通常只读）
     /// - Write → Plan（写作先列大纲）
@@ -113,8 +110,7 @@ impl ModeComposition {
     }
 
     /// 融合 domain 信号的思考深度选择。
-    ///
-    /// 先用现有 `select_mode()` 获取 base 决策，
+    /// /// 先用现有 `select_mode()` 获取 base 决策，
     /// 再根据 Domain Mode 调整：
     /// - Code → 总是 Deep（多文件关联需要深度推理）
     /// - Research → 总是 Deep（多源交叉需要深度分析）

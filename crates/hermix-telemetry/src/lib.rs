@@ -38,8 +38,7 @@ impl Default for TelemetryConfig {
 }
 
 /// Build [`TelemetryConfig`] from environment and call [`init_telemetry`].
-///
-/// Honors `RUST_LOG` / `HERMES_LOG_JSON` / `HERMES_OTLP_ENDPOINT` like the CLI and HTTP binaries.
+/// /// Honors `RUST_LOG` / `HERMES_LOG_JSON` / `HERMES_OTLP_ENDPOINT` like the CLI and HTTP binaries.
 pub fn init_telemetry_from_env(service_name: impl Into<String>, default_level: impl AsRef<str>) {
     let level = tracing_subscriber::EnvFilter::try_from_default_env()
         .map(|f| f.to_string())

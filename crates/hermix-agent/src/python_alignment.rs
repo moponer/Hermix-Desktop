@@ -140,12 +140,10 @@ fn is_utf16_surrogate_scalar(c: char) -> bool {
 
 /// Replace lone surrogate code points with U+FFFD (Python `_sanitize_surrogates`).
 /// Strip common reasoning / thinking wrappers for Codex ack heuristics (subset of Python `_strip_think_blocks`).
-///
-/// This is the **post-hoc** cleaner used when we already have the full assistant content.
+/// /// This is the **post-hoc** cleaner used when we already have the full assistant content.
 /// For **streaming** content where `<think>...</think>` may straddle two chunks, use
 /// [`ThinkBlockParser`] instead.
-///
-/// `ACK_THINK` matches both `<thinking>...</thinking>` and the bare
+/// /// `ACK_THINK` matches both `<thinking>...</thinking>` and the bare
 /// `<think>...</think>` form used by MiniMax M2.7 / Qwen / DeepSeek-R1.
 pub fn strip_think_blocks_for_ack(content: &str) -> String {
     let mut c = content.to_string();
@@ -153,7 +151,7 @@ pub fn strip_think_blocks_for_ack(content: &str) -> String {
     c = ACK_THINK.replace_all(&c, "").to_string();
     c = ACK_REASON.replace_all(&c, "").to_string();
     c = ACK_PLAN.replace_all(&c, "").to_string();
-    // 2026-07-17: models sometimes ignore the system prompt and emit an
+    // models sometimes ignore the system prompt and emit an
     // unwrapped reasoning monologue ("I think...", "trying to...",
     // "probably...") as the visible reply. Treat the whole blob as
     // internal reasoning so it doesn't leak into the user-facing chat.
@@ -166,15 +164,13 @@ pub fn strip_think_blocks_for_ack(content: &str) -> String {
 /// Heuristic: detect a reasoning monologue that the model forgot to wrap
 /// in a think block. These are internal monologues that should render as
 /// collapsed reasoning blocks, not as user-visible reply text.
-///
-/// Only triggers when:
-///   * there is no ` <think` / `</think` tag anywhere in the text (so the
-///     normal parser already had its chance), and
-///   * the text is non-trivial, and
-///   * the opening words read like self-directed analysis rather than an
-///     answer to the user.
-///
-/// This is intentionally conservative — false positives would hide real
+/// /// Only triggers when:
+/// * there is no ` <think` / `</think` tag anywhere in the text (so the
+/// normal parser already had its chance), and
+/// * the text is non-trivial, and
+/// * the opening words read like self-directed analysis rather than an
+/// answer to the user.
+/// /// This is intentionally conservative — false positives would hide real
 /// user-facing answers. It targets the common failure mode where a model
 /// emits "I think..." / "trying to reconstruct..." before any visible reply.
 pub fn looks_like_untagged_reasoning(content: &str) -> bool {
@@ -212,19 +208,16 @@ pub fn looks_like_untagged_reasoning(content: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Streaming `<think>` splitter
 // ---------------------------------------------------------------------------
-//
 // Some providers (notably MiniMax M2.7, Qwen, DeepSeek-R1 distilled) emit their
 // reasoning as a `<think>...</think>` block inside `delta.content` rather than in a
 // separate `delta.extra.thinking` field. The block can straddle multiple chunks,
 // so we need a small state machine to:
-//
-//   * keep `<think>` (no trailing `g`) and `<thinking>` (with `g`) as separators,
-//   * tolerate a chunk boundary that lands mid-tag (e.g. chunk N ends with `<th`,
-//     chunk N+1 starts with `ink>...`),
-//   * emit everything outside the block as `content`, everything inside as
-//     `reasoning_content`, in real time, with at most ~`MAX_PENDING_CHARS` of
-//     look-ahead held in `pending`.
-//
+// * keep `<think>` (no trailing `g`) and `<thinking>` (with `g`) as separators,
+// * tolerate a chunk boundary that lands mid-tag (e.g. chunk N ends with `<th`,
+// chunk N+1 starts with `ink>...`),
+// * emit everything outside the block as `content`, everything inside as
+// `reasoning_content`, in real time, with at most ~`MAX_PENDING_CHARS` of
+// look-ahead held in `pending`.
 // The state machine is intentionally allocation-light: we keep `pending` short,
 // and we never copy the full chunk more than once.
 
@@ -233,13 +226,11 @@ pub fn looks_like_untagged_reasoning(content: &str) -> bool {
 const MAX_PENDING_CHARS: usize = 32;
 
 /// Safety net for models that forget to emit `</think>`.
-///
-/// If the parser has already emitted more than this many reasoning chars
+/// /// If the parser has already emitted more than this many reasoning chars
 /// without seeing the close tag, it forcibly exits think mode on the next
 /// `feed()` call. This prevents the model from swallowing the entire visible
 /// reply as invisible reasoning just because it dropped the closing tag.
-///
-/// (The previous `THINK_FALLBACK_CHARS` force-close safety net was removed:
+/// /// (The previous `THINK_FALLBACK_CHARS` force-close safety net was removed:
 /// the front-end now renders think content inline with the visible reply,
 /// so silently re-routing a never-closed block to the reply stream would
 /// jumble the two. If the model forgets `</think>`, the user simply sees
@@ -264,11 +255,9 @@ impl ThinkBlockParser {
     }
 
     /// Feed one chunk of assistant content. Returns `(content_part, reasoning_part)`:
-    ///
-    /// * `content_part` is text that belongs to the user-visible reply.
+    /// /// * `content_part` is text that belongs to the user-visible reply.
     /// * `reasoning_part` is text that belongs to the hidden `<think>` block.
-    ///
-    /// Chars that look like the start of a tag may be held back briefly to
+    /// /// Chars that look like the start of a tag may be held back briefly to
     /// disambiguate; call [`Self::flush`] at end-of-stream to drain any leftover.
     pub fn feed(&mut self, chunk: &str) -> (String, String) {
         if chunk.is_empty() {
@@ -361,7 +350,6 @@ impl ThinkBlockParser {
                             // not properly closed, but the model clearly intended
                             // a think block. Treat the whitespace-terminated
                             // `<think` as a hard separator and enter think mode.
-                            //
                             // Without this, the parser would hold the entire
                             // stream in `pending` waiting for a `>` that never
                             // comes. At end-of-stream `flush()` would then dump

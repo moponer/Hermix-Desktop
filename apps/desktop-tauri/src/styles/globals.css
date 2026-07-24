@@ -2,14 +2,17 @@
    globals.css — Entry point. Imports modular stylesheets.
    ──────────────────────────────────────────────────────────────────
    To re-skin the entire app, edit tokens.css.
-   To add a new component, add a class to components.css.
+   To add a new component, add a class to the appropriate components-*.css file.
    To add a utility, add it to utilities.css.
    ════════════════════════════════════════════════════════════════════ */
 
 @import "tailwindcss";
 @import "./tokens.css";
 @import "./base.css";
-@import "./components.css";
+@import "./components-layout.css";
+@import "./components-controls.css";
+@import "./components-prose.css";
+@import "./components-helpers.css";
 @import "./inline-thinking-dot.css";
 @import "./code-view.css";
 @import "./utilities.css";

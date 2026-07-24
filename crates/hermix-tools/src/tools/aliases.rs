@@ -191,12 +191,12 @@ impl ToolHandler for EditFileHandler {
 ///
 /// Why this exists:
 /// - The system prompt injects a `<tools>` block but truncates long
-///   descriptions. The model can call `list_tools` to retrieve the
-///   full schema, including required parameter names and types.
+/// descriptions. The model can call `list_tools` to retrieve the
+/// full schema, including required parameter names and types.
 /// - When the LLM hallucinates a tool name, the dispatcher returns
-///   "Unknown tool 'X'. Available tools: [...]". The model can now
-///   cross-reference by calling `list_tools` itself instead of
-///   trying to remember names.
+/// "Unknown tool 'X'. Available tools: [...]". The model can now
+/// cross-reference by calling `list_tools` itself instead of
+/// trying to remember names.
 pub struct ListToolsHandler {
     registry: Arc<ToolRegistry>,
 }

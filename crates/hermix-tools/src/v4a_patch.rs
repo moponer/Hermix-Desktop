@@ -21,6 +21,14 @@
 
 use regex::Regex;
 use std::fmt;
+use std::sync::OnceLock;
+
+macro_rules! static_regex {
+    ($re:literal) => {{
+        static CELL: OnceLock<Regex> = OnceLock::new();
+        CELL.get_or_init(|| Regex::new($re).expect("static regex must compile"))
+    }};
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -98,8 +106,7 @@ impl PatchResult {
 // ---------------------------------------------------------------------------
 
 /// Parse a V4A format patch string into a list of operations.
-///
-/// Returns `(operations, error)`. On success, error is `None`.
+/// /// Returns `(operations, error)`. On success, error is `None`.
 pub fn parse_v4a_patch(patch_content: &str) -> (Vec<PatchOperation>, Option<String>) {
     let lines: Vec<&str> = patch_content.split('\n').collect();
 
@@ -120,11 +127,11 @@ pub fn parse_v4a_patch(patch_content: &str) -> (Vec<PatchOperation>, Option<Stri
     let start = start_idx.map(|i| i + 1).unwrap_or(0);
     let end = end_idx.unwrap_or(lines.len());
 
-    let update_re = Regex::new(r"\*\*\*\s*Update\s+File:\s*(.+)").expect("v4a patch regex must compile");
-    let add_re = Regex::new(r"\*\*\*\s*Add\s+File:\s*(.+)").expect("v4a patch regex must compile");
-    let delete_re = Regex::new(r"\*\*\*\s*Delete\s+File:\s*(.+)").expect("v4a patch regex must compile");
-    let move_re = Regex::new(r"\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+)").expect("v4a patch regex must compile");
-    let hint_re = Regex::new(r"@@\s*(.+?)\s*@@").expect("v4a patch regex must compile");
+    let update_re = static_regex!(r"\*\*\*\s*Update\s+File:\s*(.+)");
+    let add_re = static_regex!(r"\*\*\*\s*Add\s+File:\s*(.+)");
+    let delete_re = static_regex!(r"\*\*\*\s*Delete\s+File:\s*(.+)");
+    let move_re = static_regex!(r"\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+)");
+    let hint_re = static_regex!(r"@@\s*(.+?)\s*@@");
 
     let mut operations: Vec<PatchOperation> = Vec::new();
     let mut current_op: Option<PatchOperation> = None;
@@ -250,8 +257,7 @@ fn finalize_op(
 }
 
 /// Extract the "old" (search) and "new" (replace) text from a hunk.
-///
-/// Context lines (' ') appear in both old and new.
+/// /// Context lines (' ') appear in both old and new.
 /// Removed lines ('-') appear only in old.
 /// Added lines ('+') appear only in new.
 pub fn hunk_to_search_replace(hunk: &Hunk) -> (String, String) {

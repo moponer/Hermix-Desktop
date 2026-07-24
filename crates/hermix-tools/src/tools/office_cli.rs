@@ -374,8 +374,7 @@ impl ToolHandler for OfficeCliHandler {
 // ---------------------------------------------------------------------------
 
 /// Register the `office_cli` tool with the registry (P1.8 migration).
-///
-/// P1.8 (2026-07-02): this `register` function was previously missing —
+/// /// P1.8 (2026-07-02): this `register` function was previously missing —
 /// the `OfficeCliHandler` was implemented but never wired into the
 /// runtime. The `essential::ESSENTIAL_TOOLSETS` constant already lists
 /// `"office"` as a floor entry; without a registration the floor's
@@ -383,8 +382,7 @@ impl ToolHandler for OfficeCliHandler {
 /// `list_tools()` never exposed the tool to the LLM. The handler is
 /// tagged with the dedicated `"office"` toolset so the floor and the
 /// `set_enabled_toolsets` UI toggle both find it.
-///
-/// The same `terminal_backend` and `terminal_workspace` handles are
+/// /// The same `terminal_backend` and `terminal_workspace` handles are
 /// shared with the `terminal` and `file` tools so any code path that
 /// shells out uses one consistent backend.
 pub fn register(

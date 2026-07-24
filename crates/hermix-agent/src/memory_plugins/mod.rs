@@ -4,5 +4,5 @@
 //! OpenViking, SuperMemory, Holographic) have been removed. The project now
 //! relies solely on the built-in `EmbeddedMemoryBackend` (SQLite-backed
 //! `memory.db`) for persistent memory. The `MemoryProviderPlugin` trait was
-//! removed on 2026-06-26 — all write hooks route through `MemoryRouter`,
+//! removed on — all write hooks route through `MemoryRouter`,
 //! which fans out to every registered `MemoryLayer` backend.

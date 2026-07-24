@@ -25,8 +25,7 @@ fn default_days() -> u32 {
 }
 
 /// GET /api/analytics/usage
-///
-/// Returns real aggregates from `token_usage` + `messages.tool_calls`.
+/// /// Returns real aggregates from `token_usage` + `messages.tool_calls`.
 /// Errors are NO LONGER swallowed into an all-zero 200 (Phase 1): a
 /// failed aggregation returns `500` with a structured
 /// `AnalyticsErrorResponse` so the frontend can show the real cause.
@@ -190,8 +189,7 @@ fn build_skills(skills: &SkillUsageAggregate) -> AnalyticsSkillsResponse {
 }
 
 /// GET /api/analytics/debug
-///
-/// Phase 2: one-shot diagnostic of the stats DB. Surfaces the DB path,
+/// /// Phase 2: one-shot diagnostic of the stats DB. Surfaces the DB path,
 /// per-table existence/row-count/sample, and the applied migrations so
 /// a user can pinpoint where the pipeline is broken without opening
 /// SQLite by hand.

@@ -115,7 +115,7 @@ impl EmbeddedMemoryBackend {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(&path)?;
-        // 2026-07-04 (round 5): enable busy_timeout so concurrent writes
+        // (round 5): enable busy_timeout so concurrent writes
         // from session_persistence + memory_router + compression are
         // retried by sqlite itself for up to 5 s instead of failing
         // with `database is locked`. This is the in-process backstop —
@@ -173,8 +173,7 @@ impl EmbeddedMemoryBackend {
 
     /// Open a DB at `<data_dir>/memory.db`. `None` falls back to
     /// in-memory (used in tests).
-    ///
-    /// Uses [`hermix_config::paths::data_dir`] so the path is identical
+    /// /// Uses [`hermix_config::paths::data_dir`] so the path is identical
     /// in normal mode (`~/.hermix/data/memory.db`) and portable mode
     /// (`<install_root>/data/memory.db`).
     pub fn open_at_hermix_home() -> Result<Self> {
@@ -225,7 +224,7 @@ impl EmbeddedMemoryBackend {
                 embedding_dim   INTEGER,
                 embedding_model TEXT,
                 expires_at      TEXT,
-                -- 2026-06-26 (BaiLongma soft-hide): every frame is
+                -- (BaiLongma soft-hide): every frame is
                 -- visible by default. Soft-deleting flips `visibility`
                 -- to 0 and stamps `hidden_at`. `recognize()` always
                 -- filters `WHERE visibility = 1` so an accidental
@@ -233,7 +232,7 @@ impl EmbeddedMemoryBackend {
                 -- visibility = 1, hidden_at = NULL WHERE id = ?`.
                 visibility      INTEGER NOT NULL DEFAULT 1,
                 hidden_at       TEXT,
-                -- 2026-06-26 (write-path provenance): which hook
+                -- (write-path provenance): which hook
                 -- produced this row. One of `focus` (legacy),
                 -- `turn` (sync_turn), `memory_tool`
                 -- (on_memory_write), `session` (on_session_end),
@@ -308,7 +307,7 @@ impl EmbeddedMemoryBackend {
              AND hidden_at < datetime('now', '-30 days')",
             [],
         );
-        // 2026-06-26 (Hermes Agent curation): separate `facts`
+        // (Hermes Agent curation): separate `facts`
         // table for entities / facts the agent extracts at
         // curation time. Lives next to `frames` because the same
         // schema (id, payload, salience, tags, created_at) covers
@@ -444,7 +443,7 @@ impl EmbeddedMemoryBackend {
             )?;
             let _ = conn.execute_batch("PRAGMA user_version = 4");
         }
-        // v5 (2026-07-03): WAL mode + NORMAL synchronous — addresses
+        // WAL mode + NORMAL synchronous — addresses
         // the "SQLite 锁竞争" symptom (high write frequency from
         // every-turn `sync_turn`). WAL lets readers proceed without
         // blocking on the writer; NORMAL drops the per-commit
@@ -452,12 +451,10 @@ impl EmbeddedMemoryBackend {
         // checkpoint). Together they cut disk-side lock dwell time
         // by ~10x on hot paths (no measurement here; rationale per
         // https://www.sqlite.org/wal.html + synchronous.html).
-        //
         // Both PRAGMAs are durable: WAL mode persists in the DB
         // header (sqlite3 sees it next time even without these
         // lines). `synchronous` is per-connection so we set it on
         // every open() to defend against somebody else lowering it.
-        //
         // Note: rusqlite's bundled SQLite ships with
         // `SQLITE_ENABLE_LOCKING_STYLE` — the WAL file (`-wal`)
         // lives next to memory.db. We do **not** manually truncate
@@ -488,7 +485,7 @@ impl EmbeddedMemoryBackend {
             // need to re-enable it here.)
             conn.execute_batch("PRAGMA synchronous = NORMAL")?;
         }
-        // v6 (2026-07-14): `reflections` table for E (memory
+        // `reflections` table for E (memory
         // evolution — reflexive notes written at session end, no LLM
         // required). Reflective summaries about a session's
         // what_went_well / what_to_improve / user_preferences_observed
@@ -498,12 +495,10 @@ impl EmbeddedMemoryBackend {
         // so the user can see them in chat, and indexed so the
         // recall scheduler (A) can pull the most recent ones when
         // drift is detected.
-        //
         // We don't FTS the reflection content (it's tiny text, a
         // cheap LIKE scan is fine) but we DO index by session and
         // by created_at so "most recent N for this session" is a
         // single index lookup.
-        //
         // NOTE: gate stays `current_version < 6` even after bumping
         // CURRENT_SCHEMA_VERSION to 6 — this block IS the v6
         // migration, and we want it to run on every DB that hasn't
@@ -538,8 +533,7 @@ impl EmbeddedMemoryBackend {
     }
 
     /// Persist a focus frame (or update an existing one by id).
-    ///
-    /// This is the main write path used by `FocusStack::drain_conclusions()`
+    /// /// This is the main write path used by `FocusStack::drain_conclusions()`
     /// or by the agent loop after each turn.
     pub fn upsert_frame<T: serde::Serialize + Clone>(&self, frame: &FocusFrame<T>) -> Result<()> {
         self.upsert_frame_with_source(frame, "focus")
@@ -625,8 +619,7 @@ impl EmbeddedMemoryBackend {
     }
 
     /// Delete a frame by id.
-    ///
-    /// Phase 17: prefer [`Self::soft_hide_frame`] so the audit trail
+    /// /// Phase 17: prefer [`Self::soft_hide_frame`] so the audit trail
     /// is preserved. `delete_frame` is kept for the rare cases where
     /// the caller is sure they want a hard delete (e.g. tests, the
     /// 30-day janitor on hidden rows).
@@ -641,8 +634,7 @@ impl EmbeddedMemoryBackend {
     /// `recognize()` queries without losing the row. Use this when
     /// the agent decides a memory is no longer relevant (TTL
     /// expiry, semantic eviction, manual `memory` tool remove).
-    ///
-    /// Returns `true` if a frame was actually hidden (i.e. it
+    /// /// Returns `true` if a frame was actually hidden (i.e. it
     /// existed and was visible before).
     pub fn soft_hide_frame(&self, id: FocusFrameId) -> Result<bool> {
         let conn = self.conn.lock();
@@ -672,8 +664,7 @@ impl EmbeddedMemoryBackend {
     /// `turn`. Stored separately from the focus-stack conclusions
     /// (which are higher salience) so recall can prefer user-asserted
     /// facts over raw turns.
-    ///
-    /// `turn_number` is monotonic per session. When the user message
+    /// /// `turn_number` is monotonic per session. When the user message
     /// is empty or only whitespace, the call is a no-op (avoids
     /// polluting recall with accidental empty rows).
     pub fn record_turn(
@@ -767,8 +758,7 @@ impl EmbeddedMemoryBackend {
     /// Hermes-Agent-inspired curation hook (every N turns, or after
     /// a complex task) and by external callers that already
     /// extracted a structured fact.
-    ///
-    /// `canonical_key` is the stable identity used for dedup.
+    /// /// `canonical_key` is the stable identity used for dedup.
     /// If a fact with the same key already exists (and is visible),
     /// its `access_count` is bumped and `payload`/`salience` are
     /// updated; otherwise a new row is inserted.
@@ -856,8 +846,7 @@ impl EmbeddedMemoryBackend {
     /// - "what queries did this session issue?"
     /// - "what was the hit count distribution?"
     /// - "what's the p99 latency?"
-    ///
-    /// `query_text` is truncated to 500 chars to keep audit rows
+    /// /// `query_text` is truncated to 500 chars to keep audit rows
     /// small (long questions are usually less interesting to replay
     /// than their hash + hit_count + latency).
     pub fn record_recall_audit(
@@ -947,8 +936,7 @@ impl EmbeddedMemoryBackend {
     /// first, then oldest `created_at`) are soft-hidden so `recognize()`
     /// stops surfacing them but they remain on disk for the audit
     /// trail. Returns the number of frames newly hidden.
-    ///
-    /// Called on `open()` and after each `sync_turn` to keep the
+    /// /// Called on `open()` and after each `sync_turn` to keep the
     /// active working set bounded.
     pub fn enforce_frame_cap(&self, cap: usize) -> Result<usize> {
         let conn = self.conn.lock();
@@ -1008,8 +996,7 @@ impl EmbeddedMemoryBackend {
     /// needed) from the conclusion's text + tags and writes it to
     /// the `facts` table so cross-session recall surfaces it via
     /// the unified `recognize()` pipeline.
-    ///
-    /// `canonical_key` is derived deterministically from
+    /// /// `canonical_key` is derived deterministically from
     /// `(session_id, source_frame_id)` so re-running this on the
     /// same conclusion is idempotent.
     pub fn backfill_compression_fact(
@@ -1039,8 +1026,7 @@ impl EmbeddedMemoryBackend {
     }
 
     /// Phase 19 (A): top-N visible facts by stored salience.
-    ///
-    /// Used by `recall_scheduler` to pull candidates for re-rank.
+    /// /// Used by `recall_scheduler` to pull candidates for re-rank.
     /// We don't recompute salience here (no `salience_cfg` access
     /// without rebuilding one per call) — the stored value already
     /// reflects the most-recent write's salience, which is good
@@ -1069,7 +1055,6 @@ impl EmbeddedMemoryBackend {
 
     // =================================================================
     // Phase 19 (E): reflections table API
-    //
     // Reflections are written by `reflection_generator` at session
     // end. We deliberately keep these helpers minimal — no full-text
     // search, no embedding (the content is short and meta-cognitive;
@@ -1078,8 +1063,7 @@ impl EmbeddedMemoryBackend {
     // =================================================================
 
     /// Persist one reflection row. Returns the new id.
-    ///
-    /// Visibility defaults to 1 (visible). Caller doesn't need to
+    /// /// Visibility defaults to 1 (visible). Caller doesn't need to
     /// pre-set timestamps — we record the UTC RFC3339 now() here
     /// to avoid drift between Rust and SQLite clocks if a future
     /// caller runs from a different time zone.
@@ -1154,8 +1138,7 @@ impl EmbeddedMemoryBackend {
     /// `memory_prefetch` of session N+1 so the next session's system
     /// prompt can carry over the lessons learned from session N's
     /// reflection notes.
-    ///
-    /// Empty `exclude_session_id` means "all sessions".
+    /// /// Empty `exclude_session_id` means "all sessions".
     pub fn list_cross_session_reflections(
         &self,
         exclude_session_id: &str,
@@ -1194,8 +1177,7 @@ impl EmbeddedMemoryBackend {
     /// Count tool_error rows for this session — drives the
     /// `what_to_improve` reflection. Returns 0 if no errors
     /// (which is the happy case).
-    ///
-    /// We scan `recall_audit` because every `tool_error` already
+    /// /// We scan `recall_audit` because every `tool_error` already
     /// gets audited there in Phase 18; duplicating into a new
     /// table would just create two sources of truth.
     pub fn count_session_tool_errors(&self, session_id: &str) -> Result<u32> {
@@ -1255,13 +1237,11 @@ impl EmbeddedMemoryBackend {
     }
 
     /// L1.3: persist (or replace) the embedding for a frame.
-    ///
-    /// The frame must already exist (call `upsert_frame` first). The
+    /// /// The frame must already exist (call `upsert_frame` first). The
     /// embedding is stored as f32 little-endian bytes; `dim` is
     /// cached separately so `cosine_topk` can `WHERE dim = ?1`
     /// instead of loading BLOBs to check length.
-    ///
-    /// `model` is recorded verbatim. Cosine is only meaningful
+    /// /// `model` is recorded verbatim. Cosine is only meaningful
     /// between vectors from the same model, so `cosine_topk`
     /// filters mismatched models when a non-empty `model` is
     /// passed to it.
@@ -1465,8 +1445,7 @@ impl EmbeddedMemoryBackend {
 
     /// Re-rank hits by salience (recency × freq × pin), descending.
     /// `now` is the reference time; pass `Utc::now()` in production.
-    ///
-    /// H5: this used to be a no-op that just sorted by the
+    /// /// H5: this used to be a no-op that just sorted by the
     /// backend-assigned `hit.salience`. The new implementation
     /// re-derives salience from the algorithm using `hit.created_at`
     /// and the backend's stored `touch_count` / `pin_count` (if
@@ -1541,7 +1520,6 @@ impl EmbeddedMemoryBackend {
         // Build an FTS5 MATCH expression from the text. We split on
         // whitespace and quote each token; tokens that look like FTS5
         // operators are skipped.
-        //
         // M4: CJK query expansion — pre-segment the query with the same
         // bigram splitter used at write time so single-word queries
         // like "喜欢" still hit "我喜欢 Rust" (which is stored as
@@ -1922,17 +1900,14 @@ fn extract_text(v: &Value) -> String {
 }
 
 /// M4 (2026-07-03): CJK bigram preprocessor for FTS5 indexing.
-///
-/// SQLite's bundled FTS5 (without `SQLITE_ENABLE_FTS5_TOKENIZER_TRIGRAM`)
+/// /// SQLite's bundled FTS5 (without `SQLITE_ENABLE_FTS5_TOKENIZER_TRIGRAM`)
 /// uses the `unicode61` tokenizer which splits on whitespace — a CJK
 /// string like `"我喜欢 Rust"` tokenizes as `["我喜欢", "Rust"]`. Querying
 /// for just `"喜欢"` returns 0 hits because there's no `喜欢` token.
-///
-/// Application-layer fix: insert overlapping bigrams separated by spaces
+/// /// Application-layer fix: insert overlapping bigrams separated by spaces
 /// before passing to FTS5. `"我喜欢"` becomes `"我 喜欢"` (one bigram). The
 /// query side needs the same bigram expansion to match.
-///
-/// Idempotency: re-running on already-bigrammed text produces single-char
+/// /// Idempotency: re-running on already-bigrammed text produces single-char
 /// "words" but no new bigrams — safe to call repeatedly.
 fn cjk_bigram_segment(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
@@ -2013,8 +1988,7 @@ pub struct SessionSnapshot {
 /// session end. Written by `reflection_generator` (no LLM) and
 /// surfaced as a `StreamEvent::MemoryUpdate { kind: "reflection" }`
 /// so the user can see "what the agent thinks it learned" in chat.
-///
-/// Distinct from `facts` (atomic user/assistant assertions) and
+/// /// Distinct from `facts` (atomic user/assistant assertions) and
 /// from `session_snapshots` (state freezes for replay). Reflections
 /// are **short, meta-cognitive notes** about the session itself.
 #[derive(Debug, Clone)]
@@ -2221,12 +2195,12 @@ impl MemoryLayer for EmbeddedMemoryBackend {
     fn on_pre_compress(&self, messages: &[serde_json::Value]) -> String {
         // Two-tier contribution:
         // 1. The recent-turn ring (always present after the first
-        //    `sync_turn` call) gives the compressor a high-quality
-        //    summary of the *last 20 turns* without round-tripping
-        //    to SQLite.
+        // `sync_turn` call) gives the compressor a high-quality
+        // summary of the *last 20 turns* without round-tripping
+        // to SQLite.
         // 2. If the agent loop passes `messages` directly, we
-        //    additionally include a head/tail excerpt so the
-        //    compressor sees the global shape.
+        // additionally include a head/tail excerpt so the
+        // compressor sees the global shape.
         let mut out = String::new();
         let recent = self.recent_turns.lock();
         if !recent.is_empty() {
@@ -2308,15 +2282,15 @@ impl MemoryLayer for EmbeddedMemoryBackend {
         // LLM. Hidden frames are kept on disk for the audit trail
         // and 30-day janitor.
         // 1. Text leg — FTS5 first, LIKE fallback. We over-fetch
-        //    (limit * 2) so a later merge with the vector leg has
-        //    material to dedupe against.
+        // (limit * 2) so a later merge with the vector leg has
+        // material to dedupe against.
         let sid = query.session_id.as_deref();
         let mut ids = self.fts_search_visible(&query.text, query.limit * 2, sid)?;
         if ids.is_empty() {
             ids = self.like_search_visible(&query.text, query.limit * 2, sid)?;
         }
         // 1b. Fact leg — query the `facts` table too so L2 Semantic
-        //     memory is part of the unified recall.
+        // memory is part of the unified recall.
         let fact_ids = self.fts_facts_visible(&query.text, query.limit, sid)?;
         for fid in fact_ids {
             if !ids.contains(&fid) {
@@ -2334,13 +2308,13 @@ impl MemoryLayer for EmbeddedMemoryBackend {
             }
         }
         // 3. L1.3 vector leg — when a query embedding is provided
-        //    we run cosine_topk in parallel and merge. Empty model
-        //    filter (`""`) is the right call here because the query
-        //    embedding is "of the agent's current model" and the
-        //    backend stores whatever model it was given; the strict
-        //    match would be a follow-up. For now we let cosine
-        //    speak for itself and rely on the `embedding_dim` index
-        //    to keep the scan cheap.
+        // we run cosine_topk in parallel and merge. Empty model
+        // filter (`""`) is the right call here because the query
+        // embedding is "of the agent's current model" and the
+        // backend stores whatever model it was given; the strict
+        // match would be a follow-up. For now we let cosine
+        // speak for itself and rely on the `embedding_dim` index
+        // to keep the scan cheap.
         if let Some(qe) = query.embedding.as_deref() {
             if !qe.is_empty() {
                 let vec_hits = self
@@ -2469,7 +2443,6 @@ mod tests {
         // Simulates a real FTS5 round-trip:
         // 1. Insert frame with Chinese payload
         // 2. Single-word Chinese query "喜欢" should hit it
-        //
         // Without bigram preprocessor, the query "喜欢" would tokenize
         // to one term that doesn't appear in the index (which has
         // "我喜欢Rust" as a single unicode61 token).
@@ -2529,7 +2502,7 @@ mod tests {
         drop(conn);
 
         assert_eq!(mode, "wal", "journal_mode must be WAL after migrate()");
-        // 2026-07-18: bumped from 5 → 6 when the v6 reflections migration
+        // bumped from 5 → 6 when the v6 reflections migration
         // (2026-07-14) was promoted from "gated CREATE TABLE IF NOT EXISTS"
         // into a version-tracked migration. CURRENT_SCHEMA_VERSION was
         // bumped in lockstep; this assertion follows.
@@ -2563,7 +2536,7 @@ mod tests {
         drop(conn);
 
         assert_eq!(mode, "wal", "second open must keep WAL");
-        // 2026-07-18: v6 (reflections table) is now part of the schema
+        // v6 (reflections table) is now part of the schema
         // trail, so a "fresh DB then reopen" sequence settles at
         // user_version=6 (not 5). See CURRENT_SCHEMA_VERSION comment.
         assert_eq!(version, 6, "second open must keep user_version=6");

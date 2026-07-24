@@ -306,7 +306,184 @@ LLM 产生 thinking-only 响应 (无工具调用)
 
 ---
 
-## 7. 文档版本
+## 7. 批量处理架构：L1 / L2 / L3 三档 (2026-07-23 主人 challenge 衍生)
+
+### 7.0 触发场景
+
+主人在子 agent 修复（Bug #5 → 2026-07-23 数据传递+并行+阻止递归）落地后追问：
+
+> "如果有 100 张图片要处理呢？1000 张？10000 万张呢？"
+
+L1（`delegate_task` 单点 fan-out）实际上限 ≤ 10 并发，超出会遇到 LLM 物理边界。本节用第一性原则推导三档可扩展架构。
+
+### 7.1 第一性原则 (First Principles)
+
+| 物理约束 | 影响 |
+|---|---|
+| LLM 单次响应能发多少 tool_call | 倾向 5–10，发 20+ 已经是极限；100+ 不可能 |
+| LLM 上下文长度 | 每个 tool_call ≈ 200–500 token；100 个 call = 5–50K token 描述塞回 parent ctx |
+| LLM 没有持久任务队列 | 下一轮 LLM "看不见"上一轮发了多少；它倾向 3–5 轮内收敛 |
+| Sub-agent LLM 调用延迟 | 每个 sub-agent 5–30s（视觉 + LLM 推理） |
+| 100 张图 × 30s/张 / 10 并发 | ≈ 5 分钟（理论上 OK） |
+| 10000 张图 × 30s/张 / 10 并发 | ≈ 8.3 小时（**LLM 编排这条路径无论怎么扩都撑不住**） |
+
+**关键结论**：LLM 不能编排"数据"，只能编排"模式"。10000 张图是数据流问题，不是 agent 问题。架构必须分层。
+
+### 7.2 反模式 (Anti-Patterns)
+
+| 反模式 | 为什么崩 |
+|---|---|
+| LLM 在 prompt 里被要求"分 50 轮发 100 个 tool_call" | 第 4 轮 LLM 就开始偷懒，第 8 轮只剩 30% call 真发出去；剩下 70 个静默丢失 |
+| Sub-agent 自己再 delegate_task | 子 agent 已物理 block，但 prompt fragment "use delegate_task for images" 被复制进子 ctx，LLM 反复撞 deny 墙浪费 turn（已修：sub_agent_guidance HARD OVERRIDE） |
+| Attachments 传 base64 内联而非路径引用 | 1 张图 ≈ 100–500KB base64，10 张就 1–5MB → parent ctx 爆 |
+| 主 agent "等结果" 异步轮询 sub-agent 状态 | delegate_task 是**同步**的（tool_result 即结果），LLM 没有"等异步"的认知模型，回归 pending 死循环 |
+| "LLM 自己循环发" 替代 Rust executor | 每轮 LLM 决策成本 × N + LLM 行为不稳定的概率 × N = 不可控 |
+
+### 7.3 三档架构总览
+
+| 档位 | 工具 | 容量上限 | 谁编排数据 | 状态 |
+|---|---|---|---|---|
+| **L1** | `delegate_task` (单点 fan-out) | ≤ 10 并发 / ≤ 10 attachments per call | LLM | **已上线** (2026-07-23 修) |
+| **L2** | `delegate_batch` (Rust executor 串 fan-out) | 10–500 items | Rust executor + LLM 给模板 | **已设计，未实现** |
+| **L3** | `pipeline_run` (纯数据流) | ∞ | Rust pipeline（可完全脱离 LLM） | **概念定义** |
+
+### 7.4 L1 现状（`delegate_task`）
+
+**已修问题** (2026-07-23)：
+
+| 问题 | 修复 | 状态 |
+|---|---|---|
+| `SubAgentOrchestrator` 从未接线 → 永远返回 pending | `local_agent_service.rs` 加 `.with_sub_agent_orchestrator()` | ✅ Bug #5 |
+| Sub-agent 拿不到图（父 prompt 有 base64 但被剥离） | `SubAgentRequest.attachments: Vec<ImageAttachment>` + `attach_images` 读盘 + base64 进 multimodal content | ✅ |
+| 4 张图串行执行 = 12 分钟 | `tool_executor.rs` 改 `futures::join_all` 并发 fan-out | ✅ |
+| Sub-agent 想再 delegate | `sub_agent_safety::BLOCKED_TOOLS_FOR_SUBAGENT` 物理 strip + `sub_agent_guidance` HARD OVERRIDE | ✅ |
+| **Schema 不暴露 attachments/output_schema** | `delegation.rs` schema 增 5 字段 + 描述 L1 容量边界 | ✅ 本节 |
+
+**L1 边界（schema 里写明）**：
+
+- ≤ 10 attachments per call（更多会塞爆 parent + child ctx）
+- ≤ 10 parallel calls per round（LLM 实际并发上限）
+- LLM 不持久任务队列（fan-out 必须同 round 完成）
+- 超出 → 主 agent 应该告诉用户"L2 待实现"或分多轮自己做
+
+### 7.5 L2 设计：`delegate_batch` (待实施)
+
+**动机**：100 张图 = 10 轮 × 10 并发，LLM 自己做得到但脆弱（要每轮重新决策、不稳定）。Rust executor 接管后变成"一次调用 + 自动分批 + 进度可见"。
+
+**核心思路**：L2 内部就是 L1 fan-out 的"聚合 + 模板化"。Rust executor 拿到模板和 items，按 concurrency N 启动一组 L1 sub-agent，每个 sub-agent 接收渲染后的 task（含单个 item）+ output_schema。**L2 完全复用现有 SubAgentOrchestrator，不另起炉灶**。
+
+**API 草案**：
+
+```json
+{
+  "tool": "delegate_batch",
+  "params": {
+    "task_template": "识别这张车辆照片的车牌号。照片路径：{{item.path}}",
+    "items": [
+      {"path": "D:\\imgs\\a.jpg"},
+      {"path": "D:\\imgs\\b.jpg"},
+      // ... up to 500 items
+    ],
+    "concurrency": 10,           // optional, default = 10, max = 20
+    "model": "gpt-4o-mini",      // optional, sub-agent 模型
+    "role": "general",           // optional, default = general
+    "output_schema": "{\"plate\":\"string\"}",  // 同 L1
+    "fail_fast": false,          // optional, true = 任一失败中止；默认 false 继续跑完
+    "per_item_timeout_secs": 300, // optional, default = 300
+    "total_timeout_secs": 3600   // optional, default = 3600
+  }
+}
+```
+
+**行为契约**：
+
+1. **模板渲染**：Rust 端用 `minijinja` / `handlebars` 之类做轻量 mustache 替换（`{{item.path}}` / `{{item.id}}`），禁止 LLM 二次 prompt 注入。
+2. **并发控制**：semaphore 限制在 flight 的 sub-agent 数 ≤ concurrency；每个完成的 sub-agent 立即拉起下一个 item，直到 items 跑完。
+3. **进度汇报**：WS 广播 `batch_progress` 事件，含 `completed/total/failed/pending_ids` ——前端可实时显示进度条和"还剩 N 张"。
+4. **失败处理**：
+   - 单个 item 失败 → 记入 `failed_items: [{index, error}]`，不影响其他 item
+   - 整体超时 → 已完成的保留结果，未完成的标 `failed` 并给 `batch_timeout` 原因
+   - `fail_fast=true` → 任一失败立刻 abort，所有飞行中的 sub-agent cancel
+5. **取消传播**：主 agent interrupt → executor 停止派发新 item + 取消所有飞行中的 sub-agent（复用 `InterruptController`）
+6. **结果聚合**：返回 `BatchResult { results: Vec<ItemResult>, summary: { total, completed, failed, elapsed_secs } }`，主 agent 拿到结构化结果直接做汇总分析
+
+**与 L1 的关系**：
+
+- L2 = 聚合器 + 模板化 + 进度 + 取消，**每个 item 仍走 SubAgentOrchestrator.execute()**（一次 L1 调用）
+- L2 不重新实现 sub-agent 沙箱、context 隔离、attachment 加载——全部继承 L1
+- L1 schema 改动对 L2 完全无感（L2 用 `SubAgentRequest` 直接构造，绕过 schema）
+
+**实施成本估算**：
+
+| 子任务 | LOC 估 | 风险 |
+|---|---|---|
+| `crates/hermix-tools/src/tools/batch.rs` (新工具 + schema) | ~200 | 低 |
+| `crates/hermix-agent/src/batch_executor.rs` (并发调度 + 进度 + 取消) | ~400 | 中（要小心 Send recursion，与 L1 同样的 boxing 套路） |
+| `crates/hermix-server/src/lib.rs` (WS `batch_progress` 事件) | ~50 | 低 |
+| `apps/desktop-tauri/src/components/BatchProgress.tsx` (UI) | ~150 | 低 |
+| 测试 (Rust 单测 + 集成测试 + 一个端到端 e2e 跑 50 张图) | ~300 | 中 |
+| **合计** | **~1100 LOC** | — |
+
+**预计工作量**：1–2 天（agent_executor.rs 是最复杂的一块）。
+
+### 7.6 L3 概念：`pipeline_run` (远期)
+
+**动机**：10000 张图 = 数据流问题，应完全脱离 LLM 编排。LLM 只设计"processor"（"调 OCR 库抽车牌"），数据流走文件队列。
+
+**形态（仅概念）**：
+
+```json
+{
+  "tool": "pipeline_run",
+  "params": {
+    "stages": [
+      {"name": "discover", "kind": "glob", "pattern": "D:\\imgs\\*.jpg"},
+      {"name": "ocr",      "kind": "processor", "exec": "python ocr.py --input {input} --output {output}"},
+      {"name": "summarize","kind": "llm",      "model": "gpt-4o-mini", "prompt_template": "总结这些 OCR 结果:\n{input}"}
+    ],
+    "concurrency": 16,
+    "checkpoint_dir": "D:\\pipelines\\run-2026-07-23\\"
+  }
+}
+```
+
+**与 L2 区别**：
+
+- L2 = LLM-driven（每个 item 仍调 sub-agent LLM）
+- L3 = Dataflow-driven（中间 stage 可以不调 LLM，纯本地 OCR / 视觉模型 / 数据库查询）
+- L3 适合"100% 任务可机械化"的场景（OCR、分类、嵌入生成）；不适合"每张图都需要 LLM 推理"的场景
+
+**实施门槛**：高。需要独立的 `hermix-pipeline` crate（stage DSL、checkpoint、resumability、worker pool），是 1–2 周工作量。**当前不进规划**，等 L2 落地后再决定。
+
+### 7.7 实施路线
+
+```
+L1 (2026-07-23)  ─── schema 暴露 + 并发 fan-out ──→ 已上线 ✅
+       │
+       ▼
+L2 (V2.1)  ── Rust executor + 模板 + 进度 + 取消 ──→ 1–2 天，待主人拍板启动
+       │
+       ▼
+L3 (V3.x)  ── pipeline DSL + checkpoint ──→ 概念阶段，不进当前规划
+```
+
+**给主人拍板的 3 个问题**：
+
+1. L1 schema 的"≤ 10 attachments per call"软上限，**是否要在 tool_executor.rs 加硬警告日志**（不拒绝，只 `tracing::warn!` 提示可能溢出）？
+2. L2 `delegate_batch` 是否进下一阶段（1–2 天实现）？
+3. L3 是否进规划（明确"未来再做"，避免半途开新坑）？
+
+### 7.8 教训（固化进 SOUL/AGENTS）
+
+- **LLM 编排"模式"，Rust 编排"数据"** —— 永远不要让 LLM 在 prompt 里"循环发 N 次 tool_call"做大批量。
+- **Attachments 走路径引用，不走 base64 内联** —— 10000 张图只需要 `glob` pattern，token 成本固定。
+- **任何"批量处理"先想 L1/L2/L3** —— 不要直接动手写代码，先判断档位。
+- **Sub-agent 必带 HARD OVERRIDE prompt** —— 任何"agent-of-agent"架构都要主动阻断递归 delegation。
+- **schema 里讲清容量边界** —— 让 LLM 在调用前就知道上限，不要靠它自己试错发现。
+
+---
+
+## 8. 文档版本
 
 - v1-v5: 已废弃,基于估算的事实
 - **v6: 2026-06-19 12:30**
@@ -317,3 +494,8 @@ LLM 产生 thinking-only 响应 (无工具调用)
   - 新增 §6: Agent Loop 核心引擎修复进度
   - AL-1 ~ AL-5 已完成（含根因分析和修复验证）
   - 7 个待实施项按优先级排列
+- **v6.2: 2026-07-23**
+  - 新增 §7: 批量处理架构 L1/L2/L3 三档（主人 challenge "100/1000/10000 张图" 衍生）
+  - 第一性原则论证 + 反模式 + L2 delegate_batch API 草案 + L3 pipeline 概念
+  - L1 (`delegate_task`) schema 暴露 attachments/output_schema 并明确容量边界
+  - 待主人拍板：L2 是否进 V2.1 实施 / L3 是否进规划

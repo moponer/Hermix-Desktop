@@ -21,11 +21,11 @@
  *   timeout    → muted yellow "超时"
  *   partial    → muted gray "未完成"
  *
- * 2026-06-17 主人反馈 "已完成几个字的设计难看"：
+ * 用户反馈 "已完成几个字的设计难看"：
  *   终结态不再显示任何 chip / 时间戳 (因为 MessageBubble 会接管并显示真实时间).
  *   进行态依然有 "正在生成…" 文字 + 段间隙动画, 不变.
  *
- * 段间隙动画（2026-06-12 主人需求）：
+ * 段间隙动画（用户需求）：
  *   "正在生成…"的动画从 header 移到段间隙位置——每段输出结束后、下一段
  *   还没开始时，在 markdown 内容末尾的下一行行首显示心跳 + 扫描线。
  *   检测 markdown 文本是否以换行符结尾：`/\n\s*$/`。
@@ -33,7 +33,7 @@
  *   · 文本不以换行结尾 → 当前段还在写 → 不显示 dot（避免段内重叠）
  *   · 流结束（phase !== streaming/connecting/slow） → 自动消失
  *
- * 2026-07-11: Unified timeline rendering — reasoning / tools / text
+ * Unified timeline rendering — reasoning / tools / text
  * are now rendered in chronological order using `unifiedSteps`,
  * matching the settled MessageBubble's layout. This ensures that
  * multi-iteration agent loops (think → tool → think → tool → text)
@@ -71,7 +71,7 @@ interface StreamingBubbleProps {
    * mid-turn, which is the "avatar appears twice in one agent loop"
    * bug.
    *
-   * v18 (2026-06-17): multiple streaming placeholders within a single
+   * multiple streaming placeholders within a single
    * agent loop used to each render their own header because this
    * component hard-coded `showHeader=true`. Now the parent decides
    * — true only for the first assistant placeholder after a user
@@ -84,13 +84,13 @@ interface StreamingBubbleProps {
    *  Retained for backward compat — when `unifiedSteps` is provided,
    *  this is not used. */
   reasoningContent?: string;
-  /** 2026-07-10: Live tool execution timeline from the assistant's
+  /** Live tool execution timeline from the assistant's
    *  execution_timeline. Rendered as a collapsible block inside the
    *  streaming bubble, same as in the settled MessageBubble.
    *  Retained for backward compat — when `unifiedSteps` is provided,
    *  this is not used. */
   executionTimeline?: ExecutionTimelineEvent[];
-  /** 2026-07-11: Unified timeline steps — chronological sequence of
+  /** Unified timeline steps — chronological sequence of
    *  reasoning / tools / text. When provided, takes priority over
    *  the legacy `reasoningContent` + `executionTimeline` + `text`
    *  trio. */
@@ -98,7 +98,7 @@ interface StreamingBubbleProps {
 }
 
 /**
- * STATUS_MAP 视觉规则 (2026-06-17 主人反馈 "已完成几个字的设计难看"):
+ * STATUS_MAP 视觉规则 (用户反馈 "已完成几个字的设计难看"):
  *  - 静默 / 终结态 (completed / idle) → render 空 (不显示, 已完成是废话)
  *  - 失败态 (error / timeout / partial) → 极简图标 + 文字, 不用任何 chip 背景
  *  - 进行态 (streaming / connecting / slow) → 文字, 不带 chip 视觉重量
@@ -143,7 +143,7 @@ const NOOP = () => {};
 
 /**
  * Streaming reasoning row — always-expanded process prose.
- * 2026-07-16: replaced the per-row "已深度思考中… ▼" fold. The whole
+ * replaced the per-row "已深度思考中… ▼" fold. The whole
  * process timeline is now wrapped in a single ProcessTimeline block
  * (one fold, not N folds), so this row just renders the content.
  * Kept exported in case future code paths reuse it; the live bubble
@@ -181,7 +181,7 @@ function StreamingBubbleImpl({
   // mounted BEFORE the stream settles and renders raw streamed chunks
   // directly through MarkdownBody. Without this parse, the user sees
   // the [CONTEXT COMPACTION] English wall whenever the model echoes the
-  // banner mid-stream (verified 2026-06-27: banner echo leaked 1.2KB
+  // banner mid-stream (verified banner echo leaked 1.2KB
   // English text into the chat despite MessageBubble's strip working
   // post-stream).
   const parsedStream = useMemo(() => parseContent(deferred), [deferred]);
@@ -211,7 +211,7 @@ function StreamingBubbleImpl({
   const hasTextStep = effectiveSteps.some((s) => s.kind === "text");
   const hasNoContent = !hasTextStep;
 
-  // 2026-07-21: detect whether any tool group is still running so we can
+  // detect whether any tool group is still running so we can
   // suppress the shimmer indicator while tool cards are active.
   const hasRunningToolInSteps = isStreamingPhase && effectiveSteps.some(
     (s) => s.kind === "tools" && s.events.some(
@@ -223,8 +223,7 @@ function StreamingBubbleImpl({
     // Same outer layout as MessageBubble(showHeader=true) so the
     // avatar + meta line above the body matches the post-stream
     // bubble. No "header pops in" jump when stream settles.
-    //
-    // v18 (2026-06-17): when `showHeader=false` we still need to
+    // when `showHeader=false` we still need to
     // preserve the left padding so the body text aligns with the
     // FIRST assistant message in the loop (which has the header).
     // We mirror MessageBubble's pattern: header→flex with avatar
@@ -265,7 +264,7 @@ function StreamingBubbleImpl({
         )}
 
         {/* Process timeline (single foldable block) + final text prose.
-            2026-07-16: mirrors MessageBubble's new layout — every
+            mirrors MessageBubble's new layout — every
             reasoning/tool step goes inside one ProcessTimeline fold,
             and text steps render as continuous prose below the fold.
             This matches the WorkBuddy reference UI: one "处理中… /
@@ -337,12 +336,12 @@ function StreamingBubbleImpl({
           ) : null
         )}
 
-        {/* 2026-07-11: "正在回复" 流光指示器 — 仅当 body 已有内容但流仍活跃时显示，
+        {/* "正在回复" 流光指示器 — 仅当 body 已有内容但流仍活跃时显示，
              让用户知道 agent 在持续思考/调工具而没有结束。
              严格边界：此组件只挂在 StreamingBubble（isStreaming=true）内，
-             历史消息重载时根本不渲染 — 满足主人"恢复历史不显示"的要求。
+             历史消息重载时根本不渲染 — 满足用户"恢复历史不显示"的要求。
              至少要有一段 reasoning 才挂，避免和上面"无内容 placeholder"重复。
-             2026-07-21: 当有工具卡片正在运行时，隐藏 shimmer 指示器——
+             当有工具卡片正在运行时，隐藏 shimmer 指示器——
              工具卡片的 🔄 运行中 + 进度条已经是足够的状态指示，
              shimmer 的"正在回复"会在工具卡片下方制造冗余动画，
              让用户误以为"什么都没在做"。工具运行中时只保留工具卡片，

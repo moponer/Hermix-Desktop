@@ -10,19 +10,15 @@
 use serde_json::Value;
 
 /// Parse reasoning content from a raw LLM response JSON value.
-///
-/// Examines the response object for known reasoning fields and returns
+/// /// Examines the response object for known reasoning fields and returns
 /// the extracted text if any reasoning content is found.
-///
-/// # Fields checked (in order)
-///
-/// 1. `reasoning_content` — a simple string
+/// /// # Fields checked (in order)
+/// /// 1. `reasoning_content` — a simple string
 /// 2. `reasoning` — a simple string
 /// 3. `reasoning_details` — an array of `{ "type": "text", "text": "..." }` objects
 /// 4. `message.reasoning_content` — nested inside a `message` object
 /// 5. `message.reasoning` — nested inside a `message` object
-///
-/// Returns `None` if no reasoning content is found.
+/// /// Returns `None` if no reasoning content is found.
 pub fn parse_reasoning(response: &Value) -> Option<String> {
     // Check top-level reasoning_content
     if let Some(s) = response.get("reasoning_content").and_then(|v| v.as_str()) {
@@ -98,13 +94,11 @@ pub fn parse_reasoning(response: &Value) -> Option<String> {
 }
 
 /// Extract reasoning text from a `reasoning_details` array.
-///
-/// Each element may be:
+/// /// Each element may be:
 /// - `{ "type": "text", "text": "..." }` (standard OpenRouter format)
 /// - `{ "type": "thinking", "thinking": "..." }` (thinking blocks)
 /// - `{ "text": "..." }` (simplified format)
-///
-/// All recognized text fields are concatenated with newlines.
+/// /// All recognized text fields are concatenated with newlines.
 pub fn extract_reasoning_details(details: &[Value]) -> String {
     let mut parts = Vec::new();
 

@@ -95,11 +95,11 @@ impl Default for CaptureConfig {
 /// not have:
 ///
 /// - `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` when the session is
-///   in transition (lock screen, UAC prompt, RDP attach).
+/// in transition (lock screen, UAC prompt, RDP attach).
 /// - Driver-level failures on a few virtualised GPUs (Hyper-V
-///   session host, some VDI clients).
+/// session host, some VDI clients).
 /// - Multi-adapter laptops where the active display is wired to
-///   a different GPU than the adapter DXGI hands us.
+/// a different GPU than the adapter DXGI hands us.
 ///
 /// A black-box agent tool that returns `Err` for any of these
 /// would be a regression vs. Phase 1's BitBlt (which always

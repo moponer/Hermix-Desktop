@@ -5,8 +5,7 @@
 use regex::Regex;
 
 /// Split a long message into chunks that respect word and sentence boundaries.
-///
-/// Prefers breaking at sentence endings (`. `, `! `, `? `), then at newlines,
+/// /// Prefers breaking at sentence endings (`. `, `! `, `? `), then at newlines,
 /// then at word boundaries (spaces), and only hard-splits as a last resort.
 pub fn split_long_message(text: &str, max_len: usize) -> Vec<String> {
     if max_len == 0 {
@@ -110,8 +109,7 @@ pub fn sanitize_html(text: &str) -> String {
 }
 
 /// Estimate reading time in seconds for the given text.
-///
-/// Assumes an average reading speed of 200 words per minute.
+/// /// Assumes an average reading speed of 200 words per minute.
 pub fn estimate_read_time(text: &str) -> u32 {
     let word_count = text.split_whitespace().count() as f64;
     let minutes = word_count / 200.0;

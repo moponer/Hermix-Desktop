@@ -1,9 +1,9 @@
 /// Avatars for user, AI assistant, and system.
 /// - User / System: small geometric SVG marks that recolor with the theme
-///   and stay legible at 18–40px. Pure black/white high-contrast.
+/// and stay legible at 18–40px. Pure black/white high-contrast.
 /// - Assistant: the Hermix fox portrait (SVG). Vector source means @1x/@2x/
-///   @3x all stay crisp without per-density exports; also removes the
-///   `mascot-avatar-*.png` quartet from `src/assets/`.
+/// @3x all stay crisp without per-density exports; also removes the
+/// `mascot-avatar-*.png` quartet from `src/assets/`.
 
 interface AvatarProps {
   role: "user" | "assistant" | "system";

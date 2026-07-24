@@ -32,26 +32,22 @@ pub struct GroupChatRoom {
 /// user-invited agent — but it still occupies a row in
 /// `groupchat_room_agents` so the existing send_message leader-driven
 /// flow can find and dispatch to it without any code changes.
-///
-/// Frontend treats this id as a magic string and renders the leader
+/// /// Frontend treats this id as a magic string and renders the leader
 /// distinctly (👑, centered message bubble, no kick/model controls).
 /// API endpoints that mutate per-agent state (invite / kick /
 /// update_member_model) reject this id with 400 to prevent the user
 /// from accidentally removing or configuring the built-in leader.
-///
-/// IMPORTANT: this id MUST NOT appear in `room.agent_ids` — only in
+/// /// IMPORTANT: this id MUST NOT appear in `room.agent_ids` — only in
 /// the `groupchat_room_agents` table's `agent_id` column for the leader
 /// row. The room's `agent_ids` list is the user-facing member roster.
 pub const LEADER_AGENT_ID: &str = "__leader__";
 
 // ── Session ID generation (groupchat module) ────────────
-//
 // Replaces the previous `format!("groupchat-leader-{room_id}")` and
 // `format!("groupchat-{room_id}-{agent_id}")` synthetic IDs that were
 // created at room / agent add time but never inserted into the
 // canonical `sessions` table. AgentService then received a session_id
 // that resolved to nothing in `session_search` / `memory_prefetch`.
-//
 // Now we mint plain `Uuid::new_v4()` IDs — the same format used by
 // `hermix_gateway::session::Session::new()`, `hermix_agent::acp::session`,
 // and every other session-creating path in this workspace. Centralised
@@ -364,8 +360,7 @@ impl RankSnapshot {
     /// Recompute `tier` / `tier_cn` / `badge_emoji` from `score`. Call
     /// this after mutating `score` so the persisted snapshot stays
     /// consistent (otherwise the badge would drift from the score).
-    ///
-    /// P1.5 — returns the result of the transition detection so the
+    /// /// P1.5 — returns the result of the transition detection so the
     /// caller can decide whether to emit a 升段/掉段 event. `NoTransition`
     /// when the tier hasn't changed.
     pub fn refresh_tier(&mut self) -> TierTransition {

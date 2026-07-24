@@ -15,8 +15,7 @@ use crate::config::GatewayConfig;
 // ---------------------------------------------------------------------------
 
 /// Recursively merge `overlay` into `base`.
-///
-/// - Objects are merged key-by-key; keys present in `overlay` replace those in `base`.
+/// /// - Objects are merged key-by-key; keys present in `overlay` replace those in `base`.
 /// - All other types (arrays, strings, numbers, etc.) are overwritten by `overlay`.
 /// - `null` values in `overlay` cause the corresponding key to be **removed** from `base`.
 pub fn deep_merge(base: &mut Value, overlay: &Value) {
@@ -45,12 +44,10 @@ pub fn deep_merge(base: &mut Value, overlay: &Value) {
 // ---------------------------------------------------------------------------
 
 /// Merge a YAML-sourced config with a JSON-sourced config.
-///
-/// The `yaml_config` takes priority over `json_config`. The result
+/// /// The `yaml_config` takes priority over `json_config`. The result
 /// is a new GatewayConfig where yaml values override json values
 /// at every level.
-///
-/// After the merge, validation is applied (e.g. DailyReset at_hour clamping).
+/// /// After the merge, validation is applied (e.g. DailyReset at_hour clamping).
 pub fn merge_configs(yaml_config: &GatewayConfig, json_config: &GatewayConfig) -> GatewayConfig {
     // Serialize both to JSON values, deep-merge yaml over json, then deserialize.
     let mut base = serde_json::to_value(json_config).unwrap_or(Value::Null);

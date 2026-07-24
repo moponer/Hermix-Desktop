@@ -79,8 +79,7 @@ impl DmManager {
     }
 
     /// Handle an incoming DM from a user on a platform.
-    ///
-    /// Returns a `DmDecision` indicating how to proceed:
+    /// /// Returns a `DmDecision` indicating how to proceed:
     /// - `Allow` if the user is authorized or is an admin
     /// - `Pair` if unauthorized and behavior is Pair
     /// - `Deny` if unauthorized and behavior is Ignore

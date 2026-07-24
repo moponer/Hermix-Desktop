@@ -28,9 +28,9 @@ pub fn base_budget_for_tier(tier: RankTier) -> u32 {
 /// Compute effective token budget for an agent right now.
 ///
 /// Inputs:
-///   - `global`   — persistent rank, follows agent across rooms
-///   - `shadow`   — per-room delta, resets on (re-)invite
-///   - `streak`   — current consecutive-pass count
+/// - `global`   — persistent rank, follows agent across rooms
+/// - `shadow`   — per-room delta, resets on (re-)invite
+/// - `streak`   — current consecutive-pass count
 ///
 /// Returns the effective budget in tokens, clamped to `[4K, 48K]`.
 pub fn effective_budget(global: &GlobalRank, shadow: &RoomRankShadow, streak: u32) -> TokenBudget {

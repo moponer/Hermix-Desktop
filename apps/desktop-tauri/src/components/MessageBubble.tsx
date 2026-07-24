@@ -31,19 +31,20 @@ import {
   memoryActionLabel,
   memoryStatusColor,
 } from "../utils/memoryToolResult";
-// InlinePathPreview was retired 2026-06-22 — every path click now
+// InlinePathPreview was retired — every path click now
 // routes through ChatView's `onPathClick` → RightSidebar preview.
 // See the comment near the markdown-body render below for the bug
 // story ("产物栏展开跑到对话界面下面去了").
 import { ThoughtStreamCard } from "./ThoughtStreamCard";
+import { useSafeTimeout } from "../hooks/useSafeTimeout";
 
 // Re-export so `import { ThoughtStreamCard } from "./MessageBubble"` keeps
 // working — consistent with `PrefetchIntentChip`'s public surface below.
 export { ThoughtStreamCard };
-// 2026-07-10: Exported for reuse in StreamingBubble — both the live
+// Exported for reuse in StreamingBubble — both the live
 // streaming bubble and the settled MessageBubble render the tool
 // timeline from the same component so visuals stay identical.
-// 2026-07-16: ProcessTimeline added for the same reason — the single
+// ProcessTimeline added for the same reason — the single
 // foldable block is the canonical process surface in both renderers.
 export { ToolTimelineSection, ProcessTimeline };
 
@@ -141,10 +142,10 @@ export function MessageBubble({
 }
 
 // ── Stop-reason chip ─────────────────────────────────────────────
-// 2026-06-17 主人反馈 "已完成几个字的设计难看":
-//   stop 态不渲染任何 chip (已完成是废话, 时间戳已经在左侧). 其他 stop
-//   原因保留, 但全部去掉 pill-* 彩色文本 → 改为纯 muted 文字 + 极小图标,
-//   视觉重量与左侧时间戳持平.
+// 用户反馈 "已完成几个字的设计难看":
+// stop 态不渲染任何 chip (已完成是废话, 时间戳已经在左侧). 其他 stop
+// 原因保留, 但全部去掉 pill-* 彩色文本 → 改为纯 muted 文字 + 极小图标,
+// 视觉重量与左侧时间戳持平.
 function StopReasonChip({ reason, meta }: { reason: string; meta?: string }) {
   // stop → render nothing (the message has clearly settled; no label needed)
   if (reason === "stop") return null;
@@ -196,6 +197,7 @@ export function MessageCopyAction({
   content: string;
   className: string;
 }) {
+  const safeSetTimeout = useSafeTimeout();
   const [copied, setCopied] = useState(false);
 
   const copyMessage = async () => {
@@ -203,7 +205,7 @@ export function MessageCopyAction({
     try {
       await navigator.clipboard.writeText(content);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      safeSetTimeout(() => setCopied(false), 1500);
     } catch {
       setCopied(false);
     }
@@ -236,7 +238,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: message.content ? 6 : 0 }}>
             {message.images.map((img, i) => (
               <img
-                key={i}
+                key={`img-${img.name || i}`}
                 src={img.blobUrl}
                 alt={img.name}
                 style={{ maxWidth: 180, maxHeight: 180, borderRadius: 8, border: "1px solid #2e2e34", objectFit: "cover" }}
@@ -259,7 +261,6 @@ function UserMessage({ message }: { message: ChatMessage }) {
 // Renders tool calls from the assistant's `execution_timeline` as a
 // collapsible block inside the assistant bubble — same visual position
 // as the reasoning block, but for tools.
-//
 // This replaces the old approach of expanding timeline events into
 // separate `role: "tool"` messages (which caused tools to appear
 // above the avatar when the first assistant was empty).
@@ -399,21 +400,17 @@ function ToolGroupCard({
 }
 
 // ── Process Timeline (the ONE foldable block) ───────────────────
-//
-// 2026-07-16 v2: 流式阶段不渲染折叠头，让 reasoning / tool 和正文
+// v2: 流式阶段不渲染折叠头，让 reasoning / tool 和正文
 // 看起来一样 — 用户看到的是"LLM 实时在写"（不区分 thinking 还是
 // reply），只有关键转换发生（最终正文出现 / stream 结束）时，前
 // 面所有过程才整体折叠成一个"已完成 N 个工具"chip。
-//
 // 流式时（isStreaming=true）：
-//   · 无折叠头
-//   · 过程内容（reasoning + tools）直接平铺在文本流里，
-//     视觉上和正文一样（thinking 是浅灰斜体、tool 是普通一行）
-//
+// · 无折叠头
+// · 过程内容（reasoning + tools）直接平铺在文本流里，
+// 视觉上和正文一样（thinking 是浅灰斜体、tool 是普通一行）
 // 结束后（isStreaming=false）：
-//   ┌─  ✓ 已完成 N 个工具 ▼  ← 在 body 之上插入折叠 chip
-//   └─  body 默认折叠，点击展开看完整过程
-//
+// ┌─  ✓ 已完成 N 个工具 ▼  ← 在 body 之上插入折叠 chip
+// └─  body 默认折叠，点击展开看完整过程
 // 关键不变量：折叠只在"过程"和"结论"之间发生，不在"流式中"发生。
 // 这跟 WorkBuddy 参考 UI 一致——流式时是一段连续叙事，结束后才
 // 把"过程"压缩成可展开的历史。
@@ -457,14 +454,12 @@ function ProcessTimeline({
   // previously inflated the count to 700+ for just a handful of tools.
   // Using the same `groupTimeline` call that drives rendering guarantees
   // the header count always matches what the user sees when expanded.
-  //
   // useMemo: during streaming the parent re-renders 30-50×/s (rAF chunk
   // batches). Without memo, `groupTimeline` re-runs on every render even
   // when `processSteps` hasn't changed between batches. The dependency
   // array limits recomputation to when the steps array or streaming flag
   // actually changes.
-  //
-  // 2026-07-22 FIX (streamComplete): while the live WS is still feeding
+  // FIX (streamComplete): while the live WS is still feeding
   // events for this message (`isStreaming === true`), ask `groupTimeline`
   // to *not* flip stranded groups to `"error"` — that was the source of
   // "读取文件上来就提示执行中断，实际后面又成功了". The ToolRow renderer
@@ -509,11 +504,11 @@ function ProcessTimeline({
 
   // Header label: only used when settled (isStreaming=false). Live
   // renders no header — the content flows inline like prose.
-  //   "已完成"                    ← no timing data
-  //   "已完成 7s"                 ← < 1 minute
-  //   "已完成 1m 23s"             ← ≥ 1 minute (s always shown, never 0-padded)
-  //   "已完成 5 个工具 7s"        ← when tools ran (count + duration)
-  //   "已完成 5 个工具 (2 失败) 7s" ← when some tools failed (P4-3)
+  // "已完成"                    ← no timing data
+  // "已完成 7s"                 ← < 1 minute
+  // "已完成 1m 23s"             ← ≥ 1 minute (s always shown, never 0-padded)
+  // "已完成 5 个工具 7s"        ← when tools ran (count + duration)
+  // "已完成 5 个工具 (2 失败) 7s" ← when some tools failed (P4-3)
   const durationPart = formatDuration(durationMs);
   const errorPart = errorTools > 0 ? ` (${errorTools} 失败)` : "";
   const settledLabel = totalTools > 0
@@ -595,7 +590,7 @@ function formatDuration(ms: number | undefined): string {
  * the fold). Renders each tool call as a single row, preserving the
  * per-tool inline expansion for full stdout / structured output.
  *
- * 2026-07-16: replaced the old "工具调用 [已完成 X] ▼" outer fold
+ * replaced the old "工具调用 [已完成 X] ▼" outer fold
  * with a flat list, so the timeline reads as a narrative instead of
  * a stack of chips. Each ToolGroupCard still has its own inline
  * "click to expand" affordance for full output.
@@ -623,23 +618,20 @@ function ToolTimelineSection({
 
 // ── Unified Timeline Renderer ─────────────────────────────────────
 // Renders the assistant's response as TWO regions:
-//
-//   ┌────────────────────────────────────────────────────────────┐
-//   │ ProcessTimeline (one foldable block)                       │
-//   │   process steps  = reasoning + tools (in chronological     │
-//   │                     order, all the agent-loop scaffolding) │
-//   │   header         = "处理中…" (live) / "已完成 N 个工具"   │
-//   │                     (settled, collapsed by default)       │
-//   ├────────────────────────────────────────────────────────────┤
-//   │ Final text (one or more text steps, rendered as continuous │
-//   │   prose — no fold, no card wrapper)                        │
-//   └────────────────────────────────────────────────────────────┘
-//
-// 2026-07-16: replaces the previous iteration-based grouping. The
+// ┌────────────────────────────────────────────────────────────┐
+// │ ProcessTimeline (one foldable block)                       │
+// │   process steps  = reasoning + tools (in chronological     │
+// │                     order, all the agent-loop scaffolding) │
+// │   header         = "处理中…" (live) / "已完成 N 个工具"   │
+// │                     (settled, collapsed by default)       │
+// ├────────────────────────────────────────────────────────────┤
+// │ Final text (one or more text steps, rendered as continuous │
+// │   prose — no fold, no card wrapper)                        │
+// └────────────────────────────────────────────────────────────┘
+// replaces the previous iteration-based grouping. The
 // fold is now at the OUTER level, not per-step. Multiple text steps
 // (LLM can interleave paragraphs) are merged into a single prose
 // flow at the bottom of the bubble — same as before.
-//
 // File changes / memory updates / memory recalls / tool-calls
 // fallback / thinking dots remain as trailing meta blocks.
 
@@ -826,7 +818,7 @@ function AssistantMessage({
     [toolCalls],
   );
 
-  // Inline path preview was retired 2026-06-22 in favour of routing
+  // Inline path preview was retired in favour of routing
   // every path click through ChatView's `onPathClick` → RightSidebar.
   // The dialog form (and the `transform: ...; h-enter` ancestor it
   // spawned under) used to "fall below" the chat column, breaking
@@ -873,7 +865,7 @@ function AssistantMessage({
             display each step as a cohesive unit instead of a fixed
             3-section layout (all reasoning → all tools → all text).
 
-            2026-07-11: Replaces the previous layout where
+            Replaces the previous layout where
             ReasoningBlock, ToolTimelineSection, and the body card
             were always rendered in that fixed order regardless of
             the actual chronological flow. */}
@@ -902,7 +894,7 @@ function AssistantMessage({
         />
       </div>
 
-      {/* Inline path popover retired 2026-06-22 — see comment above
+      {/* Inline path popover retired — see comment above
           `openPath` in this component. All path clicks now flow
           through `onPathClick` (passed by ChatView → App.tsx) into
           the right sidebar's preview mode. */}
@@ -911,7 +903,6 @@ function AssistantMessage({
 }
 
 // ── System message ───────────────────────────────────────────────
-//
 // Defense-in-depth: this branch is no longer reachable through the
 // normal `getSessionMessages` path (server + api.ts both filter out
 // role='system'). It still exists because (a) the `role: "system"`
@@ -1113,19 +1104,17 @@ function MemoryRecallBlock({ recalls }: { recalls: MemoryRecallEntry[] }) {
 }
 
 // ── Body markdown ────────────────────────────────────────────────
-//
 // Body rendering is shared between MessageBubble and StreamingBubble
 // so a fenced code block in a streaming reply renders with the
 // language label + copy button + oneDark highlight the moment the
 // closing ``` arrives. See ./MarkdownBody.tsx for the renderer.
 
 // ── Tool message card (role="tool") ──────────────────────────────
-//
 // Style goals (matching WorkBuddy's tool listing):
-//   - Compact: one row per tool, no avatar or card wrapper
-//   - Collapsible: click the row to expand the terminal block
-//   - Minimal chrome: just the tool icon + name + status pill + time
-//   - Terminal output lives inside the expanded body, muted background
+// - Compact: one row per tool, no avatar or card wrapper
+// - Collapsible: click the row to expand the terminal block
+// - Minimal chrome: just the tool icon + name + status pill + time
+// - Terminal output lives inside the expanded body, muted background
 
 /* ════════════════════════════════════════════════════════════════════
    工具分类体系 v4 — 全面覆盖，零"未知操作"
@@ -1147,7 +1136,7 @@ function MemoryRecallBlock({ recalls }: { recalls: MemoryRecallEntry[] }) {
    mapped. It renders the literal tool name as the verb so the user
    always sees what actually ran — no generic placeholder.
 
-   Last updated: 2026-06-22 (v4 comprehensive rewrite)
+   Last updated: (v4 comprehensive rewrite)
    ─────────────────────────────────────────────────────────────── */
 
 interface ToolCategory {
@@ -1642,7 +1631,7 @@ function stdoutFallback(toolLower: string, stdout?: string): string | null {
   if (!stdout) return null;
   // First, peel off common JSON wrappers the backend uses for tool
   // results (`{"exit_code":0,"interpreter":"python","language":"python",
-  //  "stderr":"","stdout":"saved: D:\\qcc\\发票汇总.xls 5632 bytes\r\n"}`).
+  // "stderr":"","stdout":"saved: D:\\qcc\\发票汇总.xls 5632 bytes\r\n"}`).
   // Without this, the row reads as "已执行 {"exit_code":0,...}" —
   // pure JSON noise that the user cannot act on. We pull the
   // human-readable `stdout` (or `result`) out and recurse so
@@ -1753,14 +1742,13 @@ function ToolMessageCard({
   const memResult =
     meta.tool === "memory" ? parseMemoryResult(meta.output) : null;
   // Two-piece label: `<verb> <object>` (e.g. "读取 PDF D:\data\发票汇总.xls").
-  //   - `verb` comes from `toolVerb` (registered Chinese verb, or the
-  //     literal English name for unknown tools).
-  //   - `object` is `argsHint` — the most meaningful string we
-  //     can lift from the tool's args (path / url / command / query).
-  //     If `argsHint` is empty (e.g. a no-arg tool), we just show
-  //     the verb alone so the row doesn't read "读取文件 (空)".
-  //
-  // 主人原话 (2026-06-22): "执行的内容不要写死啊, 应该是根据实际
+  // - `verb` comes from `toolVerb` (registered Chinese verb, or the
+  // literal English name for unknown tools).
+  // - `object` is `argsHint` — the most meaningful string we
+  // can lift from the tool's args (path / url / command / query).
+  // If `argsHint` is empty (e.g. a no-arg tool), we just show
+  // the verb alone so the row doesn't read "读取文件 (空)".
+  // 用户原话 (2026-06-22): "执行的内容不要写死啊, 应该是根据实际
   // 情况显示的" — verb 不再硬塞 "调用工具" 占位符。当 LLM 输出
   // `tool="tool"` 这种空占位时，根据 args 形状 (command/path/url/
   // query/code) 推断 verb; args 也空就显示 "未知操作"。
@@ -1768,14 +1756,12 @@ function ToolMessageCard({
     ? memoryActionLabel(memResult.action)
     : toolVerb(meta.tool, meta.args);
   // The row has two visually distinct slots:
-  //
-  //   1. Verb slot (left):  always shows `verb` alone — e.g. "读取 PDF",
-  //      "执行命令", "调用工具". No args, no object, nothing else.
-  //   2. Primary slot (middle, optional): shows the most meaningful
-  //      string we can lift from args / stdout — file path, URL,
-  //      command, query, or — on error — a one-line error summary
-  //      instead of the raw JSON payload.
-  //
+  // 1. Verb slot (left):  always shows `verb` alone — e.g. "读取 PDF",
+  // "执行命令", "调用工具". No args, no object, nothing else.
+  // 2. Primary slot (middle, optional): shows the most meaningful
+  // string we can lift from args / stdout — file path, URL,
+  // command, query, or — on error — a one-line error summary
+  // instead of the raw JSON payload.
   // Earlier this code concatenated them into a single label string
   // and rendered that in the verb slot, then rendered `primary`
   // again in its own span — which produced visible duplicates like
@@ -1890,9 +1876,9 @@ function ToolMessageCard({
         )}
 
         {/* Right side: line stats + status indicator.
-            Round 6, 2026-07-06: 加 .chat-status-inline — inline-flex +
+            Round 6, 加 .chat-status-inline — inline-flex +
             vertical-align: middle + margin-left: 8px, 贴消息末尾不再
-            两端撑开 (主人反馈原状态被 justify-between 拉散). */}
+            两端撑开 (用户反馈原状态被 justify-between 拉散). */}
         <span className="tw-msg-right chat-status-inline">
           {(stats.added != null || stats.removed != null) && (
             <span className="tw-msg-stats">
@@ -1904,7 +1890,7 @@ function ToolMessageCard({
               )}
             </span>
           )}
-          {/* 2026-06-29 主人反馈: "已完成" / "失败" 用蓝/红色字符太刺眼,
+          {/* 用户反馈: "已完成" / "失败" 用蓝/红色字符太刺眼,
               全部改成小图标 + 文字形式, 颜色统一调到 muted/success/warning
               (蓝/红色字符完全不渲染). 已完成 → ✓; 失败 → ⚠; 运行中 → ⏵;
               已中断 → ⚠. */}
@@ -2274,7 +2260,7 @@ function ToolCallsFallback({ calls }: { calls: NonNullable<ChatMessage["tool_cal
   return (
     <div className="tool-rail">
       {calls.map((tc, i) => (
-        <div key={i} className="tool-row tool-done">
+        <div key={`tc-${tc.name || i}`} className="tool-row tool-done">
           <span className="rail-dot" />
           <div className="tool-head cursor-default">
             <Wrench size={12} className="text-text-muted" />
@@ -2288,12 +2274,10 @@ function ToolCallsFallback({ calls }: { calls: NonNullable<ChatMessage["tool_cal
 }
 
 // ── Approval card (role="approval") ───────────────────────────────
-//
 // Inlines a permission decision UI for a high-risk tool the agent wants
 // to run. Lives between two assistant messages (one frozen on the left,
 // a fresh empty placeholder on the right) and blocks the WS round-trip
 // until the user clicks allow/deny.
-//
 // Why not AssistantMessage fallback: approval messages have
 // `content: ""`, no `tool_calls`, no `execution_timeline` — they'd
 // render as an empty Hermes bubble (avatar + "Hermes · 刚刚" + no
@@ -2324,9 +2308,9 @@ function useApprovalCountdown(expiresAt: number | null | undefined): number | nu
 function riskVisual(risk?: string) {
   // Matches the server's `RiskLevel` enum
   // (`hermix-core::traits::RiskLevel`):
-  //   "safe"     → green shield
-  //   "caution"  → amber shield
-  //   "dangerous"→ red shield
+  // "safe"     → green shield
+  // "caution"  → amber shield
+  // "dangerous"→ red shield
   const key = (risk ?? "caution").toLowerCase();
   if (key === "dangerous") {
     return {
@@ -2483,19 +2467,14 @@ function ApprovalCard({
   const countdownIsDanger =
     typeof remainingMs === "number" && remainingMs <= 30_000;
 
-  // Card state class
+  // Card state class — drives a *subtle tinted wash* only (see
+  // components-prose.css). The card no longer paints a colored border
+  // or a left accent bar; the decision is signalled by the colored
+  // status pill + icon badge instead. This is the user-feedback fix
+  // for the old "green-bordered box with a 3px left color bar" look.
   const cardStateClass = decided
     ? (approved ? "approval-card--ok" : isExpired ? "approval-card--expired" : "approval-card--deny")
     : "";
-
-  // Accent bar color
-  const accentColor = decided
-    ? (approved ? "var(--color-success)" : isExpired ? "var(--color-text-muted, #888)" : "var(--color-error)")
-    : vis.iconBg.includes("239")
-      ? "var(--color-error)"
-      : vis.iconBg.includes("185")
-        ? "var(--color-success)"
-        : "var(--color-warning, #f59e0b)";
 
   // Icon badge bg + content
   const iconBg = decided
@@ -2504,9 +2483,6 @@ function ApprovalCard({
 
   return (
     <div className={`approval-card h-enter ${cardStateClass}`}>
-      {/* Left accent bar */}
-      <div className="approval-accent" style={{ background: accentColor }} />
-
       <div className="approval-inner">
         {/* Icon + tool row */}
         <div className="approval-head">
@@ -2584,7 +2560,6 @@ function ApprovalCard({
 }
 
 // ── Clarify card (role="clarify") ──────────────────────────────────
-//
 // Inlines a question UI for the agent's `clarify` tool. The agent is
 // blocked waiting on the answer; resolving the WS round-trip routes
 // the user's choice back as `clarify_response`.
@@ -2678,7 +2653,7 @@ function ClarifyComposer({
         <div className="flex flex-wrap gap-1.5 mb-2">
           {meta.choices.map((c, i) => (
             <button
-              key={i}
+              key={`choice-${c.label || i}`}
               type="button"
               onClick={() => onSubmit(c)}
               className="px-2.5 py-1 rounded-md text-[12px] transition-colors"
@@ -2735,12 +2710,10 @@ function ClarifyComposer({
 }
 
 // ── Reasoning Row ────────────────────────────────────────────────
-//
-// 2026-07-16: reasoning is now ALWAYS shown as flat prose inside the
+// reasoning is now ALWAYS shown as flat prose inside the
 // surrounding ProcessTimeline collapse block (no per-row folding).
 // The whole "已完成 10s ▼" fold replaces the per-row "已深度思考 ▼"
 // header — the user only needs ONE fold to read the full process.
-//
 // Visual treatment: same typography as the final prose. The surrounding
 // ProcessTimeline and the final fold label already communicate that this
 // is process content, so the row itself should not add an italic signal.

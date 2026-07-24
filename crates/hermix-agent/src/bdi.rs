@@ -265,8 +265,7 @@ impl MentalState {
     // -----------------------------------------------------------------------
 
     /// Derive intentions from beliefs + desires.
-    ///
-    /// Strategy:
+    /// /// Strategy:
     /// 1. Sort desires by priority (highest first).
     /// 2. For each desire, check if there's a supporting belief.
     /// 3. If not already committed, create a single-step intention.

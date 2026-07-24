@@ -88,14 +88,12 @@ async fn execute_llm_call(
 }
 
 /// Single retry-instrumented LLM call (non-streaming).
-///
-/// Retry discipline:
+/// /// Retry discipline:
 /// - Route build failures → fall back to primary runtime, do NOT consume retry slot
 /// - Auth (401) failures → refresh OAuth token once, retry; still fatal if refresh fails
 /// - RateLimit / Retryable → retry with backoff, up to max_retries
 /// - After all retries exhausted → try fallback_model once if configured
-///
-/// Returns the successful [`LlmResponse`] or an [`AgentError::LlmApi`]
+/// /// Returns the successful [`LlmResponse`] or an [`AgentError::LlmApi`]
 /// when all attempts (including fallback) are exhausted.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(
@@ -321,8 +319,8 @@ mod tests {
     #[test]
     fn jittered_backoff_smoke() {
         // agent_helpers::jittered_backoff(0, 1000, 30000):
-        //   exp=1000, capped=1000, jitter=250
-        //   delay in [875, 1125)
+        // exp=1000, capped=1000, jitter=250
+        // delay in [875, 1125)
         let d = jittered_backoff(0, 1000, 30000);
         assert!(d.as_millis() >= 850);
         assert!(d.as_millis() <= 1150);

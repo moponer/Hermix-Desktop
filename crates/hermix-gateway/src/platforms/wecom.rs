@@ -93,8 +93,7 @@ impl WeComAdapter {
     }
 
     /// Send a text message via WeCom API.
-    ///
-    /// If `user_id` looks like a group chat id (`wr…` / `ww…` / `wm…`), uses `chatid`
+    /// /// If `user_id` looks like a group chat id (`wr…` / `ww…` / `wm…`), uses `chatid`
     /// (group broadcast) instead of `touser` (single-user / pipe-separated user list).
     pub async fn send_text(&self, user_id: &str, text: &str) -> Result<(), GatewayError> {
         let token = self.get_access_token().await?;

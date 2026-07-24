@@ -25,7 +25,7 @@ pub mod dispatch;
 pub mod essential;
 pub mod register_builtins;
 pub mod registry;
-// `sandbox` module removed 2026-07-18 — 491 lines of dead code with zero
+// `sandbox` module removed — 491 lines of dead code with zero
 // external callers and zero integration into `ApprovalEngine`. The full
 // sandbox/approval wiring will be rebuilt the next time a tool actually
 // needs it; until then, removing the half-fabricated scaffold prevents
@@ -52,8 +52,8 @@ pub use dispatch::{dispatch_single, dispatch_tools, DispatchedResult};
 
 // Re-export approval types
 pub use approval::{
-    check_approval, ApprovalDecision, ApprovalManager, TerminalApprovalContext, UserAllowlist,
-    UserAllowlistEntry,
+    check_approval, is_readonly_command, ApprovalDecision, ApprovalManager,
+    TerminalApprovalContext, UserAllowlist, UserAllowlistEntry,
 };
 
 // Re-export credential guard
@@ -77,7 +77,7 @@ pub use tools::cua::{
 pub use tools::delegation::{DelegateTaskHandler, DelegationBackend};
 pub use tools::file::{
     PatchBackend, PatchHandler, ReadFileHandler, SearchBackend, SearchFilesHandler,
-    WriteFileHandler,
+    WriteFileHandler, read_image_for_llm,
 };
 pub use tools::homeassistant::{
     HaCallServiceHandler, HaGetStateHandler, HaListEntitiesHandler, HaListServicesHandler,

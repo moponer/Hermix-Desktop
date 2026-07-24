@@ -270,8 +270,7 @@ impl ToolsetManager {
     }
 
     /// Resolve a toolset name to a flat, deduplicated list of tool names.
-    ///
-    /// Handles:
+    /// /// Handles:
     /// - Recursive resolution of `includes`
     /// - Cycle detection
     /// - "all" or "*" resolves to the union of all registered toolsets
@@ -392,8 +391,7 @@ impl ToolsetManager {
     }
 
     /// Resolve toolsets with explicit enable/disable filtering.
-    ///
-    /// - If `enabled_toolsets` is provided, only include tools from those toolsets.
+    /// /// - If `enabled_toolsets` is provided, only include tools from those toolsets.
     /// - If `disabled_toolsets` is provided, exclude tools from those toolsets.
     /// - If both are provided, enabled takes precedence (intersect).
     /// - If neither is provided, returns all available tools.

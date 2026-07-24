@@ -13,7 +13,7 @@
 //! (mirrors the upstream pattern of running the same scanner
 //! across all memory-like stores).
 //!
-//! # 2026-06-07 hardening pass
+//! # hardening pass
 //!
 //! The memory tool previously did not scan for prompt injection.
 //! The drift detector catches *file-level* changes but not
@@ -33,7 +33,7 @@ use regex::Regex;
 use serde_json::json;
 use std::sync::LazyLock;
 
-// 2026-07-14 (P1-1): Helper to compile static regex patterns without
+// (P1-1): Helper to compile static regex patterns without
 // .unwrap(). Uses .expect() with a semantic message as required by
 // the code hardening plan (static init cannot use `?`).
 fn re(pattern: &'static str) -> Regex {

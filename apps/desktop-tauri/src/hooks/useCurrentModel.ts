@@ -144,7 +144,7 @@ export function useCurrentModel(): CurrentModel {
  * `SettingsView` saves so the "后端设置" tab updates immediately
  * without a hard reload.
  *
- * 2026-07-17: also mirror the config to the backend (`PUT /api/model/list`)
+ * also mirror the config to the backend (`PUT /api/model/list`)
  * so the chat model switcher is stable across restarts even if
  * `localStorage` is wiped (the volatility was the root cause of the
  * "switcher forgets configured models / only shows the default" bug).

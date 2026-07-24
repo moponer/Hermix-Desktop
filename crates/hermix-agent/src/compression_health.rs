@@ -1,4 +1,4 @@
-//! 2026-07-05 (N-08): startup health check for the compression auxiliary LLM.
+//! (): startup health check for the compression auxiliary LLM.
 //!
 //! The compression pipeline fails silently in the worst possible way: a
 //! bad API key / offline model takes one full `compress()` attempt to be
@@ -151,13 +151,13 @@ fn ping_request(model: Option<&str>) -> AuxiliaryRequest {
 ///
 /// Behaviour:
 /// - Returns [`CompressionHealthError::NoProviders`] early when 0 candidates
-///   are registered (the wiring problem, distinct from "API key wrong").
+/// are registered (the wiring problem, distinct from "API key wrong").
 /// - Bubbles up [`AuxiliaryError`] verbatim so the operator sees the
-///   accurate reason (auth, quota, model-not-found, network, …).
+/// accurate reason (auth, quota, model-not-found, network, …).
 /// - Treats empty/near-empty bodies as a failure (model returned nothing
-///   meaningful → compression summaries would also be meaningless).
+/// meaningful → compression summaries would also be meaningless).
 /// - Treats wall-clock over `max_latency_ms` as a soft failure so a
-///   30s auxiliary doesn't burn the loop's retry budget later.
+/// 30s auxiliary doesn't burn the loop's retry budget later.
 ///
 /// The caller decides what to do on failure: log-and-continue
 /// (skip compression), fall back to `NoOpCompressionEngine`, abort the

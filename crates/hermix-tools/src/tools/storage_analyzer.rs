@@ -30,9 +30,8 @@ use crate::ToolRegistry;
 const MIN_KB: u64 = 51_200;
 /// Max children reported per group (matches the Python skill).
 const PER_GROUP_LIMIT: usize = 40;
-/// 2026-07-18: hard upper bound for a single scan invocation.
-///
-/// Background: spawning walkdir on `C:\` (or even just `C:\Users`)
+/// hard upper bound for a single scan invocation.
+/// /// Background: spawning walkdir on `C:\` (or even just `C:\Users`)
 /// can run for **minutes** on real machines because the entry count
 /// is unbounded. spawn_blocking can't be cleanly cancelled, so an
 /// oversized scan pins a worker thread + blocks the agent loop
@@ -77,6 +76,8 @@ fn disk_usage(root: &str) -> Option<(u64, u64)> {
     let mut free = 0u64;
     let mut total = 0u64;
     let mut avail = 0u64;
+    // SAFETY: `wide` is a valid null-terminated wide string. Output
+    // pointers point to properly aligned stack-local u64 variables.
     let ok = unsafe {
         GetDiskFreeSpaceExW(
             wide.as_ptr(),
@@ -128,7 +129,7 @@ pub struct ScanReport {
     pub groups: IndexMap<String, Vec<DirEntry>>,
     pub denied: Vec<String>,
     pub notes: Vec<String>,
-    /// 2026-07-18: true when the SCAN_DEADLINE_SECS budget was hit
+    /// true when the SCAN_DEADLINE_SECS budget was hit
     /// before all configured targets were walked. The report still
     /// contains everything scanned up to the deadline (so the LLM
     /// can reason about partial state); this flag tells the agent
@@ -160,8 +161,7 @@ fn fmt_size(bytes: u64) -> String {
 
 /// Recursive size in bytes via walkdir. Skips symlinks and unreadable
 /// entries (mirrors `dir_size_bytes` in the Python skill).
-///
-/// 2026-07-18: optional `deadline` adds a `take_while` to the iterator
+/// /// optional `deadline` adds a `take_while` to the iterator
 /// so a deep tree (e.g. `C:\Windows\WinSxS` with millions of files)
 /// bails out instead of holding the spawn_blocking worker past
 /// SCAN_DEADLINE_SECS. Returning early **underestimates** the size
@@ -184,8 +184,7 @@ fn dir_size_bytes(path: &Path, deadline: Option<std::time::Instant>) -> u64 {
 }
 
 /// Size the immediate children of `path`, sorted desc, filtered to `MIN_KB`.
-///
-/// 2026-07-18: optional `deadline` short-circuits both the inner walkdir
+/// /// optional `deadline` short-circuits both the inner walkdir
 /// (per-entry check via `take_while`) and the outer children loop, so a
 /// single huge subdirectory can't burn the whole SCAN_DEADLINE_SECS
 /// budget while the rest of the targets get skipped.
@@ -360,7 +359,7 @@ impl StorageAnalyzerHandler {
     /// Run the full default-target scan. Returns the serializable report.
     fn run_scan() -> ScanReport {
         let started = SystemTime::now();
-        // 2026-07-18: per-invocation deadline. We check at the top of
+        // per-invocation deadline. We check at the top of
         // each group boundary (cheap) and pass the deadline down to
         // scan_children so it can `take_while` inside the walkdir
         // iterator (catches a single huge target hogging the budget).
@@ -684,7 +683,7 @@ mod tests {
         assert!(!report.truncated);
     }
 
-    /// 2026-07-18: when an already-elapsed deadline is passed in,
+    /// when an already-elapsed deadline is passed in,
     /// `dir_size_bytes` must short-circuit immediately (returning 0
     /// bytes) rather than walking the tree. This guards against the
     /// regression where the deadline argument was ignored.
@@ -701,7 +700,7 @@ mod tests {
         assert_eq!(size, 0, "elapsed deadline must short-circuit walkdir");
     }
 
-    /// 2026-07-18: run_path_scan happy path must NOT emit the
+    /// run_path_scan happy path must NOT emit the
     /// deadline-hit warning. Truncation handling is exercised
     /// end-to-end by the production code path on real machines; the
     /// test here just guards against a regression where the warning

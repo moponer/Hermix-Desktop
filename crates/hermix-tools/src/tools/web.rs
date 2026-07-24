@@ -232,8 +232,7 @@ impl ToolHandler for WebExtractHandler {
 // ---------------------------------------------------------------------------
 
 /// Register both `web_search` and `web_extract` with the registry.
-///
-/// Backends are keyless — no API key required. Uses multi-engine fallback:
+/// /// Backends are keyless — no API key required. Uses multi-engine fallback:
 /// DuckDuckGo → Baidu → Bing.
 pub fn register(registry: &ToolRegistry) {
     // web_search — multi-engine keyless backend
@@ -341,7 +340,6 @@ mod tests {
     }
 
     // -- SSRF pre-check -------------------------------------------------
-    //
     // Pins the wiring: the SSRF blocklist sits in the handler, not
     // the backend, so even if a future backend swap forgets to
     // re-add the check the LLM-facing tool will still refuse to

@@ -41,8 +41,7 @@ pub use types::{InterleavedFlag, ModelCapabilities, ModelInfo, ProviderInfo};
 use std::sync::OnceLock;
 
 /// Process-wide default [`ModelsDevClient`].
-///
-/// Lazily initialised on first call. Uses the production endpoint and
+/// /// Lazily initialised on first call. Uses the production endpoint and
 /// `<HERMIX_HOME>/models_dev_cache.json`. Convenient for code that doesn't
 /// need to mock the registry.
 pub fn default_client() -> &'static ModelsDevClient {

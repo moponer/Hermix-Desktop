@@ -31,7 +31,6 @@ fn make_service() -> (Arc<SessionPersistence>, LocalAgentService) {
     // cross-session recall hits into the loaded session — which
     // then breaks length-based assertions like
     // `get_session_messages_and_reset_session_round_trip`.
-    //
     // Save/restore is per-test: subsequent tests get a clean
     // `~/.hermix` (the env-var is reset in the `Drop` of the
     // returned service, see below).

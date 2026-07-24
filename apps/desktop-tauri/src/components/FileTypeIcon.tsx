@@ -24,9 +24,9 @@
      • Ear   : triangle 16..23.5 × 0.5..7.5  (folded corner)
      • Label : centered text, 9-11px font, 700 weight, white
 
-   v3 fix (主人 2026-06-22): "直接就是一个图标，背景色占满"
+   v3 fix (用户 2026-06-22): "直接就是一个图标，背景色占满"
      — v2 用了 "page body 浅色 + 底部色带" 的 GitHub Octicons 风格，
-     但主人要的是 Google Drive 风格——背景色占满整个图标，只有
+     但用户要的是 Google Drive 风格——背景色占满整个图标，只有
      右上角一个 dog-ear 折角。新版直接是单色背景 + 中央字符。
    ─────────────────────────────────────────────────────────────── */
 

@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 // Connection helper
 // ---------------------------------------------------------------------------
-//
 // `rusqlite::Connection::open` defaults to `journal_mode = delete`
 // (single writer, readers block writers) and `busy_timeout = 0`
 // (zero retry on `SQLITE_BUSY`). With two processes or threads racing
@@ -25,11 +24,9 @@ use serde::{Deserialize, Serialize};
 // immediately, and the `let _ = persist(...)` wrappers in the call
 // sites silently swallow the error. The user sees the message
 // "saved" but the row never lands in the DB.
-//
 // WAL allows concurrent readers + a single writer, and the busy
 // timeout gives the writer 5 s to retry before giving up. WAL is
 // also strictly more crash-resilient than the rollback journal.
-//
 // Best-effort: if WAL mode is rejected (read-only file, exclusive
 // lock held, etc.) we log a warning and continue — `busy_timeout`
 // alone still resolves the silent-drop bug.
@@ -66,26 +63,22 @@ fn is_busy_error(e: &AgentError) -> bool {
 }
 
 /// Pseudo-random jitter for SQLITE_BUSY retry delays.
-///
-/// ### 2026-07-05: switched from xorshift64-on-static-counter to
+/// /// ### switched from xorshift64-on-static-counter to
 /// `fastrand`.
-///
-/// The previous implementation kept a process-global `AtomicU64`
+/// /// The previous implementation kept a process-global `AtomicU64`
 /// counter and ran xorshift64 on it. Two problems:
 /// 1. **Predictability** — every process restart starts at the same
-///    counter value, so retry-jitter patterns looked identical across
-///    restarts. A stressed database + predictable jitter = collision
-///    herd on the unlucky cycle.
+/// counter value, so retry-jitter patterns looked identical across
+/// restarts. A stressed database + predictable jitter = collision
+/// herd on the unlucky cycle.
 /// 2. **Thread safety vs distribution quality** — xorshift64 has
-///    decent statistical quality for a non-crypto PRNG but it isn't
-///    thread-aware; multiple threads fetching `fetch_add` and running
-///    the same polynomial produce correlated streams.
-///
-/// `fastrand` gives each thread its own (per-thread) auto-seeded RNG
+/// decent statistical quality for a non-crypto PRNG but it isn't
+/// thread-aware; multiple threads fetching `fetch_add` and running
+/// the same polynomial produce correlated streams.
+/// /// `fastrand` gives each thread its own (per-thread) auto-seeded RNG
 /// with better distribution and zero atomic contention. Not crypto,
 /// but jitter doesn't need to be.
-///
-/// Returns a uniformly distributed `u64` in `[0, u64::MAX]`.
+/// /// Returns a uniformly distributed `u64` in `[0, u64::MAX]`.
 fn rand_jitter_u64() -> u64 {
     fastrand::u64(..)
 }
@@ -97,25 +90,23 @@ fn rand_jitter_u64() -> u64 {
 // ---------------------------------------------------------------------------
 // ApprovalRecord + SessionEntry
 // ---------------------------------------------------------------------------
-//
 // Approval rows are stored in the same `messages` table as regular messages
 // (so we get a single source of truth for the conversation timeline), but
 // with `role='approval'`. The actual payload — request id, tool name,
 // arguments, risk level, decision, and timestamp — lives in the `extra`
 // JSON column (added in migration at `ensure_db` time).
-//
 // Why a row in `messages` rather than a separate `approvals` table?
-//   1. Replay order: approval rows must interleave with assistant
-//      messages exactly when the agent emitted the `RequestApproval`
-//      event. Using a single `id` autoincrement PK + ORDER BY id ASC
-//      gives us that order for free.
-//   2. Soft-delete parity: `/undo` and `/restore` already flip
-//      `active=0` on the relevant rows. Adding `WHERE role = 'approval'`
-//      to the existing helpers is a no-op for the LLM context (we filter
-//      approvals out before constructing `Message`s — see
-//      `load_session`), but their UI presence tracks the underlying
-//      conversation state naturally.
-//   3. Single FTS5 trigger covers the table; no second trigger needed.
+// 1. Replay order: approval rows must interleave with assistant
+// messages exactly when the agent emitted the `RequestApproval`
+// event. Using a single `id` autoincrement PK + ORDER BY id ASC
+// gives us that order for free.
+// 2. Soft-delete parity: `/undo` and `/restore` already flip
+// `active=0` on the relevant rows. Adding `WHERE role = 'approval'`
+// to the existing helpers is a no-op for the LLM context (we filter
+// approvals out before constructing `Message`s — see
+// `load_session`), but their UI presence tracks the underlying
+// conversation state naturally.
+// 3. Single FTS5 trigger covers the table; no second trigger needed.
 
 /// One row of the `messages` table that corresponds to a tool-approval
 /// request. Serialized into the `extra` JSON column.
@@ -148,8 +139,7 @@ pub struct ApprovalRecord {
     /// server-side timeout have already fired (the back-end
     /// already auto-denied while the page was reloading, so
     /// the "已超时" pill is the honest state).
-    ///
-    /// `None` on rows persisted before the countdown feature
+    /// /// `None` on rows persisted before the countdown feature
     /// shipped (2026-06-14) — those rows predate the field and
     /// the front-end falls back to a 60s default in that case.
     #[serde(default)]
@@ -181,7 +171,7 @@ pub enum SessionEntry {
     ApprovalOrphan(ApprovalRecord),
 }
 
-/// 2026-06-26 (A): one row of the `compression_archives` table —
+/// (A): one row of the `compression_archives` table —
 /// the raw turns the compressor dropped from the in-memory
 /// conversation when it folded them into the handoff summary.
 /// `content` is JSON-encoded `Vec<Message>` so the schema doesn't
@@ -208,7 +198,7 @@ impl CompressionArchiveRow {
     }
 }
 
-/// 2026-06-26 (B): one row of the `compression_summary_history`
+/// (B): one row of the `compression_summary_history`
 /// table — append-only log of every compression event with its
 /// metrics. The `sessions.compressed_summary` column still holds the
 /// latest summary as a fast-load index; this table is the historical
@@ -226,7 +216,7 @@ pub struct CompressionHistoryRow {
     pub created_at: String,
 }
 
-/// 2026-06-26 (A + B): a single compression event captured by the
+/// (A + B): a single compression event captured by the
 /// agent loop. Threaded through `persist_session_with_summary` /
 /// `save_session_atomic` so the DB layer can write the
 /// `compression_archives` raw-archive row and the
@@ -234,17 +224,14 @@ pub struct CompressionHistoryRow {
 /// transaction that updates `sessions.compressed_summary`. Without
 /// this, the three writes would race and the historical trail could
 /// drift out of sync with the latest-summary column.
-///
-/// 2026-07-05 (N-02, Hermes 对标): compression now creates a real
+/// /// (, Hermes 对标): compression now creates a real
 /// child session row instead of in-place replacing the parent's
 /// messages. The child has:
-///
-/// - `parent_session_id` pointing at the live session
+/// /// - `parent_session_id` pointing at the live session
 /// - `compressed_summary` set to the handoff summary
 /// - `messages = [system_role: <summary text>]` so a click in
-///   the lineage tree shows what got folded
-///
-/// The parent session keeps its `messages` table untouched
+/// the lineage tree shows what got folded
+/// /// The parent session keeps its `messages` table untouched
 /// (in-place behaviour preserved for UI routing — the user keeps
 /// talking to the same session id), but it now has the child
 /// reachable via `find_children(parent_session_id)` so the
@@ -333,8 +320,7 @@ pub struct SessionPersistence {
 
 impl SessionPersistence {
     /// Create a new persistence manager rooted at the given hermes home directory.
-    ///
-    /// **Data files live under `<home>/data/`** (resolved via
+    /// /// **Data files live under `<home>/data/`** (resolved via
     /// [`hermix_config::paths::data_dir_in`]), so `SessionPersistence`
     /// automatically picks up the correct paths in normal mode
     /// (`~/.hermix/data/sessions.db`) and portable mode
@@ -391,7 +377,6 @@ impl SessionPersistence {
 
         // -----------------------------------------------------------------
         // Migrations FIRST.
-        //
         // The CREATE TABLE / CREATE INDEX block below references the
         // `active` and `extra` columns. On a pre-migration database those
         // columns don't exist yet, and `CREATE INDEX ... ON
@@ -400,7 +385,6 @@ impl SessionPersistence {
         // bails and the ALTER TABLE migrations that would have added the
         // column never run. So: do the migrations first, then the
         // CREATE statements that depend on the migrated schema.
-        //
         // Each migration silently no-ops on a fresh DB (the table doesn't
         // exist yet — CREATE TABLE IF NOT EXISTS below will create it with
         // the new column included) and on an already-migrated DB
@@ -517,13 +501,12 @@ impl SessionPersistence {
         }
 
         // -----------------------------------------------------------------
-        // 2026-07-05: schema-version migration bookkeeping. This table is
+        // schema-version migration bookkeeping. This table is
         // the single source of truth for "which schema migrations has
         // this database already applied?". Pre-existing DBs are stamped
         // with the migrations they're known to have (the ALTER TABLE
         // columns above and the trigram FTS5 virtual table + triggers
         // below). New DBs start at the current version.
-        //
         // Why not just rely on `CREATE TABLE / TRIGGER IF NOT EXISTS`?
         // Because `IF NOT EXISTS` is binary — either the object exists
         // (skip) or it doesn't (create). It can't express "this
@@ -532,7 +515,6 @@ impl SessionPersistence {
         // intermediate state (e.g. trigram existed in the partial
         // migration but the triggers didn't) would silently keep a
         // broken search index until they wiped the DB.
-        //
         // The tracking table makes every migration idempotent at the
         // application layer rather than the SQL layer.
         // -----------------------------------------------------------------
@@ -563,7 +545,7 @@ impl SessionPersistence {
         )?;
         // P0-3: Orchestration Engine tables (tasks + automation_*)
         stamp_migration(&conn, 6, "orchestration_engine_tables", None)?;
-        // 2026-07-14: token_usage cache + reasoning columns.
+        // token_usage cache + reasoning columns.
         // The actual ALTER TABLE lives below the CREATE TABLE block
         // because the table must exist before we can ADD COLUMN. The
         // stamp here records the migration as applied so the ALTER
@@ -734,7 +716,7 @@ impl SessionPersistence {
                 VALUES (new.id, new.content, new.session_id, new.role);
             END;
 
-            -- 2026-06-26 (A): append-only archive of the *raw* turns that
+            -- (A): append-only archive of the *raw* turns that
             -- the compressor folded into the handoff summary. The
             -- compressor (`ContextCompressor::compress`) hands us the
             -- `turns_to_summarize` slice; we JSON-encode it and store it
@@ -765,7 +747,7 @@ impl SessionPersistence {
             CREATE INDEX IF NOT EXISTS idx_compression_archives_session
                 ON compression_archives(session_id, created_at);
 
-            -- 2026-06-26 (B): append-only summary history. The
+            -- (B): append-only summary history. The
             -- `sessions.compressed_summary` column is still the
             -- fast-load index (latest summary) but it overwrote every
             -- prior compression. This sibling table keeps every
@@ -809,7 +791,7 @@ impl SessionPersistence {
                 prompt_tokens INTEGER NOT NULL DEFAULT 0,
                 completion_tokens INTEGER NOT NULL DEFAULT 0,
                 total_tokens INTEGER NOT NULL DEFAULT 0,
-                -- 2026-07-14: provider cache token breakdown so /insights
+                -- provider cache token breakdown so /insights
                 -- can surface real cache hit rates instead of zeros.
                 -- All three default to 0 so providers that don't report
                 -- cache stats (e.g. MiniMax-M3 today) don't break the
@@ -905,7 +887,7 @@ impl SessionPersistence {
             [],
         );
 
-        // 2026-07-14: token_usage cache + reasoning columns. Fresh DBs
+        // token_usage cache + reasoning columns. Fresh DBs
         // got them from the CREATE TABLE above. Pre-existing DBs that
         // predate v7 need an idempotent ALTER per column; "duplicate
         // column name" is the success signal for "already migrated".
@@ -935,8 +917,7 @@ impl SessionPersistence {
     /// append-only `token_usage` table. Called from `agent_loop` after
     /// every successful API response so `aggregate_usage` can later
     /// sum real numbers instead of returning 0.
-    ///
-    /// Caller passes the raw `UsageStats` from the LLM response. We
+    /// /// Caller passes the raw `UsageStats` from the LLM response. We
     /// store it verbatim — no rounding, no batching — so a future
     /// `/insights` panel can chart per-turn granularity if we ever
     /// expose it. `estimated_cost` is `None` if the provider didn't
@@ -976,8 +957,7 @@ impl SessionPersistence {
     /// Persist a session's messages to SQLite.
     /// Delegates to the unified [`save_session_atomic`] which wraps
     /// DB + markdown + trajectory writes in a single transaction.
-    ///
-    /// `workspace` / `expert_id` are persisted to the `sessions` row
+    /// /// `workspace` / `expert_id` are persisted to the `sessions` row
     /// in the same transaction so a session reload (e.g. after the
     /// desktop app restarts) restores the same workspace category
     /// the user picked in the welcome UI. Without this, the
@@ -1001,11 +981,9 @@ impl SessionPersistence {
 
     /// Persist a session's messages to SQLite, optionally including a
     /// compressed context summary for cross-session continuity.
-    ///
-    /// Delegates to the unified [`save_session_atomic`] which wraps
+    /// /// Delegates to the unified [`save_session_atomic`] which wraps
     /// DB + markdown + trajectory writes in a single transaction.
-    ///
-    /// 2026-06-26: prefer [`persist_session_with_compression`] when
+    /// /// prefer [`persist_session_with_compression`] when
     /// the caller has a full `CompressionSnapshot` (raw archive +
     /// summary + metrics). This legacy wrapper still exists for
     /// callers that only have the summary string; it builds a
@@ -1046,19 +1024,17 @@ impl SessionPersistence {
         )
     }
 
-    /// 2026-06-26 (A + B): persist a session with a full
+    /// (A + B): persist a session with a full
     /// compression snapshot. The snapshot carries (a) the handoff
     /// summary, (b) the raw archived turns, and (c) the compression
     /// metrics. All three are written to their respective tables in
     /// the same transaction as the `messages` DELETE+INSERT, so the
     /// snapshot can never go out of sync with the latest summary
     /// even under a mid-write crash.
-    ///
-    /// When the snapshot is empty (no compression this turn), this
+    /// /// When the snapshot is empty (no compression this turn), this
     /// is functionally identical to the legacy
     /// `persist_session` call.
-    ///
-    /// `workspace` / `expert_id` (2026-07-12): see [`persist_session`].
+    /// /// `workspace` / `expert_id` (2026-07-12): see [`persist_session`].
     pub fn persist_session_with_compression(
         &self,
         session_id: &str,
@@ -1094,24 +1070,21 @@ impl SessionPersistence {
     /// state (no partial DELETE). File writes (md / json) are attempted
     /// after the DB COMMIT — if they fail we log a warning but do not
     /// roll back, because the SQLite DB is the single source of truth.
-    ///
-    /// `compression` (2026-06-26) replaces the older
+    /// /// `compression` (2026-06-26) replaces the older
     /// `compressed_summary: Option<&str>` parameter: when non-`None`,
     /// the snapshot's summary also goes to `sessions.compressed_summary`
     /// (latest-only fast-load index), the raw archived turns go to
     /// `compression_archives` (A — durable raw), and the summary +
     /// metrics go to `compression_summary_history` (B — append-only
     /// history).
-    ///
-    /// `workspace` / `expert_id` are written to the `sessions` row in
+    /// /// `workspace` / `expert_id` are written to the `sessions` row in
     /// the same transaction (COALESCE — pass `None` to leave the
     /// column unchanged). This is what makes session reloads restore
     /// the right workspace category in the desktop sidebar; without
     /// it the SQL `INSERT ... ON CONFLICT DO UPDATE SET` skipped
     /// these columns entirely and only the legacy `PATCH /v1/sessions`
     /// route could write them.
-    ///
-    /// `user_query` and `completed` are only needed for the trajectory
+    /// /// `user_query` and `completed` are only needed for the trajectory
     /// file; pass `(None, false)` to skip trajectory.
     #[allow(clippy::too_many_arguments)]
     pub fn save_session_atomic(
@@ -1159,7 +1132,7 @@ impl SessionPersistence {
     }
 
     #[allow(clippy::too_many_arguments)]
-    /// 2026-07-16: persist the latest context-usage snapshot for a session.
+    /// persist the latest context-usage snapshot for a session.
     /// Called every agent-loop turn when a `context_usage` event is emitted,
     /// so a restored session can show the context-usage bar without waiting
     /// for a fresh live stream.
@@ -1179,7 +1152,7 @@ impl SessionPersistence {
         Ok(())
     }
 
-    /// 2026-07-16: read the last persisted context-usage snapshot for a
+    /// read the last persisted context-usage snapshot for a
     /// session, if any. Returns `None` when the column is missing (old DB)
     /// or empty.
     pub fn get_context_usage(&self, session_id: &str) -> Option<hermix_core::types::ContextUsagePayload> {
@@ -1224,8 +1197,7 @@ impl SessionPersistence {
             let now = Utc::now().to_rfc3339();
 
             // 1. UPSERT the session row FIRST so the messages.session_id →
-            //    sessions.id FOREIGN KEY holds for the INSERT in step 2.
-            //
+            // sessions.id FOREIGN KEY holds for the INSERT in step 2.
             // We can't stamp the real `message_count` here — it depends on
             // how many rows `flush_messages` actually inserts (system rows
             // are filtered out, so `messages.len()` over-counts). We use a
@@ -1260,15 +1232,15 @@ impl SessionPersistence {
             .map_err(|e| AgentError::Io(format!("Failed to upsert session: {e}")))?;
 
             // 2. Incrementally replace messages (transaction-protected DELETE+INSERT).
-            //    Returns the actual rowcount so step 3 can stamp the on-disk count
-            //    onto `sessions.message_count` instead of the over-counting
-            //    `messages.len()`.
+            // Returns the actual rowcount so step 3 can stamp the on-disk count
+            // onto `sessions.message_count` instead of the over-counting
+            // `messages.len()`.
             let inserted = self.flush_messages(&conn, session_id, messages, &now)?;
 
             // 3. Patch `message_count` to match the real INSERT count. This
-            //    also corrects any drift from prior versions that used
-            //    `messages.len()` and over-counted by N (where N is the
-            //    number of system-role rows in the in-memory array).
+            // also corrects any drift from prior versions that used
+            // `messages.len()` and over-counted by N (where N is the
+            // number of system-role rows in the in-memory array).
             conn.execute(
                 "UPDATE sessions SET message_count = ?1 WHERE id = ?2",
                 rusqlite::params![inserted as i64, session_id],
@@ -1276,10 +1248,10 @@ impl SessionPersistence {
             .map_err(|e| AgentError::Io(format!("Failed to patch session message_count: {e}")))?;
 
             // 4. (A + B): compression-side writes inside the same
-            //    transaction. If any of these fails, the whole
-            //    transaction rolls back and `messages` + `sessions`
-            //    stay where they were — so the snapshot can never go
-            //    out of sync with the latest summary.
+            // transaction. If any of these fails, the whole
+            // transaction rolls back and `messages` + `sessions`
+            // stay where they were — so the snapshot can never go
+            // out of sync with the latest summary.
             if let Some(snap) = compression {
                 // A — raw archive: append-only, never delete.
                 if !snap.archived_turns.is_empty() {
@@ -1367,18 +1339,15 @@ impl SessionPersistence {
 
 
     /// Batch insert messages into the database for FTS5 indexing.
-    ///
-    /// **Transaction-protected**: the caller (e.g. `save_session_atomic`)
+    /// /// **Transaction-protected**: the caller (e.g. `save_session_atomic`)
     /// is responsible for wrapping this in `BEGIN IMMEDIATE` / `COMMIT`.
     /// This inner helper only does the DELETE + INSERT.
     /// Persist `messages` for `session_id` after first wiping the existing
     /// rows. Returns the number of rows actually INSERTed (i.e. the count
     /// that `save_session_atomic` should stamp onto `sessions.message_count`).
-    ///
-    /// System-role rows are filtered out — they're rebuilt per-turn by
+    /// /// System-role rows are filtered out — they're rebuilt per-turn by
     /// `agent_loop` and never belong in the persisted timeline.
-    ///
-    /// **Transaction-protected**: the caller (e.g. `save_session_atomic`)
+    /// /// **Transaction-protected**: the caller (e.g. `save_session_atomic`)
     /// is responsible for wrapping this in `BEGIN IMMEDIATE` / `COMMIT`.
     /// This inner helper only does the DELETE + INSERT.
     fn flush_messages(
@@ -1403,7 +1372,7 @@ impl SessionPersistence {
 
         let mut inserted: usize = 0;
         for msg in messages {
-            // v34 (2026-07-09): ephemeral messages (e.g. replay-path
+            // ephemeral messages (e.g. replay-path
             // tool_result) exist only in the in-memory context and
             // must never be persisted to the DB.
             if msg.ephemeral {
@@ -1456,8 +1425,7 @@ impl SessionPersistence {
     }
 
     /// Save a human-readable session log as markdown.
-    ///
-    /// **Fixed filename**: `<session_id>.md` (overwrite, not new-file-per-save).
+    /// /// **Fixed filename**: `<session_id>.md` (overwrite, not new-file-per-save).
     /// Old timestamp-prefixed files (`{ts}-<sid>.md`) are moved to `orphans/`
     /// on first write; see `recover_orphan_session_logs`.
     pub fn save_session_log(
@@ -1531,8 +1499,7 @@ impl SessionPersistence {
     }
 
     /// Save messages in trajectory format for RL training.
-    ///
-    /// **Fixed filename**: `<session_id>.json` (overwrite, not new-file-per-save).
+    /// /// **Fixed filename**: `<session_id>.json` (overwrite, not new-file-per-save).
     pub fn save_trajectory(
         &self,
         session_id: &str,
@@ -1567,8 +1534,7 @@ impl SessionPersistence {
     /// Migrate old timestamp-prefixed session log files to the new
     /// fixed-name scheme. Scans `<sessions_dir>/` for files matching
     /// `*-<session_id>.md`, moves them to `<sessions_dir>/orphans/`.
-    ///
-    /// Called once per `save_session_log` call for the given session_id
+    /// /// Called once per `save_session_log` call for the given session_id
     /// (idempotent — the renamed file won't match the pattern again).
     pub fn recover_orphan_session_logs(sessions_dir: &Path, session_id: &str) {
         let Ok(entries) = std::fs::read_dir(sessions_dir) else { return };
@@ -1603,7 +1569,7 @@ impl SessionPersistence {
         }
     }
 
-    /// 2026-07-12: read back the persisted workspace / expert_id
+    /// read back the persisted workspace / expert_id
     /// for the given session. Returns `(Option<String>, Option<String>)`
     /// in `(workspace, expert_id)` order. Used by the
     /// `test_persist_session_writes_workspace_and_survives_coalesce`
@@ -1632,8 +1598,7 @@ impl SessionPersistence {
     }
 
     /// Load a previous session from SQLite.
-    ///
-    /// **Filters out approval rows** (`role='approval'`) — those live in
+    /// /// **Filters out approval rows** (`role='approval'`) — those live in
     /// the same `messages` table for ordering convenience, but they
     /// carry no LLM-relevant content and would otherwise pollute the
     /// conversation history with bogus user messages. Use
@@ -1703,8 +1668,7 @@ impl SessionPersistence {
     }
 
     /// Load the compressed context summary for a session.
-    ///
-    /// Returns `Some(summary)` if a previous compression produced a summary
+    /// /// Returns `Some(summary)` if a previous compression produced a summary
     /// that was persisted, `None` otherwise. The caller (agent loop) should
     /// inject this as a System message at the start of the conversation
     /// to maintain cross-session context continuity.
@@ -1721,13 +1685,12 @@ impl SessionPersistence {
         result.filter(|s| !s.is_empty())
     }
 
-    /// 2026-06-26 (A): archive the *raw* turns that the compressor is
+    /// (A): archive the *raw* turns that the compressor is
     /// about to fold into a handoff summary. Append-only — we never
     /// delete from `compression_archives` after a write, so the
     /// original wording survives even after `flush_messages` has
     /// wiped it from `messages` and the LLM has moved on.
-    ///
-    /// `archived_turns` is JSON-encoded as a single TEXT column so the
+    /// /// `archived_turns` is JSON-encoded as a single TEXT column so the
     /// schema doesn't have to mirror the `Message` Rust struct (which
     /// keeps evolving — `content_parts`, `cache_control`, etc.). The
     /// trade-off is no FTS5 over the archive, which is fine because
@@ -1770,7 +1733,7 @@ impl SessionPersistence {
         Ok(())
     }
 
-    /// 2026-06-26 (B): append a row to the append-only summary
+    /// (B): append a row to the append-only summary
     /// history. Pairs every compression event with its metrics so a
     /// session's full compaction arc is queryable. The
     /// `sessions.compressed_summary` column is still written by
@@ -1817,7 +1780,7 @@ impl SessionPersistence {
         Ok(())
     }
 
-    /// 2026-06-26 (A): load the raw archive rows for a session, newest
+    /// (A): load the raw archive rows for a session, newest
     /// first. Used by the cross-session recall path to recover
     /// original wording that the compressor dropped from the in-memory
     /// conversation.
@@ -1861,7 +1824,7 @@ impl SessionPersistence {
         Ok(out)
     }
 
-    /// 2026-06-26 (B): load the append-only summary history for a
+    /// (B): load the append-only summary history for a
     /// session, oldest first (chronological reading order). The caller
     /// can concatenate the summaries to reconstruct the full
     /// compaction trail.
@@ -2056,8 +2019,7 @@ impl SessionPersistence {
     /// in arrival order. This is what the UI wants for `get_session_messages`.
     /// Approval rows are returned as `SessionEntry::Approval` so the
     /// caller can render them as inline cards in the right slot.
-    ///
-    /// IMPORTANT: approval rows are NOT included in the returned
+    /// /// IMPORTANT: approval rows are NOT included in the returned
     /// `Message`s — they live only in the timeline. If you need them as
     /// LLM context, filter the `Message` variants out of the result
     /// yourself (this is what `load_session` already does).
@@ -2141,7 +2103,7 @@ impl SessionPersistence {
         Ok(entries)
     }
 
-    /// v33 (2026-07-06): same as `load_session_with_approvals` but
+    /// same as `load_session_with_approvals` but
     /// also returns the persisted `created_at` timestamp alongside
     /// each entry. Used by the HTTP `GET /v1/sessions/{id}/messages`
     /// handler to populate `ProtocolMessage.created_at` so the
@@ -2149,8 +2111,7 @@ impl SessionPersistence {
     /// session reload instead of falling back to `now` at serve
     /// time (which produced "刚刚 / 1 分钟前" for every reloaded
     /// message).
-    ///
-    /// Implementation: a second SELECT against the same `messages`
+    /// /// Implementation: a second SELECT against the same `messages`
     /// table, sharing the same WHERE / ORDER BY clause as
     /// `load_session_with_approvals`. Both result sets are returned
     /// in the same row order — we zip them positionally. No
@@ -2235,18 +2196,16 @@ impl SessionPersistence {
         Ok(result)
     }
 
-    /// 2026-07-05 (N-02, Hermes 对标): create a real child session
+    /// (, Hermes 对标): create a real child session
     /// that materialises the compressed summary as its own row,
     /// linked to the parent via `parent_session_id`.
-    ///
-    /// Returns the newly-generated `child_session_id`, which is
+    /// /// Returns the newly-generated `child_session_id`, which is
     /// deterministic (`{parent}-c{N}` where N is the parent's
     /// existing child count + 1) so repeated calls with the same
     /// `(parent_id, summary)` produce the same id and the
     /// `INSERT OR IGNORE` style logic in the SQL makes the
     /// operation idempotent.
-    ///
-    /// The child's `messages` table contains a single system-role
+    /// /// The child's `messages` table contains a single system-role
     /// message carrying the summary verbatim — that's what the
     /// frontend lineage browser displays when the user clicks
     /// the child node ("这里是你压缩前的内容").
@@ -2385,8 +2344,7 @@ impl SessionPersistence {
     /// with a user message and ends just before the next user message
     /// (or at the end of the conversation). The corresponding tool
     /// messages are also marked inactive.
-    ///
-    /// Returns the number of messages that were deactivated.
+    /// /// Returns the number of messages that were deactivated.
     pub fn mark_recent_turns_inactive(
         &self,
         session_id: &str,
@@ -2565,7 +2523,7 @@ impl SessionPersistence {
         Ok(n)
     }
 
-    // DONE (2026-07-02 P1.x): token/cost persisted via `persist_token_usage()`
+    // DONE (P1.x): token/cost persisted via `persist_token_usage()`
     // → `token_usage` table; aggregated by `aggregate_usage()` SQL.
     // No need for messages.extra.json hack.
 
@@ -2575,10 +2533,10 @@ impl SessionPersistence {
     /// `messages.tool_calls` JSON. Sessions / messages that predate the
     /// `token_usage` migration contribute `0` to token totals — that's
     /// fine, the chart shows the migration date as "0 baseline".
-    ///   - `total_sessions`: count of sessions updated within the window
-    ///   - `total_messages`: count of messages created within the window
-    ///   - `by_model`: `(model_name, session_count, message_count)` tuples
-    ///   - `recent_sessions`: the 20 most recent session ids
+    /// - `total_sessions`: count of sessions updated within the window
+    /// - `total_messages`: count of messages created within the window
+    /// - `by_model`: `(model_name, session_count, message_count)` tuples
+    /// - `recent_sessions`: the 20 most recent session ids
     pub fn aggregate_usage(
         &self,
         days: u32,
@@ -2674,7 +2632,7 @@ impl SessionPersistence {
             .map_err(|e| AgentError::Io(format!("Failed to read recent: {e}")))?;
 
         // 5) P1-3: token totals. SUM with COALESCE so a NULL `estimated_cost`
-        //    doesn't propagate and break the f64 aggregator.
+        // doesn't propagate and break the f64 aggregator.
         // Bind the token-total query result directly as mutable vars so the
         // Phase 3 legacy fallback (`estimate_usage_from_messages`) can mutate
         // them in place. No dead `= 0` initialiser — that just trips
@@ -2703,11 +2661,11 @@ impl SessionPersistence {
             .map_err(|e| AgentError::Io(format!("Failed to sum token_usage: {e}")))?;
 
         // 6) P1-3: daily curve. We materialise the full window first
-        //    (days+1 buckets ending today), then LEFT JOIN against the
-        //    aggregated rows so missing days show as 0 instead of being
-        //    absent. Doing this in Rust (not SQL) keeps the SQL
-        //    portable — we don't have to ship a recursive CTE on every
-        //    `aggregate_usage` call.
+        // (days+1 buckets ending today), then LEFT JOIN against the
+        // aggregated rows so missing days show as 0 instead of being
+        // absent. Doing this in Rust (not SQL) keeps the SQL
+        // portable — we don't have to ship a recursive CTE on every
+        // `aggregate_usage` call.
         let mut daily: Vec<DailyUsageRow> = Vec::with_capacity(days as usize + 1);
         for offset in 0..=days {
             let day_start = (now - chrono::Duration::days(offset as i64))
@@ -2801,26 +2759,25 @@ impl SessionPersistence {
         }
 
         // 7) P1-3: by_tool aggregation. Parse `messages.tool_calls` JSON
-        //    (which is `Vec<{function: {name}}>` per assistant message)
-        //    and tally by `function.name`. Done in Rust rather than
-        //    SQLite JSON1 because we already have the messages loaded
-        //    pattern in `flush_messages` — and the cost of a single
-        //    full-table scan over the date window is bounded by the
-        //    active message count, which is usually <100k.
-        //
+        // (which is `Vec<{function: {name}}>` per assistant message)
+        // and tally by `function.name`. Done in Rust rather than
+        // SQLite JSON1 because we already have the messages loaded
+        // pattern in `flush_messages` — and the cost of a single
+        // full-table scan over the date window is bounded by the
+        // active message count, which is usually <100k.
         // We build a `HashMap<String, (total_calls, sessions_set_size)>`
         // and convert at the end. `daily_avg` uses trailing-7-day counts
         // (not the full window) so a tool that ran 500 times last week
         // but only 3 this week isn't papered over by ancient noise.
         let by_tool = self.aggregate_tools(&conn, &cutoff_str)?;
 
-        // 7b) 2026-07-16 (Phase 4): per-skill usage. Grouped by target
+        // 7b) (Phase 4): per-skill usage. Grouped by target
         // skill name parsed from `skill_view` / `skill_manage` calls.
         let skills = self.aggregate_skills(&conn, &cutoff_str)?;
 
-        // 7c) 2026-07-16 (Phase 3): legacy fallback. If `token_usage`
+        // 7c) (Phase 3): legacy fallback. If `token_usage`
         // has no rows in the window but there ARE sessions/messages,
-        // the pre-2026-06-27 install never wrote usage — estimate from
+        // the pre-install never wrote usage — estimate from
         // message content so the dashboard isn't a wall of zeros.
         // We mutate the already-computed aggregates in place: only
         // fill when the real totals are empty, so modern installs
@@ -2840,9 +2797,9 @@ impl SessionPersistence {
         }
 
         // 8) Phase 3 (E4): compression telemetry. Each compression
-        //    spawns a child session (`parent_session_id` set), so
-        //    counting those within the window gives "compressions
-        //    performed" without a synthetic counter.
+        // spawns a child session (`parent_session_id` set), so
+        // counting those within the window gives "compressions
+        // performed" without a synthetic counter.
         let total_compactions: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sessions WHERE parent_session_id IS NOT NULL AND updated_at >= ?1",
@@ -2890,8 +2847,7 @@ impl SessionPersistence {
     /// P1-3 helper: parse `messages.tool_calls` JSON within `cutoff_str`
     /// window, aggregate by tool name. Kept private so the public API
     /// stays a single `aggregate_usage(days)`.
-    ///
-    /// `tool_calls` JSON shape (mirrors `Message::tool_calls` — flattened
+    /// /// `tool_calls` JSON shape (mirrors `Message::tool_calls` — flattened
     /// `FunctionCall`):
     /// ```json
     /// [{"id": "call_xxx", "name": "read_file", "arguments": "..."}]
@@ -2899,8 +2855,7 @@ impl SessionPersistence {
     /// Older OpenAI-style shape `{"function": {"name": ...}}` is also
     /// tolerated so a row written before the schema migration doesn't
     /// drop its counts.
-    ///
-    /// Defensive: malformed rows (no JSON, no name) are silently
+    /// /// Defensive: malformed rows (no JSON, no name) are silently
     /// skipped — never bubble a JSON parse error out of an analytics
     /// query, the user just sees a slightly lower total.
     fn aggregate_tools(
@@ -2991,7 +2946,7 @@ impl SessionPersistence {
         Ok(out)
     }
 
-    /// 2026-07-16 (Phase 4): aggregate skill usage from `messages.tool_calls`.
+    /// (Phase 4): aggregate skill usage from `messages.tool_calls`.
     /// Counts `skill_view` calls (a "view/load") and `skill_manage` calls
     /// (an edit/create/delete) per *target* skill — the target name comes
     /// from the call's `arguments.name`, so the dashboard shows
@@ -3109,7 +3064,7 @@ impl SessionPersistence {
         })
     }
 
-    /// 2026-07-16 (Phase 3): legacy fallback for installs that predate the
+    /// (Phase 3): legacy fallback for installs that predate the
     /// `token_usage` migration. When the real `token_usage` table is empty
     /// in the window but sessions/messages exist, estimate token counts from
     /// message content so the dashboard isn't a wall of zeros. Heuristic:
@@ -3195,7 +3150,7 @@ impl SessionPersistence {
     }
 }
 
-/// 2026-07-16 (Phase 3): token-count heuristic used by the legacy
+/// (Phase 3): token-count heuristic used by the legacy
 /// fallback. ASCII text is ~4 chars/token (0.25 token/char); CJK and
 /// other non-ASCII scripts run ~1.5 tokens/char. Crude but enough to
 /// keep the dashboard from showing a hard 0 for pre-migration installs.
@@ -3211,7 +3166,7 @@ fn estimate_tokens(s: &str) -> u64 {
     tokens.ceil() as u64
 }
 
-/// v1 (2026-06-22): PLAN_UI_ENHANCEMENT §6.1 — 真实聚合结果
+/// PLAN_UI_ENHANCEMENT §6.1 — 真实聚合结果
 /// v2 (2026-06-27, P1-3): 加 token + daily curve + by_tool 字段
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct UsageAggregate {
@@ -3222,26 +3177,26 @@ pub struct UsageAggregate {
     /// P1-3: token usage summed from `token_usage` within the window.
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
-    /// 2026-07-14: now actually aggregated from `token_usage.cache_read_tokens`
+    /// now actually aggregated from `token_usage.cache_read_tokens`
     /// — the dashboard no longer hardcodes this to 0. Providers that
     /// don't report cache stats (MiniMax today) will still show 0.
     pub total_cache_read_tokens: u64,
-    /// 2026-07-14: Anthropic-style `cache_creation_input_tokens`. Distinct
+    /// Anthropic-style `cache_creation_input_tokens`. Distinct
     /// from `cache_read_tokens` so the dashboard can chart "how much
     /// new prefix are we paying to cache" separately from "how much
     /// we're saving via cache hits".
     pub total_cache_creation_tokens: u64,
-    /// 2026-07-14: extended-thinking / o1-style reasoning token totals.
+    /// extended-thinking / o1-style reasoning token totals.
     /// Surfaced in `/insights` so users can see how much of their
     /// spend is invisible to the visible-text token count.
     pub total_reasoning_tokens: u64,
-    /// 2026-07-14 (Phase 3 / E4): number of compression child sessions
+    /// (Phase 3 / E4): number of compression child sessions
     /// created within the window. Every auto/manual compression spawns
-    /// a child session with `parent_session_id` set (N-02), so this is
+    /// a child session with `parent_session_id` set (), so this is
     /// a real, queryable "how many times did we compress" signal for
     /// the dashboard's compression card — not a synthetic counter.
     pub total_compactions: u64,
-    /// 2026-07-14 (Phase 3 / E4): total archived turns folded into
+    /// (Phase 3 / E4): total archived turns folded into
     /// compression summaries within the window. Counted as the messages
     /// inside compression-child sessions — those rows ARE the preserved
     /// history (we deliberately never insert the summary as a `system`
@@ -3256,7 +3211,7 @@ pub struct UsageAggregate {
     /// P1-3: per-tool call counts parsed from `messages.tool_calls`.
     /// Sorted by `call_count` descending so the frontend can `slice(0, 10)`.
     pub by_tool: Vec<ToolUsageRow>,
-    /// 2026-07-16 (Phase 4): per-skill usage (grouped by target skill name).
+    /// (Phase 4): per-skill usage (grouped by target skill name).
     pub skills: SkillUsageAggregate,
 }
 
@@ -3269,7 +3224,7 @@ pub struct ModelUsageRow {
     /// render the cost-by-model bar list with real numbers.
     pub input_tokens: u64,
     pub output_tokens: u64,
-    /// 2026-07-14: cache + reasoning totals so each model's row can
+    /// cache + reasoning totals so each model's row can
     /// show its own cache hit rate and reasoning footprint, not
     /// just the global totals.
     pub cache_read_tokens: u64,
@@ -3294,7 +3249,7 @@ pub struct DailyUsageRow {
     pub day: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    /// 2026-07-14: cache + reasoning per-day. Lets the SVG daily curve
+    /// cache + reasoning per-day. Lets the SVG daily curve
     /// layer cache-hit as a stacked band on top of input/output, so
     /// a "cache saved 60% of input tokens" day is visually obvious.
     pub cache_read_tokens: u64,
@@ -3317,7 +3272,7 @@ pub struct ToolUsageRow {
     pub daily_avg: f64,
 }
 
-/// 2026-07-16 (Phase 4): per-skill usage derived from `messages.tool_calls`
+/// (Phase 4): per-skill usage derived from `messages.tool_calls`
 /// where `name` is `skill_view` (a "load"/view) or `skill_manage` (an
 /// edit/create/delete). The skill name comes from the call's `arguments.name`.
 /// Unlike `by_tool` (which counts the `skill_manage` *tool* once per call),
@@ -3386,7 +3341,7 @@ mod tests {
         assert_eq!(loaded[1].content.as_deref(), Some("Hi there!"));
     }
 
-    // 2026-07-14 (Phase 6 / E1): compression must NOT lose memory.
+    // (Phase 6 / E1): compression must NOT lose memory.
     // After a compression event, the folded summary is recoverable via
     // `load_compressed_summary`, and every archived turn survives as a
     // real message row inside the compression child-session (returned
@@ -3446,7 +3401,7 @@ mod tests {
         assert!(joined.contains("follow-up clarification"));
     }
 
-    // 2026-07-14 (Phase 3 / E4 + B5): aggregate_usage must surface
+    // (Phase 3 / E4 + B5): aggregate_usage must surface
     // real compression telemetry — not zeros. We compress once, then
     // assert the windowed aggregate reports the compaction count and
     // the preserved (not lost) archived turns.
@@ -3489,7 +3444,7 @@ mod tests {
         );
     }
 
-    // 2026-07-12 regression (Bug A): createSession must persist
+    // regression (Bug A): createSession must persist
     // the welcome-state draft workspace to `sessions.workspace` so
     // a desktop restart restores the right Sidebar bucket. Before
     // the fix, the column was never written by `persist_session`
@@ -3544,7 +3499,7 @@ mod tests {
         assert_eq!(got_expert.as_deref(), Some(expert_id), "COALESCE must preserve expert_id");
     }
 
-    // 2026-07-12 regression (Bug B): the reload path must preserve
+    // regression (Bug B): the reload path must preserve
     // both visible `content` and `reasoning_content` even when the
     // persisted content contains a `<think>` block whose close tag
     // never landed (e.g. the streaming run ended mid-think, or the
@@ -3673,7 +3628,7 @@ mod tests {
     }
 
     /// Variant of [`usage`] with explicit cache + reasoning fields so
-    /// 2026-07-14 cache aggregation tests can assert against non-zero
+    /// cache aggregation tests can assert against non-zero
     /// numbers instead of relying on default zero.
     fn usage_with_cache(
         prompt: u64,
@@ -3930,7 +3885,7 @@ mod tests {
         assert_eq!(claude.output_tokens, 100);
     }
 
-    /// 2026-07-14: P1-1 cache aggregation. Verifies that real cache
+    /// P1-1 cache aggregation. Verifies that real cache
     /// read / cache creation / reasoning token counts from
     /// `persist_token_usage` flow through to (a) `UsageAggregate`
     /// totals, (b) `by_model` per-row, and (c) the `daily` per-day
@@ -3990,7 +3945,7 @@ mod tests {
         assert_eq!(today_row.reasoning_tokens, 350, "daily reasoning");
     }
 
-    /// 2026-07-14: cache hit rate sanity check. Hits are aggregated
+    /// cache hit rate sanity check. Hits are aggregated
     /// separately from `prompt_tokens` (which is "uncached prompt
     /// tokens billed"), so a UI dividing cache_read by (cache_read +
     /// prompt_tokens) gets the actual cache coverage. This test
@@ -4272,7 +4227,6 @@ mod tests {
         // then persist the next turn (replacing the messages table).
         // The approval row will be wiped by the second persist, so we
         // can't test the range heuristic this way.
-        //
         // Workaround: manually craft the rows by calling append_approval
         // after a partial persist. We do two separate persist calls —
         // first the user+assistant of turn 1, then append_approval,
@@ -4395,8 +4349,7 @@ mod tests {
     }
 
     /// Regression test for the `message_count` over-count bug:
-    ///
-    /// Before the fix, `save_session_atomic` stamped
+    /// /// Before the fix, `save_session_atomic` stamped
     /// `sessions.message_count = messages.len() as i64` while
     /// `flush_messages` silently filtered out `MessageRole::System`
     /// rows. Result: the `message_count` column on the `sessions`
@@ -4405,8 +4358,7 @@ mod tests {
     /// prompt from `agent_loop`). The UI badge rendered wrong, and any
     /// downstream code that paginated by `message_count` would skip or
     /// repeat rows.
-    ///
-    /// After the fix, `flush_messages` returns the actual INSERTed
+    /// /// After the fix, `flush_messages` returns the actual INSERTed
     /// rowcount and `save_session_atomic` stamps that exact number.
     /// This test pins the contract: 2 system + 4 user/assistant
     /// messages in → exactly 4 messages in `messages` table AND
@@ -4457,13 +4409,13 @@ mod tests {
         );
 
         // 3. The persisted-and-reloaded LLM view should also be 4 messages
-        //    (load_session already filters system rows; this just confirms
-        //    the end-to-end count is consistent across all three views).
+        // (load_session already filters system rows; this just confirms
+        // the end-to-end count is consistent across all three views).
         let loaded = sp.load_session("count-test").unwrap();
         assert_eq!(loaded.len(), 4);
     }
 
-    // 2026-06-26 (A + B): end-to-end test for the compression
+    // (A + B): end-to-end test for the compression
     // archive + summary-history write paths. Calls
     // `persist_session_with_compression` once with a real
     // snapshot, then reads back both tables to confirm the
@@ -4553,7 +4505,7 @@ mod tests {
         assert_eq!(latest, h.summary);
     }
 
-    // 2026-06-26 (A): empty snapshot short-circuits — no archive
+    // (A): empty snapshot short-circuits — no archive
     // rows, no history rows, no summary column write.
     #[test]
     fn compression_snapshot_empty_is_noop() {
@@ -4591,7 +4543,7 @@ mod tests {
         );
     }
 
-    // 2026-07-05 (N-02): compression now materialises a real
+    // (): compression now materialises a real
     // child session row, linked to the parent via
     // `parent_session_id`. The child's `messages` table carries
     // the summary as a system message + the archived turns, so
@@ -4609,7 +4561,7 @@ mod tests {
             Message::assistant("original turn B"),
         ];
         let snap = CompressionSnapshot::new(
-            "summary text from N-02 test".to_string(),
+            "summary text from test".to_string(),
             archived,
             1,
             4,
@@ -4644,7 +4596,7 @@ mod tests {
         let child_summary = sp
             .load_compressed_summary(&child_id_1)
             .expect("child summary must be populated");
-        assert_eq!(child_summary, "summary text from N-02 test");
+        assert_eq!(child_summary, "summary text from test");
 
         // The child's messages: archived turns survive in the messages
         // table (the summary itself lives on `compressed_summary`,
@@ -4682,7 +4634,7 @@ mod tests {
         let summary = sp
             .load_compressed_summary(&child_id_1)
             .expect("child summary must be populated");
-        assert_eq!(summary, "summary text from N-02 test");
+        assert_eq!(summary, "summary text from test");
 
         // Second child creation on the same parent must bump
         // the suffix to `-c2` (idempotent, deterministic).
@@ -4710,7 +4662,7 @@ mod tests {
         assert!(all_children.contains(&child_id_2));
     }
 
-    // 2026-07-05 (N-02): creating a child session for a parent
+    // (): creating a child session for a parent
     // that doesn't yet have a row in `sessions` should still
     // succeed — the child has its own row, parent_session_id
     // just points at the missing id. We tolerate the orphan

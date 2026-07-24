@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { X, Shield, AlertTriangle, Star, Settings, MessageCircle, Clock, Users, CheckCircle2 } from "lucide-react";
 import { clsx } from "clsx";
 import * as api from "../api";
+import { useSafeTimeout } from "../hooks/useSafeTimeout";
+import { toastError } from "../hooks/useToast";
 
 interface RoomSettingsDrawerProps {
   roomId: string;
@@ -10,6 +12,7 @@ interface RoomSettingsDrawerProps {
 }
 
 export function RoomSettingsDrawer({ roomId, roomName, onClose }: RoomSettingsDrawerProps) {
+  const safeSetTimeout = useSafeTimeout();
   const [tab, setTab] = useState<"rules" | "general">("rules");
   const [globalConstraints, setGlobalConstraints] = useState<string[]>([]);
   const [newConstraint, setNewConstraint] = useState("");
@@ -41,6 +44,7 @@ export function RoomSettingsDrawer({ roomId, roomName, onClose }: RoomSettingsDr
       }
     } catch (e) {
       console.error("Failed to load rules:", e);
+toastError("加载规则失败");
     }
   }, [roomId]);
 
@@ -59,6 +63,7 @@ export function RoomSettingsDrawer({ roomId, roomName, onClose }: RoomSettingsDr
       // us. We keep whatever values the user previously had so the
       // drawer is still usable if they cancel.
       console.error("Failed to load room settings:", e);
+toastError("加载聊天室设置失败");
       setSettingsLoaded(true);
     }
   }, [roomId]);
@@ -84,7 +89,7 @@ export function RoomSettingsDrawer({ roomId, roomName, onClose }: RoomSettingsDr
         },
       });
       setSaveMsg("规则已保存");
-      setTimeout(() => setSaveMsg(""), 2000);
+      safeSetTimeout(() => setSaveMsg(""), 2000);
     } catch (e) {
       setSaveMsg("保存失败");
     } finally {
@@ -108,10 +113,11 @@ export function RoomSettingsDrawer({ roomId, roomName, onClose }: RoomSettingsDr
         require_leader_approval: requireLeaderApproval,
       });
       setSaveMsg(allowIdleChat ? "已开启闲聊" : "设置已保存");
-      setTimeout(() => setSaveMsg(""), 2000);
+      safeSetTimeout(() => setSaveMsg(""), 2000);
     } catch (e) {
-      setSaveMsg("保存失败");
-      console.error("Failed to save room settings:", e);
+setSaveMsg("保存失败");
+console.error("Failed to save room settings:", e);
+toastError("保存聊天室设置失败");
     } finally {
       setSaving(false);
     }
@@ -180,7 +186,7 @@ export function RoomSettingsDrawer({ roomId, roomName, onClose }: RoomSettingsDr
                 </div>
                 <div className="space-y-1.5">
                   {globalConstraints.map((c, i) => (
-                    <div key={i} className="flex items-center gap-2 bg-bg-tertiary rounded-lg px-3 py-1.5">
+                    <div key={`global-${i}`} className="flex items-center gap-2 bg-bg-tertiary rounded-lg px-3 py-1.5">
                       <span className="flex-1 text-[11.5px] text-text-secondary">{c}</span>
                       <button
                         onClick={() => setGlobalConstraints((prev) => prev.filter((_, j) => j !== i))}
@@ -238,7 +244,7 @@ export function RoomSettingsDrawer({ roomId, roomName, onClose }: RoomSettingsDr
                 {toolPolicyMode === "blacklist" && (
                   <div className="mt-2 space-y-1.5">
                     {blacklistedTools.map((tool, i) => (
-                      <div key={i} className="flex items-center gap-2 bg-bg-tertiary rounded-lg px-3 py-1.5">
+                      <div key={`bl-${tool}-${i}`} className="flex items-center gap-2 bg-bg-tertiary rounded-lg px-3 py-1.5">
                         <span className="flex-1 text-[11.5px] text-text-secondary font-mono">{tool}</span>
                         <button
                           onClick={() => setBlacklistedTools((prev) => prev.filter((_, j) => j !== i))}

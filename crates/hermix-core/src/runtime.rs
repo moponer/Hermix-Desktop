@@ -37,8 +37,8 @@
 /// ```ignore
 /// use hermix_core::runtime::resolve_binary;
 /// let mut cmd = std::process::Command::new(resolve_binary("npx"));
-/// // On Windows: spawns `npx.cmd`.
-/// // On Linux/macOS: spawns `npx`.
+/// On Windows: spawns `npx.cmd`.
+/// On Linux/macOS: spawns `npx`.
 /// ```
 pub fn resolve_binary(name: &str) -> String {
     #[cfg(target_os = "windows")]

@@ -36,8 +36,7 @@ pub struct AdapterProxyConfig {
 // ---------------------------------------------------------------------------
 
 /// Common configuration and helpers shared by all platform adapters.
-///
-/// Concrete adapter implementations should embed this struct and delegate
+/// /// Concrete adapter implementations should embed this struct and delegate
 /// common operations (token validation, HTTP client construction) to it.
 pub struct BasePlatformAdapter {
     /// Authentication token for the platform API.

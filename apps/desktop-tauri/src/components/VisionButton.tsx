@@ -10,8 +10,8 @@ interface VisionButtonProps {
   disabled?: boolean;
 }
 
-// v3 (2026-06-25): 删 FileReader.readAsDataURL — 同步阻塞主线程 1.5s/8MB。
-//   直接传 File 引用，base64 转换/压缩/预览全部后置。
+// 删 FileReader.readAsDataURL — 同步阻塞主线程 1.5s/8MB。
+// 直接传 File 引用，base64 转换/压缩/预览全部后置。
 const ACCEPT_LIST = "*/*";
 
 export function VisionButton({ onFilesAttach, disabled }: VisionButtonProps) {

@@ -85,8 +85,7 @@ impl CodexProvider {
     }
 
     /// Convert internal messages to the Responses API input format.
-    ///
-    /// The Responses API uses a flat `input` array with items of different types:
+    /// /// The Responses API uses a flat `input` array with items of different types:
     /// - `{ "role": "user", "content": "..." }`
     /// - `{ "role": "assistant", "content": "..." }`
     /// - `{ "type": "function_call", "name": "...", "arguments": "...", "call_id": "..." }`

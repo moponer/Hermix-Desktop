@@ -73,10 +73,9 @@ pub(crate) struct PreparedRun {
 /// All mutable loop-local state shared between `run()` and `run_stream()`.
 /// Centralized to avoid declaring 17+ individual locals in both methods
 /// (reduces duplication and eliminates the "forget to sync" bug).
-///
-/// Phase 1 (2026-07-03) introduces the struct. Phase 1.1 wires the
+/// /// Phase 1 (2026-07-03) introduces the struct. Phase 1.1 wires the
 /// 14 run() + 17 run_stream() locals through it via `publish_from`.
-/// Phase 5 (2026-07-03 + 2026-07-04) folds 9 inline fields into 4
+/// Phase 5 (+ 2026-07-04) folds 9 inline fields into 4
 /// manager structs ([`TurnTimings`], [`CostGuard`], [`MessageCache`],
 /// [`RetryCounters`], [`ContextPressureMonitor`]). After Phase 5
 /// (commits a37bba3, d31f7e8) the `publish_from` bridge is gone —
@@ -124,7 +123,7 @@ pub(crate) struct LoopState {
     /// Phase 5 (2026-07-03): extracted from 3 inline fields to consolidate
     /// the throttle/cooldown rules in [`ContextPressureMonitor::should_emit_warning`].
     pub(crate) context_pressure: ContextPressureMonitor,
-    /// 2026-07-09 (AL-8): convergence detector for no-progress / error
+    /// (AL-8): convergence detector for no-progress / error
     /// loop / similar content detection. Goes beyond simple tool dedup
     /// to catch agents that are "working" (calling different tools) but
     /// not making real progress.
@@ -142,14 +141,12 @@ pub(crate) struct LoopState {
 // ---------------------------------------------------------------------------
 
 /// Outcome of one background-spawned compression attempt.
-///
-/// Produced by the `tokio::spawn`-ed compressor task and consumed by
+/// /// Produced by the `tokio::spawn`-ed compressor task and consumed by
 /// `apply_compression_result` when the agent loop's next
 /// `do_pre_turn_setup` polls the in-flight handle. The struct holds
 /// everything we need to roll the compressed state forward without
 /// having to take `compressor.lock().await` again on the apply side.
-///
-/// `compressed_base` is the snapshot the compressor produced (typically
+/// /// `compressed_base` is the snapshot the compressor produced (typically
 /// `[kept_head, summary_msg]`). `new_messages_since_snapshot` is left
 /// empty here — the agent loop splices them in at apply time so the
 /// compressor never has to know what the live `ctx` looks like after
@@ -174,8 +171,7 @@ pub(crate) struct CompressionOutcome {
 }
 
 /// In-flight bookkeeping for one background compression.
-///
-/// Lives on the `AgentLoop` (`compression_in_flight: Mutex<Option<Self>>`)
+/// /// Lives on the `AgentLoop` (`compression_in_flight: Mutex<Option<Self>>`)
 /// so the agent loop's main path can poll it on every turn setup and
 /// roll the result in without re-locking the compressor. We hold the
 /// `JoinHandle` rather than a `tokio::sync::oneshot::Receiver` because
@@ -212,14 +208,12 @@ pub(crate) struct CompressionInFlight {
 /// `match`, `continue`, and `return` statements scattered across ~1,700
 /// lines of `run()` + `run_stream()`. Making them explicit serves three
 /// purposes:
-///
-/// 1. **Documentation** — a new reader can see all possible states at a glance.
+/// /// 1. **Documentation** — a new reader can see all possible states at a glance.
 /// 2. **Observability** — emitted via `tracing` so dashboards can show
-///    which phase each turn is in.
+/// which phase each turn is in.
 /// 3. **Future unification** — when `run()` and `run_stream()` merge into
-///    `run_engine`, this enum becomes the match target of the single loop.
-///
-/// The phases flow in order, but some can skip (e.g. `PostLlmCall` →
+/// `run_engine`, this enum becomes the match target of the single loop.
+/// /// The phases flow in order, but some can skip (e.g. `PostLlmCall` →
 /// `Finalize` if no tool calls) or loop back (`PostToolExec` → `PreTurnSetup`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub(crate) enum LoopPhase {
@@ -270,13 +264,11 @@ impl LoopPhase {
     /// Map this fine-grained phase to a coarse-grained orchestration
     /// stage (P3-1). The four stages correspond to the
     /// perception-reasoning-action-observation cycle:
-    ///
-    /// - **Perception** — Init, PreTurnSetup, Prefetch
+    /// /// - **Perception** — Init, PreTurnSetup, Prefetch
     /// - **Reasoning** — LlmCall, PostLlmCall
     /// - **Action** — ToolValidation, ToolExecution
     /// - **Observation** — PostToolExec, Finalize
-    ///
-    /// Used by `TurnReport` for observability and by the frontend
+    /// /// Used by `TurnReport` for observability and by the frontend
     /// for progress display.
     pub(crate) fn as_orchestration_stage(&self) -> crate::orchestrator::OrchestrationStage {
         use crate::orchestrator::OrchestrationStage;

@@ -8,8 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Full metadata for a single model from models.dev.
-///
-/// Field-by-field port of `ModelInfo` in `agent/models_dev.py`. All numeric
+/// /// Field-by-field port of `ModelInfo` in `agent/models_dev.py`. All numeric
 /// limits use 0 as "unknown" to match Python's int(0) sentinel; `cost_*`
 /// fields use 0.0 with `None` reserved for "field not present at all".
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -162,8 +161,7 @@ pub struct ProviderInfo {
 
 /// Compact capability struct with sensible defaults — matches Python
 /// `ModelCapabilities`.
-///
-/// Defaults (`supports_tools = true`, `context_window = 200_000`, etc.) come
+/// /// Defaults (`supports_tools = true`, `context_window = 200_000`, etc.) come
 /// from the Python reference and reflect "modern frontier model" assumptions
 /// for callers that just want a quick yes/no without a full lookup.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

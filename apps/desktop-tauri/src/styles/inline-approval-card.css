@@ -1,7 +1,7 @@
 /* ════════════════════════════════════════════════════════════════════
    inline-approval-card.css — InlineApprovalCard + InlineClarifyCard
    ──────────────────────────────────────────────────────────────────
-   2026-07-18 主人反馈：「请求的按钮不够突出啊，差点没看见」
+   用户反馈：「请求的按钮不够突出啊，差点没看见」
    (Round 19 反馈消息 #10)。根因排查：
      · InlineApprovalCard.tsx 引用的 80% CSS 类名(.approval-avatar /
        .approval-pills / .approval-line2 / .approval-tool-pill /
@@ -14,7 +14,7 @@
      · 补全所有缺失的类
      · 按钮高度从 ~22px 拉到 32px、字号 12.5px、加粗
      · 主按钮(允许/发送)用 accent 实色,反按钮(拒绝)用 error-soft
-       浅红底 + 红字,两者对比 + 体积都拉满,主人一眼能看到
+       浅红底 + 红字,两者对比 + 体积都拉满,用户一眼能看到
      · countdown 时间低于 30s 触发 danger 态(原有逻辑)
      · 右下角 PendingApprovalToast 用了页面全局 fixed 定位,样式同
        文件下方的 §4。
@@ -160,20 +160,80 @@
 }
 
 .approval-resolved-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-top: 8px;
-  padding-top: 6px;
+  padding-top: 7px;
   border-top: 1px dashed var(--color-border-subtle, #ececef);
-  font-size: 11.5px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-muted, #777);
 }
 .dark .approval-resolved-footer {
   border-top-color: var(--color-border-subtle, #2c2c32);
+  color: var(--color-text-muted, #999);
+}
+
+/* Status icon chip inside the resolved footer — colored square that
+   matches the decision so the user can scan the footer state without
+   reading the text. */
+.approval-resolved-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.approval-resolved-icon.icon-ok {
+  color: var(--color-success, #16a34a);
+  background: color-mix(in srgb, var(--color-success, #16a34a) 12%, transparent);
+}
+.approval-resolved-icon.icon-deny {
+  color: var(--color-error, #dc2626);
+  background: color-mix(in srgb, var(--color-error, #dc2626) 12%, transparent);
+}
+.approval-resolved-icon.icon-expired {
+  color: var(--color-text-muted, #888);
+  background: color-mix(in srgb, var(--color-text-muted, #888) 10%, transparent);
+}
+
+/* ── §3b. Resolved-card refinements (Round 2026-07-25 优化) ─────────
+   当卡片已被决定 (approved/denied/expired), 它不再是待办项 —
+   视觉权重应"沉下去",把焦点还给当前正在进行的对话。设计意图:
+
+     · 整卡 opacity 0.93 — 让已完成的卡片在消息流里退后一步
+     · 命令文本 wrap 显示 (pre-wrap + break-word) — 完整可读,
+       审计/回顾价值优先于紧凑预览
+     · 字号略增 0.5px,颜色加深到 text-secondary — 既然已经决定,
+       不再是"瞥一眼"的预览,而是"以后回来查"的记录
+
+   Pending 卡片保留紧凑截断预览 — 用户只是要快速理解"该不该允许",
+   完整命令细节等到批准后再展开。 */
+.msg-card.approval-card.is-resolved {
+  opacity: 0.93;
+}
+
+.approval-args-text.is-resolved {
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-size: 11.5px;
+  line-height: 1.55;
+  padding: 6px 10px;
+  color: var(--color-text-secondary, #555);
+}
+.dark .approval-args-text.is-resolved {
+  color: var(--color-text-secondary, #b8b8bc);
 }
 
 /* ── §3a. Action buttons — BIG & high-contrast ─────────────────────
    之前 .approval-btn 是 `padding: 3px 12px / font-size: 11.5px /
    background: transparent` 的幽灵按钮 — 12.5px 灰字,鼠标不在上面
-   完全看不见。这是 2026-07-18 主人踩坑反馈「差点没看见」的根因。
+   完全看不见。这是 用户踩坑反馈「差点没看见」的根因。
 
    新设计:
    · 高度 32px,字号 12.5px-13px,字重 600
@@ -183,9 +243,9 @@
      + 红字,hover 加深,但默认已经够醒目
    · 二级按钮(.approval-btn-secondary): 用于 Clarify 卡片选项,
      灰底 + 边,hover 才填深
-   · 全部带 :active scale 反馈,让主人按下去时手感到位
+   · 全部带 :active scale 反馈,让用户按下去时手感到位
 
-   设计意图:权限确认是一个**带边界感的操作**——主人要么允许要么
+   设计意图:权限确认是一个**带边界感的操作**——用户要么允许要么
    拒绝,这种二元选择必须给到两个同样大、同样亮的按钮,让"红色按钮"
    本身作为视觉警示,而不是靠 hover 才看到。 */
 .approval-btn {
@@ -312,14 +372,14 @@
 }
 
 /* ── §5. Pending approval toast (右下角浮动气泡) ──────────────────
-   设计目的: 即使主人正在看别处 / 聊天列表滚走了,这个悬浮气泡会一
+   设计目的: 即使用户正在看别处 / 聊天列表滚走了,这个悬浮气泡会一
    直挂在那里,提醒 "Hermix 在等你的决定"。点击会:
      · 切到有 pending 卡的 session
      · 滚动并高亮(2s 黄色 ring 闪烁)第一张未决定的请求卡
 
    实现细节:
      · position: fixed bottom-right 24px (跟 macOS / Windows 11 的
-       通知中心同一象限,主人眼熟)
+       通知中心同一象限,用户眼熟)
      · 不用 portal — 它已经是 app-shell root,fixed 即可
      · z-index: 80 (高于 popover 50 / modal 60,低于 stream-error
        banner 这类需要盖在 toast 上的元素)
@@ -470,7 +530,7 @@
 }
 
 /* ── §7. Denial banner (A+C product fix) ───────────────────────────
-   2026-07-18: top-center banner shown when a tool call is *denied*
+   top-center banner shown when a tool call is *denied*
    (user拒绝 / 超时 / 连接中断). Mirrors the agent's injected
    "tell the user" system note with a visible cue. Uses the
    warning/error tokens only — no blue/indigo/violet per the

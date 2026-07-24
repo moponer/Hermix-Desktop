@@ -102,8 +102,7 @@ impl SignalAdapter {
     }
 
     /// Parse a single message from signal-cli's receive endpoint into a typed struct.
-    ///
-    /// Expects the signal-cli JSON envelope format with `envelope.dataMessage`.
+    /// /// Expects the signal-cli JSON envelope format with `envelope.dataMessage`.
     pub fn parse_received_message(msg: &serde_json::Value) -> Option<IncomingSignalMessage> {
         let envelope = msg.get("envelope")?;
         let source = envelope.get("source").and_then(|v| v.as_str())?.to_string();

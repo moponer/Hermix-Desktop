@@ -92,8 +92,7 @@ impl VoiceManager {
     }
 
     /// Handle voice input: transcribe audio data and return text.
-    ///
-    /// Wraps the STT pipeline with format normalization and optional
+    /// /// Wraps the STT pipeline with format normalization and optional
     /// voice activity detection.
     pub async fn handle_voice_input(
         &self,
@@ -113,8 +112,7 @@ impl VoiceManager {
     }
 
     /// Handle voice output: synthesize text into audio bytes.
-    ///
-    /// Takes a TTS backend override or uses the configured default.
+    /// /// Takes a TTS backend override or uses the configured default.
     pub async fn handle_voice_output(
         &self,
         text: &str,
@@ -133,8 +131,7 @@ impl VoiceManager {
     }
 
     /// Join a voice channel on a platform (e.g., Discord voice channel).
-    ///
-    /// This is a placeholder that records the join intent. Actual voice channel
+    /// /// This is a placeholder that records the join intent. Actual voice channel
     /// connectivity depends on the platform adapter's capabilities.
     pub async fn join_voice_channel(
         &self,
@@ -171,8 +168,7 @@ impl VoiceManager {
     }
 
     /// Simple voice activity detection (VAD) placeholder.
-    ///
-    /// Checks if the audio data contains enough energy to be considered speech.
+    /// /// Checks if the audio data contains enough energy to be considered speech.
     /// In production, use a proper VAD library (e.g., webrtc-vad or silero-vad).
     fn detect_voice_activity(&self, audio_data: &[u8]) -> bool {
         if audio_data.len() < 320 {

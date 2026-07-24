@@ -1,11 +1,8 @@
 // src/components/PlanConfirmationDialog.tsx
-//
 // P2-4: Plan 模式方案确认弹层
-//
 // 当 Agent 在 Plan 模式下产出方案后，弹出此对话框。
 // 用户确认后 PATCH task status → in_progress，Agent 继续执行。
 // 用户取消则 PATCH task status → archived。
-//
 // 样式遵守铁律 V：无蓝紫，用 gold/amber + gray/zinc。
 // Dark 双轨：通过 CSS 变量自动适配。
 

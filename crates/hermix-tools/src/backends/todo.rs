@@ -36,14 +36,14 @@ pub struct TodoItem {
     /// todo panel + WS `todo_snapshot` to filter per-session.
     /// `None` for pre-session-context items (legacy CLI). `#[serde(default)]`
     /// keeps old `todos.json` files compatible — they decode as `None`.
-    /// FRONTEND_AUDIT_TODO_2026-07-13 / Commit A.
+    /// / Commit A.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// Wire-format assistant message id that emitted the tool call
     /// which created this todo (`${session_id}-${rowIdx}`). Anchors
     /// the inline plan card next to the right assistant message
     /// after reload. `#[serde(default)]` for legacy compatibility.
-    /// P0-T1 / FRONTEND_AUDIT_TODO_2026-07-13.
+    /// P0-T1 / .
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_message_id: Option<String>,
 }
@@ -244,7 +244,7 @@ impl TodoBackend for FileTodoBackend {
     /// Default impl falls back to `list(None)` for legacy in-memory
     /// backends that don't track sessions; backends with session
     /// metadata should override for the per-session filter.
-    /// FRONTEND_AUDIT_TODO_2026-07-13 / Commit A.
+    /// / Commit A.
     async fn list_for_session(&self, session_id: &str) -> Result<String, ToolError> {
         let items = self
             .items

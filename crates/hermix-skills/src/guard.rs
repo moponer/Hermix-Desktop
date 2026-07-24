@@ -93,8 +93,7 @@ static COMPILED_BLOCKED_URLS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 /// Security guard that validates skill content and URLs against dangerous
 /// patterns.
-///
-/// Uses a default set of patterns but can be extended with custom ones.
+/// /// Uses a default set of patterns but can be extended with custom ones.
 #[derive(Debug, Clone, Default)]
 pub struct SkillGuard {
     /// Additional user-provided blocked content patterns.
@@ -113,13 +112,12 @@ impl SkillGuard {
     }
 
     /// Validate a skill's content and structure.
-    ///
-    /// Checks:
+    /// /// Checks:
     /// 1. Required fields (name, description, content steps)
     /// 2. Dangerous patterns in skill content
     /// 3. URL references in skill content
     /// 4. Documentation structure: description trigger phrases,
-    ///    required sections (When to Activate, Integration)
+    /// required sections (When to Activate, Integration)
     pub fn validate_skill(&self, skill: &Skill) -> Result<(), SkillError> {
         // 1. Structure validation: name is required.
         if skill.name.trim().is_empty() {

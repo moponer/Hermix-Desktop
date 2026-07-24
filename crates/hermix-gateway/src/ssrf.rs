@@ -16,8 +16,7 @@ use hermix_core::errors::GatewayError;
 // ---------------------------------------------------------------------------
 
 /// Check if an IPv4 address falls within a private/reserved range.
-///
-/// Blocks:
+/// /// Blocks:
 /// - 10.0.0.0/8 (Class A private)
 /// - 172.16.0.0/12 (Class B private)
 /// - 192.168.0.0/16 (Class C private)
@@ -70,8 +69,7 @@ fn is_private_ipv4(ip: &Ipv4Addr) -> bool {
 }
 
 /// Check if an IPv6 address falls within a private/reserved range.
-///
-/// Blocks:
+/// /// Blocks:
 /// - ::1/128 (Loopback)
 /// - fe80::/10 (Link-local)
 /// - fc00::/7 (Unique local / ULA)
@@ -148,8 +146,7 @@ fn is_cloud_metadata(ip: &IpAddr) -> bool {
 // ---------------------------------------------------------------------------
 
 /// DNS resolution async signature: `host` → list of `SocketAddr`.
-///
-/// Production uses `tokio::net::lookup_host`; tests can install a stub to keep
+/// /// Production uses `tokio::net::lookup_host`; tests can install a stub to keep
 /// the suite hermetic when the build host has no DNS (CI sandboxes, airgapped
 /// containers, etc.). Installed via `set_resolver_for_testing`.
 type ResolverFuture = std::pin::Pin<
@@ -190,16 +187,13 @@ async fn resolve_host(host: &str) -> std::io::Result<Vec<SocketAddr>> {
 // ---------------------------------------------------------------------------
 
 /// Check whether a URL is safe to access (not a private/internal address).
-///
-/// This function:
+/// /// This function:
 /// 1. Parses the URL
 /// 2. Resolves the hostname to IP addresses
 /// 3. Rejects any that resolve to private/reserved ranges
 /// 4. Rejects cloud metadata endpoints
-///
-/// Returns `true` if the URL is safe, `false` otherwise.
-///
-/// **Async**: Performs real DNS resolution via `tokio::net::lookup_host` to
+/// /// Returns `true` if the URL is safe, `false` otherwise.
+/// /// **Async**: Performs real DNS resolution via `tokio::net::lookup_host` to
 /// close the DNS-rebinding hole that the synchronous version had (where any
 /// hostname was accepted without checking the resolved IP).
 pub async fn is_safe_url(url: &str) -> bool {
@@ -251,11 +245,9 @@ pub async fn is_safe_url(url: &str) -> bool {
 }
 
 /// Validate a URL and return it if it passes SSRF protection checks.
-///
-/// Returns the parsed `Url` if safe, or a `GatewayError` if the URL
+/// /// Returns the parsed `Url` if safe, or a `GatewayError` if the URL
 /// is potentially dangerous.
-///
-/// **Async**: Performs real DNS resolution to close the DNS-rebinding hole.
+/// /// **Async**: Performs real DNS resolution to close the DNS-rebinding hole.
 pub async fn validate_url(url: &str) -> Result<Url, GatewayError> {
     let parsed = Url::parse(url)
         .map_err(|e| GatewayError::ConnectionFailed(format!("Invalid URL '{}': {}", url, e)))?;
@@ -389,7 +381,6 @@ mod tests {
     // Async tests: hostname-based tests require real DNS.
     // We use `example.com` (public, IANA-reserved) and `localhost`
     // (always resolves to 127.0.0.1) so the suite is hermetic.
-    //
     // The DNS stub installed below makes these tests pass on hosts that
     // have no DNS (CI sandboxes, airgapped containers). It also closes
     // the last network-dependent hole in `cargo test` for this crate.

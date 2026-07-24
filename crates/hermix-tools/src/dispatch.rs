@@ -17,8 +17,7 @@ use crate::registry::ToolRegistry;
 
 /// Dispatch one of the three bridge tools (`tool_search` /
 /// `tool_describe` / `tool_call`).
-///
-/// These are the only tools NOT registered in the registry — they are
+/// /// These are the only tools NOT registered in the registry — they are
 /// the meta-tool for discovering the deferred-tool list that the LLM
 /// would otherwise never see. The match is exhaustive on the three
 /// bridge names; any other name falls through to the `_` arm and
@@ -82,8 +81,7 @@ impl From<DispatchedResult> for ToolResult {
 }
 
 /// Timeouts for `dispatch_tools`.
-///
-/// Default: 60 s per call, 5 min total batch. These match the LLM
+/// /// Default: 60 s per call, 5 min total batch. These match the LLM
 /// timeout in `agent_loop::call_llm_with_retry` (60 s first attempt,
 /// 120 s retry) so a hanging tool never outlives its caller.
 #[derive(Debug, Clone, Copy)]
@@ -108,35 +106,30 @@ impl Default for DispatchTimeouts {
 }
 
 /// Dispatch multiple tool calls in parallel through the registry.
-///
-/// Uses `tokio::JoinSet` with a configurable concurrency cap and budget
+/// /// Uses `tokio::JoinSet` with a configurable concurrency cap and budget
 /// enforcement. Results are truncated according to the budget config
 /// (UTF-8 safe — see A1). Two new guarantees on top of A1:
-///
-/// 1. **Per-call timeout.** Each spawned task is wrapped in
-///    `tokio::time::timeout(per_call_timeout, …)`. If a tool hangs
-///    (e.g. `terminal` reading from a fifo nobody will write to,
-///    `cua.click` waiting for an element that never appears), the
-///    timer fires and we substitute a `ToolResult::err` describing
-///    the timeout — the dispatch never blocks past `per_call_timeout`.
-///
-/// 2. **Input order preserved.** Results are returned in the same
-///    order as `calls`, even though `JoinSet` reports completions
-///    out of order. We track each task's input index and place
-///    results into a fixed-size `Vec<Option<ToolResult>>` before
-///    unwrapping into the final `Vec<ToolResult>`.
-///
-/// # Arguments
+/// /// 1. **Per-call timeout.** Each spawned task is wrapped in
+/// `tokio::time::timeout(per_call_timeout, …)`. If a tool hangs
+/// (e.g. `terminal` reading from a fifo nobody will write to,
+/// `cua.click` waiting for an element that never appears), the
+/// timer fires and we substitute a `ToolResult::err` describing
+/// the timeout — the dispatch never blocks past `per_call_timeout`.
+/// /// 2. **Input order preserved.** Results are returned in the same
+/// order as `calls`, even though `JoinSet` reports completions
+/// out of order. We track each task's input index and place
+/// results into a fixed-size `Vec<Option<ToolResult>>` before
+/// unwrapping into the final `Vec<ToolResult>`.
+/// /// # Arguments
 /// * `calls`            - List of tool calls to dispatch
 /// * `registry`         - The tool registry to dispatch through
 /// * `budget`           - Budget configuration for result size limits
 /// * `pool_size`        - Maximum number of concurrent tool executions
-///                        (default: 8)
+/// (default: 8)
 /// * `timeouts`         - Per-call timeout and total batch timeout.
-///                        `DispatchTimeouts::default()` = 60 s per
-///                        call, 5 min total.
-///
-/// # Returns
+/// `DispatchTimeouts::default()` = 60 s per
+/// call, 5 min total.
+/// /// # Returns
 /// Vec of `ToolResult`, one per input call, **in the same order as
 /// `calls`**.
 pub async fn dispatch_tools(
@@ -200,7 +193,6 @@ pub async fn dispatch_tools(
             // is hidden from the LLM otherwise) and (b) `tool_call` calls
             // back into registry.dispatch_async recursively, which would
             // need a different bridge path. See `dispatch_bridge_tool`.
-            //
             // The whole bridge-or-registry dispatch is wrapped in
             // tokio::time::timeout so a hanging handler (e.g. one that
             // is blocked on a channel the user will never write to) can
@@ -454,15 +446,14 @@ mod tests {
     }
 
     // ── dispatch_bridge_tool regression tests (A2) ────────────────────
-    //
     // The bridge path used to inline a 14-line match on
     // `call.function.name.as_str()`. Extracted into
     // `dispatch_bridge_tool` so:
-    //  - all three handlers share one parse-args / format-error path;
-    //  - a future bridge tool only adds one match arm, not three call
-    //    sites;
-    //  - the `_` arm catches `is_bridge` drift (returns an error JSON
-    //    instead of silently routing a non-bridge name to a handler).
+    // - all three handlers share one parse-args / format-error path;
+    // - a future bridge tool only adds one match arm, not three call
+    // sites;
+    // - the `_` arm catches `is_bridge` drift (returns an error JSON
+    // instead of silently routing a non-bridge name to a handler).
 
     fn bridge_call(name: &str, args: &str) -> ToolCall {
         ToolCall {
@@ -525,7 +516,6 @@ mod tests {
     }
 
     // ── dispatch_tools timeout + order (A4) ──────────────────────────
-    //
     // The `FakeHandler` below is registered into a fresh ToolRegistry
     // and lets a test pick exactly how long the handler sleeps before
     // returning. The "hang forever" arm uses `tokio::time::sleep`

@@ -26,11 +26,11 @@ export function useResizable({
   side,
 }: UseResizableOptions) {
   // ── Hook order (must stay stable across renders; do NOT branch):
-  //  1. useRef  (resizingRef)
-  //  2. useState (width)
-  //  3. useCallback (onMouseDown)
-  //  4. useEffect (mousemove/mouseup listeners)
-  //  5. useEffect (persist width to storage)
+  // 1. useRef  (resizingRef)
+  // 2. useState (width)
+  // 3. useCallback (onMouseDown)
+  // 4. useEffect (mousemove/mouseup listeners)
+  // 5. useEffect (persist width to storage)
 
   const resizingRef = useRef(false);
 

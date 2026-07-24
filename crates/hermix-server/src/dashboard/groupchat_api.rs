@@ -66,8 +66,7 @@ pub struct MemberResponse {
 }
 
 /// The built-in leader (项目总管) virtual identity exposed to clients.
-///
-/// The leader exists once per room and is created automatically on
+/// /// The leader exists once per room and is created automatically on
 /// `create_room`. Its `agent_id` is the sentinel
 /// [`LEADER_AGENT_ID`] constant; the `session_id` is what the
 /// dispatcher binds to so the LeaderOrchestrator prompt can run on
@@ -214,8 +213,7 @@ pub struct UpdateSettingsRequest {
 /// Read-only snapshot of a room's settings. Returned by `GET
 /// /api/groupchat/rooms/{room_id}/settings` so the settings drawer
 /// can hydrate its form without scanning `list_rooms`.
-///
-/// Mirrors `RoomSettings` field-for-field — when new settings are
+/// /// Mirrors `RoomSettings` field-for-field — when new settings are
 /// added there, add them here too.
 #[derive(Serialize)]
 pub struct SettingsResponse {
@@ -306,8 +304,7 @@ fn msg_to_response(msg: &hermix_gateway::groupchat::persistence::ChatMessage) ->
 }
 
 /// Extract the leader profile from a list of agents, if present.
-///
-/// Returns `None` for rooms created before P1 (where the leader row
+/// /// Returns `None` for rooms created before P1 (where the leader row
 /// doesn't exist). For new rooms this is always populated because
 /// `create_room` auto-inserts the leader.
 fn leader_from_agents(agents: &[hermix_gateway::groupchat::persistence::AgentRoomProfile]) -> Option<LeaderResponse> {
@@ -502,10 +499,8 @@ pub async fn set_leader(
 }
 
 /// Invite an agent into the room.
-///
-/// `POST /api/groupchat/rooms/{room_id}/agents/{agent_id}`
-///
-/// Body: `{ "role": "leader" | "member" | "observer" }` (optional; defaults to member).
+/// /// `POST /api/groupchat/rooms/{room_id}/agents/{agent_id}`
+/// /// Body: `{ "role": "leader" | "member" | "observer" }` (optional; defaults to member).
 /// 404 if the room doesn't exist; 500 on persistence failure.
 /// Idempotent for "member" role — re-inviting an already-present member
 /// returns 200 without error.  Re-inviting as a different role upgrades
@@ -545,10 +540,8 @@ pub async fn invite_agent(
 }
 
 /// Remove an agent from the room.
-///
-/// `DELETE /api/groupchat/rooms/{room_id}/agents/{agent_id}`
-///
-/// Does **not** delete the agent itself — agents live outside of rooms.
+/// /// `DELETE /api/groupchat/rooms/{room_id}/agents/{agent_id}`
+/// /// Does **not** delete the agent itself — agents live outside of rooms.
 /// 404 if the room doesn't exist; 200 even if the agent wasn't a member
 /// (idempotent — kicking a non-member is a no-op).
 pub async fn kick_agent(
@@ -592,8 +585,8 @@ pub struct UpdateMemberDisplayNameRequest {
 }
 
 /// Snapshot of one member in a room — used by the dialog's "current
-///  members" tab so the UI can render alias + role + model in one
-///  round trip without re-fetching the full room.
+/// members" tab so the UI can render alias + role + model in one
+/// round trip without re-fetching the full room.
 #[derive(Serialize)]
 pub struct MemberSnapshot {
     pub agent_id: String,
@@ -691,17 +684,14 @@ pub async fn list_room_ranks(
 }
 
 /// Update the per-room display name (别名) for a single agent.
-///
-/// `PATCH /api/groupchat/rooms/{room_id}/agents/{agent_id}/display-name`
-///
-/// Body: `{ "display_name": "首席后端" }` — or `"display_name": null` /
+/// /// `PATCH /api/groupchat/rooms/{room_id}/agents/{agent_id}/display-name`
+/// /// Body: `{ "display_name": "首席后端" }` — or `"display_name": null` /
 /// empty string to clear the alias.
-///
-/// Notes:
+/// /// Notes:
 /// - The built-in leader (`__leader__`) is system-controlled; we accept
-///   updates so an operator can give the leader a room-specific title
-///   (e.g. "项目总管 · 物流平台") without breaking the leader-driven
-///   send_message flow (which dispatches by id, not display name).
+/// updates so an operator can give the leader a room-specific title
+/// (e.g. "项目总管 · 物流平台") without breaking the leader-driven
+/// send_message flow (which dispatches by id, not display name).
 /// - 404 if the room or the agent is not a member of the room.
 /// - 200 on success. Idempotent.
 pub async fn update_member_display_name(
@@ -727,10 +717,8 @@ pub async fn update_member_display_name(
 }
 
 /// Update the per-room model override for a single agent.
-///
-/// `PATCH /api/groupchat/rooms/{room_id}/agents/{agent_id}`
-///
-/// Body: `{ "model": "claude-sonnet-4.5" }` — or `"model": null` to clear.
+/// /// `PATCH /api/groupchat/rooms/{room_id}/agents/{agent_id}`
+/// /// Body: `{ "model": "claude-sonnet-4.5" }` — or `"model": null` to clear.
 /// 404 if the room or the agent is not a member of the room.
 /// 200 on success. Idempotent.
 pub async fn update_member_model(
@@ -821,7 +809,6 @@ pub async fn send_message(
     // are delivered via WS events (RoomEvent::MessageSaved,
     // AgentThinkingChunk, DispatchFailed, Handoff, …) which the
     // WS handler forwards to connected clients.
-    //
     // This REST endpoint is the *primary* entry point for a group-chat
     // user message (the WS `GroupChat*` commands do NOT re-trigger
     // TaskCreated). We spawn the runtime dispatch so the HTTP handler
@@ -912,8 +899,7 @@ pub async fn send_message(
 }
 
 /// Run agent dispatch for a room (leader analysis + subtasks + aggregation).
-///
-/// Extracted into its own function so `send_message` can wrap it in a 90-second
+/// /// Extracted into its own function so `send_message` can wrap it in a 90-second
 /// timeout — without one, flaky LLM providers could freeze the HTTP response for
 /// minutes via exponential-backoff retries inside the agent loop.
 async fn run_agent_dispatch(
@@ -1124,8 +1110,7 @@ async fn broadcast_to_agents(
 }
 
 /// `GET /api/groupchat/rooms/{room_id}/messages?before_id=...&limit=50`
-///
-/// M4 — supports cursor-based pagination. Returns up to `limit` (default 50)
+/// /// M4 — supports cursor-based pagination. Returns up to `limit` (default 50)
 /// messages older than `before_id`. When `before_id` is omitted, returns the
 /// most recent messages. Pass the oldest message id from the previous page
 /// as `before_id` to load the next page.
@@ -1228,10 +1213,8 @@ pub async fn update_rules(
 // ── Announcement Endpoints (P2) ─────────────────────────────────
 
 /// Publish or replace the room's pinned announcement.
-///
-/// `POST /api/groupchat/rooms/{room_id}/announcement`
-///
-/// Body: `{ "text": "本群目标：…" }`. Pass an empty `text` to clear.
+/// /// `POST /api/groupchat/rooms/{room_id}/announcement`
+/// /// Body: `{ "text": "本群目标：…" }`. Pass an empty `text` to clear.
 /// `published_at` is captured server-side from the manager's clock so
 /// clients don't have to send a timestamp. The leader is the only
 /// entity that publishes; the API doesn't currently gate this on
@@ -1266,10 +1249,8 @@ pub async fn publish_announcement(
 }
 
 /// Clear the room's pinned announcement.
-///
-/// `DELETE /api/groupchat/rooms/{room_id}/announcement`
-///
-/// Idempotent: returns 200 even when no announcement was set.
+/// /// `DELETE /api/groupchat/rooms/{room_id}/announcement`
+/// /// Idempotent: returns 200 even when no announcement was set.
 pub async fn clear_announcement(
     State(state): State<HttpServerState>,
     Path(room_id): Path<String>,
@@ -1291,10 +1272,8 @@ pub struct AnnouncementResponse {
 // ── Task Endpoints (P2) ─────────────────────────────────────────
 
 /// Get the active task (with its subtasks) for a room.
-///
-/// `GET /api/groupchat/rooms/{room_id}/tasks/active`
-///
-/// Returns 200 with `{ task: null }` (or 200 with empty task fields)
+/// /// `GET /api/groupchat/rooms/{room_id}/tasks/active`
+/// /// Returns 200 with `{ task: null }` (or 200 with empty task fields)
 /// when no active task exists. We use 200 + null rather than 404 so
 /// the UI can poll cheaply without handling a special "no task" state.
 pub async fn get_active_task(
@@ -1335,8 +1314,7 @@ pub struct ActiveTaskResponse {
 
 /// List all tasks for a room, newest first. Powers the history view
 /// inside the task panel drawer.
-///
-/// `GET /api/groupchat/rooms/{room_id}/tasks`
+/// /// `GET /api/groupchat/rooms/{room_id}/tasks`
 pub async fn list_room_tasks(
     State(state): State<HttpServerState>,
     Path(room_id): Path<String>,
@@ -1359,8 +1337,7 @@ pub async fn list_room_tasks(
 
 /// Update an existing subtask. Used by the panel to flip status to
 /// "running" / "done" / "failed" and store the result text.
-///
-/// `PATCH /api/groupchat/subtasks/{subtask_id}`
+/// /// `PATCH /api/groupchat/subtasks/{subtask_id}`
 pub async fn update_subtask(
     State(state): State<HttpServerState>,
     Path(subtask_id): Path<String>,
@@ -1424,8 +1401,8 @@ pub async fn update_subtask(
 
     // ── P3 rank hook ────────────────────────────────────────
     // Subtask status transitions move the assigned agent's rank:
-    //   any → Done    +10   (reward; bumps total_tasks + streak)
-    //   any → Failed  -15   (penalty; resets consecutive_no_violation)
+    // any → Done    +10   (reward; bumps total_tasks + streak)
+    // any → Failed  -15   (penalty; resets consecutive_no_violation)
     // Running / Pending transitions are no-ops. The reward / penalty
     // mapping lives at the API edge on purpose — the persistence
     // trait stays free of side-effect policy, and `update_subtask`
@@ -1467,12 +1444,9 @@ pub async fn update_subtask(
 }
 
 /// P1.4 — cast a vote on a fellow member (+20 up, -20 down).
-///
-/// `POST /api/groupchat/rooms/{room_id}/vote`
-///
-/// Body: `{ "target_agent_id": "...", "direction": "up|down" }`
-///
-/// Returns 200 + the updated rank snapshot on success.
+/// /// `POST /api/groupchat/rooms/{room_id}/vote`
+/// /// Body: `{ "target_agent_id": "...", "direction": "up|down" }`
+/// /// Returns 200 + the updated rank snapshot on success.
 /// 400 if the body is malformed, 404 if the room doesn't exist.
 pub async fn vote(
     State(state): State<HttpServerState>,

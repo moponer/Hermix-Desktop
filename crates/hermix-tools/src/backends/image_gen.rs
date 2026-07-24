@@ -106,8 +106,7 @@ impl FalImageGenBackend {
     }
 
     /// Resolve the best-available transport.
-    ///
-    /// Priority: direct `FAL_KEY` unless `image_gen.use_gateway: true`, then
+    /// /// Priority: direct `FAL_KEY` unless `image_gen.use_gateway: true`, then
     /// Nous-managed `fal-queue` vendor → `Err` with a hint covering both
     /// paths.
     pub fn from_env_or_managed() -> Result<Self, ToolError> {

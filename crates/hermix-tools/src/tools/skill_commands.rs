@@ -83,16 +83,15 @@ impl Default for SkillCommandRegistry {
 // ---------------------------------------------------------------------------
 
 /// Scan skills for `/command` definitions in their frontmatter and register them.
-///
-/// Frontmatter format:
+/// /// Frontmatter format:
 /// ```yaml
 /// commands:
-///   - name: plan
-///     description: "Generate an execution plan"
-///     template: "Create a detailed plan for: {args}"
-///   - name: review
-///     description: "Review code changes"
-///     template: "Review the following: {args}"
+/// - name: plan
+/// description: "Generate an execution plan"
+/// template: "Create a detailed plan for: {args}"
+/// - name: review
+/// description: "Review code changes"
+/// template: "Review the following: {args}"
 /// ```
 pub fn register_skill_commands(skills: &[SkillInfo]) -> SkillCommandRegistry {
     let mut registry = SkillCommandRegistry::new();
@@ -143,8 +142,7 @@ pub fn register_skill_commands(skills: &[SkillInfo]) -> SkillCommandRegistry {
 }
 
 /// Handle a skill command invocation.
-///
-/// Returns the skill content to inject into the conversation, with `{args}`
+/// /// Returns the skill content to inject into the conversation, with `{args}`
 /// replaced by the user's arguments.
 pub fn handle_skill_command(
     registry: &SkillCommandRegistry,

@@ -167,8 +167,7 @@ impl CdpBrowserBackend {
     }
 
     /// Create from environment variable `CHROME_CDP_URL` or default localhost.
-    ///
-    /// Does NOT auto-launch Chrome at construction time. The
+    /// /// Does NOT auto-launch Chrome at construction time. The
     /// `BrowserNavigateHandler::with_cdp_bootstrap()` handles lazy
     /// browser startup only when a navigate tool call is actually made.
     pub fn from_env() -> Self {
@@ -314,13 +313,11 @@ impl CdpBrowserBackend {
 
     /// Send a CDP command and optionally wait for a follow-up event on the
     /// same WebSocket. Returns `(immediate_response, optional_event_payload)`.
-    ///
-    /// `event_method` is the CDP method name to wait for (e.g.
+    /// /// `event_method` is the CDP method name to wait for (e.g.
     /// `"Page.loadEventFired"`). If `None`, behaves like [`Self::cdp_command`].
     /// `event_timeout` caps how long to wait for the event before returning
     /// `(result, None)` — the navigate call has likely already succeeded.
-    ///
-    /// This is the right primitive for `Page.navigate` + `Page.loadEventFired`:
+    /// /// This is the right primitive for `Page.navigate` + `Page.loadEventFired`:
     /// the immediate response comes back immediately (the navigation has been
     /// *initiated*) but the page hasn't actually loaded yet. Without waiting
     /// for the event, a follow-up `Accessibility.getFullAXTree` returns the
@@ -1276,7 +1273,7 @@ impl BrowserBackend for CdpBrowserBackend {
         let resolved = self.resolve_selector(selector);
         // Pre-flight: detect missing / covered / disabled elements BEFORE
         // dispatching a click. This is the Phase-1 deliverable that the
-        // 2026-06-27 screenshot showed was missing — the LLM was firing
+        // screenshot showed was missing — the LLM was firing
         // a click into the void, getting `clicked` back, and then
         // wondering why nothing happened.
         let preflight = self
@@ -2266,7 +2263,6 @@ mod tests {
 // ---------------------------------------------------------------------------
 // AX Tree → compact YAML conversion
 // ---------------------------------------------------------------------------
-//
 // CDP `Accessibility.getFullAXTree` returns ~5K-token noise when fed raw to
 // an LLM. We compress it to a Playwright/Stagehand-style YAML tree that
 // preserves interactive nodes, names, and states, and assigns each
@@ -2305,8 +2301,7 @@ fn ax_role_is_interactive(role: &str) -> bool {
 
 /// Convert CDP `Accessibility.getFullAXTree` `nodes` array into a compact
 /// YAML tree plus a `ref → CSS selector` map for interactive nodes.
-///
-/// `depth` limits how many nesting levels are emitted (root = 0).
+/// /// `depth` limits how many nesting levels are emitted (root = 0).
 /// `target` optionally filters by a CSS selector substring (matched against
 /// the node's own selector or any descendant's); pass `None` to keep everything.
 fn ax_tree_to_a11y_yaml(
@@ -2459,8 +2454,7 @@ fn ax_tree_to_a11y_yaml(
 /// only subtrees that contain at least one `[ref=...]` line. This is the
 /// "compact" mode the LLM opts into for dense pages (form-heavy admin UIs,
 /// dashboards, settings pages). Typical savings: ~50% token reduction.
-///
-/// Implementation: collect kept lines plus their children, then rewrite
+/// /// Implementation: collect kept lines plus their children, then rewrite
 /// indentation so the tree is still structurally valid YAML.
 fn compact_a11y_yaml(yaml: &str) -> String {
     // Strategy: mark every line that contains `[ref=` and walk the
@@ -2761,19 +2755,16 @@ mod phase2_tests {
 // ---------------------------------------------------------------------------
 // Phase 3: BrowserRegistry — per-session backend isolation
 // ---------------------------------------------------------------------------
-//
 // `AutoBrowserBackend` is a single shared instance, which means every
 // `browser_click` / `browser_snapshot` call goes through the same CDP
 // socket. In a group-chat scenario where multiple agents are operating
 // different pages concurrently, this collides: agent A clicks on page X
 // while agent B is snapshotting page Y, and the two backends race.
-//
 // `BrowserRegistry` solves this by keying backends on a `session_id`
 // string. The first call to a new session lazily creates a fresh
 // `AutoBrowserBackend`. Handlers route every call through the registry
 // by reading the `session` parameter (default: "default"), so two agents
 // in two different sessions never share state.
-//
 // Sessions are cleaned up when the entry's `Arc` count drops to zero
 // (e.g. on shutdown). We don't expose an explicit close API yet — the
 // Phase 3 deliverable is *isolation*, not lifecycle.
@@ -2881,8 +2872,7 @@ impl BrowserRegistry {
     /// Look up (or create) the backend for `session_id`. The returned
     /// `Arc` is cheap to clone and is what the handlers should hold
     /// across calls.
-    ///
-    /// **Side effect**: Chrome auto-bootstrap now happens at every
+    /// /// **Side effect**: Chrome auto-bootstrap now happens at every
     /// browser tool call (not just `browser_navigate`), via
     /// [`Self::ensure_browser_bootstrap_async`]. Callers should invoke
     /// that first when running inside an async context.
@@ -2905,8 +2895,7 @@ impl BrowserRegistry {
     /// calls short-circuit on the cached success flag). Safe to call
     /// from concurrent handlers — the probe + spawn happen inside the
     /// mutex-guarded `bootstrap_ensured` check.
-    ///
-    /// The status is **logged but not returned**: the tool layer is
+    /// /// The status is **logged but not returned**: the tool layer is
     /// responsible for surfacing a clean error to the LLM (so the
     /// user sees "browser unavailable" instead of a CDP stack trace).
     pub async fn ensure_browser_bootstrap_async(&self) {
@@ -3068,15 +3057,13 @@ mod phase3_tests {
 
 /// `SessionedBrowserBackend` is a `BrowserBackend` impl that delegates
 /// every call to a per-session backend looked up in a [`BrowserRegistry`].
-///
-/// This wrapper is the *only* thing tool handlers need to hold: they
+/// /// This wrapper is the *only* thing tool handlers need to hold: they
 /// stay typed as `Arc<dyn BrowserBackend>`, and the registry handles
 /// the per-session routing based on the `session` field of the params
 /// JSON. The wrapper therefore implements `BrowserBackend` by *ignoring*
 /// its `&self` and instead pulling a fresh backend for the active
 /// session out of the registry on every call.
-///
-/// We track the "active session" via a small mutex: each handler sets
+/// /// We track the "active session" via a small mutex: each handler sets
 /// the session id right before dispatching. The wrapper is `Clone` and
 /// cheap to share.
 pub struct SessionedBrowserBackend {

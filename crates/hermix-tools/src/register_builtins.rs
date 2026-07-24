@@ -15,20 +15,17 @@ use crate::tools::clarify::ClarifyBackend;
 use crate::ToolRegistry;
 
 /// Register all built-in tool handlers into the given registry.
-///
-/// `terminal_backend` is shared by terminal, file read/write handlers.
+/// /// `terminal_backend` is shared by terminal, file read/write handlers.
 /// `skill_provider` is shared by the three skills handlers.
 /// `clarify_backend` backs the `clarify` tool. Callers that want a
 /// blocking user-prompt experience (e.g. the desktop app via
 /// [`ChannelClarifyBackend`](crate::backends::clarify::ChannelClarifyBackend))
 /// should pass it here; otherwise the default [`SignalClarifyBackend`](crate::backends::clarify::SignalClarifyBackend)
 /// returns a JSON envelope without waiting.
-///
-/// Backends that depend on environment variables (e.g. `OPENAI_API_KEY`,
+/// /// Backends that depend on environment variables (e.g. `OPENAI_API_KEY`,
 /// `FAL_KEY`, `HASS_URL`) are constructed eagerly; if the vars are absent
 /// the tools will return a clear error at *runtime*, not at registration.
-///
-/// P1.4 (2026-07-02): the body is now an honest three-step pipeline
+/// /// P1.4 (2026-07-02): the body is now an honest three-step pipeline
 /// (build browser backend → register_all → reconcile whitelist + floor).
 /// The three `browser_*_from_config` helpers were merged into
 /// [`BrowserConfig::from_env`] (single IO instead of three) and the
@@ -44,13 +41,13 @@ pub fn register_builtin_tools(
     custom_app_manager: Option<Arc<hermix_plugin::PluginManager>>,
 ) {
     // 1. Browser backend. We construct it here (not inside
-    //    `tools::browser::register`) because the allowlist / port /
-    //    headless settings come from `config.yaml` and we don't want
-    //    the browser module to reach across the crate for config
-    //    helpers. The `SessionedBrowserBackend` wrapper hands each
-    //    `tools::browser::register` handler an indirection that
-    //    dispatches by `session_id`, so group-chat agents in
-    //    different sessions never share CDP state.
+    // `tools::browser::register`) because the allowlist / port /
+    // headless settings come from `config.yaml` and we don't want
+    // the browser module to reach across the crate for config
+    // helpers. The `SessionedBrowserBackend` wrapper hands each
+    // `tools::browser::register` handler an indirection that
+    // dispatches by `session_id`, so group-chat agents in
+    // different sessions never share CDP state.
     let browser_cfg = BrowserConfig::from_env();
     let browser_registry = std::sync::Arc::new(
         crate::backends::browser::BrowserRegistry::new()
@@ -64,19 +61,19 @@ pub fn register_builtin_tools(
         ));
 
     // 2. Clarify backend. Caller-provided (desktop uses
-    //    `ChannelClarifyBackend` for prompt-the-user) wins over the
-    //    signal-based default. The default is used by tests and CLI
-    //    callers that don't need a UI prompt.
+    // `ChannelClarifyBackend` for prompt-the-user) wins over the
+    // signal-based default. The default is used by tests and CLI
+    // callers that don't need a UI prompt.
     let clarify_backend: Arc<dyn ClarifyBackend> = match clarify_backend {
         Some(b) => b,
         None => Arc::new(crate::backends::clarify::SignalClarifyBackend::new()),
     };
 
     // 3. Wire everything into the registry via the per-tool
-    //    `register(...)` functions. Then re-register `clarify` on
-    //    top with the caller-provided backend so the desktop's
-    //    blocking prompt overrides the signal default that
-    //    `register_all` just installed.
+    // `register(...)` functions. Then re-register `clarify` on
+    // top with the caller-provided backend so the desktop's
+    // blocking prompt overrides the signal default that
+    // `register_all` just installed.
     crate::tools::register_all(
         registry,
         terminal_backend,
@@ -97,10 +94,10 @@ pub fn register_builtin_tools(
     tracing::info!("Registered {} built-in tools", registry.list_tools().len());
 
     // 4. Whitelist post-pass. `tools::register_all` registers every
-    //    tool unconditionally; this flips the ones the user did not
-    //    whitelist back off, restoring the Settings UI's runtime
-    //    toggle without re-registering. Mirrored wildcard (`"all"` /
-    //    `"*"`) keeps "user wants everything on" working.
+    // tool unconditionally; this flips the ones the user did not
+    // whitelist back off, restoring the Settings UI's runtime
+    // toggle without re-registering. Mirrored wildcard (`"all"` /
+    // `"*"`) keeps "user wants everything on" working.
     if let Some(set) = &enabled_toolsets {
         let wildcard = set.contains("all") || set.contains("*");
         if !wildcard {
@@ -118,12 +115,12 @@ pub fn register_builtin_tools(
     }
 
     // 5. Essential toolset floor. Re-asserts `terminal` / `file` /
-    //    `code_execution` / `web` / `memory` / `pdf` / `core` /
-    //    `security` AFTER the whitelist above. A hand-edited
-    //    `enabled_toolsets.json` containing only `["file", "web"]`
-    //    would otherwise leave the LLM answering "I don't have
-    //    terminal". See `essential::ensure_essentials_enabled` for
-    //    the full rationale.
+    // `code_execution` / `web` / `memory` / `pdf` / `core` /
+    // `security` AFTER the whitelist above. A hand-edited
+    // `enabled_toolsets.json` containing only `["file", "web"]`
+    // would otherwise leave the LLM answering "I don't have
+    // terminal". See `essential::ensure_essentials_enabled` for
+    // the full rationale.
     let reasserted = crate::essential::ensure_essentials_enabled(registry);
     if reasserted > 0 {
         tracing::info!(
@@ -138,7 +135,6 @@ pub fn register_builtin_tools(
 // `hermix_config::paths::hermix_home()` and ignored `HERMIX_PORTABLE_DATA_DIR`,
 // which caused session_search to write to a different DB than the rest of
 // the app in portable-desktop mode. Use `paths::sessions_db_path()` instead.
-//
 // `BrowserConfig::read_home_yaml` had the same P0: it read `$HERMIX_HOME` /
 // `$HERMES_HOME` directly via `std::env::var` instead of going through
 // `hermix_home()`. Fixed in P1.5 — portable-desktop launchers that set
@@ -298,11 +294,9 @@ mod tests {
     /// gates). If any of these regress to `Caution`/`Dangerous`,
     /// the dispatch gate will start firing unnecessary
     /// approval cards.
-    ///
-    /// When adding a new Safe tool: add it here. When removing
+    /// /// When adding a new Safe tool: add it here. When removing
     /// one: remove the line and document the rationale.
-    ///
-    /// Tools that are conditionally registered (e.g. require
+    /// /// Tools that are conditionally registered (e.g. require
     /// `HASS_URL`, `OPENAI_API_KEY`, or a browser driver) are
     /// *not* listed here — they are exercised by separate
     /// integration tests in the consumer crates.
@@ -509,7 +503,7 @@ mod tests {
             eprintln!("  {}", n);
         }
         // Hard-pin the four tools the user reported as "missing" in
-        // the 2026-06-14 regression. Note that the actual schema name
+        // the regression. Note that the actual schema name
         // for the code-execution tool is `execute_code` (the *toolset
         // tag* is `code_execution`); the LLM sees the schema name.
         for required in ["terminal", "list_files", "execute_code", "list_tools"] {
@@ -533,7 +527,6 @@ mod tests {
         // a user who disables `"browser"` thinks they turned off
         // every browser_* tool, but the registry only flips the
         // (non-existent) `"browser"` tag and leaves them all on.
-        //
         // The fix side of this test lives in `tools::browser`,
         // `tools::cua`, `tools::pdf`, `tools::office_cli`, and
         // `essential::ESSENTIAL_TOOLSETS` — together they keep the
@@ -668,19 +661,17 @@ mod tests {
 
 /// Read `browser.allowed_domains` / `browser.cdp_port` / `browser.headless`
 /// from `~/.hermix/config.yaml`.
-///
-/// Hand-rolled YAML scan — we don't want a full YAML dep here for
+/// /// Hand-rolled YAML scan — we don't want a full YAML dep here for
 /// three fields. The expected shape is:
 /// ```yaml
 /// browser:
-///   allowed_domains:
-///     - example.com
-///     - "*.trusted.io"
-///   cdp_port: 9223
-///   headless: true
+/// allowed_domains:
+/// - example.com
+/// - "*.trusted.io"
+/// cdp_port: 9223
+/// headless: true
 /// ```
-///
-/// P1.4 (2026-07-02): the previous design had three separate
+/// /// P1.4 (2026-07-02): the previous design had three separate
 /// `browser_*_from_config()` helpers, each of which independently
 /// re-`read_to_string`'d the file and re-scanned for its own key.
 /// That was three filesystem reads per `register_builtin_tools`
@@ -719,8 +710,7 @@ impl BrowserConfig {
     /// Test-only entry point: read `config.yaml` from an explicit
     /// directory. Lets unit tests exercise the disk round-trip
     /// without mutating the process-global `$HERMIX_HOME` env var.
-    ///
-    /// Why a parallel API: `from_env` reads `HERMIX_HOME` via
+    /// /// Why a parallel API: `from_env` reads `HERMIX_HOME` via
     /// `hermix_config::paths::hermix_home()`, which re-reads the env
     /// var on every call. Concurrent tests that mutate
     /// `$HERMIX_HOME` to point at their own temp dir race even when
@@ -741,8 +731,7 @@ impl BrowserConfig {
     /// Parse the three browser sub-fields out of an already-read YAML
     /// string. Pure function (no IO) — every test exercises this
     /// path so we don't need to set `HERMIX_HOME` per case.
-    ///
-    /// P1.8 (2026-07-02): rewritten via `serde_yaml` so we get a
+    /// /// P1.8 (2026-07-02): rewritten via `serde_yaml` so we get a
     /// declarative schema instead of a 90-line line scanner. The
     /// shape is exactly the same as before — `Some(vec)` for a
     /// populated list, `None` for "absent" — so callers (and the
@@ -836,20 +825,17 @@ impl BrowserConfig {
     /// Read the canonical `$HERMIX_HOME/config.yaml` (resolved via
     /// [`hermix_home`], which honors `HERMIX_PORTABLE_DATA_DIR` for
     /// the Tauri portable-desktop launcher).
-    ///
-    /// **Deliberate non-features** vs. the previous implementation:
-    ///
-    /// * **No `$HERMES_HOME` fallback.** The original NousResearch
-    ///   `hermes-agent` uses the same env var name; silently picking
-    ///   it up would let two unrelated projects fight over one data
-    ///   dir. Users running the old agent should set `HERMIX_HOME`
-    ///   explicitly or run with `HERMIX_MIGRATE_FROM_HERMES=1`.
+    /// /// **Deliberate non-features** vs. the previous implementation:
+    /// /// * **No `$HERMES_HOME` fallback.** The original NousResearch
+    /// `hermes-agent` uses the same env var name; silently picking
+    /// it up would let two unrelated projects fight over one data
+    /// dir. Users running the old agent should set `HERMIX_HOME`
+    /// explicitly or run with `HERMIX_MIGRATE_FROM_HERMES=1`.
     /// * **No raw `std::env::var("HERMIX_HOME")` lookup.** Going
-    ///   through `hermix_home()` ensures the portable launcher and
-    ///   the standard install resolve to the same file (this is the
-    ///   same P0 fix that already cleaned up `session_search`).
-    ///
-    /// Returns `None` when the home is empty or `config.yaml` is
+    /// through `hermix_home()` ensures the portable launcher and
+    /// the standard install resolve to the same file (this is the
+    /// same P0 fix that already cleaned up `session_search`).
+    /// /// Returns `None` when the home is empty or `config.yaml` is
     /// unreadable — startup should not panic on a missing config.
     fn read_home_yaml() -> Option<String> {
         let home = hermix_home();

@@ -179,7 +179,7 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
   const argsText = describeToolAction(request.tool, request.args);
   // Live countdown against the *server-emitted* deadline. `null` is
   // the "no countdown" sentinel — the card falls back to the
-  // status-only pill in that case (pre-2026-06-14 servers, or
+  // status-only pill in that case (pre-servers, or
   // messages reloaded from a legacy session row).
   const remainingMs = useCountdown(request.expiresAt);
   const showCountdown = isPending && typeof remainingMs === "number";
@@ -190,14 +190,20 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
   return (
     <div className="h-enter">
       <div className="flex-1 min-w-0">
-        {/* Header — compact: avatar · name · meta */}
-        <div className="flex items-center gap-2 mb-1.5">
-          <div className="approval-avatar">
-            <ShieldAlert size={12} />
+        {/* Header — only while pending. Resolved cards let the status
+            pill ("已允许 / 已拒绝 / 已超时") speak for itself; the
+            explicit "Hermix 请求确认 · 已决定" line becomes redundant
+            noise once the decision is recorded, and dropping it gives
+            the command + footer more breathing room. */}
+        {isPending && (
+          <div className="flex items-center gap-2 mb-1.5">
+            <div className="approval-avatar">
+              <ShieldAlert size={12} />
+            </div>
+            <span className="text-[12.5px] font-semibold text-text-primary">Hermix 请求确认</span>
+            <span className="h-tiny">{"\u00b7"} 等待你的决定</span>
           </div>
-          <span className="text-[12.5px] font-semibold text-text-primary">Hermix 请求确认</span>
-          <span className="h-tiny">{"\u00b7"} {isPending ? "等待你的决定" : "已决定"}</span>
-        </div>
+        )}
 
         {/* Card surface — `data-pending-approval-id` lets the global
             PendingApprovalToast scroll this exact card into view when
@@ -205,7 +211,7 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
             while the user can still decide; once resolved the toast
             count drops to 0 so the attribute is also irrelevant. */}
         <div
-          className="msg-card approval-card"
+          className={`msg-card approval-card${!isPending ? " is-resolved" : ""}`}
           data-resolved={resolved ?? undefined}
           data-pending-risk={isPending ? riskKey : undefined}
           data-pending-approval-id={isPending ? request.requestId : undefined}
@@ -276,7 +282,7 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
           {/* Line 2: Args text + Action buttons */}
           <div className="approval-line2">
             {argsText && (
-              <span className="approval-args-text">{argsText}</span>
+              <span className={`approval-args-text${!isPending ? " is-resolved" : ""}`}>{argsText}</span>
             )}
             {isPending ? (
               <div className="approval-actions">
@@ -297,7 +303,25 @@ export function InlineApprovalCard({ request, onApprove, onDeny, resolved }: Inl
               </div>
             ) : (
               <div className="approval-resolved-footer">
-                <span className="h-tiny text-text-faint">
+                <span
+                  className={
+                    resolved === "approved"
+                      ? "approval-resolved-icon icon-ok"
+                      : resolved === "expired"
+                        ? "approval-resolved-icon icon-expired"
+                        : "approval-resolved-icon icon-deny"
+                  }
+                  aria-hidden
+                >
+                  {resolved === "approved" ? (
+                    <Check size={11} />
+                  ) : resolved === "expired" ? (
+                    <Clock size={11} />
+                  ) : (
+                    <X size={11} />
+                  )}
+                </span>
+                <span>
                   {resolved === "approved"
                     ? "操作已继续执行"
                     : resolved === "expired"

@@ -224,8 +224,8 @@ fn find_first(haystack: &str, needle: &str) -> Option<usize> {
 /// `scan_normal` looks at the front of `input` and reports the first
 /// opening marker, if any. The returned tuple is
 /// `(start_byte, end_byte, new_state)`:
-///   - `start_byte` is the index of the first byte of the marker
-///   - `end_byte` is the index just past the last byte of the marker
+/// - `start_byte` is the index of the first byte of the marker
+/// - `end_byte` is the index just past the last byte of the marker
 ///
 /// We scan in priority order: full `<minimax:tool_call>` first (most
 /// specific), then the bare `minimax:tool_call` literal (with the
@@ -235,8 +235,8 @@ fn find_first(haystack: &str, needle: &str) -> Option<usize> {
 /// Returns `None` if no marker is present.
 fn scan_normal(input: &str) -> Option<((usize, usize), SanitizerState)> {
     // 1. The full "<minimax:tool_call>" opener (with the leading
-    //    angle bracket). This is what the LLM should produce; we
-    //    check it first because it is the most specific.
+    // angle bracket). This is what the LLM should produce; we
+    // check it first because it is the most specific.
     if let Some(start) = input.find(MINIMAX_OPEN_ANGLE) {
         return Some((
             (start, start + MINIMAX_OPEN_ANGLE.len()),
@@ -244,8 +244,8 @@ fn scan_normal(input: &str) -> Option<((usize, usize), SanitizerState)> {
         ));
     }
     // 1b. The "<minimax:tool_call" partial opener (no closing `>`)
-    //    — catches the case where the LLM streamed the tag and the
-    //    `>` arrived in a later chunk.
+    // — catches the case where the LLM streamed the tag and the
+    // `>` arrived in a later chunk.
     if let Some(start) = input.find(MINIMAX_OPEN_ANGLE_LOOSE) {
         // We still need to actually see a `>` before we commit to
         // entering INSIDE_MINIMAX. If the `>` is missing *and* the
@@ -264,11 +264,11 @@ fn scan_normal(input: &str) -> Option<((usize, usize), SanitizerState)> {
     }
 
     // 2. The bare "minimax:tool_call" literal (no leading `<`).
-    //    To avoid false positives in chat (e.g. a user message
-    //    saying "the minimax:tool_call format"), we require the
-    //    literal to be *word-bounded* — the previous char (if any)
-    //    must not be a word-character and the following non-space
-    //    char must be `<` (i.e. an opening of an `<invoke>` block).
+    // To avoid false positives in chat (e.g. a user message
+    // saying "the minimax:tool_call format"), we require the
+    // literal to be *word-bounded* — the previous char (if any)
+    // must not be a word-character and the following non-space
+    // char must be `<` (i.e. an opening of an `<invoke>` block).
     if let Some(rel_start) = find_bare_minimax_marker(input) {
         let start = rel_start;
         let end = rel_start + MINIMAX_BARE.len();
@@ -279,18 +279,18 @@ fn scan_normal(input: &str) -> Option<((usize, usize), SanitizerState)> {
     }
 
     // 3. A bare "<invoke name=…>" opener (Hermes standard). We
-    //    require the `name="…"` attribute to disambiguate from
-    //    arbitrary HTML-ish prose ("x < invoke threshold").
+    // require the `name="…"` attribute to disambiguate from
+    // arbitrary HTML-ish prose ("x < invoke threshold").
     if let Some((start, end)) = find_invoke_with_name(input) {
         return Some(((start, end), SanitizerState::InsideInvoke));
     }
 
     // 4. MiniMax M3 native tool-name-as-tag format:
-    //    `<terminal><command>ls</command></terminal>`.
-    //    The tool name becomes the outer XML tag; child tags are
-    //    parameters. We detect this by looking for `<word>`
-    //    followed (within the same chunk) by another `<` or `</`
-    //    — a strong signal of nested XML, not prose.
+    // `<terminal><command>ls</command></terminal>`.
+    // The tool name becomes the outer XML tag; child tags are
+    // parameters. We detect this by looking for `<word>`
+    // followed (within the same chunk) by another `<` or `</`
+    // — a strong signal of nested XML, not prose.
     if let Some((start, end, tag_name)) = find_tool_name_as_tag(input) {
         return Some((
             (start, end),
@@ -299,15 +299,15 @@ fn scan_normal(input: &str) -> Option<((usize, usize), SanitizerState)> {
     }
 
     // 5. Private reasoning blocks. The system prompt instructs the
-    //    model to use `<think>...</think>` for internal scratch and
-    //    never to leak reasoning into the visible reply, but models
-    //    still do — either because they ignore the rule, because
-    //    they prefer a variant like `<reflection>...</reflection>`,
-    //    or because the stream is cut and the `</think>` is lost.
-    //    Whatever the cause, the redactor must drop the whole block
-    //    on the floor so the user never sees the model's internal
-    //    monologue (`"Hmm, wait..."`, `"Actually..."`, `"Let me
-    //    think..."`) leaking into the chat bubble.
+    // model to use `<think>...</think>` for internal scratch and
+    // never to leak reasoning into the visible reply, but models
+    // still do — either because they ignore the rule, because
+    // they prefer a variant like `<reflection>...</reflection>`,
+    // or because the stream is cut and the `</think>` is lost.
+    // Whatever the cause, the redactor must drop the whole block
+    // on the floor so the user never sees the model's internal
+    // monologue (`"Hmm, wait..."`, `"Actually..."`, `"Let me
+    // think..."`) leaking into the chat bubble.
     if let Some((start, end, tag_name)) = find_think_block_open(input) {
         return Some((
             (start, end),
@@ -383,7 +383,6 @@ fn find_tool_name_as_tag(input: &str) -> Option<(usize, usize, String)> {
         // A real tool call like `<terminal><command>ls</command></terminal>`
         // always has another `<` or `</` within the tag body.
         // Pure prose like `<terminal> is running` won't have a `<` after the tag.
-        //
         // Edge case: if the tag is at the very end of the chunk (no bytes
         // left after `>`), we enter InsideTool speculatively — the next
         // chunk will either confirm (nested XML) or reveal prose.

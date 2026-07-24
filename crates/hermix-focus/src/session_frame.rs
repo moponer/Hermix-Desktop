@@ -229,7 +229,6 @@ mod tests {
     }
 
     // ── M1 lifecycle contract tests ──
-    //
     // These exercise the full push → finish → mark_clear → pop →
     // drain flow that AgentLoop::note_delegation_start +
     // note_delegation_end + drain_focus_conclusions_to_memory_router

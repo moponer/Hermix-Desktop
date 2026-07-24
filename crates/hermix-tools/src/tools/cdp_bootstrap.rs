@@ -110,15 +110,14 @@ pub enum BootstrapError {
 }
 
 /// Ensure a browser is listening on the configured CDP port.
-///
-/// # Flow
+/// /// # Flow
 /// 1. `GET http://127.0.0.1:{port}/json/version` — 200ms timeout.
 /// 2. If 2xx, parse `Browser` field and return `AlreadyRunning`.
 /// 3. If connection refused, run [`find_browser_binary`].
 /// 4. If found, [`spawn_browser`] and poll the same URL until ready
-///    or [`CDP_READY_TIMEOUT`] elapses.
+/// or [`CDP_READY_TIMEOUT`] elapses.
 /// 5. Otherwise return the structured [`BrowserStatus`] describing
-///    why we couldn't satisfy the request.
+/// why we couldn't satisfy the request.
 pub async fn ensure_browser_running(port: u16) -> BrowserStatus {
     ensure_browser_running_with(BootstrapConfig {
         port,
@@ -176,8 +175,7 @@ pub async fn ensure_browser_running_with(cfg: BootstrapConfig) -> BrowserStatus 
 
 /// Convert a [`BrowserStatus`] into either Ok (with a one-line
 /// description) or a `ToolError` with a clear remediation hint.
-///
-/// Used by the tool handler to compose its error response.
+/// /// Used by the tool handler to compose its error response.
 pub fn status_to_tool_result(status: &BrowserStatus) -> Result<String, ToolError> {
     match status {
         BrowserStatus::AlreadyRunning { version } => Ok(format!("browser ready ({version})")),
@@ -345,7 +343,7 @@ fn reg_query_string(key_path: &str, value_name: &str) -> Option<String> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     // The output line looks like:
-    //     InstallDir    REG_SZ    C:\Program Files\Google\Chrome\Application
+    // InstallDir    REG_SZ    C:\Program Files\Google\Chrome\Application
     for line in stdout.lines() {
         if line.contains(value_name) && line.contains("REG_SZ") {
             if let Some(idx) = line.find("REG_SZ") {
@@ -391,8 +389,7 @@ fn which(exe: &str) -> Result<String, ()> {
 /// Spawn Chrome/Edge with the given config. On success, the PID is
 /// recorded at `<hermix_home>/runtime/browser.pid` so [`kill_spawned_chrome`]
 /// can clean it up on shutdown.
-///
-/// We persist the PID to disk (not in memory) because hermix-desktop
+/// /// We persist the PID to disk (not in memory) because hermix-desktop
 /// can crash or be killed by the OS — only the PID file lets us find
 /// the orphaned browser on next launch (when "port 9222 already in use"
 /// appears because the previous Chrome is still running).
@@ -459,20 +456,17 @@ fn spawn_browser(candidate: &BrowserCandidate, port: u16) -> Result<u32, String>
 /// by `<hermix_home>/runtime/browser.pid`. We don't track a `Child` handle
 /// because Chrome is intentionally detached (so a misbehaving browser
 /// can't deadlock the sidecar). The PID file is the only handle we have.
-///
-/// On Windows, we shell out to `taskkill /F /T /PID <pid>`. `/T` makes
+/// /// On Windows, we shell out to `taskkill /F /T /PID <pid>`. `/T` makes
 /// sure any subprocesses (renderer, GPU process, ...) die with the
 /// browser. `/F` is the "force" flag — Chrome on Windows doesn't always
 /// honour WM_CLOSE from a non-parent process, so a polite shutdown
 /// silently fails and we end up with the same orphan-socket problem
 /// we're trying to fix.
-///
-/// Safe to call when no PID file exists (returns Ok(())). Safe to call
+/// /// Safe to call when no PID file exists (returns Ok(())). Safe to call
 /// when the PID file refers to a process that's already gone (the
 /// `taskkill` exit code is non-zero in that case but we don't propagate
 /// it — the goal is "try once, log if it fails, move on").
-///
-/// **Windows-only**: shelled-out `taskkill` has no portable
+/// /// **Windows-only**: shelled-out `taskkill` has no portable
 /// equivalent (POSIX would be `kill -9 <pid>` against the recorded
 /// PID, but the parent `hermix-tools` crate is consumed by
 /// non-Windows targets like the eval harness and CI smoke tests).

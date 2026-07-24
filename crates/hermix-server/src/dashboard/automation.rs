@@ -127,8 +127,7 @@ fn load_state(state: &HttpServerState) -> AutomationState {
 }
 
 /// Process-wide serialization for `save_state`.
-///
-/// On Windows `std::fs::write` opens the destination with `FILE_SHARE_NONE`
+/// /// On Windows `std::fs::write` opens the destination with `FILE_SHARE_NONE`
 /// semantics, so any concurrent reader (the Tauri front-end polls this file,
 /// log indexers, AV scans, etc.) makes the open return
 /// `ERROR_ACCESS_DENIED` (os error 5). Serializing writers + writing to a
@@ -177,14 +176,12 @@ async fn save_state(state: &HttpServerState, body: &AutomationState) -> Result<(
 }
 
 /// Write `content` to `final_path` atomically:
-///
-/// 1. Stage into a sibling `*.tmp.<pid>.<nanos>` file opened with
-///    `FILE_SHARE_READ | FILE_SHARE_WRITE` on Windows so concurrent readers
-///    do not block us.
+/// /// 1. Stage into a sibling `*.tmp.<pid>.<nanos>` file opened with
+/// `FILE_SHARE_READ | FILE_SHARE_WRITE` on Windows so concurrent readers
+/// do not block us.
 /// 2. `fsync` the temp file so the bytes survive a power loss.
 /// 3. `std::fs::rename` — atomic on POSIX and on NTFS since Rust 1.46.
-///
-/// On the final attempt we fall back to a non-atomic direct write so a
+/// /// On the final attempt we fall back to a non-atomic direct write so a
 /// persistent lock on the temp file (which would otherwise loop forever)
 /// still produces *some* on-disk update rather than failing the tick.
 fn write_atomic(final_path: &Path, content: &str) -> Result<(), String> {

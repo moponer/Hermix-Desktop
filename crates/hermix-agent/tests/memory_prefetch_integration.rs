@@ -3,7 +3,7 @@
 //! These verify that the agent loop's memory hooks (pre-compress note,
 //! turn start, session end) handle edge cases — missing router,
 //! `skip_memory` flag — without panicking or producing wrong output.
-//! Moved from `src/memory_prefetch.rs` integration_tests module (N-10).
+//! Moved from `src/memory_prefetch.rs` integration_tests module ().
 
 use std::sync::Mutex;
 

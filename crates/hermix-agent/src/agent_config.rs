@@ -1,6 +1,6 @@
 //! Agent configuration types.
 //!
-//! Extracted from `agent_loop.rs` on 2026-06-30 (REFACTOR_PLAN §4 / P2.2.4).
+//! Extracted from `agent_loop.rs` on (REFACTOR_PLAN §4 / P2.2.4).
 //! The config struct has grown to ~270 fields across 470 lines, so the agent
 //! loop file no longer carries the definition. The runtime semantics stay
 //! identical — only the module location changes.
@@ -458,8 +458,7 @@ pub struct AgentConfig {
     /// `skill_manage(action='auto_extract_from_conversation')`. Set
     /// to `false` in `~/.hermix/config.yaml` to opt out without
     /// having to also disable `background_review_enabled`.
-    ///
-    /// Off by default in child sessions (`spawn_background_review`
+    /// /// Off by default in child sessions (`spawn_background_review`
     /// forces it false there) so sub-agent chatter doesn't pollute
     /// the user's primary skill library.
     #[serde(default = "default_auto_skill_extraction")]
@@ -522,16 +521,14 @@ pub struct AgentConfig {
     pub stream_activity_stall_secs: u64,
 
     /// Hard outer timeout (seconds) for a single streaming LLM completion.
-    ///
-    /// `collect_stream_llm_response` would otherwise block indefinitely
+    /// /// `collect_stream_llm_response` would otherwise block indefinitely
     /// on `stream.next().await` if the upstream provider opens the
     /// SSE / chunked connection but never sends any chunk (network
     /// hang, API outage, silently dropped TCP). The inner
     /// `silence_watch` only emits activity notices — it does not
     /// abort the stream — so without this outer timeout the agent
     /// loop and the UI both hang forever on a dead provider.
-    ///
-    /// When the deadline elapses, the collector assembles whatever
+    /// /// When the deadline elapses, the collector assembles whatever
     /// content / reasoning / tool_calls were accumulated so far,
     /// stamps `finish_reason = "timeout"`, and returns
     /// [`StreamCollectOutcome::Complete`]. The agent loop then routes
@@ -539,33 +536,29 @@ pub struct AgentConfig {
     /// thinking-only reply, so a stuck provider degrades into a
     /// visible post-tool nudge (or finalizes if all nudges are
     /// exhausted) instead of pinning the UI at "正在思考".
-    ///
-    /// `0` disables the hard timeout (legacy behaviour). The default
+    /// /// `0` disables the hard timeout (legacy behaviour). The default
     /// 180 s mirrors the frontend `STALE_STREAM_TIMEOUT_MS` budget
     /// while leaving room for genuinely long tool-heavy turns.
     #[serde(default = "default_stream_overall_timeout_secs")]
     pub stream_overall_timeout_secs: u64,
 
-    /// 2026-07-19: hard deadline (seconds) for the **first chunk** of a
+    /// hard deadline (seconds) for the **first chunk** of a
     /// streaming completion to arrive.
-    ///
-    /// Background: providers like minimax/MiniMax-M3 and similar
+    /// /// Background: providers like minimax/MiniMax-M3 and similar
     /// occasionally open the SSE / chunked connection successfully but
     /// never push the first chunk (TCP keepalive on but no payload).
     /// The previous `silence_watch` only emitted "still waiting"
     /// notices — it didn't *abort* — so the agent loop and the
     /// "正在思考…" indicator both stayed pinned until the outer
     /// `stream_overall_timeout_secs` (default 180s) fired.
-    ///
-    /// This setting adds a tighter, **first-chunk-only** deadline: if
+    /// /// This setting adds a tighter, **first-chunk-only** deadline: if
     /// no chunk has arrived within `stream_first_chunk_timeout_secs`,
     /// `collect_stream_inner` returns early with
     /// `finish_reason = "no_first_chunk"`. Subsequent chunks are not
     /// gated by this — once the stream is producing data, normal
     /// `silence_watch` + `stream_activity_stall_secs` notice logic
     /// takes over.
-    ///
-    /// Default 30 s is enough for slow providers (network hitches,
+    /// /// Default 30 s is enough for slow providers (network hitches,
     /// cold caches) but bounded enough that an Open SSE / no-data
     /// hang gets surfaced to `decide_empty_response` within 30 s
     /// instead of the full 180 s outer watchdog. `0` opts out (legacy
@@ -573,7 +566,7 @@ pub struct AgentConfig {
     #[serde(default = "default_stream_first_chunk_timeout_secs")]
     pub stream_first_chunk_timeout_secs: u64,
 
-    /// 2026-07-19: hard deadline (seconds) for the gap between the end
+    /// hard deadline (seconds) for the gap between the end
     /// of one LLM turn's tool-execution bookkeeping and the start of
     /// the next turn's stream-collection call. Watched by the
     /// `run`/`run_stream` main loops via `last_progress_at`. If the
@@ -581,17 +574,15 @@ pub struct AgentConfig {
     /// window, it logs a `turn_transition_stall` warning and emits a
     /// terminal `Done` event so the WS client recovers (rather than
     /// the user being stuck on the "正在思考…" indicator).
-    ///
-    /// Root cause that motivated this setting: the `b35998b` SSE
+    /// /// Root cause that motivated this setting: the `b35998b` SSE
     /// first-chunk watchdog (above) only fixes "no chunk after the
     /// TCP open". It does **not** cover the second class of stall
-    /// observed in production on 2026-07-19 — turn 1 finishes with
+    /// observed in production on — turn 1 finishes with
     /// `finish_reason="tool_calls"`, the user clicks "允许", the tool
     /// executes and `do_post_tool_iteration` returns, but turn 2
     /// never starts. The watchdog covers the *gap* between
     /// `do_post_tool_iteration` and the next `do_pre_turn_setup`.
-    ///
-    /// 90 s is wide enough to absorb a benign stall (e.g. an SQLite
+    /// /// 90 s is wide enough to absorb a benign stall (e.g. an SQLite
     /// write under contention, a slow `auto_compress_if_over_threshold`
     /// spawn), but short enough that the user sees recovery before
     /// the outer `stream_overall_timeout_secs` (180 s) would have
@@ -615,7 +606,7 @@ pub struct AgentConfig {
 // Default value functions
 // ---------------------------------------------------------------------------
 
-/// N-07 (startup guard): validate the assembled `AgentConfig` before the
+/// (startup guard): validate the assembled `AgentConfig` before the
 /// loop starts running. Returns the first `BudgetConfig` error so the
 /// caller can convert it into a config-load error. Currently delegates to
 /// `BudgetConfig::validate()` — additional checks (e.g. `max_cost_usd`
@@ -821,7 +812,7 @@ fn default_stream_first_chunk_timeout_secs() -> u64 {
 /// turn's tool-execution bookkeeping and the start of the next turn's
 /// pre-turn setup. See [`AgentConfig::turn_transition_deadline_secs`].
 fn default_turn_transition_deadline_secs() -> u64 {
-    // 2026-07-19: lowered from 90s to 30s after the type-B recurrence —
+    // lowered from 90s to 30s after the type-B recurrence —
     // 90s felt like a hang to the user (UI spins the whole time), and
     // 30s matches `stream_first_chunk_timeout_secs` so the user gets a
     // single "30s without progress = something is wrong" mental model
@@ -994,7 +985,7 @@ mod tests {
         assert_eq!(back.memory_recall_limit_first, 50);
     }
 
-    // 2026-07-19: pin the turn-transition watchdog default + the
+    // pin the turn-transition watchdog default + the
     // "0 = opt-out" contract. Both run_stream() and run() consult
     // this field at the top of every main-loop iteration; if the
     // default drifts the WS recovery latency changes silently.

@@ -1,6 +1,6 @@
 //! GET /api/cua/trace/{session_id} — read computer-use action traces.
 //!
-//! v1 (2026-07-02): backend half of the Stage 4.1 trace panel. The
+//! backend half of the Stage 4.1 trace panel. The
 //! action recorder in `crates/hermix-tools/src/tools/cua.rs` already
 //! writes every CUA action (click / type / screenshot / denied /
 //! ...) as a single JSON line to

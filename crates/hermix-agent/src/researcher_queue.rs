@@ -71,8 +71,7 @@ impl ItemStatus {
 // ---------------------------------------------------------------------------
 
 /// A researcher queue backed by JSONL files.
-///
-/// Uses a Mutex for in-process concurrency safety. Cross-process
+/// /// Uses a Mutex for in-process concurrency safety. Cross-process
 /// file locking (`fs4`) will be added in a follow-up.
 #[derive(Debug)]
 pub struct ResearcherQueue {

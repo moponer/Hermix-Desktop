@@ -4,6 +4,7 @@ import { clsx } from "clsx";
 import * as api from "../api";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import type { AgentPersona } from "./agents/types";
+import { useSafeTimeout } from "../hooks/useSafeTimeout";
 
 interface RoomMemberDialogProps {
   roomId: string;
@@ -76,6 +77,7 @@ export function RoomMemberDialog({
   onClose,
   onMembershipChanged,
 }: RoomMemberDialogProps) {
+  const safeSetTimeout = useSafeTimeout();
   const [tab, setTab] = useState<Tab>("current");
   const [localMemberIds, setLocalMemberIds] = useState<string[]>(memberIds);
   const [busyAgentId, setBusyAgentId] = useState<string | null>(null);
@@ -177,7 +179,7 @@ export function RoomMemberDialog({
       if (updated.previous_tier) {
         const isUp = direction === "up";
         setToast(`${isUp ? "升段!" : "掉段..."} ${updated.previous_tier} → ${updated.tier_cn}`);
-        setTimeout(() => setToast(null), 2500);
+        safeSetTimeout(() => setToast(null), 2500);
       }
     } catch (e) {
       console.warn("vote failed:", e);

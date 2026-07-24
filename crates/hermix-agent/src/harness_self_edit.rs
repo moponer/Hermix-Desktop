@@ -164,8 +164,7 @@ pub fn fnv1a_hash(s: &str) -> String {
 }
 
 /// Classify tool errors into failure patterns.
-///
-/// Returns one `FailurePattern` per tool that exceeds the trigger threshold.
+/// /// Returns one `FailurePattern` per tool that exceeds the trigger threshold.
 pub fn classify_tool_failures(counter: &ToolErrorCounter) -> Vec<FailurePattern> {
     let now = now_unix_secs();
     let mut patterns = Vec::new();
@@ -193,8 +192,7 @@ pub fn classify_tool_failures(counter: &ToolErrorCounter) -> Vec<FailurePattern>
 }
 
 /// Classify convergence signals into failure patterns.
-///
-/// Wire-up note: called from the agent loop's convergence detection path
+/// /// Wire-up note: called from the agent loop's convergence detection path
 /// once the harness self-edit integration is complete.
 #[allow(dead_code)]
 pub(crate) fn classify_convergence(
@@ -308,8 +306,7 @@ pub fn generate_experience(pattern: &FailurePattern) -> ExperienceEntry {
 }
 
 /// Persist an experience entry to the experience directory.
-///
-/// Files are named `<timestamp>-<id>.jsonl` and stored under
+/// /// Files are named `<timestamp>-<id>.jsonl` and stored under
 /// `experience_dir`. If the directory doesn't exist, it's created.
 /// If the file exceeds `EXPERIENCE_FILE_LIMIT` lines, a new file is started.
 pub fn persist_experience(
@@ -352,8 +349,7 @@ pub fn persist_experience(
 }
 
 /// Propose a self-improvement rule from a failure pattern.
-///
-/// Returns `true` if a new rule was actually written (not a duplicate).
+/// /// Returns `true` if a new rule was actually written (not a duplicate).
 pub fn propose_rule(
     rule_store: &SelfRuleStore,
     pattern: &FailurePattern,
@@ -372,11 +368,9 @@ pub fn propose_rule(
 }
 
 /// Top-level entry point: detect failures, generate experiences, propose rules.
-///
-/// Call this at the end of each agent turn (or on convergence detection).
+/// /// Call this at the end of each agent turn (or on convergence detection).
 /// It's safe to call repeatedly — deduplication is handled internally.
-///
-/// Wire-up note: will be called from `run_loop.rs` once the harness
+/// /// Wire-up note: will be called from `run_loop.rs` once the harness
 /// self-edit integration is complete.
 #[allow(dead_code)]
 pub(crate) fn run_self_edit(

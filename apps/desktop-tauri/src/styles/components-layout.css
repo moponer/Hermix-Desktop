@@ -1,0 +1,517 @@
+/* ════════════════════════════════════════════════════════════════════
+   components-layout.css — App shell, panes, navigation, list items (§1-7)
+   ──────────────────────────────────────────────────────────────────
+   Part of the components.css split. Every UI pattern used in the app
+   has ONE class. Components compose these classes instead of stacking
+   Tailwind utilities.
+
+   Design philosophy: 克制、留白、呼吸感
+   · Default spacing: 8/12/16/20/24 px — generous, not cramped
+   · Radius: 6/8/10/12 — small, never bubbly
+   · Shadow: none by default, modal-only
+   · Hover: subtle gray shift, no outlines
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ════════════════════════════════════════════════════════════════════
+   § 1.  APP SHELL & PANES
+   ════════════════════════════════════════════════════════════════════ */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  overflow: hidden;
+}
+
+.app-body {
+  display: grid;
+  /* v8 → v18: 三列布局，关闭任一列时彻底归零.
+     - 主列 minmax(var(--pane-main-min), 1fr) → 主列最小宽度跟随 App.tsx
+       里的 MAIN_MIN_WIDTH（默认 580）。之前硬编码 720 把右列"挤
+       变形"：右列想撑到 RIGHT_DEFAULT=640，grid 不够空间，被迫压
+       回 480，看起来就是"右列装不下中文长文件名"。
+     - 右列 minmax(0, var(--ab-right-w)) → 上限跟随 App.tsx 的
+       right.width（用户拖动的当前值，默认 640）。之前硬编码
+       `minmax(0px, 480px)` 把 max 锁死在 480，App.tsx 把 right.width
+       设到 640 也没用，grid 仍然把 track 夹到 480。修复后右列真
+       正能"撑到 640+"，跟 left.width 一样是动态 CSS 变量驱动。
+     - 左列 minmax(200, var(--ab-left-w, 200px)) → 默认 200, 可拖到 360.
+     视口 ≥ 1280 (LEFT_MIN + MAIN_FLOOR + RIGHT_OPENED_MIN = 1280) 时三列共存.
+     视口 < 1140 时右列自动关闭 (见 [data-right-open="false"]).
+     v25: 左侧栏折叠也要归零 (见 [data-left-open="false"]). 之前
+     折叠左侧栏时只把外层 div translate-x-full 移走, 但 grid 第一列
+     还占 200px 宽, main 不扩张 → 视觉上留下一条空白, 看起来像
+     "sidebar 没真正折叠"。现在用 data-left-open 跟 data-right-open
+     一样的模式把第一列归零. */
+  --col-left:  minmax(var(--left-min, 200px), var(--ab-left-w, 200px));
+  --col-right: minmax(0px, var(--ab-right-w, 640px));
+  grid-template-columns:
+    var(--col-left)
+    minmax(var(--pane-main-min, 580px), 1fr)
+    var(--col-right);
+  grid-template-rows: minmax(0, 1fr);  /* minmax(0, ...) not bare 1fr —
+                        bare `1fr` expands to `minmax(auto, 1fr)` where the
+                        `auto` minimum can resolve to the grid items'
+                        min-content size in some browser implementations,
+                        letting the row grow beyond the container's height
+                        during streaming output. `minmax(0, 1fr)` forces
+                        the minimum to 0 unambiguously. */
+  flex: 1;
+  min-height: 0;     /* critical: .app-body is a flex item of .app-shell
+                        (column flex). Default `min-height: auto` lets its
+                        grid children (Sidebar/Chat/Right) expand the
+                        container past the flex-allocated height. The grid
+                        track 1fr then grows beyond 100vh, .pane-main
+                        inherits the bloated height, ChatView's scroll
+                        container (also flex-1 + min-h-0) ends up the
+                        same size as its content → no scrollbar, and the
+                        composer input wrapper is pushed off the bottom
+                        of the viewport. Setting min-height: 0 here
+                        caps .app-body at the flex-allocated 100vh - 40px
+                        titlebar, which is the same root cause the .pane
+                        rule below already documents for the second
+                        level of the same chain. */
+  overflow: hidden;
+  position: relative;
+  background: var(--color-bg-secondary);
+  /* No grid-template-columns transition — causes the "squished"
+     mid-animation state visible when resizing panes. Immediate
+     snap is preferred over an ugly animated collapse.
+     Also: no grid animation mid-resize → columns snap instantly,
+     no overlapping/overlay flash. */
+}
+
+/* v25: 左列关闭 → track 归零, 主列吃满左半边空间. */
+.app-body[data-left-open="false"] {
+  --col-left: 0px;
+}
+
+/* v8: 右列关闭 → track 归零, 主列吃满右半边空间. */
+.app-body[data-right-open="false"] {
+  --col-right: 0px;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;     /* critical: without this, flex/grid children with
+                        overflowing content expand the parent beyond its
+                        allocated height, pushing bottom components (sidebar
+                        status bar, chat input) off-screen. */
+  overflow: hidden;
+  flex-shrink: 0;
+  width: 100%;       /* fill parent wrapper (the wrapper controls the actual width) */
+}
+.pane-left   { background: var(--color-bg-secondary); }
+/* .pane-main 的 min-width 故意不再写 — 由 .app-body 的 grid-template-columns
+   里 minmax(720px, 1fr) 声明性保证, 避免与 grid track 的 min 双重约束造成
+   奇怪的溢出行为 (历史教训: 同时给 track 和 item 设 min-width 在窄视口
+   下会导致 inflexible 列被压扁到只剩图标竖排)。 */
+/* 主区背景 = 淡灰 (--color-bg-app = #f5f5f7) — 跟左栏/右栏/卡片(白)拉出 1 档色差,
+   卡片 .bg-bg-card 白底就自然浮起来。
+   修: 之前用 --color-bg-primary (白) 导致卡片跟主区贴墙。 */
+.pane-main   { background: var(--color-bg-app); flex: 1; border-top-left-radius: 12px; border-top-right-radius: 12px; }
+.pane-right  { background: var(--color-bg-secondary); }
+
+.pane-resizer {
+  position: absolute;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  background: transparent;
+  transition: background var(--duration-fast) ease;
+}
+.pane-resizer:hover  { background: var(--color-accent-soft); }
+.pane-resizer:active { background: var(--color-accent-soft-strong); }
+.pane-resizer-right { right: 0; }
+.pane-resizer-left  { left: 0; }
+
+.pane-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 10;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   § 2.  TITLE BAR
+   ════════════════════════════════════════════════════════════════════ */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  background: var(--color-bg-secondary);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.titlebar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 6px;
+}
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  /* 品牌区左侧 10px 边距 — 与 macOS 标题栏视觉锚点对齐 */
+  padding-left: 10px;
+  user-select: none;
+}
+.titlebar-logo {
+  /* 22px 略大于 20px：与新 SVG 圆角 + 狐狸头比例更协调 */
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  pointer-events: none;
+  /* 抗锯齿：SVG 缩放时边缘更锐利 */
+  shape-rendering: geometricPrecision;
+}
+.titlebar-title {
+  font-size: var(--font-size-body);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  letter-spacing: -0.01em;
+  pointer-events: none;
+}
+
+.titlebar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.titlebar-btn:hover { background: var(--color-bg-hover); color: var(--color-text-secondary); }
+.titlebar-btn-active { color: var(--color-accent); background: var(--color-accent-soft); }
+.titlebar-btn-danger:hover { background: var(--color-error); color: #ffffff; }
+
+/* (品牌已上移至 TitleBar,Sidebar 不再单独显示 — 避免双层标题栏) */
+
+/* ════════════════════════════════════════════════════════════════════
+   § 4.  NAVIGATION
+   ════════════════════════════════════════════════════════════════════ */
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-lg);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.nav-item:hover  { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.nav-item-active { background: var(--color-bg-active); color: var(--color-text-primary); }
+.nav-item svg    { flex-shrink: 0; }
+
+/* ════════════════════════════════════════════════════════════════════
+   § 5.  SECTION HEADER (collapsible group label)
+   ════════════════════════════════════════════════════════════════════
+
+   Hierarchy level 1 — the faintest, smallest "label" tier.
+   Visually separates major sections (Workspaces / Ungrouped / Chat Rooms). */
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 4px 6px;
+}
+.section-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--duration-fast) ease;
+}
+.section-header-toggle:hover { color: var(--color-text-muted); }
+.section-header-icon { color: var(--color-text-faint); flex-shrink: 0; }
+.section-header-count {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 11px;
+  color: var(--color-text-faint);
+  margin-left: 2px;
+}
+.section-header-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.section-header-add:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+
+/* ════════════════════════════════════════════════════════════════════
+   § 6.  LIST ITEMS (chat session / workspace / chat room)
+   ════════════════════════════════════════════════════════════════════ */
+
+.list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  color: var(--color-text-secondary);
+}
+.list-item:hover  { background: var(--color-bg-hover); }
+.list-item-active { background: var(--color-bg-active); color: var(--color-text-primary); }
+
+/* Main row: title + time + pulse indicator */
+.list-item-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.list-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+/* Time — right-aligned, faint
+ *
+ * v3 用户反馈：会话列表去掉 "几小时前 / 几天前" 时间戳。SessionItem
+ * 已不再渲染这个 span，规则保留原始样式只作为占位（其它位置如有
+ * 需要可恢复使用）。 */
+.list-item-time {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* Pulse dot — shows when model is actively streaming into this session */
+.list-item-pulse {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+.list-item-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  animation: li-pulse 1.4s ease-in-out infinite;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--color-accent) 50%, transparent);
+}
+@keyframes li-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.8); }
+}
+
+/* Active dot — static indicator that "this is the active session".
+ * PLAN_UI_ENHANCEMENT §3.3: 激活项用小圆点区分，非激活项显示相对时间。 */
+.list-item-active-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  flex-shrink: 0;
+  box-shadow: 0 0 4px color-mix(in srgb, var(--color-accent) 50%, transparent);
+}
+
+/* Message count meta (below title)
+ *
+ * v3 用户反馈：会话列表项去掉 "N 条" / "X 小时前" 的冗余 metadata，
+ * SessionItem.tsx 已不再渲染这个 span，所以这条规则在会话列表上
+ * 不再生效。但聊天室（ChatRoom）列表仍用它显示 "N 个成员"，所以
+ * 保留原始样式，只是不再被会话列表触发。
+ */
+.list-item-meta   {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.list-item-action {
+  opacity: 0;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: opacity var(--duration-fast) ease, color var(--duration-fast) ease, background var(--duration-fast) ease;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.list-item:hover .list-item-action { opacity: 1; }
+.list-item-action:hover { color: var(--color-error); }
+
+/* ── List group (嵌套 children, e.g. workspace 下的 session) ──
+ *
+ * Hierarchy level 3 — children indented under their parent row.
+ * 16px left margin + 2px faint accent-left border = clear depth cue.
+ * v3 用户反馈：工作区下的会话列表不应该有左侧的粗分隔线。
+ */
+.list-group {
+  margin-left: 16px;
+  padding-left: 10px;
+  border-left: 1.5px solid var(--color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+  margin-bottom: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.list-group-empty {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  font-style: italic;
+  padding: 4px 8px;
+}
+
+/* ── List row (workspace / chat room header with chevron) ──
+ *
+ * Hierarchy level 2 — parent folder / category row.
+ * Slightly compact, semi-bold name with accent icon = "this is a container". */
+.list-row {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-md);
+  padding: 3px 6px;
+  transition: background var(--duration-fast) ease;
+}
+.list-row:hover { background: var(--color-bg-hover); }
+.list-row-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--color-text-primary);
+}
+.list-row-chevron { color: var(--color-text-faint); flex-shrink: 0; }
+.list-row-icon    { color: var(--color-accent); flex-shrink: 0; }
+.list-row-name    {
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.list-row-count   {
+  font-size: var(--font-size-tiny);
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.list-row-action {
+  opacity: 0;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: opacity var(--duration-fast) ease, color var(--duration-fast) ease;
+  flex-shrink: 0;
+}
+.list-row:hover .list-row-action { opacity: 1; }
+.list-row-action:hover { color: var(--color-error); }
+
+/* ════════════════════════════════════════════════════════════════════
+   § 7.  USER CARD (sidebar bottom)
+   ════════════════════════════════════════════════════════════════════ */
+
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-tertiary);
+}
+.user-card-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  flex-shrink: 0;
+}
+.user-card-name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-card-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.user-card-action:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+

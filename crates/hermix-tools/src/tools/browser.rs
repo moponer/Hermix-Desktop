@@ -216,8 +216,7 @@ pub trait BrowserBackend: Send + Sync {
     /// timeout. Default implementation falls back to polling via
     /// `Runtime.evaluate`; the CDP backend overrides to use
     /// `DOM.querySelectorAll` and CDP's built-in wait primitives.
-    ///
-    /// `state`, `url_glob`, and `js_fn` extend the wait conditions
+    /// /// `state`, `url_glob`, and `js_fn` extend the wait conditions
     /// (Phase 1 deliverable, see `BrowserWaitForHandler::execute`).
     /// Backends that don't understand a given condition should ignore
     /// it and fall back to the selector-only check.
@@ -239,8 +238,7 @@ pub trait BrowserBackend: Send + Sync {
     /// The default implementation just calls [`Self::snapshot`] for backends
     /// that don't support filtering; CDP-based backends override to produce
     /// a ref-token YAML view.
-    ///
-    /// `compact = true` drops non-interactive ancestor branches, yielding
+    /// /// `compact = true` drops non-interactive ancestor branches, yielding
     /// a flat "form-only" view that uses ~50% fewer tokens on dense pages.
     async fn snapshot_with_options(
         &self,
@@ -1094,7 +1092,6 @@ impl ToolHandler for BrowserConsoleHandler {
 // ---------------------------------------------------------------------------
 // BrowserHighlightHandler
 // ---------------------------------------------------------------------------
-//
 // Phase 2: visually highlight a `[ref=eN]` element on the page with a
 // pulsing red border + tooltip. Useful for debugging — "I just clicked
 // [ref=e5] but the page didn't change, where is [ref=e5]?". The highlight
@@ -1149,13 +1146,11 @@ impl ToolHandler for BrowserHighlightHandler {
 // ---------------------------------------------------------------------------
 // BrowserInitScriptHandler
 // ---------------------------------------------------------------------------
-//
 // Phase 4: register a JS snippet that runs before every page load
 // (`Page.addScriptToEvaluateOnNewDocument`). Use cases:
-//   - pre-set `localStorage` / `sessionStorage` / cookies to bypass login
-//   - stub out anti-bot fingerprinting
-//   - install a global `window.appReady` event the LLM can `wait_for` on
-//
+// - pre-set `localStorage` / `sessionStorage` / cookies to bypass login
+// - stub out anti-bot fingerprinting
+// - install a global `window.appReady` event the LLM can `wait_for` on
 // The handler supports three actions: `add` (register a script), `list`
 // (see what's registered), and `clear` (remove all). Scripts persist
 // across navigations on the same backend; they are isolated per session
@@ -1313,7 +1308,6 @@ mod tests {
     }
 
     // -- SSRF pre-check -------------------------------------------------
-    //
     // Browser-navigate is the highest-risk surface: a successful
     // navigate gives the LLM both session cookies/storage and
     // the ability to submit forms on the destination. The guard

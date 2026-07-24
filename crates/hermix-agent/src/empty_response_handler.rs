@@ -47,7 +47,7 @@
 //!   The new nudge fires before Finalize and pushes the LLM to actually call
 //!   a tool again (re-list, retry with a more precise id, or use a different
 //!   approach). Cap shared with permission-giveup (3 nudges total) so a
-//!   stubborn LLM can't loop forever.主人原话：「只有穷极一切办法没有完成
+//!   stubborn LLM can't loop forever.用户原话：「只有穷极一切办法没有完成
 //!   任务的可能了，才会主动停止」 — this nudge is the agent loop's
 //!   implementation of that principle.
 
@@ -58,8 +58,7 @@ use hermix_core::Message;
 /// Coarse classification of a tool failure, used by
 /// `decide_empty_response` to decide whether the LLM should be nudged
 /// to retry with a different approach.
-///
-/// 2026-07-23: introduced alongside the tool-failure-retry nudge.
+/// /// introduced alongside the tool-failure-retry nudge.
 /// Without this, the agent loop couldn't tell apart "the LLM gave up"
 /// (worth a Finalize) from "the LLM wants to retry but forgot to call a
 /// tool" (worth a nudge).
@@ -111,8 +110,7 @@ impl ToolFailureRecord {
     /// current turn produced no tool errors — so the section 2c nudge
     /// stays a pure "LLM was about to give up after a real failure"
     /// guard and never misfires on a genuine completion.
-    ///
-    /// `ToolErrorRecord` only carries the formatted error string (not
+    /// /// `ToolErrorRecord` only carries the formatted error string (not
     /// the `ToolError` variant), so classification is by stable string
     /// markers emitted by the backends.
     pub fn from_recent_error(errors: &[hermix_core::ToolErrorRecord], current_turn: u32) -> Option<Self> {
@@ -130,8 +128,7 @@ impl ToolFailureRecord {
 }
 
 /// Map a formatted tool-error string to a coarse [`ToolFailureKind`].
-///
-/// The `[PERMISSION_DENIED]` prefix is the stable marker the runtime
+/// /// The `[PERMISSION_DENIED]` prefix is the stable marker the runtime
 /// emits for ACL / sandbox / environment restrictions (handled by the
 /// permission-giveup nudge, so we route it there to avoid double-nudging).
 fn classify_failure(msg: &str) -> ToolFailureKind {
@@ -157,17 +154,15 @@ fn classify_failure(msg: &str) -> ToolFailureKind {
 pub const CODEX_MAX_ACK_CONTINUATIONS: u32 = 2;
 
 /// Max post-tool nudges before respecting the LLM's stop signal.
-///
-/// When the LLM stops after tool execution with only reasoning_content
+/// /// When the LLM stops after tool execution with only reasoning_content
 /// (no visible text, no tool calls), we inject a system nudge to push it
 /// to produce visible output or continue working. Previously this fired
 /// only once (`== 0` check), which was too aggressive: the LLM often
 /// needs 2-3 attempts to recover, especially when:
-///   - The `<think>` tag wasn't closed, routing all text to reasoning
-///   - The LLM was confused by a tool error and needs to re-orient
-///   - The LLM's first nudge response was still thinking-only
-///
-/// After `MAX_POST_TOOL_NUDGES` attempts, we respect the LLM's decision
+/// - The `<think>` tag wasn't closed, routing all text to reasoning
+/// - The LLM was confused by a tool error and needs to re-orient
+/// - The LLM's first nudge response was still thinking-only
+/// /// After `MAX_POST_TOOL_NUDGES` attempts, we respect the LLM's decision
 /// and finalize. The `local_agent_service` falls back to
 /// `reasoning_content` as the visible reply so the user always sees
 /// something.
@@ -175,8 +170,7 @@ pub const MAX_POST_TOOL_NUDGES: u32 = 3;
 
 /// Max "agent-recovery" nudges (permission-giveup + tool-failure-retry
 /// combined) before respecting the LLM's stop signal.
-///
-/// 2026-07-23: this cap is shared between permission-giveup and
+/// /// this cap is shared between permission-giveup and
 /// tool-failure-retry because both nudges are aimed at the same situation
 /// — the LLM has a visible-text answer but the underlying task isn't
 /// done yet, and we want one more push before we Finalize. Using a
@@ -186,8 +180,7 @@ pub const MAX_AGENT_RECOVERY_NUDGES: u32 = 3;
 
 /// Max "completion-verification" nudges before respecting the LLM's
 /// stop signal.
-///
-/// 2026-07-23 (主人反馈 #2): the agent must NOT declare a task complete
+/// /// (用户反馈 #2): the agent must NOT declare a task complete
 /// on the strength of a visible-text reply alone. When tools were used
 /// this session and the LLM is about to finalize (visible text, no new
 /// tool call, no recoverable failure), we inject ONE verification nudge
@@ -227,7 +220,7 @@ pub struct EmptyResponseInput<'a> {
     pub post_tool_nudge_count: u32,
     /// Number of "agent-recovery" nudges (permission-giveup +
     /// tool-failure-retry) already fired this session. Capped at
-    /// [`MAX_AGENT_RECOVERY_NUDGES`]. 2026-07-23: added to back the
+    /// [`MAX_AGENT_RECOVERY_NUDGES`]. added to back the
     /// new tool-failure-retry nudge without abusing the existing
     /// `post_tool_nudge_count` counter.
     pub agent_recovery_nudge_count: u32,
@@ -239,8 +232,7 @@ pub struct EmptyResponseInput<'a> {
     /// the last tool succeeded.
     pub recent_tool_failure: Option<ToolFailureRecord>,
     /// Number of "completion-verification" nudges already fired this
-    /// session. Capped at [`MAX_COMPLETION_VERIFY_NUDGES`]. 2026-07-23:
-    /// added to back the new completion-verification gate (section 2d)
+    /// session. Capped at [`MAX_COMPLETION_VERIFY_NUDGES`]. /// added to back the new completion-verification gate (section 2d)
     /// which forces the LLM to verify real completion before finalizing.
     pub completion_verify_nudge_count: u32,
     pub total_turns: u32,
@@ -262,8 +254,7 @@ pub struct EmptyResponseOutput {
 
 /// Detect if the LLM's visible text looks like it's giving up due to
 /// perceived permission/sandbox restrictions.
-///
-/// The LLM may produce visible text like "I don't have permission" or
+/// /// The LLM may produce visible text like "I don't have permission" or
 /// "I'm in a sandbox and can't access X" without actually trying the
 /// command. This is a false give-up — the system is NOT a sandbox and
 /// the LLM has full filesystem access.
@@ -313,8 +304,7 @@ fn looks_like_permission_giveup(text: &str) -> bool {
 
 /// Single authority for "what should the loop do when the LLM produces
 /// no tool calls this turn".
-///
-/// Priority order:
+/// /// Priority order:
 /// 1. Codex ack continuation (protocol need)
 /// 2. Post-tool nudge (push LLM to produce visible text after tools — one time only)
 /// 2b. Permission-give-up nudge (LLM claims it lacks permissions — push it to try alternatives)
@@ -325,8 +315,8 @@ pub fn decide_empty_response(
     input: EmptyResponseInput<'_>,
 ) -> EmptyResponseOutput {
     // 1. Codex ack continuation — protocol-level: the Codex Responses
-    //    API sometimes emits a planning/ack reply that needs an explicit
-    //    "continue" user message to proceed.
+    // API sometimes emits a planning/ack reply that needs an explicit
+    // "continue" user message to proceed.
     if input.api_mode == ApiMode::CodexResponses
         && input.has_tool_schemas
         && input.codex_ack_continuations < CODEX_MAX_ACK_CONTINUATIONS
@@ -349,23 +339,21 @@ pub fn decide_empty_response(
     }
 
     // 2. Post-tool nudge — when the LLM stops after tool execution
-    //    with only reasoning_content (no visible text, no tool calls),
-    //    give it up to MAX_POST_TOOL_NUDGES more turns to produce
-    //    visible text or call more tools. This lets the LLM "decide"
-    //    whether to summarize results or continue working — exactly
-    //    what the user expects after a tool executes.
-    //
-    //    Previously this fired only once (count == 0), which was too
-    //    aggressive: the LLM often needs 2-3 attempts to recover,
-    //    especially when the `<think>` tag wasn't closed (routing all
-    //    text to reasoning_content) or the LLM was confused by a tool
-    //    error. With only one nudge, the loop would finalize while
-    //    the LLM was still trying to work — the "agent stops without
-    //    completing the task" bug.
-    //
-    //    After MAX_POST_TOOL_NUDGES attempts, respect the LLM's
-    //    decision and finalize. The `local_agent_service` falls back
-    //    to `reasoning_content` as the visible reply.
+    // with only reasoning_content (no visible text, no tool calls),
+    // give it up to MAX_POST_TOOL_NUDGES more turns to produce
+    // visible text or call more tools. This lets the LLM "decide"
+    // whether to summarize results or continue working — exactly
+    // what the user expects after a tool executes.
+    // Previously this fired only once (count == 0), which was too
+    // aggressive: the LLM often needs 2-3 attempts to recover,
+    // especially when the `<think>` tag wasn't closed (routing all
+    // text to reasoning_content) or the LLM was confused by a tool
+    // error. With only one nudge, the loop would finalize while
+    // the LLM was still trying to work — the "agent stops without
+    // completing the task" bug.
+    // After MAX_POST_TOOL_NUDGES attempts, respect the LLM's
+    // decision and finalize. The `local_agent_service` falls back
+    // to `reasoning_content` as the visible reply.
     if input.history_includes_tool
         && input.has_tool_schemas
         && (input.max_turns == 0 || input.total_turns < input.max_turns)
@@ -412,21 +400,19 @@ pub fn decide_empty_response(
     }
 
     // 2b. Permission-give-up nudge — when the LLM produces visible text
-    //     that looks like it's giving up due to perceived permission/sandbox
-    //     restrictions. The system is NOT a sandbox — the LLM has full
-    //     filesystem access. Push it to try alternative approaches.
-    //
-    //     This fires AFTER the post-tool nudge (section 2) because the
-    //     post-tool nudge has a `!assistant_has_visible_text` guard —
-    //     when the LLM says "I don't have permission" (which IS visible
-    //     text), section 2 is skipped. Without this section, the LLM
-    //     would fall through to Finalize, abandoning the task.
-    //
-    //     2026-07-23: counter switched from `post_tool_nudge_count` to
-    //     the shared `agent_recovery_nudge_count` so the cap is per
-    //     "agent is still trying to recover" rather than per nudge
-    //     flavor. Max [`MAX_AGENT_RECOVERY_NUDGES`] (3) covers the
-    //     permission-giveup + tool-failure-retry pair combined.
+    // that looks like it's giving up due to perceived permission/sandbox
+    // restrictions. The system is NOT a sandbox — the LLM has full
+    // filesystem access. Push it to try alternative approaches.
+    // This fires AFTER the post-tool nudge (section 2) because the
+    // post-tool nudge has a `!assistant_has_visible_text` guard —
+    // when the LLM says "I don't have permission" (which IS visible
+    // text), section 2 is skipped. Without this section, the LLM
+    // would fall through to Finalize, abandoning the task.
+    // counter switched from `post_tool_nudge_count` to
+    // the shared `agent_recovery_nudge_count` so the cap is per
+    // "agent is still trying to recover" rather than per nudge
+    // flavor. Max [`MAX_AGENT_RECOVERY_NUDGES`] (3) covers the
+    // permission-giveup + tool-failure-retry pair combined.
     if input.history_includes_tool
         && input.has_tool_schemas
         && (input.max_turns == 0 || input.total_turns < input.max_turns)
@@ -463,26 +449,24 @@ pub fn decide_empty_response(
         };
     }
 
-    // 2c. Tool-failure-retry nudge — 2026-07-23: when the LLM's
-    //     last tool call FAILED (kind != PermissionDenied which is
-    //     handled by 2b) and the LLM responded with visible text
-    //     but NO new tool calls, the old code went straight to
-    //     Finalize. That contradicts the "穷极一切办法没有完成
-    //     任务的可能了" design principle (主人 2026-07-23 反馈):
-    //     the LLM has just said "I found the key, now I'll retry
-    //     with the right old_text" — but the agent loop bailed
-    //     out before the LLM could actually retry.
-    //
-    //     The nudge points the LLM at concrete next steps based
-    //     on the failure kind. Counter is shared with the
-    //     permission-giveup nudge (section 2b) so a stubborn LLM
-    //     can't loop forever; cap is [`MAX_AGENT_RECOVERY_NUDGES`].
-    //
-    //     Skipped when the LLM already produced an
-    //     actual tool call (caught upstream by the caller — if
-    //     `tool_calls_present` we never reach this function). Also
-    //     skipped when no failure was recorded, so this is purely
-    //     a "LLM was about to give up" guard.
+    // 2c. Tool-failure-retry nudge — when the LLM's
+    // last tool call FAILED (kind != PermissionDenied which is
+    // handled by 2b) and the LLM responded with visible text
+    // but NO new tool calls, the old code went straight to
+    // Finalize. That contradicts the "穷极一切办法没有完成
+    // 任务的可能了" design principle (用户 反馈):
+    // the LLM has just said "I found the key, now I'll retry
+    // with the right old_text" — but the agent loop bailed
+    // out before the LLM could actually retry.
+    // The nudge points the LLM at concrete next steps based
+    // on the failure kind. Counter is shared with the
+    // permission-giveup nudge (section 2b) so a stubborn LLM
+    // can't loop forever; cap is [`MAX_AGENT_RECOVERY_NUDGES`].
+    // Skipped when the LLM already produced an
+    // actual tool call (caught upstream by the caller — if
+    // `tool_calls_present` we never reach this function). Also
+    // skipped when no failure was recorded, so this is purely
+    // a "LLM was about to give up" guard.
     // Precompute the recent-tool-failure guard (Rust 2021 has no
     // let-chains, so we can't inline `let Some(failure) = ...` in the
     // `if`). `recoverable` is true only when a failure exists AND it is
@@ -547,37 +531,34 @@ pub fn decide_empty_response(
         };
     }
 
-    // 2d. Completion-verification gate — 2026-07-23 (主人反馈 #2).
-    //     The agent must NOT declare a task complete on the strength of
-    //     a visible-text reply alone. When tools were used this session
-    //     and the LLM is about to finalize (visible text, no new tool
-    //     call, and neither the permission-giveup nor the
-    //     tool-failure-retry branch fired), inject ONE verification
-    //     nudge requiring the LLM to re-examine the tool outputs / final
-    //     state against the user's original request and continue (with a
-    //     tool call) if anything is unverified or unmet.
-    //
-    //     This directly addresses the reported failure mode: the LLM
-    //     replied "done" but the result was fake / unverified, only
-    //     discovered on the NEXT conversation. The nudge explicitly
-    //     tells the LLM to confirm the end state via a tool (re-read the
-    //     file, re-run the check) rather than assume — and to keep
-    //     working if the criterion isn't met.
-    //
-    //     Capped at MAX_COMPLETION_VERIFY_NUDGES (1): after one
-    //     verification pass, if the LLM re-affirms completion we respect
-    //     it and finalize (no loop). If instead the LLM calls a tool to
-    //     verify, the loop continues naturally. Skipped for pure Q&A
-    //     sessions (no tools used) since there is nothing to verify.
-    //
-    //     SCOPING (2026-07-23 follow-up): this gate must NOT fire when a
-    //     real failure or permission give-up is already on the table —
-    //     those are owned by sections 2b (permission-giveup) and 2c
-    //     (tool-failure-retry) and would otherwise double-nudge or
-    //     hijack their finalize-after-exhaustion semantics. We only fire
-    //     on a *clean* completion claim: tools were used, there is no
-    //     recorded recent tool failure, the reply is not a permission
-    //     give-up, and the LLM produced visible text claiming done.
+    // 2d. Completion-verification gate — (用户反馈 #2).
+    // The agent must NOT declare a task complete on the strength of
+    // a visible-text reply alone. When tools were used this session
+    // and the LLM is about to finalize (visible text, no new tool
+    // call, and neither the permission-giveup nor the
+    // tool-failure-retry branch fired), inject ONE verification
+    // nudge requiring the LLM to re-examine the tool outputs / final
+    // state against the user's original request and continue (with a
+    // tool call) if anything is unverified or unmet.
+    // This directly addresses the reported failure mode: the LLM
+    // replied "done" but the result was fake / unverified, only
+    // discovered on the NEXT conversation. The nudge explicitly
+    // tells the LLM to confirm the end state via a tool (re-read the
+    // file, re-run the check) rather than assume — and to keep
+    // working if the criterion isn't met.
+    // Capped at MAX_COMPLETION_VERIFY_NUDGES (1): after one
+    // verification pass, if the LLM re-affirms completion we respect
+    // it and finalize (no loop). If instead the LLM calls a tool to
+    // verify, the loop continues naturally. Skipped for pure Q&A
+    // sessions (no tools used) since there is nothing to verify.
+    // SCOPING (follow-up): this gate must NOT fire when a
+    // real failure or permission give-up is already on the table —
+    // those are owned by sections 2b (permission-giveup) and 2c
+    // (tool-failure-retry) and would otherwise double-nudge or
+    // hijack their finalize-after-exhaustion semantics. We only fire
+    // on a *clean* completion claim: tools were used, there is no
+    // recorded recent tool failure, the reply is not a permission
+    // give-up, and the LLM produced visible text claiming done.
     if input.history_includes_tool
         && input.has_tool_schemas
         && (input.max_turns == 0 || input.total_turns < input.max_turns)
@@ -615,21 +596,19 @@ pub fn decide_empty_response(
     }
 
     // 3. Autonomous pre-tool nudge — when autonomous mode is on and the
-    //    LLM hasn't used any tools yet, push it to start working.
-    //    Fires once only (count == 0). If the LLM still doesn't use tools
-    //    after one nudge, respect its decision and finalize.
-    //
-    //    This does NOT fire after tools have run — the post-tool nudge
-    //    above handles that case.
-    //
-    //    2026-07-15: Removed the `!(assistant_has_visible_text)` guard.
-    //    Previously, if the LLM produced visible text (e.g. "I'll help you
-    //    with that") but no tool calls, the loop would finalize immediately.
-    //    The user saw a reply but the task wasn't actually started. Now the
-    //    nudge fires even when visible text is present, pushing the LLM to
-    //    use tools. The nudge message is updated to acknowledge the text
-    //    and redirect to tool usage. After one nudge, the LLM's decision
-    //    is respected — if it still doesn't use tools, the loop finalizes.
+    // LLM hasn't used any tools yet, push it to start working.
+    // Fires once only (count == 0). If the LLM still doesn't use tools
+    // after one nudge, respect its decision and finalize.
+    // This does NOT fire after tools have run — the post-tool nudge
+    // above handles that case.
+    // Removed the `!(assistant_has_visible_text)` guard.
+    // Previously, if the LLM produced visible text (e.g. "I'll help you
+    // with that") but no tool calls, the loop would finalize immediately.
+    // The user saw a reply but the task wasn't actually started. Now the
+    // nudge fires even when visible text is present, pushing the LLM to
+    // use tools. The nudge message is updated to acknowledge the text
+    // and redirect to tool usage. After one nudge, the LLM's decision
+    // is respected — if it still doesn't use tools, the loop finalizes.
     if input.autonomous_mode
         && input.has_tool_schemas
         && !input.history_includes_tool
@@ -673,11 +652,10 @@ pub fn decide_empty_response(
     }
 
     // 4. Default: trust the LLM's stop signal and finalize.
-    //
-    //    If the LLM chose to stop without visible text, we respect
-    //    that. The thinking content is in the collapsible block.
-    //    The `local_agent_service` will fall back to `reasoning_content`
-    //    as the visible reply if `content` is empty.
+    // If the LLM chose to stop without visible text, we respect
+    // that. The thinking content is in the collapsible block.
+    // The `local_agent_service` will fall back to `reasoning_content`
+    // as the visible reply if `content` is empty.
     EmptyResponseOutput {
         action: EmptyResponseAction::Finalize,
         new_codex_ack_continuations: input.codex_ack_continuations,
@@ -891,7 +869,7 @@ mod tests {
 
     #[test]
     fn autonomous_nudge_fires_with_visible_text_when_no_tools_yet() {
-        // 2026-07-15: The autonomous nudge should fire even when the LLM
+        // The autonomous nudge should fire even when the LLM
         // produced visible text, as long as no tools have been used yet.
         // The LLM might say "I'll help you with that" but not actually
         // start working — the nudge pushes it to use tools.
@@ -1045,7 +1023,7 @@ mod tests {
         // section 2b does NOT fire. With no recorded tool failure, the
         // completion-verification gate (section 2d) now injects one
         // verification pass instead of finalizing blindly — this is the
-        // exact "fake completion" bug 主人 reported.
+        // exact "fake completion" bug 用户 reported.
         let m = make_assistant_msg(
             Some("扫描完成，C盘共有20个目录。"),
             false,
@@ -1113,9 +1091,8 @@ mod tests {
         assert!(!looks_like_permission_giveup("任务已完成"));
     }
 
-    // ---- 2026-07-23: Tool-failure-retry nudge (section 2c) ----
-    //
-    // 主人原话：「只有穷极一切办法没有完成任务的可能了，才会主动停止」。
+    // ---- Tool-failure-retry nudge (section 2c) ----
+    // 用户原话：「只有穷极一切办法没有完成任务的可能了，才会主动停止」。
     // The post-tool/permission-giveup nudges were already in place,
     // but neither fired when the LLM had *visible text* AND a
     // *non-permission* tool failure (e.g. memory "No entry matched").
@@ -1126,7 +1103,7 @@ mod tests {
 
     #[test]
     fn tool_failure_retry_nudge_fires_on_no_match_with_visible_text() {
-        // The exact scenario from 主人's 2026-07-23 screenshot:
+        // The exact scenario from 用户's screenshot:
         // LLM called memory tool, got "No entry matched '...'", then
         // produced visible text saying "now I'll try a different
         // old_text" — but didn't actually call a tool. Old code
@@ -1290,7 +1267,7 @@ mod tests {
 
     #[test]
     fn agent_recovery_counter_is_shared_between_permission_and_failure() {
-        // 主人 2026-07-23: section 2b (permission) and 2c
+        // 用户 section 2b (permission) and 2c
         // (tool-failure) should share the recovery counter so a
         // stubborn LLM that bounces between the two nudge flavors
         // still gets capped at MAX_AGENT_RECOVERY_NUDGES total
@@ -1340,7 +1317,7 @@ mod tests {
         assert_eq!(out.action, EmptyResponseAction::Finalize);
     }
 
-    // ===== 2026-07-23: section 2d (completion-verification gate) =====
+    // ===== section 2d (completion-verification gate) =====
 
     #[test]
     fn completion_verify_nudge_fires_on_tool_session_with_visible_text() {

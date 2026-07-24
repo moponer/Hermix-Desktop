@@ -55,8 +55,7 @@ impl Default for CostGuard {
 
 /// Fallback cost-per-million-USD pricing for known model families
 /// when [`AgentConfig`] does not pin a rate.
-///
-/// Phase 5 (2026-07-03): used by `estimate_usage_cost_usd` in the
+/// /// Phase 5 (2026-07-03): used by `estimate_usage_cost_usd` in the
 /// cost guard. Physically moved with the cost guard (2026-07-04)
 /// because no other call site in `agent_loop.rs` needs it.
 pub(crate) fn default_model_cost_per_million(model: &str) -> Option<(f64, f64)> {
@@ -123,8 +122,7 @@ impl CostGuard {
     /// accumulate the per-turn USD cost into `session_cost_usd` using
     /// the model's pricing config. No-op when the provider did not
     /// return usage for the turn.
-    ///
-    /// Pre-extraction this block was open-coded inside
+    /// /// Pre-extraction this block was open-coded inside
     /// `process_post_response` immediately after the post-LLM hook;
     /// it stays identical otherwise.
     pub fn record_usage(
@@ -148,8 +146,7 @@ impl CostGuard {
     /// the returned `model` (the struct doesn't have access to
     /// `AgentLoop::turn_route_cost_guard` which depends on
     /// `self.primary_runtime_snapshot()`).
-    ///
-    /// Phase 5b (2026-07-04): takes `&RouteState` so it can skip the
+    /// /// Phase 5b (2026-07-04): takes `&RouteState` so it can skip the
     /// warn path when the session has already been downgraded. The
     /// downgrade state itself is owned by `RouteState`, not by this
     /// struct — passing `&RouteState` keeps `CostGuard` focused on
@@ -202,8 +199,7 @@ impl CostGuard {
 
 /// Result of [`CostGuard::evaluate_thresholds`]. The caller drives
 /// the side effects (route build + system message) from the variant.
-///
-/// `warn` and `trip` can co-exist on the same call when spend jumped
+/// /// `warn` and `trip` can co-exist on the same call when spend jumped
 /// past both thresholds in one turn (e.g. the per-turn usage report
 /// pushed total spend above `max_cost_usd` while also clearing the
 /// warn ratio). The caller fires the warn side effect (system

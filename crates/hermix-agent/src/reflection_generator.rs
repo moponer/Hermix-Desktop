@@ -63,8 +63,8 @@ pub fn generate_reflections(inputs: &ReflectionInputs) -> Vec<Reflection> {
     let mut out = Vec::with_capacity(4);
 
     // 1. what_went_well — only when there were no tool errors AND
-    //    we actually did something. Suppress on trivial sessions
-    //    (1 turn, 0 facts) to avoid noise.
+    // we actually did something. Suppress on trivial sessions
+    // (1 turn, 0 facts) to avoid noise.
     if inputs.tool_error_count == 0 && (inputs.turn_count >= 2 || inputs.session_fact_count >= 1) {
         let content = match (inputs.turn_count, inputs.session_fact_count) {
             (t, 0) => format!("本次会话 {} 轮，无工具调用错误。", t),
@@ -81,8 +81,8 @@ pub fn generate_reflections(inputs: &ReflectionInputs) -> Vec<Reflection> {
     }
 
     // 2. what_to_improve — surface tool errors so the user knows
-    //    we noticed (and so next-session reflection can avoid the
-    //    same path).
+    // we noticed (and so next-session reflection can avoid the
+    // same path).
     if inputs.tool_error_count > 0 {
         out.push(Reflection {
             kind: KIND_WHAT_TO_IMPROVE,
@@ -95,8 +95,8 @@ pub fn generate_reflections(inputs: &ReflectionInputs) -> Vec<Reflection> {
     }
 
     // 3. user_preferences_observed — only when we have a stable
-    //    signal (the dialectic detector must have fired at least
-    //    once in the session).
+    // signal (the dialectic detector must have fired at least
+    // once in the session).
     if let Some(style) = inputs.dominant_user_style.as_deref() {
         let human = match style {
             "direct" => "直接、命令式",
@@ -116,8 +116,8 @@ pub fn generate_reflections(inputs: &ReflectionInputs) -> Vec<Reflection> {
     }
 
     // 4. next_session_hint — only when we learned something worth
-    //    resuming (3+ facts) or talked long enough that the user
-    //    is likely to come back (10+ turns).
+    // resuming (3+ facts) or talked long enough that the user
+    // is likely to come back (10+ turns).
     if inputs.session_fact_count >= 3 || inputs.turn_count >= 10 {
         let hint = if inputs.session_fact_count >= 3 {
             format!(

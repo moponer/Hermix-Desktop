@@ -74,8 +74,7 @@ fn md_excess_nl() -> &'static Regex {
 // ---------------------------------------------------------------------------
 
 /// Remove markdown formatting that shouldn't be spoken aloud.
-///
-/// Order matches Python exactly — swapping the order would change output for
+/// /// Order matches Python exactly — swapping the order would change output for
 /// inputs that mix code fences with bold or links.
 pub fn strip_markdown_for_tts(text: &str) -> String {
     let mut s = md_code_block().replace_all(text, " ").to_string();
@@ -97,16 +96,13 @@ pub fn strip_markdown_for_tts(text: &str) -> String {
 
 /// Stateful filter that removes `<think>...</think>` blocks from a streaming
 /// text source.
-///
-/// States:
-///
-/// * **Outside** — emit text until we see `<think` (opening tag prefix).
-///   Because `<think>` can span two deltas we also buffer any trailing `<`
-///   that *might* be the start of `<think` and re-check on the next chunk.
+/// /// States:
+/// /// * **Outside** — emit text until we see `<think` (opening tag prefix).
+/// Because `<think>` can span two deltas we also buffer any trailing `<`
+/// that *might* be the start of `<think` and re-check on the next chunk.
 /// * **Inside**  — silently drop everything until `</think>` is seen, then
-///   return to Outside.
-///
-/// Per Python's behaviour, an unclosed `<think` tag at stream end is treated
+/// return to Outside.
+/// /// Per Python's behaviour, an unclosed `<think` tag at stream end is treated
 /// as hidden content and dropped.
 #[derive(Debug, Default)]
 pub struct IncrementalThinkStripper {
@@ -126,8 +122,7 @@ impl IncrementalThinkStripper {
     }
 
     /// Consume the next delta and return the text that should be emitted.
-    ///
-    /// The returned string is always safe to append to downstream buffers —
+    /// /// The returned string is always safe to append to downstream buffers —
     /// any partial `<think...` tag is held back until the next call (or
     /// [`flush`](Self::flush)).
     pub fn push(&mut self, delta: &str) -> String {
@@ -253,8 +248,7 @@ impl IncrementalThinkStripper {
 
 /// Compute the largest prefix length of `buf` that is *guaranteed* not to be
 /// the start of a `<think` tag spanning into the next delta.
-///
-/// If `buf` ends with `<`, `<t`, `<th`, ..., `<thin` (anything that could be
+/// /// If `buf` ends with `<`, `<t`, `<th`, ..., `<thin` (anything that could be
 /// the opening tag's prefix) we must hold it back.
 fn tail_safe_emit_boundary(buf: &str) -> usize {
     const OPEN: &str = "<think";

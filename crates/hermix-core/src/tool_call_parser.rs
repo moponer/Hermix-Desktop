@@ -24,8 +24,7 @@ pub trait ToolCallParser: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// The default Hermes-format tool call parser.
-///
-/// Parses `<function_calls>` XML blocks containing `<invoke>` and
+/// /// Parses `<function_calls>` XML blocks containing `<invoke>` and
 /// `<parameter>` elements.
 #[derive(Clone)]
 pub struct HermesToolCallParser;
@@ -40,8 +39,7 @@ fn next_call_id() -> String {
 
 /// Parse MiniMax M3 native tool-call format:
 /// `<terminal><command>ls -la</command></terminal>`
-///
-/// Uses manual byte-scanning with nesting tracking because regex
+/// /// Uses manual byte-scanning with nesting tracking because regex
 /// alone cannot correctly match the outer close tag when the inner
 /// content also contains `</word>` tags.
 fn parse_m3_tool_tags(content: &str, calls: &mut Vec<ToolCall>) {
@@ -172,13 +170,11 @@ impl ToolCallParser for HermesToolCallParser {
         // match (specific tag name) and the wrappers never nest, so
         // getting it first avoids accidentally trying to parse the
         // same invoke twice via the looser fallback regexes below.
-        //
         // The LLM in the wild occasionally drops the closing
         // `</minimax:tool_call>` (the model runs out of tokens mid
         // block) or omits the leading `<` (text-only continuation
         // after a tool-call). Both shapes are still matched by the
         // invoke extractor further down.
-        //
         // Crucially: if the model emits `<minimax:tool_call>` or even
         // just `<invoke name="X">` but the stream cuts mid-block
         // (no closing tags), the block_re and the nested `<parameter>`
@@ -355,14 +351,12 @@ impl ToolCallParser for HermesToolCallParser {
         }
 
         // Format 6 — *best-effort* unclosed-block extractor (2026-06-14).
-        //
         // When MiniMax-M3 (or M2.x / older Hermes fine-tunes) hits
         // finish_reason="stop" while still inside a tool-call XML
         // block, the structured extractors above return nothing:
-        //   - `</invoke>` is missing → Format 1 block_re fails
-        //   - `</function_calls>` is missing → Format 2 fails
-        //   - `<invoke>...</invoke>` is missing → Format 4 fails
-        //
+        // - `</invoke>` is missing → Format 1 block_re fails
+        // - `</function_calls>` is missing → Format 2 fails
+        // - `<invoke>...</invoke>` is missing → Format 4 fails
         // In this case we do a *single-pass* scan for any `<invoke
         // name="X">` (even with empty body) and record a skeletal
         // ToolCall so the agent loop knows **something was attempted**.
@@ -440,8 +434,7 @@ pub fn parse_tool_calls(content: &str) -> Result<Vec<ToolCall>, AgentError> {
 }
 
 /// Strip MiniMax M3 native tool-call tags from text content.
-///
-/// Removes blocks like `<terminal><command>ls</command></terminal>`
+/// /// Removes blocks like `<terminal><command>ls</command></terminal>`
 /// and `<read_file><path>/tmp</path></read_file>` where the outer
 /// tag name is the tool name and inner tags are parameters.
 fn remove_m3_tool_tags(text: &mut String) {
@@ -570,8 +563,7 @@ fn remove_m3_tool_tags(text: &mut String) {
 }
 
 /// Separate plain text from tool calls in LLM output content.
-///
-/// Returns a tuple of (plain_text, tool_calls).
+/// /// Returns a tuple of (plain_text, tool_calls).
 pub fn separate_text_and_calls(content: &str) -> (String, Vec<ToolCall>) {
     let calls = parse_tool_calls(content).unwrap_or_default();
     let mut result = content.to_string();
@@ -625,8 +617,7 @@ pub fn get_parser(name: &str) -> Option<Box<dyn ToolCallParser>> {
 // ---------------------------------------------------------------------------
 
 /// Format a list of tool calls back into the Hermes `<function_calls>` XML format.
-///
-/// This enables round-trip fidelity: parsing then formatting should be
+/// /// This enables round-trip fidelity: parsing then formatting should be
 /// semantically equivalent to the original input.
 pub fn format_tool_calls(calls: &[ToolCall]) -> String {
     if calls.is_empty() {

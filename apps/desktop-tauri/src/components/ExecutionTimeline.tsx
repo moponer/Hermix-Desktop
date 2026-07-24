@@ -4,7 +4,7 @@ interface ExecutionTimelineProps {
   events: ExecutionTimelineEvent[];
 }
 
-// 2026-06-29 (C3 marker protocol): mirror of the backend
+// (C3 marker protocol): mirror of the backend
 // `Section::label()` (see `crates/hermix-agent/src/context.rs`).
 // We render the chip text on the front-end, so we need a label
 // table — but it's intentionally a *display* label (matches the
@@ -136,7 +136,7 @@ export function ExecutionTimeline({ events }: ExecutionTimelineProps) {
 }
 
 /**
- * 2026-06-29 (C3 marker protocol): render the `SectionGateReport`
+ * (C3 marker protocol): render the `SectionGateReport`
  * inline. Patched sections get a green-bordered chip ("the gate
  * auto-spliced this in"), pending sections get a dim border ("the
  * gate saw it was missing but the current `RouteContext` doesn't

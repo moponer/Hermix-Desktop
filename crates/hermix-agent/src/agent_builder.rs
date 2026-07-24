@@ -27,8 +27,7 @@ use crate::AgentConfig;
 // ---------------------------------------------------------------------------
 
 /// Split a `"provider:model"` string into `(provider, model)`.
-///
-/// If no colon is present the provider defaults to `"openai"`.
+/// /// If no colon is present the provider defaults to `"openai"`.
 pub fn parse_model_string(model: &str) -> (&str, &str) {
     model.split_once(':').unwrap_or(("openai", model))
 }
@@ -38,15 +37,14 @@ pub fn parse_model_string(model: &str) -> (&str, &str) {
 // ---------------------------------------------------------------------------
 
 /// Build an [`AgentConfig`] from a [`GatewayConfig`] and a model string.
-///
-/// `platform` lets callers tag the config with their origin (`"cli"`,
+/// /// `platform` lets callers tag the config with their origin (`"cli"`,
 /// `"http"`, `"gateway"`, …).  When `None` the field is left unset.
 pub fn build_agent_config(
     config: &GatewayConfig,
     model: &str,
     platform: Option<&str>,
 ) -> AgentConfig {
-    // N-07 (startup guard): `BudgetConfig` is the most common target of
+    // (startup guard): `BudgetConfig` is the most common target of
     // user typos (off-by-thousand off-by-million). Validate it eagerly
     // here so a broken `~/.hermix/config.yaml` is visible in the first
     // log line of every command. The non-fatal variant keeps the
@@ -157,8 +155,7 @@ pub fn build_agent_config(
 /// Bridge a full [`hermix_tools::ToolRegistry`] into the minimal
 /// [`AgentToolRegistry`](crate::agent_loop::ToolRegistry) consumed by
 /// [`AgentLoop`](crate::AgentLoop).
-///
-/// When `allowed_tool_names` is `Some`, only the tools whose `schema.name`
+/// /// When `allowed_tool_names` is `Some`, only the tools whose `schema.name`
 /// appears in that set are bridged. This implements the per-message tool
 /// whitelist driven by [`AgentOverrides::tools`].
 pub fn bridge_tool_registry(
@@ -235,14 +232,12 @@ pub fn env_var_name_for_provider(provider: &str) -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// Build an `Arc<dyn LlmProvider>` from a [`GatewayConfig`] and model string.
-///
-/// Returns `Err(AgentError::Config(...))` when no API key can be resolved for
+/// /// Returns `Err(AgentError::Config(...))` when no API key can be resolved for
 /// the requested provider. **This is intentional** — silently falling back to
 /// a no-op `StubProvider` was the root cause of the "stuck thinking" desktop
 /// bug: the LLM stream returned an immediate error chunk the front-end never
 /// surfaced, leaving the user staring at a "正在思考..." spinner forever.
-///
-/// Callers are expected to propagate the error to the user (the desktop
+/// /// Callers are expected to propagate the error to the user (the desktop
 /// server turns it into a structured WS error event; the CLI exits with a
 /// clear hint).
 pub fn build_provider(
@@ -468,8 +463,8 @@ pub fn build_provider(
         _ => {
             // Check for a custom provider configured via env vars
             // (Settings → 自定义).  The naming convention is:
-            //   CUSTOM_{ID}_API_KEY   — the API key
-            //   CUSTOM_{ID}_BASE_URL  — the base URL
+            // CUSTOM_{ID}_API_KEY   — the API key
+            // CUSTOM_{ID}_BASE_URL  — the base URL
             // The model string is `custom-{id}:{model-name}` so the
             // provider_name here will be `custom-{id}`.
             let custom_provider_key = provider_name
@@ -541,8 +536,8 @@ impl LlmProvider for BedrockUnsupportedProvider {
 
 // ---------------------------------------------------------------------------
 // (StubProvider removed — build_provider now returns AgentError::Config
-//  instead of silently falling back; see the function-level doc on
-//  build_provider for rationale.)
+// instead of silently falling back; see the function-level doc on
+// build_provider for rationale.)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]

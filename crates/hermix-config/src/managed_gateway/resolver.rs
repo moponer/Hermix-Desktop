@@ -9,8 +9,7 @@ use super::config::{build_vendor_gateway_url, GatewayBuilder, ManagedToolGateway
 use super::selection::managed_nous_tools_enabled;
 
 /// Optional injection points for hermetic tests / custom hosts.
-///
-/// In production callers pass `ResolveOptions::default()`, which uses the
+/// /// In production callers pass `ResolveOptions::default()`, which uses the
 /// env-driven URL builder and the disk-backed token reader (no automatic
 /// refresh — the CLI layer is expected to wire one in via `token_reader`
 /// when it owns the OAuth flow).
@@ -22,8 +21,7 @@ pub struct ResolveOptions<'a> {
 
 /// Resolve a managed gateway config for `vendor`, or `None` if any of the
 /// three required pieces is missing:
-///
-/// * the `HERMES_ENABLE_NOUS_MANAGED_TOOLS` feature flag is off, or
+/// /// * the `HERMES_ENABLE_NOUS_MANAGED_TOOLS` feature flag is off, or
 /// * no gateway URL could be derived, or
 /// * no Nous access token is reachable.
 pub fn resolve_managed_tool_gateway(

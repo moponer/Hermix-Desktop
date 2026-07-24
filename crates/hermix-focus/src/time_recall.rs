@@ -252,9 +252,9 @@ fn parse_chinese(s: &str) -> Option<TimeExpression> {
 }
 
 /// Convert a simple Chinese numeral to i64. Supports:
-///   零 (0) 一二三四五六七八九 十百 两
-///   e.g. 零=0, 一=1, ..., 九=9, 十=10, 十一=11, ... 十九=19, 二十=20, ...
-///   一百=100, 一百二十三=123, 两=2
+/// 零 (0) 一二三四五六七八九 十百 两
+/// e.g. 零=0, 一=1, ..., 九=9, 十=10, 十一=11, ... 十九=19, 二十=20, ...
+/// 一百=100, 一百二十三=123, 两=2
 fn chinese_numeral_to_i64(s: &str) -> Option<i64> {
     if s.is_empty() {
         return None;

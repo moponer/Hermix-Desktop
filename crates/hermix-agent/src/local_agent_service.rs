@@ -9,7 +9,7 @@ use tracing::instrument;
 
 use hermix_config::GatewayConfig;
 use hermix_core::traits::{AgentOverrides, AgentReply, AgentService, PermissionLevel, RiskLevel};
-// 2026-06-26 (C): `MemoryLayer` trait must be in scope so we can
+// (C): `MemoryLayer` trait must be in scope so we can
 // call `MemoryRouter::recognize` from `get_session_messages`. The
 // router itself is a `Vec<DynMemoryLayer>` so the method is on
 // the trait, not on the concrete `MemoryRouter` struct.
@@ -48,8 +48,7 @@ use crate::hardline;
 use crate::session_persistence::SessionPersistence;
 
 /// Collapse a run of consecutive assistant messages into one.
-///
-/// Background: the agent loop's `run_stream` may push multiple
+/// /// Background: the agent loop's `run_stream` may push multiple
 /// assistant entries per user turn — one per LLM call within the
 /// turn.  If the first LLM response is judged "reasoning-only"
 /// (e.g. MiniMax M2.7 emits a body of pure `<think>...</think>` with
@@ -58,16 +57,13 @@ use crate::session_persistence::SessionPersistence;
 /// reply lands in a *second* assistant entry.  Persisting both rows
 /// makes the desktop client render N stacked bubbles for a single
 /// user message.
-///
-/// This helper:
-///
-/// * drops runs of empty placeholders (no content, no tool_calls);
+/// /// This helper:
+/// /// * drops runs of empty placeholders (no content, no tool_calls);
 /// * concatenates content / tool_calls / reasoning_content across
-///   non-empty runs;
+/// non-empty runs;
 /// * preserves the last message's id, timestamp, stop_reason, model,
-///   cache_control so the merged row carries the terminal metadata.
-///
-/// It's the backend counterpart of the desktop's
+/// cache_control so the merged row carries the terminal metadata.
+/// /// It's the backend counterpart of the desktop's
 /// `mergeConsecutiveAssistantMessages` — both layers apply the same
 /// rule so a stale server view still renders cleanly on reload.
 fn merge_consecutive_assistant_messages(messages: Vec<Message>) -> Vec<Message> {
@@ -162,8 +158,7 @@ fn merge_consecutive_assistant_messages(messages: Vec<Message>) -> Vec<Message> 
 }
 
 /// Local in-process agent service.
-///
-/// This service runs the agent loop directly in the current process,
+/// /// This service runs the agent loop directly in the current process,
 /// using SQLite for session persistence.
 pub struct LocalAgentService {
     /// Gateway configuration. Wrapped in a `Mutex` so the
@@ -179,8 +174,7 @@ pub struct LocalAgentService {
     /// Optional provider factory override, mainly for tests.
     provider_factory: Option<ProviderFactory>,
     /// Tirith tool-call policy engine.
-    ///
-    /// Pre-evaluates each tool call before it reaches
+    /// /// Pre-evaluates each tool call before it reaches
     /// `on_pre_tool_dispatch` and can short-circuit with a
     /// hard block (no user prompt, no fallback path — the LLM
     /// is told the call is structurally invalid and gets a
@@ -195,7 +189,7 @@ pub struct LocalAgentService {
     /// display. `None` means no tracker (the default — production
     /// code that doesn't need the UI feature pays no cost).
     consciousness_tracker: Option<Arc<ConsciousnessTracker>>,
-    /// 2026-06-26 (C): shared `MemoryRouter` for cross-session
+    /// (C): shared `MemoryRouter` for cross-session
     /// recall. Built once on construction (matching the same
     /// `block_in_place` pattern as `spawn_agent_loop`) and reused
     /// by `get_session_messages` so loading a historical session
@@ -205,14 +199,14 @@ pub struct LocalAgentService {
     /// holds. `None` means recall is disabled (e.g. test
     /// harnesses with no `hermix_home`).
     memory_router: Option<Arc<hermix_focus::MemoryRouter>>,
-    /// 2026-07-10: one-shot gate for the compression LLM health check.
+    /// one-shot gate for the compression LLM health check.
     /// `spawn_agent_loop` is called on every `send_message_stream`,
     /// and previously each call spawned a new fire-and-forget health
     /// check task — producing a 401 error log on every single message
     /// when the aux API key was invalid. The check only needs to run
     /// once per process lifetime; subsequent calls are pure noise.
     compression_health_checked: std::sync::atomic::AtomicBool,
-    /// 2026-07-19: when the one-shot compression LLM health check fails
+    /// when the one-shot compression LLM health check fails
     /// with a quota / 429 error, store a user-facing warning here. The
     /// NEXT `send_message_stream` surfaces it via a `StreamEvent::
     /// CompactionStatus` (quota_exhausted) so the user learns their
@@ -224,7 +218,7 @@ pub struct LocalAgentService {
 
 pub type ProviderFactory = Arc<dyn Fn(&GatewayConfig, &str) -> Arc<dyn LlmProvider> + Send + Sync>;
 
-/// 2026-07-19: returns true when an LLM error string indicates a quota /
+/// returns true when an LLM error string indicates a quota /
 /// rate-limit exhaustion — HTTP 429 or a provider-specific "用量上限" /
 /// "Token Plan" message. Used to decide whether the one-shot compression
 /// health check failure should be surfaced to the user as a quota warning
@@ -316,7 +310,7 @@ impl LocalAgentService {
         None
     }
 
-    /// 2026-07-19: consume a previously-stored compression-quota warning
+    /// consume a previously-stored compression-quota warning
     /// (set by the one-shot startup health check when it hit a 429 / quota
     /// error). Returns `Some(msg)` at most once; the server emits it as a
     /// `StreamEvent::CompactionStatus` (quota_exhausted) so the user learns
@@ -416,19 +410,17 @@ impl LocalAgentService {
 
     /// Resolve the per-turn `effective_model` from request overrides and
     /// the persisted default.
-    ///
-    /// 2026-06-26: extracted from `send_message` so the
-    ///   "user-selected model in UI actually takes effect" guarantee is
-    ///   unit-testable end-to-end — the previous bug had `overrides.model`
-    ///   being read but the logic was inline inside `send_message` and
-    ///   only reachable via a full WebSocket roundtrip, so the broken
-    ///   "always default" behaviour was invisible to tests.
-    ///
-    /// Precedence (matches the original inline logic):
-    ///   1. `overrides.model` if non-empty (the user's per-session choice)
-    ///   2. `cfg_snapshot.model` (config.yaml default)
-    ///   3. `fallback_model()` (any registered provider)
-    ///   4. `Err(Config(...))` — no model anywhere
+    /// /// extracted from `send_message` so the
+    /// "user-selected model in UI actually takes effect" guarantee is
+    /// unit-testable end-to-end — the previous bug had `overrides.model`
+    /// being read but the logic was inline inside `send_message` and
+    /// only reachable via a full WebSocket roundtrip, so the broken
+    /// "always default" behaviour was invisible to tests.
+    /// /// Precedence (matches the original inline logic):
+    /// 1. `overrides.model` if non-empty (the user's per-session choice)
+    /// 2. `cfg_snapshot.model` (config.yaml default)
+    /// 3. `fallback_model()` (any registered provider)
+    /// 4. `Err(Config(...))` — no model anywhere
     pub fn resolve_effective_model(
         &self,
         overrides: &AgentOverrides,
@@ -469,8 +461,7 @@ impl LocalAgentService {
     /// Probe the default LLM provider configuration. Returns the
     /// resolution error (typically `AgentError::Config` for a missing
     /// API key) if the configured model cannot be built.
-    ///
-    /// Called by the desktop server at startup so we can log a single
+    /// /// Called by the desktop server at startup so we can log a single
     /// loud `ERROR` and broadcast a `config_error` status to the
     /// client before the first user turn — instead of letting every
     /// message fall through the silent-stub hole.
@@ -496,14 +487,12 @@ impl LocalAgentService {
     /// (model load + connection pool warmup + auth handshake —
     /// typically 30–60s on a fresh process, which the previous
     /// 30s first-chunk timeout mis-classified as a "timeout").
-    ///
-    /// Fire-and-forget: a failed warmup logs at WARN and never
+    /// /// Fire-and-forget: a failed warmup logs at WARN and never
     /// blocks service construction or the user's first real
     /// chat. The point isn't the response — it's the round-trip
     /// that primes the provider's HTTP keep-alive pool and
     /// in-process caches.
-    ///
-    /// Safe to call from a non-async context (constructors,
+    /// /// Safe to call from a non-async context (constructors,
     /// restart handlers) because `tokio::spawn` resolves the
     /// current runtime handle lazily.
     pub fn warm_up_default_provider(&self) {
@@ -626,13 +615,12 @@ impl LocalAgentService {
         // Wire Phase 7 H1: tool schema router (KeywordRouter + AlwaysInclude).
         // `with_tool_router` consumes `agent`, so the call order is:
         // build the router first (borrows `&agent`), then move `agent`
-        // into `with_tool_router`. Pre-2026-07-04 the router was a
+        // into `with_tool_router`. Pre-the router was a
         // static call that ignored `agent.always_include`.
         let router = agent.default_tool_router();
         agent = agent.with_tool_router(router);
 
         // Wire Phase 15: time-aware recall via MemoryRouter.
-        //
         // `all_plugins_as_router` synchronously constructs and
         // `initialize()`s every bundled memory plugin, including
         // OpenViking which spins up a `reqwest::blocking::Client`.
@@ -645,7 +633,6 @@ impl LocalAgentService {
         // its own runtime.  `block_in_place` returns the closure's
         // `Output` directly (it panics on current-thread, but the
         // production Tauri/HTTP server is multi-thread).
-        //
         // M1.6.5: previously this whole block was gated on
         // `if let Some(ref hh) = hermix_home`, which meant any
         // caller that didn't set `AgentConfig::hermix_home` (e.g.
@@ -659,7 +646,7 @@ impl LocalAgentService {
         });
         // `block_in_place` is safe here: `spawn_agent_loop` only runs
         // inside `tokio::spawn`, which pins to a multi-thread worker.
-        // `CurrentThread` panics cannot happen. (2026-07-05: same
+        // `CurrentThread` panics cannot happen. (same
         // rationale as `build_shared_memory_router`'s runtime_flavor
         // detection — but that one is a public fn, this is a private
         // call site under a known guard.)
@@ -710,8 +697,7 @@ impl LocalAgentService {
         // into the agent loop. Falls back gracefully if no API keys are
         // available — the simple character-based compressor in context.rs
         // handles that case.
-        //
-        // 2026-07-09: pass the GatewayConfig so the auxiliary client reads
+        // pass the GatewayConfig so the auxiliary client reads
         // API keys from config.yaml's [llm_providers] section — same source
         // as the main conversation provider. Without this, a user who
         // configured their key only in config.yaml (not as an env var)
@@ -730,7 +716,6 @@ impl LocalAgentService {
                 // (`DEFAULT_BREAKER_THRESHOLD = 3`,
                 // `DEFAULT_BREAKER_COOLDOWN_SECS = 600`) when the user
                 // hasn't customised the field — backward compatible.
-                //
                 // P0-1 (Frontend Audit 2026-07-13): also pull
                 // `min_summary_tokens` / `summary_tokens_ceiling` from
                 // `compaction:` so the desktop Settings → Advanced tab
@@ -783,7 +768,7 @@ impl LocalAgentService {
                     aux.clone(),
                 )
                 .with_breaker_config(breaker_threshold, breaker_cooldown_secs);
-                // 2026-07-04: validate that the LLM-powered summariser
+                // validate that the LLM-powered summariser
                 // actually has a model to call. Without this, every
                 // compression attempt would silently fail at runtime
                 // (the aux call returns an error, `compress()` records
@@ -795,7 +780,7 @@ impl LocalAgentService {
                          Falling back to character-based compressor."
                     );
                 } else {
-                    // N-08: extract the summary model BEFORE moving the
+                    // extract the summary model BEFORE moving the
                     // compressor into the agent loop (with_compressor
                     // consumes it). When no `compaction.summary_model`
                     // override is set, pass `None` so the health check
@@ -819,8 +804,7 @@ impl LocalAgentService {
                     // failed check only logs a warning; the compressor
                     // is already wired and the first real compression
                     // will surface the error again at WARN level.
-                    //
-                    // 2026-07-10: one-shot gate — `spawn_agent_loop` is
+                    // one-shot gate — `spawn_agent_loop` is
                     // called on every `send_message_stream`, so without
                     // this guard the health check fires on every single
                     // message. When the aux API key is invalid (401),
@@ -831,7 +815,7 @@ impl LocalAgentService {
                         .swap(true, std::sync::atomic::Ordering::SeqCst);
                     if !already_checked {
                         let check_aux = aux.clone();
-                        // 2026-07-19: clone the warning slot so the
+                        // clone the warning slot so the
                         // background health-check task can record a quota
                         // exhaustion without borrowing `self` into the
                         // `async move` closure.
@@ -851,7 +835,7 @@ impl LocalAgentService {
                                     "compression LLM health check passed"
                                 ),
                                 Err(e) => {
-                                    // 2026-07-19: if the check failed because
+                                    // if the check failed because
                                     // the Token Plan quota is exhausted (429),
                                     // remember it so the NEXT message can warn
                                     // the user via a `CompactionStatus` banner.
@@ -944,29 +928,46 @@ impl LocalAgentService {
     /// P6 (2026-07-20, direction 1): returns `Some(<resource description>)`
     /// when `tc` is a resource-bearing tool whose target is outside
     /// `profile`'s granted scope, else `None`.
-    ///
-    /// Only `file`-family tools (by `path` argument) and `terminal` /
-    /// `code_execution` (by `command` argument) are gated — everything
-    /// else falls through to the normal risk matrix unchanged. The
-    /// description string is surfaced verbatim to the desktop UI's
-    /// approval card so the user knows exactly what they're granting.
+    /// /// Only **mutating** `file`-family tools (by `path` argument) and
+    /// `terminal` / `code_execution` (by `command` argument) are gated —
+    /// read-only tools (`read_file`, `read_image`, `search_files`,
+    /// `list_directory`) are **exempt** because they never modify state.
+    /// Requiring approval for read/search/list operations is pure friction
+    /// with zero safety benefit: the agent runs on the user's own machine
+    /// and reading files is its core capability. Everything else falls
+    /// through to the normal risk matrix unchanged. The description string
+    /// is surfaced verbatim to the desktop UI's approval card so the user
+    /// knows exactly what they're granting.
     fn resource_guard(
         tc: &ToolCall,
         profile: &PermissionProfile,
         params: &Value,
     ) -> Option<String> {
         let name = tc.function.name.as_str();
-        const FILE_TOOLS: &[&str] = &[
+
+        // Read-only file tools never modify state — skip the path guard
+        // entirely.  These operations cannot cause damage, so gating them
+        // behind an approval prompt adds friction without safety value.
+        const READONLY_FILE_TOOLS: &[&str] = &[
             "read_file",
-            "write_file",
-            "patch",
             "read_image",
             "search_files",
-            "delete_file",
             "list_directory",
+        ];
+        if READONLY_FILE_TOOLS.contains(&name) {
+            return None;
+        }
+
+        // Mutating file tools — still gate on the granted scope so a
+        // write/patch/delete outside the user-approved directory triggers
+        // an approval card.
+        const WRITE_FILE_TOOLS: &[&str] = &[
+            "write_file",
+            "patch",
+            "delete_file",
             "disk_cleanup",
         ];
-        if FILE_TOOLS.contains(&name) {
+        if WRITE_FILE_TOOLS.contains(&name) {
             if let Some(path) = params.get("path").and_then(|v| v.as_str()) {
                 if !profile.allows_path(path) {
                     return Some(format!("未授权路径: {path}"));
@@ -976,7 +977,13 @@ impl LocalAgentService {
         }
         if name == "terminal" || name == "code_execution" {
             if let Some(cmd) = params.get("command").and_then(|v| v.as_str()) {
-                if !profile.allows_command(cmd) {
+                // Read-only commands (grep, find, cat, ls, dir,
+                // Get-ChildItem, etc.) never modify state — skip the
+                // permission-profile gate so search/read/list
+                // operations don't trigger approval prompts.
+                if !hermix_tools::is_readonly_command(cmd)
+                    && !profile.allows_command(cmd)
+                {
                     return Some(format!("未授权命令: {cmd}"));
                 }
             }
@@ -986,39 +993,37 @@ impl LocalAgentService {
     }
 
     /// Internal: pre-dispatch decision for a tool call.
-    ///
-    /// Extracted from the `on_pre_tool_dispatch` closure in
+    /// /// Extracted from the `on_pre_tool_dispatch` closure in
     /// [`Self::send_message`] for testability — the closure was a
     /// 140-line inline lambda that couldn't be exercised by unit
     /// tests. The five-layer decision matrix is:
-    ///
-    /// 0. **Hardline blocklist** (L0, the floor) — catastrophic
-    ///    patterns (`rm -rf /`, fork bomb, `mkfs.*` on block
-    ///    device, `dd` to block device, `curl|sh`) are denied
-    ///    **regardless of `PermissionLevel`**. This is the agent's
-    ///    last-resort defense — there is no override path. See
-    ///    [`crate::hardline`] and the upstream
-    ///    `tools/approval.py::UNRECOVERABLE_BLOCKLIST` it mirrors.
+    /// /// 0. **Hardline blocklist** (L0, the floor) — catastrophic
+    /// patterns (`rm -rf /`, fork bomb, `mkfs.*` on block
+    /// device, `dd` to block device, `curl|sh`) are denied
+    /// **regardless of `PermissionLevel`**. This is the agent's
+    /// last-resort defense — there is no override path. See
+    /// [`crate::hardline`] and the upstream
+    /// `tools/approval.py::UNRECOVERABLE_BLOCKLIST` it mirrors.
     /// 1. **`PermissionLevel::Full`** — user has explicitly opted
-    ///    out of the safety net; allow everything (Tirith is also
-    ///    bypassed because the user has taken responsibility for
-    ///    whatever the model invents).
+    /// out of the safety net; allow everything (Tirith is also
+    /// bypassed because the user has taken responsibility for
+    /// whatever the model invents).
     /// 2. **Tirith pre-check** — structural policy
-    ///    (`\\?\`-prefix block, system-dir reads, etc.). A
-    ///    `Block` short-circuits to `Deny` with a
-    ///    machine-readable reason so the LLM can reformulate; a
-    ///    `RequireApproval` re-routes through the standard
-    ///    approval path with `risk: "caution"` regardless of
-    ///    the tool's registered risk level; `Warn` and `Allow`
-    ///    fall through.
+    /// (`\\?\`-prefix block, system-dir reads, etc.). A
+    /// `Block` short-circuits to `Deny` with a
+    /// machine-readable reason so the LLM can reformulate; a
+    /// `RequireApproval` re-routes through the standard
+    /// approval path with `risk: "caution"` regardless of
+    /// the tool's registered risk level; `Warn` and `Allow`
+    /// fall through.
     /// 3. **Tool `RiskLevel`** — `Safe` always allows;
-    ///    `Caution` always allows (the tool's own internal
-    ///    guards run); `Dangerous` requires explicit user
-    ///    approval in `Default` mode.
+    /// `Caution` always allows (the tool's own internal
+    /// guards run); `Dangerous` requires explicit user
+    /// approval in `Default` mode.
     /// 4. **No approval infrastructure wired** — graceful
-    ///    fallback to `Allow` (unit tests and headless callers
-    ///    without a WS handler shouldn't be blocked from
-    ///    dispatching the tool).
+    /// fallback to `Allow` (unit tests and headless callers
+    /// without a WS handler shouldn't be blocked from
+    /// dispatching the tool).
     #[allow(clippy::too_many_arguments)]
     fn decide_pre_tool_dispatch(
         tc: &ToolCall,
@@ -1138,7 +1143,6 @@ impl LocalAgentService {
             return ToolDispatchDecision::Allow;
         }
         // Dangerous tool in Default mode → ask the user
-        //
         // Pre-approval shortcut: if the user previously picked
         // "Always Allow" or "Allow for this session" for the same
         // tool/args shape, skip the WS round-trip. See the
@@ -1172,7 +1176,7 @@ impl LocalAgentService {
 
 #[async_trait]
 impl AgentService for LocalAgentService {
-    /// 2026-07-19: override the default `take_compression_quota_warning`
+    /// override the default `take_compression_quota_warning`
     /// (returns `None`) by delegating to the inherent method we already
     /// defined on `LocalAgentService`. See
     /// `LocalAgentService::take_compression_quota_warning` for the
@@ -1243,7 +1247,7 @@ impl AgentService for LocalAgentService {
         }
 
         // Append the new user message
-        // 2026-06-25: 多图支持 — 优先用新数组，回退到旧字段保持兼容
+        // 多图支持 — 优先用新数组，回退到旧字段保持兼容
         let images: Vec<(&str, &str)> = if let Some(ref imgs) = overrides.images {
             imgs.iter()
                 .map(|i| (i.mime_type.as_str(), i.base64.as_str()))
@@ -1261,7 +1265,7 @@ impl AgentService for LocalAgentService {
         }
 
         // Determine effective model and personality.
-        // 2026-06-26: extracted to `resolve_effective_model` for testability —
+        // extracted to `resolve_effective_model` for testability —
         // the previous inline `match` made the "user-selected model takes
         // effect" guarantee only verifiable via full WebSocket roundtrips,
         // which is how the "UI switch does nothing" bug went uncaught.
@@ -1288,7 +1292,7 @@ impl AgentService for LocalAgentService {
         let (mut agent_config, allowed_tools) =
             Self::apply_overrides(agent_config, &effective_overrides);
 
-        // 2026-07-21 (fix): `apply_overrides` does not propagate the
+        // (fix): `apply_overrides` does not propagate the
         // session id into AgentConfig — it only sets system_prompt,
         // workspace and permission level. Without this stamp, every
         // downstream consumer that reads `self.config.session_id`
@@ -1310,7 +1314,7 @@ impl AgentService for LocalAgentService {
             );
         }
 
-        // 2026-07-17 (Phase A "Caution tool needs UI prompts"):
+        // (Phase A "Caution tool needs UI prompts"):
         // wire the per-request approval hook so the terminal tool's
         // `RequiresConfirmation` branch emits a `request_approval`
         // event on the active WS channel instead of bouncing the
@@ -1345,7 +1349,6 @@ impl AgentService for LocalAgentService {
         // `GroupStarted` events can anchor the inline card to the right
         // assistant message (instead of falling back to the fragile
         // "latest assistant message ≤ first item.created_at" heuristic).
-        //
         // The id is `${session_id}-${rowIdx}` — the exact formula
         // `hermix_server::...::get_session_messages` uses on read.
         // `messages.len()` is the index the new assistant row will
@@ -1407,8 +1410,7 @@ impl AgentService for LocalAgentService {
         // real reply).  Without this, the desktop client renders N
         // stacked bubbles for a single user message — and the next
         // reload sees the same broken view from persisted state.
-        //
-        // 2026-06-26: snapshot the compression fields BEFORE the
+        // snapshot the compression fields BEFORE the
         // `merge_consecutive_assistant_messages` move so the
         // borrow checker doesn't see a partial-move of `result`.
         let snapshot = build_compression_snapshot(&result);
@@ -1441,14 +1443,13 @@ impl AgentService for LocalAgentService {
             );
         }
 
-        // 2026-07-05 (N-02): when compression actually happened
+        // (): when compression actually happened
         // (snapshot is non-None), materialise the summary as a
         // child session so the lineage tree can show "what got
         // folded". The parent's messages stay untouched (UI
         // routing keeps working); the child is a sibling
         // browseable via the lineage API.
-        //
-        // 2026-07-22 (Bug #3): fire-and-forget on
+        // (Bug #3): fire-and-forget on
         // `spawn_blocking` instead of awaiting inline. The child
         // creation does one `INSERT INTO sessions` + N×`INSERT
         // INTO messages` in autocommit (no transaction wrapper),
@@ -1520,15 +1521,15 @@ impl AgentService for LocalAgentService {
             })
             .unwrap_or_default();
 
-        // 2026-07-17: clear the per-request terminal approval hook
+        // clear the per-request terminal approval hook
         // so a dropped session can't leave a stale `Arc<dyn Fn>`
         // pointing at a dead WS handle. Cheap (Mutex write, single
         // Arc drop). See `set_terminal_approval_ctx` above.
         self.tool_registry.clear_terminal_approval_ctx();
-        // 2026-07-21: also clear the per-session permission profile.
+        // also clear the per-session permission profile.
         self.tool_registry
             .set_terminal_permission_profile(PermissionProfile::default());
-        // 2026-07-21: clear the code_execution stdout callback and
+        // clear the code_execution stdout callback and
         // active call_id so a dropped session can't leave stale
         // callbacks pointing at a dead WS handle.
         self.tool_registry.set_code_execution_stdout_cb(None);
@@ -1579,7 +1580,7 @@ impl AgentService for LocalAgentService {
         self.gateway_token_warn(session_id, &mut messages);
 
         // Append the new user message
-        // 2026-06-25: 多图支持 — 优先用新数组，回退到旧字段保持兼容
+        // 多图支持 — 优先用新数组，回退到旧字段保持兼容
         let images: Vec<(&str, &str)> = if let Some(ref imgs) = overrides.images {
             imgs.iter()
                 .map(|i| (i.mime_type.as_str(), i.base64.as_str()))
@@ -1596,7 +1597,7 @@ impl AgentService for LocalAgentService {
             messages.push(Message::user(text));
         }
 
-        // 2026-07-06: early persist — save the user message BEFORE
+        // early persist — save the user message BEFORE
         // running the streaming agent. Without this, an abort (WS
         // disconnect, server restart, timeout) before the post-agent
         // persist at line ~1935 loses the user's message entirely.
@@ -1627,7 +1628,7 @@ impl AgentService for LocalAgentService {
         }
 
         // Determine effective model and personality.
-        // 2026-06-26: extracted to `resolve_effective_model` for testability —
+        // extracted to `resolve_effective_model` for testability —
         // the previous inline `match` made the "user-selected model takes
         // effect" guarantee only verifiable via full WebSocket roundtrips,
         // which is how the "UI switch does nothing" bug went uncaught.
@@ -1654,7 +1655,7 @@ impl AgentService for LocalAgentService {
         let (mut agent_config, allowed_tools) =
             Self::apply_overrides(agent_config, &effective_overrides);
 
-        // 2026-07-21 (fix): `apply_overrides` does not propagate the
+        // (fix): `apply_overrides` does not propagate the
         // session id into AgentConfig — it only sets system_prompt,
         // workspace and permission level. Without this stamp, every
         // downstream consumer that reads `self.config.session_id`
@@ -1676,7 +1677,7 @@ impl AgentService for LocalAgentService {
             );
         }
 
-        // 2026-07-17 (Phase A "Caution tool needs UI prompts"):
+        // (Phase A "Caution tool needs UI prompts"):
         // wire the per-request approval hook so the terminal tool's
         // `RequiresConfirmation` branch emits a `request_approval`
         // event on the active WS channel instead of bouncing the
@@ -1711,7 +1712,6 @@ impl AgentService for LocalAgentService {
         // `GroupStarted` events can anchor the inline card to the right
         // assistant message (instead of falling back to the fragile
         // "latest assistant message ≤ first item.created_at" heuristic).
-        //
         // The id is `${session_id}-${rowIdx}` — the exact formula
         // `hermix_server::...::get_session_messages` uses on read.
         // `messages.len()` is the index the new assistant row will
@@ -1736,7 +1736,7 @@ impl AgentService for LocalAgentService {
         let cu_session_id = session_id.to_string();
         let cu_persistence = self.session_persistence.clone();
         let boxed_on_chunk: Box<dyn Fn(StreamChunk) + Send + Sync> = Box::new(move |chunk| {
-            // 2026-07-16: persist the context-usage snapshot on every
+            // persist the context-usage snapshot on every
             // agent-loop turn so a restored session shows the context-usage
             // bar without waiting for a fresh live stream.
             if let Some(delta) = &chunk.delta {
@@ -1775,7 +1775,7 @@ impl AgentService for LocalAgentService {
         let tool_start_forwarder = on_chunk.clone();
         let tool_complete_forwarder = on_chunk.clone();
         let status_forwarder = on_chunk.clone();
-        // 2026-06-29: a second clone so `on_compaction_status`
+        // a second clone so `on_compaction_status`
         // (declared further below) can forward its `compaction_status`
         // event to the same WS socket without fighting the
         // `status_callback` closure for ownership of
@@ -1783,7 +1783,7 @@ impl AgentService for LocalAgentService {
         // is essentially free — it just keeps the two emit paths
         // independent.
         let status_forwarder_for_compaction = status_forwarder.clone();
-        // 2026-06-29 (C3 marker protocol): third clone so the
+        // (C3 marker protocol): third clone so the
         // `on_section_gate` closure can forward the
         // `SectionGateReport` to the same WS socket without fighting
         // the `status_callback` / `on_compaction_status` closures
@@ -1800,7 +1800,7 @@ impl AgentService for LocalAgentService {
         let profile_arc_for_callback: Arc<std::sync::Mutex<PermissionProfile>> = Arc::new(
             std::sync::Mutex::new(agent_config.permission_profile.clone()),
         );
-        // 2026-07-21: sync the initial profile to the registry's
+        // sync the initial profile to the registry's
         // shared handle so `TerminalHandler` can consult it to skip
         // `ApprovalManager` confirmation for already-granted commands.
         // The `on_pre_tool_approved` callback below keeps this in sync
@@ -1819,7 +1819,7 @@ impl AgentService for LocalAgentService {
         let consciousness_tool_start = self.consciousness_tracker.clone();
         let consciousness_tool_complete = self.consciousness_tracker.clone();
         let consciousness_status = self.consciousness_tracker.clone();
-        // v4 (2026-06-22): in-memory buffer of execution_timeline
+        // in-memory buffer of execution_timeline
         // events emitted during this turn. After the agent finishes
         // we attach it to the trailing assistant message so the
         // session reload path (`save_session_atomic` →
@@ -1827,18 +1827,16 @@ impl AgentService for LocalAgentService {
         // can rebuild the same inline tool cards the user saw
         // mid-stream — correct status (running/done/error),
         // arguments, stdout chunks, and file_change summaries.
-        //
         // Without this persistence, every tool call on a reloaded
         // session rendered as a stale "运行中" pill because no
         // event had been written to DB to mark them as completed.
-        //
         // We use Arc<Mutex<...>> because the forwarder closures
         // are invoked from the agent-loop executor thread, but the
         // attach step runs in `send_message_stream`'s continuation
         // after `run_stream` returns.
         let timeline_buffer: Arc<Mutex<Vec<ExecutionTimelineEvent>>> =
             Arc::new(Mutex::new(Vec::new()));
-        // 2026-07-21: set up the code_execution stdout streaming callback.
+        // set up the code_execution stdout streaming callback.
         // `LocalCodeExecutionBackend` calls this for each stdout line it
         // reads from the child process, so the WS stream receives
         // `tool_stdout` events in real-time instead of buffering
@@ -1891,10 +1889,10 @@ impl AgentService for LocalAgentService {
         let tl_for_tool_start = timeline_buffer.clone();
         let tl_for_tool_complete = timeline_buffer.clone();
         let tl_for_status = timeline_buffer.clone();
-        // 2026-07-21: clone for `on_tool_start` so it can set the
+        // clone for `on_tool_start` so it can set the
         // active `code_execution` tool_call_id on the registry.
         let registry_for_tool_start = self.tool_registry.clone();
-        // 2026-07-21: clone for `on_tool_complete` so it can clear the
+        // clone for `on_tool_complete` so it can clear the
         // active `code_execution` tool_call_id.
         let registry_for_tool_complete = self.tool_registry.clone();
         let callbacks = AgentCallbacks {
@@ -1936,7 +1934,7 @@ impl AgentService for LocalAgentService {
                 // Pre-cloned at the call-site (see `tl_for_tool_start`)
                 // so the outer `timeline_buffer` is preserved.
                 let timeline_buffer = tl_for_tool_start.clone();
-                // v4 (2026-06-22): capture this event into the
+                // capture this event into the
                 // session-scoped timeline buffer so a reload can
                 // replay it. The buffer is drained and attached to
                 // the trailing assistant message just before
@@ -1979,7 +1977,7 @@ impl AgentService for LocalAgentService {
                     );
                     t.set_active_tools(t.recent(0).len() as u32 + 1);
                 }
-                // 2026-07-21: when `code_execution` starts, store the
+                // when `code_execution` starts, store the
                 // tool_call_id so the stdout callback can emit `tool_stdout`
                 // events with the correct ID.
                 if tool_name == "code_execution" {
@@ -2010,7 +2008,7 @@ impl AgentService for LocalAgentService {
                         .get("file_summary")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    // v4 (2026-06-22): capture file_change into
+                    // capture file_change into
                     // the timeline buffer so reloaded sessions
                     // rebuild the "文件变更 (N个)" summary block
                     // alongside the tool cards.
@@ -2049,7 +2047,7 @@ impl AgentService for LocalAgentService {
                     return;
                 }
 
-                // 2026-07-21: for `code_execution`, stdout was already
+                // for `code_execution`, stdout was already
                 // streamed line-by-line via the stdout callback during
                 // execution. Skip the bulk tool_stdout replay here so
                 // we don't duplicate every line in the timeline.
@@ -2061,7 +2059,7 @@ impl AgentService for LocalAgentService {
                     let total_chunks = chars.len().div_ceil(STDOUT_CHUNK_SIZE).max(1);
                     for (idx, chunk) in chars.chunks(STDOUT_CHUNK_SIZE).enumerate() {
                         let part: String = chunk.iter().collect();
-                        // v4 (2026-06-22): capture every stdout
+                        // capture every stdout
                         // chunk so the reloaded session shows the
                         // same terminal-style output in the tool
                         // card's collapsible "查看输出" section.
@@ -2099,7 +2097,7 @@ impl AgentService for LocalAgentService {
                         });
                     }
                 }
-                // v4 (2026-06-22): capture the terminal tool_complete
+                // capture the terminal tool_complete
                 // event — this is what flips the reloaded tool card
                 // from "运行中" to "已完成" (or "失败" if the
                 // payload carries an error). Without this entry on
@@ -2143,7 +2141,7 @@ impl AgentService for LocalAgentService {
                     );
                     t.set_active_tools(0);
                 }
-                // 2026-07-21: when `code_execution` finishes, clear the
+                // when `code_execution` finishes, clear the
                 // active tool_call_id so the stdout callback won't emit
                 // stale events.
                 if tool_name == "code_execution" {
@@ -2154,14 +2152,13 @@ impl AgentService for LocalAgentService {
             status_callback: Some(Arc::new(move |kind, message| {
                 // Pre-cloned at the call-site (see `tl_for_status`).
                 let timeline_buffer = tl_for_status.clone();
-                // v4 (2026-06-22): capture status notes (lifecycle
+                // capture status notes (lifecycle
                 // / activity events) so reloaded sessions redraw
                 // them alongside their parent tool card via
                 // `groupTimeline`'s "attach to most-recent running
                 // group" logic. The WS stream and the persisted
                 // timeline both see the same set of events now.
-                //
-                // 2026-06-29: clone the `status_forwarder` Arc
+                // clone the `status_forwarder` Arc
                 // inside the closure body so we don't move the
                 // outer handle — the `on_compaction_status` closure
                 // built below needs it too.
@@ -2218,17 +2215,15 @@ impl AgentService for LocalAgentService {
                     }
                 }
             })),
-            // 2026-06-29: forward the compression pipeline's
+            // forward the compression pipeline's
             // `BreakerSnapshot` to the front-end as a dedicated
             // `compaction_status` WS event. The mirror callback
             // (`status_callback` above) only carries `(kind, message)`
             // strings — too narrow for the structured snapshot the
             // `CompactionStatusBanner` needs (state, pressure,
             // failure reason, change timestamp).
-            //
             // Wire shape on the wire:
-            //   { "event": "compaction_status", "snapshot": { ... } }
-            //
+            // { "event": "compaction_status", "snapshot": { ... } }
             // The hook in `useStreamChat.ts` parses `snapshot` and
             // maps it to the `CompactionStatus` interface consumed
             // by the banner. Failure to serialise is logged and
@@ -2263,7 +2258,7 @@ impl AgentService for LocalAgentService {
                     usage: None,
                 });
             })),
-            // 2026-06-29 (C3 marker protocol): forward the
+            // (C3 marker protocol): forward the
             // `SectionGateReport` to the front-end as a dedicated
             // `section_gate` WS event. The trace panel renders the
             // "patched N missing required sections" / "pending M
@@ -2271,15 +2266,14 @@ impl AgentService for LocalAgentService {
             // `patched` / `pending` arrays. See
             // `Section::label()` for the per-section display
             // string.
-            //
             // Wire shape on the wire:
-            //   {
-            //     "event": "section_gate",
-            //     "report": {
-            //       "patched": [{ "section": "identity", "applied": true, "reason": "..." }],
-            //       "pending": [{ "section": "tool_list", "applied": false, "reason": "..." }]
-            //     }
-            //   }
+            // {
+            // "event": "section_gate",
+            // "report": {
+            // "patched": [{ "section": "identity", "applied": true, "reason": "..." }],
+            // "pending": [{ "section": "tool_list", "applied": false, "reason": "..." }]
+            // }
+            // }
             on_section_gate: Some(Arc::new(move |report: &crate::context::SectionGateReport| {
                 // Pre-clone for ownership (see
                 // `status_forwarder_for_section_gate` above). The
@@ -2323,7 +2317,6 @@ impl AgentService for LocalAgentService {
                 // silently hitting `access denied` or fabricating a reply.
                 // The configured `workspace` root is implicitly granted so
                 // normal in-workspace file ops don't prompt on every call.
-                //
                 // Wrap in Arc<Mutex<>> so the `on_pre_tool_approved` callback
                 // (direction 3) can update the same profile after a successful
                 // approval — making "user grants once, then never re-prompts"
@@ -2388,7 +2381,7 @@ impl AgentService for LocalAgentService {
                     let grant = PendingGrant::from_tool_call(&tc.function.name, &raw_params);
                     let mut profile = profile_arc.lock().expect("profile_arc poisoned");
                     grant.apply_to(&mut profile);
-                    // 2026-07-21: sync the updated profile to the
+                    // sync the updated profile to the
                     // registry's shared handle so `TerminalHandler`
                     // sees the new grant immediately (skip its
                     // internal `ApprovalManager` confirmation for
@@ -2404,7 +2397,7 @@ impl AgentService for LocalAgentService {
                 }))
             },
             on_prefetch_intent: effective_overrides.on_prefetch_intent.clone(),
-            // 2026-07-19 (type-B root-cause): forward the
+            // (type-B root-cause): forward the
             // server-side soft-shutdown `Notify` into the agent's
             // callbacks so `resolve_pre_dispatch` can race it
             // against the approval oneshot. Without this the
@@ -2430,8 +2423,7 @@ impl AgentService for LocalAgentService {
         // real reply).  Without this, the desktop client renders N
         // stacked bubbles for a single user message — and the next
         // reload sees the same broken view from persisted state.
-        //
-        // 2026-06-26: capture the compression snapshot BEFORE the
+        // capture the compression snapshot BEFORE the
         // partial move of `result.messages` so the borrow checker
         // doesn't see a dangling borrow.
         let snapshot = build_compression_snapshot(&result);
@@ -2460,8 +2452,7 @@ impl AgentService for LocalAgentService {
         // Persist updated session. Log on failure rather than silently
         // swallow: see the matching call in `send_message_sync` for the
         // rationale.
-        //
-        // v4 (2026-06-22): attach the timeline we captured during
+        // attach the timeline we captured during
         // streaming to the trailing assistant message before
         // persisting. Without this the chat layer on reload has no
         // signal that a tool call ever completed — every tool card
@@ -2512,10 +2503,9 @@ impl AgentService for LocalAgentService {
             );
         }
 
-        // 2026-07-05 (N-02): see sync-path comment. Same
+        // (): see sync-path comment. Same
         // child-session materialisation for the stream path.
-        //
-        // 2026-07-22 (Bug #3): also fire-and-forget on
+        // (Bug #3): also fire-and-forget on
         // `spawn_blocking` here. Same rationale as the sync-path
         // block above — the inline call historically held the
         // stream task 3–6s past the agent-loop reply, exceeding the
@@ -2548,16 +2538,16 @@ impl AgentService for LocalAgentService {
             }
         }
 
-        // 2026-07-17: clear the per-request terminal approval hook
+        // clear the per-request terminal approval hook
         // so a dropped session can't leave a stale `Arc<dyn Fn>`
         // pointing at a dead WS handle. Cheap (Mutex write, single
         // Arc drop). See `set_terminal_approval_ctx` above.
         self.tool_registry.clear_terminal_approval_ctx();
-        // 2026-07-21: also clear the per-session permission profile
+        // also clear the per-session permission profile
         // so a dropped session's grants don't leak into the next one.
         self.tool_registry
             .set_terminal_permission_profile(PermissionProfile::default());
-        // 2026-07-21: clear the code_execution stdout callback and
+        // clear the code_execution stdout callback and
         // active call_id so a dropped session can't leave stale
         // callbacks pointing at a dead WS handle.
         self.tool_registry.set_code_execution_stdout_cb(None);
@@ -2585,7 +2575,7 @@ impl AgentService for LocalAgentService {
             messages.insert(0, summary_msg);
         }
 
-        // 2026-06-26 (C): cross-session recall. The
+        // (C): cross-session recall. The
         // `compressed_summary` block above is the *latest* handoff
         // summary — lossy by design. The full compaction arc and
         // the raw turn wording live in `compression_archives` and
@@ -2595,7 +2585,6 @@ impl AgentService for LocalAgentService {
         // any relevant hits as a system message *after* the summary
         // block so the LLM has both the local handoff AND
         // cross-session context.
-        //
         // Best-effort: when the router is unavailable, recall fails,
         // or the query is too short, we silently fall through and
         // keep the summary-only path. Session loading must never
@@ -2699,13 +2688,12 @@ impl AgentService for LocalAgentService {
         }
     }
 
-    /// 2026-06-26 (A + B): build a [`CompressionSnapshot`] from an
+    /// (A + B): build a [`CompressionSnapshot`] from an
     /// `AgentResult`. Returns `None` when there's no compression
     /// data this turn (most turns), in which case the caller passes
     /// `None` to `persist_session_with_compression` and the legacy
     /// "no compression" path runs unchanged.
-    ///
-    /// The snapshot carries (a) the handoff summary, (b) the raw
+    /// /// The snapshot carries (a) the handoff summary, (b) the raw
     /// archived turns, and (c) the compression metrics — all three
     /// are written to their respective tables inside one DB
     /// transaction by `save_session_atomic`.
@@ -2714,15 +2702,14 @@ impl AgentService for LocalAgentService {
     }
 }
 
-/// 2026-06-26 (C): build the shared `MemoryRouter` once per
+/// (C): build the shared `MemoryRouter` once per
 /// `LocalAgentService` instance, mirroring the same
 /// `block_in_place + all_plugins_as_router` shape used by
 /// `spawn_agent_loop`. The router wraps `EmbeddedMemoryBackend`
 /// (the SQLite-backed `memory.db`) — see
 /// `crate::memory_layer_adapter::all_plugins_as_router` for the
 /// wiring.
-///
-/// `None` is returned when the router build fails (e.g. the
+/// /// `None` is returned when the router build fails (e.g. the
 /// embedded SQLite backend can't open its file). In that case the
 /// cross-session recall path is silently disabled; we never want
 /// a missing `memory.db` to break session loading.
@@ -2753,13 +2740,12 @@ fn build_shared_memory_router(session_label: &'static str) -> Option<Arc<hermix_
     Some(Arc::new(result))
 }
 
-/// 2026-06-26 (A + B): build a [`CompressionSnapshot`] from an
+/// (A + B): build a [`CompressionSnapshot`] from an
 /// `AgentResult`. Returns `None` when there's no compression data
 /// this turn (most turns) — the caller then passes `None` to
 /// `persist_session_with_compression` and the legacy "no
 /// compression" path runs unchanged.
-///
-/// Pure function (no `&self`), so it lives at module scope rather
+/// /// Pure function (no `&self`), so it lives at module scope rather
 /// than inside the `LocalAgentService` impl block — both the
 /// blocking `send_message` and the streaming `send_message_stream`
 /// call sites share the same shape.
@@ -2811,7 +2797,7 @@ mod override_tests {
     use hermix_config::GatewayConfig;
     use hermix_core::traits::PermissionLevel;
 
-    /// 2026-06-26: regression coverage for the "UI model switch does
+    /// regression coverage for the "UI model switch does
     /// nothing" bug. The fix extracted `compute_effective_model` from
     /// the inline `match` inside `send_message` so the precedence
     /// walk (overrides → config → fallback) is reachable without
@@ -3120,13 +3106,11 @@ mod override_tests {
     // -----------------------------------------------------------------
     // decide_pre_tool_dispatch — full 4-layer decision matrix
     // -----------------------------------------------------------------
-    //
     // Permission is decided in this order:
-    //   1. Full  → Allow
-    //   2. Tirith pre-check (Block / Warn / RequireApproval / Allow)
-    //   3. Tool RiskLevel (Safe / Caution / Dangerous)
-    //   4. Graceful Allow if approval infrastructure is not wired
-    //
+    // 1. Full  → Allow
+    // 2. Tirith pre-check (Block / Warn / RequireApproval / Allow)
+    // 3. Tool RiskLevel (Safe / Caution / Dangerous)
+    // 4. Graceful Allow if approval infrastructure is not wired
     // The tests below exercise every cell of that matrix. They
     // also verify the WS event payload the server sends to the
     // desktop client (event / request_id / tool / arguments /
@@ -3807,9 +3791,9 @@ mod override_tests {
     async fn channel_resolve_true_unblocks_with_true() {
         // The actual downstream consumer of AwaitApproval is
         // `agent_loop::resolve_pre_dispatch` which maps:
-        //   Ok(true)  → Ok(())   (allow, run the tool)
-        //   Ok(false) → Err(...) (deny, surface to LLM)
-        //   Err(_)    → Err(...) (channel closed, surface to LLM)
+        // Ok(true)  → Ok(())   (allow, run the tool)
+        // Ok(false) → Err(...) (deny, surface to LLM)
+        // Err(_)    → Err(...) (channel closed, surface to LLM)
         // Here we assert the channel itself behaves correctly
         // when the ApprovalRegistry resolves it.
         let registry = build_test_registry();

@@ -1,11 +1,9 @@
-// N-09 (2026-07-05): wire-→ in-memory chat row adapter.
-//
+// wire → in-memory chat row adapter.
 // Lives between `GET /v1/sessions/{id}/messages` (snake_case + raw `extra`
 // blob) and `ChatMessage` (typed `approval` / `tool` / `clarify` projections
 // + UI-only fields). Adding a new approval/clarify/tool field is now a
 // one-file change here, instead of an Edit-spread across `api.ts` and
 // `types.ts` with a hand-written per-role projection in `getSessionMessages`.
-//
 // This module also owns the content-filter pipeline that strips internal
 // system directives (`<system-reminder>`, `<plan>`) before the renderer
 // sees them, so a leaked directive shows up as a missing substitution in
@@ -23,7 +21,7 @@ export type WireMessage = {
   role: string;
   content: string;
   timestamp?: string;
-  // v33 (2026-07-06): `created_at` is what the backend actually
+  // `created_at` is what the backend actually
   // persists (the SQLite `messages.created_at` column). The previous
   // code only read `wire.timestamp`, which was always `undefined`,
   // falling back to `new Date().toISOString()` — producing "刚刚" /
@@ -53,6 +51,7 @@ export type WireMessage = {
     expires_at?: number | null;
     linked_assistant_id?: string | null;
   };
+  /** Extensibility index — backend may send extra fields. */
   [k: string]: unknown;
 };
 
@@ -176,7 +175,7 @@ export function wireToChatMessage(
     return null;
   }
   const id = wire.id ?? `${sessionId}-${wire.role}-${rowIndex}`;
-  // v33 (2026-07-06): prefer `created_at` (the SQLite-persisted
+  // prefer `created_at` (the SQLite-persisted
   // wall-clock) over the optional legacy `timestamp` field. Fall
   // back to `new Date()` only as a last resort — pre-existing
   // sessions written before the column was exposed would land
@@ -216,8 +215,7 @@ export function wireToChatMessage(
   const projectedToolCalls = projectToolCalls(wire.tool_calls);
   // `reasoningContent` was originally a non-typed sneaking-through
   // read; type it properly now.
-  //
-  // 2026-07-08 (user, 思考折叠在输出结束后消失):
+  // (user, 思考折叠在输出结束后消失):
   // the server's `ProtocolMessage` field is `reasoning_content`
   // (snake_case; no `rename_all = "camelCase"` on the struct), so the
   // wire payload's key is `reasoning_content`. The previous code
@@ -228,7 +226,6 @@ export function wireToChatMessage(
   // with this `undefined` projection. Net effect: the folding block
   // is visible during the stream (read from local in-memory state)
   // and disappears once the post-stream re-fetch lands.
-  //
   // Read both casings for forward-compat: if we ever add
   // `#[serde(rename_all = "camelCase")]` to `ProtocolMessage`,
   // the camelCase branch will start returning truthy values and
@@ -239,7 +236,7 @@ export function wireToChatMessage(
   let reasoningContent =
     typeof reasoningRaw === "string" ? reasoningRaw : undefined;
   let visibleContent = wire.content;
-  // 2026-07-17: defence for messages already persisted before the backend
+  // defence for messages already persisted before the backend
   // fix. If the visible content is an unwrapped reasoning monologue (the
   // model ignored the system prompt and emitted "I think..." / "trying
   // to..." without a ` <think` tag), move it to reasoningContent so the UI
@@ -314,7 +311,7 @@ function looksLikeUntaggedReasoning(text: string): boolean {
  * array in one call. Returns rows the renderer cares about with
  * the directive strip already applied.
  *
- * 2026-07-10: Tool rows are now MERGED into the preceding assistant
+ * Tool rows are now MERGED into the preceding assistant
  * message's `execution_timeline` instead of being emitted as separate
  * `role: "tool"` messages. During live streaming, tool events
  * (tool_start / tool_stdout / tool_complete) are appended to the

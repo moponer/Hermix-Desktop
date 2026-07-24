@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // message role); surfacing `ToolCall` here keeps the wire schema
 // self-contained.
 pub use hermix_core::ToolCall;
-// v4 (2026-06-22): re-export `ExecutionTimelineEvent` alongside
+// re-export `ExecutionTimelineEvent` alongside
 // `ToolCall` so the wire-format `ProtocolMessage::execution_timeline`
 // field can name the type without forcing consumers to import
 // `hermix_core::types` directly. Mirrors the rationale for `ToolCall`
@@ -89,8 +89,7 @@ pub struct ProtocolMessage {
     /// client uses this to restore the collapsible "思考过程" block
     /// on session reload — without it the user sees the reply but
     /// not the thinking that produced it.
-    ///
-    /// Populated for `role == "assistant"` only; `None` for all
+    /// /// Populated for `role == "assistant"` only; `None` for all
     /// other roles (user, system, tool, approval).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
@@ -99,20 +98,18 @@ pub struct ProtocolMessage {
     /// this assistant turn. Mirrors `Message::execution_timeline`,
     /// which the server persists to `messages.execution_timeline`
     /// on flush.
-    ///
-    /// The desktop client feeds these straight into
+    /// /// The desktop client feeds these straight into
     /// `expandTimelineToMessages` / `groupTimeline` to redraw the
     /// inline tool cards the user saw mid-stream — same status
     /// (running/done/error), same arguments, same stdout. Without
     /// it the reloaded session renders every tool call as a stale
     /// "运行中" pill.
-    ///
-    /// v4 (2026-06-22): added — previous reloads had no way to
+    /// /// added — previous reloads had no way to
     /// reconstruct tool state because the WS stream wasn't
     /// persisted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_timeline: Option<Vec<ExecutionTimelineEvent>>,
-    /// v33 (2026-07-06): wall-clock ISO-8601 timestamp read from
+    /// wall-clock ISO-8601 timestamp read from
     /// `messages.created_at`. The desktop client uses this to
     /// render the per-message relative time ("3 天前") instead of
     /// falling back to `new Date()` in the wire adapter, which
@@ -123,30 +120,41 @@ pub struct ProtocolMessage {
     /// case the client falls back to `wire.timestamp ?? now`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// `Some(true)` marks this message as a copy returned from a
+    /// compression child session (i.e. a turn that was folded
+    /// away by the compression pipeline and is being shipped back
+    /// to the client on session reload). The desktop client uses
+    /// this to render a subtle "已压缩" marker on the message
+    /// header so the user can tell which rows are history vs
+    /// active. `None` for messages that were never archived.
+    /// Added back to fix the `protocolMessage.compressed` field
+    /// resolution error reported on 2026-07-24 (the field was
+    /// referenced by `server::get_session_messages` but the
+    /// transport struct definition was missing it, so the server
+    /// crate no longer compiled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed: Option<bool>,
 }
 
 /// User's choice on a `RequestApproval` card.
-///
-/// Mirrors the upstream Hermes 4-state approval model
+/// /// Mirrors the upstream Hermes 4-state approval model
 /// (`once / session / always / deny`):
-///
-/// - `Once`   — approve this single invocation. Server resolves to
-///   `approved`; nothing is persisted.
+/// /// - `Once`   — approve this single invocation. Server resolves to
+/// `approved`; nothing is persisted.
 /// - `Session` — approve for the rest of this session (or until the
-///   agent process restarts, whichever comes first). Server resolves
-///   to `approved` AND records the command in a per-session in-memory
-///   set so subsequent same-shape tool calls bypass the prompt.
+/// agent process restarts, whichever comes first). Server resolves
+/// to `approved` AND records the command in a per-session in-memory
+/// set so subsequent same-shape tool calls bypass the prompt.
 /// - `Always` — approve for all future sessions. Server resolves to
-///   `approved` AND appends the command to the persistent
-///   `$HERMIX_HOME/approval_allowlist.json` so it's loaded next
-///   startup.
+/// `approved` AND appends the command to the persistent
+/// `$HERMIX_HOME/approval_allowlist.json` so it's loaded next
+/// startup.
 /// - `Deny`   — refuse this invocation. Server resolves to `denied`;
-///   nothing is persisted. (The user can still click "always deny"
-///   via the explicit `Deny` button in some clients, but the WS
-///   protocol's `Deny` is single-shot — a future v3 protocol can add
-///   `deny_session` / `deny_always` if needed.)
-///
-/// Free-form `String` on the wire so future variants (e.g.
+/// nothing is persisted. (The user can still click "always deny"
+/// via the explicit `Deny` button in some clients, but the WS
+/// protocol's `Deny` is single-shot — a future v3 protocol can add
+/// `deny_session` / `deny_always` if needed.)
+/// /// Free-form `String` on the wire so future variants (e.g.
 /// `smart_skip` after an LLM risk-evaluation pass) don't require a
 /// protocol bump. Server-side, unknown values are logged and
 /// downgraded to `Deny` (fail-closed).
@@ -214,7 +222,7 @@ pub struct ListSessionsResponse {
 pub struct SessionMessagesResponse {
     pub session_id: SessionId,
     pub messages: Vec<ProtocolMessage>,
-    /// 2026-07-16: last persisted context-usage snapshot for the session,
+    /// last persisted context-usage snapshot for the session,
     /// so the frontend can show the context-usage bar immediately after
     /// restoring an old session. `None` on sessions that never streamed
     /// (or pre-migration DBs).
@@ -261,7 +269,7 @@ pub struct SendMessageRequest {
     pub user_id: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
-    /// Optional images for vision-enabled models (2026-06-25: 多图支持).
+    /// Optional images for vision-enabled models (多图支持).
     /// When present, the agent passes each image to the provider so the LLM
     /// can "see" them. Binary `Vec<u8>` straight from the client — no base64
     /// round-trip across the wire.
@@ -387,7 +395,7 @@ pub enum StreamEvent {
         /// compression types.
         snapshot: serde_json::Value,
     },
-    /// 2026-07-14: Per-turn token usage snapshot for the live
+    /// Per-turn token usage snapshot for the live
     /// "cache hit" chip in the chat header. Emitted after every
     /// successful LLM response so the front-end can update its
     /// session-level rolling cache hit rate in real time. Distinct
@@ -433,15 +441,14 @@ pub enum StreamEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         choices: Vec<ApprovalChoice>,
     },
-    /// 2026-07-14: Surface memory writes / updates / deletes /
+    /// Surface memory writes / updates / deletes /
     /// summaries in the conversation so the user can always see what
     /// the agent is remembering. Bridged from the agent-loop
     /// `status_callback` event type `"memory_update"` (mirrors how
     /// `UsageUpdate` is bridged). One event per operation, or one
     /// batched event per turn when several facts are extracted at
     /// once (`count` carries the batch size).
-    ///
-    /// `action` is one of: `"write"` | `"update"` | `"delete"` |
+    /// /// `action` is one of: `"write"` | `"update"` | `"delete"` |
     /// `"summarize"` | `"cleanup"` | `"snapshot"`.
     /// `memory_type` is one of: `"fact"` | `"style"` | `"summary"` |
     /// `"tool"` | `"snapshot"`.
@@ -474,8 +481,7 @@ pub enum StreamEvent {
     /// facts from memory this turn. Surfaced as a small "💭 想到 N 条"
     /// chip in the conversation. Different from `MemoryUpdate`
     /// (which fires on writes): this fires on reads.
-    ///
-    /// The full recall content is injected into the system prompt
+    /// /// The full recall content is injected into the system prompt
     /// by `prompt_assembly`; this event only carries metadata
     /// (count + a small preview of `canonical_key`s) for the UI.
     MemoryRecall {
@@ -521,11 +527,9 @@ pub enum StreamEvent {
         results: Vec<PrefetchResultEntry>,
     },
     /// M5: ACUI (Agent-Controlled UI) directive.
-    ///
-    /// Agent 主动推送结构化 UI 卡片给前端。前端按 directive.id 维护
+    /// /// Agent 主动推送结构化 UI 卡片给前端。前端按 directive.id 维护
     /// 一组"已 show 未 hide"的卡片，按 `directive.kind` 查注册表渲染。
-    ///
-    /// 协议层独立于渲染实现（可换 React / Vue / Web Components）。
+    /// /// 协议层独立于渲染实现（可换 React / Vue / Web Components）。
     Acui {
         /// The directive itself (`AcuiShow` / `AcuiUpdate` / `AcuiHide`).
         /// Tag is `"op"`; on the wire the inner variant is flattened.
@@ -675,8 +679,7 @@ pub enum StreamEvent {
     /// fresh group_id. Front-end creates a new inline card anchored to
     /// the assistant message with `message_id`. Subsequent TodoItemUpserted
     /// for the same group_id updates the existing card in place.
-    ///
-    /// `message_id` lets the front-end know where in the message stream
+    /// /// `message_id` lets the front-end know where in the message stream
     /// to render the new card. `None` means the change came from outside
     /// an agent loop (HTTP PATCH / direct WS) and the front-end should
     /// fall back to anchoring at the end of the stream.
@@ -754,14 +757,28 @@ pub enum StreamEvent {
         /// The plan text produced by the agent.
         plan_text: String,
     },
+    /// Application-level WebSocket heartbeat. Emitted by the
+    /// server every ~15s during a streaming session so the
+    /// client can reset its idle/stale timer (the WS protocol
+    /// ping alone doesn't reach the JS `onmessage` handler, so
+    /// without this event the client would auto-settle the
+    /// stream during long tool-only runs like `code_execution`
+    /// that produce no `text` chunks for ≥90s). The client
+    /// side (`useStreamChat.resetStaleTimer`) treats every WS
+    /// event as a liveness ping, so the message body is empty
+    /// after serde — only the envelope is required.
+    /// Added back to fix the `StreamEvent::Heartbeat` variant
+    /// resolution error reported on 2026-07-24 (the variant
+    /// was referenced by `server::handle_ws_stream_send` but
+    /// the transport enum definition was missing it).
+    Heartbeat,
 }
 
 /// One row in the task list. Same shape as
 /// `hermix_tools::backends::todo::TodoItem`, but defined here so the
 /// transport crate doesn't depend on hermix-tools (which would form
 /// a cycle hermix-server → hermix-tools → hermix-transport).
-///
-/// Fields mirror `TodoItem` 1:1 — when adding a field there, mirror
+/// /// Fields mirror `TodoItem` 1:1 — when adding a field there, mirror
 /// it here too and bump the todo event protocol version in
 /// `AGENTS.md`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -830,7 +847,7 @@ pub enum WsClientMessage {
         user_id: Option<String>,
         #[serde(default)]
         request_id: Option<String>,
-        /// Optional images (2026-06-25: 多图支持). Binary直传 — 客户端不做 base64。
+        /// Optional images (多图支持). Binary直传 — 客户端不做 base64。
         /// Server 接收后由 agent_loop 传给 provider。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         images: Option<Vec<ImageAttachment>>,
@@ -846,8 +863,7 @@ pub enum WsClientMessage {
         skills: Option<Vec<String>>,
     },
     /// Response to a [`StreamEvent::RequestApproval`].
-    ///
-    /// The `decision` field is a free-form string that maps to
+    /// /// The `decision` field is a free-form string that maps to
     /// [`ApprovalChoice`]: `"once"`, `"session"`, `"always"`, or
     /// `"deny"` (case-insensitive). The legacy 2-state values
     /// `"approved"` and `"denied"` are also accepted for backward
@@ -1051,7 +1067,7 @@ mod tests {
     /// When the server omits `expires_at` (skip_serializing_if), the
     /// front-end still has to deserialize the event without crashing.
     /// The `#[serde(default)]` on the field keeps backwards compat
-    /// with pre-2026-06-14 servers (the field didn't exist before the
+    /// with pre-servers (the field didn't exist before the
     /// countdown feature was added).
     #[test]
     fn request_approval_event_without_expires_at_round_trips() {

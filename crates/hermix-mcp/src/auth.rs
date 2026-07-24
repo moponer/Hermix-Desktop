@@ -15,16 +15,14 @@ use crate::McpError;
 // ---------------------------------------------------------------------------
 
 /// Trait for providing authentication tokens for MCP server connections.
-///
-/// Implementations can provide different authentication mechanisms:
+/// /// Implementations can provide different authentication mechanisms:
 /// - Bearer token (simple static token)
 /// - OAuth2 (client credentials flow with token refresh)
 /// - Custom (any mechanism that produces a token string)
 #[async_trait::async_trait]
 pub trait McpAuthProvider: Send + Sync {
     /// Get an authentication token.
-    ///
-    /// Returns a token string suitable for use in an Authorization header.
+    /// /// Returns a token string suitable for use in an Authorization header.
     /// For OAuth, this will automatically refresh expired tokens.
     async fn get_token(&self) -> Result<String, McpError>;
 
@@ -37,8 +35,7 @@ pub trait McpAuthProvider: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Simple bearer token authentication provider.
-///
-/// Use this when you have a static API key or token that doesn't expire.
+/// /// Use this when you have a static API key or token that doesn't expire.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BearerTokenAuth {
     /// The bearer token to use for authentication.
@@ -73,12 +70,10 @@ impl McpAuthProvider for BearerTokenAuth {
 // ---------------------------------------------------------------------------
 
 /// OAuth2 client credentials flow configuration.
-///
-/// This auth provider implements the OAuth2 client credentials grant
+/// /// This auth provider implements the OAuth2 client credentials grant
 /// (RFC 6749 Section 4.4) which is suitable for server-to-server
 /// authentication where no user interaction is needed.
-///
-/// Token lifecycle:
+/// /// Token lifecycle:
 /// 1. On first `get_token()` call, requests an access token from the token endpoint
 /// 2. Caches the token and its expiration time
 /// 3. On subsequent calls, returns the cached token if it hasn't expired
@@ -132,13 +127,11 @@ impl OAuthConfig {
     }
 
     /// Exchange client credentials for an access token.
-    ///
-    /// Performs the OAuth2 client credentials grant:
+    /// /// Performs the OAuth2 client credentials grant:
     /// ```text
     /// POST /token
     /// Content-Type: application/x-www-form-urlencoded
-    ///
-    /// grant_type=client_credentials
+    /// /// grant_type=client_credentials
     /// &client_id=...
     /// &client_secret=...
     /// &scope=...

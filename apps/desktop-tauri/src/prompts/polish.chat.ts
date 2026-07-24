@@ -1,11 +1,9 @@
 // src/prompts/polish.chat.ts
-//
-// v1 (2026-06-22): PLAN_UI_ENHANCEMENT §1.3 — 对话场景润色 prompt。
+// PLAN_UI_ENHANCEMENT §1.3 — 对话场景润色 prompt。
 // 与 §7.1 自动化 PROMPT 改写 prompt **互不共用**，分别维护。
 // 区别：
-//   - 本 prompt 面向自然语言对话：流畅、清晰、避免重复
-//   - 自动化 PROMPT 改写：结构化、保留占位符、强调可执行性
-//
+// - 本 prompt 面向自然语言对话：流畅、清晰、避免重复
+// - 自动化 PROMPT 改写：结构化、保留占位符、强调可执行性
 // 输入：用户当前草稿原文 (draft) + 可选上下文 (ctx)
 // 输出：润色后可直接发送的对话内容（plain text，无 markdown 包装）
 

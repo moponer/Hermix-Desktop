@@ -42,7 +42,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// 2026-07-14 (P1-1): Helper to compile static regex patterns without
+// (P1-1): Helper to compile static regex patterns without
 // .unwrap(). Uses .expect() with a semantic message as required by
 // the code hardening plan (static init cannot use `?`).
 fn re(pattern: &'static str) -> Regex {
@@ -83,7 +83,7 @@ static DENIED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // Windows: del /erase with /q (quiet = no prompt)
         re(r"(?i)\b(del|erase)\s+.*\b/q\b"),
         re(r"(?i)\brmdir\s+(/\w+\s+)*/s\s+(/\w+\s+)*/q"),
-        // Windows (2026-06-07 pass): catastrophic destructive ops.
+        // Windows (pass): catastrophic destructive ops.
         // - `rd /s` (recursive delete) with /q (quiet) — same shape as rm -rf
         // - `reg delete` against HKLM / HKCR (system hives)
         // - `diskpart clean` / `diskpart offline` — wipes disk signatures
@@ -91,7 +91,7 @@ static DENIED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // - `cipher /w:<path>` — secure-erase all free space on a drive
         // - `bcdedit /deletevalue` / `bcdedit /set` — bootloader surgery
         // - `format C:` / `format <drive>` — already matched but pinned
-        //   here too because it's the textbook example
+        // here too because it's the textbook example
         // - `Remove-Item -Recurse -Force` (PowerShell rm -rf equivalent)
         re(r"(?i)\brd\s+(/\w+\s+)*/s\s+(/\w+\s+)*/q"),
         re(r"(?i)\breg\s+delete\s+(HKLM|HKCR|HKCU\\SYSTEM|HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run)"),
@@ -143,14 +143,14 @@ static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         re(r"(?i)\bdel\s+"),
         re(r"(?i)\berase\s+"),
         re(r"(?i)\brmdir\s+(/\w+\s+)*/s\b"),
-        // Windows (2026-06-07 pass): destructive-but-not-catastrophic ops.
+        // Windows (pass): destructive-but-not-catastrophic ops.
         // The user might legitimately want to run these, but the
         // LLM should ask first.
         // - `taskkill /f` (force kill)
         // - `reg delete` of a non-system hive (HKCU\Software\Foo)
         // - `net stop` / `net start` (Windows service lifecycle)
         // - `Remove-Item` with -Recurse OR -Force (without the
-        //   combo, which is already denied)
+        // combo, which is already denied)
         // - `Stop-Service` / `Restart-Service` (PowerShell)
         // - `Set-Service` (modify a service's start mode / creds)
         // - `wevtutil cl` (clear event logs)
@@ -161,7 +161,7 @@ static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // - `takeown` / `icacls` (ownership / ACL manipulation)
         // - `sfc /scannow` is read-only so not blocked
         // - `DISM /Online /Cleanup-Image /RestoreHealth` is
-        //   system-state-modifying
+        // system-state-modifying
         re(r"(?i)\btaskkill\s+(/\w+\s+)*/f\b"),
         re(r"(?i)\b(taskkill|tskill)\s+"),
         re(r"(?i)\breg\s+delete\s+"),
@@ -177,7 +177,7 @@ static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         re(r"(?i)\bDISM\s+/Online\s+/Cleanup-Image\s+/RestoreHealth\b"),
         re(r"(?i)\bsfc\s+/scannow\b"),
         // PowerShell encoded command (very commonly abused):
-        //   powershell -enc <base64> / powershell -EncodedCommand <base64>
+        // powershell -enc <base64> / powershell -EncodedCommand <base64>
         // Also `-ExecutionPolicy Bypass` because it implies the
         // user is trying to skip a safety control.
         re(r"(?i)\bpowershell(\.exe)?\s+.*(-enc(odedCommand)?\s|-e\s)"),
@@ -191,8 +191,7 @@ static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 /// `CONFIRM_PATTERNS` so a read-only PowerShell cmdlet like
 /// `Get-ChildItem` is never held up by the broad `powershell` confirm
 /// pattern.
-///
-/// Rationale (2026-07-21): the user reported that simple read-only
+/// /// Rationale (2026-07-21): the user reported that simple read-only
 /// operations like `Get-PSDrive` and `Get-ChildItem` were triggering
 /// approval prompts during a disk-analysis task. These commands are
 /// inherently safe — they read metadata and never modify state.
@@ -234,6 +233,29 @@ static READONLY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // Git read-only subcommands (already Approved by default, but
         // pinning here in case a future confirm pattern catches them).
         re(r"(?i)\bgit\s+(status|log|diff|show|branch|remote|ls-files)\b"),
+        // Unix read-only commands — search / read / list operations
+        // that never modify state.  Added so `is_readonly_command`
+        // (used by `resource_guard`) can skip the permission-profile
+        // gate for these commands, eliminating approval prompts for
+        // common exploration workflows.
+        re(r"(?i)\bcat\s"),
+        re(r"(?i)\bgrep\s"),
+        re(r"(?i)\brg\s"),
+        re(r"(?i)\bfindstr\s"),
+        re(r"(?i)\bls\b"),
+        re(r"(?i)\bhead\s"),
+        re(r"(?i)\btail\s"),
+        re(r"(?i)\bwc\s"),
+        re(r"(?i)\bless\s"),
+        re(r"(?i)\bmore\s"),
+        re(r"(?i)\btree\s"),
+        re(r"(?i)\btype\s"),
+        re(r"(?i)\bwhich\s"),
+        re(r"(?i)\bpwd\b"),
+        // NOTE: `find` is handled separately in `is_readonly_command`
+        // because Rust's `regex` crate does not support negative
+        // lookahead, so we cannot express "find without -delete/
+        // -exec" as a single regex in this list.
     ]
 });
 
@@ -245,15 +267,13 @@ static READONLY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 /// `RequiresConfirmation` decision as a `request_approval` event on the
 /// same WS channel the agent streams on, instead of bouncing the
 /// "please reply `HERMIX_CONFIRM=1`" text through the LLM.
-///
-/// Set by `LocalAgentService::send_message` on every turn (the closure
+/// /// Set by `LocalAgentService::send_message` on every turn (the closure
 /// captures the active WS `ApprovalRegistry` + `on_event`), and read by
 /// `TerminalHandler::execute` when `ApprovalManager::check_approval`
 /// returns `RequiresConfirmation`. When both fields are `None`
 /// (unit tests, headless callers, CLI runs without a UI), the tool
 /// falls back to the legacy text-based flow — backward-compatible.
-///
-/// The closure captures the same `Arc`s the dangerous-tool approval
+/// /// The closure captures the same `Arc`s the dangerous-tool approval
 /// path uses (see `local_agent_service::decide_pre_tool_dispatch`),
 /// so the frontend can reuse the existing `InlineApprovalCard` without
 /// any client-side change.
@@ -330,24 +350,20 @@ pub struct ApprovalManager {
     /// session are remembered — subsequent matches skip the confirmation
     /// prompt. Cleared on session reset. Mirrors Hermes Agent's
     /// session-scoped approval memory.
-    ///
-    /// ### 2026-07-05: optional disk persistence
-    ///
-    /// The in-memory set is still authoritative, but callers can
+    /// /// ### optional disk persistence
+    /// /// The in-memory set is still authoritative, but callers can
     /// opt into persisting the set to `<hermix_home>/session_approvals.json`
     /// via [`Self::approve_for_session_with_persist`] (which calls
     /// [`persist_session_approvals`] under the hood). On startup,
     /// [`load_session_approvals`] restores the previous session's
     /// approved commands so a restart doesn't re-prompt for every
     /// command the user already approved.
-    ///
-    /// We deliberately use a separate file from `approval_allowlist.json`
+    /// /// We deliberately use a separate file from `approval_allowlist.json`
     /// (the "always allow" persistent patterns) — the allowlist is
     /// pattern-based and survives forever; session approvals are
     /// exact-match commands and survive across restarts but can be
     /// wiped by `clear_session_approvals()` (e.g. on `/new`).
-    ///
-    /// 2026-07-17: wrapped in `Mutex` so `approve_for_session` can
+    /// /// wrapped in `Mutex` so `approve_for_session` can
     /// be called from a `&self` context — the terminal tool's
     /// WS-approval path needs to persist "this exact command was
     /// approved for this session" without holding a `&mut self` on
@@ -384,15 +400,13 @@ impl ApprovalManager {
     /// `storage_analyzer --path` from `storage_analyzer --path "C:\"`)
     /// so that approving one invocation of a command also covers
     /// subsequent invocations with different arguments.
-    ///
-    /// Rationale (2026-07-21): the previous implementation used the
+    /// /// Rationale (2026-07-21): the previous implementation used the
     /// full normalized command string as the session key, which meant
     /// `storage_analyzer --path "C:\"` and `storage_analyzer --path
     /// "C:\Users"` were treated as two different commands — the user
     /// had to approve each one separately. Prefix matching (first 2
     /// tokens) groups them so a single approval covers all arguments.
-    ///
-    /// For single-token commands (e.g. `ls`), the key is just the
+    /// /// For single-token commands (e.g. `ls`), the key is just the
     /// command name itself.
     fn command_prefix_key(command: &str) -> String {
         command
@@ -456,27 +470,25 @@ impl ApprovalManager {
     }
 
     /// Check whether a command requires approval.
-    ///
-    /// Returns:
+    /// /// Returns:
     /// - `Denied` if the command matches a denied pattern (built-in
-    ///   or custom). The user allowlist is **never** allowed to
-    ///   downgrade a `Denied` decision — catastrophic patterns stay
-    ///   catastrophic.
+    /// or custom). The user allowlist is **never** allowed to
+    /// downgrade a `Denied` decision — catastrophic patterns stay
+    /// catastrophic.
     /// - `Approved` if the command matches a confirm pattern **and**
-    ///   the user allowlist has a matching entry (the "always allow"
-    ///   tier).
+    /// the user allowlist has a matching entry (the "always allow"
+    /// tier).
     /// - `RequiresConfirmation` if the command matches a confirm
-    ///   pattern but is not in the allowlist.
+    /// pattern but is not in the allowlist.
     /// - `Approved` if no patterns match (implicit allowlist).
     pub fn check_approval(&self, command: &str) -> ApprovalDecision {
         // 1. Denied patterns — built-in then custom. NEVER overridden
-        //    by the user allowlist OR session approvals (catastrophic
-        //    operations stay catastrophic regardless of "always allow"
-        //    or session-level shortcuts).
-        //
-        //    This MUST run before the session-approved check to prevent
-        //    a scenario where `rm -rf /` is accidentally added to
-        //    session_approved (e.g. via a bug) and bypasses the denial.
+        // by the user allowlist OR session approvals (catastrophic
+        // operations stay catastrophic regardless of "always allow"
+        // or session-level shortcuts).
+        // This MUST run before the session-approved check to prevent
+        // a scenario where `rm -rf /` is accidentally added to
+        // session_approved (e.g. via a bug) and bypasses the denial.
         for re in DENIED_PATTERNS.iter() {
             if re.is_match(command) {
                 return ApprovalDecision::Denied;
@@ -489,11 +501,11 @@ impl ApprovalManager {
         }
 
         // 1b. Read-only patterns — these commands have no side effects
-        //     and are always allowed, even if a CONFIRM_PATTERN would
-        //     otherwise match. Checked AFTER denied patterns (so a
-        //     catastrophic command is never downgraded) but BEFORE
-        //     session/confirm checks so read-only exploration never
-        //     triggers an approval prompt.
+        // and are always allowed, even if a CONFIRM_PATTERN would
+        // otherwise match. Checked AFTER denied patterns (so a
+        // catastrophic command is never downgraded) but BEFORE
+        // session/confirm checks so read-only exploration never
+        // triggers an approval prompt.
         for re in READONLY_PATTERNS.iter() {
             if re.is_match(command) {
                 return ApprovalDecision::Approved;
@@ -501,11 +513,11 @@ impl ApprovalManager {
         }
 
         // 2. Session-level approval — if this command prefix was approved
-        //    in the current session, skip re-prompting. This only runs
-        //    AFTER denied patterns are checked, so catastrophic commands
-        //    are always rejected. Uses prefix-based matching (first 2
-        //    tokens) so `storage_analyzer --path "C:\"` approval also
-        //    covers `storage_analyzer --path "C:\Users"`.
+        // in the current session, skip re-prompting. This only runs
+        // AFTER denied patterns are checked, so catastrophic commands
+        // are always rejected. Uses prefix-based matching (first 2
+        // tokens) so `storage_analyzer --path "C:\"` approval also
+        // covers `storage_analyzer --path "C:\Users"`.
         let prefix_key = Self::command_prefix_key(command);
         if let Ok(set) = self.session_approved.lock() {
             if set.contains(&prefix_key) {
@@ -517,8 +529,8 @@ impl ApprovalManager {
         // a turn.
 
         // 2. Confirm patterns — built-in then custom. If a confirm
-        //    pattern matched, the allowlist gets a chance to
-        //    downgrade to Approved.
+        // pattern matched, the allowlist gets a chance to
+        // downgrade to Approved.
         let mut matched_confirm = false;
         for re in CONFIRM_PATTERNS.iter() {
             if re.is_match(command) {
@@ -537,8 +549,8 @@ impl ApprovalManager {
 
         if matched_confirm {
             // 3. User allowlist — if any pattern matches, downgrade
-            //    to Approved. The allowlist is the user's "I trust
-            //    this enough to skip the prompt next time" decision.
+            // to Approved. The allowlist is the user's "I trust
+            // this enough to skip the prompt next time" decision.
             if let Some(al) = &self.user_allowlist {
                 if al.matches(command) {
                     return ApprovalDecision::Approved;
@@ -560,11 +572,9 @@ impl ApprovalManager {
     /// Subsequent `check_approval` calls for the same command will
     /// return `Approved` without prompting. Does NOT override `Denied`
     /// decisions (catastrophic patterns stay catastrophic).
-    ///
-    /// Use [`Self::approve_for_session_with_persist`] when you also
+    /// /// Use [`Self::approve_for_session_with_persist`] when you also
     /// want the approval to survive a process restart.
-    ///
-    /// 2026-07-17: `&self` (was `&mut self`) so the terminal tool's
+    /// /// `&self` (was `&mut self`) so the terminal tool's
     /// WS-approval path can persist the per-session approval without
     /// requiring `&mut self` on the handler. Backed by `Mutex` internally.
     pub fn approve_for_session(&self, command: &str) {
@@ -576,14 +586,12 @@ impl ApprovalManager {
 
     /// Like [`Self::approve_for_session`] but also writes the in-memory
     /// set to disk at `path` so the approval survives a process restart.
-    ///
-    /// Persistence is opt-in (callers pass the path explicitly) so
+    /// /// Persistence is opt-in (callers pass the path explicitly) so
     /// ephemeral test / CLI flows can avoid touching the filesystem.
     /// `path` is typically `$HERMIX_HOME/session_approvals.json`; pass
     /// `None` to skip persistence and behave like
     /// [`Self::approve_for_session`].
-    ///
-    /// 2026-07-17: `&self` for the same reason as `approve_for_session`.
+    /// /// `&self` for the same reason as `approve_for_session`.
     pub fn approve_for_session_with_persist(
         &self,
         command: &str,
@@ -647,8 +655,7 @@ impl ApprovalManager {
 
     /// Restore a previously-persisted session-approval set.
     /// Replaces the current in-memory set (does not merge).
-    ///
-    /// 2026-07-17: `&self` (was `&mut self`) for the same Mutex
+    /// /// `&self` (was `&mut self`) for the same Mutex
     /// reason as the other session-approval methods.
     pub fn restore_session_approvals(&self, set: std::collections::HashSet<String>) {
         if let Ok(mut current) = self.session_approved.lock() {
@@ -662,18 +669,15 @@ impl ApprovalManager {
 // ---------------------------------------------------------------------------
 
 /// Load a previously-persisted session-approval set from `path`.
-///
-/// Failure matrix (mirrors `UserAllowlist::load`):
-///
-/// | File state        | Result                                          |
+/// /// Failure matrix (mirrors `UserAllowlist::load`):
+/// /// | File state        | Result                                          |
 /// |-------------------|-------------------------------------------------|
 /// | Missing           | empty set (no warning)                          |
 /// | Empty             | empty set (no warning)                          |
 /// | Valid JSON array  | populated set                                   |
 /// | Corrupt JSON      | empty set + warning                             |
 /// | Permission denied | empty set + warning                             |
-///
-/// Load is **never** fatal — a corrupt or unreadable file must not
+/// /// Load is **never** fatal — a corrupt or unreadable file must not
 /// stop the agent from starting.
 pub fn load_session_approvals(path: &Path) -> std::collections::HashSet<String> {
     let bytes = match std::fs::read(path) {
@@ -752,14 +756,40 @@ pub fn check_approval(command: &str) -> ApprovalDecision {
     manager.check_approval(command)
 }
 
+/// Returns `true` if `command` matches a built-in read-only pattern
+/// (e.g. `grep`, `find`, `cat`, `dir`, `Get-ChildItem`).  Used by
+/// [`resource_guard`](../hermix_agent/local_agent_service/struct.LocalAgentService.html)
+/// to skip the permission-profile gate for read-only terminal commands
+/// so that search/read/list operations never trigger an approval prompt.
+///
+/// This is a **subset** of `check_approval == Approved` — it only
+/// matches commands that are explicitly recognised as side-effect-free,
+/// not the implicit "no pattern matched" default-allow path.
+pub fn is_readonly_command(command: &str) -> bool {
+    // Static patterns first.
+    if READONLY_PATTERNS.iter().any(|re| re.is_match(command)) {
+        return true;
+    }
+    // `find` is read-only UNLESS it carries -delete / -exec /
+    // -execdir.  Rust's `regex` crate does not support negative
+    // lookahead, so we handle this in code rather than as a regex.
+    let lower = command.to_lowercase();
+    if lower.split_whitespace().next() == Some("find") {
+        let has_mutation = lower
+            .split_whitespace()
+            .any(|arg| arg == "-delete" || arg == "-exec" || arg == "-execdir");
+        return !has_mutation;
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
 // UserAllowlist — persistent "Always Allow" command patterns
 // ---------------------------------------------------------------------------
 
 /// A single "Always Allow" entry: a regex pattern + the example command
 /// the user originally approved.
-///
-/// Stored as a regex (not a literal) so future versions can support
+/// /// Stored as a regex (not a literal) so future versions can support
 /// broader patterns (e.g. `^sudo apt install \S+(\s.*)?$` to allow all
 /// `sudo apt install <pkg>` invocations with any further args). For
 /// MVP, [`UserAllowlist::add_literal`] stores a regex-escaped exact
@@ -779,15 +809,13 @@ pub struct UserAllowlistEntry {
 }
 
 /// Persistent user "Always Allow" list.
-///
-/// Holds the regex patterns the user has blessed for the `always`
+/// /// Holds the regex patterns the user has blessed for the `always`
 /// tier of the 4-state approval (`once` / `session` / `always` /
 /// `deny`). Loaded from disk at agent startup via [`Self::load`] and
 /// re-saved on every modification. A missing or corrupt file yields
 /// an empty allowlist — load **must not** fail the agent start, by
 /// design.
-///
-/// The `compiled` cache is kept in sync with `entries` at all times
+/// /// The `compiled` cache is kept in sync with `entries` at all times
 /// (skip-serialized so the JSON only stores the source patterns;
 /// recompiled lazily on `load`).
 #[derive(Debug, Clone, Default)]
@@ -810,8 +838,7 @@ impl UserAllowlist {
     /// Add a regex pattern. Compiles it; returns an error if invalid
     /// (the entry is **not** added in that case — the caller can
     /// decide to drop, log, or surface to the user).
-    ///
-    /// `command_hint` is informational (e.g. the example command
+    /// /// `command_hint` is informational (e.g. the example command
     /// that triggered the prompt); it shows up in `--allowlist list`
     /// output and is **not** consulted at match time.
     pub fn add(
@@ -872,16 +899,14 @@ impl UserAllowlist {
     }
 
     /// Load from a JSON file. Behavior matrix:
-    ///
-    /// | File state             | Result                              |
+    /// /// | File state             | Result                              |
     /// |------------------------|-------------------------------------|
     /// | Missing                | `Self::new()` (no warning)          |
     /// | Empty                  | `Self::new()` (no warning)          |
     /// | Valid JSON array       | populated, recompiled               |
     /// | Corrupt JSON           | `Self::new()` + warning to stderr   |
     /// | Permission denied      | `Self::new()` + warning to stderr   |
-    ///
-    /// Load is **never** fatal: a corrupt or unreadable file must
+    /// /// Load is **never** fatal: a corrupt or unreadable file must
     /// not stop the agent from starting. The user can rebuild the
     /// allowlist by re-clicking "Always Allow" on the relevant
     /// prompts.
@@ -1045,7 +1070,7 @@ mod tests {
 
     // -----------------------------------------------------------------
     // Read-only command matrix — the user's #1 requirement
-    // (主人原话: "基础的命令不应该纳入权限管理中"). Every command in
+    // (用户原话: "基础的命令不应该纳入权限管理中"). Every command in
     // this list MUST classify as `Approved`; if any of them
     // regresses to `RequiresConfirmation` the bundled
     // `CONFIRM_PATTERNS` regexes have been over-broadened.
@@ -1158,7 +1183,6 @@ mod tests {
         // Every entry in the documented "Destructive ops"
         // category should be denied. This guards against
         // accidentally deleting a pattern from DENIED_PATTERNS.
-        //
         // History note (2026-06-08): `format C:` was originally
         // listed in `confirm_patterns_are_comprehensive` (as a
         // CONFIRM pattern), but was promoted to DENIED when the
@@ -1194,7 +1218,6 @@ mod tests {
         // category should require confirmation. This guards
         // against accidentally deleting a pattern from
         // CONFIRM_PATTERNS.
-        //
         // NOTE: `pacman -S <pkg>` is `install` semantically but
         // the built-in pattern only matches the long form
         // `pacman install <pkg>`. `pacman -S vim` therefore
@@ -1202,7 +1225,6 @@ mod tests {
         // allowlist) — a known policy gap tracked separately.
         // If a future patch tightens the regex to include `-S`
         // / `-R` / `-Rs`, add the entry back here.
-        //
         // NOTE 2: `format C:` was here historically but is now in
         // DENIED (see `denied_patterns_are_comprehensive`).
         let cautious = [
@@ -1325,7 +1347,6 @@ mod tests {
 
     // -----------------------------------------------------------------
     // UserAllowlist — persistent "Always Allow" layer (P1b)
-    //
     // The allowlist is the user's opt-out from the `confirm` tier:
     // when a command matches a confirm pattern AND the user has
     // previously clicked "Always Allow" for it, the decision is
@@ -1537,8 +1558,7 @@ mod tests {
     /// `ApprovalManager` itself denies (`rm -rf /`, `mkfs`, `dd
     /// of=/dev/...`, etc.) stay catastrophic regardless of "always
     /// allow" preferences.
-    ///
-    /// NOTE: pure fork bombs like `:(){ :|:& };:` are caught by
+    /// /// NOTE: pure fork bombs like `:(){ :|:& };:` are caught by
     /// `hermix-agent`'s `hardline::UNRECOVERABLE_BLOCKLIST`, not by
     /// `ApprovalManager::DENIED_PATTERNS` — that's a different
     /// layer of defense and out of scope for this manager-level
@@ -1665,7 +1685,7 @@ mod tests {
         );
     }
 
-    // ----- 2026-07-05: session-approval persistence -----
+    // ----- session-approval persistence -----
 
     /// `approve_for_session_with_persist` writes the in-memory set to
     /// disk atomically, and `load_session_approvals` reconstructs it
@@ -1745,7 +1765,7 @@ mod tests {
         assert!(set.is_empty());
     }
 
-    // ----- 2026-07-21: read-only patterns + prefix-based session approval -----
+    // ----- read-only patterns + prefix-based session approval -----
 
     /// Read-only PowerShell cmdlets (Get-ChildItem, Get-PSDrive, etc.)
     /// must be Approved even though the broad `powershell` confirm
@@ -1790,8 +1810,7 @@ mod tests {
     /// Session approval now uses prefix matching: approving
     /// `storage_analyzer --path "C:\\"` also covers
     /// `storage_analyzer --path "C:\\Users"`.
-    ///
-    /// Use `apt install` as the "different command" probe because it
+    /// /// Use `apt install` as the "different command" probe because it
     /// matches a CONFIRM_PATTERN (unlike `storage_clean` which falls
     /// through to the implicit-Approved default at check_approval:551).
     #[test]
@@ -1829,5 +1848,68 @@ mod tests {
             ApprovalManager::command_prefix_key("  powershell   -Command   \"Get-Process\"  "),
             "powershell -Command"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // is_readonly_command — used by resource_guard to skip the
+    // permission-profile gate for read-only terminal commands.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn is_readonly_command_identifies_search_read_list() {
+        // Unix read-only commands added to READONLY_PATTERNS
+        assert!(is_readonly_command("cat file.txt"));
+        assert!(is_readonly_command("grep -r 'TODO' src/"));
+        assert!(is_readonly_command("rg 'pattern'"));
+        assert!(is_readonly_command("findstr /s /i pattern *.txt"));
+        assert!(is_readonly_command("ls -la"));
+        assert!(is_readonly_command("head -n 20 file"));
+        assert!(is_readonly_command("tail -f log"));
+        assert!(is_readonly_command("wc -l file"));
+        assert!(is_readonly_command("less README.md"));
+        assert!(is_readonly_command("more file"));
+        assert!(is_readonly_command("tree /F"));
+        assert!(is_readonly_command("type config.sys"));
+        assert!(is_readonly_command("which python"));
+        assert!(is_readonly_command("pwd"));
+
+        // Windows / PowerShell read-only commands already in the list
+        assert!(is_readonly_command("dir C:\\Users"));
+        assert!(is_readonly_command("whoami"));
+        assert!(is_readonly_command("Get-ChildItem C:\\Users"));
+        assert!(is_readonly_command("Get-Content file.txt"));
+
+        // Git read-only subcommands
+        assert!(is_readonly_command("git status"));
+        assert!(is_readonly_command("git log --oneline -20"));
+    }
+
+    #[test]
+    fn is_readonly_command_find_without_mutation_flags() {
+        // `find` without -delete / -exec / -execdir is read-only
+        assert!(is_readonly_command("find . -name '*.rs'"));
+        assert!(is_readonly_command("find /tmp -name 'foo'"));
+        assert!(is_readonly_command("find . -type f -name '*.log'"));
+        assert!(is_readonly_command("FIND . -name '*.py'"));
+    }
+
+    #[test]
+    fn is_readonly_command_find_with_mutation_flags_is_not_readonly() {
+        // `find` with -delete / -exec / -execdir is NOT read-only
+        assert!(!is_readonly_command("find . -name '*.tmp' -delete"));
+        assert!(!is_readonly_command("find . -exec rm {} \\;"));
+        assert!(!is_readonly_command("find / -execdir touch {} \\;"));
+    }
+
+    #[test]
+    fn is_readonly_command_rejects_mutating_commands() {
+        // Commands that modify state must NOT be classified as readonly
+        assert!(!is_readonly_command("rm file.txt"));
+        assert!(!is_readonly_command("del file.txt"));
+        assert!(!is_readonly_command("python script.py"));
+        assert!(!is_readonly_command("cargo build"));
+        assert!(!is_readonly_command("npm install"));
+        assert!(!is_readonly_command("echo hello > file.txt"));
+        assert!(!is_readonly_command("write_file --path foo"));
     }
 }

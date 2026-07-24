@@ -6,8 +6,7 @@
 use hermix_core::{BudgetConfig, ToolResult};
 
 /// Truncate a single result string to `max_chars`.
-///
-/// Counts **characters** (not bytes) so that CJK / emoji payloads are
+/// /// Counts **characters** (not bytes) so that CJK / emoji payloads are
 /// safe — `content.len() <= max_chars` and `&content[..max_chars]` would
 /// panic on multi-byte boundaries. If the content exceeds `max_chars`,
 /// it is truncated and a sentinel message is appended indicating how
@@ -29,10 +28,9 @@ pub fn truncate_result(content: &str, max_chars: usize) -> String {
 }
 
 /// Enforce budget on a batch of tool results.
-///
-/// - Each result is individually truncated to `budget.max_result_size_chars`.
+/// /// - Each result is individually truncated to `budget.max_result_size_chars`.
 /// - If the aggregate size exceeds `budget.max_aggregate_chars`, results are
-///   further truncated proportionally until the total fits.
+/// further truncated proportionally until the total fits.
 pub fn enforce_budget(results: &mut [ToolResult], budget: &BudgetConfig) {
     // Step 1: Per-result truncation
     for result in results.iter_mut() {
@@ -54,8 +52,7 @@ pub fn enforce_budget(results: &mut [ToolResult], budget: &BudgetConfig) {
 }
 
 /// Check whether the aggregate size of tool results is within budget.
-///
-/// Returns `true` if the total character count of all results does not
+/// /// Returns `true` if the total character count of all results does not
 /// exceed `max_aggregate`.
 pub fn check_aggregate_budget(results: &[ToolResult], max_aggregate: usize) -> bool {
     let total: usize = results.iter().map(|r| r.content.chars().count()).sum();
