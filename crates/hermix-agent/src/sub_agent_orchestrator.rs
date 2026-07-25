@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use hermix_core::{AgentError, LlmProvider, Message};
+use hermix_core::{AgentError, LlmProvider, Message, StreamChunk, StreamDelta};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::time::timeout;
@@ -158,6 +158,16 @@ impl SubAgentRole {
             Self::Plan => "planner that produces plans and strategies",
         }
     }
+
+    /// Lowercased role name (`general` | `explore` | `plan`), used for the
+    /// `role` field of `SubAgentEvent` payloads emitted to the frontend.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Explore => "explore",
+            Self::Plan => "plan",
+        }
+    }
 }
 
 /// Tools available to the Explore role (read-only).
@@ -270,6 +280,11 @@ pub struct SubAgentOrchestratorConfig {
     pub hermix_home: PathBuf,
     pub parent_session_id: Option<String>,
     pub timeout: Duration,
+    /// Optional chunk emitter used to stream sub-agent lifecycle events
+    /// (`sub_agent_update`) to the frontend in real time. Wired by the
+    /// server with the per-stream WS `on_chunk` callback. When `None`, the
+    /// orchestrator still runs sub-agents but does not surface live status.
+    pub chunk_emitter: Option<Arc<dyn Fn(StreamChunk) + Send + Sync>>,
 }
 
 /// In-process executor for `delegate_task` tool calls.
@@ -286,7 +301,11 @@ impl SubAgentOrchestrator {
     /// /// The returned orchestrator inherits the parent's tool registry, provider
     /// and interrupt handle so cancellation propagates from the parent to any
     /// actively running child.
-    pub fn from_parent(parent: &AgentLoop, hermix_home: PathBuf) -> Self {
+    pub fn from_parent(
+        parent: &AgentLoop,
+        hermix_home: PathBuf,
+        chunk_emitter: Option<Arc<dyn Fn(StreamChunk) + Send + Sync>>,
+    ) -> Self {
         Self {
             cfg: SubAgentOrchestratorConfig {
                 parent_config: parent.config.clone(),
@@ -296,6 +315,7 @@ impl SubAgentOrchestrator {
                 hermix_home,
                 parent_session_id: parent.config.session_id.clone(),
                 timeout: Duration::from_secs(DEFAULT_SUB_AGENT_TIMEOUT_SECS),
+                chunk_emitter,
             },
         }
     }
@@ -367,6 +387,45 @@ impl SubAgentOrchestrator {
         self.persist_lineage(&lineage).await;
     }
 
+    /// Emit a `sub_agent_update` chunk to the frontend (if an emitter is
+    /// wired). Called on each lifecycle phase transition so the UI can show
+    /// a live "子代理" panel. Failures are silently ignored — sub-agent
+    /// status is best-effort observability, never on the critical path.
+    fn emit_sub_agent(
+        &self,
+        sub_agent_id: &str,
+        phase: &str,
+        task: &str,
+        role: SubAgentRole,
+        turns: Option<u32>,
+        cost_usd: Option<f64>,
+        error: Option<&str>,
+    ) {
+        let emitter = match &self.cfg.chunk_emitter {
+            Some(e) => e,
+            None => return,
+        };
+        let payload = serde_json::json!({
+            "event": "sub_agent_update",
+            "sub_agent_id": sub_agent_id,
+            "phase": phase,
+            "task": task,
+            "role": role.as_str(),
+            "turns": turns,
+            "cost_usd": cost_usd,
+            "error": error,
+        });
+        emitter(StreamChunk {
+            delta: Some(StreamDelta {
+                content: None,
+                tool_calls: None,
+                extra: Some(payload),
+            }),
+            finish_reason: None,
+            usage: None,
+        });
+    }
+
     /// Execute a `delegate_task` request **asynchronously**: spawn the child
     /// loop on its own detached tokio task, persist a `Spawned` lineage record
     /// immediately, and return a JSON envelope containing `sub_agent_id` right
@@ -384,6 +443,9 @@ impl SubAgentOrchestrator {
             let sub_agent_id = format!("subagent-{}", uuid::Uuid::new_v4());
             let lineage = this.build_lineage(&req, &sub_agent_id, SubAgentStatus::Spawned);
             this.persist_lineage(&lineage).await;
+            // Surface the spawn immediately so the frontend shows the
+            // sub-agent panel before the child begins producing output.
+            this.emit_sub_agent(&sub_agent_id, "spawned", &req.task, req.role, Some(0), None, None);
 
             // Detach the child run — it persists its own terminal lineage when done.
             let this2 = this.clone();
@@ -393,6 +455,25 @@ impl SubAgentOrchestrator {
             tokio::spawn(async move {
                 let outcome = this2.run_child(&req2, &sub_agent_id_for_task).await;
                 this2.persist_terminal_lineage(&base_lineage, &outcome).await;
+                // Surface the terminal state (done / failed) on the panel.
+                let (phase, turns, cost_usd, err) = match &outcome {
+                    Ok(result) => (
+                        "done",
+                        Some(result.total_turns),
+                        result.usage.as_ref().and_then(|u| u.estimated_cost),
+                        None,
+                    ),
+                    Err(e) => ("failed", None, None, Some(e.to_string())),
+                };
+                this2.emit_sub_agent(
+                    &sub_agent_id_for_task,
+                    phase,
+                    &req2.task,
+                    req2.role,
+                    turns,
+                    cost_usd,
+                    err.as_deref(),
+                );
             });
 
             json!({
@@ -468,6 +549,9 @@ impl SubAgentOrchestrator {
         req: &SubAgentRequest,
         sub_agent_id: &str,
     ) -> Result<hermix_core::AgentResult, SubAgentError> {
+        // Surface the start so the frontend flips the sub-agent panel from
+        // "spawned" to "started" (执行中) as soon as the child loop begins.
+        self.emit_sub_agent(sub_agent_id, "started", &req.task, req.role, None, None, None);
         let child_interrupt = InterruptController::new();
 
         // Forward parent cancellation to child via a light watcher task.
@@ -945,6 +1029,7 @@ mod tests {
             hermix_home: tmp.path().to_path_buf(),
             parent_session_id: Some("parent".into()),
             timeout: Duration::from_millis(50),
+            chunk_emitter: None,
         }));
         let out = orch
             .execute(SubAgentRequest {
@@ -985,6 +1070,7 @@ mod tests {
             hermix_home: tmp.path().to_path_buf(),
             parent_session_id: None,
             timeout: Duration::from_secs(2),
+            chunk_emitter: None,
         }));
         let out = orch
             .execute(SubAgentRequest {
@@ -1019,6 +1105,7 @@ mod tests {
             hermix_home: tmp.path().to_path_buf(),
             parent_session_id: Some("root".into()),
             timeout: Duration::from_secs(1),
+            chunk_emitter: None,
         });
         let child = orch.build_child_config(
             &SubAgentRequest {

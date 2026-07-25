@@ -644,6 +644,33 @@ pub enum StreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         new_tier: Option<String>,
     },
+    /// Sub-agent (`delegate_task`) lifecycle event. Streamed in real
+    /// time so the frontend can render a live "子代理" panel showing each
+    /// sub-agent's task goal, current phase (spawned → started → done /
+    /// failed), turn count and estimated cost. The orchestrator emits one
+    /// `sub_agent_update` chunk per phase transition; the server routes it
+    /// here. `sub_agent_id` matches the id returned to the parent LLM so the
+    /// user can correlate the panel with tool output.
+    SubAgentEvent {
+        /// Stable sub-agent id (e.g. `subagent-<uuid>`).
+        sub_agent_id: String,
+        /// Lifecycle phase: `spawned` | `started` | `done` | `failed`.
+        phase: String,
+        /// The task goal the parent delegated.
+        task: String,
+        /// Sub-agent role (`general` | `explore` | `plan`). `None` for legacy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        /// Current turn count (best-effort; `None` until the child reports).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turns: Option<u32>,
+        /// Estimated cost in USD (if the child reported usage).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost_usd: Option<f64>,
+        /// Human-readable terminal error (only present on `failed` phase).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     Error { code: String, message: String },
     Done {
         content: String,
@@ -772,6 +799,13 @@ pub enum StreamEvent {
     /// was referenced by `server::handle_ws_stream_send` but
     /// the transport enum definition was missing it).
     Heartbeat,
+/// (P1-7 / STABILITY-PLAN §2.6): server→client pong response to
+/// a client-initiated application-level ping. The client sends
+/// `WsClientMessage::Ping` every 10s; if it doesn't receive a
+/// `Pong` for 2 consecutive cycles (20s), it closes the WS and
+/// reconnects. This catches half-open connections where TCP stays
+/// up but packets are silently dropped.
+Pong,
 }
 
 /// One row in the task list. Same shape as
@@ -924,6 +958,11 @@ pub enum WsClientMessage {
         agent_id: String,
         comment: String,
     },
+    /// (P1-7 / STABILITY-PLAN §2.6): client→server application-level
+    /// ping. The client sends this every 10s; the server responds with
+    /// `StreamEvent::Pong`. If the client doesn't receive a Pong for 2
+    /// consecutive cycles (20s), it closes the WS and reconnects.
+    Ping,
 }
 
 /// P1.4 — vote direction for member-to-member feedback.

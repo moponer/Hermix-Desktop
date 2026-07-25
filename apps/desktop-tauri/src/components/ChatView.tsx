@@ -7,7 +7,7 @@ import {
   shouldFollowOnStreamChunk,
   computeBottomScrollTop,
 } from "../utils/chatScroll";
-import type { ChatMessage, TimelineStep, QueuedMessage, QueuedImage } from "../types";
+import type { ChatMessage, TimelineStep, QueuedMessage, QueuedImage, SubAgentState } from "../types";
 import type { CompressMethod } from "../utils/imageCompressor";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
 import type { CompactionStatus } from "./CompactionStatusBanner";
@@ -34,6 +34,7 @@ import { StreamingBubble } from "./StreamingBubble";
 import type { StreamPhase } from "../hooks/useStreamChat";
 import type { TodoSnapshotItem } from "../hooks/useStreamChat";
 import { TodoListCard } from "./TodoListCard";
+import { SubAgentPanel } from "./SubAgentPanel";
 
 // Memoized wrapper around the full MessageBubble. Without this, every
 // parent re-render (e.g. every streaming chunk) re-mounts the whole
@@ -729,6 +730,12 @@ interface ChatViewProps {
     itemsById: Record<string, TodoSnapshotItem>;
   }>;
   /**
+   * Live sub-agent (`delegate_task`) state keyed by `subAgentId`.
+   * App.tsx accumulates it from `onSubAgentEvent` and passes it down
+   * so ChatView can render a real-time "子代理" status panel.
+   */
+  subAgents?: Record<string, SubAgentState>;
+  /**
    * Called when the user clicks a checkbox in a TodoListCard. App.tsx
    * is responsible for routing through the backend HTTP layer so the
    * WS forwarder fires and every connected client stays in sync.
@@ -909,6 +916,7 @@ export function ChatView({
   rightOpen,
   onToggleRight,
   todoGroups, onTodoPatch, justPatchedTodoRef,
+  subAgents,
   onApproveApproval,
   onDenyApproval,
   onPathClick,
@@ -2051,6 +2059,13 @@ const clearPendingImages = useCallback(() => {
               </div>
             );
           })()}
+
+          {/* Real-time sub-agent ("子代理") status panel. Driven by
+              `SubAgentEvent` WS messages; shows each delegated task's
+              goal + lifecycle phase as the work runs. Sits below the
+              message stream so the user sees delegated work where the
+              conversation actually lives. */}
+          <SubAgentPanel subAgents={subAgents ?? {}} />
 
           {/* The streaming assistant message is now rendered inline in
               the loop above (so tool cards visually precede streamed

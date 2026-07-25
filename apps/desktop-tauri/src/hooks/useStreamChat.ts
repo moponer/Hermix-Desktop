@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { resolveWebSocketUrl } from "../api";
 import { diagLog, diagWarn, nextDiagId } from "../lib/diag";
 import type { AcuiDirective } from "../acui/types";
+import type { SubAgentEventPayload } from "../types";
 
 /**
  * Single row in the live task list. Mirrors
@@ -188,6 +189,13 @@ interface StreamCallbacks {
     previewKeys: string[];
     turnNumber: number;
   }) => void;
+  /**
+   * A sub-agent (`delegate_task`) lifecycle phase transition. Mirrors
+   * `StreamEvent::SubAgentEvent` in hermix-transport. The front-end
+   * keeps a session-level map keyed by `subAgentId` and updates the
+   * matching row on each event (spawned → started → done / failed).
+   */
+  onSubAgentEvent?: (info: SubAgentEventPayload) => void;
   /**
    * A todo list mutation fired by the server. Four kinds:
    *
@@ -937,6 +945,24 @@ export function useStreamChat(activeSessionId: string | null) {
                 toolRunningRef.current = false;
                 resetStaleTimer();
                 callbacks.onToolComplete?.({ toolCallId, tool, content: evtContent, denialKind });
+                return;
+              }
+
+              if (evtType === "sub_agent_event") {
+                // Live sub-agent lifecycle event. The server serialises
+                // it as `WsEnvelope.event` with `type: "sub_agent_event"`
+                // and the fields on `data.event`. Forward to the caller
+                // so the "子代理" panel can update the matching row.
+                const ev = data?.event ?? data;
+                callbacks.onSubAgentEvent?.({
+                  subAgentId: ev?.sub_agent_id,
+                  phase: ev?.phase,
+                  task: typeof ev?.task === "string" ? ev.task : "",
+                  role: ev?.role,
+                  turns: typeof ev?.turns === "number" ? ev.turns : undefined,
+                  costUsd: typeof ev?.cost_usd === "number" ? ev.cost_usd : undefined,
+                  error: ev?.error,
+                });
                 return;
               }
 

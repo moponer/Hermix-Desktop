@@ -14,6 +14,7 @@ import { RightSidebar, PreviewPanel, type RightTab } from "./components/RightSid
 import { TitleBar } from "./components/TitleBar";
 import { useStreamChat } from "./hooks/useStreamChat";
 import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
+import type { SubAgentState, SubAgentEventPayload } from "./types";
 import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
@@ -781,6 +782,10 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     itemsById: Record<string, TodoSnapshotItem>;
   }
   const [todoGroups, setTodoGroups] = useState<TodoGroup[]>([]);
+  // Live sub-agent (delegate_task) state, keyed by `subAgentId`. Fed by
+  // `onSubAgentEvent` from the WS stream and rendered by `SubAgentPanel`
+  // inside ChatView. Cleared when the active session changes.
+  const [subAgents, setSubAgents] = useState<Record<string, SubAgentState>>({});
   const todoGroupsByIdRef = useRef<Map<string, TodoGroup>>(new Map());
   /**
    * Shared mutable set between App.tsx and every TodoListCard. Card
@@ -863,6 +868,10 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     prevActiveSessionIdRef.current = activeSessionId;
     todoGroupsByIdRef.current.clear();
     setTodoGroups([]);
+    // Clear live sub-agent state on session switch so a previous
+    // session's "子代理" panel doesn't leak into the new one. The
+    // next `sub_agent_event` WS events re-populate it.
+    setSubAgents({});
   }, [activeSessionId]);
 
   // Viewport-aware layout: 三列共存阈值从 state 读取, 不再硬编码 1140.
@@ -2164,6 +2173,25 @@ return {
               };
             }));
           },
+          onSubAgentEvent: (info: SubAgentEventPayload) => {
+            // Accumulate live sub-agent state keyed by subAgentId so the
+            // "子代理" panel can show each delegated task's phase in real
+            // time (spawned → started → done / failed).
+            if (!info?.subAgentId) return;
+            setSubAgents((prev) => ({
+              ...prev,
+              [info.subAgentId]: {
+                subAgentId: info.subAgentId,
+                phase: info.phase,
+                task: info.task,
+                role: info.role,
+                turns: info.turns,
+                costUsd: info.costUsd,
+                error: info.error,
+                updatedAt: Date.now(),
+              },
+            }));
+          },
           onApprovalRequest,
           onClarifyRequest,
           onAcuiDirective: (directive) => acui.apply(directive),
@@ -2752,6 +2780,7 @@ return {
               // App owns the groups store; ChatView renders one card per
               // group right after the originating assistant message.
               todoGroups={todoGroups}
+              subAgents={subAgents}
               onTodoPatch={async (id, patch) => {
                 try {
                   await api.patchTodo(id, patch);

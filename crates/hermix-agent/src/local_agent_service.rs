@@ -642,6 +642,7 @@ impl LocalAgentService {
         agent_config: AgentConfig,
         agent_tool_registry: Arc<crate::agent_loop::ToolRegistry>,
         provider: Arc<dyn LlmProvider>,
+        on_chunk: Arc<dyn Fn(StreamChunk) + Send + Sync>,
     ) -> AgentLoop {
         let hermix_home = agent_config.hermix_home.clone();
         let compressor_model = agent_config.model.clone();
@@ -904,6 +905,19 @@ impl LocalAgentService {
                 );
             }
         }
+
+        // Wire the sub-agent orchestrator so `delegate_task` actually runs.
+        // Previously the orchestrator field was never attached in production,
+        // so sub-agents silently did nothing. The orchestrator also carries
+        // the WS chunk emitter so sub-agent lifecycle events stream to the
+        // frontend in real time (the "子代理" panel).
+        let sub_agent_hermix_home: PathBuf = hh_owned.clone().into();
+        let orch = crate::sub_agent_orchestrator::SubAgentOrchestrator::from_parent(
+            &agent,
+            sub_agent_hermix_home,
+            Some(on_chunk.clone()),
+        );
+        agent = agent.with_sub_agent_orchestrator(Arc::new(orch));
 
         agent
     }
@@ -1444,8 +1458,16 @@ impl AgentService for LocalAgentService {
         }
 
         // Create and run agent
-        let agent =
-            self.spawn_agent_loop(session_id, agent_config, agent_tool_registry, provider);
+        let agent = self.spawn_agent_loop(
+            session_id,
+            agent_config,
+            agent_tool_registry,
+            provider,
+            // Sync (non-streaming) path has no live WS; sub-agent events are
+            // dropped via a no-op emitter. The orchestrator still runs so
+            // `delegate_task` works.
+            Arc::new(|_chunk: StreamChunk| {}),
+        );
         // Register the agent's InterruptController (same as the stream path).
         {
             let sid = session_id.to_string();
@@ -1792,6 +1814,13 @@ impl AgentService for LocalAgentService {
 
         // Convert Arc to Box for AgentLoop
         let stream_forwarder = on_chunk.clone();
+        // Independent clone of the WS chunk emitter for the sub-agent
+        // orchestrator. Must be taken BEFORE `on_chunk` is moved into the
+        // `on_thinking` (and other `move`) closures below, so the
+        // orchestrator can stream `sub_agent_event`s for the whole
+        // lifetime of its detached child task (which may outlive this
+        // `send_message_stream` call).
+        let on_chunk_for_orchestrator = on_chunk.clone();
         let cu_session_id = session_id.to_string();
         let cu_persistence = self.session_persistence.clone();
         let boxed_on_chunk: Box<dyn Fn(StreamChunk) + Send + Sync> = Box::new(move |chunk| {
@@ -2470,7 +2499,13 @@ impl AgentService for LocalAgentService {
 
         // Create and run agent with streaming
         let agent = self
-            .spawn_agent_loop(session_id, agent_config, agent_tool_registry, provider)
+            .spawn_agent_loop(
+                session_id,
+                agent_config,
+                agent_tool_registry,
+                provider,
+                on_chunk_for_orchestrator,
+            )
             .with_callbacks(callbacks);
         // Register the agent's InterruptController so the server's
         // shutdown path can call `interrupt_all()` and let the agent

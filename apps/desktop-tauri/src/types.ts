@@ -237,6 +237,9 @@ export interface ChatMessage {
    * images after a session reload).
    */
   images?: ChatMessageImage[];
+/// Context-compression marker: when `true`, the bubble shows a "已压缩"
+/// badge to indicate this message was compacted by the context engine.
+compressed?: boolean;
   // ── wire-only carry-over fields ─────────────────────────────────
   // Carried verbatim from the JSON response so a session reload shows
   // the same content the user saw mid-stream. The typed-`tool` /
@@ -333,6 +336,41 @@ export interface ExecutionTimelineEvent {
    *  using `Section::label()` from the backend, so the front-end
    *  never has to maintain a hard-coded label table. */
   section_gate_report?: SectionGateReport;
+}
+
+/**
+ * Live sub-agent (`delegate_task`) lifecycle phase. Mirrors the
+ * `phase` field of `StreamEvent::SubAgentEvent` in hermix-transport.
+ * Transition order: `spawned` → `started` → `done` / `failed`.
+ */
+export type SubAgentPhase = "spawned" | "started" | "done" | "failed";
+
+/**
+ * Live sub-agent state, keyed by `subAgentId` in a session-level
+ * `Record`. The "子代理" panel updates the matching row on each phase
+ * transition so the user can watch delegated work in real time.
+ */
+export interface SubAgentState {
+  subAgentId: string;
+  phase: SubAgentPhase;
+  task: string;
+  role?: "general" | "explore" | "plan";
+  turns?: number;
+  costUsd?: number;
+  error?: string;
+  /** Front-end-side wall-clock of the last phase update. */
+  updatedAt: number;
+}
+
+/** Payload delivered by `useStreamChat`'s `onSubAgentEvent` callback. */
+export interface SubAgentEventPayload {
+  subAgentId: string;
+  phase: SubAgentPhase;
+  task: string;
+  role?: "general" | "explore" | "plan";
+  turns?: number;
+  costUsd?: number;
+  error?: string;
 }
 
 /**

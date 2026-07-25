@@ -12,6 +12,8 @@ mod automation_trigger;
 mod orchestration_bus;
 mod task_tracker_adapter;
 mod security;
+mod crash_dump;
+mod metrics;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_state;
 
@@ -42,7 +44,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::Utc;
-use futures::{SinkExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt};
+use std::panic::AssertUnwindSafe;
 use hermix_config::GatewayConfig;
 use hermix_agent::python_alignment::ThinkBlockParser;
 use hermix_agent::ArchiveRef;
@@ -190,10 +193,28 @@ impl ApprovalRegistry {
         // await point.
         {
             let mut sessions = self.inner.lock().unwrap();
-            sessions
+            // (P2-6 / STABILITY-PLAN §2.7): Reject duplicate request_id
+            // instead of silently overwriting the existing pending sender.
+            // Overwriting would cause the first receiver to get
+            // ChannelClosed (deny by default), which is a silent failure.
+            // Instead, return a pre-resolved DeniedByUser so the LLM
+            // sees an explicit "denied" and can retry with a new id.
+            let session_map = sessions
                 .entry(session_id.to_string())
-                .or_default()
-                .insert(request_id.to_string(), tx);
+                .or_default();
+            if session_map.contains_key(request_id) {
+                tracing::warn!(
+                    session_id = %session_id,
+                    request_id = %request_id,
+                    "duplicate approval request_id — rejecting (not overwriting existing pending request)"
+                );
+                // Pre-resolve the new receiver as DeniedByUser so the
+                // caller gets a clear "denied" signal rather than
+                // ChannelClosed ambiguity.
+                let _ = tx.send(ApprovalOutcome::DeniedByUser);
+                return rx;
+            }
+            session_map.insert(request_id.to_string(), tx);
         }
         // Spawn a timer that, on expiry, takes the sender back
         // out of the registry and sends `TimedOut`. If a real
@@ -588,6 +609,54 @@ mod approval_registry_tests {
         assert!(!reg.is_pending("never-session", "req-1"));
     }
 
+    // -- P2-6: duplicate request_id rejection ----------------------
+
+    #[tokio::test]
+    async fn duplicate_request_id_is_rejected_not_overwritten() {
+        // (P2-6 / STABILITY-PLAN §2.7): A duplicate request_id must
+        // NOT overwrite the existing pending sender. The second call
+        // returns a pre-resolved DeniedByUser receiver so the LLM
+        // sees an explicit denial and can retry with a new id.
+        let reg = ApprovalRegistry::with_timeout(std::time::Duration::ZERO);
+
+        // First request — normal registration.
+        let rx1 = reg.request_approval("sess-a", "req-dup");
+        assert!(reg.is_pending("sess-a", "req-dup"));
+
+        // Second request with the same id — must be rejected.
+        let rx2 = reg.request_approval("sess-a", "req-dup");
+
+        // The second receiver should immediately resolve to DeniedByUser.
+        assert_eq!(
+            rx2.await,
+            Ok(hermix_core::ApprovalOutcome::DeniedByUser),
+            "duplicate request_id must return DeniedByUser, not hang"
+        );
+
+        // The original request is still pending and can be resolved normally.
+        assert!(reg.is_pending("sess-a", "req-dup"));
+        assert!(reg.resolve("sess-a", "req-dup", hermix_core::ApprovalOutcome::Approved));
+        assert_eq!(rx1.await, Ok(hermix_core::ApprovalOutcome::Approved));
+    }
+
+    #[tokio::test]
+    async fn duplicate_request_id_different_sessions_are_independent() {
+        // Same request_id in different sessions must not conflict.
+        let reg = ApprovalRegistry::with_timeout(std::time::Duration::ZERO);
+        let rx1 = reg.request_approval("sess-a", "req-1");
+        let rx2 = reg.request_approval("sess-b", "req-1");
+
+        // Both should be pending independently.
+        assert!(reg.is_pending("sess-a", "req-1"));
+        assert!(reg.is_pending("sess-b", "req-1"));
+
+        // Resolve both normally — no rejection.
+        assert!(reg.resolve("sess-a", "req-1", hermix_core::ApprovalOutcome::Approved));
+        assert!(reg.resolve("sess-b", "req-1", hermix_core::ApprovalOutcome::DeniedByUser));
+        assert_eq!(rx1.await, Ok(hermix_core::ApprovalOutcome::Approved));
+        assert_eq!(rx2.await, Ok(hermix_core::ApprovalOutcome::DeniedByUser));
+    }
+
     // -----------------------------------------------------------------
     // record_approval_side_effect — 4-state session/always store
     // updates. We construct a minimal `HttpServerState` with empty
@@ -611,6 +680,8 @@ mod approval_registry_tests {
             hermix_agent::session_persistence::SessionPersistence::new(&hermix_home),
         );
         let _ = session_persistence.ensure_db();
+        let metrics = crate::metrics::MetricsCollector::new(&hermix_home);
+
         HttpServerState {
             config: Arc::new(hermix_config::GatewayConfig::default()),
             tool_registry: Arc::new(hermix_tools::ToolRegistry::new()),
@@ -652,6 +723,7 @@ mod approval_registry_tests {
             active_handles: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             todo_event_tx: None,
             orchestration_bus: OrchestrationEventBus::new(),
+            metrics,
             task_service: None,
             automation_service: None,
             automation_engine_scheduler: None,
@@ -1084,6 +1156,10 @@ pub struct HttpServerState {
     /// events. Tool backends and the agent loop hold a clone to emit;
     /// the WS handler subscribes to forward events to connected clients.
     pub orchestration_bus: OrchestrationEventBus,
+    /// (P2-1 / STABILITY-PLAN §2.8) Lightweight metric collector.
+    /// In-memory accumulation with batch flush to SQLite. Used by
+    /// the `/v1/metrics` dashboard endpoint.
+    pub metrics: crate::metrics::MetricsCollector,
     /// Phase 1 / P1-5: Task lifecycle service. Backed by
     /// [`hermix_task::TaskRepository`] pointing at the same
     /// `sessions.db` (铁律 D/WAL). `None` when the DB path can't be
@@ -1455,6 +1531,8 @@ impl HttpServerState {
         let groupchat_mgr =
             Self::init_groupchat_manager(&hermix_home, Some(agent_service.clone()));
 
+        let metrics = crate::metrics::MetricsCollector::new(&hermix_home);
+
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -1496,6 +1574,7 @@ impl HttpServerState {
             // the early struct literal doesn't need to await anything.
             todo_event_tx: Some(todo_event_tx.clone()),
             orchestration_bus: OrchestrationEventBus::new(),
+            metrics,
             task_service: {
                 let repo = std::sync::Arc::new(hermix_task::TaskRepository::new(
                     session_persistence.db_path().to_path_buf(),
@@ -1670,6 +1749,8 @@ impl HttpServerState {
 
         let groupchat_mgr = Self::init_groupchat_manager(&hermix_home, Some(agent_service.clone()));
 
+        let metrics = crate::metrics::MetricsCollector::new(&hermix_home);
+
         let state = Self {
             config: Arc::new(config),
             tool_registry,
@@ -1708,6 +1789,7 @@ impl HttpServerState {
             active_handles: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             todo_event_tx: Some(todo_event_tx.clone()), // injected after register_builtin_tools below
             orchestration_bus: OrchestrationEventBus::new(),
+            metrics,
             task_service: {
                 let repo = std::sync::Arc::new(hermix_task::TaskRepository::new(
                     session_persistence.db_path().to_path_buf(),
@@ -1920,6 +2002,7 @@ pub fn router(state: HttpServerState) -> Router {
         .route("/v1/protocol/schema", get(protocol_schema))
         .route("/v1/telemetry/client-event", post(client_telemetry_event))
         .route("/metrics", get(metrics_prometheus))
+        .route("/v1/metrics", get(metrics_snapshot))
         .route("/v1/sessions", get(list_sessions).post(create_session))
         .route(
             "/v1/sessions/{session_id}",
@@ -2298,14 +2381,25 @@ async fn register_expert(
 }
 
 async fn metrics_prometheus() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            "text/plain; version=0.0.4; charset=utf-8",
-        )],
-        hermix_telemetry::prometheus_text(),
-    )
+(
+[(
+header::CONTENT_TYPE,
+"text/plain; version=0.0.4; charset=utf-8",
+)],
+hermix_telemetry::prometheus_text(),
+)
 }
+
+/// (P2-1 / STABILITY-PLAN §2.8) JSON snapshot of local metrics
+/// for dashboard display. Returns counters, latency percentiles,
+/// and buffer status.
+async fn metrics_snapshot(
+    State(state): State<HttpServerState>,
+) -> Json<crate::metrics::MetricsSnapshot> {
+    Json(state.metrics.snapshot())
+}
+
+
 
 async fn protocol_schema() -> impl IntoResponse {
     Json(serde_json::json!({
@@ -2745,8 +2839,10 @@ async fn delete_session(
     // resurrect — but leaving these behind is an orphaned-data leak.
     // Best-effort: log + ignore on failure; never fail the delete
     // because of leftover files (the DB row is already gone).
-    let cleanup_session_dir = || {
-        let home = &state.hermix_home;
+    // (P0-3 / STABILITY-PLAN §2.2): typed as a non-capturing `fn`
+    // pointer so it can be `Copy`-captured into `spawn_blocking`
+    // closures at both call sites without being consumed.
+    let cleanup_session_dir: fn(&std::path::Path, &str) = |home, session_id| {
         let data_dir = hermix_config::paths::data_dir_in(home);
 
         // 1. Archive tree: <hermix_home>/sessions/<sid>/ (holds
@@ -2820,9 +2916,10 @@ async fn delete_session(
     // sync with frames/facts or future searches corrupt)
     // Best-effort: any failure is logged + ignored; the session delete
     // itself must never fail because the memory purge hiccupped.
-    let purge_session_memory = || {
+    // (P0-3): same `fn`-pointer pattern as `cleanup_session_dir`.
+    let purge_session_memory: fn(&std::path::Path, &str) = |hermix_home, session_id| {
         let mem_path =
-            hermix_config::paths::data_dir_in(&state.hermix_home)
+            hermix_config::paths::data_dir_in(hermix_home)
                 .join("memory.db");
         let Ok(conn) = rusqlite::Connection::open(&mem_path) else {
             tracing::warn!(
@@ -2952,8 +3049,15 @@ async fn delete_session(
                 let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
                 // same success-path logging/cleanup as the
                 // happy path below (see cleanup_session_dir + tracing::info).
-                cleanup_session_dir();
-                purge_session_memory();
+                // (P0-3): side effects run fire-and-forget on the
+                // blocking pool so the HTTP response returns
+                // immediately and the async worker stays free.
+                let home = state.hermix_home.clone();
+                let sid = session_id.clone();
+                tokio::task::spawn_blocking(move || {
+                    cleanup_session_dir(&home, &sid);
+                    purge_session_memory(&home, &sid);
+                });
                 tracing::info!(
                     session_id = %session_id,
                     "delete_session: deleted session + cascade child rows (after FTS rebuild)"
@@ -3008,8 +3112,16 @@ async fn delete_session(
     // surface the deletion in backend logs. Previously the
     // happy path was completely silent, so operators/owners had no way
     // to confirm a delete actually happened.
-    cleanup_session_dir();
-    purge_session_memory();
+    // (P0-3): side effects run fire-and-forget on the blocking pool
+    // — the DB row is already gone; fs cleanup + memory purge are
+    // best-effort and must not block the HTTP response or the async
+    // runtime worker (same class of fix as Bug #3).
+    let home = state.hermix_home.clone();
+    let sid = session_id.clone();
+    tokio::task::spawn_blocking(move || {
+        cleanup_session_dir(&home, &sid);
+        purge_session_memory(&home, &sid);
+    });
     tracing::info!(
         session_id = %session_id,
         "delete_session: deleted session + cascade child rows (messages/compression_archives/compression_summary_history/token_usage)"
@@ -3539,9 +3651,9 @@ async fn approve_via_rest(
         // `(None, None)` and the function returns early without
         // touching the profile. The regular command-side-effect then
         // runs as the fallback.
-        record_resource_approval_side_effect(&state, &session_id, request_id, choice);
+        record_resource_approval_side_effect(&state, &session_id, request_id, choice).await;
         if let Ok(Some(cmd)) =
-            lookup_pending_command(&state, &session_id, request_id)
+            lookup_pending_command(&state, &session_id, request_id).await
         {
             record_approval_side_effect(&state, &session_id, &cmd, choice);
         }
@@ -3880,17 +3992,8 @@ const WS_HEARTBEAT_INTERVAL_SECS: u64 = 15;
 fn check_recent_send(state: &HttpServerState, session_id: &str, text: &str) -> Option<u64> {
     let key = dedup_key(session_id, text);
     let now = std::time::Instant::now();
-    // ★ DIAG unconditional stderr print so we can confirm
-    // dedup is reached even if tracing is filtered.
-    eprintln!(
-        "!!!DEDUP CALLED!!! session={} text={:?} key={} map_lock_ok={}",
-        session_id,
-        text,
-        key,
-        state.recent_sends.lock().is_ok()
-    );
-    // Tdiagnostic — confirm dedup is reached in real WS path.
-    tracing::info!(
+    // Dedup reached (diagnostic; suppressed at default tracing level).
+    tracing::debug!(
         session = %session_id,
         key = %key,
         text_len = text.len(),
@@ -3960,18 +4063,23 @@ async fn handle_ws_stream_send(
 ) {
     use tokio::sync::mpsc;
 
-    // ★ DIAG unconditional entry print — owner reported
-    // 10x send_message_stream on backend but only 1x handleSendMessage
-    // on frontend. If we see 10x here too, the trigger is upstream
-    // (multiple WS frames from a single sendStream call → most likely
-    // browser-side auto-resume or our own loop somewhere we haven't
-    // found yet).
-    eprintln!(
-        "!!!HANDLE_WS_STREAM_SEND_ENTRY!!! session={} text_len={} text_preview={:?} trace_id={}",
-        session_id,
-        request.text.len(),
-        &request.text.chars().take(40).collect::<String>(),
-        trace_id
+    // (P1-10 / STABILITY-PLAN §2.8): replaced unconditional eprintln
+    // with tracing::debug! behind the "ws_stream_send" target. In
+    // production (default log filter) this produces zero output; enable
+    // with RUST_LOG=ws_stream_send=debug to diagnose WS send issues.
+    //
+    // LESSON: WS 静默丢消息 — handle_ws_stream_send 永久诊断
+    //   根因：WebView2 known issue 导致 WS 静默丢消息，需要 entry 点
+    //   诊断日志来排查。原为 eprintln 永久输出，P1-10 改为可关闭的
+    //   tracing::debug!。
+    //   测试：handle_ws_stream_send_tests（隐式 — 通过 dedup 逻辑覆盖）
+    tracing::debug!(
+        target: "ws_stream_send",
+        session = %session_id,
+        text_len = request.text.len(),
+        text_preview = %&request.text.chars().take(40).collect::<String>(),
+        trace_id = %trace_id,
+        "handle_ws_stream_send entry"
     );
 
     // (type-B root-cause): soft-shutdown `Notify` for the
@@ -4944,6 +5052,59 @@ async fn handle_ws_stream_send(
                                 },
                             }
                         }
+                        "sub_agent_update" => {
+                            // Real-time sub-agent (delegate_task) lifecycle
+                            // event. Routed to the frontend as
+                            // `StreamEvent::SubAgentEvent` so the chat UI can
+                            // render a live "子代理" panel (task goal + phase
+                            // badge + turns + cost). The payload is produced
+                            // by `sub_agent_orchestrator::emit_sub_agent`.
+                            let sub_agent_id = extra
+                                .get("sub_agent_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if sub_agent_id.is_empty() {
+                                return;
+                            }
+                            let phase = extra
+                                .get("phase")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            let task = extra
+                                .get("task")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let role = extra
+                                .get("role")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            let turns = extra
+                                .get("turns")
+                                .and_then(|v| v.as_u64())
+                                .map(|v| v as u32);
+                            let cost_usd = extra.get("cost_usd").and_then(|v| v.as_f64());
+                            let error = extra
+                                .get("error")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            WsEnvelope {
+                                version: 1,
+                                request_id: request_id.clone(),
+                                trace_id: trace_id_for_stream.clone(),
+                                event: StreamEvent::SubAgentEvent {
+                                    sub_agent_id,
+                                    phase,
+                                    task,
+                                    role,
+                                    turns,
+                                    cost_usd,
+                                    error,
+                                },
+                            }
+                        }
                         _ => {
                             tracing::debug!(event = %event_type, "unknown extra event type; skipping");
                             return;
@@ -5000,13 +5161,62 @@ async fn handle_ws_stream_send(
         });
     }
 
+    // P2-4: Clone hermix_home + session_persistence for crash dump
+    // path inside the agent task's catch_unwind recovery.
+    let hermix_home_clone = state.hermix_home.clone();
+    let session_persistence_clone = state.session_persistence.clone();
+
     // P1-2: Clone trace_id for the heartbeat arm before the spawn
     // moves trace_id_owned into the agent task closure.
     let trace_id_heartbeat = trace_id_owned.clone();
     let agent_handle = tokio::spawn(async move {
-        let result = agent_service
-            .send_message_stream(&session_id_clone, &request_text, overrides, on_chunk)
-            .await;
+        // (P1-1 / STABILITY-PLAN §2.3): wrap the agent call in
+        // catch_unwind so a panic in a tool handler or LLM provider
+        // doesn't silently kill the WS connection. The panic is
+        // converted to a structured Error event that the frontend
+        // renders as a user-visible error message, and the session
+        // cleanup still runs normally. Requires panic=unwind (set in
+        // Cargo.toml [profile.release]).
+        let result = AssertUnwindSafe(
+            agent_service
+                .send_message_stream(&session_id_clone, &request_text, overrides, on_chunk)
+        )
+        .catch_unwind()
+        .await;
+
+        // Convert a caught panic into an AgentError so the existing
+        // error-handling path below handles it uniformly.
+        let result = match result {
+            Ok(inner) => inner,
+            Err(panic_payload) => {
+                let msg = panic_payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.clone()))
+                    .unwrap_or_else(|| "internal panic (unknown payload type)".to_string());
+                tracing::error!(
+                    session = %session_id_clone,
+                    panic_msg = %msg,
+                    "agent task panicked — converted to error event for WS client"
+                );
+                // (P2-4 / STABILITY-PLAN §2.8): Write a crash dump for
+                // post-mortem diagnostics. Best-effort — failure to write
+                // the dump is logged inside write_crash_dump and does NOT
+                // block the error recovery path (STABILITY-PLAN §4 F10).
+                let recent_messages = session_persistence_clone
+                    .load_session(&session_id_clone)
+                    .unwrap_or_default();
+                crash_dump::write_crash_dump(
+                    &hermix_home_clone,
+                    &session_id_clone,
+                    &msg,
+                    &recent_messages,
+                );
+                Err(hermix_core::AgentError::ToolExecution(format!(
+                    "internal error (panic): {msg}"
+                )))
+            }
+        };
 
         // FIX: Previously, if ws_disconnected was true, we
         // skipped sending the terminal Done/Error event entirely. This
@@ -5383,12 +5593,12 @@ async fn handle_ws_stream_send(
                                             session_id,
                                             &request_id,
                                             choice,
-                                        );
+                                        ).await;
                                         if let Ok(Some(cmd)) = lookup_pending_command(
                                             &state,
                                             session_id,
                                             &request_id,
-                                        ) {
+                                        ).await {
                                             record_approval_side_effect(
                                                 &state,
                                                 session_id,
@@ -5415,6 +5625,20 @@ async fn handle_ws_stream_send(
                                             "clarify_response (streaming) resolve failed"
                                         );
                                     }
+                                }
+                                WsClientMessage::Ping => {
+                                    // (P1-7): respond to client application-level
+                                    // ping with Pong so the client can detect
+                                    // half-open connections.
+                                    let pong = WsEnvelope {
+                                        version: 1,
+                                        request_id: None,
+                                        trace_id: trace_id_heartbeat.clone(),
+                                        event: StreamEvent::Pong,
+                                    };
+                                    let _ = sender.send(WsMessage::Text(
+                                        serde_json::to_string(&pong).unwrap_or_default().into(),
+                                    )).await;
                                 }
                                 other => {
                                     // Send messages during streaming are
@@ -6308,12 +6532,12 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
                                     &session_id,
                                     &request_id,
                                     choice,
-                                );
+                                ).await;
                                 if let Ok(Some(cmd)) = lookup_pending_command(
                                     &state,
                                     &session_id,
                                     &request_id,
-                                ) {
+                                ).await {
                                     record_approval_side_effect(
                                         &state,
                                         &session_id,
@@ -6562,6 +6786,20 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
                             }
                             continue;
                         }
+                        WsClientMessage::Ping => {
+                            // (P1-7): respond to client application-level
+                            // ping with Pong even when no stream is active.
+                            let pong = WsEnvelope {
+                                version: 1,
+                                request_id: None,
+                                trace_id: trace_id_base.clone(),
+                                event: StreamEvent::Pong,
+                            };
+                            let _ = sender.send(WsMessage::Text(
+                                serde_json::to_string(&pong).unwrap_or_default().into(),
+                            )).await;
+                            continue;
+                        }
                     }
                 }
 
@@ -6624,15 +6862,23 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
 /// grant. We now rely on the persisted `messages.extra` row
 /// alone — the registry state is irrelevant for resource
 /// extraction because the data lives in SQLite.
-fn lookup_pending_command(
+async fn lookup_pending_command(
     state: &HttpServerState,
     session_id: &str,
     request_id: &str,
 ) -> Result<Option<String>, String> {
+    // Offload the synchronous SQLite read to a blocking thread so the approval
+    // handler — which runs on the async executor that also serves every
+    // WebSocket heartbeat — never stalls on disk I/O or a db write lock.
+    // (STABILITY-PLAN P0-3)
+    let db_path = state.session_persistence.db_path().to_path_buf();
+    let session_id = session_id.to_string();
+    let request_id = request_id.to_string();
+    tokio::task::spawn_blocking(move || {
     // Pull the original arguments from the persisted approval
     // message so we can extract the `command` field.
     let needle = format!("%\"request_id\":\"{}\"%", request_id);
-    let conn = rusqlite::Connection::open(&state.session_persistence.db_path())
+    let conn = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("open sessions db: {e}"))?;
     let mut stmt = conn
         .prepare(
@@ -6661,6 +6907,9 @@ fn lookup_pending_command(
         .and_then(|c| c.as_str())
         .map(|s| s.to_string());
     Ok(command)
+    })
+    .await
+    .map_err(|e| format!("lookup_pending_command join error: {e}"))?
 }
 
 /// P6 (2026-07-20): lookup variant for **resource-scope** approvals
@@ -6675,13 +6924,18 @@ fn lookup_pending_command(
 /// and silently discard every Session/Always grant. The persisted
 /// `messages.extra` row is the source of truth for the resource
 /// arguments — registry state is irrelevant.
-fn lookup_pending_resource(
+async fn lookup_pending_resource(
     state: &HttpServerState,
     session_id: &str,
     request_id: &str,
 ) -> Result<(Option<String>, Option<String>), String> {
+    // Same offloading rationale as `lookup_pending_command` (P0-3).
+    let db_path = state.session_persistence.db_path().to_path_buf();
+    let session_id = session_id.to_string();
+    let request_id = request_id.to_string();
+    tokio::task::spawn_blocking(move || {
     let needle = format!("%\"request_id\":\"{}\"%", request_id);
-    let conn = rusqlite::Connection::open(&state.session_persistence.db_path())
+    let conn = rusqlite::Connection::open(&db_path)
         .map_err(|e| format!("open sessions db: {e}"))?;
     let mut stmt = conn
         .prepare(
@@ -6714,6 +6968,9 @@ fn lookup_pending_resource(
         .and_then(|c| c.as_str())
         .map(|s| s.to_string());
     Ok((path, command))
+    })
+    .await
+    .map_err(|e| format!("lookup_pending_resource join error: {e}"))?
 }
 
 /// Persist the 4-state side effect of a `Session` / `Always`
@@ -6825,13 +7082,13 @@ fn record_approval_side_effect(
 /// back to `config.yaml`; `Session` keeps the grant in-memory only
 /// (the existing `session_bypass` mechanism is for terminal
 /// commands and doesn't carry paths). `Once` / `Deny` are no-ops.
-fn record_resource_approval_side_effect(
+async fn record_resource_approval_side_effect(
     state: &HttpServerState,
     session_id: &str,
     request_id: &str,
     choice: hermix_transport::ApprovalChoice,
 ) {
-    let (path, command) = match lookup_pending_resource(state, session_id, request_id) {
+    let (path, command) = match lookup_pending_resource(state, session_id, request_id).await {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(
