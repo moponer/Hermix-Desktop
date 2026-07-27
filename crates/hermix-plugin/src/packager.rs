@@ -184,9 +184,12 @@ impl EsbuildPackager {
             .arg("--color=false");
 
         if bundle_deps {
-            // For UI, we want to externalize React only if it's
-            // imported from the shell. Otherwise, bundle everything.
-            // Default: bundle everything for self-contained output.
+            // UI bundles run inside the app-shell loader, which provides
+            // React/ReactDOM via an import map (esm.sh). Externalizing them
+            // avoids "Could not resolve 'react'" during esbuild and prevents
+            // duplicate React instances at runtime.
+            cmd.arg("--external:react")
+                .arg("--external:react-dom/client");
         }
 
         cmd.stdout(Stdio::piped())

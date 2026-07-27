@@ -4,6 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>自定义应用</title>
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.3.1",
+            "react-dom/client": "https://esm.sh/react-dom@18.3.1/client"
+        }
+    }
+    </script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -97,8 +105,8 @@
 
                 // 5. 渲染
                 loading.style.display = "none";
-                const React = await import("https://esm.sh/react@18.3.1");
-                const ReactDOM = await import("https://esm.sh/react-dom@18.3.1/client");
+                const React = await import("react");
+                const ReactDOM = await import("react-dom/client");
 
                 // 如果 ui.bundle.js 已经打包了 React (esbuild --bundle), 直接渲染
                 // 否则用 esm.sh 的 React
