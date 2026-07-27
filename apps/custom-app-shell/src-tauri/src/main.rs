@@ -362,6 +362,39 @@ async fn shell_temp_file(prefix: Option<String>, suffix: Option<String>) -> Resu
     Ok(path.to_string_lossy().to_string())
 }
 
+// ── IPC 命令: 冒烟测试上报 ──
+//
+// 仅当父进程设置了 HERMIX_SMOKE_LOG 环境变量时才写日志 (正常模式该变量
+// 为空, 命令直接返回, 零开销). 日志每行一条 JSON:
+//   {"level":"ready"|"error"|..., "message":"..."}
+
+#[tauri::command]
+async fn smoke_report(level: String, message: String) {
+    let Some(log_path) = std::env::var("HERMIX_SMOKE_LOG")
+        .ok()
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let entry = serde_json::json!({
+        "ts": ts,
+        "level": level,
+        "message": message,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = writeln!(f, "{}", entry);
+        let _ = f.flush();
+    }
+}
+
 // ── 入口 ──
 
 fn main() {
@@ -374,6 +407,10 @@ fn main() {
         .unwrap_or("自定义应用")
         .to_string();
     let resizable = wc["resizable"].as_bool().unwrap_or(true);
+
+    // 冒烟模式: 由父进程 (server / 桌面) 通过 HERMIX_SMOKE=1 激活.
+    // 该模式下窗口隐藏, 仅用于无头捕获运行时错误.
+    let smoke_mode = std::env::var("HERMIX_SMOKE").map(|v| v == "1").unwrap_or(false);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -401,9 +438,14 @@ fn main() {
             shell_env_list,
             shell_temp_dir,
             shell_temp_file,
+            smoke_report,
         ])
         .setup(move |app| {
             if let Some(window) = app.get_webview_window("main") {
+                if smoke_mode {
+                    // 冒烟模式: 隐藏窗口, 避免干扰用户
+                    let _ = window.set_visible(false);
+                }
                 let _ = window.set_title(&title);
                 let _ = window.set_resizable(resizable);
                 if width > 0.0 && height > 0.0 {

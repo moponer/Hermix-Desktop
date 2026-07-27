@@ -530,6 +530,7 @@ pub fn run() {
             commands_custom_app::custom_app_run,
             commands_custom_app::custom_app_open_dir,
             commands_custom_app::custom_app_validate,
+            commands_custom_app::custom_app_smoke_test,
         ])
         .run(tauri::generate_context!())
         .expect("error while running hermix-desktop");

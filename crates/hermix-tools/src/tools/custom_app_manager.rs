@@ -24,7 +24,7 @@ use hermix_core::{
 };
 use hermix_plugin::{
     api::{AppResponse, AppSummary, CreateAppRequest},
-    PluginManager,
+    run_smoke_test_async, validate_custom_app, PluginManager,
 };
 
 use crate::ToolRegistry;
@@ -219,6 +219,67 @@ impl CustomAppManagerHandler {
         });
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
+
+    /// 开发期自验证 (L0+L1): 校验 manifest 完整性 + 导入白名单 + esbuild 预打包.
+    /// 不打包、不改任何文件, 仅静态/预打包分析. 返回结构化报告.
+    async fn validate(&self, params: &Value) -> Result<String, ToolError> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
+
+        let app_dir = self.manager.plugins_dir().join(id);
+        if !app_dir.exists() {
+            return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
+        }
+
+        let report = validate_custom_app(&app_dir);
+        let result = json!({
+            "success": report.ok,
+            "message": if report.ok {
+                format!("应用 '{id}' 开发期校验通过 (manifest + 导入白名单 + esbuild 预打包)")
+            } else {
+                format!("应用 '{id}' 开发期校验发现问题, 请根据 issues 修复后重试")
+            },
+            "validation": report,
+        });
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+    }
+
+    /// L2 运行时冒烟测试: 先刷新打包产物, 再启动壳加载应用并捕获运行时错误.
+    /// 通过 `run_smoke_test_async` 在 blocking 线程上启动壳、轮询日志.
+    async fn smoke(&self, params: &Value) -> Result<String, ToolError> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
+
+        let app_dir = self.manager.plugins_dir().join(id);
+        if !app_dir.exists() {
+            return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
+        }
+
+        // 先刷新打包产物 (esbuild 打包 + 复制壳)
+        self.manager
+            .package_plugin(id)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("打包应用失败: {e}")))?;
+
+        let app_dir_buf = app_dir.to_path_buf();
+        let shell_buf = self.manager.shell_path().to_path_buf();
+        let report = run_smoke_test_async(app_dir_buf, shell_buf).await;
+
+        let result = json!({
+            "success": report.ok,
+            "message": if report.ok {
+                format!("应用 '{id}' 运行时冒烟测试通过 (已挂载, 无运行时错误)")
+            } else {
+                format!("应用 '{id}' 运行时冒烟测试发现问题 (见 smoke.errors)")
+            },
+            "smoke": report,
+        });
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+    }
 }
 
 #[async_trait]
@@ -237,8 +298,10 @@ impl ToolHandler for CustomAppManagerHandler {
             "delete" => self.delete(&params).await,
             "package" => self.package(&params).await,
             "run" => self.run(&params).await,
+            "validate" => self.validate(&params).await,
+            "smoke" => self.smoke(&params).await,
             other => Err(ToolError::InvalidParams(format!(
-                "未知操作: '{other}'。可用: create, update, list, get, delete, package, run"
+                "未知操作: '{other}'。可用: create, update, list, get, delete, package, run, validate, smoke"
             ))),
         }
     }
@@ -251,7 +314,7 @@ impl ToolHandler for CustomAppManagerHandler {
             json!({
                 "type": "string",
                 "description": "要执行的操作",
-                "enum": ["create", "update", "list", "get", "delete", "package", "run"]
+                "enum": ["create", "update", "list", "get", "delete", "package", "run", "validate", "smoke"]
             }),
         );
 
@@ -323,7 +386,7 @@ impl ToolHandler for CustomAppManagerHandler {
 
         tool_schema(
             "custom_app_manager",
-            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行。打包使用预编译壳+esbuild，用户无需安装Rust/Tauri。",
+            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行、开发期校验(validate)、运行时冒烟测试(smoke)。打包使用预编译壳+esbuild，用户无需安装Rust/Tauri。开发应用时应: 写代码→validate→失败则修复→再validate，直到 ok=true；如需进一步确认运行时无报错，可调用 smoke。",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }

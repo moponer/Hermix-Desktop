@@ -92,6 +92,36 @@ tags:
 }
 ```
 
+### action: validate — 开发期自验证 (L0+L1, 必须)
+
+```json
+{
+  "action": "validate",
+  "id": "pdf-converter"
+}
+```
+
+返回 `{ success, message, validation: { ok, issues: [{level, code, message}] } }`。
+- `ok == true` → 通过, 可继续 / 视为开发完成。
+- `ok == false` → 根据 `issues` 修复代码, 再次 `validate`, **直到 `ok == true`**。
+校验覆盖: manifest 完整性 + `ui.tsx`/`backend.ts` 导入白名单 (只允许
+react / react-dom/client + 相对/URL 路径, 裸 npm 包会报错) + 用与真实打包同款的
+esbuild 标志做预打包。
+
+### action: smoke — 运行时冒烟测试 (L2, 可选)
+
+```json
+{
+  "action": "smoke",
+  "id": "pdf-converter"
+}
+```
+
+先刷新打包产物, 再无头启动壳加载应用, 捕获运行时错误 (白屏 / 运行时异常 /
+挂载失败)。返回 `{ success, message, smoke: { ok, ready, errors, detail } }`。
+`ok == false` 时根据 `smoke.errors` 修复代码后重试。仅当需要进一步确认运行时
+行为时调用 (会真实启动隐藏壳进程, 较重)。
+
 ## backend.ts 规范
 
 `backend.ts` 在 WebView2 中运行，**不能使用 Node.js API**（如 `fs`、`path`）。
@@ -246,9 +276,16 @@ export default function App() {
 2. **设计 manifest**: 确定应用 ID、名称、窗口大小、权限
 3. **编写 backend.ts**: 实现业务逻辑，使用 `invoke` 进行系统操作
 4. **编写 ui.tsx**: 实现 React UI，调用后端或直接使用 `invoke`
-5. **创建应用**: 使用 `custom_app_manager` 的 `create` action
-6. **提示用户打包**: 告诉用户在"应用"页面点击"打包"按钮
-7. **提示用户运行**: 打包完成后点击"启动"按钮
+5. **创建/更新应用**: 使用 `custom_app_manager` 的 `create` / `update` action
+6. **★ 开发期自验证 (必须, 闭环)**: 每次生成或修改代码后, 调用 `custom_app_manager` 的
+   `validate` action。若返回 `ok == false`, 根据 `issues` 修复代码, 再次 `validate`,
+   **反复直到 `ok == true` 才算「开发完成」**。这一步会把 manifest 错误、非法导入
+   (裸 npm 包)、esbuild 打包失败等问题挡在开发期, 用户不需要帮你测打包。
+7. **(可选) 运行时冒烟**: 若想进一步确认「打包后能跑 / 不白屏 / 无运行时报错」, 调用
+   `smoke` action (会先打包再无头启动壳捕获运行时错误)。`ok == false` 时根据
+   `smoke.errors` 修复。注意冒烟会真实启动一个隐藏壳进程, 较重, 仅在需要时调用。
+8. **提示用户打包/运行**: 告诉用户在"应用"页面点击"打包""启动"按钮即可, 此时应已无
+   已知错误。
 
 ## 最佳实践
 

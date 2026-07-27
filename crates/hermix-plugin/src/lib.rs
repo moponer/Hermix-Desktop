@@ -20,6 +20,8 @@ pub mod packager;
 pub mod icon_library;
 pub mod validate;
 pub use validate::validate_custom_app;
+pub mod smoke;
+pub use smoke::{run_smoke_test, run_smoke_test_async, SmokeError, SmokeReport};
 pub mod window_manager;
 pub mod api;
 

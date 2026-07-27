@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hermix_config::paths::hermix_home;
-use hermix_plugin::{validate_custom_app, PluginManager, PluginWindowManager};
+use hermix_plugin::{run_smoke_test_async, validate_custom_app, PluginManager, PluginWindowManager};
 
 /// Application state holding the PluginManager.
 pub struct CustomAppState {
@@ -261,4 +261,34 @@ pub async fn custom_app_validate(id: String) -> Result<serde_json::Value, String
     }
     let report = validate_custom_app(&app_dir);
     serde_json::to_value(&report).map_err(|e| format!("序列化校验报告失败: {e}"))
+}
+
+/// L2 运行时冒烟测试: 先刷新打包产物, 再无头启动壳加载应用并捕获运行时错误.
+///
+/// 返回结构化报告 `{ ok, ready, packaged, errors: [{message}], detail }`.
+/// agent 开发循环或用户「冒烟测试」按钮可调用, 用于把"打包后能跑 / 不白屏 /
+/// 无运行时报错"这类问题也在开发期暴露, 而非用户点击启动后才发现.
+#[tauri::command]
+pub async fn custom_app_smoke_test(id: String) -> Result<serde_json::Value, String> {
+    let shell_path = resolve_shell_path();
+    let esbuild_path = resolve_esbuild_path();
+    let apps_dir = resolve_apps_dir();
+    let app_dir = apps_dir.join(&id);
+    if !app_dir.exists() {
+        return Err(format!("应用目录不存在: {}", app_dir.display()));
+    }
+
+    let manager = PluginManager::new(apps_dir, shell_path.clone(), esbuild_path);
+    manager
+        .scan_plugins()
+        .map_err(|e| format!("扫描应用失败: {e}"))?;
+
+    // 刷新打包产物 (esbuild 打包 + 复制壳)
+    manager
+        .package_plugin(&id)
+        .await
+        .map_err(|e| format!("编译应用失败: {e}"))?;
+
+    let report = run_smoke_test_async(app_dir, shell_path).await;
+    serde_json::to_value(&report).map_err(|e| format!("序列化冒烟报告失败: {e}"))
 }

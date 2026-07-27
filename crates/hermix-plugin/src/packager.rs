@@ -297,7 +297,7 @@ fn generate_default_ui(app_name: &str) -> String {
 import {{ createElement as e }} from "react";
 function DefaultApp() {{
   return e('div', {{ style: {{ padding: '40px', textAlign: 'center', fontFamily: 'system-ui' }} }},
-    e('h1', {{ style: {{ color: '#6c63ff' }} }}, '{app_name}'),
+    e('h1', {{ style: {{ color: '#232328' }} }}, '{app_name}'),
     e('p', {{ style: {{ color: '#888' }} }}, '此应用没有自定义 UI。后端结果将在控制台显示。'),
   );
 }}

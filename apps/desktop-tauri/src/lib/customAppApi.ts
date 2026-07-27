@@ -165,6 +165,25 @@ export interface ValidationReport {
   issues: ValidationIssue[];
 }
 
+// ── 运行时冒烟测试 (L2) ──
+
+export interface SmokeError {
+  message: string;
+}
+
+export interface SmokeReport {
+  /** 是否通过 (已挂载且无运行时错误) */
+  ok: boolean;
+  /** 应用是否成功挂载 (React 渲染出内容) */
+  ready: boolean;
+  /** 是否已打包 (dist 存在) */
+  packaged: boolean;
+  /** 运行时错误列表 */
+  errors: SmokeError[];
+  /** 详细日志 (每行一条事件) */
+  detail: string;
+}
+
 /**
  * 开发期自验证: 在打包/运行前校验应用源码, 把打包期错误提前到开发期暴露。
  * 校验 manifest 完整性、导入白名单 (只允许 react / react-dom/client +
@@ -175,4 +194,13 @@ export interface ValidationReport {
  */
 export async function validateCustomApp(id: string): Promise<ValidationReport> {
   return invoke<ValidationReport>("custom_app_validate", { id });
+}
+
+/**
+ * L2 运行时冒烟测试: 先刷新打包产物, 再无头启动壳加载应用并捕获运行时错误
+ * (白屏 / 运行时异常 / 挂载失败)。通过 Tauri 命令 `custom_app_smoke_test` 暴露。
+ * 返回结构化报告, `ok === false` 时 `errors` 含具体运行时问题。
+ */
+export async function smokeTestCustomApp(id: string): Promise<SmokeReport> {
+  return invoke<SmokeReport>("custom_app_smoke_test", { id });
 }

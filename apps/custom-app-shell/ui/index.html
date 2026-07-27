@@ -73,6 +73,26 @@
         // Tauri v2 内部桥接，壳内始终可用
         const invoke = typeof window !== "undefined" && window.__TAURI_INTERNALS__?.invoke;
 
+        // 运行时冒烟测试支持: 把 JS 运行时错误 / 挂载结果上报给壳的 smoke_report IPC.
+        // 仅在父进程以 HERMIX_SMOKE=1 启动壳时, 该 IPC 才会把事件写入日志文件.
+        let __smokeReportedReady = false;
+        function smokeReport(level, message) {
+            if (!invoke) return;
+            try {
+                invoke("smoke_report", { level, message });
+            } catch (_) { /* 正常模式无副作用 */ }
+        }
+        // 全局错误监听 — 尽早安装, 覆盖后续动态 import 与渲染期错误
+        window.addEventListener("error", (e) => {
+            const msg = e.error && e.error.stack ? e.error.stack : (e.message || String(e));
+            smokeReport("error", "window.onerror: " + msg);
+        });
+        window.addEventListener("unhandledrejection", (e) => {
+            const r = e.reason;
+            const msg = (r && (r.stack || r.message)) ? (r.stack || r.message) : String(r);
+            smokeReport("error", "unhandledrejection: " + msg);
+        });
+
         async function readResourceText(path) {
             if (invoke) {
                 try {
@@ -135,11 +155,25 @@
                 const React = await import("react");
                 const ReactDOM = await import("react-dom/client");
                 ReactDOM.createRoot(root).render(React.createElement(Component));
+
+                // 挂载检测: React 异步渲染, 稍后检查 app-root 是否产生了内容.
+                // 同时捕获渲染期 / effect 内抛出的运行时错误 (会被上面的全局监听上报).
+                setTimeout(() => {
+                    if (root.childElementCount > 0) {
+                        if (!__smokeReportedReady) {
+                            __smokeReportedReady = true;
+                            smokeReport("ready", "应用已挂载 (app-root 有内容)");
+                        }
+                    } else {
+                        smokeReport("error", "白屏检测: 渲染后 app-root 在 1.5s 内仍为空 (组件可能初始返回 null 或抛错未捕获)");
+                    }
+                }, 1500);
             } catch (e) {
                 loading.style.display = "none";
                 errorDiv.style.display = "block";
                 errorMsg.textContent = e instanceof Error ? `${e.message}\n${e.stack || ""}` : String(e);
                 console.error("[app-loader] 加载失败:", e);
+                smokeReport("error", "loadApp 失败: " + (e && e.stack ? e.stack : (e && e.message) || String(e)));
             }
         }
 
