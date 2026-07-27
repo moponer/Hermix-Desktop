@@ -1,0 +1,47 @@
+/*
+ * Rainforest Theme (雨林 · 墨绿)
+ * 深森林绿静态色场 + 轻微暗角阴影，无动画、无粒子、无雨。
+ * 基底 = SVG 内部 radialGradient（墨绿场）+ 烘焙暗角（单条 data URI，无 CSS 线性渐变）。
+ * token 在暗色基础上整体染绿，accent 用低饱和鼠尾草绿，无任何蓝紫。
+ */
+@layer themes {
+  :root[data-theme="rainforest"] {
+    --color-bg-app:         #0a1d12;
+    --color-bg-primary:     #15241c;
+    --color-bg-secondary:   #1b2c22;
+    --color-bg-tertiary:    #223328;
+    --color-bg-hover:       #1e3026;
+    --color-bg-active:      #283a2e;
+    --color-bg-card:        #15241c;
+    --color-bg-elevated:    #1d2e24;
+    --color-bg-code:        #101b14;
+    --color-bg-code-header: #16241c;
+    --color-bg-code-border: #2f4536;
+
+    --color-border-primary:   #2c4032;
+    --color-border-secondary: #3a523f;
+    --color-border-subtle:    #243429;
+
+    --color-text-primary:   #e8f0ea;
+    --color-text-secondary: #c8d6cb;
+    --color-text-tertiary:  #a9bcae;
+    --color-text-muted:     #8aa093;
+    --color-text-faint:     #67806f;
+    --color-text-on-code:   #d6e4d9;
+
+    --color-accent:            #7fb89a;
+    --color-accent-hover:      #93c8ab;
+    --color-accent-soft:       rgba(127, 184, 154, 0.14);
+    --color-accent-soft-strong: rgba(127, 184, 154, 0.24);
+    --color-accent-on-text:    #0c1f15;
+
+    --color-overlay-scrim:     rgba(4, 15, 9, 0.70);
+    --color-modal-outline:     rgba(232, 240, 234, 0.08);
+
+    /* 墨绿静态场：径向渐变 + 烘焙暗角，单条 SVG data URI */
+    --theme-bg-app: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800' preserveAspectRatio='xMidYMid slice'%3E%3Cdefs%3E%3CradialGradient id='g' cx='50%25' cy='34%25' r='85%25'%3E%3Cstop offset='0%25' stop-color='%23163322'/%3E%3Cstop offset='48%25' stop-color='%23102a1b'/%3E%3Cstop offset='100%25' stop-color='%230a1d12'/%3E%3C/radialGradient%3E%3CradialGradient id='v' cx='50%25' cy='40%25' r='75%25'%3E%3Cstop offset='55%25' stop-color='%23000000' stop-opacity='0'/%3E%3Cstop offset='100%25' stop-color='%23000000' stop-opacity='0.38'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='1200' height='800' fill='url(%23g)'/%3E%3Crect width='1200' height='800' fill='url(%23v)'/%3E%3C/svg%3E");
+
+    --theme-bg-sidebar:  var(--color-bg-secondary);
+    --theme-bg-titlebar: var(--color-bg-elevated);
+  }
+}
