@@ -1404,6 +1404,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",
+ "hermix-config",
  "hermix-cua",
  "hermix-plugin",
  "once_cell",

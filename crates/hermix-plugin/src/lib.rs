@@ -61,6 +61,9 @@ pub enum PluginError {
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("app shell not found: {0}")]
+    ShellNotFound(String),
+
     #[error("esbuild not found: {0}")]
     EsbuildNotFound(String),
 

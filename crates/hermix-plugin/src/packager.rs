@@ -46,7 +46,7 @@ impl EsbuildPackager {
     pub async fn package(&self, entry: &PluginEntry) -> Result<PackageResult, PluginError> {
         // Validate shell exists
         if !self.shell_path.exists() {
-            return Err(PluginError::EsbuildNotFound(format!(
+            return Err(PluginError::ShellNotFound(format!(
                 "app shell not found at {}",
                 self.shell_path.display()
             )));

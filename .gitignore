@@ -64,8 +64,6 @@ apps/desktop-tauri/src-tauri/.cargo/*
 
 # Release directory (build outputs)
 /release/**
-!/release/.gitkeep
-!/release/build.sh
 
 # Staging directories (cargo/npm artifacts)
 **/*-staging/
@@ -127,3 +125,14 @@ apps/desktop-tauri/src-tauri/binaries/
 # and copied to hermix_home()/ocr/ on first run by ensure_ocr_models().
 # Offline build escape hatch: pre-place the 3 files here manually.
 apps/desktop-tauri/src-tauri/resources/ocr/
+
+# Custom-app runtime binaries (~12MB) — NOT committed to git (keeps remote
+# repo small). Built/fetched at build/dev time by:
+#   - scripts/build-app-shell.ps1  -> resources/shell/{app-shell.exe,WebView2Loader.dll}
+#   - scripts/download-esbuild.ps1  -> resources/esbuild/esbuild.exe
+# then bundled into the NSIS package via tauri.conf.json `bundle.resources`
+# and copied to hermix_home()/shell/ + hermix_home()/esbuild/ on first run by
+# ensure_app_shell_and_esbuild(). Offline build escape hatch: pre-place the
+# files here manually.
+apps/desktop-tauri/src-tauri/resources/shell/
+apps/desktop-tauri/src-tauri/resources/esbuild/

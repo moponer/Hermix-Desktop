@@ -190,6 +190,78 @@ fn ensure_ocr_models(resource_dir: &std::path::Path, ocr_dir: &std::path::Path) 
     }
 }
 
+/// Extract the custom-app runtime pieces (precompiled app shell + esbuild
+/// binary) from the bundled Tauri resources into `HERMIX_HOME` so they are
+/// reachable at a stable path regardless of whether the app is installed
+/// (portable) or run from source.
+///
+/// `commands_custom_app` resolves these via `hermix_home()/shell/app-shell.exe`
+/// and `hermix_home()/esbuild/esbuild.exe`; this function makes that path
+/// concrete on first launch. If the bundled resources are absent (dev build
+/// without `bundle.resources`, or resources already extracted), it is a
+/// silent no-op — the custom-app commands then fall back to the
+/// `current_exe/resources/` location, so packaging still works.
+fn ensure_app_shell_and_esbuild(
+    resource_dir: &std::path::Path,
+    hermix_home: &std::path::Path,
+) {
+    // Each entry is (bundled dir under resources/, target subdir under HERMIX_HOME/).
+    let pairs = [
+        ("resources/shell", "shell"),
+        ("resources/esbuild", "esbuild"),
+    ];
+    for (src_rel, dst_rel) in pairs {
+        let bundled = resource_dir.join(src_rel);
+        if !bundled.exists() {
+            continue; // not bundled in this build — skip silently
+        }
+        let target = hermix_home.join(dst_rel);
+        if let Err(e) = std::fs::create_dir_all(&target) {
+            eprintln!(
+                "[Hermix] failed to create {} dir {}: {e}",
+                dst_rel,
+                target.display()
+            );
+            continue;
+        }
+        let mut copied = 0u32;
+        let mut entries = match std::fs::read_dir(&bundled) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("[Hermix] cannot read bundled {src_rel}: {e}");
+                continue;
+            }
+        };
+        while let Some(entry) = entries.next() {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let src_path = entry.path();
+            if !src_path.is_file() {
+                continue;
+            }
+            let dst_path = target.join(entry.file_name());
+            if dst_path.exists() {
+                continue; // already extracted on a prior launch
+            }
+            match std::fs::copy(&src_path, &dst_path) {
+                Ok(_) => copied += 1,
+                Err(e) => eprintln!(
+                    "[Hermix] failed to copy {src_rel} asset {}: {e}",
+                    src_path.display()
+                ),
+            }
+        }
+        if copied > 0 {
+            println!(
+                "[Hermix] extracted {copied} custom-app {dst_rel} file(s) to {}",
+                target.display()
+            );
+        }
+    }
+}
+
 /// Recursive directory copy. Returns the number of files copied.
 fn copy_dir_recursively(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<u32> {
     let mut count = 0u32;
@@ -317,6 +389,7 @@ pub fn run() {
             if let Ok(resource_dir) = app.path().resource_dir() {
                 ensure_bundled_skills(&resource_dir, &skills_dir);
                 ensure_ocr_models(&resource_dir, &hermix_home.join("ocr"));
+                ensure_app_shell_and_esbuild(&resource_dir, &hermix_home);
             } else {
                 eprintln!("[Hermix] cannot resolve resource_dir — bundled skills and OCR models will not be extracted");
             }

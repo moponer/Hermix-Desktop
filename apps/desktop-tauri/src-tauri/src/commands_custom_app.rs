@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use hermix_config::paths::hermix_home;
 use hermix_plugin::{PluginManager, PluginWindowManager};
 
 /// Application state holding the PluginManager.
@@ -18,75 +19,70 @@ pub struct CustomAppState {
 
 /// Resolve the path to the precompiled app shell.
 ///
-/// In development, this is `apps/custom-app-shell/src-tauri/target/release/app-shell.exe`.
-/// In production (packaged), this is `<resource_dir>/app-shell.exe`.
+/// Priority:
+///   1. `HERMIX_HOME/shell/app-shell.exe` — extracted on first launch by
+///      `ensure_app_shell_and_esbuild` (lib.rs setup).
+///   2. `current_exe/resources/shell/app-shell.exe` — portable/installed
+///      build where the bundler placed the shell next to the exe.
+///   3. `current_exe/shell/app-shell.exe` — fallback for adjacent layout.
+///   4. `HERMIX_HOME/shell/app-shell.exe` — final default (may not exist;
+///      the packager reports a clear `ShellNotFound` error in that case).
+///
+/// Uses the canonical `hermix_home()` (same source as the rest of the app)
+/// rather than reading `HERMIX_HOME` directly, so portable-data-dir and
+/// env-override precedence are always correct.
 fn resolve_shell_path() -> PathBuf {
-    // 1. Check HERMIX_HOME for a user-placed shell
-    if let Ok(home) = std::env::var("HERMIX_HOME") {
-        let shell = PathBuf::from(home).join("app-shell.exe");
-        if shell.exists() {
-            return shell;
+    let home = hermix_home();
+
+    let candidates = [
+        Some(home.join("shell").join("app-shell.exe")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("resources").join("shell").join("app-shell.exe"))),
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("shell").join("app-shell.exe"))),
+    ]
+    .into_iter()
+    .flatten();
+
+    for c in candidates {
+        if c.exists() {
+            return c;
         }
     }
 
-    // 2. Check alongside the current exe (portable mode)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let shell = dir.join("app-shell.exe");
-            if shell.exists() {
-                return shell;
-            }
-            // Check resources subdir
-            let shell = dir.join("resources").join("app-shell.exe");
-            if shell.exists() {
-                return shell;
-            }
-        }
-    }
-
-    // 3. Default: HERMIX_HOME/app-shell.exe (will fail gracefully)
-    if let Ok(home) = std::env::var("HERMIX_HOME") {
-        PathBuf::from(home).join("app-shell.exe")
-    } else {
-        PathBuf::from("app-shell.exe")
-    }
+    home.join("shell").join("app-shell.exe")
 }
 
 /// Resolve the path to the bundled esbuild executable.
 fn resolve_esbuild_path() -> PathBuf {
-    // 1. Check alongside the current exe (portable/packaged mode)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let esbuild = dir.join("esbuild.exe");
-            if esbuild.exists() {
-                return esbuild;
-            }
-            let esbuild = dir.join("resources").join("esbuild.exe");
-            if esbuild.exists() {
-                return esbuild;
-            }
+    let home = hermix_home();
+
+    let candidates = [
+        Some(home.join("esbuild").join("esbuild.exe")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("resources").join("esbuild").join("esbuild.exe"))),
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("esbuild").join("esbuild.exe"))),
+    ]
+    .into_iter()
+    .flatten();
+
+    for c in candidates {
+        if c.exists() {
+            return c;
         }
     }
 
-    // 2. Check HERMIX_HOME
-    if let Ok(home) = std::env::var("HERMIX_HOME") {
-        let esbuild = PathBuf::from(home).join("esbuild.exe");
-        if esbuild.exists() {
-            return esbuild;
-        }
-    }
-
-    // 3. Default
-    PathBuf::from("esbuild.exe")
+    home.join("esbuild").join("esbuild.exe")
 }
 
 /// Resolve the custom apps directory.
 fn resolve_apps_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HERMIX_HOME") {
-        PathBuf::from(home).join("custom-apps")
-    } else {
-        PathBuf::from("custom-apps")
-    }
+    hermix_home().join("custom-apps")
 }
 
 /// Initialize the custom app system. Called once at startup.

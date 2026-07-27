@@ -53,7 +53,10 @@
       "resources/skills/modelscope-dev/ios-application-dev/SKILL.md",
       "resources/ocr/pp-ocrv5_mobile_det.onnx",
       "resources/ocr/pp-ocrv5_mobile_rec.onnx",
-      "resources/ocr/ppocrv5_dict.txt"
+      "resources/ocr/ppocrv5_dict.txt",
+      "resources/shell/app-shell.exe",
+      "resources/shell/WebView2Loader.dll",
+      "resources/esbuild/esbuild.exe"
     ]
   },
   "plugins": {

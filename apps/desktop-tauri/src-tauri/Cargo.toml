@@ -31,6 +31,7 @@ which = "6"
 # `commands_cua.rs` mirror the same pattern.
 hermix-cua = { path = "../../../crates/hermix-cua" }
 hermix-plugin = { path = "../../../crates/hermix-plugin" }
+hermix-config = { path = "../../../crates/hermix-config" }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
