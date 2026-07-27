@@ -241,8 +241,31 @@ fn ensure_app_shell_and_esbuild(
             if !src_path.is_file() {
                 continue;
             }
+            // Skip zero-byte placeholders. These are gitignored stubs that
+            // exist only to satisfy Tauri's resource check in offline/sandbox
+            // builds and must NEVER be copied over a real binary or be the
+            // only thing shipped to a user on a fresh install.
+            let src_size = match entry.metadata() {
+                Ok(m) => m.len(),
+                Err(_) => continue,
+            };
+            if src_size == 0 {
+                eprintln!(
+                    "[Hermix] skipping zero-byte bundled asset {} — run the build scripts to fetch the real binary",
+                    src_path.display()
+                );
+                continue;
+            }
             let dst_path = target.join(entry.file_name());
-            if dst_path.exists() {
+            // Copy when missing, or when the bundled asset is larger than what
+            // we extracted before (covers upgrades and a 0-byte stub that
+            // previously slipped through). This way a user never has to
+            // manually copy files after installing on a new machine.
+            let should_copy = match dst_path.metadata() {
+                Ok(m) => src_size > m.len(),
+                Err(_) => true,
+            };
+            if !should_copy {
                 continue; // already extracted on a prior launch
             }
             match std::fs::copy(&src_path, &dst_path) {
@@ -506,6 +529,7 @@ pub fn run() {
             commands_custom_app::custom_app_package,
             commands_custom_app::custom_app_run,
             commands_custom_app::custom_app_open_dir,
+            commands_custom_app::custom_app_validate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running hermix-desktop");

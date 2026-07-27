@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hermix_config::paths::hermix_home;
-use hermix_plugin::{PluginManager, PluginWindowManager};
+use hermix_plugin::{validate_custom_app, PluginManager, PluginWindowManager};
 
 /// Application state holding the PluginManager.
 pub struct CustomAppState {
@@ -241,4 +241,24 @@ pub async fn custom_app_open_dir(id: String) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// 开发期自验证: 在打包/运行前校验应用源码, 把打包期错误提前到开发期暴露。
+///
+/// 校验内容 (见 `hermix_plugin::validate_custom_app`):
+/// - L0: manifest 完整性 + `ui.tsx`/`backend.ts` 导入白名单
+/// - L1: 用与真实打包同款的 esbuild 标志做预打包
+///
+/// 返回结构化报告 `{ ok, issues: [{level, code, message}] }`。
+/// agent 开发循环应在生成/修改应用代码后调用本命令, `ok == false` 时继续
+/// 修复直至通过, 才视为「开发完成」, 从而让用户只测功能、不测打包/运行错误。
+#[tauri::command]
+pub async fn custom_app_validate(id: String) -> Result<serde_json::Value, String> {
+    let apps_dir = resolve_apps_dir();
+    let app_dir = apps_dir.join(&id);
+    if !app_dir.exists() {
+        return Err(format!("应用目录不存在: {}", app_dir.display()));
+    }
+    let report = validate_custom_app(&app_dir);
+    serde_json::to_value(&report).map_err(|e| format!("序列化校验报告失败: {e}"))
 }

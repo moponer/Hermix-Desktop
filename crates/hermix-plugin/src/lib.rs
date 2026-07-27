@@ -18,6 +18,8 @@ pub mod manifest;
 pub mod scanner;
 pub mod packager;
 pub mod icon_library;
+pub mod validate;
+pub use validate::validate_custom_app;
 pub mod window_manager;
 pub mod api;
 

@@ -148,3 +148,31 @@ export async function runCustomApp(id: string): Promise<void> {
     throw new Error(err.error || `启动失败: ${res.status}`);
   }
 }
+
+// ── 开发期自验证 (shift-left): 由 agent 在生成/修改应用代码后调用 ──
+
+export interface ValidationIssue {
+  /** "error" 阻断打包; "warning" 仅提示 */
+  level: string;
+  /** manifest / import / esbuild */
+  code: string;
+  message: string;
+}
+
+export interface ValidationReport {
+  /** 是否通过 (无 error 级问题) */
+  ok: boolean;
+  issues: ValidationIssue[];
+}
+
+/**
+ * 开发期自验证: 在打包/运行前校验应用源码, 把打包期错误提前到开发期暴露。
+ * 校验 manifest 完整性、导入白名单 (只允许 react / react-dom/client +
+ * 相对/URL)、并用与真实打包同款的 esbuild 标志做预打包。
+ *
+ * 通过 Tauri 命令 `custom_app_validate` 暴露 (与 HTTP 路由并列)。
+ * agent 开发循环应在生成/修改代码后调用, `ok === false` 时继续修复直至通过。
+ */
+export async function validateCustomApp(id: string): Promise<ValidationReport> {
+  return invoke<ValidationReport>("custom_app_validate", { id });
+}
