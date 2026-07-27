@@ -316,7 +316,7 @@ export function Sidebar({
           {workspaces.length === 0 ? (
             <p className="list-group-empty">
               还没有工作区<br />
-              <span style={{ fontSize: "10.5px" }}>点 + 选择本地目录后开始受限对话</span>
+              <span style={{ fontSize: "12px" }}>点 + 选择本地目录后开始受限对话</span>
             </p>
           ) : (
           <div className="stack-v" style={{ gap: 2 }}>
@@ -430,7 +430,7 @@ export function Sidebar({
                   <div
                     role="alert"
                     style={{
-                      fontSize: 11,
+                      fontSize: 12,
                       padding: "4px 8px",
                       borderRadius: 6,
                       background: "rgba(239,68,68,0.10)",
@@ -466,7 +466,7 @@ export function Sidebar({
                     placeholder="聊天室名称"
                     disabled={creatingRoom}
                     className="input"
-                    style={{ flex: 1, padding: "5px 10px", fontSize: 12.5 }}
+                    style={{ flex: 1, padding: "5px 10px", fontSize: 13 }}
                   />
                   <button
                     onClick={handleCreateRoom}
