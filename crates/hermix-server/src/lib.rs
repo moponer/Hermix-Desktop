@@ -192,7 +192,7 @@ impl ApprovalRegistry {
         // short and avoids holding the registry lock across an
         // await point.
         {
-            let mut sessions = self.inner.lock().unwrap();
+            let mut sessions = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             // (P2-6 / STABILITY-PLAN §2.7): Reject duplicate request_id
             // instead of silently overwriting the existing pending sender.
             // Overwriting would cause the first receiver to get
@@ -228,7 +228,7 @@ impl ApprovalRegistry {
             tokio::spawn(async move {
                 tokio::time::sleep(to).await;
                 let tx_opt = {
-                    let mut sessions = inner.lock().unwrap();
+                    let mut sessions = inner.lock().unwrap_or_else(|e| e.into_inner());
                     sessions
                         .get_mut(&sess)
                         .and_then(|session| session.remove(&req))
@@ -262,7 +262,7 @@ impl ApprovalRegistry {
     pub fn resolve(&self, session_id: &str, request_id: &str, outcome: ApprovalOutcome) -> bool {
         let mut sessions: std::sync::MutexGuard<
             HashMap<String, HashMap<String, oneshot::Sender<ApprovalOutcome>>>,
-        > = self.inner.lock().unwrap();
+        > = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(session) = sessions.get_mut(session_id) {
             if let Some(tx) = session.remove(request_id) {
                 let _ = tx.send(outcome);
@@ -278,7 +278,7 @@ impl ApprovalRegistry {
     /// already resolved (duplicate response) or timed out — both
     /// of which remove the entry.
     pub fn is_pending(&self, session_id: &str, request_id: &str) -> bool {
-        let sessions = self.inner.lock().unwrap();
+        let sessions = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         sessions
             .get(session_id)
             .map(|s| s.contains_key(request_id))
@@ -744,7 +744,7 @@ mod approval_registry_tests {
         );
 
         // session_bypass now has one pattern for sess-A.
-        let map = state.session_bypass.lock().unwrap();
+        let map = state.session_bypass.lock().unwrap_or_else(|e| e.into_inner());
         let patterns = map.get("sess-A").expect("sess-A entry");
         assert_eq!(patterns.len(), 1);
         assert!(patterns[0].is_match("sudo apt install ripgrep"));
@@ -763,7 +763,7 @@ mod approval_registry_tests {
         let state = test_state(home.clone());
 
         // Initially no allowlist.
-        assert!(state.user_allowlist.lock().unwrap().is_none());
+        assert!(state.user_allowlist.lock().unwrap_or_else(|e| e.into_inner()).is_none());
 
         record_approval_side_effect(
             &state,
@@ -773,7 +773,7 @@ mod approval_registry_tests {
         );
 
         // Lazily created, in-memory.
-        assert!(state.user_allowlist.lock().unwrap().is_some());
+        assert!(state.user_allowlist.lock().unwrap_or_else(|e| e.into_inner()).is_some());
 
         // Persisted to disk.
         let path = hermix_config::paths::approval_allowlist_path();
@@ -800,7 +800,7 @@ mod approval_registry_tests {
         // test (it verifies the side-effect ran; the on-disk
         // roundtrip is covered by `hermix-tools::approval`
         // tests).
-        let al = state.user_allowlist.lock().unwrap();
+        let al = state.user_allowlist.lock().unwrap_or_else(|e| e.into_inner());
         let al = al.as_ref().expect("lazy-init created the allowlist");
         assert!(al.matches("systemctl restart nginx"));
         // Different command — no match.
@@ -817,8 +817,8 @@ mod approval_registry_tests {
             "ls -la",
             hermix_transport::ApprovalChoice::Once,
         );
-        assert!(state.session_bypass.lock().unwrap().is_empty());
-        assert!(state.user_allowlist.lock().unwrap().is_none());
+        assert!(state.session_bypass.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+        assert!(state.user_allowlist.lock().unwrap_or_else(|e| e.into_inner()).is_none());
     }
 
     /// `Deny` choice: no-op. The state is unchanged.
@@ -831,8 +831,8 @@ mod approval_registry_tests {
             "rm -rf /",
             hermix_transport::ApprovalChoice::Deny,
         );
-        assert!(state.session_bypass.lock().unwrap().is_empty());
-        assert!(state.user_allowlist.lock().unwrap().is_none());
+        assert!(state.session_bypass.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+        assert!(state.user_allowlist.lock().unwrap_or_else(|e| e.into_inner()).is_none());
     }
 
     /// Two `Session` approvals for the same session accumulate
@@ -853,7 +853,7 @@ mod approval_registry_tests {
             "systemctl restart nginx",
             hermix_transport::ApprovalChoice::Session,
         );
-        let map = state.session_bypass.lock().unwrap();
+        let map = state.session_bypass.lock().unwrap_or_else(|e| e.into_inner());
         let patterns = map.get("sess-A").expect("sess-A entry");
         assert_eq!(patterns.len(), 2);
     }
@@ -935,7 +935,7 @@ mod approval_registry_tests {
         assert_eq!(deduped, 8, "exactly 8 deduped in a 9-storm");
 
         // Map should hold exactly 1 entry (the fresh one).
-        let map_size = state.recent_sends.lock().unwrap().len();
+        let map_size = state.recent_sends.lock().unwrap_or_else(|e| e.into_inner()).len();
         assert_eq!(map_size, 1, "dedup map must have 1 entry, got {map_size}");
     }
 
@@ -960,7 +960,7 @@ mod approval_registry_tests {
         assert_eq!(check_recent_send(&state, "sess-A", "在吗?"), None);
 
         // Map should hold exactly 2 entries (one per content key)
-        let map_size = state.recent_sends.lock().unwrap().len();
+        let map_size = state.recent_sends.lock().unwrap_or_else(|e| e.into_inner()).len();
         assert_eq!(map_size, 2, "map should hold 2 keys (你好 + 在吗?)");
     }
 
@@ -1031,7 +1031,7 @@ mod approval_registry_tests {
             "docker system prune",
             hermix_transport::ApprovalChoice::Always,
         );
-        let al = state.user_allowlist.lock().unwrap();
+        let al = state.user_allowlist.lock().unwrap_or_else(|e| e.into_inner());
         let al = al.as_ref().unwrap();
         // No dedupe — both entries stored. This is a known
         // MVP limitation; the UI can show distinct timestamps
@@ -4111,7 +4111,7 @@ async fn handle_ws_stream_send(
     let active_key = dedup_key(session_id, &request.text);
 
     let stale_handle = {
-        let mut handles = state.active_handles.lock().unwrap();
+        let mut handles = state.active_handles.lock().unwrap_or_else(|e| e.into_inner());
         handles.remove(&active_key)
     };
     if let Some(handle) = stale_handle {
@@ -4124,8 +4124,8 @@ async fn handle_ws_stream_send(
         // `agent_handle.abort()`). Its cleanup `remove` won't run, so we
         // free the locks here ourselves.
         handle.abort();
-        state.active_sessions.lock().unwrap().remove(&active_key);
-        state.recent_sends.lock().unwrap().remove(&active_key);
+        state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+        state.recent_sends.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
         // Fall through: the `active_sessions` insert below re-takes the
         // lock for THIS send.
     } else if let Some(elapsed) = check_recent_send(&state, session_id, &request.text) {
@@ -4159,7 +4159,7 @@ async fn handle_ws_stream_send(
     // window (when `check_recent_send` above misses them) and is a
     // safety net for any entry that slipped past the override.
     let is_duplicate = {
-        let mut active = state.active_sessions.lock().unwrap();
+        let mut active = state.active_sessions.lock().unwrap_or_else(|e| e.into_inner());
         if !active.insert(active_key.clone()) {
             true
         } else {
@@ -4655,7 +4655,7 @@ async fn handle_ws_stream_send(
         if let Some(ref mut delta) = chunk.delta {
             if let Some(ref mut text) = delta.content {
                 if !text.is_empty() {
-                    let (clean, think) = think_parser.lock().unwrap().feed(text);
+                    let (clean, think) = think_parser.lock().unwrap_or_else(|e| e.into_inner()).feed(text);
                     // forward the extracted think block to
                     // the client as `StreamEvent::Thinking` so the
                     // chat layer can render a collapsible "思考过程"
@@ -4695,7 +4695,7 @@ async fn handle_ws_stream_send(
             // LLM response is sanitised.
             if let Some(text) = &delta.content {
                 if !text.is_empty() {
-                    let mut guard = tool_call_sanitizer.lock().unwrap();
+                    let mut guard = tool_call_sanitizer.lock().unwrap_or_else(|e| e.into_inner());
                     let cleaned = guard.feed(text);
                     drop(guard);
                     let _ = tx_clone.try_send(WsEnvelope {
@@ -5236,11 +5236,11 @@ async fn handle_ws_stream_send(
         // agent task after ws_close_frame would leave the session locked
         // forever, blocking subsequent messages.
         {
-            let mut active_s = active_sessions.lock().unwrap();
+            let mut active_s = active_sessions.lock().unwrap_or_else(|e| e.into_inner());
             active_s.remove(&active_key_clone);
-            let mut active_h = active_handles.lock().unwrap();
+            let mut active_h = active_handles.lock().unwrap_or_else(|e| e.into_inner());
             active_h.remove(&active_key_clone);
-            let mut rs = recent_sends.lock().unwrap();
+            let mut rs = recent_sends.lock().unwrap_or_else(|e| e.into_inner());
             rs.remove(&active_key_clone);
         }
 
@@ -5257,7 +5257,7 @@ async fn handle_ws_stream_send(
                 // frontend's resolveMessage handles that split for
                 // display. We send the LLM's raw content as-is.
                 let cleaned = {
-                    let mut guard = tool_call_sanitizer_owned.lock().unwrap();
+                    let mut guard = tool_call_sanitizer_owned.lock().unwrap_or_else(|e| e.into_inner());
                     guard.flush();
                     guard.feed(&reply.text)
                 };
@@ -5348,7 +5348,7 @@ async fn handle_ws_stream_send(
 
         // Release the per-session stream lock so future sends
         // (same or different content) for this session are allowed.
-        active_sessions.lock().unwrap().remove(&active_key_clone);
+        active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key_clone);
         // drop the recent_sends entry on stream completion
         // (success OR error). Otherwise a failed send ("LLM busy, try
         // later") leaves the text in the dedup map for DEDUP_WINDOW_SECS
@@ -5356,7 +5356,7 @@ async fn handle_ws_stream_send(
         // they saw no response at all. In-flight protection is already
         // covered by active_sessions; recent_sends only needs to guard
         // the brief pre-insert race window.
-        recent_sends.lock().unwrap().remove(&active_key_clone);
+        recent_sends.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key_clone);
     });
 
     // register the live task handle OUTSIDE the spawned
@@ -5365,7 +5365,7 @@ async fn handle_ws_stream_send(
     // hangs without sending a terminal `Done` event. This runs
     // synchronously right after `tokio::spawn`, before the task body
     // executes, so the cleanup `remove` below always finds the entry.
-    state.active_handles.lock().unwrap().insert(active_key.clone(), agent_handle);
+    state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).insert(active_key.clone(), agent_handle);
 
     // Forward channel events to WebSocket
     tracing::info!(
@@ -5446,8 +5446,8 @@ async fn handle_ws_stream_send(
                             // area) — `active_sessions` is freed
                             // immediately so the user can retry.
                             shutdown_notify.notify_one();
-                            state.active_handles.lock().unwrap().remove(&active_key);
-                            state.active_sessions.lock().unwrap().remove(&active_key);
+                            state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                            state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
                             break;
                         }
                     }
@@ -5488,8 +5488,8 @@ async fn handle_ws_stream_send(
                     // though we can't yet read a close frame, so we
                     // must let the agent task know.
                     shutdown_notify.notify_one();
-                    state.active_handles.lock().unwrap().remove(&active_key);
-                    state.active_sessions.lock().unwrap().remove(&active_key);
+                    state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                    state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
                     break;
                 }
                 // Application-level heartbeat — resets the client's
@@ -5509,8 +5509,8 @@ async fn handle_ws_stream_send(
                     was_client_disconnect = true;
                     ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                     shutdown_notify.notify_one();
-                    state.active_handles.lock().unwrap().remove(&active_key);
-                    state.active_sessions.lock().unwrap().remove(&active_key);
+                    state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                    state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
                     break;
                 }
             }
@@ -5682,8 +5682,8 @@ async fn handle_ws_stream_send(
                         was_client_disconnect = true;
                         ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                         shutdown_notify.notify_one();
-                        state.active_handles.lock().unwrap().remove(&active_key);
-                        state.active_sessions.lock().unwrap().remove(&active_key);
+                        state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                        state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
                         break;
                     }
                     Some(Ok(_)) => {
@@ -5699,8 +5699,8 @@ async fn handle_ws_stream_send(
                         was_client_disconnect = true;
                         ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                         shutdown_notify.notify_one();
-                        state.active_handles.lock().unwrap().remove(&active_key);
-                        state.active_sessions.lock().unwrap().remove(&active_key);
+                        state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                        state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
                         break;
                     }
                     None => {
@@ -5709,8 +5709,8 @@ async fn handle_ws_stream_send(
                         was_client_disconnect = true;
                         ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
                         shutdown_notify.notify_one();
-                        state.active_handles.lock().unwrap().remove(&active_key);
-                        state.active_sessions.lock().unwrap().remove(&active_key);
+                        state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                        state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
                         break;
                     }
                 }

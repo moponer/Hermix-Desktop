@@ -1684,6 +1684,7 @@ impl ContextCompressor {
                 // Check for base64 image data in text content
                 if content.len() > 10_000 && (
                     content.contains("data:image/") ||
+                    content.contains("\"_image_data\"") ||
                     content.contains("base64,") && content.len() > 50_000
                 ) {
                     *content = "[image data removed to save context]".to_string();

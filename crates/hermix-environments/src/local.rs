@@ -48,6 +48,47 @@ fn detect_image_magic(header: &[u8]) -> Option<&'static str> {
     None
 }
 
+/// Kill a process and all its descendants.
+///
+/// hermix launches commands via `cmd.exe /c <cmd>`, so the real
+/// long-running process is a *grandchild* of the tokio `Child`.
+/// `Child::kill_on_drop(true)` only terminates the direct child
+/// (cmd.exe); the grandchild survives as an orphan and, on Windows,
+/// keeps the inherited stdout/stderr pipe handles open — which hangs
+/// `wait_with_output`'s read tasks indefinitely. `taskkill /T /F`
+/// walks the process tree and kills every descendant, releasing the
+/// pipes. Best-effort: failures are logged but never propagated.
+fn kill_process_tree(pid: u32) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let out = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                tracing::info!(pid, "killed process tree after command timeout");
+            }
+            Ok(o) => {
+                tracing::warn!(
+                    pid,
+                    stderr = %String::from_utf8_lossy(&o.stderr),
+                    "taskkill /T /F did not succeed while cleaning up timed-out command"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(pid, error = %e, "failed to invoke taskkill for timed-out command");
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+    }
+}
+
 /// A [`TerminalBackend`] that runs commands on the local machine.
 pub struct LocalBackend {
     /// Default timeout in seconds for command execution.
@@ -253,6 +294,14 @@ impl TerminalBackend for LocalBackend {
         }
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
+        // Capture the spawned PID *outside* the timeout future so that
+        // on timeout we can kill the entire process tree (see
+        // `kill_process_tree`). Background mode returns immediately and
+        // never reaches the timeout arm, so its process is left running
+        // as intended.
+        let pid_cell: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
+        let pid_for_block = pid_cell.clone();
+
         // Use explicit workdir, or fall back to workspace_root.
         // Strip \\?\ prefix on Windows — many programs (cmd.exe, FIND, etc.)
         // can't handle the Win32 device namespace path format. The
@@ -271,10 +320,17 @@ impl TerminalBackend for LocalBackend {
             cmd.stdin(Stdio::null());
         }
 
-        let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
+        let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async move {
             let child = cmd
                 .spawn()
                 .map_err(|e| AgentError::Io(format!("Failed to spawn command: {}", e)))?;
+
+            // Record the PID for the outer timeout handler (tree-kill
+            // on timeout). Done for every mode; background mode also
+            // pushes it to `background_processes` below.
+            if let Some(id) = child.id() {
+                *pid_for_block.lock().unwrap() = Some(id);
+            }
 
             // In background mode, track the PID and return immediately.
             if background {
@@ -335,10 +391,19 @@ impl TerminalBackend for LocalBackend {
         match result {
             Ok(Ok(output)) => Ok(output),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(AgentError::Timeout(format!(
-                "Command timed out after {} seconds",
-                timeout_secs
-            ))),
+            Err(_) => {
+                // Timeout: kill the whole process tree so the
+                // grandchild under `cmd.exe /c` doesn't outlive the
+                // future and hold the stdout/stderr pipes open
+                // (which would hang the runtime's read tasks).
+                if let Some(pid) = *pid_cell.lock().unwrap() {
+                    kill_process_tree(pid);
+                }
+                Err(AgentError::Timeout(format!(
+                    "Command timed out after {} seconds",
+                    timeout_secs
+                )))
+            }
         }
     }
 

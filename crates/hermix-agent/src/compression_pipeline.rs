@@ -269,7 +269,42 @@ impl TokenScorer {
     /// Score a single message in the context of the full message
     /// list. Score is in `[0.0, 1.0]`.
     pub fn score(&self, msg: &Message, all: &[Message], idx: usize) -> f64 {
+        // Legacy entry point retained for tests / external callers.
+        // Computes the tool_call_id reference count inline (O(n) per
+        // message). The production hot path (`drop_low_score`) calls
+        // `score_with_refs` with a precomputed ref-count map to avoid
+        // the O(n²) scan over the whole history.
         let n = all.len().max(1);
+        let tcid_refs = msg
+            .tool_call_id
+            .as_deref()
+            .map(|tcid| {
+                all.iter()
+                    .filter(|m| m.tool_call_id.as_deref() == Some(tcid))
+                    .count()
+            })
+            .unwrap_or(0);
+        self.score_inner(msg, n, idx, tcid_refs)
+    }
+
+    /// Score with a precomputed `tool_call_id` reference count.
+    ///
+    /// Produces identical results to [`score`](Self::score) but lets
+    /// the caller pass in a ref count looked up from a single O(n)
+    /// `HashMap` built once over the whole message list, instead of
+    /// recomputing it O(n) for every message (which made the classify
+    /// pass O(n²) on long histories).
+    pub fn score_with_refs(
+        &self,
+        msg: &Message,
+        n: usize,
+        idx: usize,
+        tcid_refs: usize,
+    ) -> f64 {
+        self.score_inner(msg, n, idx, tcid_refs)
+    }
+
+    fn score_inner(&self, msg: &Message, n: usize, idx: usize, tcid_refs: usize) -> f64 {
         // recency: linear ramp from 0.0 (oldest) to 1.0 (newest).
         // P2 note (2026-07-18): `idx` is the position within the
         // `messages` slice passed to *this* compress() call. It is
@@ -296,16 +331,8 @@ impl TokenScorer {
             MessageRole::Assistant => 0.4,
         };
         // frequency: same tool_call_id used N times → bump up to 0.5.
-        let frequency = if let Some(tcid) = msg.tool_call_id.as_deref() {
-            let refs = all
-                .iter()
-                .filter(|m| m.tool_call_id.as_deref() == Some(tcid))
-                .count();
-            if refs >= 2 {
-                ((refs - 1) as f64).min(4.0) / 4.0
-            } else {
-                0.0
-            }
+        let frequency = if tcid_refs >= 2 {
+            ((tcid_refs - 1) as f64).min(4.0) / 4.0
         } else {
             0.0
         };
@@ -458,11 +485,24 @@ pub fn drop_low_score(
     if messages.is_empty() {
         return (messages, Vec::new());
     }
-    // Capture an immutable snapshot of the message list so we can
-    // score each message against the full context (recency,
-    // frequency) while still moving each message out by ownership.
-    let all = messages.clone();
-    let n = all.len();
+    let n = messages.len();
+
+    // Build a single O(n) tool_call_id reference-count map. This
+    // replaces two per-message O(n) scans in the old implementation:
+    // `score`'s `frequency` term and `is_referenced_tool` both did
+    // `all.iter().filter(...).count()`, making the whole classify
+    // pass O(n²) on long histories. We also drop the previous
+    // `messages.clone()` (a full deep copy of the message list) by
+    // classifying against a borrowed slice and only moving messages
+    // out in Phase 3 — so the only allocation here is the ref-count
+    // map, sized to the number of distinct tool_call_ids.
+    let mut ref_counts: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for m in messages.iter() {
+        if let Some(tcid) = m.tool_call_id.as_deref() {
+            *ref_counts.entry(tcid).or_insert(0) += 1;
+        }
+    }
 
     // Phase 1: classify each message. `keep[i]` = true means
     // "survives every pass". Candidates for dropping land in
@@ -470,7 +510,7 @@ pub fn drop_low_score(
     // the highest-scoring ones if the min_keep floor is breached.
     let mut keep = vec![false; n];
     let mut drop_candidates: Vec<(usize, f64)> = Vec::new();
-    for (idx, msg) in all.iter().enumerate() {
+    for (idx, msg) in messages.iter().enumerate() {
         let is_pin = pin.map(|p| p.is_pinned(msg)).unwrap_or(false);
         let in_tail_window = idx + protect_last_n >= n;
         let is_instructional = msg.role == MessageRole::System
@@ -479,17 +519,13 @@ pub fn drop_low_score(
                 .as_deref()
                 .map(looks_like_instruction)
                 .unwrap_or(false);
-        let is_referenced_tool = msg
+        let tcid_refs = msg
             .tool_call_id
             .as_deref()
-            .map(|tcid| {
-                all.iter()
-                    .filter(|m| m.tool_call_id.as_deref() == Some(tcid))
-                    .count()
-                    >= 2
-            })
-            .unwrap_or(false);
-        let score = scorer.score(msg, &all, idx);
+            .and_then(|tcid| ref_counts.get(tcid).copied())
+            .unwrap_or(0);
+        let is_referenced_tool = tcid_refs >= 2;
+        let score = scorer.score_with_refs(msg, n, idx, tcid_refs);
 
         if is_pin || in_tail_window || is_instructional || is_referenced_tool || score >= threshold
         {
