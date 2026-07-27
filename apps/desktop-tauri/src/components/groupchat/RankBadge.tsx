@@ -71,7 +71,7 @@ export function RoomRankChip({ ranks }: { ranks: api.GroupChatRank[] | undefined
   const c = tierColor(top.tier);
   return (
     <span
-      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold shrink-0"
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[12px] font-semibold shrink-0"
       style={{ background: c.bg, color: c.text, boxShadow: `inset 0 0 0 1px ${c.ring}` }}
       title={`最高段位：${top.tier_cn} · 积分 ${top.score}`}
     >
@@ -86,7 +86,7 @@ export function RoomRankSummary({ ranks }: { ranks: api.GroupChatRank[] | undefi
   if (!ranks || ranks.length === 0) return null;
   const parts = summarizeRanks(ranks);
   return (
-    <span className="inline-flex items-center gap-1.5 text-[10.5px] text-text-muted">
+    <span className="inline-flex items-center gap-1.5 text-[12px] text-text-muted">
       <Trophy size={11} className="text-text-muted" />
       {parts.map((p, i) => (
         <span key={p.tier} className="inline-flex items-center gap-0.5">

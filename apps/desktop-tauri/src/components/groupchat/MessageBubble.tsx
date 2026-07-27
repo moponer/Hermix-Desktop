@@ -47,19 +47,19 @@ export const DispatchErrorCard = memo(function DispatchErrorCard({
         />
         <div className="min-w-0 flex-1">
           <p
-            className="text-[12px] font-medium"
+            className="text-[13px] font-medium"
             style={{ color: "var(--color-error-text, #b91c1c)" }}
           >
             {isLeader ? "总管调度失败" : `${agentName} 回复失败`}
           </p>
-          <p className="text-[11px] text-text-muted mt-0.5 break-words">
+          <p className="text-[12px] text-text-muted mt-0.5 break-words">
             {reason}
           </p>
           {onRetry && (
             <button
               type="button"
               onClick={onRetry}
-              className="mt-1.5 text-[11px] font-medium text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
+              className="mt-1.5 text-[12px] font-medium text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
             >
               重试
             </button>
@@ -90,9 +90,9 @@ export const HandoffSeparator = memo(function HandoffSeparator({
       : `委托 ${toAgentName} 协助`;
   return (
     <div className="flex items-center gap-2 py-1.5 animate-in">
-      <div className="flex-1 h-px bg-border-subtle" />
+      <div className="flex-1" />
       <div
-        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-medium shrink-0"
+        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-medium shrink-0"
         style={{
           background: "var(--color-bg-tertiary)",
           color: "var(--color-text-muted)",
@@ -102,7 +102,7 @@ export const HandoffSeparator = memo(function HandoffSeparator({
         <ArrowRightCircle size={11} />
         <span>{label}</span>
       </div>
-      <div className="flex-1 h-px bg-border-subtle" />
+      <div className="flex-1" />
     </div>
   );
 });
@@ -114,16 +114,16 @@ export const HandoffSeparator = memo(function HandoffSeparator({
 function RawContentToggle({ metadata }: { metadata: string }) {
   const [show, setShow] = useState(false);
   return (
-    <div className="mt-1.5 pt-1.5 border-t border-border-subtle">
+    <div className="mt-1.5 pt-1.5">
       <button
         type="button"
         onClick={() => setShow((v) => !v)}
-        className="text-[10.5px] text-text-faint hover:text-text-secondary transition-colors"
+        className="text-[12px] text-text-faint hover:text-text-secondary transition-colors"
       >
         {show ? "收起思考过程" : "展开思考过程"}
       </button>
       {show && (
-        <pre className="mt-1.5 text-[11px] leading-snug text-text-muted whitespace-pre-wrap break-words overflow-x-auto max-h-40 overflow-y-auto rounded-lg bg-bg-tertiary p-2">
+        <pre className="mt-1.5 text-[12px] leading-snug text-text-muted whitespace-pre-wrap break-words overflow-x-auto max-h-40 overflow-y-auto rounded-lg bg-bg-tertiary p-2">
           {(() => {
             try {
               const parsed = JSON.parse(metadata);
@@ -141,7 +141,7 @@ function RawContentToggle({ metadata }: { metadata: string }) {
 /* ── Time + copy row ── */
 function MessageMeta({ msg }: { msg: ChatMsg }) {
   return (
-    <span className="text-[10px] text-text-faint flex items-center gap-1">
+    <span className="text-[12px] text-text-faint flex items-center gap-1">
       <button
         type="button"
         className="hover:text-text-secondary transition-colors"
@@ -206,13 +206,13 @@ export const MessageBubble = memo(function MessageBubble({
         >
           <span className="w-5 h-5 rounded-full flex items-center justify-center shrink-0 bg-text-faint/20">
             <span
-              className="text-[10.5px] leading-none font-bold"
+              className="text-[12px] leading-none font-bold"
               style={{ opacity: 0.5 }}
             >
               !
             </span>
           </span>
-          <span className="text-[11.5px] leading-relaxed text-text-faint text-center">
+          <span className="text-[13px] leading-relaxed text-text-faint text-center">
             {msg.content}
           </span>
         </div>
@@ -237,11 +237,11 @@ export const MessageBubble = memo(function MessageBubble({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 mb-0.5">
-            <span className="text-[12px] text-text-primary font-medium">
+            <span className="text-[13px] text-text-primary font-medium">
               {displayName}
             </span>
             <span
-              className="text-[9.5px] uppercase tracking-wider px-1 py-px rounded font-semibold"
+              className="text-[12px] uppercase tracking-wider px-1 py-px rounded font-semibold"
               style={{
                 background: "hsla(43, 96%, 56%, 0.18)",
                 color: "hsl(33, 90%, 38%)",
@@ -249,12 +249,12 @@ export const MessageBubble = memo(function MessageBubble({
             >
               总管
             </span>
-            <span className="text-[10px] text-text-faint ml-auto">
+            <span className="text-[12px] text-text-faint ml-auto">
               <MessageMeta msg={msg} />
             </span>
           </div>
           <div
-            className="rounded-xl px-3.5 py-2 text-[13px] leading-snug whitespace-pre-wrap break-words"
+            className="rounded-xl px-3.5 py-2 text-[14px] leading-snug whitespace-pre-wrap break-words"
             style={{
               background: leaderTone.bg,
               color: "var(--color-text-primary)",
@@ -279,7 +279,7 @@ export const MessageBubble = memo(function MessageBubble({
         {!isUser && (
           <div className="flex items-center gap-1.5 mb-1 px-1">
             <span
-              className="text-[11px] font-semibold truncate max-w-[120px]"
+              className="text-[12px] font-semibold truncate max-w-[120px]"
               style={{ color: tone?.text ?? "var(--color-text-secondary)" }}
               title={displayName}
             >
@@ -290,7 +290,7 @@ export const MessageBubble = memo(function MessageBubble({
         )}
         <div
           className={clsx(
-            "rounded-2xl px-3.5 py-2.5 text-[13px] leading-snug",
+            "rounded-2xl px-3.5 py-2.5 text-[14px] leading-snug",
             isUser ? "rounded-br-md" : "rounded-bl-md",
           )}
           style={
@@ -311,13 +311,13 @@ export const MessageBubble = memo(function MessageBubble({
                   }
           }
         >
-          <div className="text-[13px] leading-snug">
+          <div className="text-[14px] leading-snug">
             <MarkdownBody content={msg.content} />
           </div>
           {!isUser && msg.metadata && <RawContentToggle metadata={msg.metadata} />}
         </div>
         {isUser && (
-          <p className="text-[10px] text-text-faint mt-1 px-1">
+          <p className="text-[12px] text-text-faint mt-1 px-1">
             <MessageMeta msg={msg} />
           </p>
         )}

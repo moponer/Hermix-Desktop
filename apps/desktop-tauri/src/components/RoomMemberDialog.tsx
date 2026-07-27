@@ -279,7 +279,7 @@ export function RoomMemberDialog({
       >
         {/* P1.5 — tier transition toast */}
         {toast && (
-          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-4 py-2 rounded-xl text-[12px] font-semibold animate-in fade-in slide-in-from-top-2"
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 px-4 py-2 rounded-xl text-[13px] font-semibold animate-in fade-in slide-in-from-top-2"
             style={{
               background: "hsla(43, 96%, 56%, 0.95)",
               color: "hsl(33, 90%, 15%)",
@@ -290,7 +290,7 @@ export function RoomMemberDialog({
           </div>
         )}
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border-primary">
+        <div className="flex items-center justify-between px-4 py-3 bg-bg-secondary">
           <div className="flex items-center gap-2 min-w-0">
             <Users size={16} className="text-text-secondary shrink-0" />
             <h3 className="text-[14px] font-semibold text-text-primary truncate">
@@ -307,7 +307,7 @@ export function RoomMemberDialog({
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-border-primary" role="tablist">
+        <div className="flex bg-bg-secondary" role="tablist">
           {(["current", "invite"] as const).map((t) => (
             <button
               key={t}
@@ -324,7 +324,7 @@ export function RoomMemberDialog({
               {t === "current" ? <Users size={12} /> : <UserPlus size={12} />}
               <span>{t === "current" ? "当前" : "邀请"}</span>
               <span
-                className="text-[10.5px] px-1.5 py-px rounded-md font-semibold"
+                className="text-[12px] px-1.5 py-px rounded-md font-semibold"
                 style={{
                   background: tab === t ? "var(--color-accent-soft, rgba(71,85,105,0.10))" : "var(--color-bg-tertiary)",
                   color: tab === t ? "var(--color-accent)" : "var(--color-text-muted)",
@@ -337,7 +337,7 @@ export function RoomMemberDialog({
         </div>
 
         {/* Search + error */}
-        <div className="px-4 py-2.5 border-b border-border-subtle space-y-2">
+        <div className="px-4 py-2.5 bg-bg-secondary space-y-2">
           <div className="relative">
             <Search
               size={12}
@@ -347,13 +347,13 @@ export function RoomMemberDialog({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={tab === "current" ? "搜索当前成员..." : "搜索可邀请的成员..."}
-              className="w-full pl-7 pr-3 py-1.5 rounded-lg bg-bg-tertiary text-[12px] text-text-primary placeholder:text-text-faint outline-none focus:ring-1 focus:ring-accent/40"
+              className="w-full pl-7 pr-3 py-1.5 rounded-lg bg-bg-tertiary text-[13px] text-text-primary placeholder:text-text-faint outline-none focus:ring-1 focus:ring-accent/40"
             />
           </div>
           {error && (
             <div
               role="alert"
-              className="flex items-start gap-2 px-2.5 py-1.5 rounded-lg text-[11.5px] leading-snug"
+              className="flex items-start gap-2 px-2.5 py-1.5 rounded-lg text-[13px] leading-snug"
               style={{ background: "var(--color-error-bg, rgba(239,68,68,0.10))", color: "var(--color-error-text, #b91c1c)" }}
             >
               <AlertCircle size={12} className="shrink-0 mt-[1px]" />
@@ -401,9 +401,9 @@ export function RoomMemberDialog({
             </>
           )}
           {tab === "invite" && (
-            <ul className="divide-y divide-border-subtle">
+            <ul className="bg-bg-secondary">
               {inviteList.length === 0 ? (
-                <li className="flex flex-col items-center justify-center py-10 text-text-faint text-[12px] gap-2">
+                <li className="flex flex-col items-center justify-center py-10 text-text-faint text-[13px] gap-2">
                   <Users size={20} className="opacity-40" />
                   <p>{agents.length === 0 ? "请先在「专家」页面创建专家" : "所有专家都已在房间内"}</p>
                 </li>
@@ -417,10 +417,10 @@ export function RoomMemberDialog({
                   >
                     <AgentAvatar agent={agent} size={28} />
                     <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-medium text-text-primary truncate">
+                      <p className="text-[14px] font-medium text-text-primary truncate">
                         {agent.name}
                       </p>
-                      <p className="text-[10.5px] text-text-faint truncate">
+                      <p className="text-[12px] text-text-faint truncate">
                         {agent.role || agent.identity || "专家"}
                       </p>
                     </div>
@@ -431,7 +431,7 @@ export function RoomMemberDialog({
                         [agent.id]: e.target.value as "member" | "observer",
                       }))}
                       disabled={isBusy}
-                      className="text-[11px] px-1.5 py-1 rounded-md bg-bg-tertiary text-text-secondary border border-border-subtle outline-none"
+                      className="text-[12px] px-1.5 py-1 rounded-md bg-bg-tertiary text-text-secondary border border-border-subtle outline-none"
                       title="总管由系统内置，无需指定"
                     >
                       <option value="member">成员</option>
@@ -441,7 +441,7 @@ export function RoomMemberDialog({
                       type="button"
                       disabled={isBusy}
                       onClick={() => handleInvite(agent.id)}
-                      className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11.5px] font-medium transition-all hover:opacity-90"
+                      className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[13px] font-medium transition-all hover:opacity-90"
                       style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
                     >
                       <Check size={11} />
@@ -455,10 +455,10 @@ export function RoomMemberDialog({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end px-4 py-3 border-t border-border-primary">
+        <div className="flex items-center justify-end px-4 py-3 bg-bg-secondary">
           <button
             onClick={onClose}
-            className="px-3 py-1.5 rounded-lg text-[12px] font-medium"
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium"
             style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}
           >
             完成
@@ -493,7 +493,7 @@ function LeaderRow({
 }) {
   return (
     <div
-      className="flex items-center gap-2.5 px-4 py-2.5 border-b border-border-subtle"
+      className="flex items-center gap-2.5 px-4 py-2.5 bg-bg-secondary"
       style={{ background: "hsla(43, 96%, 56%, 0.08)" }}
       title="项目总管 · 系统内置 · 不可邀请、不可请出、不可修改模型"
     >
@@ -513,10 +513,10 @@ function LeaderRow({
         <Crown size={14} strokeWidth={2.4} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-[13px] font-medium text-text-primary truncate flex items-center gap-1.5">
+        <p className="text-[14px] font-medium text-text-primary truncate flex items-center gap-1.5">
           <span>{leader.display_name}</span>
           <span
-            className="text-[9.5px] font-bold uppercase tracking-wider px-1.5 py-px rounded-md"
+            className="text-[12px] font-bold uppercase tracking-wider px-1.5 py-px rounded-md"
             style={{
               background: "hsla(43, 96%, 56%, 0.18)",
               color: "hsl(33, 90%, 38%)",
@@ -525,7 +525,7 @@ function LeaderRow({
             系统内置
           </span>
         </p>
-        <p className="text-[10.5px] text-text-faint truncate">
+        <p className="text-[12px] text-text-faint truncate">
           负责决策、任务分解与结果验收 · 每群聊实例独立
         </p>
       </div>
@@ -536,7 +536,7 @@ function LeaderRow({
           const val = e.target.value;
           onSetModel(leader.agent_id, val || null);
         }}
-        className="text-[11px] px-1.5 py-1 rounded-md bg-bg-tertiary text-text-secondary border border-border-subtle outline-none max-w-[140px]"
+        className="text-[12px] px-1.5 py-1 rounded-md bg-bg-tertiary text-text-secondary border border-border-subtle outline-none max-w-[140px]"
       >
         <option value="">默认模型</option>
         {enabledModels.map((m) => (
@@ -597,14 +597,14 @@ function MemberList({
 
   if (items.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-10 text-text-faint text-[12px] gap-2">
+      <div className="flex flex-col items-center justify-center py-10 text-text-faint text-[13px] gap-2">
         <Users size={20} className="opacity-40" />
         <p>{emptyText}</p>
       </div>
     );
   }
   return (
-    <ul className="divide-y divide-border-subtle">
+    <ul className="bg-bg-secondary">
       {items.map((agent) => {
         const isBusy = busyAgentId === agent.id;
         const override = overrides[agent.id];
@@ -618,11 +618,11 @@ function MemberList({
           >
             <AgentAvatar agent={agent} size={28} />
             <div className="flex-1 min-w-0">
-              <p className="text-[13px] font-medium text-text-primary truncate flex items-center gap-1.5">
+              <p className="text-[14px] font-medium text-text-primary truncate flex items-center gap-1.5">
                 {alias ?? agent.name}
                 {alias && (
                   <span
-                    className="inline-flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider px-1 py-px rounded shrink-0"
+                    className="inline-flex items-center gap-0.5 text-[12px] font-bold uppercase tracking-wider px-1 py-px rounded shrink-0"
                     style={{
                       background: "hsla(220, 0%, 55%, 0.12)",
                       color: "hsl(220, 0%, 40%)",
@@ -635,7 +635,7 @@ function MemberList({
                 )}
                 {rank && (
                   <span
-                    className="inline-flex items-center gap-0.5 text-[9.5px] font-semibold px-1.5 py-px rounded shrink-0"
+                    className="inline-flex items-center gap-0.5 text-[12px] font-semibold px-1.5 py-px rounded shrink-0"
                     style={{
                       background: "hsla(43, 96%, 56%, 0.18)",
                       color: "hsl(33, 90%, 38%)",
@@ -648,7 +648,7 @@ function MemberList({
                   </span>
                 )}
               </p>
-              <p className="text-[10.5px] text-text-faint truncate">
+              <p className="text-[12px] text-text-faint truncate">
                 {alias ? `${agent.name} · ` : ""}{agent.role || agent.identity || "专家"}
               </p>
             </div>
@@ -705,7 +705,7 @@ function MemberList({
                 value={override ?? ""}
                 disabled={isBusy}
                 onChange={(e) => onSetModel(agent.id, e.target.value || null)}
-                className="text-[11px] px-1.5 py-1 rounded-md bg-bg-tertiary text-text-secondary border border-border-subtle outline-none focus:ring-1 focus:ring-accent/40 max-w-[160px]"
+                className="text-[12px] px-1.5 py-1 rounded-md bg-bg-tertiary text-text-secondary border border-border-subtle outline-none focus:ring-1 focus:ring-accent/40 max-w-[160px]"
               >
                 <option value="">
                   {agentDefault ? `默认 · ${truncateModelId(agentDefault)}` : "默认（agent 未设）"}
@@ -727,7 +727,7 @@ function MemberList({
               disabled={isBusy}
               onClick={() => onAction(agent.id)}
               className={clsx(
-                "shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11.5px] font-medium transition-all",
+                "shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[13px] font-medium transition-all",
                 isBusy && "opacity-60 cursor-wait",
                 "hover:opacity-90"
               )}

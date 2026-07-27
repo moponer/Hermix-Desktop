@@ -332,7 +332,7 @@ toastError("删除聊天室失败");
 
         {/* Chat area */}
         <div
-          className="flex-1 flex flex-col min-w-0 rounded-2xl overflow-hidden border border-border-subtle"
+          className="flex-1 flex flex-col min-w-0 rounded-2xl overflow-hidden"
           style={{ background: "var(--color-bg-secondary)" }}
         >
           {activeRoom && roomTone ? (
@@ -360,7 +360,7 @@ toastError("删除聊天室失败");
               />
 
               {/* Input */}
-              <div className="px-5 py-3 border-t border-border-subtle bg-bg-primary">
+              <div className="px-5 py-3 bg-bg-primary">
                 <ChatComposerInput
                   ref={composerRef}
                   onSend={handleSendMessage}
@@ -372,7 +372,7 @@ toastError("删除聊天室失败");
                   }
                 />
                 {loading && (
-                  <div className="flex items-center gap-1.5 mt-2 text-[11px] text-text-muted">
+                  <div className="flex items-center gap-1.5 mt-2 text-[12px] text-text-muted">
                     <span className="flex gap-0.5">
                       <span
                         className="w-1 h-1 rounded-full bg-text-muted animate-bounce"

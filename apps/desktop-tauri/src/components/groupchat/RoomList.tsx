@@ -21,7 +21,7 @@ function InlineError({ message, onDismiss }: { message: string; onDismiss: () =>
   return (
     <div
       role="alert"
-      className="flex items-start gap-2 px-2.5 py-2 rounded-lg text-[12px] leading-snug"
+      className="flex items-start gap-2 px-2.5 py-2 rounded-lg text-[13px] leading-snug"
       style={{
         background: "var(--color-error-bg, rgba(239,68,68,0.10))",
         color: "var(--color-error-text, #b91c1c)",
@@ -76,7 +76,7 @@ const RoomItem = memo(function RoomItem({
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <span
           className={clsx(
-            "text-[13px] font-semibold truncate",
+            "text-[14px] font-semibold truncate",
             active ? "text-text-primary" : "text-text-secondary",
           )}
         >
@@ -162,7 +162,7 @@ export const RoomList = memo(function RoomList({
             <Users size={13} />
           </div>
           <h2 className="text-[14px] font-semibold text-text-primary">群聊</h2>
-          <span className="text-[10px] text-text-faint font-mono px-1.5 py-0.5 rounded-md bg-bg-tertiary">
+          <span className="text-[12px] text-text-faint font-mono px-1.5 py-0.5 rounded-md bg-bg-tertiary">
             {rooms.length}
           </span>
         </div>
@@ -197,13 +197,13 @@ export const RoomList = memo(function RoomList({
             }}
             placeholder="聊天室名称"
             disabled={creatingRoom}
-            className="w-full rounded-lg bg-bg-tertiary px-3 py-2 text-[13px] text-text-primary placeholder:text-text-faint outline-none disabled:opacity-50"
+            className="w-full rounded-lg bg-bg-tertiary px-3 py-2 text-[14px] text-text-primary placeholder:text-text-faint outline-none disabled:opacity-50"
           />
           <div className="flex gap-1.5">
             <button
               onClick={onCreateRoom}
               disabled={!newRoomName.trim() || creatingRoom}
-              className="flex-1 py-1.5 rounded-lg text-[12px] font-medium transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 py-1.5 rounded-lg text-[13px] font-medium transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
               style={{
                 background: "var(--color-btn-primary-bg)",
                 color: "var(--color-btn-primary-text)",
@@ -217,7 +217,7 @@ export const RoomList = memo(function RoomList({
                 onNewRoomNameChange("");
               }}
               disabled={creatingRoom}
-              className="flex-1 py-1.5 rounded-lg text-[12px] font-medium transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex-1 py-1.5 rounded-lg text-[13px] font-medium transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
               style={{
                 background: "var(--color-btn-secondary-bg)",
                 color: "var(--color-btn-secondary-text)",
@@ -238,7 +238,7 @@ export const RoomList = memo(function RoomList({
               value={roomSearch}
               onChange={(e) => onRoomSearchChange(e.target.value)}
               placeholder="搜索房间…"
-              className="flex-1 bg-transparent text-[11px] text-text-primary placeholder:text-text-faint outline-none"
+              className="flex-1 bg-transparent text-[12px] text-text-primary placeholder:text-text-faint outline-none"
             />
             {roomSearch && (
               <button
@@ -257,8 +257,8 @@ export const RoomList = memo(function RoomList({
         {rooms.length === 0 && !showNewRoom && (
           <div className="flex flex-col items-center py-10 text-center">
             <MessageCircle size={32} className="text-text-faint mb-3" />
-            <p className="text-[13px] text-text-muted">暂无聊天室</p>
-            <p className="text-[11px] text-text-faint mt-1">点击 + 创建一个聊天室</p>
+            <p className="text-[14px] text-text-muted">暂无聊天室</p>
+            <p className="text-[12px] text-text-faint mt-1">点击 + 创建一个聊天室</p>
           </div>
         )}
         {filteredRooms.map((room) => (

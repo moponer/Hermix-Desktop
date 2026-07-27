@@ -50,12 +50,12 @@ export function StreamingAgentRow({
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 mb-0.5">
-          <span className="text-[12px] text-text-primary font-medium">
+          <span className="text-[13px] text-text-primary font-medium">
             {info.name}
           </span>
           {isLeader && (
             <span
-              className="text-[9.5px] uppercase tracking-wider px-1 py-px rounded font-semibold"
+              className="text-[12px] uppercase tracking-wider px-1 py-px rounded font-semibold"
               style={{
                 background: "hsla(43, 96%, 56%, 0.18)",
                 color: "hsl(33, 90%, 38%)",
@@ -66,7 +66,7 @@ export function StreamingAgentRow({
           )}
         </div>
         <div
-          className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px]"
+          className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[13px]"
           style={{
             background: "var(--color-bg-tertiary)",
             color: "var(--color-text-muted)",

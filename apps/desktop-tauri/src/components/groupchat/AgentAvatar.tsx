@@ -97,7 +97,7 @@ export const AgentStack = memo(function AgentStack({
 }) {
   if (agents.length === 0) {
     return (
-      <span className="text-[10.5px] text-text-faint italic">暂无成员</span>
+      <span className="text-[12px] text-text-faint italic">暂无成员</span>
     );
   }
   const shown = agents.slice(0, max);
@@ -115,14 +115,14 @@ export const AgentStack = memo(function AgentStack({
         ))}
         {overflow > 0 && (
           <div
-            className="rounded-full bg-bg-tertiary text-text-muted text-[9px] font-semibold flex items-center justify-center ring-2 ring-bg-primary"
+            className="rounded-full bg-bg-tertiary text-text-muted text-[12px] font-semibold flex items-center justify-center ring-2 ring-bg-primary"
             style={{ width: 20, height: 20, marginLeft: -7 }}
           >
             +{overflow}
           </div>
         )}
       </div>
-      <span className="ml-2 text-[10.5px] text-text-muted truncate">
+      <span className="ml-2 text-[12px] text-text-muted truncate">
         {agents.length} 位成员
       </span>
     </div>

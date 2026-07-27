@@ -132,13 +132,13 @@ export function AutomationView() {
               到点自动用当前会话的 agent 跑 prompt。
             </p>
             {error && (
-              <p className="text-[12px] text-error mt-2">⚠️ {error}</p>
+              <p className="text-[13px] text-error mt-2">⚠️ {error}</p>
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setCreating(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-bg-primary text-[12px] font-medium hover:bg-accent-hover"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-bg-primary text-[13px] font-medium hover:bg-accent-hover"
             >
               <Plus size={13} /> 新建自动化
             </button>
@@ -146,15 +146,15 @@ export function AutomationView() {
         </div>
 
         {loading && tasks.length === 0 ? (
-          <p className="text-[12px] text-text-faint py-8 text-center">加载中…</p>
+          <p className="text-[13px] text-text-faint py-8 text-center">加载中…</p>
         ) : tasks.length === 0 ? (
-          <p className="text-[12px] text-text-faint py-8 text-center">
+          <p className="text-[13px] text-text-faint py-8 text-center">
             还没有任何自动化任务，点击右上「新建自动化」开始
           </p>
         ) : (
           categories.map((cat) => (
             <div key={cat} className="mb-6">
-              <h2 className="text-[11px] font-medium text-text-muted uppercase tracking-wider mb-2">
+              <h2 className="text-[12px] font-medium text-text-muted uppercase tracking-wider mb-2">
                 {cat} · {grouped[cat].length}
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
@@ -221,10 +221,10 @@ function TaskCard({
 }) {
   return (
     <div
-      className={`relative flex flex-col gap-2 p-3.5 rounded-xl border group ${
+      className={`relative flex flex-col gap-2 p-3.5 rounded-xl group ${
         task.enabled
-          ? "bg-bg-card border-border-secondary"
-          : "bg-bg-card/60 border-border-primary opacity-80"
+          ? "bg-bg-card"
+          : "bg-bg-card/40 opacity-70"
       }`}
     >
       <div className="flex items-start gap-2.5">
@@ -233,28 +233,28 @@ function TaskCard({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <p className="text-[12.5px] font-semibold text-text-primary truncate">
+            <p className="text-[13px] font-semibold text-text-primary truncate">
               {task.name}
             </p>
             {task.last_status === "running" && (
-              <span className="text-[9px] text-info animate-pulse">
+              <span className="text-[12px] text-info animate-pulse">
                 运行中
               </span>
             )}
             {task.last_status === "failed" && (
-              <span className="text-[9px] text-error">失败</span>
+              <span className="text-[12px] text-error">失败</span>
             )}
           </div>
           {task.description && (
-            <p className="text-[10.5px] text-text-muted leading-relaxed mt-0.5 line-clamp-2">
+            <p className="text-[12px] text-text-muted leading-relaxed mt-0.5 line-clamp-2">
               {task.description}
             </p>
           )}
-          <div className="flex items-center gap-2 mt-1.5 text-[10px] text-text-faint">
+          <div className="flex items-center gap-2 mt-1.5 text-[12px] text-text-faint">
             <span className="font-mono">{task.schedule}</span>
             {task.schedule_label && <span>· {task.schedule_label}</span>}
           </div>
-          <div className="flex items-center gap-2 mt-1 text-[10px] text-text-faint">
+          <div className="flex items-center gap-2 mt-1 text-[12px] text-text-faint">
             <span>累计 {task.run_count} 次</span>
             {task.last_run_at && (
               <span>
@@ -276,21 +276,21 @@ function TaskCard({
         <button
           onClick={onTrigger}
           disabled={task.last_status === "running"}
-          className="flex items-center gap-1 px-2 py-1 text-[10.5px] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded disabled:opacity-40"
+          className="flex items-center gap-1 px-2 py-1 text-[12px] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded disabled:opacity-40"
           title="立刻跑一次"
         >
           <Play size={10} /> 立即运行
         </button>
         <button
           onClick={onEdit}
-          className="flex items-center gap-1 px-2 py-1 text-[10.5px] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded"
+          className="flex items-center gap-1 px-2 py-1 text-[12px] text-text-secondary hover:text-text-primary hover:bg-bg-hover rounded"
           title="编辑"
         >
           <Pencil size={10} /> 编辑
         </button>
         <button
           onClick={onDelete}
-          className="flex items-center gap-1 px-2 py-1 text-[10.5px] text-text-faint hover:text-error hover:bg-bg-hover rounded"
+          className="flex items-center gap-1 px-2 py-1 text-[12px] text-text-faint hover:text-error hover:bg-bg-hover rounded"
           title="删除"
          aria-label="删除">
           <Trash2 size={10} />
@@ -298,7 +298,7 @@ function TaskCard({
         <div className="flex-1" />
         <button
           onClick={onToggle}
-          className={`flex items-center gap-1 px-2 py-1 text-[10.5px] rounded ${
+          className={`flex items-center gap-1 px-2 py-1 text-[12px] rounded ${
             task.enabled
               ? "text-success hover:bg-bg-hover"
               : "text-text-faint hover:text-text-secondary hover:bg-bg-hover"
@@ -429,7 +429,7 @@ function TaskEditor({
                 <button
                   key={expr}
                   onClick={() => update("schedule", expr)}
-                  className={`px-2 py-0.5 text-[10.5px] rounded ${
+                  className={`px-2 py-0.5 text-[12px] rounded ${
                     draft.schedule === expr
                       ? "bg-accent text-bg-primary"
                       : "bg-bg-secondary text-text-secondary hover:bg-bg-hover border border-border-primary"
@@ -507,21 +507,21 @@ function TaskEditor({
                       type="button"
                       onClick={() => toggleSkill(sk.name)}
                       title={sk.description}
-                      className={`px-2 py-1 text-[10.5px] rounded border transition-colors ${
+                      className={`px-2 py-1 text-[12px] rounded border transition-colors ${
                         selected
                           ? "bg-accent text-bg-primary border-accent"
                           : "bg-bg-secondary text-text-secondary border-border-primary hover:bg-bg-hover"
                       }`}
                     >
                       {sk.name}
-                      {sk.category ? <span className="ml-1 text-[9px] opacity-60">({sk.category})</span> : null}
+                      {sk.category ? <span className="ml-1 text-[12px] opacity-60">({sk.category})</span> : null}
                     </button>
                   );
                 })}
               </div>
             </Field>
           )}
-          <label className="flex items-center gap-2 text-[12px] text-text-secondary cursor-pointer select-none">
+          <label className="flex items-center gap-2 text-[13px] text-text-secondary cursor-pointer select-none">
             <input
               type="checkbox"
               checked={draft.enabled}

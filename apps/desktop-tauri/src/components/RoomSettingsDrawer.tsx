@@ -131,7 +131,7 @@ toastError("保存聊天室设置失败");
         style={{ transform: "translateZ(0)" }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border-primary">
+        <div className="flex items-center justify-between px-4 py-3 bg-bg-secondary">
           <div className="flex items-center gap-2">
             <Settings size={16} className="text-text-secondary" />
             <h3 className="text-[14px] font-semibold text-text-primary">{roomName} — 规则设置</h3>
@@ -142,7 +142,7 @@ toastError("保存聊天室设置失败");
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-border-primary">
+        <div className="flex bg-bg-secondary">
           {(["rules", "general"] as const).map((t) => (
             <button
               key={t}
@@ -165,12 +165,12 @@ toastError("保存聊天室设置失败");
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
                   <Shield size={13} className="text-accent" />
-                  <span className="text-[12px] font-semibold text-text-primary">内置安全规则</span>
-                  <span className="text-[10px] text-text-faint">（不可修改）</span>
+                  <span className="text-[13px] font-semibold text-text-primary">内置安全规则</span>
+                  <span className="text-[12px] text-text-faint">（不可修改）</span>
                 </div>
                 <div className="rounded-lg bg-bg-tertiary p-3 space-y-1">
                   {["禁止执行破坏性命令", "禁止格式化磁盘", "禁止修改系统关键文件", "禁止未授权网络扫描"].map((rule) => (
-                    <div key={rule} className="text-[11.5px] text-text-secondary flex items-center gap-1.5">
+                    <div key={rule} className="text-[13px] text-text-secondary flex items-center gap-1.5">
                       <span className="text-text-faint">•</span> {rule}
                     </div>
                   ))}
@@ -181,16 +181,16 @@ toastError("保存聊天室设置失败");
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
                   <AlertTriangle size={13} className="text-warning" />
-                  <span className="text-[12px] font-semibold text-text-primary">全局规则</span>
-                  <span className="text-[10px] text-text-faint">（适用于所有专家）</span>
+                  <span className="text-[13px] font-semibold text-text-primary">全局规则</span>
+                  <span className="text-[12px] text-text-faint">（适用于所有专家）</span>
                 </div>
                 <div className="space-y-1.5">
                   {globalConstraints.map((c, i) => (
                     <div key={`global-${i}`} className="flex items-center gap-2 bg-bg-tertiary rounded-lg px-3 py-1.5">
-                      <span className="flex-1 text-[11.5px] text-text-secondary">{c}</span>
+                      <span className="flex-1 text-[13px] text-text-secondary">{c}</span>
                       <button
                         onClick={() => setGlobalConstraints((prev) => prev.filter((_, j) => j !== i))}
-                        className="text-text-faint hover:text-error text-[11px]"
+                        className="text-text-faint hover:text-error text-[12px]"
                       >删除</button>
                     </div>
                   ))}
@@ -205,7 +205,7 @@ toastError("保存聊天室设置失败");
                         }
                       }}
                       placeholder="添加新规则..."
-                      className="flex-1 rounded-lg bg-bg-tertiary px-3 py-1.5 text-[11.5px] text-text-primary placeholder:text-text-faint outline-none"
+                      className="flex-1 rounded-lg bg-bg-tertiary px-3 py-1.5 text-[13px] text-text-primary placeholder:text-text-faint outline-none"
                     />
                     <button
                       onClick={() => {
@@ -215,7 +215,7 @@ toastError("保存聊天室设置失败");
                         }
                       }}
                       disabled={!newConstraint.trim()}
-                      className="px-2.5 py-1.5 rounded-lg text-[11.5px] font-medium disabled:opacity-40"
+                      className="px-2.5 py-1.5 rounded-lg text-[13px] font-medium disabled:opacity-40"
                       style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
                     >添加</button>
                   </div>
@@ -224,7 +224,7 @@ toastError("保存聊天室设置失败");
 
               {/* Tool policy */}
               <div>
-                <span className="text-[12px] font-semibold text-text-primary block mb-2">工具策略</span>
+                <span className="text-[13px] font-semibold text-text-primary block mb-2">工具策略</span>
                 <div className="space-y-2">
                   {(["blacklist", "whitelist", "strict"] as const).map((mode) => (
                     <label key={mode} className="flex items-center gap-2 cursor-pointer">
@@ -235,7 +235,7 @@ toastError("保存聊天室设置失败");
                         onChange={() => setToolPolicyMode(mode)}
                         className="accent-[var(--color-accent)]"
                       />
-                      <span className="text-[12px] text-text-secondary">
+                      <span className="text-[13px] text-text-secondary">
                         {mode === "blacklist" ? "黑名单模式（默认）" : mode === "whitelist" ? "白名单模式" : "严格模式"}
                       </span>
                     </label>
@@ -245,10 +245,10 @@ toastError("保存聊天室设置失败");
                   <div className="mt-2 space-y-1.5">
                     {blacklistedTools.map((tool, i) => (
                       <div key={`bl-${tool}-${i}`} className="flex items-center gap-2 bg-bg-tertiary rounded-lg px-3 py-1.5">
-                        <span className="flex-1 text-[11.5px] text-text-secondary font-mono">{tool}</span>
+                        <span className="flex-1 text-[13px] text-text-secondary font-mono">{tool}</span>
                         <button
                           onClick={() => setBlacklistedTools((prev) => prev.filter((_, j) => j !== i))}
-                          className="text-text-faint hover:text-error text-[11px]"
+                          className="text-text-faint hover:text-error text-[12px]"
                         >删除</button>
                       </div>
                     ))}
@@ -263,7 +263,7 @@ toastError("保存聊天室设置失败");
                           }
                         }}
                         placeholder="工具名称（如 terminal）..."
-                        className="flex-1 rounded-lg bg-bg-tertiary px-3 py-1.5 text-[11.5px] text-text-primary font-mono placeholder:text-text-faint outline-none"
+                        className="flex-1 rounded-lg bg-bg-tertiary px-3 py-1.5 text-[13px] text-text-primary font-mono placeholder:text-text-faint outline-none"
                       />
                       <button
                         onClick={() => {
@@ -273,7 +273,7 @@ toastError("保存聊天室设置失败");
                           }
                         }}
                         disabled={!newBlacklistTool.trim()}
-                        className="px-2.5 py-1.5 rounded-lg text-[11.5px] font-medium disabled:opacity-40"
+                        className="px-2.5 py-1.5 rounded-lg text-[13px] font-medium disabled:opacity-40"
                         style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
                       >添加</button>
                     </div>
@@ -285,25 +285,25 @@ toastError("保存聊天室设置失败");
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
                   <Star size={13} className="text-warning" />
-                  <span className="text-[12px] font-semibold text-text-primary">惩处策略</span>
+                  <span className="text-[13px] font-semibold text-text-primary">惩处策略</span>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[11px] text-text-faint block mb-1">初始积分</label>
+                    <label className="text-[12px] text-text-faint block mb-1">初始积分</label>
                     <input
                       type="number"
                       value={initialScore}
                       onChange={(e) => setInitialScore(Number(e.target.value))}
-                      className="w-full rounded-lg bg-bg-tertiary px-3 py-1.5 text-[12px] text-text-primary outline-none"
+                      className="w-full rounded-lg bg-bg-tertiary px-3 py-1.5 text-[13px] text-text-primary outline-none"
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] text-text-faint block mb-1">反思阈值</label>
+                    <label className="text-[12px] text-text-faint block mb-1">反思阈值</label>
                     <input
                       type="number"
                       value={reflectionThreshold}
                       onChange={(e) => setReflectionThreshold(Number(e.target.value))}
-                      className="w-full rounded-lg bg-bg-tertiary px-3 py-1.5 text-[12px] text-text-primary outline-none"
+                      className="w-full rounded-lg bg-bg-tertiary px-3 py-1.5 text-[13px] text-text-primary outline-none"
                     />
                   </div>
                 </div>
@@ -325,11 +325,11 @@ toastError("保存聊天室设置失败");
                     data-testid="toggle-idle-chat"
                   />
                   <div className="flex-1">
-                    <div className="flex items-center gap-1.5 text-[12px] font-semibold text-text-primary">
+                    <div className="flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
                       <MessageCircle size={13} className="text-accent" />
                       启用闲聊模式
                     </div>
-                    <div className="text-[11px] text-text-muted mt-0.5">
+                    <div className="text-[12px] text-text-muted mt-0.5">
                       开启后,空闲的成员会按设定间隔自动发起分享经验 / 总结任务 / 学习心得的短消息。
                       关闭后定时器立即停止,不再产生闲聊消息。
                     </div>
@@ -342,7 +342,7 @@ toastError("保存聊天室设置失败");
                 )}>
                   <div className="flex items-center gap-3">
                     <Clock size={12} className="text-text-faint" />
-                    <label className="text-[11.5px] text-text-secondary whitespace-nowrap">
+                    <label className="text-[13px] text-text-secondary whitespace-nowrap">
                       闲聊间隔 (秒)
                     </label>
                     <input
@@ -352,10 +352,10 @@ toastError("保存聊天室设置失败");
                       value={idleIntervalSecs}
                       onChange={(e) => setIdleIntervalSecs(Math.max(30, Number(e.target.value) || 30))}
                       disabled={!settingsLoaded || !allowIdleChat}
-                      className="flex-1 rounded-lg bg-bg-secondary px-2.5 py-1 text-[12px] text-text-primary outline-none focus:ring-1 focus:ring-accent"
+                      className="flex-1 rounded-lg bg-bg-secondary px-2.5 py-1 text-[13px] text-text-primary outline-none focus:ring-1 focus:ring-accent"
                     />
                   </div>
-                  <div className="text-[10.5px] text-text-faint pl-5">
+                  <div className="text-[12px] text-text-faint pl-5">
                     建议 60-600 秒。太短会刷屏,太长看不到效果。
                   </div>
                 </div>
@@ -363,11 +363,11 @@ toastError("保存聊天室设置失败");
 
               {/* ── Concurrency ──────────────────────────────── */}
               <div className="rounded-xl bg-bg-tertiary p-3 space-y-2">
-                <div className="flex items-center gap-1.5 text-[12px] font-semibold text-text-primary">
+                <div className="flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
                   <Users size={13} className="text-accent" />
                   并发上限
                 </div>
-                <div className="text-[11px] text-text-muted">
+                <div className="text-[12px] text-text-muted">
                   单条用户消息触发总管拆解后, 同时被调用的成员数量上限。
                 </div>
                 <div className="flex items-center gap-3 pl-0.5">
@@ -378,9 +378,9 @@ toastError("保存聊天室设置失败");
                     value={maxConcurrentAgents}
                     onChange={(e) => setMaxConcurrentAgents(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
                     disabled={!settingsLoaded}
-                    className="w-24 rounded-lg bg-bg-secondary px-2.5 py-1 text-[12px] text-text-primary outline-none focus:ring-1 focus:ring-accent"
+                    className="w-24 rounded-lg bg-bg-secondary px-2.5 py-1 text-[13px] text-text-primary outline-none focus:ring-1 focus:ring-accent"
                   />
-                  <span className="text-[11px] text-text-faint">1-20</span>
+                  <span className="text-[12px] text-text-faint">1-20</span>
                 </div>
               </div>
 
@@ -395,11 +395,11 @@ toastError("保存聊天室设置失败");
                     className="mt-0.5 accent-[var(--color-accent)]"
                   />
                   <div className="flex-1">
-                    <div className="flex items-center gap-1.5 text-[12px] font-semibold text-text-primary">
+                    <div className="flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
                       <CheckCircle2 size={13} className="text-accent" />
                       需要总管审批
                     </div>
-                    <div className="text-[11px] text-text-muted mt-0.5">
+                    <div className="text-[12px] text-text-muted mt-0.5">
                       开启后,总管拆解出的子任务在派发给成员前需要总管确认。
                       关闭后直接派发,响应更快。
                     </div>
@@ -408,7 +408,7 @@ toastError("保存聊天室设置失败");
               </div>
 
               {!settingsLoaded && (
-                <div className="text-[11px] text-text-faint text-center py-2">
+                <div className="text-[12px] text-text-faint text-center py-2">
                   正在加载设置…
                 </div>
               )}
@@ -417,14 +417,14 @@ toastError("保存聊天室设置失败");
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-border-primary">
-          <span className="text-[11px] text-success">{saveMsg}</span>
+        <div className="flex items-center justify-between px-4 py-3 bg-bg-secondary">
+          <span className="text-[12px] text-success">{saveMsg}</span>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-[12px] font-medium" style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}>取消</button>
+            <button onClick={onClose} className="px-3 py-1.5 rounded-lg text-[13px] font-medium" style={{ background: "var(--color-btn-secondary-bg)", color: "var(--color-btn-secondary-text)" }}>取消</button>
             <button
               onClick={tab === "general" ? handleSaveSettings : handleSave}
               disabled={saving}
-              className="px-3 py-1.5 rounded-lg text-[12px] font-medium disabled:opacity-50"
+              className="px-3 py-1.5 rounded-lg text-[13px] font-medium disabled:opacity-50"
               style={{ background: "var(--color-btn-primary-bg)", color: "var(--color-btn-primary-text)" }}
             >
               {saving ? "保存中..." : "保存"}

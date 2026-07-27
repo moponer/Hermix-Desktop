@@ -61,7 +61,7 @@ export const MessageList = memo(function MessageList({
           <p className="text-[15px] font-semibold text-text-primary mb-1">
             开始一场群聊
           </p>
-          <p className="text-[12px] text-text-muted mb-5 max-w-[280px] leading-relaxed">
+          <p className="text-[13px] text-text-muted mb-5 max-w-[280px] leading-relaxed">
             {roomAgents.length > 0
               ? `${hasLeader ? "项目总管已就位 · " : ""}${roomAgents
                   .slice(0, 2)

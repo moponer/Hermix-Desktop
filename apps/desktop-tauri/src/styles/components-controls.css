@@ -389,8 +389,8 @@
 .modal-icon-error { background: var(--color-error-soft);   color: var(--color-error); }
 
 .modal-title-block { flex: 1; min-width: 0; }
-.modal-title    { font-size: 14.5px; font-weight: 600; color: var(--color-text-primary); line-height: 1.3; }
-.modal-subtitle { font-size: 12px; color: var(--color-text-muted); margin-top: 4px; line-height: 1.5; }
+.modal-title    { font-size: 15px; font-weight: 600; color: var(--color-text-primary); line-height: 1.3; }
+.modal-subtitle { font-size: 13px; color: var(--color-text-muted); margin-top: 4px; line-height: 1.5; }
 
 .modal-close {
   color: var(--color-text-muted);
@@ -413,33 +413,32 @@
   max-height: 180px;
   overflow-y: auto;
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--color-text-primary);
   white-space: pre-wrap;
   word-break: break-all;
   line-height: 1.5;
   margin: 0 20px 16px;
 }
-.modal-body  { padding: 0 20px 16px; font-size: 12.5px; color: var(--color-text-primary); line-height: 1.5; }
+.modal-body  { padding: 0 20px 16px; font-size: 13px; color: var(--color-text-primary); line-height: 1.5; }
 .modal-form  { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 12px; max-height: 50vh; overflow-y: auto; }
 .modal-footer {
   display: flex;
   gap: 8px;
   padding: 12px 20px 20px;
-  border-top: 1px solid var(--color-bg-tertiary);
 }
 .modal-footer .btn { flex: 1; }
 
 /* ── Modal form fields (used by AutomationView / PluginsView editors) ── */
 .modal-field     { display: flex; flex-direction: column; gap: 3px; }
-.modal-field-label { font-size: 11.5px; font-weight: 500; color: var(--color-text-secondary); }
-.modal-field-hint { font-size: 10.5px; color: var(--color-text-faint); line-height: 1.45; margin-top: 1px; }
+.modal-field-label { font-size: 12.5px; font-weight: 500; color: var(--color-text-secondary); }
+.modal-field-hint { font-size: 12px; color: var(--color-text-faint); line-height: 1.45; margin-top: 1px; }
 
 .modal-input,
 .modal-textarea {
   width: 100%;
   padding: 7px 10px;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.5;
   color: var(--color-text-primary);
   background: var(--color-bg-primary);
@@ -462,7 +461,7 @@
   justify-content: center;
   gap: 5px;
   padding: 7px 16px;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   border-radius: var(--radius-md);
   border: 1px solid transparent;

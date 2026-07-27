@@ -35,14 +35,14 @@ export const RoomHeader = memo(function RoomHeader({
 }) {
   return (
     <div
-      className="relative px-5 pt-3 pb-2.5 border-b border-border-subtle"
+      className="relative px-5 pt-3 pb-2.5"
       style={{ background: roomTone.hero }}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
             <span
-              className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md"
+              className="text-[12px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md"
               style={{
                 background: roomTone.dot + "33",
                 color: roomTone.text,
@@ -54,7 +54,7 @@ export const RoomHeader = memo(function RoomHeader({
               {room.name}
             </h3>
           </div>
-          <p className="text-[11.5px] text-text-muted flex items-center gap-1.5 flex-wrap">
+          <p className="text-[13px] text-text-muted flex items-center gap-1.5 flex-wrap">
             <span>
               {room.leader && roomAgents.length > 0
                 ? `总管 + ${roomAgents.length} 位成员 · 协作中`
@@ -138,7 +138,7 @@ export const RoomHeader = memo(function RoomHeader({
               );
             })}
           </div>
-          <div className="text-[10.5px] text-text-muted leading-tight min-w-0">
+          <div className="text-[12px] text-text-muted leading-tight min-w-0">
             <p className="font-semibold text-text-secondary">
               {room.leader ? "项目总管 · 在岗" : "在线成员"}
             </p>
