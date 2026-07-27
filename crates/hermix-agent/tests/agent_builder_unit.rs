@@ -54,7 +54,7 @@ fn bridge_tool_registry_keeps_schema_count() {
 hermix_tools::register_builtin_tools(&tools, terminal_backend, skill_provider, None, None, None, None);
 
 let defs = tools.get_definitions();
-let bridged = bridge_tool_registry(&tools, None);
+let bridged = bridge_tool_registry(&tools, None, Arc::new(hermix_tools::ToolCallContext::default()));
     let bridged_names = bridged.names();
     assert!(
         !defs.is_empty(),
@@ -84,7 +84,7 @@ assert!(defs.len() >= 2, "need at least 2 builtin tools for this test");
         defs.iter().take(2).map(|s| s.name.clone()).collect();
     let expected_kept: usize = allow_names.len();
 
-    let bridged = bridge_tool_registry(&tools, Some(&allow_names));
+    let bridged = bridge_tool_registry(&tools, Some(&allow_names), Arc::new(hermix_tools::ToolCallContext::default()));
     let bridged_names = bridged.names();
     assert_eq!(
         bridged_names.len(),

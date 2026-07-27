@@ -100,10 +100,10 @@
   background: transparent;
   padding: 10px 12px;
   color: inherit;
-  font-size: 12px;
+  font-size: 13px;
   border: 0;
   font-weight: 400;
-  line-height: 1.5;
+  line-height: 1.6;
   display: block;
   overflow-x: auto;
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
@@ -482,15 +482,25 @@
   scrollbar-gutter: stable;
 }
 
-/* Preview pane default font — pure monospace stack.
-   v3 had a `sans-serif` fallback that broke CJK rendering (Consolas
-   doesn't have CJK glyphs, fell back to 微软雅黑 → ASCII/CJK size
-   mismatch). v7 keeps the same rule but the only `*` selector here
-   is scoped to the preview pane wrapper, so it doesn't bleed. */
-.preview-pane,
-.preview-pane *,
-.preview-pane *::before,
-.preview-pane *::after {
+/* ── Monospace font scoping (fix 2026-07-26) ──
+   之前用 `.preview-pane *` + `!important` 把整个预览面板的所有元素
+   都强制成等宽字体，包括 Markdown 正文 (`.preview-md-body`) 里的
+   标题、段落、列表——这直接破坏了 Markdown 阅读体验，所有文字
+   都变成了等宽，看起来像代码而不是文档。
+
+   现在：只对代码视图相关元素 (code-viewport / code-pre / code-body /
+   code-gutter / code-ln / code-status / code-empty) 应用等宽字体，
+   Markdown 预览区域走自己的 `--font-family-primary` 字体栈。
+   详见 code-view.css 中 `.preview-md-body` 的样式定义。 */
+.preview-pane .code-viewport,
+.preview-pane .code-viewport *,
+.preview-pane .code-viewport *::before,
+.preview-pane .code-viewport *::after,
+.preview-pane .code-status,
+.preview-pane .code-status *,
+.preview-pane .code-empty,
+.preview-pane .preview-path,
+.preview-pane .preview-stats {
   font-family: "JetBrains Mono", "JetBrainsMono NF", "Cascadia Mono",
     "Cascadia Code", Consolas, "Source Code Pro", Menlo, ui-monospace,
     monospace !important;
@@ -506,26 +516,26 @@
   box-sizing: border-box !important;
 }
 
-/* Prevent any markdown-injected element from escaping the preview pane. */
-.preview-pane h1,
-.preview-pane h2,
-.preview-pane h3,
-.preview-pane h4,
-.preview-pane h5,
-.preview-pane h6,
-.preview-pane p,
-.preview-pane ul,
-.preview-pane ol,
-.preview-pane li,
-.preview-pane strong,
-.preview-pane em,
-.preview-pane blockquote,
-.preview-pane a,
-.preview-pane img,
-.preview-pane hr {
-  font-family: inherit !important;
-  margin-top: 0 !important;
-  margin-bottom: 0.4em !important;
+/* Markdown body inside preview pane: reset the old blanket `margin: 0`
+   override that collapsed heading spacing. Now `.preview-md-body`
+   owns its own typography (see code-view.css). We only keep the
+   max-width safety guard so wide images/tables don't overflow. */
+.preview-pane .preview-md-body h1,
+.preview-pane .preview-md-body h2,
+.preview-pane .preview-md-body h3,
+.preview-pane .preview-md-body h4,
+.preview-pane .preview-md-body h5,
+.preview-pane .preview-md-body h6,
+.preview-pane .preview-md-body p,
+.preview-pane .preview-md-body ul,
+.preview-pane .preview-md-body ol,
+.preview-pane .preview-md-body li,
+.preview-pane .preview-md-body strong,
+.preview-pane .preview-md-body em,
+.preview-pane .preview-md-body blockquote,
+.preview-pane .preview-md-body a,
+.preview-pane .preview-md-body img,
+.preview-pane .preview-md-body hr {
   max-width: 100% !important;
 }
 
@@ -1372,14 +1382,14 @@
   white-space: nowrap;
   flex-shrink: 0;
   margin-left: 4px;
-  border: 1px solid var(--color-border, #2e2e34);
-  background: var(--color-surface-2, #1c1c20);
-  color: var(--color-text-secondary, #c9c9d1);
+  border: 1px solid var(--color-border-secondary, #d4d4d8);
+  background: var(--color-bg-tertiary, #ededee);
+  color: var(--color-text-secondary, #52525b);
 }
 .tw-msg-archive-chip {
   /* distinguished only by a faint accent border; keeps the
      "整理记忆" action noticeable without shouting */
-  border-color: var(--color-border-strong, #3a3a42);
+  border-color: var(--color-border-strong, #18181b);
 }
 .tw-msg-primary--link:hover {
   text-decoration: underline;

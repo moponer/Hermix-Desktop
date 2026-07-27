@@ -307,6 +307,22 @@ pub const DEFAULT_RESIDENT_TOOLS: &[&str] = &[
     "search_files",
     "list_files",
     "edit_file",
+    // Binary / multimodal file readers — MUST be resident so the LLM
+    // can see them without going through tool_search bridge. Without
+    // this, the KeywordRouter + AlwaysInclude pipeline correctly
+    // forwards them, but assemble_tool_schemas's classify_tools
+    // buckets them as "deferred" (not in DEFAULT_RESIDENT_TOOLS),
+    // hiding them behind tool_search/tool_call bridges.
+    "read_pdf",
+    "read_image",
+    // File operations — move/rename must be resident so the LLM
+    // can rename files without resorting to terminal mv (quoting issues).
+    "move_file",
+    // Sub-agent delegation — MUST be resident so the LLM can spawn
+    // sub-agents for image/binary analysis without discovering the
+    // tool through tool_search first.
+    "delegate_task",
+    "get_subagent_result",
     // Terminal
     "terminal",
     "process",

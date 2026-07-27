@@ -39,6 +39,7 @@ members = [
     "crates/hermix-task",
     "crates/hermix-automation",
     "crates/hermix-plugin",
+    "crates/hermix-ocr",
 ]
 
 [workspace.package]
@@ -55,6 +56,26 @@ repository = "https://github.com/nousresearch/hermes-engine"
 unused_variables = "allow"
 unused_imports = "allow"
 dead_code = "allow"
+
+[workspace.lints.clippy]
+# (P0-6 / STABILITY-PLAN §2.1): std::sync / parking_lot lock guards
+# held across `.await` are guaranteed deadlocks (the owning thread is
+# parked and can't release). tokio::sync locks are async-aware and NOT
+# caught by this lint — those require code review (see P0-4 cdp.rs /
+# P0-5 session.rs for the patterns to avoid: nested locks, lock-held-
+# during-long-read).
+await_holding_lock = "deny"
+# (P1-4 / STABILITY-PLAN §2.3): warn-level for unwrap/expect in
+# production code. The plan calls for deny, but the existing codebase
+# has 500+ unwrap calls (server/lib.rs 130, session_persistence.rs
+# 176, etc.). Deny would immediately break compilation. Strategy:
+# 1. warn now — makes new unwrap/expect visible in CI output
+# 2. Clean up existing unwrap in top-5 files
+# 3. Promote to deny once density is manageable
+# Test code is exempt via #[cfg_attr(test, allow(...))] in individual
+# crates if needed.
+unwrap_used = "warn"
+expect_used = "warn"
 
 [workspace.dependencies]
 # Internal crates
@@ -79,6 +100,7 @@ hermix-voice = { path = "crates/hermix-voice" }
 hermix-task = { path = "crates/hermix-task" }
 hermix-automation = { path = "crates/hermix-automation" }
 hermix-plugin = { path = "crates/hermix-plugin" }
+hermix-ocr = { path = "crates/hermix-ocr" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -198,13 +220,20 @@ incremental = true
 # opt-level=3 is the default; stated explicitly so it doesn't get silently
 # downgraded. lto=thin + codegen-units=1 gives ~5-10% size win on the
 # binary with a small build-time cost. strip=symbols removes debuginfo
-# (we ship no stack traces). panic=abort saves ~50 KB and shortens
-# cold-start by skipping unwinding tables. The dev/test profile above
-# keeps the line-tables-only contract for fast incremental builds.
+# (we ship no stack traces).
+#
+# (P1-1 / STABILITY-PLAN §2.3): panic=unwind is REQUIRED for task-level
+# panic isolation. With panic=abort, ANY panic in a tool handler or agent
+# loop kills the entire server process — all user sessions lost. With
+# panic=unwind, tokio's task model naturally isolates panics to the
+# spawning task, and catch_unwind can convert them to structured errors.
+# The ~50 KB size increase is negligible for a desktop app that already
+# ships WebView2 + React. Cold-start impact is marginal (unwinding tables
+# are lazily loaded).
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
-panic = "abort"
+panic = "unwind"
 incremental = false

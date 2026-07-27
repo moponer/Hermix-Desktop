@@ -334,6 +334,13 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
         // got X".
         let interpreter_label = interpreter.display().to_string();
 
+        // (P2-5 / STABILITY-PLAN §2.7) Plant a canary file in the
+        // temp directory before execution. After execution, we verify
+        // it's intact — if the executed code modified or deleted it,
+        // that's a potential sandbox escape.
+        let canary_dir = std::env::temp_dir();
+        let canary = canary::plant(&canary_dir).ok();
+
         let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
             let child = cmd.spawn().map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to spawn {interpreter_label}: {e}"))
@@ -348,6 +355,18 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
             ))
         })
         .await;
+
+        // (P2-5) Verify canary integrity after execution.
+        if let Some(ref canary_path) = canary {
+            if let Err(msg) = canary::verify(canary_path) {
+                tracing::warn!(
+                    target: "hermix.tools.code_execution",
+                    canary = %canary_path.display(),
+                    "{msg}"
+                );
+            }
+            canary::remove(canary_path);
+        }
 
         match result {
             Ok(Ok((exit_code, stdout, stderr))) => {
@@ -371,6 +390,60 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
                 timeout_secs
             ))),
         }
+    }
+}
+
+// -- P2-5: sandbox canary detection ----------------------------------------
+
+/// (P2-5 / STABILITY-PLAN §2.7) Canary file for sandbox leak
+/// detection. We write a unique canary file to a temp directory
+/// before code execution. After execution, we check:
+/// 1. The canary file still exists (not deleted).
+/// 2. The canary content is unchanged (not modified).
+/// If either check fails, the executed code may have escaped its
+/// intended scope and wrote to the temp directory.
+mod canary {
+    use std::path::{Path, PathBuf};
+
+    /// Magic string written into the canary file.
+    const CANARY_MAGIC: &str = "HERMIX_CANARY_DO_NOT_TOUCH";
+
+    /// Write a canary file into `dir` and return its path.
+    /// The filename is unique per call to prevent collision.
+    pub fn plant(dir: &Path) -> std::io::Result<PathBuf> {
+        let canary_path = dir.join(format!(
+            ".hermix_canary_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::write(&canary_path, CANARY_MAGIC.as_bytes())?;
+        Ok(canary_path)
+    }
+
+    /// Check that the canary file still exists and its content
+    /// is unchanged. Returns `Ok(())` if intact, or `Err(msg)`
+    /// describing the violation.
+    pub fn verify(canary_path: &Path) -> Result<(), String> {
+        if !canary_path.exists() {
+            return Err(format!(
+                "sandbox canary file was deleted: {} — code may have escaped its scope",
+                canary_path.display()
+            ));
+        }
+        match std::fs::read_to_string(canary_path) {
+            Ok(content) if content == CANARY_MAGIC => Ok(()),
+            Ok(content) => Err(format!(
+                "sandbox canary file was modified (expected '{}', got '{}') — code may have escaped its scope",
+                CANARY_MAGIC, content
+            )),
+            Err(e) => Err(format!(
+                "sandbox canary file is unreadable: {e} — code may have escaped its scope"
+            )),
+        }
+    }
+
+    /// Remove the canary file (cleanup). Best-effort — ignores errors.
+    pub fn remove(canary_path: &Path) {
+        let _ = std::fs::remove_file(canary_path);
     }
 }
 
@@ -432,5 +505,37 @@ mod tests {
         let backend = LocalCodeExecutionBackend::default();
         let langs = backend.available_languages();
         assert!(langs.contains(&"python".to_string()), "python must always be advertised; got: {:?}", langs);
+    }
+
+    // -- P2-5: sandbox canary tests -------------------------------------------
+
+    #[test]
+    fn canary_plant_and_verify_intact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canary = canary::plant(tmp.path()).unwrap();
+        assert!(canary.exists());
+        assert!(canary::verify(&canary).is_ok(), "fresh canary should be intact");
+        canary::remove(&canary);
+        assert!(!canary.exists());
+    }
+
+    #[test]
+    fn canary_detects_deletion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canary = canary::plant(tmp.path()).unwrap();
+        std::fs::remove_file(&canary).unwrap();
+        let result = canary::verify(&canary);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("deleted"));
+    }
+
+    #[test]
+    fn canary_detects_modification() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canary = canary::plant(tmp.path()).unwrap();
+        std::fs::write(&canary, b"TAMPERED").unwrap();
+        let result = canary::verify(&canary);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("modified"));
     }
 }

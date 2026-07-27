@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev:vite": "vite",
+    "predev:vite": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/download-ocr-models.ps1",
     "dev:backend": "cargo build -p hermix-server",
     "dev": "echo [dev] Building hermix-server... && cargo build -p hermix-server && echo [dev] Copying fresh binary to sidecar dir... && copy /y ..\\..\\release\\target\\debug\\hermix.exe src-tauri\\binaries\\hermix-x86_64-pc-windows-msvc.exe && echo [dev] Verifying sidecar is fresh... && forfiles /P src-tauri\\binaries /M hermix-x86_64-pc-windows-msvc.exe /C \"cmd /c echo [dev] Sidecar timestamp: @fdate @ftime size: @fsize bytes\" && echo [dev] Starting Tauri dev... && cargo tauri dev",
     "build:vite": "vite build",
+    "prebuild:vite": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/download-ocr-models.ps1 -Required",
     "build:backend": "cargo build -p hermix-server --release",
     "build": "npm run build:backend && cargo tauri build",
     "test": "vitest run",
@@ -29,24 +31,25 @@
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^15.6.1",
     "refractor": "^3.6.0",
+    "remark-breaks": "3.0.0",
     "remark-gfm": "^4.0.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.4",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^4.5.2",
     "autoprefixer": "^10.4.21",
+    "jsdom": "^26.1.0",
     "postcss": "^8.5.4",
     "tailwindcss": "^4.1.7",
     "typescript": "^5.8.3",
     "vite": "^6.3.5",
-    "vitest": "^3.1.1",
-    "@testing-library/react": "^16.3.0",
-    "@testing-library/jest-dom": "^6.6.3",
-    "jsdom": "^26.1.0"
+    "vitest": "^3.1.1"
   }
 }

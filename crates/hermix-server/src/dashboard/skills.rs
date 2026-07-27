@@ -740,7 +740,12 @@ mod tests {
             _content: &str,
             _category: Option<&str>,
         ) -> Result<hermix_core::Skill, hermix_core::AgentError> {
-            unreachable!("NoopSkillProvider::create_skill should never be called")
+            // (P1-3 / STABILITY-PLAN §2.3): return a structured error
+            // instead of unreachable!() so a routing mistake degrades
+            // gracefully instead of panicking the dashboard.
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopSkillProvider::create_skill should never be called".into()
+            ))
         }
         async fn get_skill(
             &self,
@@ -758,7 +763,9 @@ mod tests {
             _name: &str,
             _content: &str,
         ) -> Result<hermix_core::Skill, hermix_core::AgentError> {
-            unreachable!("NoopSkillProvider::update_skill should never be called")
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopSkillProvider::update_skill should never be called".into()
+            ))
         }
         async fn delete_skill(
             &self,
@@ -782,7 +789,9 @@ mod tests {
             _background: bool,
             _pty: bool,
         ) -> Result<CommandOutput, hermix_core::AgentError> {
-            unreachable!("NoopBackend::execute_command should never be called")
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopBackend::execute_command should never be called".into()
+            ))
         }
         async fn read_file(
             &self,
@@ -790,20 +799,26 @@ mod tests {
             _offset: Option<u64>,
             _limit: Option<u64>,
         ) -> Result<String, hermix_core::AgentError> {
-            unreachable!("NoopBackend::read_file should never be called")
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopBackend::read_file should never be called".into()
+            ))
         }
         async fn write_file(
             &self,
             _path: &str,
             _content: &str,
         ) -> Result<(), hermix_core::AgentError> {
-            unreachable!("NoopBackend::write_file should never be called")
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopBackend::write_file should never be called".into()
+            ))
         }
         async fn file_exists(
             &self,
             _path: &str,
         ) -> Result<bool, hermix_core::AgentError> {
-            unreachable!("NoopBackend::file_exists should never be called")
+            Err(hermix_core::AgentError::ToolExecution(
+                "NoopBackend::file_exists should never be called".into()
+            ))
         }
     }
 

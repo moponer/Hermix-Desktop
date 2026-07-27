@@ -1364,67 +1364,49 @@ impl AgentService for LocalAgentService {
         // (writes to an empty-string session row, polluting DB).
         agent_config.session_id = Some(session_id.to_string());
 
-        // Wire the resolved workspace to the terminal handler so
-        // commands run in the user's workspace, not the server CWD.
-        if let Some(ref ws) = agent_config.workspace {
-            self.tool_registry.set_terminal_workspace(
-                Some(std::path::PathBuf::from(ws)),
-            );
-        }
+        // Phase 2 (session isolation): the per-session workspace,
+        // approval context, session id, and message id are now carried
+        // by `ToolCallContext` (built below) and read directly by
+        // `execute_with_context` — no process-global Arc writes needed.
+        // The global Arc fields on `ToolRegistryInner` are kept as a
+        // backward-compat fallback for the non-context dispatch path
+        // (tests, headless callers) but are no longer written here.
 
-        // (Phase A "Caution tool needs UI prompts"):
-        // wire the per-request approval hook so the terminal tool's
-        // `RequiresConfirmation` branch emits a `request_approval`
-        // event on the active WS channel instead of bouncing the
-        // user through "reply `HERMIX_CONFIRM=1`" text. We pass
-        // through whatever the caller wired into
-        // `AgentOverrides::approval_requester` / `on_event`; headless
-        // callers and tests that left both `None` keep the legacy
-        // text flow (the tool sees `is_wired() == false` and falls
-        // back). Cleared again in the cleanup closure below so a
-        // dropped session can't leave a stale `Arc<dyn Fn>` pointing
-        // at a dead WS handle.
-        self.tool_registry.set_terminal_approval_ctx(
-            hermix_tools::TerminalApprovalContext {
-                session_id: session_id.to_string(),
-                requester: effective_overrides.approval_requester.clone(),
-                on_event: effective_overrides.on_event.clone(),
-            },
-        );
-
-        // P2-S1: stamp the active session onto the `todo` tool so its
-        // WS todo events are filtered per-session by the server's WS
-        // forwarder. The `TodoHandler` is a process-wide singleton; this
-        // is set once per turn (a turn == one tool-call batch in
-        // practice) and overwritten on the next turn, so cross-session
-        // leakage is impossible as long as turns are sequential (they
-        // are — one message in flight per session).
-        self.tool_registry
-            .set_active_session_for_tool("todo", Some(session_id.to_string()));
-
-        // P0-T1 (Frontend Audit 2026-07-13): stamp the **wire-format id
-        // of the upcoming assistant message** onto the todo tool so its
-        // `GroupStarted` events can anchor the inline card to the right
-        // assistant message (instead of falling back to the fragile
-        // "latest assistant message ≤ first item.created_at" heuristic).
-        // The id is `${session_id}-${rowIdx}` — the exact formula
-        // `hermix_server::...::get_session_messages` uses on read.
-        // `messages.len()` is the index the new assistant row will
-        // occupy once it's persisted (the user message we just pushed
-        // is at the previous index, so the assistant that the LLM is
-        // about to produce lands at exactly this position).
+        // P0-T1: compute the wire-format id of the upcoming assistant
+        // message so `ToolCallContext.message_id` can carry it.
         let upcoming_assistant_idx = messages.len();
         let upcoming_assistant_id =
             format!("{}-{}", session_id, upcoming_assistant_idx);
-        self.tool_registry
-            .set_active_message_id_for_tool("todo", Some(upcoming_assistant_id));
 
         // Build provider
         let provider = self.resolve_provider(&effective_model)?;
 
+        // Phase 1 (session isolation): build per-session ToolCallContext.
+        // This carries workspace, approval hooks, permission profile,
+        // session id, and message id through the dispatch chain WITHOUT
+        // process-global mutable state. The global Arc writes below
+        // (set_terminal_workspace etc.) are kept as a transitional
+        // fallback for tools that haven't implemented ContextAware yet.
+        let tool_ctx = Arc::new(hermix_tools::ToolCallContext {
+            session_id: session_id.to_string(),
+            workspace: agent_config.workspace.clone().map(std::path::PathBuf::from),
+            approval_ctx: hermix_tools::TerminalApprovalContext {
+                session_id: session_id.to_string(),
+                requester: effective_overrides.approval_requester.clone(),
+                on_event: effective_overrides.on_event.clone(),
+            },
+            permission_profile: agent_config.permission_profile.clone(),
+            message_id: Some(upcoming_assistant_id.clone()),
+            stdout_cb: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            active_call_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        });
+
         // Bridge tool registry with optional whitelist from overrides
-        let agent_tool_registry =
-            Arc::new(bridge_tool_registry(&self.tool_registry, allowed_tools.as_ref()));
+        let agent_tool_registry = Arc::new(bridge_tool_registry(
+            &self.tool_registry,
+            allowed_tools.as_ref(),
+            tool_ctx.clone(),
+        ));
 
         // Pre-save: persist the user's message BEFORE running the agent.
         // If `agent.run()` fails (provider error / network timeout / API
@@ -1602,19 +1584,13 @@ impl AgentService for LocalAgentService {
             })
             .unwrap_or_default();
 
-        // clear the per-request terminal approval hook
-        // so a dropped session can't leave a stale `Arc<dyn Fn>`
-        // pointing at a dead WS handle. Cheap (Mutex write, single
-        // Arc drop). See `set_terminal_approval_ctx` above.
-        self.tool_registry.clear_terminal_approval_ctx();
-        // also clear the per-session permission profile.
-        self.tool_registry
-            .set_terminal_permission_profile(PermissionProfile::default());
-        // clear the code_execution stdout callback and
-        // active call_id so a dropped session can't leave stale
-        // callbacks pointing at a dead WS handle.
-        self.tool_registry.set_code_execution_stdout_cb(None);
-        self.tool_registry.set_code_execution_active_call_id(None);
+        // Phase 3 (session isolation): terminal approval context is
+        // carried by ToolCallContext; code_execution stdout_cb and
+        // active_call_id are now on ToolCallContext too (Arc<Mutex>
+        // handles, cleared here). terminal_permission_profile was dead
+        // code (written but never read by any tool) — removed.
+        let _ = tool_ctx.stdout_cb.lock().map(|mut g| *g = None);
+        let _ = tool_ctx.active_call_id.lock().map(|mut g| *g = None);
 
         Ok(AgentReply {
             text: reply_text,
@@ -1750,67 +1726,44 @@ impl AgentService for LocalAgentService {
         // (writes to an empty-string session row, polluting DB).
         agent_config.session_id = Some(session_id.to_string());
 
-        // Wire the resolved workspace to the terminal handler so
-        // commands run in the user's workspace, not the server CWD.
-        if let Some(ref ws) = agent_config.workspace {
-            self.tool_registry.set_terminal_workspace(
-                Some(std::path::PathBuf::from(ws)),
-            );
-        }
+        // Phase 2 (session isolation): the per-session workspace,
+        // approval context, session id, and message id are now carried
+        // by `ToolCallContext` (built below) and read directly by
+        // `execute_with_context` — no process-global Arc writes needed.
+        // The global Arc fields on `ToolRegistryInner` are kept as a
+        // backward-compat fallback for the non-context dispatch path
+        // (tests, headless callers) but are no longer written here.
 
-        // (Phase A "Caution tool needs UI prompts"):
-        // wire the per-request approval hook so the terminal tool's
-        // `RequiresConfirmation` branch emits a `request_approval`
-        // event on the active WS channel instead of bouncing the
-        // user through "reply `HERMIX_CONFIRM=1`" text. We pass
-        // through whatever the caller wired into
-        // `AgentOverrides::approval_requester` / `on_event`; headless
-        // callers and tests that left both `None` keep the legacy
-        // text flow (the tool sees `is_wired() == false` and falls
-        // back). Cleared again in the cleanup closure below so a
-        // dropped session can't leave a stale `Arc<dyn Fn>` pointing
-        // at a dead WS handle.
-        self.tool_registry.set_terminal_approval_ctx(
-            hermix_tools::TerminalApprovalContext {
-                session_id: session_id.to_string(),
-                requester: effective_overrides.approval_requester.clone(),
-                on_event: effective_overrides.on_event.clone(),
-            },
-        );
-
-        // P2-S1: stamp the active session onto the `todo` tool so its
-        // WS todo events are filtered per-session by the server's WS
-        // forwarder. The `TodoHandler` is a process-wide singleton; this
-        // is set once per turn (a turn == one tool-call batch in
-        // practice) and overwritten on the next turn, so cross-session
-        // leakage is impossible as long as turns are sequential (they
-        // are — one message in flight per session).
-        self.tool_registry
-            .set_active_session_for_tool("todo", Some(session_id.to_string()));
-
-        // P0-T1 (Frontend Audit 2026-07-13): stamp the **wire-format id
-        // of the upcoming assistant message** onto the todo tool so its
-        // `GroupStarted` events can anchor the inline card to the right
-        // assistant message (instead of falling back to the fragile
-        // "latest assistant message ≤ first item.created_at" heuristic).
-        // The id is `${session_id}-${rowIdx}` — the exact formula
-        // `hermix_server::...::get_session_messages` uses on read.
-        // `messages.len()` is the index the new assistant row will
-        // occupy once it's persisted (the user message we just pushed
-        // is at the previous index, so the assistant that the LLM is
-        // about to produce lands at exactly this position).
+        // P0-T1: compute the wire-format id of the upcoming assistant
+        // message so `ToolCallContext.message_id` can carry it.
         let upcoming_assistant_idx = messages.len();
         let upcoming_assistant_id =
             format!("{}-{}", session_id, upcoming_assistant_idx);
-        self.tool_registry
-            .set_active_message_id_for_tool("todo", Some(upcoming_assistant_id));
 
         // Build provider
         let provider = self.resolve_provider(&effective_model)?;
 
+        // Phase 1 (session isolation): build per-session ToolCallContext.
+        let tool_ctx = Arc::new(hermix_tools::ToolCallContext {
+            session_id: session_id.to_string(),
+            workspace: agent_config.workspace.clone().map(std::path::PathBuf::from),
+            approval_ctx: hermix_tools::TerminalApprovalContext {
+                session_id: session_id.to_string(),
+                requester: effective_overrides.approval_requester.clone(),
+                on_event: effective_overrides.on_event.clone(),
+            },
+            permission_profile: agent_config.permission_profile.clone(),
+            message_id: Some(upcoming_assistant_id.clone()),
+            stdout_cb: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            active_call_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        });
+
         // Bridge tool registry with optional whitelist from overrides
-        let agent_tool_registry =
-            Arc::new(bridge_tool_registry(&self.tool_registry, allowed_tools.as_ref()));
+        let agent_tool_registry = Arc::new(bridge_tool_registry(
+            &self.tool_registry,
+            allowed_tools.as_ref(),
+            tool_ctx.clone(),
+        ));
 
         // Convert Arc to Box for AgentLoop
         let stream_forwarder = on_chunk.clone();
@@ -1890,12 +1843,12 @@ impl AgentService for LocalAgentService {
         );
         // sync the initial profile to the registry's
         // shared handle so `TerminalHandler` can consult it to skip
-        // `ApprovalManager` confirmation for already-granted commands.
-        // The `on_pre_tool_approved` callback below keeps this in sync
-        // as the user approves new resources during the turn.
-        if let Ok(p) = profile_arc_for_callback.lock() {
-            self.tool_registry.set_terminal_permission_profile(p.clone());
-        }
+        // Phase 3: terminal_permission_profile was dead code (written
+        // but never read by any tool handler) — removed entirely.
+        // The profile is carried by ToolCallContext.permission_profile.
+        // Still grant the workspace root on the local profile_arc so
+        // `resource_guard` and the on_pre_tool_approved callback work.
+        // (No global write needed.)
         // Also grant the workspace root so in-workspace terminal
         // commands don't trigger confirmation.
         if let Some(ws) = &agent_config.workspace {
@@ -1929,13 +1882,18 @@ impl AgentService for LocalAgentService {
         // reads from the child process, so the WS stream receives
         // `tool_stdout` events in real-time instead of buffering
         // everything until the process exits.
-        let registry_for_code_exec_stdout = self.tool_registry.clone();
+        // Phase 3: the callback and active_call_id are now on
+        // ToolCallContext (Arc<Mutex> handles), not global registry
+        // fields — eliminates cross-session stdout race.
+        let code_exec_active_call_id = tool_ctx.active_call_id.clone();
         let code_exec_stdout_forwarder = on_chunk.clone();
         let code_exec_timeline_buffer = timeline_buffer.clone();
-        self.tool_registry.set_code_execution_stdout_cb(Some(Box::new(
+        *tool_ctx.stdout_cb.lock().unwrap() = Some(Box::new(
             move |line: &str| {
-                let tool_call_id = registry_for_code_exec_stdout
-                    .code_execution_active_call_id()
+                let tool_call_id = code_exec_active_call_id
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.clone())
                     .unwrap_or_else(|| "code_execution-unknown".to_string());
                 code_exec_stdout_forwarder(StreamChunk {
                     delta: Some(StreamDelta {
@@ -1968,7 +1926,7 @@ impl AgentService for LocalAgentService {
                     });
                 }
             },
-        )));
+        ));
         // Hand each `move` closure its own Arc clone so the outer
         // `timeline_buffer` binding survives until the post-stream
         // drain at line 1561. A `move` closure captures by value,
@@ -1977,12 +1935,12 @@ impl AgentService for LocalAgentService {
         let tl_for_tool_start = timeline_buffer.clone();
         let tl_for_tool_complete = timeline_buffer.clone();
         let tl_for_status = timeline_buffer.clone();
-        // clone for `on_tool_start` so it can set the
-        // active `code_execution` tool_call_id on the registry.
-        let registry_for_tool_start = self.tool_registry.clone();
-        // clone for `on_tool_complete` so it can clear the
-        // active `code_execution` tool_call_id.
-        let registry_for_tool_complete = self.tool_registry.clone();
+        // clone `active_call_id` handle for the on_tool_start /
+        // on_tool_complete callbacks so they can set/clear the
+        // active `code_execution` tool_call_id without going through
+        // the global registry (Phase 3: per-session isolation).
+        let active_call_id_for_start = tool_ctx.active_call_id.clone();
+        let active_call_id_for_complete = tool_ctx.active_call_id.clone();
         let callbacks = AgentCallbacks {
             // Live reasoning bridge: the agent loop calls this for
             // every chunk of `<think>...</think>` text the LLM emits.
@@ -2069,8 +2027,9 @@ impl AgentService for LocalAgentService {
                 // tool_call_id so the stdout callback can emit `tool_stdout`
                 // events with the correct ID.
                 if tool_name == "code_execution" {
-                    registry_for_tool_start
-                        .set_code_execution_active_call_id(Some(tool_call_id.to_string()));
+                    let _ = active_call_id_for_start
+                        .lock()
+                        .map(|mut g| *g = Some(tool_call_id.to_string()));
                 }
             })),
             on_tool_complete: Some(Box::new(move |tool_call_id, tool_name, output, denial_kind| {
@@ -2233,8 +2192,9 @@ impl AgentService for LocalAgentService {
                 // active tool_call_id so the stdout callback won't emit
                 // stale events.
                 if tool_name == "code_execution" {
-                    registry_for_tool_complete
-                        .set_code_execution_active_call_id(None);
+                    let _ = active_call_id_for_complete
+                        .lock()
+                        .map(|mut g| *g = None);
                 }
             })),
             status_callback: Some(Arc::new(move |kind, message| {
@@ -2462,20 +2422,18 @@ impl AgentService for LocalAgentService {
             // separate pending map.
             on_pre_tool_approved: {
                 let profile_arc = profile_arc_for_callback.clone();
-                let registry_for_approval = self.tool_registry.clone();
                 Some(Arc::new(move |tc: &ToolCall| {
                     let raw_params: Value = serde_json::from_str(&tc.function.arguments)
                         .unwrap_or(Value::Object(Default::default()));
                     let grant = PendingGrant::from_tool_call(&tc.function.name, &raw_params);
                     let mut profile = profile_arc.lock().expect("profile_arc poisoned");
                     grant.apply_to(&mut profile);
-                    // sync the updated profile to the
-                    // registry's shared handle so `TerminalHandler`
-                    // sees the new grant immediately (skip its
-                    // internal `ApprovalManager` confirmation for
-                    // this command prefix on subsequent calls).
-                    registry_for_approval
-                        .set_terminal_permission_profile(profile.clone());
+                    // Phase 3: terminal_permission_profile was dead code
+                    // (no tool handler ever read it from the registry).
+                    // The profile is still maintained on `profile_arc`
+                    // for `resource_guard` — that's the authoritative
+                    // copy. `ToolCallContext.permission_profile` carries
+                    // the initial snapshot for context-aware tools.
                     tracing::info!(
                         tool = %tc.function.name,
                         path = ?grant.path,
@@ -2517,6 +2475,35 @@ impl AgentService for LocalAgentService {
             if let Ok(mut guard) = self.active_interrupts.lock() {
                 guard.insert(sid, ctrl);
             }
+        }
+        // (WS-disconnect early-exit): spawn a background task that
+        // watches the `shutdown` Notify. When the server's WS forward
+        // loop detects the client disconnected (heartbeat ping fail,
+        // socket send fail, or close frame received), it fires
+        // `notify_one()` on this Notify. This task translates that
+        // signal into an `interrupt()` on the agent's
+        // InterruptController, so the agent loop's existing
+        // `take_interrupt_graceful()` check (which runs before each
+        // LLM call) catches it at the next turn boundary and exits
+        // gracefully — instead of continuing to make LLM API calls
+        // when no client is listening.
+        //
+        // IMPORTANT: this only prevents FUTURE LLM calls. If the
+        // agent is in the middle of an LLM call when the WS dies,
+        // that call will complete (we can't cancel an in-flight HTTP
+        // request), but the agent won't start a new turn. The partial
+        // result from the current turn IS persisted by
+        // `graceful_interrupt_result`.
+        if let Some(ref shutdown_notify) = effective_overrides.shutdown {
+            let ctrl = agent.interrupt.clone();
+            let notify = shutdown_notify.clone();
+            tokio::spawn(async move {
+                notify.notified().await;
+                tracing::info!(
+                    "WS disconnect detected via shutdown Notify — interrupting agent loop to prevent wasted LLM calls"
+                );
+                ctrl.interrupt(None);
+            });
         }
         let result = agent
             .run_stream(messages.clone(), None, Some(boxed_on_chunk))
@@ -2651,20 +2638,13 @@ impl AgentService for LocalAgentService {
             }
         }
 
-        // clear the per-request terminal approval hook
-        // so a dropped session can't leave a stale `Arc<dyn Fn>`
-        // pointing at a dead WS handle. Cheap (Mutex write, single
-        // Arc drop). See `set_terminal_approval_ctx` above.
-        self.tool_registry.clear_terminal_approval_ctx();
-        // also clear the per-session permission profile
-        // so a dropped session's grants don't leak into the next one.
-        self.tool_registry
-            .set_terminal_permission_profile(PermissionProfile::default());
-        // clear the code_execution stdout callback and
-        // active call_id so a dropped session can't leave stale
-        // callbacks pointing at a dead WS handle.
-        self.tool_registry.set_code_execution_stdout_cb(None);
-        self.tool_registry.set_code_execution_active_call_id(None);
+        // Phase 3 (session isolation): terminal approval context is
+        // carried by ToolCallContext; code_execution stdout_cb and
+        // active_call_id are now on ToolCallContext too (Arc<Mutex>
+        // handles, cleared here). terminal_permission_profile was dead
+        // code (written but never read by any tool) — removed.
+        let _ = tool_ctx.stdout_cb.lock().map(|mut g| *g = None);
+        let _ = tool_ctx.active_call_id.lock().map(|mut g| *g = None);
 
         Ok(AgentReply {
             text: reply_text,

@@ -63,6 +63,7 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
     let clarify_dispatcher = ClarifyDispatcher::new();
     let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<crate::ClarifyBroadcast>(64);
     let agent_service: Arc<dyn AgentService> = Arc::new(NullAgentService);
+    let metrics = crate::metrics::MetricsCollector::new(&home);
 
     HttpServerState {
         config,
@@ -102,6 +103,7 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         // the WS forwarder, so None is fine.
         todo_event_tx: None,
         orchestration_bus: crate::OrchestrationEventBus::new(),
+        metrics,
         task_service: None,
         automation_service: None,
         automation_engine_scheduler: None,

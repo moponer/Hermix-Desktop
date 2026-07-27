@@ -913,11 +913,22 @@ impl AgentLoop {
             model = %self.config.model,
             provider = %self.config.provider.as_deref().unwrap_or(""),
             msg_count = messages.len(),
-            tool_count = tools.as_ref().map(|t| t.len()).unwrap_or(0),
+            // Recorded after prepare_run_context resolves the actual
+            // tool set (from registry when caller passes None).
+            // Using Empty here avoids the misleading tool_count=0
+            // when tools=None (the normal path from local_agent_service).
+            tool_count = tracing::field::Empty,
             total_turns = tracing::field::Empty,
             total_ms = tracing::field::Empty,
         )
     )]
+    //
+    // LESSON: read path 不得套 streaming state machine
+    //   根因：早期设计试图在 read path（DB → ctx）中嵌入 streaming
+    //   状态机，导致 read 延迟不可预测 + 状态不一致。
+    //   修复规则：read path 只做纯数据加载，streaming 逻辑只在
+    //   write path（LLM → ctx → DB）中运行。
+    //   测试：run_loop_tests（隐式 — run 函数的 read/write 分离覆盖）
     pub async fn run(
         &self,
         messages: Vec<Message>,
@@ -943,6 +954,10 @@ impl AgentLoop {
             review_memory_at_end,
             task_hint,
         } = self.prepare_run_context(messages, tools.as_ref()).await;
+        // Record the RESOLVED tool count (after routing) so the span
+        // shows how many tools the LLM actually sees, not the raw
+        // parameter count (which is 0 when caller passes None).
+        tracing::Span::current().record("tool_count", tool_schemas.len());
 tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run)");
 self.notify_phase(&LoopPhase::Init, 0);
 let mut post_tool_nudge_count: u32 = 0;
@@ -1519,7 +1534,9 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
             model = %self.config.model,
             provider = %self.config.provider.as_deref().unwrap_or(""),
             msg_count = messages.len(),
-            tool_count = tools.as_ref().map(|t| t.len()).unwrap_or(0),
+            // Recorded after prepare_run_context resolves the actual
+            // tool set (from registry when caller passes None).
+            tool_count = tracing::field::Empty,
             total_turns = tracing::field::Empty,
             total_ms = tracing::field::Empty,
         )
@@ -1537,7 +1554,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
         let _run_started = Instant::now();
         info!(
             msg_count = messages.len(),
-            tool_count = tools.as_ref().map(|t| t.len()).unwrap_or(0),
+            tools_passed = tools.as_ref().map(|t| t.len()).unwrap_or(0),
             "run_stream entered"
         );
         let on_chunk = match on_chunk {
@@ -1620,6 +1637,9 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
             review_memory_at_end,
             task_hint,
         } = self.prepare_run_context(messages, tools.as_ref()).await;
+        // Record the RESOLVED tool count (after routing) so the span
+        // shows how many tools the LLM actually sees.
+        tracing::Span::current().record("tool_count", tool_schemas.len());
         tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run_stream)");
 self.notify_phase(&LoopPhase::Init, 0);
         let mut post_tool_nudge_count: u32 = 0;
@@ -1719,6 +1739,15 @@ self.notify_phase(&LoopPhase::PreTurnSetup, total_turns);
             // --- Streaming first attempt + same D-step semantic recovery as `run()` (retries use non-stream) ---
             tracing::debug!(phase = %LoopPhase::LlmCall, turn = total_turns, "run_stream: LLM API call (streaming)");
 self.notify_phase(&LoopPhase::LlmCall, total_turns);
+            // Emit a status event so the frontend knows the agent is
+            // still alive between turns. Without this, after a long
+            // delegate_task returns and the loop starts a new LLM call,
+            // the UI shows the "stop" button with zero activity — no
+            // thinking dot, no status chip — for potentially minutes
+            // until the first streaming chunk arrives. This status event
+            // resets the idle/stale timers on the frontend and shows
+            // "正在思考…（第 N 轮）" so the user knows the agent is working.
+            self.emit_status("thinking", &format!("正在思考…（第 {} 轮）", total_turns));
             let api_start = Instant::now();
             let mut inner_empty = 0u32;
             let mut inner_thinking = 0u32;

@@ -12,6 +12,7 @@ use hermix_core::{
 };
 
 use crate::approval::{ApprovalDecision, ApprovalManager, TerminalApprovalContext};
+use crate::context::{ContextAware, ToolCallContext};
 use crate::ToolRegistry;
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ pub fn register(
         "terminal",
         "terminal",
         schema,
-        handler,
+        handler.clone(),
         Arc::new(|| true),
         vec![],
         true,
@@ -55,6 +56,11 @@ pub fn register(
         RiskLevel::Caution,
         false,
     );
+    // Phase 1 (session isolation): register as ContextAware so
+    // dispatch_with_context routes to execute_with_context with
+    // per-session ctx instead of reading process-global Arcs.
+    let context_aware: Arc<dyn ContextAware> = handler as Arc<dyn ContextAware>;
+    registry.set_context_aware("terminal", context_aware);
 }
 
 // ---------------------------------------------------------------------------
@@ -128,33 +134,21 @@ impl TerminalHandler {
     /// - `None`        — no WS context wired (default state); caller
     /// falls back to the legacy `HERMIX_CONFIRM=1` text flow so
     /// headless / unit-test callers keep working.
-    async fn request_ws_approval(&self, effective_cmd: &str) -> Option<ApprovalOutcome> {
-        // Snapshot the context so we don't hold the mutex across
-        // `.await` (the requester/on_event clones are cheap; the
-        // Mutex guard would block any `set_terminal_approval_ctx`
-        // call from the agent service during the await).
-        let (session_id, requester, on_event) = {
-            let ctx = match self.approval_ctx.lock() {
-                Ok(g) => g,
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "approval_ctx lock poisoned; falling back to text flow"
-                    );
-                    return None;
-                }
-            };
-            if !ctx.is_wired() {
-                return None;
-            }
-            (
-                ctx.session_id.clone(),
-                ctx.requester(),
-                ctx.on_event(),
-            )
-        };
-        let requester = requester?; // unreachable (is_wired checked) but makes the match arms tidy
-        let on_event = on_event?;
+    async fn request_ws_approval(
+        &self,
+        effective_cmd: &str,
+        approval_ctx: &TerminalApprovalContext,
+    ) -> Option<ApprovalOutcome> {
+        // Phase 2: the context is now passed in directly — no mutex
+        // lock needed. The caller (execute_inner) obtained it from
+        // either the global Arc (execute path) or ctx (ContextAware
+        // path), so it's already scoped to this call.
+        if !approval_ctx.is_wired() {
+            return None;
+        }
+        let session_id = approval_ctx.session_id.clone();
+        let requester = approval_ctx.requester()?;
+        let on_event = approval_ctx.on_event()?;
 
         // Build a unique request id. The terminal tool can fire many
         // approvals back-to-back in a single turn, so monotonic
@@ -231,6 +225,85 @@ static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 =
 #[async_trait]
 impl ToolHandler for TerminalHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        // Phase 2: read from global Arcs (backward compat for
+        // non-context dispatch path — tests, headless callers).
+        let workspace = self
+            .default_workspace
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().cloned());
+        let approval_ctx = self
+            .approval_ctx
+            .lock()
+            .ok()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        execute_inner(self, params, workspace, &approval_ctx).await
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "command".into(),
+            json!({
+                "type": "string",
+                "description": "The command to execute"
+            }),
+        );
+        props.insert(
+            "timeout".into(),
+            json!({
+                "type": "integer",
+                "description": "Timeout in milliseconds (default: 30000)"
+            }),
+        );
+        props.insert(
+            "workdir".into(),
+            json!({
+                "type": "string",
+                "description": "Working directory for the command"
+            }),
+        );
+        props.insert(
+            "background".into(),
+            json!({
+                "type": "boolean",
+                "description": "Run command in background (default: false)",
+                "default": false
+            }),
+        );
+        props.insert(
+            "pty".into(),
+            json!({
+                "type": "boolean",
+                "description": "Run command in PTY mode for interactive programs (default: false)",
+                "default": false
+            }),
+        );
+
+        tool_schema(
+            "terminal",
+            "Execute a terminal command. Returns stdout, stderr, and exit code.\n\
+             \n\
+             ## When to reach for this tool\n\
+             `terminal` is the right tool whenever the user wants to **see, list, count, search, or inspect** something on the system: directory listings (`dir` / `ls`), file contents (`type` / `cat` / `head`), running processes (`tasklist` / `ps`), system info, or any one-off shell pipeline. \
+             It is also the right tool for **doing** things on the system: running a build, installing a package, invoking a CLI the user names. \
+             Prefer this over `computer_use.screenshot` whenever a shell command can answer the question — `screenshot` is a 50× bigger payload for 1/50th the precision, and shell output is searchable, copy-pasteable, and diffable.",
+            JsonSchema::object(props, vec!["command".into()]),
+        )
+    }
+}
+
+/// Core execution logic — free function to avoid trait-impl method
+/// restrictions. Takes `&TerminalHandler` as first arg so both
+/// `ToolHandler::execute` and `ContextAware::execute_with_context`
+/// can call it with per-session workspace/approval_ctx.
+async fn execute_inner(
+    this: &TerminalHandler,
+    params: Value,
+    workspace: Option<std::path::PathBuf>,
+    approval_ctx: &TerminalApprovalContext,
+) -> Result<String, ToolError> {
         let command = params
             .get("command")
             .and_then(|v| v.as_str())
@@ -275,6 +348,45 @@ impl ToolHandler for TerminalHandler {
             )));
         }
 
+        // Binary-file guard: when the LLM tries to read binary file
+        // CONTENT (images, PDFs) via terminal commands like `type`,
+        // `cat`, `more`, `head`, `tail`, block it and redirect to
+        // `delegate_task` + `read_image` / `read_pdf`. Terminal can
+        // only inspect file metadata (dir, certutil, fc), not visual
+        // content — the LLM must use a sub-agent for that.
+        if let Some(ext) = detect_binary_content_read(command) {
+            tracing::warn!(
+                command,
+                ext,
+                "blocked terminal attempt to read binary file content"
+            );
+            let tool = if ext == "pdf" { "read_pdf" } else { "read_image" };
+            return Err(ToolError::ExecutionFailed(format!(
+                "Cannot read binary .{} file content via terminal. \
+                 Terminal commands can only inspect file metadata \
+                 (size, hash, structure), not visual content. \
+                 \n\n\
+                 To analyze this file's content:\n\
+                 1. Call `delegate_task` with a task like \
+                 \"Read and identify the content of this {}\"\n\
+                 2. Pass the file path in the `context` parameter\n\
+                 3. The sub-agent will call `{}` and return the \
+                 result\n\
+                 \n\
+                 Example:\n\
+                 delegate_task(task=\"Identify the person name and \
+                 document type in this image\", context=\"Path: <the file path>\")",
+                ext, ext, tool
+            )));
+        }
+
+        // Binary-file nudge: for OTHER terminal commands that reference
+        // binary file extensions (dir, certutil, fc, copy, etc.),
+        // append a reminder to the output. This keeps the LLM aware
+        // that terminal can't do content analysis, without blocking
+        // useful metadata operations.
+        let binary_nudge = detect_binary_file_reference(command);
+
         // Defense-in-depth: detect shell metacharacters that could be
         // used for command chaining or injection. This catches generic
         // injection vectors that might not be in the approval pattern
@@ -289,10 +401,11 @@ impl ToolHandler for TerminalHandler {
             // Always require confirmation for metacharacter commands,
             // even with HERMIX_CONFIRM=1 marker. This prevents the
             // marker from being used to bypass this safety check.
-            if let Some(decision) = self
-                .request_ws_approval(&format!(
-                    "{} (contains {})", command, metachar_desc
-                ))
+            if let Some(decision) = this
+                .request_ws_approval(
+                    &format!("{} (contains {})", command, metachar_desc),
+                    approval_ctx,
+                )
                 .await
             {
                 if !matches!(decision, ApprovalOutcome::Approved) {
@@ -340,7 +453,7 @@ impl ToolHandler for TerminalHandler {
         let stripped = command.strip_prefix("HERMIX_CONFIRM=1 ");
         let effective_cmd = stripped.unwrap_or(command);
 
-        match self.approval.check_approval(effective_cmd) {
+        match this.approval.check_approval(effective_cmd) {
             ApprovalDecision::Denied => {
                 return Err(ToolError::ExecutionFailed(format!(
                     "Command denied by security policy: {}",
@@ -355,8 +468,8 @@ impl ToolHandler for TerminalHandler {
                         command = %effective_cmd,
                         "command confirmed by user via HERMIX_CONFIRM marker"
                     );
-                } else if let Some(decision) = self
-                    .request_ws_approval(effective_cmd)
+                } else if let Some(decision) = this
+                    .request_ws_approval(effective_cmd, approval_ctx)
                     .await
                 {
                     // WS path. The agent service wired
@@ -415,10 +528,9 @@ impl ToolHandler for TerminalHandler {
         let workdir = explicit_workdir
             .map(|s| strip_win32_long_path(s))
             .or_else(|| {
-                self.default_workspace
-                    .read()
-                    .ok()
-                    .and_then(|g| g.as_ref().map(|p| strip_win32_long_path(&p.to_string_lossy())))
+                workspace
+                    .as_ref()
+                    .map(|p| strip_win32_long_path(&p.to_string_lossy()))
             });
 
         // Validate workdir for path traversal attempts
@@ -443,67 +555,23 @@ impl ToolHandler for TerminalHandler {
 
         let pty = params.get("pty").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        match self
+        match this
             .backend
             .execute_command(command, timeout, workdir.as_deref(), background, pty)
             .await
         {
-            Ok(output) => Ok(format_command_output(&output)),
+            Ok(output) => {
+                let mut result = format_command_output(&output);
+                if let Some(nudge) = binary_nudge {
+                    result.push_str(&format!(
+                        "\n\n{}",
+                        nudge
+                    ));
+                }
+                Ok(result)
+            }
             Err(e) => Err(ToolError::from_message(e.to_string())),
         }
-    }
-
-    fn schema(&self) -> ToolSchema {
-        let mut props = IndexMap::new();
-        props.insert(
-            "command".into(),
-            json!({
-                "type": "string",
-                "description": "The command to execute"
-            }),
-        );
-        props.insert(
-            "timeout".into(),
-            json!({
-                "type": "integer",
-                "description": "Timeout in milliseconds (default: 30000)"
-            }),
-        );
-        props.insert(
-            "workdir".into(),
-            json!({
-                "type": "string",
-                "description": "Working directory for the command"
-            }),
-        );
-        props.insert(
-            "background".into(),
-            json!({
-                "type": "boolean",
-                "description": "Run command in background (default: false)",
-                "default": false
-            }),
-        );
-        props.insert(
-            "pty".into(),
-            json!({
-                "type": "boolean",
-                "description": "Run command in PTY mode for interactive programs (default: false)",
-                "default": false
-            }),
-        );
-
-        tool_schema(
-            "terminal",
-            "Execute a terminal command. Returns stdout, stderr, and exit code.\n\
-             \n\
-             ## When to reach for this tool\n\
-             `terminal` is the right tool whenever the user wants to **see, list, count, search, or inspect** something on the system: directory listings (`dir` / `ls`), file contents (`type` / `cat` / `head`), running processes (`tasklist` / `ps`), system info, or any one-off shell pipeline. \
-             It is also the right tool for **doing** things on the system: running a build, installing a package, invoking a CLI the user names. \
-             Prefer this over `computer_use.screenshot` whenever a shell command can answer the question — `screenshot` is a 50× bigger payload for 1/50th the precision, and shell output is searchable, copy-pasteable, and diffable.",
-            JsonSchema::object(props, vec!["command".into()]),
-        )
-    }
 }
 
 impl TerminalHandler {
@@ -511,6 +579,84 @@ impl TerminalHandler {
     // it was extracted to `hermix_core::path_security` during the
     // Windows-first hardening pass so memory / skills /
     // cron / credentials tools can all share the same check.
+}
+
+// ---------------------------------------------------------------------------
+// ContextAware impl (Phase 1: session isolation)
+// ---------------------------------------------------------------------------
+
+/// Phase 2: directly reads from `ctx` — no global Arc swap/restore.
+/// This eliminates the race window entirely: the workspace and
+/// approval context come from the per-session `ToolCallContext`
+/// captured in the bridge closure, not from process-global
+/// `Arc<Mutex<…>>` fields that concurrent sessions can overwrite.
+#[async_trait]
+impl ContextAware for TerminalHandler {
+    async fn execute_with_context(
+        &self,
+        params: Value,
+        ctx: &ToolCallContext,
+    ) -> Result<String, ToolError> {
+        execute_inner(self, params, ctx.workspace.clone(), &ctx.approval_ctx).await
+    }
+}
+
+/// Detect if a terminal command is trying to READ the CONTENT of a
+/// binary file (images, PDFs). Returns the file extension if so.
+///
+/// Only blocks content-reading commands (type, cat, more, head, tail, sort).
+/// Metadata commands (dir, ls, certutil, fc, copy, move, del) are allowed.
+fn detect_binary_content_read(command: &str) -> Option<&'static str> {
+    let lower = command.to_lowercase();
+    // Content-reading command prefixes (Windows + Unix).
+    let read_cmds = ["type ", "cat ", "more ", "head ", "tail ", "sort "];
+    let is_read_cmd = read_cmds.iter().any(|c| lower.starts_with(c)
+        || lower.contains(&format!("| {}", c.trim()))
+        || lower.contains(&format!("&&{}", c.trim())));
+    if !is_read_cmd {
+        return None;
+    }
+    // Check for binary file extensions in the command.
+    let binary_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".pdf"];
+    for ext in binary_exts {
+        if lower.contains(ext) {
+            // Return without the dot for the error message.
+            return Some(match ext {
+                ".jpg" | ".jpeg" => "jpg",
+                ".png" => "png",
+                ".gif" => "gif",
+                ".webp" => "webp",
+                ".bmp" => "bmp",
+                ".pdf" => "pdf",
+                _ => ext,
+            });
+        }
+    }
+    None
+}
+
+/// Detect if a terminal command references binary file extensions
+/// (without being a content-read command). Returns a nudge string
+/// to append to the command output.
+fn detect_binary_file_reference(command: &str) -> Option<String> {
+    let lower = command.to_lowercase();
+    let binary_exts = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".pdf"];
+    let has_binary = binary_exts.iter().any(|e| lower.contains(e));
+    if !has_binary {
+        return None;
+    }
+    // Don't nudge if this is already a blocked content-read command
+    // (those get a hard error, not a nudge).
+    if detect_binary_content_read(command).is_some() {
+        return None;
+    }
+    Some(
+        "\n[Note: This command references a binary image/PDF file. \
+         Terminal can only inspect metadata (size, hash, structure). \
+         For CONTENT analysis (OCR, person/vehicle identification, \
+         document type recognition), use delegate_task to spawn a \
+         sub-agent that calls read_image or read_pdf.]".to_string()
+    )
 }
 
 /// Format command output for display.

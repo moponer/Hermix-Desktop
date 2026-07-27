@@ -1,10 +1,10 @@
-//! get_subagent_result tool: fetch the output of a background sub-agent.
+//! get_subagent_result tool: fetch the output of a sub-agent by id.
 //!
-//! `delegate_task` now dispatches the child loop on a detached tokio task and
-//! returns a `sub_agent_id` immediately (see `SubAgentOrchestrator::execute_async`).
-//! This tool is how the parent agent retrieves the child's result once it has
-//! finished — it reads the lineage JSON written to
-//! `<hermix_home>/subagents/{sub_agent_id}.json`.
+//! `delegate_task` is SYNCHRONOUS — it blocks until the child finishes and
+//! returns the result directly in the tool result. You normally do NOT need
+//! this tool. It exists for edge cases: retrieving a result from a lineage
+//! file written by a previous session, or inspecting a sub-agent record
+//! that was persisted to `<hermix_home>/subagents/{sub_agent_id}.json`.
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -98,11 +98,11 @@ impl ToolHandler for GetSubAgentResultHandler {
         );
         tool_schema(
             "get_subagent_result",
-            "Fetch the result of a BACKGROUND sub-agent spawned by delegate_task. \
-             delegate_task returns immediately with a sub_agent_id and does NOT block — \
-             the child runs in the background. Call this to retrieve its output. \
-             If status is 'spawned' (or 'started'), the child is still running; wait a \
-             moment and call again with the same sub_agent_id. Once status is 'completed' \
+            "Fetch the result of a sub-agent by id. delegate_task is SYNCHRONOUS — \
+             it blocks until the child finishes and returns the result directly. \
+             You normally do NOT need this tool. It exists for edge cases: \
+             retrieving a result from a previous session's lineage file, or \
+             inspecting a persisted sub-agent record. If status is 'completed', \
              the `result` field holds the child's text conclusion.",
             JsonSchema::object(props, vec!["sub_agent_id".into()]),
         )

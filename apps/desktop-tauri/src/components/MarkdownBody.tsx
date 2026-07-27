@@ -10,13 +10,13 @@
  *     transitions to its final rendered form.
  */
 
-import { Children, isValidElement, memo, useState } from "react";
+import { Children, isValidElement, memo, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneLight, oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import remarkBreaks from "remark-breaks";
 import { Check, Copy, X } from "lucide-react";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
+import { highlightToReact, readIsDark } from "../lib/codeHighlight";
 
 /* ── Path linkification ──────────────────────────────────────── */
 
@@ -101,20 +101,44 @@ export function linkifyChildren(
 
 const LANG_LABEL: Record<string, string> = {
   ts: "TypeScript", tsx: "TSX", js: "JavaScript", jsx: "JSX",
-  rs: "Rust", py: "Python", go: "Go", java: "Java", sql: "SQL",
-  json: "JSON", yaml: "YAML", yml: "YAML", toml: "TOML", xml: "XML",
-  sh: "Shell", bash: "Bash", css: "CSS", html: "HTML", vue: "Vue",
-  md: "Markdown", txt: "Text",
+  mjs: "JavaScript", cjs: "JavaScript",
+  rs: "Rust", py: "Python", pyw: "Python", go: "Go", java: "Java",
+  kt: "Kotlin", kts: "Kotlin",
+  c: "C", h: "C", cpp: "C++", cxx: "C++", hpp: "C++", cc: "C++", hh: "C++",
+  cs: "C#", csharp: "C#",
+  rb: "Ruby", php: "PHP",
+  sh: "Shell", bash: "Bash", zsh: "Shell", fish: "Shell",
+  ps1: "PowerShell", powershell: "PowerShell",
+  bat: "Batch", cmd: "Batch", batch: "Batch",
+  css: "CSS", scss: "SCSS", less: "Less",
+  html: "HTML", htm: "HTML", xml: "XML", svg: "SVG",
+  vue: "Vue", svelte: "Svelte", razor: "Razor",
+  pug: "Pug", jade: "Pug", hbs: "Handlebars",
+  json: "JSON", json5: "JSON5", yaml: "YAML", yml: "YAML",
+  toml: "TOML", ini: "INI", conf: "INI", cfg: "INI", env: "Env",
+  properties: "Properties", props: "Properties",
+  graphql: "GraphQL", gql: "GraphQL", sql: "SQL",
+  md: "Markdown", mdx: "MDX", markdown: "Markdown",
+  adoc: "AsciiDoc", asciidoc: "AsciiDoc", rst: "reST", tex: "LaTeX",
+  dockerfile: "Docker", docker: "Docker",
+  makefile: "Makefile", make: "Makefile", cmake: "CMake",
+  gitignore: ".gitignore", ignore: ".gitignore",
+  nginx: "Nginx", vim: "Vim", viml: "Vim",
+  diff: "Diff", patch: "Diff", http: "HTTP", regex: "Regex",
+  csv: "CSV", tsv: "CSV", mermaid: "Mermaid",
+  swift: "Swift", lua: "Lua", dart: "Dart",
+  scala: "Scala", sc: "Scala",
+  elixir: "Elixir", ex: "Elixir", exs: "Elixir",
+  haskell: "Haskell", hs: "Haskell",
+  nim: "Nim", zig: "Zig", julia: "Julia", r: "R",
+  sol: "Solidity", solidity: "Solidity",
+  proto: "Protobuf", protobuf: "Protobuf",
+  txt: "Text", text: "Text",
 };
 
-/** Reads the current dark-mode state from the DOM.
- *  useTheme() applies the `.dark` class to <html> and <body>.
- *  Reading it here (during render) is safe because it's idempotent
- *  and the parent re-renders when the theme changes, which
- *  re-invokes this function with the updated value. */
-function readIsDark(): boolean {
-  return typeof document !== "undefined" && document.documentElement.classList.contains("dark");
-}
+// ── Language alias normalization is now handled by `toRefractorLang()`
+//    in `src/lib/codeHighlight.ts`. The LANG_LABEL map below is only
+//    used for display labels in the code block header.
 
 // Exported so PreviewPanel can reuse the same code
 // block rendering (language label + copy button + syntax highlighting)
@@ -123,6 +147,31 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
   const safeSetTimeout = useSafeTimeout();
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  // refractor 同步高亮 — 在 Tauri webview 里可靠运行（不依赖
+  // 异步 chunk 加载，不像 react-syntax-highlighter 的 Prism async build）。
+  // useMemo 缓存，只在 code/language/isDark 变化时重新 tokenize。
+  const highlighted = useMemo(
+    () => highlightToReact(code, language, isDark),
+    [code, language, isDark],
+  );
+
+  // 数行数 — 比 split 快 5-10×，大代码块不卡
+  const lineCount = useMemo(() => {
+    let n = 1;
+    for (let i = 0; i < code.length; i++) {
+      if (code.charCodeAt(i) === 10) n++;
+    }
+    if (code.endsWith("\n")) n--;
+    return Math.max(1, n);
+  }, [code]);
+
+  // 超过阈值的代码块默认折叠，显示前 30 行 + 渐变遮罩 + 展开按钮。
+  // 行高 13px × 1.6 = 20.8px → 30 行 + 16px padding ≈ 640px
+  const COLLAPSE_THRESHOLD = 30;
+  const shouldCollapse = lineCount > COLLAPSE_THRESHOLD;
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(code);
@@ -157,9 +206,14 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
           borderColor: "var(--color-border-subtle)",
         }}
       >
-        <span className="font-mono uppercase tracking-wider">
-          {LANG_LABEL[language] ?? "Code"}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="font-mono uppercase tracking-wider">
+            {LANG_LABEL[language] ?? "Code"}
+          </span>
+          {shouldCollapse && (
+            <span className="text-[10px] opacity-50">{lineCount} 行</span>
+          )}
+        </div>
         <button
           onClick={handleCopy}
           className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-bg-hover"
@@ -169,31 +223,95 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
           <span className="font-medium">{copied ? "已复制" : failed ? "复制失败" : "复制"}</span>
         </button>
       </div>
-      <SyntaxHighlighter
-        language={language}
-        style={isDark ? oneDark : oneLight}
-        customStyle={{
-          margin: 0,
-          borderRadius: 0,
-          fontSize: "13px",
-          padding: "16px",  // 四边统一 16px inset
-          background: "transparent",  // 继承 wrapper 底色
-          lineHeight: "1.65",
-        }}
-        // Removed preTagProps — react-syntax-highlighter
-        // passes it through to the DOM <pre> element, causing a React
-        // warning "does not recognize the `preTagProps` prop".  The
-        // className we needed (code-block-body) is now applied via CSS
-        // targeting `pre` inside the wrapper div.
-        codeTagProps={{
-          // The inner `<code>` element has its own padding from
-          // `.prose pre code`. Reset it so the outer `pre`'s
-          // uniform 16px inset is the only thing in effect.
-          style: { padding: 0, background: "transparent" },
-        }}
-      >
-        {code}
-      </SyntaxHighlighter>
+      {/* 代码主体 — refractor 同步高亮。
+          之前用 react-syntax-highlighter (Prism async build)，在 Tauri
+          webview 里动态 import prismjs 语言 chunk 可能静默失败，
+          导致很多语言没有高亮。换成 refractor 后全部同步注册，可靠。 */}
+      <div style={{ position: "relative" }}>
+        <pre
+          style={{
+            margin: 0,
+            padding: "16px",
+            background: "transparent",
+            overflow: shouldCollapse && !expanded ? "hidden" : "auto",
+            fontSize: "13px",
+            lineHeight: "1.6",
+            maxHeight: shouldCollapse && !expanded ? "640px" : undefined,
+          }}
+        >
+          <code
+            className={`language-${language}`}
+            style={{
+              padding: 0,
+              background: "transparent",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {highlighted}
+          </code>
+        </pre>
+        {/* 折叠状态：底部渐变遮罩 + 展开按钮 */}
+        {shouldCollapse && !expanded && (
+          <div
+            style={{
+              position: "absolute",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: "56px",
+              background: "linear-gradient(to bottom, transparent, var(--color-bg-code) 60%)",
+              display: "flex",
+              alignItems: "flex-end",
+              justifyContent: "center",
+              paddingBottom: "6px",
+              pointerEvents: "none",
+            }}
+          >
+            <button
+              onClick={() => setExpanded(true)}
+              style={{
+                background: "var(--color-bg-code-header)",
+                border: "1px solid var(--color-border-subtle)",
+                borderRadius: "4px",
+                padding: "3px 14px",
+                fontSize: "11px",
+                color: "var(--color-text-muted)",
+                cursor: "pointer",
+                pointerEvents: "auto",
+                fontFamily: "inherit",
+              }}
+            >
+              展开全部（共 {lineCount} 行）
+            </button>
+          </div>
+        )}
+        {/* 展开状态：底部收起按钮 */}
+        {shouldCollapse && expanded && (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              padding: "4px",
+              borderTop: "1px solid var(--color-border-subtle)",
+              background: "var(--color-bg-code-header)",
+            }}
+          >
+            <button
+              onClick={() => setExpanded(false)}
+              style={{
+                background: "transparent",
+                border: "none",
+                fontSize: "11px",
+                color: "var(--color-text-muted)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              收起
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -225,7 +343,7 @@ export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
   return (
     <div className="prose max-w-none">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{
           p({ children, ...props }) {
             return <p {...props}>{linkifyChildren(children, handlePathClick)}</p>;
@@ -234,9 +352,12 @@ export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
             return <li {...props}>{linkifyChildren(children, handlePathClick)}</li>;
           },
           code({ className, children, ...props }) {
-            const match = /language-(\w+)/.exec(className || "");
+            const match = /language-([\w-]+)/.exec(className || "");
             const codeString = String(children).replace(/\n$/, "");
-            if (match) return <CodeBlock language={match[1]} code={codeString} isDark={isDark} />;
+            if (match) {
+              const lang = match[1].toLowerCase();
+              return <CodeBlock language={lang} code={codeString} isDark={isDark} />;
+            }
             return <code {...props}>{children}</code>;
           },
           // v3: LLM 输出里的 `- [ ]` / `- [x]` 任务标记

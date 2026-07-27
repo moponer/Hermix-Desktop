@@ -54,17 +54,27 @@ pub async fn get_status(State(state): State<HttpServerState>) -> Json<StatusResp
             }
         };
 
-    // Query active session count from SQLite directly
+    // Query active session count from SQLite directly.
+    // (P0-3 / STABILITY-PLAN §2.2): the sync SQLite query runs on the
+    // blocking pool so concurrent dashboard polls don't starve the
+    // async runtime workers.
     let db_path = hermix_config::sessions_db_path_in(&state.hermix_home);
     let active_sessions = if db_path.exists() {
-        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-            conn.query_row("SELECT COUNT(DISTINCT id) FROM sessions", [], |row| {
-                row.get::<_, u32>(0)
-            })
-            .unwrap_or(0)
-        } else {
-            0
-        }
+        tokio::task::spawn_blocking(move || {
+            rusqlite::Connection::open(&db_path)
+                .ok()
+                .and_then(|conn| {
+                    conn.query_row(
+                        "SELECT COUNT(DISTINCT id) FROM sessions",
+                        [],
+                        |row| row.get::<_, u32>(0),
+                    )
+                    .ok()
+                })
+                .unwrap_or(0)
+        })
+        .await
+        .unwrap_or(0)
     } else {
         0
     };

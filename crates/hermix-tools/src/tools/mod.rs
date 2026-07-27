@@ -14,6 +14,7 @@
 //!   / tool_result_storage` references that pointed at the deleted files.
 
 pub mod aliases;
+pub mod batch_ocr_rename;
 pub mod browser;
 pub mod cdp_bootstrap;
 pub mod clarify;
@@ -146,6 +147,10 @@ pub fn register_all(
     // because they need fuzzy-match + ripgrep semantics that the
     // TerminalBackend trait doesn't expose.
     file::register(registry, terminal_backend.clone());
+    // Batch OCR rename — scan images, run local OCR in-process, propose /
+    // apply renames by recognised identity fields. Registered DANGEROUS so
+    // the destructive (dry_run:false) call fires an approval card.
+    batch_ocr_rename::register(registry);
     // P1.8 (2026-07-02): office_cli was previously implemented but
     // never registered. Add it next to `file` and `terminal` so the
     // `essential::ESSENTIAL_TOOLSETS["office"]` floor finds a real

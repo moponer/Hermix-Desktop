@@ -7,6 +7,7 @@ use tokio::sync::broadcast;
 
 use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
 
+use crate::context::{ContextAware, ToolCallContext};
 use crate::tools::session_stamper::SessionStamper;
 use crate::ToolRegistry;
 use std::sync::Arc;
@@ -87,7 +88,7 @@ pub fn register(
         "todo",
         "todo",
         schema,
-        handler,
+        handler.clone(),
         Arc::new(|| true),
         vec![],
         false,
@@ -98,6 +99,11 @@ pub fn register(
         false,
     );
     registry.set_session_stamper("todo", stamper);
+    // Phase 1 (session isolation): register as ContextAware so
+    // dispatch_with_context routes to execute_with_context with
+    // per-session ctx instead of reading process-global Arcs.
+    let context_aware: Arc<dyn ContextAware> = handler as Arc<dyn ContextAware>;
+    registry.set_context_aware("todo", context_aware);
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +654,33 @@ impl ToolHandler for TodoHandler {
             "Task orchestration with dependency tracking. Use get_next to find the next task to execute based on dependencies and priority. After executing a task, use record_execution to log the result and update status to completed.",
             JsonSchema::object(props, vec!["action".into()]),
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ContextAware impl (Phase 1: session isolation)
+// ---------------------------------------------------------------------------
+
+/// Transitional "swap, call, restore" using `SessionStamper` methods.
+/// `set_active_session` / `set_active_message_id` return the previous
+/// value so we can restore it after the call. Once Phase 2 removes
+/// the global stamper state, this will read directly from `ctx`.
+#[async_trait]
+impl ContextAware for TodoHandler {
+    async fn execute_with_context(
+        &self,
+        params: Value,
+        ctx: &ToolCallContext,
+    ) -> Result<String, ToolError> {
+        let old_session = self.set_active_session(Some(ctx.session_id.clone()));
+        let old_msg_id = self.set_active_message_id(ctx.message_id.clone());
+
+        let result = self.execute(params).await;
+
+        self.set_active_session(old_session);
+        self.set_active_message_id(old_msg_id);
+
+        result
     }
 }
 

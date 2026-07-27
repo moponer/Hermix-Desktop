@@ -22,6 +22,28 @@ use crate::credential_pool::CredentialPool;
 use crate::rate_limit::RateLimitTracker;
 
 // ---------------------------------------------------------------------------
+// HTTP client builder with mandatory timeouts (P1-5 / STABILITY-PLAN §2.4)
+// ---------------------------------------------------------------------------
+
+/// Build a `reqwest::Client` with mandatory connect + request timeouts.
+///
+/// (P1-5): Previously all LLM providers used `Client::new()` which has
+/// NO connect timeout — a half-open TCP connection (server accept() but
+/// never responds) could hang up to 75s (Linux default) or indefinitely
+/// (Windows). The `stream_first_chunk` 30s watchdog eventually fires,
+/// but the user sees 30s of nothing. `connect_timeout(10s)` ensures the
+/// TCP handshake phase fails fast; `timeout(180s)` aligns with the
+/// existing `stream_overall` 180s cap so a stuck response body can't
+/// outlive the stream watchdog.
+fn build_llm_http_client() -> Client {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(180))
+        .build()
+        .unwrap_or_else(|_| Client::new())
+}
+
+// ---------------------------------------------------------------------------
 // GenericProvider — a flexible, config-driven provider
 // ---------------------------------------------------------------------------
 
@@ -137,7 +159,7 @@ impl GenericProvider {
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
-            client: Arc::new(RwLock::new(Client::new())),
+            client: Arc::new(RwLock::new(build_llm_http_client())),
             client_refreshed_at: Arc::new(PLMutex::new(Instant::now())),
             extra_headers: Vec::new(),
             rate_limiter: None,
@@ -241,7 +263,7 @@ impl GenericProvider {
 
     fn refresh_client(&self, reason: &str) {
         tracing::warn!("rebuilding primary HTTP client: {}", reason);
-        *self.client.write() = Client::new();
+        *self.client.write() = build_llm_http_client();
         *self.client_refreshed_at.lock() = Instant::now();
     }
 
@@ -784,7 +806,7 @@ impl AnthropicProvider {
             base_url: "https://api.anthropic.com".to_string(),
             api_key: api_key.into(),
             model: "claude-3-5-sonnet-20241022".to_string(),
-            client: Arc::new(RwLock::new(Client::new())),
+            client: Arc::new(RwLock::new(build_llm_http_client())),
             client_refreshed_at: Arc::new(PLMutex::new(Instant::now())),
             api_version: "2023-06-01".to_string(),
             rate_limiter: None,
@@ -845,7 +867,7 @@ impl AnthropicProvider {
 
     fn refresh_client(&self, reason: &str) {
         tracing::warn!("rebuilding anthropic HTTP client: {}", reason);
-        *self.client.write() = Client::new();
+        *self.client.write() = build_llm_http_client();
         *self.client_refreshed_at.lock() = Instant::now();
     }
 

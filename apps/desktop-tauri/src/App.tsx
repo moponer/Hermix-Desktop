@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
+import { ImageLightbox } from "./components/ImageLightbox";
 import { AutomationView } from "./components/AutomationView";
 import { SettingsView } from "./components/SettingsView";
 import { SearchView } from "./components/SearchView";
@@ -1850,6 +1851,10 @@ streamPhaseRef.current = null;
             if (sessionId === activeSessionId) {
               setStreamError(localizeStreamError(err));
             }
+            // Clear live sub-agent panel on error — the stream is
+            // dead, no more sub-agent events will arrive, and
+            // leaving stale "执行中" entries would confuse the user.
+            setSubAgents({});
           },
           onToolStart: ({ toolCallId, tool, content }) => {
             // Tool events are now appended to the
@@ -2520,6 +2525,12 @@ return {
             // flight belong to the now-finished turn and shouldn't
             // bleed into the next send.
             acui.reset();
+            // Clear live sub-agent panel after a short delay so the
+            // user can see the final "已完成/失败" state briefly.
+            // Without this the panel persists forever in the chat
+            // — sub-agents are never removed from the state map
+            // once they complete, only on session switch.
+            setTimeout(() => setSubAgents({}), 3000);
           },
         },
         finalOverrides,
@@ -2904,6 +2915,7 @@ contextUsage={contextUsage}
         />
       )}
       <ToastContainer />
+      <ImageLightbox />
     </div>
   );
 }

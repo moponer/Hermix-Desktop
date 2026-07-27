@@ -649,11 +649,12 @@ impl AgentLoop {
             pending_steer: Arc::new(Mutex::new(None)),
             tool_router: None,
             memory_router: None,
-            always_include: vec![
-                "read_file".to_string(),
-                "write_file".to_string(),
-                "memory".to_string(),
-            ],
+always_include: vec![
+"read_file".to_string(),
+"write_file".to_string(),
+"move_file".to_string(),
+"memory".to_string(),
+],
             prefetcher: None,
             learned_prefetch_stats: Arc::new(Mutex::new(
                 hermix_intelligence::prefetch::IntentStats::default(),
@@ -700,11 +701,12 @@ impl AgentLoop {
             pending_steer: Arc::new(Mutex::new(None)),
             tool_router: None,
             memory_router: None,
-            always_include: vec![
-                "read_file".to_string(),
-                "write_file".to_string(),
-                "memory".to_string(),
-            ],
+always_include: vec![
+"read_file".to_string(),
+"write_file".to_string(),
+"move_file".to_string(),
+"memory".to_string(),
+],
             prefetcher: None,
             learned_prefetch_stats: Arc::new(Mutex::new(
                 hermix_intelligence::prefetch::IntentStats::default(),
@@ -3571,22 +3573,18 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        // No personality, no tools, no plugin context — formatting discipline
-        // and thinking discipline must still be present in every prompt.
+        // No personality, no tools, no plugin context — thinking discipline
+        // (which includes output format) must still be present in every prompt.
         let prompt = crate::prompt_assembly::build_system_prompt(&agent.config, &agent.prompt_cache, agent.memory_router.as_deref(), "", &[], "gpt-4o", 0);
         assert!(
-            prompt.contains("Output formatting discipline"),
-            "formatting discipline block missing from system prompt"
+            prompt.contains("Output format"),
+            "output format block missing from system prompt"
         );
-        assert!(prompt.contains("DO NOT"));
-        assert!(prompt.contains("Code identifiers"));
+        assert!(prompt.contains("think"));
         assert!(
-            prompt.contains("Output format — strict"),
-            "output format contract block missing from system prompt"
+            prompt.contains("Always close"),
+            "think-block closing discipline missing"
         );
-        assert!(prompt.contains("Hard rules"));
-        assert!(prompt.contains("Correct example"));
-        assert!(prompt.contains("Wrong example"));
     }
 
     #[test]
@@ -3715,12 +3713,12 @@ mod tests {
             "decision pattern step 1 (scan tools) missing"
         );
         assert!(
-            prompt.contains("call it first"),
+            prompt.contains("purpose-built alternative"),
             "decision pattern step 2 (use purpose-built tool first) missing"
         );
         assert!(
-            prompt.contains("Anti-patterns"),
-            "anti-pattern block missing"
+            prompt.contains("Forbidden shapes"),
+            "forbidden-shapes block (anti-pattern equivalent) missing"
         );
 
         // 2. MiniMax models must now be in the tool-enforcement whitelist so they
@@ -3803,16 +3801,15 @@ mod tests {
             "EXPLORE_EFFICIENCY_GUIDANCE block must be injected on FirstTurn"
         );
         assert!(
-            first_turn.contains("list the directory to 'recon'")
-                || first_turn.contains("Go straight to the known entry file"),
-            "explore anti-pattern (don't recon by listing dirs) missing"
+            first_turn.contains("Don't re-read"),
+            "explore anti-pattern (don't re-read/re-list) missing"
         );
         assert!(
-            first_turn.contains("Never list the same directory twice"),
+            first_turn.contains("list the same directory twice"),
             "explore de-dup rule (no double dir listing) missing"
         );
         assert!(
-            first_turn.contains("Do NOT write a temporary script file"),
+            first_turn.contains("temp script files"),
             "explore rule (no temp scripts) missing"
         );
 

@@ -157,6 +157,7 @@ impl CredentialGuard {
     /// Check whether reading a file is allowed.
     /// /// Returns `Err(ToolError)` if the file is a protected credential file.
     pub fn check_read_access(&self, path: &Path) -> Result<(), ToolError> {
+        check_path_prefix(path)?;
         if self.is_protected_file(path) {
             return Err(ToolError::ExecutionFailed(format!(
                 "Access denied: '{}' is a protected credential file",
@@ -171,6 +172,7 @@ impl CredentialGuard {
     /// content contains detectable secrets (when content scanning is enabled).
     pub fn check_write_access(&self, path: &Path, content: &str) -> Result<(), ToolError> {
         // Check path first
+        check_path_prefix(path)?;
         if self.is_protected_file(path) {
             return Err(ToolError::ExecutionFailed(format!(
                 "Write denied: '{}' is a protected credential file",
@@ -196,6 +198,53 @@ impl Default for CredentialGuard {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Path traversal advisory (P1-8 / STABILITY-PLAN §2.7)
+// ---------------------------------------------------------------------------
+
+/// Advisory check for path traversal patterns (`..` sequences).
+///
+/// (P1-8): This is advisory, NOT blocking. Hermix Desktop intentionally
+/// allows full filesystem access (including `C:\` and other drives) —
+/// the terminal tool's description explicitly says so. The primary
+/// defenses are:
+/// 1. `CredentialGuard` blocks credential files (`.env`, `credentials.json`, etc.)
+/// 2. Terminal tool's pre-flight gate blocks `\\?\` and similar pathological prefixes
+/// 3. Approval system requires user consent for Caution-risk commands
+///
+/// This function adds a defense-in-depth advisory: it logs a warning
+/// when a path contains `..` segments that could escape the current
+/// directory. The warning is visible in logs for post-mortem analysis
+/// but does NOT block the operation.
+pub fn check_path_traversal_advisory(path: &str) {
+    // Detect `..` as a path component (not inside a filename like `file..txt`)
+    let normalized = path.replace('\\', "/");
+    let components: Vec<&str> = normalized.split('/').collect();
+    if components.iter().any(|c| *c == "..") {
+        tracing::debug!(
+            path = %path,
+            "path contains '..' traversal segment — advisory only (tool intentionally allows cross-directory access)"
+        );
+    }
+}
+
+/// Hard block for pathological path prefixes (`\\?\`, `\\.\`) — these are a
+/// known bypass vector and are never legitimate for the file tools (the
+/// terminal tool already rejects them pre-flight). Hermix Desktop
+/// intentionally allows broad filesystem access, so this is defense-in-depth
+/// against only the pathological prefixes, not a workspace boundary.
+/// (STABILITY-PLAN P1-8)
+fn check_path_prefix(path: &Path) -> Result<(), ToolError> {
+    let s = path.to_string_lossy().replace('/', "\\");
+    if s.starts_with("\\\\?\\") || s.starts_with("\\\\.\\") {
+        return Err(ToolError::ExecutionFailed(format!(
+            "Access denied: pathological path prefix '{}' is not permitted",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

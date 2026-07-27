@@ -10,13 +10,14 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
-use hermix_core::{traits::{RiskLevel, PermissionMode}, PermissionProfile, truncate_chars, ToolHandler, ToolSchema};
+use hermix_core::{traits::{RiskLevel, PermissionMode}, truncate_chars, ToolHandler, ToolSchema};
 use indexmap::IndexMap;
 use serde_json::Value;
 use tracing::{instrument, warn};
 
 use crate::SessionStamper;
 use crate::approval::TerminalApprovalContext;
+use crate::context::{ContextAware, ToolCallContext};
 
 // ---------------------------------------------------------------------------
 // ToolEntry
@@ -37,6 +38,12 @@ pub struct ToolEntry {
     /// the tool is session-agnostic. See
     /// `tools::session_stamper::SessionStamper`.
     pub session_stamper: Option<Arc<dyn SessionStamper>>,
+    /// Optional context-aware handler for tools that need per-session
+    /// state at dispatch time (terminal, todo, code_execution).
+    /// When `None`, the tool is session-agnostic and dispatches via
+    /// the standard `ToolHandler::execute` path. See
+    /// `context::ContextAware`.
+    pub context_aware: Option<Arc<dyn ContextAware>>,
     /// Availability check — returns true if the tool can be used right now.
     pub check_fn: Arc<dyn Fn() -> bool + Send + Sync>,
     /// Environment dependencies required for this tool (e.g. "EXA_API_KEY").
@@ -130,6 +137,25 @@ fn run_async_in_blocking(
     }
 }
 
+/// Same as [`run_async_in_blocking`] but for `ContextAware` tools that
+/// need per-session `ToolCallContext` at dispatch time. The context is
+/// cloned into the `block_on` future so the borrow outlives the
+/// `block_in_place` scope.
+fn run_async_in_blocking_with_context(
+    ca: &dyn ContextAware,
+    params: Value,
+    ctx: &ToolCallContext,
+) -> Result<String, hermix_core::ToolError> {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    let handle = Handle::current();
+    let ctx_owned = ctx.clone();
+    match handle.runtime_flavor() {
+        RuntimeFlavor::MultiThread => tokio::task::block_in_place(|| {
+            handle.block_on(async move { ca.execute_with_context(params, &ctx_owned).await })
+        }),
+        _ => handle.block_on(async move { ca.execute_with_context(params, &ctx_owned).await }),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // ToolRegistry
@@ -156,17 +182,6 @@ pub struct ToolRegistryInner {
     /// event instead of bouncing the user through text. `None` in both
     /// fields ⇒ fallback to the legacy `HERMIX_CONFIRM=1` text flow.
     pub terminal_approval_ctx: Arc<std::sync::Mutex<TerminalApprovalContext>>,
-/// Shared handle to the per-session `PermissionProfile` (2026-07-21).
-/// `LocalAgentService` writes the active profile here before each
-/// turn; `TerminalHandler` reads it to skip its internal
-/// `ApprovalManager` confirmation when the command is already
-/// granted by the profile (so the user doesn't get double-prompted:
-/// once by `resource_guard` and again by `ApprovalManager`).
-pub terminal_permission_profile: Arc<std::sync::Mutex<PermissionProfile>>,
-/// Per-session callback for `code_execution` stdout streaming.
-pub code_execution_stdout_cb: Arc<std::sync::Mutex<Option<Box<dyn Fn(&str) + Send + Sync>>>>,
-/// Active tool_call_id for the currently running `code_execution`.
-pub code_execution_active_call_id: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// Thread-safe wrapper around `ToolRegistryInner`.
@@ -186,11 +201,6 @@ impl ToolRegistry {
                 terminal_approval_ctx: Arc::new(std::sync::Mutex::new(
                     TerminalApprovalContext::default(),
                 )),
-                terminal_permission_profile: Arc::new(std::sync::Mutex::new(
-                    PermissionProfile::default(),
-                )),
-                code_execution_stdout_cb: Arc::new(std::sync::Mutex::new(None)),
-                code_execution_active_call_id: Arc::new(std::sync::Mutex::new(None)),
             })),
         }
     }
@@ -205,11 +215,6 @@ impl ToolRegistry {
                 terminal_approval_ctx: Arc::new(std::sync::Mutex::new(
                     TerminalApprovalContext::default(),
                 )),
-                terminal_permission_profile: Arc::new(std::sync::Mutex::new(
-                    PermissionProfile::default(),
-                )),
-                code_execution_stdout_cb: Arc::new(std::sync::Mutex::new(None)),
-                code_execution_active_call_id: Arc::new(std::sync::Mutex::new(None)),
             })),
         }
     }
@@ -281,94 +286,6 @@ impl ToolRegistry {
     }
 
     /// Get a clone of the shared terminal-permission-profile handle.
-    /// `register_builtin_tools` clones this into `TerminalHandler` so
-    /// the agent service can update the profile per session without
-    /// re-registering the tool.
-    pub fn terminal_permission_profile_handle(
-        &self,
-    ) -> Arc<std::sync::Mutex<PermissionProfile>> {
-        self.inner
-            .read()
-            .expect("registry rwlock not poisoned")
-            .terminal_permission_profile
-            .clone()
-    }
-
-    /// Set the per-session permission profile. Called by
-    /// `LocalAgentService::send_message` with the `profile_arc` it
-    /// manages for `resource_guard` — so `TerminalHandler` can consult
-    /// the same profile to skip its internal `ApprovalManager`
-    /// confirmation for already-granted commands.
-    pub fn set_terminal_permission_profile(&self, profile: PermissionProfile) {
-        match self
-            .inner
-            .read()
-            .expect("registry rwlock not poisoned")
-            .terminal_permission_profile
-            .lock()
-        {
-            Ok(mut guard) => *guard = profile,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "terminal_permission_profile lock poisoned; ignoring update"
-                );
-            }
-        }
-    }
-
-    /// Set the code_execution stdout streaming callback.
-    pub fn set_code_execution_stdout_cb(
-        &self,
-        cb: Option<Box<dyn Fn(&str) + Send + Sync>>,
-    ) {
-        match self
-            .inner
-            .read()
-            .expect("registry rwlock not poisoned")
-            .code_execution_stdout_cb
-            .lock()
-        {
-            Ok(mut guard) => *guard = cb,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "code_execution_stdout_cb lock poisoned; ignoring update"
-                );
-            }
-        }
-    }
-
-    /// Set the active code_execution tool_call_id.
-    pub fn set_code_execution_active_call_id(&self, id: Option<String>) {
-        match self
-            .inner
-            .read()
-            .expect("registry rwlock not poisoned")
-            .code_execution_active_call_id
-            .lock()
-        {
-            Ok(mut guard) => *guard = id,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "code_execution_active_call_id lock poisoned; ignoring update"
-                );
-            }
-        }
-    }
-
-    /// Get the active code_execution tool_call_id.
-    pub fn code_execution_active_call_id(&self) -> Option<String> {
-        self.inner
-            .read()
-            .expect("registry rwlock not poisoned")
-            .code_execution_active_call_id
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone())
-    }
-
     /// Register a new tool.
     /// /// If a tool with the same name already exists, the call is rejected
     /// (logged + no-op). Pass `override_existing: true` to force a
@@ -514,8 +431,33 @@ impl ToolRegistry {
                 is_interactive: false,
                 is_enabled,
                 session_stamper: None,
+                context_aware: None,
             },
         );
+    }
+
+    /// Attach a [`ContextAware`] impl to an already-registered tool.
+    /// Follows the same opt-in pattern as `set_session_stamper`:
+    /// registration flows through `register_with_risk` which has no
+    /// `context_aware` parameter (keeping the blast radius tiny — only
+    /// terminal / todo / code_execution need one). After registering,
+    /// the tool's `register` helper calls this with the same `Arc<T>`
+    /// it handed to `register_with_risk`, so the registry keeps a
+    /// typed `Arc<dyn ContextAware>` alongside the `Arc<dyn ToolHandler>`.
+    pub fn set_context_aware(
+        &self,
+        name: &str,
+        ca: Arc<dyn ContextAware>,
+    ) {
+        let mut inner = self.inner.write().expect("registry rwlock not poisoned");
+        if let Some(entry) = inner.tools.get_mut(name) {
+            entry.context_aware = Some(ca);
+        } else {
+            tracing::warn!(
+                tool = %name,
+                "set_context_aware called for unregistered tool; ignored"
+            );
+        }
     }
 
     /// Attach a [`SessionStamper`] to an already-registered tool.
@@ -921,6 +863,110 @@ impl ToolRegistry {
         tracing::Span::current().record("result_kind", result.1);
         tracing::Span::current().record("tool_ms", elapsed.as_millis() as u64);
         result.0
+    }
+
+    /// Dispatch a tool call by name with per-session context (SYNC).
+    ///
+    /// If the tool has a `ContextAware` impl, `execute_with_context`
+    /// is called with `ctx`. Otherwise, the standard `execute` path
+    /// runs (context is ignored). Both paths share the same
+    /// truncation / error-wrapping logic.
+    pub fn dispatch_with_context(
+        &self,
+        name: &str,
+        params: Value,
+        ctx: &ToolCallContext,
+    ) -> String {
+        let inner = self.inner.read().expect("registry rwlock not poisoned");
+        let entry = match inner.tools.get(name) {
+            Some(e) => e,
+            None => return Self::tool_error(&format!("Tool not found: {}", name)),
+        };
+        let handler = Arc::clone(&entry.handler);
+        let context_aware = entry.context_aware.clone();
+        let max_chars = entry
+            .max_result_size_chars
+            .unwrap_or(inner.global_max_result_size_chars);
+        let schema = entry.schema.clone();
+        drop(inner);
+
+        let params = Self::coerce_args(&schema, params);
+
+        let result: Result<String, hermix_core::ToolError> = if let Some(ca) = context_aware {
+            run_async_in_blocking_with_context(ca.as_ref(), params, ctx)
+        } else {
+            run_async_in_blocking(handler.as_ref(), params)
+        };
+
+        match result {
+            Ok(output) => {
+                if output.chars().count() > max_chars {
+                    let head = truncate_chars(&output, max_chars);
+                    let removed = output.chars().count() - max_chars;
+                    Self::tool_result(&format!(
+                        "{}\n\n[... truncated {} characters ...]",
+                        head, removed
+                    ))
+                } else {
+                    Self::tool_result(&output)
+                }
+            }
+            Err(e) => Self::tool_error(&e.to_string()),
+        }
+    }
+
+    /// Dispatch a tool call asynchronously with per-session context.
+    ///
+    /// If the tool has a `ContextAware` impl, `execute_with_context`
+    /// is called with `ctx`. Otherwise, the standard `execute` path
+    /// runs (context is ignored).
+    pub async fn dispatch_async_with_context(
+        &self,
+        name: &str,
+        params: Value,
+        ctx: &ToolCallContext,
+    ) -> String {
+        let (handler, context_aware, max_chars, schema) = {
+            let inner = self.inner.read().expect("registry rwlock not poisoned");
+            match inner.tools.get(name) {
+                Some(e) => (
+                    Arc::clone(&e.handler),
+                    e.context_aware.clone(),
+                    e.max_result_size_chars
+                        .unwrap_or(inner.global_max_result_size_chars),
+                    e.schema.clone(),
+                ),
+                None => return Self::tool_error(&format!("Tool not found: {}", name)),
+            }
+        };
+
+        let params = Self::coerce_args(&schema, params);
+
+        // Await inside the match so the `Arc<dyn ContextAware>` (ca)
+        // stays alive for the duration of the future. Extracting the
+        // future into a `let exec_fut = …` before awaiting would drop
+        // `ca` at the end of the `if let` block, leaving a dangling
+        // borrow.
+        let raw = match context_aware {
+            Some(ca) => ca.execute_with_context(params, ctx).await,
+            None => handler.execute(params).await,
+        };
+
+        match raw {
+            Ok(output) => {
+                if output.chars().count() > max_chars {
+                    let head = truncate_chars(&output, max_chars);
+                    let removed = output.chars().count() - max_chars;
+                    Self::tool_result(&format!(
+                        "{}\n\n[... truncated {} characters ...]",
+                        head, removed
+                    ))
+                } else {
+                    Self::tool_result(&output)
+                }
+            }
+            Err(e) => Self::tool_error(&e.to_string()),
+        }
     }
 
     /// Get a reference to a tool entry by name.

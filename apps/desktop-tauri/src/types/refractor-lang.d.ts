@@ -6,87 +6,11 @@ declare module "refractor" {
   export function highlight(value: string, name: string): any;
   export function register(lang: any): void;
 }
-declare module "refractor/lang/python" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/typescript" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/javascript" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/jsx" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/tsx" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/rust" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/go" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/java" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/kotlin" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/c" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/cpp" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/ruby" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/php" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/bash" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/css" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/scss" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/json" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/yaml" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/toml" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/markup" {
-  const value: unknown;
-  export default value;
-}
-declare module "refractor/lang/sql" {
+
+// 通配符声明：覆盖所有 refractor/lang/* 语言模块。
+// 之前为每种语言单独声明，但随着语言覆盖扩展到 60+ 种，
+// 维护一长串 declare module 太冗余。通配符一次性覆盖所有。
+declare module "refractor/lang/*" {
   const value: unknown;
   export default value;
 }

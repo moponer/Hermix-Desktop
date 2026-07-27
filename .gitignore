@@ -104,10 +104,26 @@ apps/desktop-tauri/src-tauri/$null
 /tmp_msgs.json
 _count_lines.ps1
 
+# Root-level temp files (cargo check output, test output, debug scripts)
+/*.txt
+/*.py
+/*.bat
+
 # tsc / typecheck temp logs dropped during runs
 **/tmp_tsc*.txt
+**/tsc_check.txt
+**/tsc_err*.txt
+**/tsc_light_check.txt
+**/tsc_output*.txt
 
 # Tauri sidecar binaries (build outputs, NOT source — never commit)
 apps/desktop-tauri/src-tauri/binaries/
 /officecli.exe
 /⚠️
+
+# OCR models (~21MB) — NOT committed to git (keeps remote repo small).
+# Fetched at build/dev time by scripts/download-ocr-models.ps1 into this dir,
+# then bundled into the NSIS package via tauri.conf.json `bundle.resources`
+# and copied to hermix_home()/ocr/ on first run by ensure_ocr_models().
+# Offline build escape hatch: pre-place the 3 files here manually.
+apps/desktop-tauri/src-tauri/resources/ocr/

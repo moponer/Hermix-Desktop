@@ -14,7 +14,10 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, traits::RiskLevel};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use hermix_ocr::OcrEngine;
+use crate::tools::file::ocr_engine;
 use crate::tools::file::to_absolute_path;
 use crate::ToolRegistry;
 
@@ -81,6 +84,48 @@ pub fn resolve_pdftotext_path() -> Result<PathBuf, String> {
     Err(format!(
         "pdftotext binary not found. Expected {} next to hermes.exe, or on PATH.",
         PDFTOTEXT_BIN
+    ))
+}
+
+/// Name of the vendored Poppler rasterizer binary, including `.exe` on Windows.
+#[cfg(windows)]
+const PDFTOPPM_BIN: &str = "pdftoppm.exe";
+#[cfg(not(windows))]
+const PDFTOPPM_BIN: &str = "pdftoppm";
+
+/// Default cap on the number of pages rasterized for OCR, to bound the cost
+/// of running the local OCR engine over very large scanned PDFs.
+const DEFAULT_OCR_PAGE_CAP: u32 = 20;
+
+/// Rasterization DPI for `pdftoppm`. 200 is a good balance between OCR
+/// accuracy and PNG size (≈ a few hundred KB per page at this DPI).
+const OCR_DPI: u32 = 200;
+
+/// Resolve the on-disk path to the `pdftoppm` (PDF→image) binary, using the
+/// same sibling-exe-then-PATH resolution as [`resolve_pdftotext_path`].
+///
+/// `pdftoppm` is the rasterizer that turns each PDF page into a PNG so the
+/// local OCR engine can read the pixels — needed for scanned/image-based
+/// PDFs that have no embedded text layer.
+pub fn resolve_pdftoppm_path() -> Result<PathBuf, String> {
+    // 1. Sibling of the running hermes.exe (production / pnpm tauri build).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sibling = dir.join(PDFTOPPM_BIN);
+            if sibling.exists() {
+                return Ok(sibling);
+            }
+        }
+    }
+
+    // 2. PATH lookup (dev mode, vcpkg, MSYS2, homebrew, etc.).
+    if let Ok(p) = which::which("pdftoppm") {
+        return Ok(p);
+    }
+
+    Err(format!(
+        "pdftoppm binary not found. Expected {PDFTOPPM_BIN} next to hermes.exe, or on PATH. \
+         It ships with Poppler for Windows (https://github.com/oschwartz10612/poppler-windows/releases)."
     ))
 }
 
@@ -211,6 +256,272 @@ except Exception as e:
         let abs = to_absolute_path(path);
         Ok(format!("[file: {abs}]\n{out}"))
     }
+
+    /// Run the three digital-text tiers (pdftotext → lopdf → pdfminer) and
+    /// return the first successful extraction as plain text. Mirrors the
+    /// original inline chain so behavior for digital PDFs is unchanged.
+    ///
+    /// A scanned/image-based PDF returns `Ok("")` (empty) or `Err` from all
+    /// three tiers — the caller detects that and falls through to the OCR
+    /// tier ([`Self::extract_via_ocr`]).
+    async fn extract_digital(
+        &self,
+        path: &str,
+        layout: bool,
+        pages: Option<&str>,
+        max_chars: usize,
+    ) -> Result<String, ToolError> {
+        // ── Tier 1: pdftotext (Poppler binary) ────────────────
+        if let Ok(bin) = resolve_pdftotext_path() {
+            let mut cmd = Command::new(&bin);
+            if layout {
+                cmd.arg("-layout");
+            } else {
+                cmd.arg("-simple");
+            }
+            cmd.arg("-q");
+            if let Some(pr) = pages {
+                if let Some((f, l)) = pr.split_once('-') {
+                    cmd.arg("-f").arg(f);
+                    cmd.arg("-l").arg(l);
+                }
+            }
+            cmd.arg(path);
+
+            let output = cmd.output().await.map_err(|e| {
+                ToolError::ExecutionFailed(format!(
+                    "Failed to spawn pdftotext at {}: {e}",
+                    bin.display()
+                ))
+            })?;
+
+            if output.status.success() {
+                let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+                let truncated = text.len() > max_chars;
+                if truncated {
+                    text.truncate(max_chars);
+                    text.push_str("\n\n[...truncated, use a smaller `pages` range to read more]");
+                }
+                let abs = to_absolute_path(path);
+                return Ok(format!("[file: {abs}]\n{text}"));
+            }
+
+            // pdftotext ran but failed. Check for the Windows
+            // 0xc000007b (missing Poppler DLLs) — if so, fall
+            // through to tier 2. Otherwise report the error.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let exit_code = output.status.code().unwrap_or(-1);
+            if exit_code == STATUS_INVALID_IMAGE_NOT_FORMAT
+                || stderr.contains("0xc000007b")
+            {
+                tracing::warn!(
+                    "pdftotext failed with 0xc000007b (missing Poppler DLLs); \
+                     falling through to lopdf"
+                );
+            } else {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "pdftotext exited with status {}: {}",
+                    output.status,
+                    stderr.trim()
+                )));
+            }
+        } else {
+            tracing::warn!("pdftotext not available; falling through to lopdf");
+        }
+
+        // ── Tier 2: lopdf (pure Rust) ─────────────────────────
+        if let Ok(text) = self.extract_via_lopdf(path).await {
+            return Ok(text);
+        }
+
+        // ── Tier 3: Python pdfminer.six (last resort) ─────────
+        self.extract_via_python(path).await
+    }
+
+    /// Tier 4 (OCR): rasterize each PDF page via `pdftoppm` and run local
+    /// OCR (oar-ocr / PP-OCRv5 mobile) on the rendered PNGs.
+    ///
+    /// Used for scanned/image-based PDFs that have no text layer, and when
+    /// the caller passes `ocr: true` to get a structured confidence report
+    /// alongside the digital text.
+    ///
+    /// Returns a JSON string carrying both the digital `text` (if any) and
+    /// the OCR result (`ocr_text`, per-page `ocr_pages`, `low_confidence_count`)
+    /// so the LLM can verify low-confidence regions with its own vision.
+    async fn extract_via_ocr(
+        &self,
+        path: &str,
+        pages: Option<&str>,
+        digital_text: Option<&str>,
+    ) -> Result<String, ToolError> {
+        let pdftoppm = match resolve_pdftoppm_path() {
+            Ok(p) => p,
+            Err(_) => return Err(ToolError::ExecutionFailed(
+                "This PDF has no extractable text layer (scanned/image-based), but the rasterizer \
+                 `pdftoppm` (Poppler) is not installed. Place `pdftoppm.exe` next to hermes.exe or on \
+                 PATH (Poppler for Windows), or delegate to a sub-agent `read_image` for LLM vision fallback."
+                    .into(),
+            )),
+        };
+
+        let engine = match ocr_engine() {
+            Ok(e) => e,
+            Err(e) => return Err(ToolError::ExecutionFailed(format!(
+                "This PDF has no extractable text layer (scanned/image-based), but local OCR models \
+                 are missing at <hermix_home>/ocr/: {e}. Delegate to a sub-agent `read_image` \
+                 (LLM vision) instead."
+            ))),
+        };
+
+        // Page range: honor `pages` ("first-last"), else cap to bound cost.
+        let (first, last_parsed): (u32, u32) = match pages {
+            Some(pr) => match pr.split_once('-') {
+                Some((f, l)) => (
+                    f.trim().parse().unwrap_or(1),
+                    l.trim().parse().unwrap_or(DEFAULT_OCR_PAGE_CAP),
+                ),
+                None => (1, pr.trim().parse().unwrap_or(DEFAULT_OCR_PAGE_CAP)),
+            },
+            None => (1, DEFAULT_OCR_PAGE_CAP),
+        };
+        // Clamp the last page so we never rasterize more than DEFAULT_OCR_PAGE_CAP
+        // pages from `first` (a 500-page scanned PDF must not trigger 500 OCR runs).
+        let last = last_parsed.min(first + DEFAULT_OCR_PAGE_CAP - 1).max(first);
+
+        // Unique temp dir for the rendered pages (cleaned up after OCR).
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = std::env::temp_dir().join(format!(
+            "hermix_pdf_ocr_{}_{}",
+            std::process::id(),
+            nanos
+        ));
+        if let Err(e) = std::fs::create_dir_all(&tmp) {
+            return Err(ToolError::ExecutionFailed(format!(
+                "failed to create temp dir for OCR: {e}"
+            )));
+        }
+        let cleanup = || {
+            let _ = std::fs::remove_dir_all(&tmp);
+        };
+
+        let prefix = tmp.join("page");
+        let mut cmd = Command::new(&pdftoppm);
+        cmd.arg("-png")
+            .arg("-r")
+            .arg(OCR_DPI.to_string())
+            .arg("-f")
+            .arg(first.to_string())
+            .arg("-l")
+            .arg(last.to_string())
+            .arg(path)
+            .arg(&prefix);
+
+        let raster = cmd.output().await.map_err(|e| {
+            cleanup();
+            ToolError::ExecutionFailed(format!(
+                "failed to spawn pdftoppm at {}: {e}",
+                pdftoppm.display()
+            ))
+        })?;
+        if !raster.status.success() {
+            let stderr = String::from_utf8_lossy(&raster.stderr);
+            cleanup();
+            return Err(ToolError::ExecutionFailed(format!(
+                "pdftoppm exited with status {}: {}. The PDF may be corrupt or have no renderable pages.",
+                raster.status,
+                stderr.trim()
+            )));
+        }
+
+        // Enumerate rendered PNGs: page-<N>.png, sorted by page number N.
+        let mut page_files: Vec<(u32, PathBuf)> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&tmp) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if let Some(rest) = name.strip_prefix("page-") {
+                    if let Some(num_str) = rest.strip_suffix(".png") {
+                        if let Ok(n) = num_str.parse::<u32>() {
+                            page_files.push((n, entry.path()));
+                        }
+                    }
+                }
+            }
+        }
+        page_files.sort_by_key(|(n, _)| *n);
+
+        if page_files.is_empty() {
+            cleanup();
+            return Err(ToolError::ExecutionFailed(
+                "pdftoppm produced no page images — the PDF may be empty, corrupt, or its pages are \
+                 not rasterizable."
+                    .into(),
+            ));
+        }
+
+        let mut ocr_pages: Vec<serde_json::Value> = Vec::new();
+        let mut ocr_text = String::new();
+        let mut low_total: usize = 0;
+
+        for (n, png) in &page_files {
+            let png_str = png.to_string_lossy().to_string();
+            let words = match tokio::task::spawn_blocking(move || engine.recognize_path(&png_str))
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    ocr_pages.push(json!({ "page": n, "error": format!("OCR task panicked: {e}") }));
+                    continue;
+                }
+            };
+            match words {
+                Ok(ws) => {
+                    let low = ws
+                        .iter()
+                        .filter(|w| w.confidence < engine.confidence_threshold())
+                        .count();
+                    low_total += low;
+                    let joined = ws
+                        .iter()
+                        .map(|w| w.text.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !joined.is_empty() {
+                        ocr_text.push_str(&format!("── Page {n} ──\n"));
+                        ocr_text.push_str(&joined);
+                        ocr_text.push('\n');
+                    }
+                    ocr_pages.push(json!({
+                        "page": n,
+                        "low_confidence_count": low,
+                        "text": joined,
+                    }));
+                }
+                Err(e) => {
+                    ocr_pages.push(json!({ "page": n, "error": format!("{e}") }));
+                }
+            }
+        }
+
+        cleanup();
+
+        let scanned = digital_text.map(|s| s.trim().is_empty()).unwrap_or(true);
+        Ok(json!({
+            "tool": "read_pdf",
+            "ok": true,
+            "path": path,
+            "ocr": true,
+            "scanned": scanned,
+            "text": digital_text.unwrap_or(""),
+            "ocr_text": ocr_text.trim_end(),
+            "ocr_pages": ocr_pages,
+            "low_confidence_count": low_total,
+            "pages_rendered": page_files.len(),
+        })
+        .to_string())
+    }
 }
 
 impl Default for ReadPdfHandler {
@@ -290,77 +601,59 @@ impl ToolHandler for ReadPdfHandler {
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_MAX_CHARS);
 
-        // ── Tier 1: pdftotext (Poppler binary) ────────────────
-        match resolve_pdftotext_path() {
-            Ok(bin) => {
-                let mut cmd = Command::new(&bin);
-                if layout {
-                    cmd.arg("-layout");
-                } else {
-                    cmd.arg("-simple");
-                }
-                cmd.arg("-q");
-                if let Some(ref pr) = pages {
-                    if let Some((f, l)) = pr.split_once('-') {
-                        cmd.arg("-f").arg(f);
-                        cmd.arg("-l").arg(l);
+        let ocr = params
+            .get("ocr")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // Run the three digital-text tiers (pdftotext → lopdf → pdfminer).
+        // For a scanned/image-based PDF all three return empty, so we then
+        // fall through to the OCR tier (Tier 4) below.
+        let digital_result = self
+            .extract_digital(path, layout, pages.as_deref(), max_chars)
+            .await;
+        let digital_text: Option<String> = digital_result.as_ref().ok().cloned();
+        let is_empty = digital_text
+            .as_ref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+
+        // Fast path: digital text found and OCR not requested → return plain
+        // text (unchanged behavior). Only switch to JSON when OCR is involved.
+        if !ocr && !is_empty {
+            return Ok(digital_text.unwrap());
+        }
+
+        // Need OCR: either the caller requested it explicitly (`ocr: true`),
+        // or this is a scanned PDF whose digital layers are empty.
+        match self
+            .extract_via_ocr(path, pages.as_deref(), digital_text.as_deref())
+            .await
+        {
+            Ok(json) => Ok(json),
+            Err(ocr_err) => {
+                if let Some(t) = digital_text {
+                    if !t.trim().is_empty() {
+                        // Safety net: digital text exists but we reached here
+                        // (e.g. ocr:true on a digital PDF whose OCR failed).
+                        return Ok(t);
                     }
-                }
-                cmd.arg(path);
-
-                let output = cmd.output().await.map_err(|e| {
-                    ToolError::ExecutionFailed(format!(
-                        "Failed to spawn pdftotext at {}: {e}",
-                        bin.display()
-                    ))
-                })?;
-
-                if output.status.success() {
-                    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-                    let truncated = text.len() > max_chars;
-                    if truncated {
-                        text.truncate(max_chars);
-                        text.push_str("\n\n[...truncated, use a smaller `pages` range to read more]");
-                    }
-                    let abs = to_absolute_path(path);
-                    return Ok(format!("[file: {abs}]\n{text}"));
-                }
-
-                // pdftotext ran but failed. Check for the Windows
-                // 0xc000007b (missing Poppler DLLs) — if so, fall
-                // through to tier 2. Otherwise report the error.
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let exit_code = output.status.code().unwrap_or(-1);
-                if exit_code == STATUS_INVALID_IMAGE_NOT_FORMAT
-                    || stderr.contains("0xc000007b")
-                {
-                    tracing::warn!(
-                        "pdftotext failed with 0xc000007b (missing Poppler DLLs); \
-                         falling through to lopdf"
-                    );
-                } else {
+                    // Scanned PDF, OCR unavailable → actionable guidance.
                     return Err(ToolError::ExecutionFailed(format!(
-                        "pdftotext exited with status {}: {}",
-                        output.status,
-                        stderr.trim()
+                        "Scanned PDF (no text layer). Local OCR unavailable: {ocr_err}. \
+                         Tip: delegate to a sub-agent `read_image` for LLM vision, \
+                         or install Poppler (pdftoppm) + OCR models at <hermix_home>/ocr/."
                     )));
                 }
-            }
-            Err(e) => {
-                tracing::warn!("pdftotext not available ({e}); falling through to lopdf");
-            }
-        }
-
-        // ── Tier 2: lopdf (pure Rust) ─────────────────────────
-        match self.extract_via_lopdf(path).await {
-            Ok(text) => return Ok(text),
-            Err(e) => {
-                tracing::warn!("lopdf fallback failed ({e}); trying Python pdfminer");
+                // No digital text and OCR failed: surface OCR error if explicitly
+                // requested, otherwise surface the original digital-tier error.
+                if ocr {
+                    Err(ocr_err)
+                } else {
+                    digital_result
+                }
             }
         }
-
-        // ── Tier 3: Python pdfminer.six (last resort) ─────────
-        self.extract_via_python(path).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -394,6 +687,14 @@ impl ToolHandler for ReadPdfHandler {
                 "description": format!("Maximum characters to return. Default: {DEFAULT_MAX_CHARS}. Output is truncated with a hint if exceeded.")
             }),
         );
+        props.insert(
+            "ocr".into(),
+            json!({
+                "type": "boolean",
+                "description": "If true, also rasterize each page with pdftoppm and run local OCR (oar-ocr / PP-OCRv5 mobile), returning structured text + per-word confidence in addition to any digital text. Auto-enabled when the PDF has no text layer (scanned / image-based). Words below `confidence_threshold` are flagged via `low_confidence_count` — verify those with the LLM's own vision. Default false.",
+                "default": false
+            }),
+        );
 
         tool_schema(
             "read_pdf",
@@ -401,7 +702,10 @@ impl ToolHandler for ReadPdfHandler {
              **Use this tool whenever the user wants to read, search, or extract content from a PDF file** \u{2014} \
              prefer this over running `pdftotext`, `pdf2txt`, or any PDF-parsing command via `terminal` or `process_registry`. \
              Preserves CJK characters and physical layout by default. \
-             Use the `pages` parameter to limit the range; use a smaller `max_chars` for very large documents.",
+             Use the `pages` parameter to limit the range; use a smaller `max_chars` for very large documents. \
+             Scanned / image-based PDFs (no text layer) are recovered automatically by a 4th tier that rasterizes pages with `pdftoppm` and runs local OCR; set `ocr: true` to force the OCR report on any PDF. \
+             ⚠️ For PDFs > ~5 pages, call this INSIDE a sub-agent via `delegate_task` — reading a large PDF into the MAIN agent context dumps 30K+ tokens that bloat context and make the LLM drift off-task. \
+             Delegate: `delegate_task(task=\"Summarize this PDF\", context=\"Path: ...\")`.",
             JsonSchema::object(props, vec!["path".into()]),
         )
     }
@@ -417,6 +721,13 @@ mod tests {
         // binary may or may not be present on CI), but we verify the
         // function is callable and returns a String (not panics).
         let _ = resolve_pdftotext_path();
+    }
+
+    #[test]
+    fn test_resolve_pdftoppm_returns_path_or_err() {
+        // Same contract as the pdftotext resolver: callable, returns a
+        // PathBuf on success or a String error, never panics.
+        let _ = resolve_pdftoppm_path();
     }
 
     #[test]

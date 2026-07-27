@@ -2554,12 +2554,13 @@ function Composer(p: ComposerProps) {
         onChange={(e) => p.setInput(e.target.value)}
         onKeyDown={p.handleKeyDown}
         onPaste={(e) => {
-          // 粘贴上传：从剪贴板提取图片文件
+          // 粘贴上传：从剪贴板提取任意文件（图片 + 文档等）。
+          // handleFilesAttach 内部按 MIME 拆成图片预览 / 文件路径附件，
+          // 因此这里不再过滤 image/，让用户能粘贴任意文档进输入框。
           const files = Array.from(e.clipboardData?.files ?? []);
-          const imageFiles = files.filter((f) => f.type.startsWith("image/"));
-          if (imageFiles.length > 0) {
+          if (files.length > 0) {
             e.preventDefault();
-            p.onFilesAttach?.(imageFiles);
+            p.onFilesAttach?.(files);
           }
         }}
         placeholder={p.isStreaming ? "输入消息加入队列..." : p.placeholder}

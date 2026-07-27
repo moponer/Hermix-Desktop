@@ -77,6 +77,7 @@ pub fn emit_acui_hide(callbacks: &AgentCallbacks, id: impl Into<String>) {
 /// via `.with_always_include()`). Plumbed in previously
 /// the field existed but the router ignored it.
 pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchemaRouter> {
+    // v2: added delegate_task, read_image, move_file, list_tools to system whitelist
     let mut whitelist: Vec<String> = vec![
         // System-level always-forward (see doc above).
         "read_file".to_string(),
@@ -92,6 +93,24 @@ pub fn default_tool_router(user_always_include: &[String]) -> Arc<dyn ToolSchema
         // instead of calling the tool directly.
         "read_pdf".to_string(),
         "list_files".to_string(),
+        // delegate_task and read_image must be always-forwarded
+        // so the LLM can spawn sub-agents for image/binary file
+        // analysis. Without this, the KeywordRouter scores them ≈ 0
+        // on CJK-heavy queries (e.g. "图片按内容重命名"), and the
+        // LLM falls back to read_file on JPEGs (which fails with
+        // UTF-8 errors) or terminal OCR (which has no tesseract).
+        // This caused a 13-turn self-spin loop in real testing.
+        "delegate_task".to_string(),
+        "read_image".to_string(),
+        // move_file must be always-forwarded so the LLM can rename
+        // files without resorting to terminal `mv`/`Rename-Item`
+        // (which has quoting issues on Windows paths with CJK).
+        "move_file".to_string(),
+        // list_tools must be always-forwarded so the LLM can
+        // discover tools not in its initial schema set (e.g.
+        // file_converter, task_manager) without wasting turns
+        // on tool_search (which doesn't exist as a callable tool).
+        "list_tools".to_string(),
         // Browser and computer-use tools must be always-forwarded
         // so the LLM can access them when the user explicitly
         // requests web browsing, page interaction, or GUI

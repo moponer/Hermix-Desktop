@@ -16,6 +16,38 @@ use hermix_core::{AgentError, CommandOutput, TerminalBackend};
 // in `hermix-core` so the code-execution backend and Python agent
 // glue can share the same logic.
 
+/// Detect common image formats from the first few bytes of a file.
+///
+/// Returns the format name (e.g. `"JPEG"`) if the magic bytes match a
+/// known image type, or `None` if the bytes don't look like an image.
+/// Used by `read_file` to give the LLM a helpful error message when it
+/// tries to read a binary image file as UTF-8 text (common when the
+/// file extension is non-standard, e.g. `.jpgg` instead of `.jpg`).
+fn detect_image_magic(header: &[u8]) -> Option<&'static str> {
+    if header.len() >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF {
+        return Some("JPEG");
+    }
+    if header.len() >= 8
+        && header[0..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    {
+        return Some("PNG");
+    }
+    if header.len() >= 6
+        && (&header[0..6] == b"GIF87a" || &header[0..6] == b"GIF89a")
+    {
+        return Some("GIF");
+    }
+    // WEBP: RIFF....WEBP
+    if header.len() >= 12 && &header[0..4] == b"RIFF" && &header[8..12] == b"WEBP" {
+        return Some("WEBP");
+    }
+    // BMP: BM
+    if header.len() >= 2 && &header[0..2] == b"BM" {
+        return Some("BMP");
+    }
+    None
+}
+
 /// A [`TerminalBackend`] that runs commands on the local machine.
 pub struct LocalBackend {
     /// Default timeout in seconds for command execution.
@@ -156,10 +188,60 @@ impl TerminalBackend for LocalBackend {
         };
         #[cfg(windows)]
         let mut cmd = {
-            // On Windows, use cmd.exe /c instead of sh -c.
-            let mut c = TokioCommand::new("cmd.exe");
-            c.arg("/c").arg(command);
-            c
+            let trimmed = command.trim_start();
+            let lower = trimmed.to_lowercase();
+            // Detect PowerShell commands and route directly to
+            // powershell.exe, bypassing cmd.exe which mangles quotes
+            // in PowerShell commands (e.g. stripping outer double
+            // quotes from `powershell -Command "Get-Process | Select Name"`).
+            if lower.starts_with("powershell ") || lower.starts_with("powershell.exe ") {
+                // Strip "powershell" or "powershell.exe" prefix (case-insensitive)
+                let after_ps = trimmed[lower.find(' ').unwrap_or(0)..].trim_start();
+                let lower_after = after_ps.to_lowercase();
+                let mut c = TokioCommand::new("powershell.exe");
+                c.arg("-NoProfile").arg("-NonInteractive");
+                if lower_after.starts_with("-command ") {
+                    let cmd_str = after_ps["-command ".len()..].trim_start();
+                    c.arg("-Command").arg(cmd_str);
+                } else if lower_after.starts_with("-encodedcommand ") {
+                    let cmd_str = after_ps["-encodedcommand ".len()..].trim_start();
+                    c.arg("-EncodedCommand").arg(cmd_str);
+                } else if lower_after.starts_with("-file ") {
+                    let cmd_str = after_ps["-file ".len()..].trim_start();
+                    c.arg("-File").arg(cmd_str);
+                } else {
+                    // No flag — wrap the entire rest in -Command
+                    c.arg("-Command").arg(after_ps);
+                }
+                c
+            } else if lower.starts_with("pwsh ") || lower.starts_with("pwsh.exe ") {
+                let after_pws = trimmed[lower.find(' ').unwrap_or(0)..].trim_start();
+                let lower_after = after_pws.to_lowercase();
+                let mut c = TokioCommand::new("pwsh.exe");
+                c.arg("-NoProfile").arg("-NonInteractive");
+                if lower_after.starts_with("-command ") {
+                    c.arg("-Command").arg(after_pws["-command ".len()..].trim_start());
+                } else {
+                    c.arg("-Command").arg(after_pws);
+                }
+                c
+            } else if lower.starts_with("cmd /c ") {
+                // LLM wrapped in "cmd /c" — strip it, we already use cmd.exe /c
+                let rest = &trimmed["cmd /c ".len()..];
+                let mut c = TokioCommand::new("cmd.exe");
+                c.arg("/c").arg(rest);
+                c
+            } else if lower.starts_with("cmd.exe /c ") {
+                let rest = &trimmed["cmd.exe /c ".len()..];
+                let mut c = TokioCommand::new("cmd.exe");
+                c.arg("/c").arg(rest);
+                c
+            } else {
+                // Default: cmd.exe /c <command>
+                let mut c = TokioCommand::new("cmd.exe");
+                c.arg("/c").arg(command);
+                c
+            }
         };
         // Hide the console window on Windows — without CREATE_NO_WINDOW,
         // every shell tool call (dir /b, etc.) flashes a black cmd window
@@ -266,9 +348,44 @@ impl TerminalBackend for LocalBackend {
         offset: Option<u64>,
         limit: Option<u64>,
     ) -> Result<String, AgentError> {
-        let content = tokio::fs::read_to_string(path)
-            .await
-            .map_err(|e| AgentError::Io(format!("Failed to read file '{}': {}", path, e)))?;
+        let content = match tokio::fs::read_to_string(path).await {
+            Ok(content) => content,
+            Err(e) => {
+                // If the error is about UTF-8 validity, the file is likely
+                // binary (e.g. a JPEG/PNG with a non-standard extension like
+                // .jpgg). Read the first few bytes to check for known image
+                // magic numbers and suggest `read_image` — the LLM frequently
+                // picks read_file for image files when the extension doesn't
+                // match the read_image tool's documented format list.
+                let err_str = e.to_string();
+                if err_str.contains("valid UTF-8")
+                    || err_str.contains("invalid")
+                    || err_str.contains("non-UTF")
+                {
+                    if let Ok(header) = tokio::fs::read(path).await {
+                        if let Some(format_name) = detect_image_magic(&header) {
+                            return Err(AgentError::Io(format!(
+                                "Failed to read file '{}': the file is a binary {} image, \
+                 not valid UTF-8 text. Use the `read_image` tool instead of `read_file` \
+                 to read this file — read_image handles binary data correctly.",
+                path,
+                format_name
+                            )));
+                        }
+                        return Err(AgentError::Io(format!(
+                            "Failed to read file '{}': the file is binary (not valid UTF-8). \
+                 If this is an image, use the `read_image` tool instead. \
+                 Original error: {}",
+                            path, e
+                        )));
+                    }
+                }
+                return Err(AgentError::Io(format!(
+                    "Failed to read file '{}': {}",
+                    path, e
+                )));
+            }
+        };
 
         let lines: Vec<&str> = content.lines().collect();
 
@@ -436,5 +553,55 @@ mod tests {
             .file_exists("/tmp/hermes_nonexistent_test_file_xyz")
             .await
             .unwrap());
+    }
+
+    #[test]
+    fn test_detect_image_magic_jpeg() {
+        let header = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        assert_eq!(detect_image_magic(&header), Some("JPEG"));
+    }
+
+    #[test]
+    fn test_detect_image_magic_png() {
+        let header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        assert_eq!(detect_image_magic(&header), Some("PNG"));
+    }
+
+    #[test]
+    fn test_detect_image_magic_not_image() {
+        let header = b"Hello, world! This is a text file.";
+        assert_eq!(detect_image_magic(header), None);
+    }
+
+    #[tokio::test]
+    async fn test_read_file_binary_image_suggests_read_image() {
+        let dir = std::env::temp_dir().join("hermes_test_binary_read");
+        let _ = std::fs::create_dir_all(&dir);
+        // Create a fake JPEG file (magic bytes + some garbage).
+        // The .jpgg extension is intentionally non-standard to
+        // reproduce Bug ①: the LLM picked read_file because the
+        // extension didn't match read_image's documented format list.
+        let path = dir.join("test_image.jpgg");
+        let path_str = path.to_string_lossy().to_string();
+        std::fs::write(&path, [0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46])
+            .unwrap();
+
+        let backend = LocalBackend::default();
+        let result = backend.read_file(&path_str, None, None).await;
+
+        assert!(result.is_err(), "read_file should fail on binary JPEG");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("binary JPEG image"),
+            "error should mention JPEG: got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("read_image"),
+            "error should suggest read_image: got: {}",
+            err_msg
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }

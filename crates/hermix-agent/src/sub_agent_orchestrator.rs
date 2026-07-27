@@ -101,10 +101,10 @@ pub struct SubAgentLineage {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubAgentStatus {
-    /// Dispatched: the child loop has been spawned on its own tokio task but
-    /// has not yet produced a terminal result. Introduced for the async
-    /// `execute_async` path so the parent agent gets a `sub_agent_id`
-    /// immediately instead of blocking on the child to completion.
+    /// Legacy status: the child was spawned but not yet started. The old
+    /// `execute_async` path returned immediately with this status; the
+    /// current path is synchronous (waits for completion) so `Spawned` is
+    /// only seen in lineage files from older sessions.
     Spawned,
     Started,
     Completed,
@@ -440,49 +440,35 @@ impl SubAgentOrchestrator {
     pub fn execute_async(self: &Arc<Self>, req: SubAgentRequest) -> BoxSendFuture<String> {
         let this = self.clone();
         Box::pin(async move {
-            let sub_agent_id = format!("subagent-{}", uuid::Uuid::new_v4());
-            let lineage = this.build_lineage(&req, &sub_agent_id, SubAgentStatus::Spawned);
-            this.persist_lineage(&lineage).await;
-            // Surface the spawn immediately so the frontend shows the
-            // sub-agent panel before the child begins producing output.
-            this.emit_sub_agent(&sub_agent_id, "spawned", &req.task, req.role, Some(0), None, None);
-
-            // Detach the child run — it persists its own terminal lineage when done.
-            let this2 = this.clone();
-            let req2 = req.clone();
-            let base_lineage = lineage.clone();
-            let sub_agent_id_for_task = sub_agent_id.clone();
-            tokio::spawn(async move {
-                let outcome = this2.run_child(&req2, &sub_agent_id_for_task).await;
-                this2.persist_terminal_lineage(&base_lineage, &outcome).await;
-                // Surface the terminal state (done / failed) on the panel.
-                let (phase, turns, cost_usd, err) = match &outcome {
-                    Ok(result) => (
-                        "done",
-                        Some(result.total_turns),
-                        result.usage.as_ref().and_then(|u| u.estimated_cost),
-                        None,
-                    ),
-                    Err(e) => ("failed", None, None, Some(e.to_string())),
-                };
-                this2.emit_sub_agent(
-                    &sub_agent_id_for_task,
-                    phase,
-                    &req2.task,
-                    req2.role,
-                    turns,
-                    cost_usd,
-                    err.as_deref(),
-                );
-            });
-
-            json!({
-                "sub_agent_id": sub_agent_id,
-                "status": "spawned",
-                "polling_tool": "get_subagent_result",
-                "note": "Sub-agent is now running in the background and does NOT block your turn. Continue with other work, or call get_subagent_result(sub_agent_id) to fetch its output when ready.",
-            })
-            .to_string()
+            // Spawn execute_inner on its own tokio task to break async
+            // recursion (AgentLoop::run → execute_tool_calls →
+            // delegate_task → execute_async → run_child → AgentLoop::run).
+            // run_child ALSO spawns the child AgentLoop internally, so this
+            // outer spawn is belt-and-suspenders.
+            //
+            // Unlike the old implementation which returned immediately with
+            // {"status":"spawned"} (requiring get_subagent_result polling),
+            // we now WAIT for the child to finish and return its final
+            // result. This makes delegate_task truly synchronous — matching
+            // the schema description ("SYNCHRONOUS: blocks until the
+            // sub-agent finishes") and eliminating the polling loop bug.
+            let req_for_error = req.clone();
+            let handle = tokio::spawn(this.execute_inner(req));
+            match handle.await {
+                Ok(result_str) => result_str,
+                Err(join_err) => {
+                    tracing::error!(
+                        error = %join_err,
+                        "sub-agent tokio task panicked or was cancelled"
+                    );
+                    json!({
+                        "status": "failed",
+                        "error": format!("Sub-agent task failed: {}", join_err),
+                        "task": req_for_error.task,
+                    })
+                    .to_string()
+                }
+            }
         })
     }
 
@@ -503,6 +489,30 @@ impl SubAgentOrchestrator {
 
         // Persist the terminal state (updates lineage fields + writes file).
         self.persist_terminal_lineage(&lineage, &outcome).await;
+
+        // Emit terminal event so the frontend panel updates from
+        // "started" to "done" / "failed". This was previously only done
+        // in the async execute_async path's spawned task; now that
+        // execute_async delegates to execute_inner, the emit must live
+        // here so both code paths share the same lifecycle events.
+        let (phase, turns, cost_usd, err) = match &outcome {
+            Ok(result) => (
+                "done",
+                Some(result.total_turns),
+                result.usage.as_ref().and_then(|u| u.estimated_cost),
+                None,
+            ),
+            Err(e) => ("failed", None, None, Some(e.to_string())),
+        };
+        self.emit_sub_agent(
+            &sub_agent_id,
+            phase,
+            &req.task,
+            req.role,
+            turns,
+            cost_usd,
+            err.as_deref(),
+        );
 
         match outcome {
             Ok(result) => {

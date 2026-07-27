@@ -255,18 +255,51 @@
 /* ── 滚动容器 ──────────────────────────────────────────────────── */
 .preview-pane .code-viewport {
   display: block;
+  position: relative; /* for .code-copy-btn absolute positioning */
   width: 100%;
   height: 100%;
   background: var(--color-bg-code);
   font-family: "JetBrains Mono", "JetBrainsMono NF", "Cascadia Mono",
     "Cascadia Code", Consolas, "Source Code Pro", Menlo, ui-monospace,
     monospace;
-  font-size: 11px;
-  line-height: 1.55;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--color-text-on-code);
   overflow: auto;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── 复制按钮 overlay ───────────────────────────────────────────
+   hover 时淡入显示，点击复制全部源代码到剪贴板。
+   与聊天 CodeBlock 的复制按钮体验一致。 */
+.preview-pane .code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-code-header);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  pointer-events: auto;
+}
+
+.preview-pane .code-viewport:hover .code-copy-btn {
+  opacity: 0.85;
+}
+
+.preview-pane .code-copy-btn:hover {
+  opacity: 1 !important;
+  background: var(--color-bg-hover);
 }
 
 /* ── Flex 行容器：gutter + 代码主体 ─────────────────────────────── */
@@ -337,7 +370,17 @@
 
 .preview-pane .is-wrap .code-pre {
   white-space: pre-wrap;
-  word-break: break-all;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* When wrap is on, long unbroken tokens (like minified JS URLs) should
+   break at character level as a last resort, but only after trying word
+   boundaries first. This prevents the ugly mid-word breaks that
+   `break-all` produces while still wrapping long lines. */
+.preview-pane .is-wrap .code-body {
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .preview-pane .code-body {
@@ -606,8 +649,8 @@
   border: 1px solid var(--color-border-subtle);
   border-radius: 6px;
   overflow-x: auto;
-  font-size: 12.5px;
-  line-height: 1.55;
+  font-size: 13px;
+  line-height: 1.6;
 }
 .preview-pane .preview-md-body pre code {
   padding: 0;

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
+import { openImageViewer } from "./imageViewer";
 import { createPortal } from "react-dom";
 import {
   X, Search, FileText, FileCode, FileJson,
@@ -8,10 +9,11 @@ import {
   Copy, Eye, ExternalLink,
   List, LayoutGrid, ArrowLeft, ArrowUp,
   ArrowRight,
-  Folder, RefreshCw,
+  Folder, RefreshCw, WrapText,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import { CodeView } from "./CodeView";
 import { CodeBlock } from "./MarkdownBody";
 import { SpreadsheetView } from "./SpreadsheetView";
@@ -128,24 +130,60 @@ const LANG_LABELS: Record<string, string> = {
   kotlin: "Kotlin",
   c: "C",
   cpp: "C++",
+  csharp: "C#",
   objc: "Objective-C",
   ruby: "Ruby",
   php: "PHP",
   bash: "Bash",
   shell: "Shell",
   powershell: "PowerShell",
+  batch: "Batch",
   css: "CSS",
   scss: "SCSS",
   less: "Less",
   html: "HTML",
+  markup: "HTML/XML",
   json: "JSON",
+  json5: "JSON5",
+  jsonp: "JSONP",
   yaml: "YAML",
   xml: "XML",
   ini: "INI",
+  toml: "TOML",
+  properties: "Properties",
   sql: "SQL",
   lua: "Lua",
   swift: "Swift",
+  dart: "Dart",
+  scala: "Scala",
+  elixir: "Elixir",
+  haskell: "Haskell",
+  nim: "Nim",
+  zig: "Zig",
+  julia: "Julia",
+  r: "R",
+  solidity: "Solidity",
+  protobuf: "Protobuf",
+  graphql: "GraphQL",
+  nginx: "Nginx",
+  docker: "Dockerfile",
+  makefile: "Makefile",
+  cmake: "CMake",
+  ignore: "Git Ignore",
+  diff: "Diff",
+  http: "HTTP",
+  regex: "Regex",
+  vim: "Vim",
   markdown: "Markdown",
+  latex: "LaTeX",
+  asciidoc: "AsciiDoc",
+  rest: "reStructuredText",
+  wiki: "Wiki",
+  pug: "Pug",
+  handlebars: "Handlebars",
+  csv: "CSV",
+  mermaid: "Mermaid",
+  git: "Git",
   text: "Text",
 };
 
@@ -193,20 +231,47 @@ function isPdfExt(name: string): boolean {
 function detectLanguage(name: string): string | null {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
-    ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx", mjs: "javascript",
-    rs: "rust", py: "python", go: "go", java: "java", kt: "kotlin",
-    c: "c", cpp: "cpp", cxx: "cpp", h: "c", hpp: "cpp",
-    rb: "ruby", php: "php", sh: "bash", bash: "bash",
+    // 编程语言
+    ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx",
+    mjs: "javascript", cjs: "javascript",
+    rs: "rust", py: "python", pyw: "python", go: "go", java: "java",
+    kt: "kotlin", kts: "kotlin",
+    c: "c", h: "c", cpp: "cpp", cxx: "cpp", hpp: "cpp", cc: "cpp", hh: "cpp",
+    cs: "csharp", rb: "ruby", php: "php",
+    swift: "swift", lua: "lua", dart: "dart", scala: "scala", sc: "scala",
+    ex: "elixir", exs: "elixir", hs: "haskell", nim: "nim", zig: "zig",
+    jl: "julia", r: "r", sol: "solidity", proto: "protobuf",
+    // Shell / 脚本
+    sh: "bash", bash: "bash", zsh: "bash", fish: "bash",
+    ps1: "powershell", psm1: "powershell",
+    bat: "batch", cmd: "batch",
+    // 标记 / 模板
     css: "css", scss: "scss", less: "less",
-    html: "markup", vue: "markup", svelte: "markup",
-    sql: "sql", json: "json", yaml: "yaml", yml: "yaml", toml: "toml", xml: "markup",
-    md: "markdown", mdx: "markdown", txt: "text", csv: "text",
-    ini: "ini", conf: "ini", env: "ini",
-    swift: "swift", lua: "lua", ino: "ino",
-    ps1: "powershell",
+    html: "markup", htm: "markup", xml: "markup", svg: "markup",
+    vue: "markup", svelte: "markup", razor: "markup",
+    pug: "pug", jade: "pug", hbs: "handlebars",
+    // 数据 / 配置
+    json: "json", json5: "json5", jsonp: "jsonp",
+    yaml: "yaml", yml: "yaml", toml: "toml",
+    ini: "ini", conf: "ini", cfg: "ini", env: "properties",
+    properties: "properties", props: "properties",
+    graphql: "graphql", gql: "graphql", sql: "sql",
+    // 文档
+    md: "markdown", mdx: "markdown",
+    adoc: "asciidoc", asc: "asciidoc",
+    rst: "rest", wiki: "wiki", tex: "latex",
+    // 构建 / 工具
+    dockerfile: "docker",
+    makefile: "makefile", make: "makefile", cmake: "cmake",
+    gitignore: "ignore", nginx: "nginx",
+    vim: "vim", viml: "vim", vimrc: "vim",
+    // 其他
+    diff: "diff", patch: "diff", http: "http", regex: "regex",
+    csv: "csv", tsv: "csv", mermaid: "mermaid", git: "git",
+    txt: "text", ino: "cpp",
   };
-  // Treat markdown as plain text (no syntax highlighting effects)
   const lang = map[ext] ?? null;
+  // Markdown 走专门的 Markdown 预览路径，不走 CodeView
   if (lang === "markdown" || lang === "text") return null;
   return lang;
 }
@@ -223,6 +288,7 @@ export function PreviewPanel({
   const [previewState, setPreviewState] = useState<PreviewState>({ status: "idle" });
   const [resolvedPath, setResolvedPath] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [wrap, setWrap] = useState(true);
   const [activeLine, setActiveLine] = useState(0);
   const [cursor, setCursor] = useState<{ line: number; col: number }>({ line: 1, col: 1 });
 
@@ -414,6 +480,10 @@ export function PreviewPanel({
 
   const codeLang = artifact ? detectLanguage(artifact.name) : null;
 
+  // 主题检测 — 传给 CodeView 控制高亮配色 (ONE_DARK / ONE_LIGHT)。
+  // 之前 CodeView 只有暗色配色，在亮色主题下代码 token 对比度差。
+  const isDark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+
 
   const openContainingDir = () => {
     if (!artifact) return;
@@ -544,6 +614,20 @@ export function PreviewPanel({
           <div className="preview-head-spacer" />
 
           <div className="preview-head-actions">
+            {/* Wrap toggle — only for text/code files. Long lines (HTML,
+                CSS, etc.) wrap by default; click to switch to horizontal
+                scroll mode. */}
+            {(previewState.status === "text") && (
+              <button
+                type="button"
+                onClick={() => setWrap((w) => !w)}
+                title={wrap ? "取消自动换行" : "开启自动换行"}
+                className={clsx("head-action", wrap && "is-active")}
+                aria-label={wrap ? "取消自动换行" : "开启自动换行"}
+              >
+                <WrapText size={13} />
+              </button>
+            )}
             {/* Copy file content to clipboard — only for text/code files */}
             {(previewState.status === "text" || previewState.status === "markdown") && (
               <button
@@ -632,6 +716,8 @@ export function PreviewPanel({
             <CodeView
               source={textContent}
               language={codeLang}
+              wrap={wrap}
+              isDark={isDark}
               activeLine={activeLine + 1}
               onLineClick={(line) => {
                 setActiveLine(line - 1);
@@ -667,6 +753,8 @@ export function PreviewPanel({
                 alt={artifact?.name ?? "image"}
                 className="preview-image-img"
                 draggable={false}
+                onClick={() => openImageViewer({ src: previewState.dataUrl, name: artifact?.name })}
+                style={{ cursor: "pointer" }}
               />
             </div>
           )}
@@ -682,7 +770,7 @@ export function PreviewPanel({
             <div className="preview-md-host">
               <article className="preview-md-body">
                 <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
+                  remarkPlugins={[remarkGfm, remarkBreaks]}
                   components={{
                     // External links should open in the OS browser
                     // via Tauri, not as a file:// in the webview.
@@ -707,11 +795,10 @@ export function PreviewPanel({
                     // syntax highlighting + language label + copy
                     // button, matching the chat bubble experience.
                     code({ className, children, ...props }) {
-                      const match = /language-(\w+)/.exec(className || "");
+                      const match = /language-([\w-]+)/.exec(className || "");
                       const codeString = String(children).replace(/\n$/, "");
                       if (match) {
-                        const dark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
-                        return <CodeBlock language={match[1]} code={codeString} isDark={dark} />;
+                        return <CodeBlock language={match[1].toLowerCase()} code={codeString} isDark={isDark} />;
                       }
                       return <code {...props}>{children}</code>;
                     },
@@ -776,6 +863,8 @@ export function PreviewPanel({
                 <CodeView
                   source={textContent}
                   language={codeLang}
+                  wrap={wrap}
+                  isDark={isDark}
                   activeLine={activeLine + 1}
                   onLineClick={(line) => {
                     setActiveLine(line - 1);
@@ -1333,7 +1422,7 @@ function ComputerTab({
             <span className="text-text-faint text-[11px]">选择目录…</span>
           )}
           {breadcrumbs.map((seg, i) => (
-            <span key={`crumb-${seg.name || i}`} className="computer-crumb-group">
+            <span key={`crumb-${seg.label || i}`} className="computer-crumb-group">
               <button
                 type="button"
                 onClick={() => navigateTo(seg.path)}
@@ -1778,7 +1867,7 @@ function BrowserTab() {
           <div className="space-y-1">
             {history.map((h, i) => (
               <button
-                key={`hist-${h.path || i}`}
+                key={`hist-${h}-${i}`}
                 onClick={() => setUrl(h)}
                 className="block w-full text-left px-2 py-1 rounded text-[11px] text-text-muted hover:bg-bg-hover truncate transition-colors"
               >

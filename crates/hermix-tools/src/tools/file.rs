@@ -12,9 +12,34 @@ use hermix_core::{
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use once_cell::sync::OnceCell;
 
 use crate::credential_guard::CredentialGuard;
 use crate::ToolRegistry;
+use hermix_ocr::{OarOcrEngine, OcrConfig, OcrEngine, OcrError};
+
+/// Lazily-built, process-wide shared OCR engine (oar-ocr / PP-OCRv5 mobile).
+///
+/// Models live at `<hermix_home>/ocr/`. If the models are missing the engine
+/// fails to build; callers then fall back to a sub-agent's `read_image`
+/// (LLM multimodal vision). The engine is cached so the ~21 MB models load
+/// only once per process.
+///
+/// `pub(crate)` so `pdf.rs` can reuse the exact same engine instance for the
+/// scanned-PDF OCR tier (Tier 4) instead of building a second one.
+pub(crate) fn ocr_engine() -> Result<&'static OarOcrEngine, OcrError> {
+    static ENGINE: OnceCell<OarOcrEngine> = OnceCell::new();
+    ENGINE.get_or_try_init(|| {
+        let ocr_dir = hermix_config::paths::hermix_home().join("ocr");
+        let cfg = OcrConfig {
+            det_model: ocr_dir.join("pp-ocrv5_mobile_det.onnx"),
+            rec_model: ocr_dir.join("pp-ocrv5_mobile_rec.onnx"),
+            dict_path: ocr_dir.join("ppocrv5_dict.txt"),
+            confidence_threshold: 0.7,
+        };
+        OarOcrEngine::new(&cfg)
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Registration (P1.3 migration: file tools move out of register_builtins.rs)
@@ -101,7 +126,9 @@ pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBacke
         Arc::new(|| true),
         vec![],
         true,
-        "Read a local image file so the LLM can SEE it natively — free, no API key.",
+        "Read a local image file so the LLM can SEE it natively — free, no API key. \
+         ⚠️ MUST be called INSIDE a sub-agent via `delegate_task`: calling it in the MAIN agent context injects a 2,000–8,000 token base64 blob paid on every subsequent turn, bloating context and making the LLM drift off-task. \
+         Delegate instead: `delegate_task(task=\"...\", context=\"Image path: ...\")`.",
         "🖼️",
         None,
         RiskLevel::Safe,
@@ -185,6 +212,8 @@ impl ToolHandler for ReadFileHandler {
             .ok_or_else(|| ToolError::InvalidParams("Missing 'path' parameter".into()))?;
 
         CredentialGuard::new().check_read_access(Path::new(path))?;
+        // (P1-8): advisory path traversal check — logs but does not block.
+        crate::credential_guard::check_path_traversal_advisory(path);
 
         let offset = params.get("offset").and_then(|v| v.as_u64());
 
@@ -264,6 +293,8 @@ impl ToolHandler for WriteFileHandler {
             .ok_or_else(|| ToolError::InvalidParams("Missing 'content' parameter".into()))?;
 
         CredentialGuard::new().check_write_access(Path::new(path), content)?;
+// (P1-8): advisory path traversal check — logs but does not block.
+crate::credential_guard::check_path_traversal_advisory(path);
 
         self.backend
             .write_file(path, content)
@@ -539,7 +570,12 @@ fn mime_from_ext(path: &str) -> &'static str {
 /// `sub_agent_orchestrator::attach_images` so the resize/encode logic
 /// lives in exactly one place.
 ///
-/// `detail` is currently unused but reserved for future image-resize logic.
+/// Images larger than 1 MiB are automatically decoded, resized to max
+/// 1920 px on the longest side, and re-encoded as JPEG before base64.
+/// This is critical because an 8.3 MB JPEG produces ~11 MB base64 —
+/// most LLM vision APIs silently truncate payloads > 5 MB, causing
+/// the LLM to hallucinate image content (wrong names, wrong text).
+/// Resized images are typically 100–300 KB base64.
 pub fn read_image_for_llm(
     path: &str,
     _detail: &str,
@@ -554,7 +590,64 @@ pub fn read_image_for_llm(
         ));
     }
 
+    const MAX_RAW_SIZE_BYTES: usize = 1 * 1024 * 1024; // 1 MiB
+    const MAX_DIMENSION_PX: u32 = 1920;
+
     let mime = mime_from_ext(path).to_string();
+
+    // Resize JPEG/PNG images > 1 MiB to reduce base64 payload.
+    // GIF/WEBP/BMP are harder to re-encode reliably; leave as-is.
+    let can_resize = mime == "image/jpeg" || mime == "image/png";
+    let needs_resize = bytes.len() > MAX_RAW_SIZE_BYTES;
+
+    if can_resize && needs_resize {
+        match image::load_from_memory(&bytes) {
+            Ok(img) => {
+                let (w, h) = (img.width(), img.height());
+                let mut resized = img;
+                if w.max(h) > MAX_DIMENSION_PX {
+                    let ratio = MAX_DIMENSION_PX as f64 / w.max(h) as f64;
+                    let new_w = (w as f64 * ratio).round() as u32;
+                    let new_h = (h as f64 * ratio).round() as u32;
+                    resized = resized.resize(
+                        new_w,
+                        new_h,
+                        image::imageops::FilterType::Lanczos3,
+                    );
+                }
+                let mut jpeg_buf = Vec::with_capacity(256 * 1024);
+                match resized.write_to(
+                    &mut std::io::Cursor::new(&mut jpeg_buf),
+                    image::ImageFormat::Jpeg,
+                ) {
+                    Ok(()) => {
+                        let b64 = general_purpose::STANDARD.encode(&jpeg_buf);
+                        tracing::info!(
+                            path,
+                            orig_w = w, orig_h = h,
+                            orig_kb = bytes.len() / 1024,
+                            new_kb = jpeg_buf.len() / 1024,
+                            "read_image_for_llm: resized large image for LLM vision"
+                        );
+                        return Ok(("image/jpeg".to_string(), b64));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path, error = %e,
+                            "read_image_for_llm: JPEG re-encode failed, falling back to raw bytes"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path, error = %e,
+                    "read_image_for_llm: image decode failed, falling back to raw bytes"
+                );
+            }
+        }
+    }
+
     let b64 = general_purpose::STANDARD.encode(&bytes);
     Ok((mime, b64))
 }
@@ -582,6 +675,11 @@ impl ToolHandler for ReadImageHandler {
             return Err(ToolError::InvalidParams("'path' must be non-empty".into()));
         }
 
+        let ocr = params
+            .get("ocr")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let bytes = std::fs::read(path).map_err(|e| {
             ToolError::from_message(format!("cannot read image file '{path}': {e}"))
         })?;
@@ -598,6 +696,42 @@ impl ToolHandler for ReadImageHandler {
 
         let mime = mime_from_ext(path);
         let b64 = general_purpose::STANDARD.encode(&bytes);
+
+        if ocr {
+            match ocr_engine() {
+                Ok(engine) => match engine.recognize_path(path) {
+                    Ok(words) => {
+                        let low = words
+                            .iter()
+                            .filter(|w| w.confidence < engine.confidence_threshold())
+                            .count();
+                        return Ok(json!({
+                            "tool": "read_image",
+                            "ok": true,
+                            "path": path,
+                            "ocr": true,
+                            "ocr_text": words.iter().map(|w| w.text.clone()).collect::<Vec<_>>().join("\n"),
+                            "ocr_words": words
+                                .iter()
+                                .map(|w| json!({ "text": w.text, "confidence": w.confidence }))
+                                .collect::<Vec<_>>(),
+                            "low_confidence_count": low,
+                            "mime_type": mime,
+                            "size_bytes": bytes.len(),
+                            "_image_data": b64,
+                        }).to_string());
+                    }
+                    Err(e) => return Err(ToolError::ExecutionFailed(format!(
+                        "OCR recognition failed for '{path}': {e}. Image pixels are still \
+                         returned via _image_data for LLM vision fallback."
+                    ))),
+                },
+                Err(e) => return Err(ToolError::ExecutionFailed(format!(
+                    "OCR engine unavailable: {e}. Local OCR models may be missing at \
+                     <hermix_home>/ocr/. The image is still returned via _image_data for LLM vision."
+                ))),
+            }
+        }
 
         Ok(json!({
             "tool": "read_image",
@@ -619,6 +753,14 @@ impl ToolHandler for ReadImageHandler {
                 "description": "Local image file path (PNG/JPEG/GIF/WEBP/BMP). Reads the file so the LLM can SEE it via native multimodal vision — free, offline, no API key."
             }),
         );
+        props.insert(
+            "ocr".into(),
+            json!({
+                "type": "boolean",
+                "description": "If true, also run local OCR (oar-ocr / PP-OCRv5 mobile) and return structured text + per-word confidence alongside the image. Words below `confidence_threshold` are flagged via `low_confidence_count` — verify those with the LLM's own vision (the image is still returned in `_image_data`). Default false."
+            }),
+        );
+
         tool_schema(
             "read_image",
             "Read a local image file so the LLM can SEE it using its native multimodal vision ability.\n\

@@ -2209,6 +2209,13 @@ impl SessionPersistence {
     /// message carrying the summary verbatim — that's what the
     /// frontend lineage browser displays when the user clicks
     /// the child node ("这里是你压缩前的内容").
+    //
+    // LESSON: 2026-07-22 Bug #3 — finalize 路径同步 I/O 阻塞 WS heartbeat
+    //   根因：此函数内 N×autocommit INSERT 无事务包装，3-6s 阻塞 > 15s heartbeat
+    //   → 前端 was_client_disconnect=true close。
+    //   修复规则（P0-2 代码化）：finalize 后置副作用必须 spawn_blocking
+    //   fire-and-forget，禁止在 async 路径中 await。
+    //   测试：session_persistence_tests::test_compression_child_session_idempotent
     pub fn create_compression_child_session(
         &self,
         parent_session_id: &str,

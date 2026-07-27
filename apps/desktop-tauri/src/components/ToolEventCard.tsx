@@ -315,6 +315,9 @@ const TOOL_VERB: Record<string, string> = {
   create: "已创建",
   file_change: "已变更",
   memory: "记忆",
+  delegate_task: "已委派子agent",
+  delegate: "已委派子agent",
+  get_subagent_result: "已获取子agent结果",
 };
 
 function toolVerb(tool: string): string {

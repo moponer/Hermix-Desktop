@@ -31,6 +31,9 @@ use super::manager::{CdpError, CdpResult};
 use super::protocol::{CdpCommand, CdpEnvelope, CdpEvent, CdpResponse};
 use crate::error::CuaError;
 
+/// The concrete WebSocket stream type used by the CDP client.
+type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
 /// Self-hosted Chrome DevTools Protocol client. Wraps a single
 /// WebSocket connection plus a tokio runtime so the public API is
 /// synchronous.
@@ -40,7 +43,17 @@ pub struct CdpClient {
 }
 
 struct CdpClientInner {
-    ws: Mutex<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>,
+    /// Outbound command channel: `call()` pushes `Message`s here and
+    /// `reader_loop` drains them onto the socket inside its `select!`.
+    ///
+    /// (P0-4 / STABILITY-PLAN §2.1): Previously a shared
+    /// `Mutex<WebSocketStream>` was used and `reader_loop` held the
+    /// lock for the entire `ws.next().await`, starving `call()`'s
+    /// `send().await`. Now the socket is owned exclusively by
+    /// `reader_loop` — reads never block writes, and writes are
+    /// queued through this channel so neither direction starves the
+    /// other.
+    cmd_tx: mpsc::UnboundedSender<Message>,
     next_id: AtomicU64,
     /// Pending request/response correlation.
     pending: Mutex<HashMap<u64, oneshot::Sender<CdpResponse>>>,
@@ -58,9 +71,9 @@ impl CdpClient {
     /// `webSocketDebuggerUrl` (typically
     /// `ws://127.0.0.1:9222/devtools/browser/<uuid>`).
     /// /// Spins up a dedicated `current_thread` tokio runtime and
-    /// launches two background tasks: one that pumps frames from
-    /// the socket into the pending/event maps, one that exposes
-    /// the write half for `call` to push commands through.
+    /// launches a single background task that owns the socket,
+    /// pumping inbound frames into the pending/event maps and
+    /// draining outbound commands from the command channel.
     pub fn connect(ws_url: &str) -> CdpResult<Self> {
         let rt = Runtime::new().map_err(|e| CdpError::Protocol(format!(
             "build tokio runtime: {e}"
@@ -75,8 +88,13 @@ impl CdpClient {
             Ok::<_, CdpError>(stream)
         })?;
 
+        // Command channel for outbound writes. `reader_loop` owns the
+        // socket exclusively and drains this channel inside its
+        // `select!` — no lock is ever held across `ws.next().await`
+        // (P0-4).
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let inner = Arc::new(CdpClientInner {
-            ws: Mutex::new(ws),
+            cmd_tx,
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
             events: Mutex::new(HashMap::new()),
@@ -84,12 +102,12 @@ impl CdpClient {
             _reader: Mutex::new(None),
         });
 
-        // Spawn the read loop on the runtime. We do this from
+        // Spawn the read/write loop on the runtime. We do this from
         // outside the runtime via `rt.spawn` because the runtime
         // was just built — there's no current-thread context yet
         // and `Handle::current()` would fail.
         let reader_inner = Arc::clone(&inner);
-        let reader_handle = rt.spawn(reader_loop(reader_inner));
+        let reader_handle = rt.spawn(reader_loop(ws, cmd_rx, reader_inner));
 
         {
             let mut guard = rt.block_on(async {
@@ -131,17 +149,17 @@ impl CdpClient {
         let payload = serde_json::to_string(&cmd)
             .map_err(|e| CdpError::Protocol(format!("encode {method}: {e}")))?;
 
-        // Send through the same ws (tungstenite lets multiple
-        // tasks share via Mutex).
-        let send_res = {
-            let mut ws = self.inner.ws.lock().await;
-            ws.send(Message::Text(payload)).await
-        };
-        if let Err(e) = send_res {
+        // Push the command onto the channel; `reader_loop` writes it
+        // to the socket inside its `select!`. The channel send only
+        // fails if the receiver was dropped (socket closed) — convert
+        // to the same error shape the old direct-send produced (P0-4).
+        if self.inner.cmd_tx.send(Message::Text(payload)).is_err() {
             // Clean up the pending entry so a future retry can
             // claim a new id cleanly.
             self.inner.pending.lock().await.remove(&id);
-            return Err(CdpError::Protocol(format!("WS send {method}: {e}")));
+            return Err(CdpError::Protocol(format!(
+                "WS send {method}: command channel closed"
+            )));
         }
 
         // Wait for the response.
@@ -206,63 +224,89 @@ impl Drop for CdpClient {
     }
 }
 
-/// Background task: read frames forever, demultiplex into the
-/// pending map (responses) or the events map (events).
-async fn reader_loop(inner: Arc<CdpClientInner>) {
+/// Background task: owns the WebSocket exclusively, demultiplexing
+/// inbound frames into the pending map (responses) or the events map
+/// (events), and draining outbound commands from `cmd_rx` onto the
+/// socket.
+///
+/// (P0-4 / STABILITY-PLAN §2.1): Previously a shared
+/// `Mutex<WebSocketStream>` was used, and this loop held the lock for
+/// the entire `ws.next().await`, starving `call()`'s `send().await`.
+/// Now the socket is owned exclusively by this task — reads never
+/// block writes, and writes are queued through `cmd_rx` inside a
+/// `select!` so neither direction starves the other.
+async fn reader_loop(
+    mut ws: WsStream,
+    mut cmd_rx: mpsc::UnboundedReceiver<Message>,
+    inner: Arc<CdpClientInner>,
+) {
     loop {
-        let frame = {
-            let mut ws = inner.ws.lock().await;
-            ws.next().await
-        };
-        match frame {
-            Some(Ok(Message::Text(text))) => match serde_json::from_str::<CdpEnvelope>(&text) {
-                Ok(env) => match env.classify() {
-                    super::protocol::EnvelopeKind::Response => {
-                        let id = env.id.unwrap_or(0);
-                        let resp = CdpResponse {
-                            id,
-                            result: env.result,
-                            error: env.error,
-                        };
-                        let sender = inner.pending.lock().await.remove(&id);
-                        if let Some(tx) = sender {
-                            // If the receiver was dropped, ignore —
-                            // caller gave up.
-                            let _ = tx.send(resp);
-                        } else {
-                            tracing::debug!(
-                                "CDP response for unknown id {id}; dropping"
-                            );
+        tokio::select! {
+            // Inbound frame from the browser.
+            frame = ws.next() => {
+                match frame {
+                    Some(Ok(Message::Text(text))) => match serde_json::from_str::<CdpEnvelope>(&text) {
+                        Ok(env) => match env.classify() {
+                            super::protocol::EnvelopeKind::Response => {
+                                let id = env.id.unwrap_or(0);
+                                let resp = CdpResponse {
+                                    id,
+                                    result: env.result,
+                                    error: env.error,
+                                };
+                                let sender = inner.pending.lock().await.remove(&id);
+                                if let Some(tx) = sender {
+                                    // If the receiver was dropped, ignore —
+                                    // caller gave up.
+                                    let _ = tx.send(resp);
+                                } else {
+                                    tracing::debug!(
+                                        "CDP response for unknown id {id}; dropping"
+                                    );
+                                }
+                            }
+                            super::protocol::EnvelopeKind::Event => {
+                                let method = env.method.unwrap_or_default();
+                                let event = CdpEvent {
+                                    method: method.clone(),
+                                    params: env.params,
+                                };
+                                let sender = inner.events.lock().await.get(&method).cloned();
+                                if let Some(tx) = sender {
+                                    let _ = tx.send(event);
+                                }
+                            }
+                            super::protocol::EnvelopeKind::Unknown => {
+                                tracing::debug!("CDP envelope with neither id nor method: {text}");
+                            }
+                        },
+                        Err(e) => {
+                            tracing::warn!("CDP frame parse error: {e}; payload={text}");
                         }
+                    },
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {
+                        // Ping / Pong / Binary — ignore. (CDP only uses
+                        // text frames; tungstenite handles ping/pong
+                        // transparently.)
                     }
-                    super::protocol::EnvelopeKind::Event => {
-                        let method = env.method.unwrap_or_default();
-                        let event = CdpEvent {
-                            method: method.clone(),
-                            params: env.params,
-                        };
-                        let sender = inner.events.lock().await.get(&method).cloned();
-                        if let Some(tx) = sender {
-                            let _ = tx.send(event);
-                        }
+                    Some(Err(e)) => {
+                        tracing::warn!("CDP read error: {e}");
+                        break;
                     }
-                    super::protocol::EnvelopeKind::Unknown => {
-                        tracing::debug!("CDP envelope with neither id nor method: {text}");
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!("CDP frame parse error: {e}; payload={text}");
                 }
-            },
-            Some(Ok(Message::Close(_))) | None => break,
-            Some(Ok(_)) => {
-                // Ping / Pong / Binary — ignore. (CDP only uses
-                // text frames; tungstenite handles ping/pong
-                // transparently.)
             }
-            Some(Err(e)) => {
-                tracing::warn!("CDP read error: {e}");
-                break;
+            // Outbound command queued by `call()`.
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(msg) => {
+                        if let Err(e) = ws.send(msg).await {
+                            tracing::warn!("CDP write error: {e}");
+                            break;
+                        }
+                    }
+                    None => break, // all senders dropped → shutdown
+                }
             }
         }
     }

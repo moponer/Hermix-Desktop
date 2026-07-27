@@ -35,7 +35,13 @@ impl CodexProvider {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: api_key.into(),
             model: "codex-mini-latest".to_string(),
-            client: Client::new(),
+            // (P1-5): mandatory connect + request timeouts, same as
+            // GenericProvider / AnthropicProvider in provider.rs.
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(180))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             rate_limiter: None,
             credential_pool: None,
         }

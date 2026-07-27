@@ -527,6 +527,78 @@ pub fn kill_spawned_chrome() {
     let _ = std::fs::remove_file(&pid_path);
 }
 
+/// (P2-8 / STABILITY-PLAN §2.5) Clean up orphan browser PID at startup.
+///
+/// Called once during hermix server startup. If `browser.pid` exists:
+/// 1. If the PID process is still running → kill it (orphan from previous crash).
+/// 2. If the PID process is gone → just remove the stale PID file.
+/// 3. If the PID file is malformed → remove it.
+///
+/// This prevents zombie Chrome processes from accumulating across hermix
+/// restarts. Without this, a crashed hermix leaves Chrome running with
+/// `--remote-debugging-port=9222`, and the next launch sees "port already
+/// in use" — the user has to manually taskkill.
+///
+/// **Windows-only**: mirrors `kill_spawned_chrome` which uses `taskkill`.
+#[cfg(target_os = "windows")]
+pub fn cleanup_orphan_pid() {
+    let pid_path = hermix_config::paths::hermix_home()
+        .join("runtime")
+        .join("browser.pid");
+
+    let pid_str = match std::fs::read_to_string(&pid_path) {
+        Ok(s) => s,
+        Err(_) => return, // No PID file — nothing to clean.
+    };
+
+    let pid: u32 = match pid_str.trim().parse() {
+        Ok(n) if n > 0 => n,
+        _ => {
+            tracing::warn!(
+                target: "hermix.tools",
+                "browser.pid contains invalid content: {pid_str:?} — removing stale file"
+            );
+            let _ = std::fs::remove_file(&pid_path);
+            return;
+        }
+    };
+
+    // Check if the process is still alive by trying to query it.
+    // `tasklist /FI "PID eq <pid>"` exits 0 if the process exists.
+    let is_alive = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            // If the output contains the PID number, the process exists.
+            // "INFO: No tasks are running which match the specified criteria."
+            // means it's gone.
+            !stdout.contains("No tasks")
+        })
+        .unwrap_or(false);
+
+    if is_alive {
+        tracing::info!(
+            target: "hermix.tools",
+            "Found orphan browser process (PID {pid}) from previous run — killing"
+        );
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    } else {
+        tracing::debug!(
+            target: "hermix.tools",
+            "Stale browser.pid (PID {pid}) — process already gone, removing file"
+        );
+    }
+
+    let _ = std::fs::remove_file(&pid_path);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

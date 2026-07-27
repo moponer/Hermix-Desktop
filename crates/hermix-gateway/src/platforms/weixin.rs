@@ -1259,9 +1259,25 @@ impl PlatformAdapter for WeChatAdapter {
         self.inner.base.mark_stopped();
         self.inner.stop.notify_waiters();
         self.stop_signal.notify_one();
+        // (P0-7 / STABILITY-PLAN §2.5): abort the poll task AND await
+        // its cancellation (bounded by a timeout) so we never leak a
+        // zombie task. Previously `abort()` was fire-and-forget — the
+        // task could linger across reconnects, accumulating one
+        // dangling task per cycle.
         if let Some(t) = self.poll_task.write().await.take() {
             t.abort();
+            // After `abort()` the join resolves immediately
+            // (Err JoinError::Cancelled); the timeout is
+            // belt-and-suspenders against a task stuck in a
+            // non-cancellable blocking section.
+            let _ = tokio::time::timeout(Duration::from_secs(2), t).await;
         }
+        // Drop the stored inbound sender so the receiver's `recv()`
+        // returns None once all in-flight clones (held briefly by the
+        // poll_loop's spawned send tasks) are dropped. Without this,
+        // the channel stays half-open and the downstream consumer
+        // task hangs forever across reconnects. (P0-7)
+        *self.inner.inbound_tx.write().await = None;
         Ok(())
     }
 

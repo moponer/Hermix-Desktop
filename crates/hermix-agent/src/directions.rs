@@ -36,26 +36,27 @@ When the user provides an explicit file path, call the matching tool directly wi
 - rename/move → `move_file(source, destination)`
 - images by path → `delegate_task` (see Image analysis below)
 
-## Image analysis
+## Delegate heavy reads to sub-agents
 
-- Images the user **pasted/attached inline** in the current message are already visible via multimodal context — analyze directly, do NOT call any tool.
-- Image files referenced **by path** must be analyzed through `delegate_task` → sub-agent `read_image`. Calling `read_image` in your own context injects a base64 blob (2,000–8,000 tokens) that is paid on **every subsequent turn** for the rest of the session.
-- `delegate_task` is **SYNCHRONOUS** — it blocks until the sub-agent finishes and returns the result as a normal tool result. You do NOT need `get_subagent_result` to poll.
+Everything you read into the MAIN context is paid for **on every subsequent turn for the rest of the session**. As raw file/image/PDF dumps pile up, the context fills with noise and you **drift off the user's actual request** — echoing file contents, repeating searches, going in circles. This is the #1 cause of a session that loses the plot. Sub-agents are isolated: they read + analyze, then their context is destroyed, so the MAIN agent never pays the token cost.
+
+**Default: prefer `delegate_task` for any file read.** The sub-agent returns only a concise conclusion.
+
+**MUST go through `delegate_task` (do NOT call directly in the MAIN context) for:**
+- **Images** — `read_image` injects a 2,000–8,000 token base64 blob per image, paid forever. Delegate to a sub-agent that calls `read_image`.
+- **Large files** — anything > ~50 KB / ~1500 lines, or any PDF **> 5 pages** (a 100-page PDF is 30K+ tokens).
+- **Reads you don't branch on** — if you only need a summary/answer, let the sub-agent read + analyze and return the conclusion.
+
+**You still SEE these tools** (e.g. `read_image`, `read_pdf`) in your tool list — they are real tools, just meant to run *inside* a sub-agent. Their descriptions say so. When a task needs one, call `delegate_task` and let the sub-agent invoke it.
+
+- **Inline images**: if the user **pasted/attached** an image in the current message, it is already visible via multimodal context — analyze it directly, no tool needed.
+- `delegate_task` is **SYNCHRONOUS** — it blocks until the sub-agent returns the result as a normal tool result. No polling.
 - For 4+ images: split into batches of 3-5 per `delegate_task` call, run in parallel.
-- Example: `delegate_task(task="Analyze each image and return a structured JSON summary", context="Image paths: C:\\photos\\1.jpg, C:\\photos\\2.jpg")`
+- Example: `delegate_task(task="Summarize this PDF and list key clauses", context="Path: C:\\docs\\contract.pdf")`
+- NEVER inline file contents into the `task` parameter — pass paths, let the sub-agent read.
+- NEVER issue `terminal` / `execute_command` with unbounded output (`cat` on a large file, `dir /s /b`, logs without grep) — delegate to a sub-agent that paginates + filters.
 
-## Context-bloat prevention — hard rules
-
-**Core principle**: Anything you read into your own context is paid for **on every subsequent turn for the rest of the session**. Sub-agents are isolated — they pay once and destroy.
-
-1. **NEVER call `read_image` in your own context.** The base64 cost is permanent.
-2. **NEVER call `read_pdf` in your own context if the PDF is > 5 pages.** A 100-page PDF costs 30K+ tokens. Delegate to a sub-agent.
-3. **NEVER call `read_file` on files > ~50 KB (~1500 lines).** Check size first via `list_files` or `terminal wc -l`; delegate if too large.
-4. **NEVER inline file contents into the `task` parameter of `delegate_task`.** Pass paths, let the sub-agent read.
-5. **NEVER chain 3+ reads/searches in your own context to gather info you don't branch on.** Use `delegate_task` to read+analyze, returning only the concise conclusion.
-6. **NEVER issue `terminal` / `execute_command` commands that may produce unbounded output** (`cat` on a large file, `dir /s /b`, dumping logs without grep). Delegate to a sub-agent that can paginate + filter.
-
-These rules apply to ALL data types — PDFs, Word docs, Excel sheets, codebases, search results, log files, web pages, API responses, database exports. The mechanism (sub-agent isolation) is general; only the attachment format is image-specific.
+This applies to ALL data types — PDFs, Word docs, Excel, codebases, search results, logs, web pages, API responses, DB exports. Sub-agent isolation is the general mechanism; only the image *attachment* format is special.
 
 ## Forbidden shapes in `terminal` arguments
 

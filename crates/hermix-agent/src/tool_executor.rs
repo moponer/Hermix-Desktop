@@ -261,9 +261,10 @@ impl AgentLoop {
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
                 };
-                // Orchestrator internally runs the child on its own
-                // `tokio::spawn` task, which erases the child future and breaks
-                // async recursion between parent / child `execute_tool_calls`.
+                // Orchestrator spawns execute_inner on its own tokio task
+                // (breaking async recursion) and WAITS for the child to
+                // finish — synchronous from the LLM's perspective. The
+                // result string is returned directly; no polling needed.
                 let output = orch.execute_async(req).await;
                 orchestrated.push(ToolResult::ok(&tc.id, output));
             }

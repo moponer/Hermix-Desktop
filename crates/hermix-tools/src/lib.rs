@@ -21,6 +21,7 @@
 pub mod approval;
 pub mod backends;
 pub mod cached_check;
+pub mod context;
 pub mod dispatch;
 pub mod essential;
 pub mod register_builtins;
@@ -55,6 +56,9 @@ pub use approval::{
     check_approval, is_readonly_command, ApprovalDecision, ApprovalManager,
     TerminalApprovalContext, UserAllowlist, UserAllowlistEntry,
 };
+
+// Re-export context types (Phase 1: session isolation)
+pub use context::{ContextAware, ToolCallContext};
 
 // Re-export credential guard
 pub mod credential_guard;

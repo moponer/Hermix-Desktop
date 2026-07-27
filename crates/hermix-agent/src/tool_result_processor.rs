@@ -281,6 +281,13 @@ pub fn push_tool_result_from_struct(
 /// /// Returns the original content unchanged if:
 /// - The content is not valid JSON
 /// - The JSON doesn't contain image data keys
+//
+// LESSON: 2026-07-22 Bug #4 — ImageUrl base64 不清理 → ctx 永久膨胀
+//   根因：compression.rs Pass 4 只清 Tool role，跳过 User role 的
+//   content_parts: [Text, ImageUrl]，导致 base64 图片数据永久留在 ctx。
+//   修复规则：read_image 后必须 strip_image_base64，将 base64 替换为
+//   placeholder，防止 ctx 永久膨胀。
+//   测试：tool_result_processor_tests::test_strip_image_base64
 pub fn strip_image_base64(content: &str) -> String {
     let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(content) else {
         return content.to_string();

@@ -88,3 +88,6 @@ features = ["png"]
 # recorder writes a parseable JSONL file. Not in production
 # dependencies — only needed for `cargo test`.
 tempfile = "3"
+
+[lints]
+workspace = true

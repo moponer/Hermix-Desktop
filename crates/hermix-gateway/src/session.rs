@@ -349,6 +349,10 @@ impl SessionManager {
         let session_clone = session.clone();
 
         sessions.insert(session_key.clone(), session);
+        // Release the sessions write guard BEFORE touching
+        // user_sessions — never hold both locks simultaneously
+        // (P0-5 / STABILITY-PLAN §2.1: nested-lock deadlock guard).
+        drop(sessions);
 
         // Track user -> session mapping for cross-platform continuity
         let mut user_sessions = self.user_sessions.write().await;
@@ -444,12 +448,25 @@ impl SessionManager {
     }
 
     /// Remove a session entirely.
+    ///
+    /// (P0-5 / STABILITY-PLAN §2.1): Previously held
+    /// `sessions.write()` while acquiring `user_sessions.write()` —
+    /// a nested-lock pattern that deadlocks if any other path takes
+    /// the two locks in the opposite order. Now we remove from
+    /// `sessions`, capture the `user_id`, drop the `sessions` guard,
+    /// and only then touch `user_sessions`. The two locks are never
+    /// held simultaneously.
     pub async fn remove_session(&self, session_id: &str) {
-        let mut sessions = self.sessions.write().await;
-        if let Some(session) = sessions.remove(session_id) {
-            // Clean up user_sessions index
+        // Remove from the sessions map and capture the user_id we
+        // need for the index cleanup — then release the sessions
+        // write guard BEFORE touching user_sessions.
+        let user_id = {
+            let mut sessions = self.sessions.write().await;
+            sessions.remove(session_id).map(|s| s.user_id)
+        };
+        if let Some(user_id) = user_id {
             let mut user_sessions = self.user_sessions.write().await;
-            if let Some(ids) = user_sessions.get_mut(&session.user_id) {
+            if let Some(ids) = user_sessions.get_mut(&user_id) {
                 ids.retain(|id| id != session_id);
             }
         }
@@ -496,9 +513,15 @@ impl SessionManager {
     /// Flush all in-memory sessions (e.g., before shutdown or persistence).
     /// /// Returns all sessions that were flushed.
     pub async fn flush_memories(&self) -> Vec<Session> {
-        let mut sessions = self.sessions.write().await;
-        let all: Vec<Session> = sessions.values().cloned().collect();
-        sessions.clear();
+        // Collect + clear sessions, then drop the guard before
+        // touching user_sessions — never hold both locks
+        // simultaneously (P0-5 / STABILITY-PLAN §2.1).
+        let all: Vec<Session> = {
+            let mut sessions = self.sessions.write().await;
+            let all: Vec<Session> = sessions.values().cloned().collect();
+            sessions.clear();
+            all
+        };
 
         let mut user_sessions = self.user_sessions.write().await;
         user_sessions.clear();

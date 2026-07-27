@@ -199,7 +199,7 @@ export function TaskPanel({
                   className="max-h-[200px] overflow-y-auto px-2 py-2 space-y-1 border-t border-border-subtle"
                 >
                   {timeline.map((e, i) => (
-                    <TimelineRow key={`${e.created_at}-${e.type}-${i}`} event={e} agentById={agentById} />
+                    <TimelineRow key={`${e.kind}-${i}`} event={e} agentById={agentById} />
                   ))}
                 </div>
               )}
@@ -230,7 +230,7 @@ export function TaskPanel({
               {showAudit && (
                 <div className="px-3 py-2 space-y-1.5 border-t border-border-subtle">
                   {audit.map((e, i) => (
-                    <AuditRow key={`${e.created_at}-${e.type}-${i}`} event={e} agentById={agentById} roomId={roomId} />
+                    <AuditRow key={`${e.kind}-${i}`} event={e} agentById={agentById} roomId={roomId} />
                   ))}
                 </div>
               )}

@@ -10,14 +10,22 @@ import type { SubAgentState, SubAgentPhase } from "../types";
  *
  * Uses the project's established info/success/error status tokens
  * (no blue/purple per design rules) and gray/zinc surfaces.
+ *
+ * Light-theme fix (2026-07-26): removed `opacity` inline styles that
+ * killed contrast on white backgrounds (0.55 opacity on #fafafa =
+ * nearly invisible). Now uses explicit CSS variables for muted text
+ * (--color-text-muted / --color-text-faint) instead of opacity tricks.
+ * Also fixed dark fallback colors in CSS var defaults — these were
+ * hard-coded dark values (#1c1c20, #e5e7eb) that would render
+ * light-on-light / dark-on-dark if the CSS var failed to resolve.
  */
 
 const PHASE_CONFIG: Record<
   SubAgentPhase,
   { label: string; bg: string; text: string; icon: typeof Loader2 }
 > = {
-  spawned: { label: "已启动", bg: "var(--color-info-soft)", text: "var(--color-info)", icon: Bot },
-  started: { label: "执行中", bg: "var(--color-info-soft)", text: "var(--color-info)", icon: Loader2 },
+  spawned: { label: "已启动", bg: "var(--color-accent-soft-strong)", text: "var(--color-accent)", icon: Bot },
+  started: { label: "执行中", bg: "var(--color-accent-soft-strong)", text: "var(--color-accent)", icon: Loader2 },
   done: { label: "已完成", bg: "var(--color-success-soft)", text: "var(--color-success)", icon: CheckCircle2 },
   failed: { label: "失败", bg: "var(--color-error-soft)", text: "var(--color-error)", icon: AlertCircle },
 };
@@ -36,19 +44,19 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
     <div
       className="sub-agent-panel"
       style={{
-        background: "var(--color-bg-secondary, #1c1c20)",
-        border: "1px solid var(--color-bg-tertiary, #2e2e34)",
+        background: "var(--color-bg-secondary)",
+        border: "1px solid var(--color-border-secondary)",
         borderRadius: 12,
         padding: "10px 12px",
         margin: "10px 0",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-        <Sparkles size={14} style={{ color: "var(--color-info, #94a3b8)" }} />
-        <span style={{ fontWeight: 600, fontSize: 13, color: "var(--color-text, #e5e7eb)" }}>
+        <Sparkles size={14} style={{ color: "var(--color-accent)" }} />
+        <span style={{ fontWeight: 600, fontSize: 13, color: "var(--color-text-primary)" }}>
           子代理
         </span>
-        <span style={{ fontSize: 11, color: "var(--color-text, #e5e7eb)", opacity: 0.5 }}>
+        <span style={{ fontSize: 11, color: "var(--color-text-faint)" }}>
           {list.length}
         </span>
       </div>
@@ -60,7 +68,7 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
             <div
               key={sa.subAgentId}
               style={{
-                background: "var(--color-bg-tertiary, #2e2e34)",
+                background: "var(--color-bg-tertiary)",
                 borderRadius: 8,
                 padding: "8px 10px",
               }}
@@ -77,8 +85,7 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
                   title={sa.task}
                   style={{
                     fontSize: 12.5,
-                    color: "var(--color-text, #e5e7eb)",
-                    opacity: 0.92,
+                    color: "var(--color-text-primary)",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
@@ -98,7 +105,7 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
                     flexShrink: 0,
                   }}
                 >
-                  <Icon size={11} />
+                  <Icon size={11} className={sa.phase === "started" ? "animate-spin shrink-0" : undefined} />
                   {cfg.label}
                 </span>
               </div>
@@ -109,8 +116,7 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
                   gap: 10,
                   marginTop: 5,
                   fontSize: 11,
-                  color: "var(--color-text, #e5e7eb)",
-                  opacity: 0.55,
+                  color: "var(--color-text-muted)",
                 }}
               >
                 {sa.role && <span>{ROLE_LABEL[sa.role] ?? sa.role}</span>}
@@ -122,8 +128,7 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
                   style={{
                     marginTop: 5,
                     fontSize: 11,
-                    color: "var(--color-error, #ef4444)",
-                    opacity: 0.85,
+                    color: "var(--color-error)",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",

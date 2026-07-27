@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use hermix_config::GatewayConfig;
 use hermix_core::{AgentError, LlmProvider};
-use hermix_tools::ToolRegistry;
+use hermix_tools::{ToolCallContext, ToolRegistry};
 
 use crate::agent_loop::{
     CheapModelRouteConfig, RuntimeProviderConfig, SmartModelRoutingConfig,
@@ -155,12 +155,20 @@ pub fn build_agent_config(
 /// Bridge a full [`hermix_tools::ToolRegistry`] into the minimal
 /// [`AgentToolRegistry`](crate::agent_loop::ToolRegistry) consumed by
 /// [`AgentLoop`](crate::AgentLoop).
-/// /// When `allowed_tool_names` is `Some`, only the tools whose `schema.name`
+///
+/// When `allowed_tool_names` is `Some`, only the tools whose `schema.name`
 /// appears in that set are bridged. This implements the per-message tool
 /// whitelist driven by [`AgentOverrides::tools`].
+///
+/// `ctx` is captured by every bridge closure so the per-session context
+/// (workspace, approval hooks, session id, etc.) is available at
+/// dispatch time without process-global mutable state. Each
+/// `send_message` call builds its own `ToolCallContext` and passes it
+/// here, so two concurrent sessions never share context.
 pub fn bridge_tool_registry(
     tools: &ToolRegistry,
     allowed_tool_names: Option<&HashSet<String>>,
+    ctx: Arc<ToolCallContext>,
 ) -> AgentToolRegistry {
     let mut agent_registry = AgentToolRegistry::new();
     for schema in tools.get_definitions() {
@@ -171,12 +179,13 @@ pub fn bridge_tool_registry(
         }
         let name = schema.name.clone();
         let tools_clone = tools.clone();
+        let ctx_clone = ctx.clone();
         agent_registry.register(
             name.clone(),
             schema,
             Arc::new(
                 move |params: Value| -> Result<String, hermix_core::ToolError> {
-                    Ok(tools_clone.dispatch(&name, params))
+                    Ok(tools_clone.dispatch_with_context(&name, params, &ctx_clone))
                 },
             ),
         );

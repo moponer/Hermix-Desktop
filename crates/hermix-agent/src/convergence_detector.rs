@@ -507,11 +507,11 @@ mod tests {
             ..Default::default()
         });
 
-        d.check(false, 1, 0, "");
+        d.check(false, 1, 0, "", &[], &[]);
         d.reset();
-        d.check(false, 1, 0, "");
+        d.check(false, 1, 0, "", &[], &[]);
         assert_eq!(
-            d.check(false, 1, 0, ""),
+            d.check(false, 1, 0, "", &[], &[]),
             ConvergenceSignal::Continue
         );
     }
@@ -524,12 +524,12 @@ mod tests {
             ..Default::default()
         });
 
-        d.check(false, 2, 0, ""); // no-progress 1
-        d.check(false, 1, 0, ""); // no-progress 2
-        d.check(true, 0, 0, "Partial success"); // visible -> reset
-        d.check(false, 1, 0, ""); // no-progress 1 again
+        d.check(false, 2, 0, "", &[], &[]); // no-progress 1
+        d.check(false, 1, 0, "", &[], &[]); // no-progress 2
+        d.check(true, 0, 0, "Partial success", &[], &[]); // visible -> reset
+        d.check(false, 1, 0, "", &[], &[]); // no-progress 1 again
         assert_eq!(
-            d.check(false, 1, 0, ""),
+            d.check(false, 1, 0, "", &[], &[]),
             ConvergenceSignal::Continue // still at 2, not 3
         );
     }
@@ -544,19 +544,19 @@ mod tests {
         });
 
         // 2 no-progress turns → warning
-        d.check(false, 1, 0, "");
-        let signal = d.check(false, 1, 0, "");
+        d.check(false, 1, 0, "", &[], &[]);
+        let signal = d.check(false, 1, 0, "", &[], &[]);
         assert!(matches!(signal, ConvergenceSignal::Warn { .. }));
 
         // No repeat warning
-        assert_eq!(d.check(false, 1, 0, ""), ConvergenceSignal::Continue);
+        assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
 
         // LLM produces visible text → resets
-        d.check(true, 0, 0, "Progress update");
+        d.check(true, 0, 0, "Progress update", &[], &[]);
 
         // New no-progress streak → can warn again
-        d.check(false, 1, 0, "");
-        let signal = d.check(false, 1, 0, "");
+        d.check(false, 1, 0, "", &[], &[]);
+        let signal = d.check(false, 1, 0, "", &[], &[]);
         assert!(matches!(signal, ConvergenceSignal::Warn { .. }));
     }
 
@@ -586,9 +586,9 @@ mod tests {
         d.apply_domain_max_stall(3);
 
         // 3 no-progress turns should now trigger a warning
-        assert_eq!(d.check(false, 1, 0, ""), ConvergenceSignal::Continue);
-        assert_eq!(d.check(false, 1, 0, ""), ConvergenceSignal::Continue);
-        let signal = d.check(false, 1, 0, "");
+        assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
+        assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
+        let signal = d.check(false, 1, 0, "", &[], &[]);
         assert!(matches!(
             signal,
             ConvergenceSignal::Warn {

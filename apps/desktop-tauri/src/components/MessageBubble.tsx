@@ -1,4 +1,5 @@
 import React from "react";
+import { openImageViewer } from "./imageViewer";
 import {
   ChevronDown, ChevronRight, Terminal, Globe, Wrench,
   AlertCircle, AlertTriangle, CheckCircle2, Loader2, Copy, Check,
@@ -241,7 +242,13 @@ function UserMessage({ message }: { message: ChatMessage }) {
                 key={`img-${img.name || i}`}
                 src={img.blobUrl}
                 alt={img.name}
-                style={{ maxWidth: 180, maxHeight: 180, borderRadius: 8, border: "1px solid #2e2e34", objectFit: "cover" }}
+                onClick={() =>
+                  openImageViewer(
+                    message.images!.map((m) => ({ src: m.blobUrl, name: m.name })),
+                    i,
+                  )
+                }
+                style={{ maxWidth: 180, maxHeight: 180, borderRadius: 8, border: "1px solid #2e2e34", objectFit: "cover", cursor: "pointer" }}
                 loading="lazy"
               />
             ))}
@@ -1143,7 +1150,7 @@ interface ToolCategory {
   keywords: string[];
   verb: string;
   bg: string;
-  kind: "shell" | "read" | "write" | "edit" | "delete" | "search-web" | "search-file" | "list" | "fetch" | "parse" | "image" | "code" | "git" | "build" | "test" | "install" | "deploy" | "db" | "desktop" | "reason" | "ask" | "clipboard" | "network" | "other";
+  kind: "shell" | "read" | "write" | "edit" | "delete" | "search-web" | "search-file" | "list" | "fetch" | "parse" | "image" | "code" | "git" | "build" | "test" | "install" | "deploy" | "db" | "desktop" | "reason" | "delegate" | "ask" | "clipboard" | "network" | "other";
 }
 
 const TOOL_CATEGORIES: ToolCategory[] = [
@@ -1308,28 +1315,42 @@ const TOOL_CATEGORIES: ToolCategory[] = [
     bg: "#94a3b8",
     kind: "reason",
   },
-  // 24. 询问用户 (黄色)
+  // 24. 委派子agent (粉色)
+  //    MUST come before "询问用户" — "delegate_task" contains
+  //    the substring "ask" (t-a-s-k), so it would wrongly
+  //    match the "ask" keyword in the ask-user category.
+  {
+    keywords: ["delegate_task", "delegate", "sub_agent", "subagent", "spawn_agent", "fan_out", "get_subagent_result", "get_sub_agent_result"],
+    verb: "委派子agent",
+    bg: "#ec4899",
+    kind: "delegate",
+  },
+  // 25. 询问用户 (黄色)
+  //    NOTE: "ask" keyword is broad — it matches any tool name
+  //    containing "ask" as a substring. The "delegate" category
+  //    above must stay BEFORE this one to prevent
+  //    "delegate_task" from being misclassified as "询问用户".
   {
     keywords: ["ask_user", "ask", "question", "confirm", "clarify"],
     verb: "询问用户",
     bg: "#eab308",
     kind: "ask",
   },
-  // 25. 剪贴板 (灰色)
+  // 26. 剪贴板 (灰色)
   {
     keywords: ["clipboard", "paste", "copy_to_clipboard", "read_clipboard"],
     verb: "读取剪贴板",
     bg: "#6b7280",
     kind: "clipboard",
   },
-  // 26. 格式化/检查 (灰色)
+  // 27. 格式化/检查 (灰色)
   {
     keywords: ["lint", "format", "prettier", "eslint", "check", "validate", "audit"],
     verb: "代码检查",
     bg: "#6b7280",
     kind: "other",
   },
-  // 27. 工具/通用 (灰色 — 最后兜底)
+  // 28. 工具/通用 (灰色 — 最后兜底)
   {
     keywords: [],  // empty array = catch-all, never matches by keyword
     verb: "调用工具",
@@ -2650,7 +2671,7 @@ function ClarifyComposer({
         <div className="flex flex-wrap gap-1.5 mb-2">
           {meta.choices.map((c, i) => (
             <button
-              key={`choice-${c.label || i}`}
+              key={`choice-${c}-${i}`}
               type="button"
               onClick={() => onSubmit(c)}
               className="px-2.5 py-1 rounded-md text-[12px] transition-colors"

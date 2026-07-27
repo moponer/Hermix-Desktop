@@ -62,3 +62,6 @@ tracing-subscriber = { workspace = true }
 proptest = { workspace = true }
 tempfile = "3"
 walkdir = "2"
+
+[lints]
+workspace = true

@@ -4,6 +4,7 @@
 // prop-driven leaf components: they parse a JSON `output` string and
 // render; they depend only on React hooks + DOM, no MessageBubble internals.
 import { useMemo } from "react";
+import { openImageViewer } from "../imageViewer";
 
 function ScreenshotPreview({ output }: { output?: string }) {
   const parsed = useMemo(() => {
@@ -40,6 +41,13 @@ function ScreenshotPreview({ output }: { output?: string }) {
         alt={w && h ? `桌面截图 ${w}×${h}` : "桌面截图"}
         className="w-full h-auto max-h-[480px] object-contain bg-black/40"
         draggable={false}
+        onClick={() =>
+          openImageViewer({
+            src: `data:image/png;base64,${parsed.png_base64}`,
+            name: w && h ? `桌面截图 ${w}×${h}` : "桌面截图",
+          })
+        }
+        style={{ cursor: "pointer" }}
       />
       <div className="flex items-center justify-between gap-2 px-2 py-1 text-[11px] text-text-faint bg-bg-secondary/40 border-t border-border-primary/30">
         <span className="font-mono">{w}×{h}{monitorLabel}</span>

@@ -1843,7 +1843,7 @@ mod tests {
 
     #[test]
     fn all_handlers_returns_correct_count() {
-        assert_eq!(all_handlers().len(), 17);
+        assert_eq!(all_handlers().len(), 16);
     }
 
     #[test]

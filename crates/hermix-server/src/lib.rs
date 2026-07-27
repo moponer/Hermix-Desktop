@@ -5136,6 +5136,10 @@ async fn handle_ws_stream_send(
     // produced output after being stopped.
     let ws_disconnected = Arc::new(AtomicBool::new(false));
     let active_key_clone = active_key.clone();
+    // Clone for the agent task so it can check whether the WS died
+    // before or after the agent finished — critical for diagnosing
+    // "Done event failed to send" warnings.
+    let ws_disconnected_for_task = ws_disconnected.clone();
 
     // surface a prior compression-quota warning (set by the
     // one-shot startup health check if it hit a 429 / quota error) as a
@@ -5170,6 +5174,7 @@ async fn handle_ws_stream_send(
     // moves trace_id_owned into the agent task closure.
     let trace_id_heartbeat = trace_id_owned.clone();
     let agent_handle = tokio::spawn(async move {
+        let agent_task_started = std::time::Instant::now();
         // (P1-1 / STABILITY-PLAN §2.3): wrap the agent call in
         // catch_unwind so a panic in a tool handler or LLM provider
         // doesn't silently kill the WS connection. The panic is
@@ -5277,14 +5282,26 @@ async fn handle_ws_stream_send(
                     .await
                 {
                     // (P0-1 defense): tx.send failure means
-                    // the client's WS reader side dropped. Log a warning
-                    // so we can diagnose "stream hung with no Done"
-                    // issues from logs instead of just seeing the Done
-                    // silently disappear.
+                    // the client's WS reader side dropped (the forward
+                    // loop exited). Log a warning with diagnostics so we
+                    // can determine: (a) how long the agent ran before
+                    // the channel died, (b) whether the WS disconnect
+                    // was already detected by the forward loop (if true,
+                    // the client closed first; if false, the agent
+                    // finished faster than the forward loop could detect
+                    // the disconnect — a race condition).
+                    let elapsed_ms = agent_task_started.elapsed().as_millis();
+                    let ws_was_disconnected = ws_disconnected_for_task
+                        .load(std::sync::atomic::Ordering::SeqCst);
                     tracing::warn!(
                         session = %session_id_clone,
                         error = %e,
-                        "Done event failed to send — client may not have received terminal event"
+                        elapsed_ms = elapsed_ms,
+                        ws_was_disconnected = ws_was_disconnected,
+                        "Done event failed to send — client may not have received terminal event. \
+                         If ws_was_disconnected=true, the WS closed before the agent finished \
+                         (client disconnect or network drop). If false, the agent finished but \
+                         the mpsc channel was already closed by the forward loop (race)."
                     );
                 }
             }
@@ -5320,6 +5337,9 @@ async fn handle_ws_stream_send(
                         session = %session_id_clone,
                         error = %send_err,
                         user_message = %message,
+                        elapsed_ms = agent_task_started.elapsed().as_millis(),
+                        ws_was_disconnected = ws_disconnected_for_task
+                            .load(std::sync::atomic::Ordering::SeqCst),
                         "Error event FAILED to send — WS already closed, user will not see this error in chat"
                     );
                 }

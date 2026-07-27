@@ -12,6 +12,7 @@ hermix-config = { workspace = true }
 hermix-intelligence = { workspace = true }
 hermix-focus = { workspace = true }
 hermix-tools = { workspace = true }
+hermix-ocr = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
