@@ -44,6 +44,50 @@ import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 // 用 default import 拿到完整对象后再解构。
 const { highlight, register } = refractor;
 
+// ── 注册安全封装 ──────────────────────────────────────────────
+// 根因（2026-07-27 修复）：refractor 的 `register()` 在
+// `grammar.displayName` 已存在时直接跳过（去重守卫）。而 core.js 在
+// 加载时已经 `register(js)` —— 其 displayName 恰好就是 "javascript"，
+// 于是把一份 *lite* 版 javascript grammar 挂到了
+// `refract.languages.javascript`。我们随后 `register(javascript)`
+// （full 版）被当成 no-op，full 版从未安装。lite 版的
+// `template-string` 是个裸 RegExp（无 `.pattern` 属性），而
+// `js-templates` / `js-extras` 假设它是 `{pattern: regex}` 对象 →
+// 读 `.pattern.source` 抛 "Cannot read properties of undefined"，并
+// 使整个模块 import 失败 → 全部代码高亮失效。
+//
+// 防御：1) 注册前先 evict lite 版 javascript，让 full 版真正装进；
+// 2) 每个 register 包 try/catch，单个坏 grammar 只告警、绝不拖垮全局。
+// 这也符合"任一语言定义可崩都不应让全局高亮挂掉"的对抗式审查要求。
+function safeRegister(grammar: Parameters<typeof register>[0]): void {
+  try {
+    register(grammar);
+  } catch (err) {
+    if (typeof console !== "undefined") {
+      const name =
+        grammar && typeof grammar === "object" && "displayName" in grammar
+          ? String((grammar as { displayName?: unknown }).displayName)
+          : "?";
+      console.warn(`[codeHighlight] 语言注册失败 "${name}":`, err);
+    }
+  }
+}
+
+// evict refractor 自带的 lite 版 javascript（core.js 注册的 js，
+// displayName="javascript"，template-string 是裸 RegExp 无 .pattern）。
+// 必须在本文件任何 `register(javascript)` 之前执行，否则 full 版
+// 因去重守卫被跳过。
+// 注：`languages` 是 refractor 运行时属性，类型未声明，需 cast。
+const refractorWithLanguages = refractor as unknown as {
+  languages?: Record<string, unknown>;
+};
+if (
+  refractorWithLanguages.languages &&
+  refractorWithLanguages.languages.javascript
+) {
+  delete refractorWithLanguages.languages.javascript;
+}
+
 // 核心语言
 import python from "refractor/lang/python";
 import typescript from "refractor/lang/typescript";
@@ -112,23 +156,25 @@ import asciidoc from "refractor/lang/asciidoc";
 import csv from "refractor/lang/csv";
 
 // 一次性注册所有语言 — 模块加载时执行，全局生效
-register(python); register(typescript); register(javascript);
-register(jsxLang); register(tsxLang); register(rust); register(go);
-register(java); register(kotlin); register(c); register(cpp);
-register(csharp); register(ruby); register(php); register(bash);
-register(css); register(cssExtras); register(scss); register(less);
-register(json); register(json5); register(yaml); register(toml);
-register(xml); register(sql);
-register(diff); register(docker); register(markdown); register(powershell);
-register(swift); register(lua); register(ini); register(batch);
-register(makefile); register(cmake); register(ignore); register(properties);
-register(graphql); register(nginx); register(http); register(git);
-register(regex); register(rLang); register(latex); register(dart);
-register(scala); register(elixir); register(haskell); register(vim);
-register(zig); register(nim); register(julia); register(solidity);
-register(protobuf); register(mermaid); register(jsonp); register(jsExtras);
-register(jsTemplates); register(wiki); register(rest); register(pug);
-register(handlebars); register(asciidoc); register(csv);
+// 用 safeRegister 包裹：单个语言定义若内部抛错（依赖缺失等），
+// 只告警不影响其余语言与模块整体加载。
+safeRegister(python); safeRegister(typescript); safeRegister(javascript);
+safeRegister(jsxLang); safeRegister(tsxLang); safeRegister(rust); safeRegister(go);
+safeRegister(java); safeRegister(kotlin); safeRegister(c); safeRegister(cpp);
+safeRegister(csharp); safeRegister(ruby); safeRegister(php); safeRegister(bash);
+safeRegister(css); safeRegister(cssExtras); safeRegister(scss); safeRegister(less);
+safeRegister(json); safeRegister(json5); safeRegister(yaml); safeRegister(toml);
+safeRegister(xml); safeRegister(sql);
+safeRegister(diff); safeRegister(docker); safeRegister(markdown); safeRegister(powershell);
+safeRegister(swift); safeRegister(lua); safeRegister(ini); safeRegister(batch);
+safeRegister(makefile); safeRegister(cmake); safeRegister(ignore); safeRegister(properties);
+safeRegister(graphql); safeRegister(nginx); safeRegister(http); safeRegister(git);
+safeRegister(regex); safeRegister(rLang); safeRegister(latex); safeRegister(dart);
+safeRegister(scala); safeRegister(elixir); safeRegister(haskell); safeRegister(vim);
+safeRegister(zig); safeRegister(nim); safeRegister(julia); safeRegister(solidity);
+safeRegister(protobuf); safeRegister(mermaid); safeRegister(jsonp); safeRegister(jsExtras);
+safeRegister(jsTemplates); safeRegister(wiki); safeRegister(rest); safeRegister(pug);
+safeRegister(handlebars); safeRegister(asciidoc); safeRegister(csv);
 
 // ── 语言别名映射 ──────────────────────────────────────────────
 // LLM 输出的语言标签（如 `html`、`vue`、`sh`）→ refractor 已注册的语言名
