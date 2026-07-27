@@ -1192,13 +1192,13 @@
   flex-direction: column;
   padding: 16px;
   background: var(--color-bg-secondary, #1e1e32);
-  border: 1px solid var(--color-border, #2a2a3e);
+  border: none;
   border-radius: var(--radius-md, 8px);
-  transition: border-color 0.15s;
+  transition: background 0.15s;
 }
 
 .custom-app-card:hover {
-  border-color: rgba(108, 99, 255, 0.4);
+  background: var(--color-bg-tertiary, #2a2a3e);
 }
 
 .custom-app-card__header {
@@ -1375,7 +1375,6 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--color-border, #2a2a3e);
 }
 
 .modal-header__title {
@@ -1446,7 +1445,6 @@
   display: flex;
   gap: 4px;
   padding: 8px 20px;
-  border-bottom: 1px solid var(--color-border, #2a2a3e);
 }
 
 .modal-tab {
@@ -1493,7 +1491,6 @@
 .app-detail-info__row {
   display: flex;
   padding: 8px 0;
-  border-bottom: 1px solid var(--color-border, #2a2a3e);
   font-size: 13px;
 }
 
@@ -1565,7 +1562,6 @@
   align-items: center;
   gap: 8px;
   padding: 12px 20px;
-  border-top: 1px solid var(--color-border, #2a2a3e);
 }
 
 .modal-footer__spacer {

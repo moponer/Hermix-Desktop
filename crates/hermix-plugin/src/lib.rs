@@ -74,6 +74,60 @@ pub enum PluginError {
     ExecutionFailed(String),
 }
 
+/// Resolve the path to the precompiled app shell (`app-shell.exe`).
+///
+/// Candidate priority (mirrors the Tauri custom-app commands so the
+/// HTTP/WS server and the desktop UI agree on where the binary lives):
+///   1. `HERMIX_HOME/shell/app-shell.exe` — extracted on first launch by the
+///      desktop app's `ensure_app_shell_and_esbuild`.
+///   2. `current_exe/resources/shell/app-shell.exe` — portable/installed build.
+///   3. `current_exe/shell/app-shell.exe` — adjacent-layout fallback.
+///   4. `HERMIX_HOME/shell/app-shell.exe` — default (may not exist yet; the
+///      packager returns a clear `ShellNotFound` error in that case).
+pub fn resolve_shell_path() -> PathBuf {
+    let home = hermix_config::paths::hermix_home();
+    let candidates = [
+        Some(home.join("shell").join("app-shell.exe")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("resources").join("shell").join("app-shell.exe"))),
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("shell").join("app-shell.exe"))),
+    ]
+    .into_iter()
+    .flatten();
+    for c in candidates {
+        if c.exists() {
+            return c;
+        }
+    }
+    home.join("shell").join("app-shell.exe")
+}
+
+/// Resolve the path to the bundled esbuild executable (`esbuild.exe`).
+/// Same candidate priority as [`resolve_shell_path`], with `esbuild` substituted.
+pub fn resolve_esbuild_path() -> PathBuf {
+    let home = hermix_config::paths::hermix_home();
+    let candidates = [
+        Some(home.join("esbuild").join("esbuild.exe")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("resources").join("esbuild").join("esbuild.exe"))),
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("esbuild").join("esbuild.exe"))),
+    ]
+    .into_iter()
+    .flatten();
+    for c in candidates {
+        if c.exists() {
+            return c;
+        }
+    }
+    home.join("esbuild").join("esbuild.exe")
+}
+
 /// The main plugin manager that coordinates all plugin operations.
 pub struct PluginManager {
     /// Directory where plugins are stored.

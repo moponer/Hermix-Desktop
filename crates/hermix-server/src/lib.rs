@@ -1312,8 +1312,8 @@ impl HttpServerState {
         // `commands_custom_app.rs`.
         let custom_app_manager = std::sync::Arc::new(hermix_plugin::PluginManager::new(
             hermix_config::paths::hermix_home().join("custom-apps"),
-            hermix_config::paths::hermix_home().join("app-shell.exe"),
-            hermix_config::paths::hermix_home().join("esbuild.exe"),
+            hermix_plugin::resolve_shell_path(),
+            hermix_plugin::resolve_esbuild_path(),
         ));
 
         hermix_tools::register_builtin_tools(
@@ -1665,8 +1665,8 @@ impl HttpServerState {
         // `commands_custom_app.rs`.
         let custom_app_manager = std::sync::Arc::new(hermix_plugin::PluginManager::new(
             hermix_config::paths::hermix_home().join("custom-apps"),
-            hermix_config::paths::hermix_home().join("app-shell.exe"),
-            hermix_config::paths::hermix_home().join("esbuild.exe"),
+            hermix_plugin::resolve_shell_path(),
+            hermix_plugin::resolve_esbuild_path(),
         ));
 
         hermix_tools::register_builtin_tools(
