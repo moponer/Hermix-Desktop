@@ -17,6 +17,7 @@
 pub mod manifest;
 pub mod scanner;
 pub mod packager;
+pub mod icon_library;
 pub mod window_manager;
 pub mod api;
 
@@ -226,14 +227,32 @@ impl PluginManager {
             None
         };
 
-        // Write icon.png from base64 data if provided
+        // Write icon.png from base64 data if provided; otherwise auto-generate
+        // a per-app icon from the built-in library (deterministic by id/category).
         let icon_path = if let Some(data) = icon_data {
             let bytes = base64_decode_icon(data)?;
             let path = plugin_dir.join("icon.png");
             std::fs::write(&path, bytes)?;
             Some(path)
         } else {
-            None
+            match icon_library::generate_icon_png(
+                &manifest.name,
+                &manifest.id,
+                &manifest.category,
+            ) {
+                Ok(bytes) => {
+                    let path = plugin_dir.join("icon.png");
+                    if std::fs::write(&path, &bytes).is_ok() {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("自动生成应用图标失败 (使用默认壳图标): {e}");
+                    None
+                }
+            }
         };
 
         // If icon was saved but manifest doesn't reference it, update the manifest

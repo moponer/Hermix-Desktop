@@ -16,3 +16,13 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 walkdir = "2"
 base64 = "0.22"
+# 内置图标库: 纯 Rust SVG 栅格化 (无系统字体依赖) + 轻量绘制
+resvg = "0.42"
+usvg = "0.42"
+tiny-skia = "0.11"
+# 打包时为复制出的 app-shell.exe 打内嵌图标补丁 (仅 Windows)
+windows-sys = { version = "0.52", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+] }

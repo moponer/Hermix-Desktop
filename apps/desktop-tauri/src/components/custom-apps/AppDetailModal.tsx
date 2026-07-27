@@ -180,7 +180,9 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
       <div className="modal-content modal-content--wide app-detail-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-header__title">
-            {manifest.icon_file ? (
+            {manifest.icon ? (
+              <span className="modal-header__icon">{manifest.icon}</span>
+            ) : manifest.icon_file ? (
               <img
                 className="modal-header__icon-img"
                 src={`/api/custom-apps/${encodeURIComponent(appId)}/icon`}
@@ -188,7 +190,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                 draggable={false}
               />
             ) : (
-              <span className="modal-header__icon">{manifest.icon}</span>
+              <span className="modal-header__icon">📦</span>
             )}
             <h2>{manifest.name}</h2>
             <span className="modal-header__version">v{manifest.version}</span>
@@ -225,17 +227,19 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
             <div className="app-detail-overview">
               <section className="app-detail-hero">
                 <div className="app-detail-hero__main">
-                  <div className="app-detail-hero__icon-wrap">
-                    {manifest.icon_file ? (
-                      <img
-                        className="app-detail-hero__icon-img"
-                        src={`/api/custom-apps/${encodeURIComponent(appId)}/icon`}
-                        alt={manifest.name}
-                        draggable={false}
-                      />
-                    ) : (
-                      <span className="app-detail-hero__icon">{manifest.icon}</span>
-                    )}
+                <div className="app-detail-hero__icon-wrap">
+                  {manifest.icon ? (
+                    <span className="app-detail-hero__icon">{manifest.icon}</span>
+                  ) : manifest.icon_file ? (
+                    <img
+                      className="app-detail-hero__icon-img"
+                      src={`/api/custom-apps/${encodeURIComponent(appId)}/icon`}
+                      alt={manifest.name}
+                      draggable={false}
+                    />
+                  ) : (
+                    <span className="app-detail-hero__icon">📦</span>
+                  )}
                   </div>
                   <div className="app-detail-hero__text">
                     <h3 className="app-detail-hero__name">{manifest.name}</h3>

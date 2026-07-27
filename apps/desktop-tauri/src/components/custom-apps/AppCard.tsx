@@ -22,8 +22,11 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, packaging }: AppCardProps) {
-  // Determine the icon to display: custom PNG image or emoji fallback
-  const iconEl = app.icon_file ? (
+  // 主程序列表优先显示 emoji 徽标 (保持整体 UI 风格一致);
+  // 生成的 PNG 图标专用于独立壳窗口, 这里仅作 emoji 缺失时的兜底。
+  const iconEl = app.icon ? (
+    <span className="custom-app-card__icon">{app.icon}</span>
+  ) : app.icon_file ? (
     <img
       className="custom-app-card__icon-img"
       src={`/api/custom-apps/${encodeURIComponent(app.id)}/icon`}
@@ -31,7 +34,7 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
       draggable={false}
     />
   ) : (
-    <span className="custom-app-card__icon">{app.icon}</span>
+    <span className="custom-app-card__icon">📦</span>
   );
 
   return (

@@ -97,20 +97,69 @@ impl EsbuildPackager {
         let resources_dir = output_dir.join("resources");
         std::fs::create_dir_all(&resources_dir)?;
 
-        // Copy custom icon file to resources if present
-        if let Some(icon_path) = &entry.icon_path {
-            if icon_path.exists() {
-                let icon_name = icon_path.file_name().unwrap_or_default();
-                std::fs::copy(icon_path, resources_dir.join(icon_name)).map_err(|e| {
-                    PluginError::PackagingFailed(format!("复制图标文件失败: {e}"))
-                })?;
-                tracing::debug!("copied icon: {} → {}", icon_path.display(), resources_dir.join(icon_name).display());
-            }
-        }
+        // Resolve the app icon: prefer an existing icon_file (user/agent supplied),
+        // otherwise auto-generate a per-app icon from the built-in library.
+        // This guarantees the shell never falls back to the default (main-program)
+        // icon.
+        let existing_icon = entry
+            .icon_path
+            .as_ref()
+            .filter(|p| p.exists())
+            .and_then(|p| std::fs::read(p).ok());
+        let icon_bytes: Option<Vec<u8>> = existing_icon.or_else(|| {
+            crate::icon_library::generate_icon_png(
+                &entry.manifest.name,
+                &entry.manifest.id,
+                &entry.manifest.category,
+            )
+            .map_err(|e| {
+                tracing::warn!("打包时自动生成图标失败 (使用默认壳图标): {e}");
+                e
+            })
+            .ok()
+        });
 
-        // Write manifest.json to resources
-        let manifest_json = serde_json::to_string_pretty(&entry.manifest)?;
-        std::fs::write(resources_dir.join("manifest.json"), manifest_json)?;
+        if let Some(bytes) = icon_bytes {
+            std::fs::write(resources_dir.join("icon.png"), &bytes).map_err(|e| {
+                PluginError::PackagingFailed(format!("写入图标失败: {e}"))
+            })?;
+            // Persist to the app dir for stability across re-packages.
+            let _ = std::fs::write(entry.dir.join("icon.png"), &bytes);
+            // Ensure the manifest references the icon (for the runtime shell).
+            if entry.manifest.icon_file.as_deref() != Some("icon.png") {
+                let mut m = entry.manifest.clone();
+                m.icon_file = Some("icon.png".to_string());
+                let mj = serde_json::to_string_pretty(&m)?;
+                std::fs::write(resources_dir.join("manifest.json"), &mj)?;
+                let _ = std::fs::write(entry.dir.join("manifest.json"), &mj);
+            } else {
+                // Write manifest.json to resources
+                let manifest_json = serde_json::to_string_pretty(&entry.manifest)?;
+                std::fs::write(resources_dir.join("manifest.json"), manifest_json)?;
+            }
+
+            // Layer 2: patch the copied app-shell.exe's embedded icon so the
+            // Explorer/taskbar file icon matches the app (not the main program).
+            // Failures are non-fatal — the .exe still runs fine.
+            #[cfg(windows)]
+            if let Ok((group, icons, _ico)) = crate::icon_library::generate_icon_resources(
+                &entry.manifest.name,
+                &entry.manifest.id,
+                &entry.manifest.category,
+            ) {
+                if let Err(e) =
+                    crate::icon_library::patch_exe_icon(&exe_path, &group, &icons)
+                {
+                    tracing::warn!("打补丁 exe 图标失败 (不影响运行): {e}");
+                } else {
+                    tracing::debug!("已为 {} 打补丁内嵌图标", exe_path.display());
+                }
+            }
+        } else {
+            // Write manifest.json to resources (no icon available)
+            let manifest_json = serde_json::to_string_pretty(&entry.manifest)?;
+            std::fs::write(resources_dir.join("manifest.json"), manifest_json)?;
+        }
 
         // Bundle backend.ts
         if entry.backend_path.exists() {
