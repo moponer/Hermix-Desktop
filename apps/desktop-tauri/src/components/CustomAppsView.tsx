@@ -8,6 +8,7 @@ import {
   packageCustomApp,
   runCustomApp,
   deleteCustomApp,
+  openCustomAppDist,
 } from "../lib/customAppApi";
 import { AppCard } from "./custom-apps/AppCard";
 import { AppDetailModal } from "./custom-apps/AppDetailModal";
@@ -52,6 +53,15 @@ export function CustomAppsView() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setPackagingId(null);
+    }
+  };
+
+  const handleOpenDist = async (path: string) => {
+    setError(null);
+    try {
+      await openCustomAppDist(path);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -163,6 +173,7 @@ export function CustomAppsView() {
                 app={app}
                 onView={() => setSelectedAppId(app.id)}
                 onPackage={() => handlePackage(app.id)}
+                onOpenDist={() => app.dist_path && handleOpenDist(app.dist_path)}
                 onRun={() => handleRun(app.id)}
                 onDelete={() => handleDelete(app.id)}
                 packaging={packagingId === app.id}

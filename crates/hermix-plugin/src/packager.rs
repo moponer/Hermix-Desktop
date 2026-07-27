@@ -245,7 +245,7 @@ fn calculate_dir_size(path: &Path) -> u64 {
 fn generate_default_ui(app_name: &str) -> String {
     format!(
         r#"// Auto-generated default UI for "{app_name}"
-const e = React.createElement;
+import {{ createElement as e }} from "react";
 function DefaultApp() {{
   return e('div', {{ style: {{ padding: '40px', textAlign: 'center', fontFamily: 'system-ui' }} }},
     e('h1', {{ style: {{ color: '#6c63ff' }} }}, '{app_name}'),

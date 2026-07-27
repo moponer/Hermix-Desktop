@@ -62,12 +62,41 @@
          * App Loader — 壳的内置前端
          *
          * 职责:
-         * 1. 加载 resources/manifest.json
+         * 1. 通过 Tauri IPC 读取 resources/manifest.json（相对 fetch 在 app 协议下
+         *    会命中嵌入资源 404，返回 index.html，导致 JSON 解析失败）
          * 2. 注入 CSS 变量 (设计系统)
-         * 3. 动态 import resources/ui.bundle.js
-         * 4. 加载 resources/backend.bundle.js 到全局
-         * 5. 渲染 React 组件
+         * 3. 通过 IPC 读取 resources/ui.bundle.js / backend.bundle.js，转成 Blob URL 后 import
+         * 4. 挂载 backend 到全局
+         * 5. 用 import map 提供的 React 渲染组件
          */
+
+        // Tauri v2 内部桥接，壳内始终可用
+        const invoke = typeof window !== "undefined" && window.__TAURI_INTERNALS__?.invoke;
+
+        async function readResourceText(path) {
+            if (invoke) {
+                try {
+                    return await invoke("shell_fs_read", { path });
+                } catch (e) {
+                    console.warn("[app-loader] IPC 读取失败，回退到 fetch:", e);
+                }
+            }
+            const r = await fetch(path);
+            if (!r.ok) throw new Error(`资源加载失败 ${path} (${r.status})`);
+            return r.text();
+        }
+
+        async function importResourceModule(path) {
+            const source = await readResourceText(path);
+            const blob = new Blob([source], { type: "text/javascript" });
+            const url = URL.createObjectURL(blob);
+            try {
+                return await import(url);
+            } finally {
+                URL.revokeObjectURL(url);
+            }
+        }
+
         async function loadApp() {
             const loading = document.getElementById("app-loading");
             const errorDiv = document.getElementById("app-error");
@@ -76,10 +105,8 @@
 
             try {
                 // 1. 加载 manifest
-                const manifest = await fetch("resources/manifest.json").then(r => {
-                    if (!r.ok) throw new Error(`manifest.json 加载失败 (${r.status})`);
-                    return r.json();
-                });
+                const manifestText = await readResourceText("resources/manifest.json");
+                const manifest = JSON.parse(manifestText);
 
                 // 2. 应用主题 (CSS 变量)
                 if (manifest.theme) {
@@ -91,7 +118,7 @@
 
                 // 3. 加载 backend bundle (挂载到全局)
                 try {
-                    const backendModule = await import("resources/backend.bundle.js");
+                    const backendModule = await importResourceModule("resources/backend.bundle.js");
                     window.__APP_BACKEND__ = backendModule;
                 } catch (e) {
                     console.warn("backend.bundle.js 加载失败 (应用可能不需要后端):", e);
@@ -99,31 +126,15 @@
                 }
 
                 // 4. 加载 UI bundle
-                const uiModule = await import("resources/ui.bundle.js");
+                const uiModule = await importResourceModule("resources/ui.bundle.js");
                 const Component = uiModule.default;
                 if (!Component) throw new Error("ui.bundle.js 未导出默认组件");
 
-                // 5. 渲染
+                // 5. 渲染（React 由 import map 从 esm.sh 提供，与 UI bundle 共用同一实例）
                 loading.style.display = "none";
                 const React = await import("react");
                 const ReactDOM = await import("react-dom/client");
-
-                // 如果 ui.bundle.js 已经打包了 React (esbuild --bundle), 直接渲染
-                // 否则用 esm.sh 的 React
-                try {
-                    ReactDOM.createRoot(root).render(React.createElement(Component));
-                } catch (e) {
-                    // ui.bundle.js 自己打包了 React，直接调用
-                    // React 可能已经在 bundle 内部，尝试直接 render
-                    root.innerHTML = '<div id="__react_root"></div>';
-                    // 如果 ui bundle 是 self-contained 的, 它可能有自己的 render 逻辑
-                    if (typeof Component === "function") {
-                        // 尝试使用 bundle 内部的 React
-                        const internalReact = window.__APP_REACT__ || React;
-                        const internalReactDOM = window.__APP_REACT_DOM__ || ReactDOM;
-                        internalReactDOM.createRoot(root).render(internalReact.createElement(Component));
-                    }
-                }
+                ReactDOM.createRoot(root).render(React.createElement(Component));
             } catch (e) {
                 loading.style.display = "none";
                 errorDiv.style.display = "block";

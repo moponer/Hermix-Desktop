@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import {
   X,
   Package,
+  FolderOpen,
   Play,
   RefreshCw,
   Code2,
@@ -22,6 +23,7 @@ import {
   packageCustomApp,
   runCustomApp,
   updateCustomApp,
+  openCustomAppDist,
 } from "../../lib/customAppApi";
 
 interface AppDetailModalProps {
@@ -126,6 +128,16 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
       await runCustomApp(appId);
       setSuccess("应用已启动");
       setTimeout(() => setSuccess(null), 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleOpenDist = async () => {
+    if (!app?.dist_path) return;
+    setError(null);
+    try {
+      await openCustomAppDist(app.dist_path);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -241,15 +253,25 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                   >
                     <Play size={14} /> 运行
                   </button>
-                  <button
-                    className="app-detail-btn app-detail-btn--secondary"
-                    onClick={handlePackage}
-                    disabled={packaging}
-                    title="打包为可分发独立 EXE"
-                  >
-                    <Package size={14} />
-                    {packaging ? "打包中..." : "打包"}
-                  </button>
+                  {is_packaged ? (
+                    <button
+                      className="app-detail-btn app-detail-btn--secondary"
+                      onClick={handleOpenDist}
+                      title="打开打包后的应用目录"
+                    >
+                      <FolderOpen size={14} /> 打开目录
+                    </button>
+                  ) : (
+                    <button
+                      className="app-detail-btn app-detail-btn--secondary"
+                      onClick={handlePackage}
+                      disabled={packaging}
+                      title="打包为可分发独立 EXE"
+                    >
+                      <Package size={14} />
+                      {packaging ? "打包中..." : "打包"}
+                    </button>
+                  )}
                 </div>
               </section>
 
@@ -377,14 +399,24 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
           <button className="app-detail-btn app-detail-btn--primary" onClick={handleRun}>
             <Play size={14} /> 运行
           </button>
-          <button
-            className="app-detail-btn app-detail-btn--secondary"
-            onClick={handlePackage}
-            disabled={packaging}
-          >
-            <Package size={14} />
-            {packaging ? "打包中..." : "打包"}
-          </button>
+          {is_packaged ? (
+            <button
+              className="app-detail-btn app-detail-btn--secondary"
+              onClick={handleOpenDist}
+              title="打开打包后的应用目录"
+            >
+              <FolderOpen size={14} /> 打开目录
+            </button>
+          ) : (
+            <button
+              className="app-detail-btn app-detail-btn--secondary"
+              onClick={handlePackage}
+              disabled={packaging}
+            >
+              <Package size={14} />
+              {packaging ? "打包中..." : "打包"}
+            </button>
+          )}
         </div>
       </div>
     </div>

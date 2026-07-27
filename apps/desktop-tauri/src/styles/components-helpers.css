@@ -1327,6 +1327,15 @@
   background: rgba(108, 99, 255, 0.25);
 }
 
+.custom-app-card__btn--open {
+  background: rgba(108, 99, 255, 0.15);
+  color: #6c63ff;
+}
+
+.custom-app-card__btn--open:hover {
+  background: rgba(108, 99, 255, 0.25);
+}
+
 .custom-app-card__btn--delete {
   background: transparent;
   color: var(--color-text-faint, #555);

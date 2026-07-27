@@ -1,6 +1,7 @@
 // Custom Apps API client — communicates with the backend HTTP API
 // at /api/custom-apps/*
 
+import { invoke } from "@tauri-apps/api/core";
 import { apiUrl } from "../api";
 
 // ── Types ──
@@ -37,6 +38,8 @@ export interface CustomAppSummary {
   category: string;
   author: string;
   is_packaged: boolean;
+  /** Path to the dist directory (if packaged) */
+  dist_path: string | null;
 }
 
 export interface CustomAppResponse {
@@ -73,6 +76,11 @@ export async function listCustomApps(): Promise<CustomAppSummary[]> {
   if (!res.ok) throw new Error(`列表失败: ${res.status}`);
   const data = await res.json();
   return data.apps ?? [];
+}
+
+/** Open the packaged app's dist directory in the system file explorer. */
+export async function openCustomAppDist(path: string): Promise<void> {
+  await invoke("open_external_url", { url: path });
 }
 
 export async function getCustomApp(id: string): Promise<CustomAppResponse> {

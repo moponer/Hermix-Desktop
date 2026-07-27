@@ -65,6 +65,9 @@ pub struct AppSummary {
     pub category: String,
     pub author: String,
     pub is_packaged: bool,
+    /// Path to the dist directory (if packaged).
+    #[serde(default)]
+    pub dist_path: Option<String>,
 }
 
 /// Response for packaging an app.
@@ -86,7 +89,8 @@ pub struct RunAppResponse {
 
 impl From<&crate::PluginEntry> for AppSummary {
     fn from(entry: &crate::PluginEntry) -> Self {
-        let is_packaged = entry.dir.join("dist").exists();
+        let dist_dir = entry.dir.join("dist");
+        let is_packaged = dist_dir.exists();
         Self {
             id: entry.manifest.id.clone(),
             name: entry.manifest.name.clone(),
@@ -97,6 +101,11 @@ impl From<&crate::PluginEntry> for AppSummary {
             category: entry.manifest.category.clone(),
             author: entry.manifest.author.clone(),
             is_packaged,
+            dist_path: if is_packaged {
+                Some(dist_dir.to_string_lossy().to_string())
+            } else {
+                None
+            },
         }
     }
 }

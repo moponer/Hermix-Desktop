@@ -1,12 +1,13 @@
 // AppCard — displays a single custom app in the grid view
 
-import { Package, Play, Trash2, Eye } from "lucide-react";
+import { Package, FolderOpen, Play, Trash2, Eye } from "lucide-react";
 import type { CustomAppSummary } from "../../lib/customAppApi";
 
 interface AppCardProps {
   app: CustomAppSummary;
   onView: () => void;
   onPackage: () => void;
+  onOpenDist: () => void;
   onRun: () => void;
   onDelete: () => void;
   packaging?: boolean;
@@ -20,7 +21,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   "other": "其他",
 };
 
-export function AppCard({ app, onView, onPackage, onRun, onDelete, packaging }: AppCardProps) {
+export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, packaging }: AppCardProps) {
   // Determine the icon to display: custom PNG image or emoji fallback
   const iconEl = app.icon_file ? (
     <img
@@ -76,15 +77,26 @@ export function AppCard({ app, onView, onPackage, onRun, onDelete, packaging }: 
           <Play size={14} />
           运行
         </button>
-        <button
-          className="custom-app-card__btn custom-app-card__btn--package"
-          onClick={onPackage}
-          disabled={packaging}
-          title="打包为可分发到其他电脑的独立 EXE"
-        >
-          <Package size={14} />
-          {packaging ? "打包中..." : "打包"}
-        </button>
+        {app.is_packaged ? (
+          <button
+            className="custom-app-card__btn custom-app-card__btn--open"
+            onClick={onOpenDist}
+            title="打开打包后的应用目录"
+          >
+            <FolderOpen size={14} />
+            打开目录
+          </button>
+        ) : (
+          <button
+            className="custom-app-card__btn custom-app-card__btn--package"
+            onClick={onPackage}
+            disabled={packaging}
+            title="打包为可分发到其他电脑的独立 EXE"
+          >
+            <Package size={14} />
+            {packaging ? "打包中..." : "打包"}
+          </button>
+        )}
         <button
           className="custom-app-card__btn custom-app-card__btn--delete"
           onClick={onDelete}
