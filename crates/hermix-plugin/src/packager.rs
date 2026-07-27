@@ -28,8 +28,14 @@ pub struct PackageResult {
 /// Packs plugins using esbuild + precompiled shell.
 pub struct EsbuildPackager {
     /// Path to the precompiled app-shell.exe.
+    ///
+    /// NOTE: retained for API compatibility with `PluginManager::new`, but
+    /// the effective path is re-resolved per call in `package()` so that
+    /// first-launch extraction / manual drops take effect without a restart.
+    #[allow(dead_code)]
     shell_path: PathBuf,
-    /// Path to the esbuild executable.
+    /// Path to the esbuild executable (see `shell_path` note above).
+    #[allow(dead_code)]
     esbuild_path: PathBuf,
 }
 
@@ -44,19 +50,26 @@ impl EsbuildPackager {
 
     /// Package a plugin into a standalone directory.
     pub async fn package(&self, entry: &PluginEntry) -> Result<PackageResult, PluginError> {
+        // Resolve shell/esbuild paths at *call time* (not cached at
+        // construction). The desktop app extracts them on first launch and
+        // the user may also drop them in manually; re-resolving here means
+        // neither requires restarting the server to take effect.
+        let shell_path = crate::resolve_shell_path();
+        let esbuild_path = crate::resolve_esbuild_path();
+
         // Validate shell exists
-        if !self.shell_path.exists() {
+        if !shell_path.exists() {
             return Err(PluginError::ShellNotFound(format!(
                 "app shell not found at {}",
-                self.shell_path.display()
+                shell_path.display()
             )));
         }
 
         // Validate esbuild exists
-        if !self.esbuild_path.exists() {
+        if !esbuild_path.exists() {
             return Err(PluginError::EsbuildNotFound(format!(
                 "esbuild not found at {}",
-                self.esbuild_path.display()
+                esbuild_path.display()
             )));
         }
 
@@ -76,7 +89,7 @@ impl EsbuildPackager {
             entry.manifest.id.clone()
         };
         let exe_path = output_dir.join(&exe_name);
-        std::fs::copy(&self.shell_path, &exe_path).map_err(|e| {
+        std::fs::copy(&shell_path, &exe_path).map_err(|e| {
             PluginError::PackagingFailed(format!("复制 app shell 失败: {e}"))
         })?;
 
@@ -102,6 +115,7 @@ impl EsbuildPackager {
         // Bundle backend.ts
         if entry.backend_path.exists() {
             self.bundle_with_esbuild(
+                &esbuild_path,
                 &entry.backend_path,
                 &resources_dir.join("backend.bundle.js"),
                 "esm",
@@ -114,6 +128,7 @@ impl EsbuildPackager {
         if let Some(ui_path) = &entry.ui_path {
             if ui_path.exists() {
                 self.bundle_with_esbuild(
+                    &esbuild_path,
                     ui_path,
                     &resources_dir.join("ui.bundle.js"),
                     "esm",
@@ -147,20 +162,24 @@ impl EsbuildPackager {
     /// Run esbuild to bundle a TypeScript file.
     async fn bundle_with_esbuild(
         &self,
+        esbuild_path: &Path,
         entry_path: &Path,
         output_path: &Path,
         format: &str,
         bundle_deps: bool,
     ) -> Result<(), PluginError> {
-        let mut cmd = std::process::Command::new(&self.esbuild_path);
+        let mut cmd = std::process::Command::new(esbuild_path);
 
         cmd.arg(entry_path)
             .arg("--bundle")
             .arg(format!("--format={format}"))
             .arg("--platform=browser")
             .arg("--target=es2020")
-            .arg("--outfile")
-            .arg(output_path)
+            // IMPORTANT: esbuild 0.21+ rejects the space-separated
+            // `--outfile <path>` form and reports "Invalid build flag".
+            // The `--outfile=<path>` (equals) form is required and works
+            // across all versions.
+            .arg(format!("--outfile={}", output_path.display()))
             .arg("--log-level=warning")
             .arg("--color=false");
 
