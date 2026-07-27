@@ -395,6 +395,80 @@ impl AgentLoop {
         session_started_hooks_fired: bool,
         persist_user_idx: Option<usize>,
     ) -> AgentResult {
+        // Default (non-error) interrupt path: a user-initiated stop or
+        // WS disconnect. Surfaces `finish_reason = "interrupted"` so the
+        // frontend shows a neutral "已中断" chip (never a red error
+        // banner — the user expected this).
+        self.graceful_interrupt_result_with(
+            ctx,
+            total_turns,
+            tool_errors,
+            accumulated_usage,
+            session_cost_usd,
+            session_started_hooks_fired,
+            persist_user_idx,
+            false,
+        )
+    }
+
+    /// Like [`Self::graceful_interrupt_result`] but flags the interrupt
+    /// as a *backend* failure (LLM/transport error, mid-stream chunk
+    /// failure) so the server emits a structured `Error` event and the
+    /// frontend shows a red "出错了" banner + error prompt.
+    pub(crate) fn graceful_interrupt_result_errored(
+        &self,
+        ctx: &ContextManager,
+        total_turns: u32,
+        tool_errors: &[hermix_core::ToolErrorRecord],
+        accumulated_usage: Option<UsageStats>,
+        session_cost_usd: f64,
+        session_started_hooks_fired: bool,
+        persist_user_idx: Option<usize>,
+    ) -> AgentResult {
+        self.graceful_interrupt_result_with(
+            ctx,
+            total_turns,
+            tool_errors,
+            accumulated_usage,
+            session_cost_usd,
+            session_started_hooks_fired,
+            persist_user_idx,
+            true,
+        )
+    }
+
+    /// Like [`Self::graceful_interrupt_result`] but lets the caller flag
+    /// that the interrupt was caused by a *backend* failure (LLM/transport
+    /// error, mid-stream chunk failure) rather than a user stop.
+    ///
+    /// Backend failures set `finish_reason = "error"` so the server can
+    /// emit a structured `StreamEvent::Error` and the frontend shows a
+    /// red "出错了" banner + error prompt. Without this distinction the
+    /// server sent `Done` for backend failures too, so the frontend
+    /// silently displayed the partial/last content as a completed turn
+    /// with no error indication.
+    pub(crate) fn graceful_interrupt_result_with(
+        &self,
+        ctx: &ContextManager,
+        total_turns: u32,
+        tool_errors: &[hermix_core::ToolErrorRecord],
+        accumulated_usage: Option<UsageStats>,
+        session_cost_usd: f64,
+        session_started_hooks_fired: bool,
+        persist_user_idx: Option<usize>,
+        errored: bool,
+    ) -> AgentResult {
+        // `errored` distinguishes a *backend* failure from a
+        // *user-initiated* interrupt (stop button, WS disconnect).
+        // Both are "graceful" (we persist partial content), but only a
+        // backend failure should be surfaced to the frontend as an
+        // error — a user interrupt is expected and must NOT show a red
+        // "出错了" banner.
+        let finish_reason = if errored {
+            Some("error".to_string())
+        } else {
+            Some("interrupted".to_string())
+        };
         self.finalize_agent_result(
             ctx,
             total_turns,
@@ -405,7 +479,7 @@ impl AgentLoop {
             persist_user_idx,
             false,
             true,
-            None,
+            finish_reason,
         )
     }
 

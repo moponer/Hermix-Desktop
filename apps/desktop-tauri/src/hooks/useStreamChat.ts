@@ -1534,6 +1534,20 @@ export function useStreamChat(activeSessionId: string | null) {
               if (evtType === "done") {
                 const reason: string | undefined =
                   data?.finish_reason || data?.event?.finish_reason;
+                // (defensive) a backend-caused failure may arrive as a
+                // `done` with finish_reason "error" (e.g. a future
+                // refactor or an older server build). Route it to the
+                // error path so the user sees a red banner + "出错了"
+                // instead of a misleading "completed" with partial content.
+                if (reason === "error") {
+                  settle(
+                    "",
+                    "对话因后端错误中断（模型或网络调用失败）",
+                    undefined,
+                    "error",
+                  );
+                  return;
+                }
                 // M3 may send a `done` with empty `evtContent` (the
                 // finish_reason frame doesn't contain the streamed
                 // text). Always prefer `fullText` (the accumulated

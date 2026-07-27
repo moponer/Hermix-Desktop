@@ -5269,7 +5269,39 @@ async fn handle_ws_stream_send(
                 // here, so the row exists regardless.
                 let done_content = redact_sensitive(&cleaned);
                 let done_finish_reason = reply.finish_reason.clone();
-                if let Err(e) = tx
+                // A backend LLM/transport failure is surfaced as a
+                // structured `Error` event so the frontend shows a red
+                // "出错了" banner + error prompt, instead of silently
+                // displaying the partial/last content as a completed
+                // turn. A user-initiated interrupt (`interrupted`) or
+                // any other reason still uses the normal `Done` event.
+                if reply.finish_reason.as_deref() == Some("error") {
+                    let code = "backend_error".to_string();
+                    let message =
+                        "对话因后端错误中断（模型或网络调用失败）。已保留已生成的部分内容，请稍后重试。"
+                            .to_string();
+                    if let Err(e) = tx
+                        .send(WsEnvelope {
+                            version: 1,
+                            request_id: request_id_owned.clone(),
+                            trace_id: trace_id_owned.clone(),
+                            event: StreamEvent::Error {
+                                code,
+                                message: redact_sensitive(&message),
+                            },
+                        })
+                        .await
+                    {
+                        let elapsed_ms = agent_task_started.elapsed().as_millis();
+                        tracing::warn!(
+                            session = %session_id_clone,
+                            error = %e,
+                            elapsed_ms = elapsed_ms,
+                            "Error event (backend failure) failed to send — WS already closed, \
+                             user will not see this error in chat"
+                        );
+                    }
+                } else if let Err(e) = tx
                     .send(WsEnvelope {
                         version: 1,
                         request_id: request_id_owned.clone(),

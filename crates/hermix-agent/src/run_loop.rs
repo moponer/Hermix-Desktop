@@ -1110,7 +1110,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                             error = %e,
                             "LLM call failed (non-stream path) — treating as graceful interrupt for persistence"
                         );
-                        return Ok(self.graceful_interrupt_result(
+                        return Ok(self.graceful_interrupt_result_errored(
                             &ctx,
                             total_turns,
                             &tool_errors,
@@ -1827,7 +1827,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                                 error = %e,
                                 "collect_stream_llm_response failed — treating as graceful interrupt for persistence"
                             );
-                            return Ok(self.graceful_interrupt_result(
+                            return Ok(self.graceful_interrupt_result_errored(
                                 &ctx,
                                 total_turns,
                                 &tool_errors,
@@ -1844,8 +1844,15 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                             state
                                 .cost_guard
                                 .record_usage(partial.usage.as_ref(), partial.model.as_str(), &self.config);
+                            // A mid-stream chunk failure (silence_watch /
+                            // network blip) carries `finish_reason =
+                            // "stream_error"` on the partial response; a
+                            // user stop carries "interrupted". Only the
+                            // former is a backend failure that must be
+                            // surfaced to the frontend as an error.
+                            let errored = partial.finish_reason.as_deref() == Some("stream_error");
                             ctx.add_message(partial.message);
-                            return Ok(self.graceful_interrupt_result(
+                            return Ok(self.graceful_interrupt_result_with(
                                 &ctx,
                                 total_turns,
                                 &tool_errors,
@@ -1853,6 +1860,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                                 state.cost_guard.session_cost_usd,
                                 session_started_hooks_fired,
                                 persist_user_idx,
+                                errored,
                             ));
                         }
                     }
@@ -1884,7 +1892,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                                 error = %e,
                                 "LLM call failed (stream retry path) — treating as graceful interrupt for persistence"
                             );
-                            return Ok(self.graceful_interrupt_result(
+                            return Ok(self.graceful_interrupt_result_errored(
                                 &ctx,
                                 total_turns,
                                 &tool_errors,
