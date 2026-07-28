@@ -39,8 +39,13 @@ if (-not (Test-Path $esbuildDir)) {
 }
 
 if (Test-Path $dest) {
-    Write-Host "[esbuild] skip (already present): $dest"
-    exit 0
+    $existing = (Get-Item $dest).Length
+    if ($existing -ge 1MB) {
+        Write-Host "[esbuild] skip (already present, $existing bytes): $dest"
+        exit 0
+    }
+    Write-Warning "[esbuild] existing file is too small ($existing bytes) — re-downloading the real binary"
+    Remove-Item $dest -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "[esbuild] downloading esbuild $esbuildVersion (windows-64) ..."

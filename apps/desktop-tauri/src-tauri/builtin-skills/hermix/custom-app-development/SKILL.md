@@ -248,7 +248,7 @@ export default function App() {
 
 **重要**: 
 - `invoke` 全局可用，无需 import
-- React 和 ReactDOM 会被 esbuild 打包进 ui.bundle.js
+- React 和 ReactDOM 由壳的 import map 提供（esbuild `--external` 外部化），使用 automatic JSX runtime
 - CSS 变量可在 `manifest.json` 的 `theme` 字段中定义
 
 ## manifest.json 规范

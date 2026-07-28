@@ -23,7 +23,7 @@ $ErrorActionPreference = 'Continue'
 
 # scripts/ -> repo root -> tauri resources/ocr
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
-$ocrDir = Join-Path $repoRoot 'apps' 'desktop-tauri' 'src-tauri' 'resources' 'ocr'
+$ocrDir = Join-Path $repoRoot ([System.IO.Path]::Combine('apps', 'desktop-tauri', 'src-tauri', 'resources', 'ocr'))
 
 $models = @(
     @{ name = 'pp-ocrv5_mobile_det.onnx'; url = 'https://github.com/GreatV/oar-ocr/releases/download/v0.3.0/pp-ocrv5_mobile_det.onnx' },

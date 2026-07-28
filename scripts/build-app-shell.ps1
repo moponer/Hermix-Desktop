@@ -29,8 +29,13 @@ $destExe    = Join-Path $outDir 'app-shell.exe'
 $destLoader = Join-Path $outDir 'WebView2Loader.dll'
 
 if (Test-Path $destExe) {
-    Write-Host "[app-shell] skip (already built): $destExe"
-    exit 0
+    $sz = (Get-Item $destExe).Length
+    if ($sz -ge 1MB) {
+        Write-Host "[app-shell] skip (already built, $sz bytes): $destExe"
+        exit 0
+    }
+    Write-Warning "[app-shell] existing file is too small ($sz bytes) — rebuilding"
+    Remove-Item $destExe -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "[app-shell] building custom-app-shell (release) ..."
