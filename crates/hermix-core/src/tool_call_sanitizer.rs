@@ -79,6 +79,11 @@ enum SanitizerState {
     /// so we can match the corresponding `</think>` even if the
     /// opener arrived in a different chunk.
     InsideThink(String),
+    /// Inside a `<tool_calls>...</tool_calls>` wrapper. Some
+    /// provider/model combinations emit tool calls wrapped in this
+    /// tag; the opening tag, its body, and the closing tag must all
+    /// be suppressed so only the surrounding prose reaches the user.
+    InsideToolCalls,
 }
 
 impl Default for SanitizerState {
@@ -186,6 +191,15 @@ impl ToolCallSanitizer {
                         remaining = "";
                     }
                 }
+                SanitizerState::InsideToolCalls => {
+                    if let Some(end_idx) = find_first(remaining, TOOL_CALLS_CLOSE) {
+                        remaining = &remaining[end_idx..];
+                        self.state = SanitizerState::Normal;
+                    } else {
+                        self.held_bytes += remaining.len();
+                        remaining = "";
+                    }
+                }
             }
         }
 
@@ -212,6 +226,9 @@ const MINIMAX_OPEN_ANGLE_LOOSE: &str = "<minimax:tool_call";
 const MINIMAX_BARE: &str = "minimax:tool_call";
 const MINIMAX_CLOSE: &str = "</minimax:tool_call>";
 const INVOKE_CLOSE: &str = "</invoke>";
+const TOOL_CALLS_OPEN: &str = "<tool_calls>";
+const TOOL_CALLS_OPEN_LOOSE: &str = "<tool_calls";
+const TOOL_CALLS_CLOSE: &str = "</tool_calls>";
 
 /// Find the first byte-offset of `needle` in `haystack`, returning
 /// the index just past the end of the needle.
@@ -263,7 +280,29 @@ fn scan_normal(input: &str) -> Option<((usize, usize), SanitizerState)> {
         }
     }
 
-    // 2. The bare "minimax:tool_call" literal (no leading `<`).
+    // 2. `<tool_calls>...</tool_calls>` wrapper. Some model/provider
+    // combinations emit tool calls wrapped in this tag; the opening
+    // tag, body, and closing tag must all be suppressed. We check it
+    // *before* `<invoke>` because `<tool_calls>` is the outer
+    // envelope: if we matched `<invoke>` first, the wrapper opener
+    // would be emitted as prose and leak into the chat bubble.
+    if let Some(start) = input.find(TOOL_CALLS_OPEN) {
+        return Some((
+            (start, start + TOOL_CALLS_OPEN.len()),
+            SanitizerState::InsideToolCalls,
+        ));
+    }
+    if let Some(start) = input.find(TOOL_CALLS_OPEN_LOOSE) {
+        let after = &input[start + TOOL_CALLS_OPEN_LOOSE.len()..];
+        if after.starts_with('>') || after.starts_with(' ') || after.is_empty() {
+            return Some((
+                (start, start + TOOL_CALLS_OPEN_LOOSE.len()),
+                SanitizerState::InsideToolCalls,
+            ));
+        }
+    }
+
+    // 3. The bare "minimax:tool_call" literal (no leading `<`).
     // To avoid false positives in chat (e.g. a user message
     // saying "the minimax:tool_call format"), we require the
     // literal to be *word-bounded* — the previous char (if any)
@@ -278,14 +317,14 @@ fn scan_normal(input: &str) -> Option<((usize, usize), SanitizerState)> {
         ));
     }
 
-    // 3. A bare "<invoke name=…>" opener (Hermes standard). We
+    // 4. A bare "<invoke name=…>" opener (Hermes standard). We
     // require the `name="…"` attribute to disambiguate from
     // arbitrary HTML-ish prose ("x < invoke threshold").
     if let Some((start, end)) = find_invoke_with_name(input) {
         return Some(((start, end), SanitizerState::InsideInvoke));
     }
 
-    // 4. MiniMax M3 native tool-name-as-tag format:
+    // 5. MiniMax M3 native tool-name-as-tag format:
     // `<terminal><command>ls</command></terminal>`.
     // The tool name becomes the outer XML tag; child tags are
     // parameters. We detect this by looking for `<word>`
@@ -298,7 +337,7 @@ fn scan_normal(input: &str) -> Option<((usize, usize), SanitizerState)> {
         ));
     }
 
-    // 5. Private reasoning blocks. The system prompt instructs the
+    // 6. Private reasoning blocks. The system prompt instructs the
     // model to use `<think>...</think>` for internal scratch and
     // never to leak reasoning into the visible reply, but models
     // still do — either because they ignore the rule, because
@@ -501,6 +540,7 @@ fn find_invoke_with_name(input: &str) -> Option<(usize, usize)> {
 fn scan_orphan_close(input: &str) -> Option<(usize, usize)> {
     let minimax_pos = input.find(MINIMAX_CLOSE);
     let invoke_pos = input.find(INVOKE_CLOSE);
+    let tool_calls_pos = input.find(TOOL_CALLS_CLOSE);
     // Also strip orphan tool-name close tags like `</terminal>`
     // (MiniMax M3 native format). Match any `</` followed by
     // lowercase+underscore identifier and `>`.
@@ -523,6 +563,7 @@ fn scan_orphan_close(input: &str) -> Option<(usize, usize)> {
     let orphan_matches: Vec<(usize, usize)> = [
         minimax_pos.map(|m| (m, m + MINIMAX_CLOSE.len())),
         invoke_pos.map(|i| (i, i + INVOKE_CLOSE.len())),
+        tool_calls_pos.map(|t| (t, t + TOOL_CALLS_CLOSE.len())),
         tool_close_re.find(input).map(|m| (m.start(), m.end())),
         think_close_re.find(input).map(|m| (m.start(), m.end())),
     ]
@@ -1008,5 +1049,60 @@ mod tests {
         // both should be preserved.
         assert!(out.contains("rethink"), "should preserve prose: {out}");
         assert!(out.contains("<thinkful>"), "should preserve prose: {out}");
+    }
+
+    // ---- <tool_calls> wrapper leak (2026-07-28) --------------------------
+    // Some providers/models wrap raw tool calls in `<tool_calls>`
+    // `</tool_calls>`. The opening tag, the body, and a stray
+    // closing tag must all be suppressed — the user was seeing
+    // `</tool_calls>` at the end of every assistant bubble.
+    #[test]
+    fn strips_tool_calls_wrapper_in_one_chunk() {
+        let input = "好的，正在处理。\n<tool_calls>\n<invoke name=\"memory\">\n<parameter name=\"action\">remove</parameter>\n<parameter name=\"target\">user</parameter>\n</invoke>\n</tool_calls>\n处理完毕。";
+        let out = drain(&[input]);
+        assert!(!out.contains("<tool_calls>"), "leaked: {out}");
+        assert!(!out.contains("</tool_calls>"), "leaked: {out}");
+        assert!(!out.contains("<invoke"), "leaked: {out}");
+        assert!(!out.contains("memory"), "tool body leaked: {out}");
+        assert!(out.contains("好的，正在处理。"));
+        assert!(out.contains("处理完毕。"));
+    }
+
+    #[test]
+    fn strips_tool_calls_wrapper_split_across_chunks() {
+        let chunks = [
+            "好的。\n<tool_calls>\n<invoke name=\"memory\">",
+            "\n<parameter name=\"action\">remove</parameter>",
+            "\n</invoke>\n</tool_calls>\n完毕。",
+        ];
+        let out = drain(&chunks);
+        assert!(!out.contains("<tool_calls>"), "leaked: {out}");
+        assert!(!out.contains("</tool_calls>"), "leaked: {out}");
+        assert!(!out.contains("<invoke"), "leaked: {out}");
+        assert!(!out.contains("remove"), "tool body leaked: {out}");
+        assert!(out.contains("好的。"));
+        assert!(out.contains("完毕。"));
+    }
+
+    #[test]
+    fn strips_orphan_tool_calls_close() {
+        // Exact repro from the 2026-07-28 screenshot: the model
+        // emitted only the closing `</tool_calls>` as visible text.
+        let input = "已经执行了。\n</tool_calls>\n还有什么要问的？";
+        let out = drain(&[input]);
+        assert!(!out.contains("</tool_calls>"), "leaked: {out}");
+        assert!(!out.contains("<tool_calls>"), "leaked: {out}");
+        assert!(out.contains("已经执行了。"));
+        assert!(out.contains("还有什么要问的？"));
+    }
+
+    #[test]
+    fn preserves_prose_mentioning_tool_calls() {
+        // The user (or model, in prose) may mention the literal
+        // string "tool_calls" without angle brackets. It must pass
+        // through untouched.
+        let input = "The field is called tool_calls in OpenAI's API.";
+        let out = drain(&[input]);
+        assert_eq!(out, input, "plain prose should pass through: {out}");
     }
 }
