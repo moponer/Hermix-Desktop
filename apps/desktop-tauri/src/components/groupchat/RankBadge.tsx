@@ -81,6 +81,28 @@ export function RoomRankChip({ ranks }: { ranks: api.GroupChatRank[] | undefined
   );
 }
 
+
+/** Single-agent rank chip — used inline in MessageBubble so the tier
+ *  is visible next to the speaker's name in the chat stream itself,
+ *  not only in the room list / room header. Renders nothing when
+ *  the rank row is missing or unranked (no tier assigned yet). */
+export function AgentRankBadge({ rank }: { rank: api.GroupChatRank | undefined }) {
+  if (!rank || !rank.tier) return null;
+  const c = tierColor(rank.tier);
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 px-1 py-px rounded text-[11px] font-semibold shrink-0"
+      style={{ background: c.bg, color: c.text, boxShadow: `inset 0 0 0 1px ${c.ring}` }}
+      title={`段位：${rank.tier_cn} · 积分 ${rank.score}`}
+      data-testid="agent-rank-badge"
+      data-tier={rank.tier}
+    >
+      <span aria-hidden>{rank.badge_emoji}</span>
+      <span>{rank.tier_cn}</span>
+    </span>
+  );
+}
+
 /** Full tier breakdown — used in the active room header. */
 export function RoomRankSummary({ ranks }: { ranks: api.GroupChatRank[] | undefined }) {
   if (!ranks || ranks.length === 0) return null;

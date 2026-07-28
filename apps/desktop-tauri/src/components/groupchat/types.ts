@@ -23,6 +23,16 @@ export interface ChatRoom {
   /** Pinned project announcement. `null` when no announcement. */
   announcement: string | null;
   announcementPublishedAt: string | null;
+  /** Free-form description of the room (project background, goal,
+   *  constraints). `null` when no description is set. Distinct from
+   *  `announcement` which is the leader-pinned "current goal". */
+  description: string | null;
+  /** UI rendering style: "modern" | "classic" | "compact".
+   *  Defaults to "modern" when null/undefined (old rooms). */
+  style: string | null;
+  /** Chat mode: "task_collab" (leader dispatches tasks) or "free_chat"
+   *  (members respond freely). Defaults to "task_collab" when null. */
+  chatMode: "task_collab" | "free_chat";
   /** The currently in-flight task. `null` when no active task. */
   activeTask: api.GroupChatTask | null;
 }
@@ -112,10 +122,38 @@ export function agentTone(id: string): AgentTone {
  *  the message stream between regular messages. */
 export interface InlineEvent {
   id: string;
-  kind: "dispatch_failed" | "handoff";
+  kind: "dispatch_failed" | "handoff" | "task_completed" | "agent_expelled" | "audit_verdict";
   agentName: string;
   reason: string;
   isLeader: boolean;
   toAgentName?: string;
   handoffKind?: string;
+  /** Only for `audit_verdict` events — the numeric level (e.g. "violation"
+   *  / "warning") so the renderer can pick a tone. */
+  auditLevel?: string;
+  /** Only for `audit_verdict` events — score delta for the chip text. */
+  auditScoreDelta?: number;
+}
+
+/**
+ * Convert `hsl(H, S%, L%)` to `hsla(H, S%, L%, A)` so callers can keep
+ * the base colour as `tone.ring` (full saturation) and apply alpha at
+ * the call site.
+ *
+ * Why this exists: the old call sites wrote `${tone.ring}33` — the
+ * intent was `#RRGGBBAA`-style hex alpha suffix (0x33 = 20% opacity).
+ * That pattern works for hex colours but NOT for `hsl(...)`; the CSS
+ * parser treats the trailing `33` as a stray length and silently drops
+ * the entire `box-shadow` declaration. Every groupchat bubble therefore
+ * ended up with a fully-opaque border — visible as a thick horizontal
+ * line below the message text instead of the intended 20% subtle ring.
+ *
+ * Pass-through when the input doesn't match `hsl(...)`, so the helper
+ * is safe to call on any CSS colour.
+ */
+export function withAlpha(color: string, alpha: number): string {
+  if (color.startsWith('hsl(') && color.endsWith(')')) {
+    return `hsla(${color.slice(4, -1)}, ${alpha})`;
+  }
+  return color;
 }

@@ -5,6 +5,7 @@ import * as api from "../api";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import type { AgentPersona } from "./agents/types";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
+import { withAlpha } from "./groupchat/types";
 
 interface RoomMemberDialogProps {
   roomId: string;
@@ -269,7 +270,7 @@ export function RoomMemberDialog({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.4)", contain: "layout style paint" }}
+      style={{ background: "var(--color-overlay-scrim)", contain: "layout style paint" }}
       onClick={onClose}
     >
       <div
@@ -354,7 +355,7 @@ export function RoomMemberDialog({
             <div
               role="alert"
               className="flex items-start gap-2 px-2.5 py-1.5 rounded-lg text-[13px] leading-snug"
-              style={{ background: "var(--color-error-bg, rgba(239,68,68,0.10))", color: "var(--color-error-text, #b91c1c)" }}
+              style={{ background: "var(--color-error-soft)", color: "var(--color-error)" }}
             >
               <AlertCircle size={12} className="shrink-0 mt-[1px]" />
               <span className="flex-1 break-words">{error}</span>
@@ -780,7 +781,7 @@ function AgentAvatar({ agent, size }: { agent: AgentPersona; size: number }) {
         background: bg,
         color: text,
         fontSize: size * 0.42,
-        boxShadow: `inset 0 0 0 1px ${ring}55`,
+        boxShadow: `inset 0 0 0 1px ${withAlpha(ring, 0.33)}`,
       }}
     >
       {letter}

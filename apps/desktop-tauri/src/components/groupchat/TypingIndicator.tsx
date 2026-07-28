@@ -31,26 +31,32 @@ export function TypingDots() {
 export function StreamingAgentRow({
   info,
   agent,
+  compact = false,
 }: {
   info: { name: string; role: "leader" | "member" };
   agent: AgentPersona | null;
+  compact?: boolean;
 }) {
   const isLeader = info.role === "leader";
+  const avatarSize = compact ? 24 : 30;
+  const textSize = compact ? "text-[12px]" : "text-[13px]";
+  const padding = compact ? "px-2.5 py-1" : "px-3 py-1.5";
   return (
     <div className="flex gap-2 items-start animate-in">
       {isLeader ? (
-        <LeaderAvatar size={30} />
+        <LeaderAvatar size={avatarSize} />
       ) : agent ? (
-        <AgentAvatar agent={agent} size={30} />
+        <AgentAvatar agent={agent} size={avatarSize} />
       ) : (
         <div
-          className="w-[30px] h-[30px] rounded-full bg-bg-tertiary"
+          className="rounded-full bg-bg-tertiary"
+          style={{ width: avatarSize, height: avatarSize }}
           title={info.name}
         />
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 mb-0.5">
-          <span className="text-[13px] text-text-primary font-medium">
+          <span className={`${textSize} text-text-primary font-medium`}>
             {info.name}
           </span>
           {isLeader && (
@@ -66,7 +72,7 @@ export function StreamingAgentRow({
           )}
         </div>
         <div
-          className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[13px]"
+          className={`inline-flex items-center gap-1.5 rounded-xl ${padding} ${textSize}`}
           style={{
             background: "var(--color-bg-tertiary)",
             color: "var(--color-text-muted)",

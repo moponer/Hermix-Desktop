@@ -159,30 +159,31 @@ export function useGroupChatWebSocket(
                   });
                   return next;
                 });
-                // Leader's stream is only a thinking trace — never saved as a message.
+                // Accumulate ALL chunks (leader + member) as visible messages.
+                // The leader's streamed text IS the reply — thinking traces
+                // are sent separately via GroupChatThinking events (which
+                // we intentionally don't render as chat messages).
                 // NOTE: `agentMsgs` is mutated OUTSIDE the setMessages updater so the
                 // updater stays pure. React 18 StrictMode double-invokes updaters;
                 // mutating shared state inside one would double-append streamed text.
-                if (!isLeaderChunk) {
-                  const existing = agentMsgs.get(agent_id);
-                  const nextMsg: ChatMsg = existing
-                    ? { ...existing, content: existing.content + content }
-                    : {
-                        id: `stream-${agent_id}-${Date.now()}`,
-                        roomId: activeRoomId,
-                        senderId: agent_id,
-                        senderName: agent_name || agent_id,
-                        content,
-                        messageType: "chat",
-                        timestamp: Date.now(),
-                      };
-                  agentMsgs.set(agent_id, nextMsg);
-                  setMessages((prev) =>
-                    existing
-                      ? prev.map((m) => (m.id === existing.id ? nextMsg : m))
-                      : [...prev, nextMsg],
-                  );
-                }
+                const existing = agentMsgs.get(agent_id);
+                const nextMsg: ChatMsg = existing
+                  ? { ...existing, content: existing.content + content }
+                  : {
+                      id: `stream-${agent_id}-${Date.now()}`,
+                      roomId: activeRoomId,
+                      senderId: agent_id,
+                      senderName: agent_name || (isLeaderChunk ? "项目总管" : agent_id),
+                      content,
+                      messageType: "chat",
+                      timestamp: Date.now(),
+                    };
+                agentMsgs.set(agent_id, nextMsg);
+                setMessages((prev) =>
+                  existing
+                    ? prev.map((m) => (m.id === existing.id ? nextMsg : m))
+                    : [...prev, nextMsg],
+                );
                 return;
               }
 
@@ -268,6 +269,22 @@ export function useGroupChatWebSocket(
                   score_after,
                   reason,
                 });
+                // Only violations (not benign scoring updates) get an
+                // inline chip — keeps the stream free of low-signal noise.
+                if (level === "violation") {
+                  setInlineEvents((prev) => [
+                    ...prev,
+                    {
+                      id: `audit-verdict-${inlineEventCounter.current++}`,
+                      kind: "audit_verdict" as const,
+                      agentName: agent_id,
+                      reason,
+                      isLeader: false,
+                      auditLevel: level,
+                      auditScoreDelta: score_delta,
+                    },
+                  ]);
+                }
                 return;
               }
               if (evt.agent_expelled) {
@@ -278,10 +295,122 @@ export function useGroupChatWebSocket(
                   agent_name,
                   reason,
                 });
+                // High-signal event — surface in the chat stream too so
+                // the user knows the team shrunk even with TaskPanel closed.
+                setInlineEvents((prev) => [
+                  ...prev,
+                  {
+                    id: `agent-expelled-${inlineEventCounter.current++}`,
+                    kind: "agent_expelled" as const,
+                    agentName: agent_name,
+                    reason,
+                    isLeader: false,
+                  },
+                ]);
                 return;
               }
               if (evt.room_completed) {
                 onEngineEvent(activeRoomId, { kind: "room_completed" });
+                // Inline ribbon: high-signal "task finished" marker so the
+                // user sees the outcome in the chat stream even if they
+                // never opened the TaskPanel. task_phase_change events are
+                // intentionally NOT injected here — one per subtask would
+                // flood the stream with low-value noise.
+                setInlineEvents((prev) => [
+                  ...prev,
+                  {
+                    id: `task-completed-${inlineEventCounter.current++}`,
+                    kind: "task_completed" as const,
+                    agentName: "",
+                    reason: "任务已完成",
+                    isLeader: true,
+                  },
+                ]);
+                return;
+              }
+
+              // ── Discussion events (P3.1) ──
+              if (evt.discussion_started) {
+                const { discussion_id, topic, participants, max_rounds } = evt.discussion_started;
+                onEngineEvent(activeRoomId, {
+                  kind: "discussion_started",
+                  discussion_id,
+                  topic,
+                  participants,
+                  max_rounds,
+                });
+                return;
+              }
+              if (evt.discussion_chunk) {
+                const { agent_id, agent_name, delta } = evt.discussion_chunk;
+                const isLeaderChunk = agent_id === LEADER_SENDER_ID;
+                setStreamingAgents((prev) => {
+                  if (prev.has(agent_id)) return prev;
+                  const next = new Map(prev);
+                  next.set(agent_id, {
+                    name: agent_name || (isLeaderChunk ? "项目总管" : agent_id),
+                    role: isLeaderChunk ? "leader" : "member",
+                  });
+                  return next;
+                });
+                // Accumulate discussion chunks as visible messages.
+                const existing = agentMsgs.get(agent_id);
+                const nextMsg: ChatMsg = existing
+                  ? { ...existing, content: existing.content + delta }
+                  : {
+                      id: `discussion-${agent_id}-${Date.now()}`,
+                      roomId: activeRoomId,
+                      senderId: agent_id,
+                      senderName: agent_name || (isLeaderChunk ? "项目总管" : agent_id),
+                      content: delta,
+                      messageType: "discussion",
+                      timestamp: Date.now(),
+                    };
+                agentMsgs.set(agent_id, nextMsg);
+                setMessages((prev) =>
+                  existing
+                    ? prev.map((m) => (m.id === existing.id ? nextMsg : m))
+                    : [...prev, nextMsg],
+                );
+                return;
+              }
+              if (evt.discussion_message_saved) {
+                // A participant's full message is saved — nothing to do
+                // here since we already streamed it chunk-by-chunk above.
+                // The persisted version will be fetched on reload.
+                return;
+              }
+              if (evt.discussion_round_summary) {
+                const { round, summary, next_action } = evt.discussion_round_summary;
+                const id = `round-summary-${inlineEventCounter.current++}`;
+                setInlineEvents((prev) => [
+                  ...prev,
+                  {
+                    id,
+                    kind: "task_completed" as const,
+                    agentName: "",
+                    reason: `第${round}轮 · ${summary} · ${next_action}`,
+                    isLeader: true,
+                  },
+                ]);
+                return;
+              }
+              if (evt.discussion_concluded) {
+                const { total_rounds } = evt.discussion_concluded;
+                onEngineEvent(activeRoomId, {
+                  kind: "discussion_concluded",
+                  total_rounds,
+                });
+                setInlineEvents((prev) => [
+                  ...prev,
+                  {
+                    id: `discussion-concluded-${inlineEventCounter.current++}`,
+                    kind: "task_completed" as const,
+                    agentName: "",
+                    reason: `讨论结束（共${total_rounds}轮）`,
+                    isLeader: true,
+                  },
+                ]);
                 return;
               }
 

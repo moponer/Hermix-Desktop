@@ -2,28 +2,126 @@
  * Message list container — renders the scrollable message stream
  * with typing indicators and empty-state hero.
  *
+ * Supports three rendering styles:
+ * - "modern" (default): bubble-based, avatars, left/right aligned (WeChat/Feishu)
+ * - "classic": IRC-style monospace linear log, no bubbles (1.0 era chat room)
+ * - "compact": denser bubble layout, smaller text and spacing (Slack compact)
+ *
  * Extracted from GroupChatView.tsx during the 2026-07 refactor.
  */
 
 import { useRef, useEffect, memo } from "react";
-import { Users, MessageSquare } from "lucide-react";
+import { Users, UserPlus } from "lucide-react";
 import type { AgentPersona } from "../agents/types";
-import { MessageBubble, DispatchErrorCard, HandoffSeparator } from "./MessageBubble";
+import { MessageBubble, DispatchErrorCard, HandoffSeparator, TaskCompletedCard, AgentExpelledCard, AuditVerdictCard } from "./MessageBubble";
 import { StreamingAgentRow } from "./TypingIndicator";
-import type { ChatMsg, AgentTone, InlineEvent } from "./types";
+import type * as api from "@/api";
+import { type ChatMsg, type AgentTone, type InlineEvent } from "./types";
 
 // Re-export for backward compatibility — callers that imported
 // InlineEvent from MessageList still work.
 export type { InlineEvent };
+
+/* ── Classic IRC-style message row ──
+ * Monospace, no bubbles, [time] name: message format.
+ * Reminiscent of 1.0-era chat rooms / IRC clients.
+ */
+const ClassicMessageRow = memo(function ClassicMessageRow({
+  msg,
+}: {
+  msg: ChatMsg;
+}) {
+  const time = new Date(msg.timestamp).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const isUser = msg.senderId === "user";
+  const isSystem = msg.senderId === "__system__";
+
+  if (isSystem) {
+    return (
+      <div className="text-center text-[12px] text-text-faint font-mono py-0.5">
+        — {msg.content} —
+      </div>
+    );
+  }
+
+  const nameColor = isUser
+    ? "var(--color-text-primary)"
+    : msg.senderId === "__leader__"
+      ? "hsl(33, 90%, 38%)"
+      : "var(--color-text-secondary)";
+
+  return (
+    <div className="font-mono text-[13px] leading-snug px-1 py-0.5 hover:bg-bg-hover/50 rounded">
+      <span className="text-text-faint">[{time}] </span>
+      <span className="font-semibold" style={{ color: nameColor }}>
+        {msg.senderName}
+      </span>
+      <span className="text-text-faint">: </span>
+      <span className="text-text-primary break-words whitespace-pre-wrap">{msg.content}</span>
+    </div>
+  );
+});
+
+/* ── Classic-style inline event ──
+ * Renders inline events as IRC-style system notices.
+ */
+const ClassicInlineEvent = memo(function ClassicInlineEvent({
+  ev,
+}: {
+  ev: InlineEvent;
+}) {
+  const text = (() => {
+    switch (ev.kind) {
+      case "dispatch_failed":
+        return `*** ${ev.isLeader ? "总管" : ev.agentName} 回复失败: ${ev.reason}`;
+      case "handoff":
+        return `*** 已转交 ${ev.toAgentName ?? ""} 接管 (${ev.reason})`;
+      case "task_completed":
+        return `*** 任务已完成`;
+      case "agent_expelled":
+        return `*** ${ev.agentName} 已被移出房间 (${ev.reason})`;
+      case "audit_verdict":
+        return `*** ${ev.agentName} 触发违规 (${ev.reason})`;
+      default:
+        return null;
+    }
+  })();
+  if (!text) return null;
+  return (
+    <div className="font-mono text-[12px] text-text-muted italic px-1 py-0.5">
+      {text}
+    </div>
+  );
+});
+
+/* ── Classic-style typing indicator ──
+ * `* name is typing...` instead of animated dots.
+ */
+const ClassicTypingRow = memo(function ClassicTypingRow({
+  name,
+}: {
+  name: string;
+}) {
+  return (
+    <div className="font-mono text-[12px] text-text-faint italic px-1 py-0.5">
+      * {name} 正在输入...
+    </div>
+  );
+});
 
 export const MessageList = memo(function MessageList({
   messages,
   agents,
   streamingAgents,
   inlineEvents,
-  roomTone,
+  roomTone: _roomTone,
   roomAgents,
   hasLeader,
+  roomStyle = "modern",
+  ranks,
+  modelOverrides,
   onRetry,
   onOpenMembers,
 }: {
@@ -34,6 +132,15 @@ export const MessageList = memo(function MessageList({
   roomTone: AgentTone | null;
   roomAgents: AgentPersona[];
   hasLeader: boolean;
+  /** UI rendering style: "modern" | "classic" | "compact".
+   *  Defaults to "modern" when not specified. */
+  roomStyle?: string;
+  /** Per-room rank snapshot, threaded into each MessageBubble so the
+   *  tier chip can render next to the speaker display name. */
+  ranks?: api.GroupChatRank[];
+  /** Per-member model override map (agent_id -> model id). Surfaced
+   *  inline next to the member name when a non-default model spoke. */
+  modelOverrides?: Record<string, string | undefined>;
   onRetry?: () => void;
   onOpenMembers?: () => void;
 }) {
@@ -43,69 +150,147 @@ export const MessageList = memo(function MessageList({
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingAgents, inlineEvents]);
 
-  return (
-    <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3.5">
-      {messages.length === 0 && inlineEvents.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-12 text-center">
-          <div
-            className="w-20 h-20 rounded-2xl flex items-center justify-center text-4xl mb-4 shadow-sm"
-            style={{
-              background: roomTone?.bg ?? "var(--color-bg-tertiary)",
-              boxShadow: roomTone
-                ? `inset 0 0 0 1px ${roomTone.ring}55`
-                : undefined,
-            }}
-          >
-            <MessageSquare size={36} className="text-text-faint" />
+  const isClassic = roomStyle === "classic";
+  const isCompact = roomStyle === "compact";
+
+  // ── Classic style: IRC-like linear log ──
+  if (isClassic) {
+    return (
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
+        {messages.length === 0 && inlineEvents.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <div className="flex items-center justify-center mb-3" style={{ width: 64, height: 64 }}>
+              <Users size={24} strokeWidth={1.5} style={{ color: "var(--color-accent)" }} />
+            </div>
+            <p className="text-[14px] font-mono text-text-muted mb-1">
+              == 聊天室已就绪 ==
+            </p>
+            <p className="text-[12px] font-mono text-text-faint max-w-[280px]">
+              {hasLeader ? "总管已在线，邀请成员开始协作" : "邀请成员后开始对话"}
+            </p>
           </div>
-          <p className="text-[15px] font-semibold text-text-primary mb-1">
-            开始一场群聊
+        ) : (
+          <>
+            {messages.map((msg) => (
+              <ClassicMessageRow key={msg.id} msg={msg} />
+            ))}
+            {inlineEvents.map((ev) => (
+              <ClassicInlineEvent key={ev.id} ev={ev} />
+            ))}
+            {streamingAgents.size > 0 && (
+              <>
+                {Array.from(streamingAgents.entries()).map(([agentId, info]) => (
+                  <ClassicTypingRow key={agentId} name={info.name} />
+                ))}
+              </>
+            )}
+          </>
+        )}
+        <div ref={chatEndRef} className="h-0 w-0" />
+      </div>
+    );
+  }
+
+  // ── Modern / Compact styles: bubble-based ──
+const compactSpacing = isCompact ? "space-y-1.5" : "space-y-2";
+const compactPadding = isCompact ? "px-4 py-2" : "px-4 py-3";
+
+  return (
+    <div className={`flex-1 overflow-y-auto ${compactPadding} ${compactSpacing}`}>
+      {messages.length === 0 && inlineEvents.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-full text-center" style={{ minHeight: "100%" }}>
+          {/* Icon — 24px line icon, brand-blue */}
+          <div className="flex items-center justify-center mb-3" style={{ width: 64, height: 64 }}>
+            <Users size={24} strokeWidth={1.5} style={{ color: "var(--color-accent)" }} />
+          </div>
+          {/* Title */}
+          <p className="text-[16px] font-semibold text-text-primary mb-2">
+            {roomAgents.length > 0 ? "开始对话" : "还没有协作成员"}
           </p>
-          <p className="text-[13px] text-text-muted mb-5 max-w-[280px] leading-relaxed">
+          {/* Description */}
+          <p className="text-[13px] text-text-secondary mb-4 max-w-[280px] leading-relaxed">
             {roomAgents.length > 0
-              ? `${hasLeader ? "项目总管已就位 · " : ""}${roomAgents
-                  .slice(0, 2)
-                  .map((a) => a.name)
-                  .join("、")} 等 ${roomAgents.length} 位成员正在待命`
-              : hasLeader
-                ? "项目总管已就位，等待团队成员加入后开始协作"
-                : "邀请成员后，他们会基于各自角色协作回复你的消息"}
+              ? `${roomAgents.length} 位成员正在待命，发送消息开始协作`
+              : "邀请成员加入后即可开始协作"}
           </p>
+          {/* Single primary button */}
           {onOpenMembers && (
-            <button onClick={onOpenMembers} className="btn btn-primary btn-sm">
-              <Users size={13} /> 管理成员
+            <button
+              onClick={onOpenMembers}
+              className="flex items-center gap-1.5 px-5 rounded-lg text-[13px] font-medium transition-all active:scale-95"
+              style={{
+                height: 36,
+                background: "var(--color-accent)",
+                color: "var(--color-accent-on-text)",
+              }}
+            >
+              <UserPlus size={14} />
+              邀请成员
             </button>
           )}
         </div>
       ) : (
         <>
           {messages.map((msg) => (
-            <MessageBubble key={msg.id} msg={msg} agents={agents} />
+            <MessageBubble
+              key={msg.id}
+              msg={msg}
+              agents={agents}
+              ranks={ranks}
+              modelOverrides={modelOverrides}
+              compact={isCompact}
+            />
           ))}
 
-          {/* Inline transient events (dispatch errors, handoffs) */}
-          {inlineEvents.map((ev) =>
-            ev.kind === "dispatch_failed" ? (
-              <DispatchErrorCard
-                key={ev.id}
-                agentName={ev.agentName}
-                reason={ev.reason}
-                isLeader={ev.isLeader}
-                onRetry={onRetry}
-              />
-            ) : (
-              <HandoffSeparator
-                key={ev.id}
-                toAgentName={ev.toAgentName ?? ""}
-                reason={ev.reason}
-                kind={ev.handoffKind ?? "transfer"}
-              />
-            ),
-          )}
+          {/* Inline transient events (dispatch errors, handoffs, task engine signals) */}
+          {inlineEvents.map((ev) => {
+            switch (ev.kind) {
+              case "dispatch_failed":
+                return (
+                  <DispatchErrorCard
+                    key={ev.id}
+                    agentName={ev.agentName}
+                    reason={ev.reason}
+                    isLeader={ev.isLeader}
+                    onRetry={onRetry}
+                  />
+                );
+              case "handoff":
+                return (
+                  <HandoffSeparator
+                    key={ev.id}
+                    toAgentName={ev.toAgentName ?? ""}
+                    reason={ev.reason}
+                    kind={ev.handoffKind ?? "transfer"}
+                  />
+                );
+              case "task_completed":
+                return <TaskCompletedCard key={ev.id} />;
+              case "agent_expelled":
+                return (
+                  <AgentExpelledCard
+                    key={ev.id}
+                    agentName={ev.agentName}
+                    reason={ev.reason}
+                  />
+                );
+              case "audit_verdict":
+                return (
+                  <AuditVerdictCard
+                    key={ev.id}
+                    agentName={ev.agentName}
+                    reason={ev.reason}
+                    scoreDelta={ev.auditScoreDelta}
+                  />
+                );
+              default:
+                return null;
+            }
+          })}
 
-          {/* Live typing indicators */}
+          {/* live typing indicators */}
           {streamingAgents.size > 0 && (
-            <div className="space-y-3.5 pt-1">
+            <div className={`${compactSpacing} pt-1`}>
               {Array.from(streamingAgents.entries()).map(([agentId, info]) => {
                 const found = agents.find((a) => a.id === agentId);
                 return (
@@ -113,6 +298,7 @@ export const MessageList = memo(function MessageList({
                     key={agentId}
                     info={info}
                     agent={found ?? null}
+                    compact={isCompact}
                   />
                 );
               })}

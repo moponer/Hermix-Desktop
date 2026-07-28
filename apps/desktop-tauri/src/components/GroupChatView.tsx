@@ -81,12 +81,19 @@ interface GroupChatViewProps {
 
 export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
-  const [agents, setAgents] = useState<AgentPersona[]>(loadAgents);
+  // F6 — `agents` is essentially static (computed once from localStorage
+  // + BUILTIN_EXPERTS). We previously kept it in `useState` and polled
+  // every 5s, but the polling added CPU cost for no real-world benefit.
+  // Plain const keeps the API stable (rooms filter against this list)
+  // without the React state churn. To support cross-tab agent edits,
+  // add a `window.storage` listener here that forces a re-derivation.
+  const agents: AgentPersona[] = loadAgents();
   const [activeRoomId, setActiveRoomId] = useState<string | null>(initialRoomId ?? null);
 
   // Create-room form state
   const [showNewRoom, setShowNewRoom] = useState(false);
   const [newRoomName, setNewRoomName] = useState("");
+  const [newRoomStyle, setNewRoomStyle] = useState<string>("modern");
   const [createRoomError, setCreateRoomError] = useState<string | null>(null);
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [roomSearch, setRoomSearch] = useState("");
@@ -150,7 +157,10 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
           ),
           announcement: r.announcement ?? null,
           announcementPublishedAt: r.announcement_published_at ?? null,
-          activeTask: r.active_task ?? null,
+          description: r.description ?? null,
+style: r.style ?? null,
+chatMode: (r.chat_mode === "free_chat" ? "free_chat" : "task_collab") as "task_collab" | "free_chat",
+activeTask: r.active_task ?? null,
         })),
       );
     } catch {
@@ -206,19 +216,13 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
     }
   }, [activeRoomId, rooms]);
 
-  // Refresh agents periodically
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const fresh = loadAgents();
-      setAgents((prev) => {
-        if (prev.length !== fresh.length) return fresh;
-        const prevIds = prev.map((a) => a.id).sort().join(",");
-        const freshIds = fresh.map((a) => a.id).sort().join(",");
-        return prevIds !== freshIds ? fresh : prev;
-      });
-    }, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  // F6 — agents polling removed. The 5-second interval was a safety
+  // net for localStorage edits in another tab; in practice agents are
+  // created/removed through the chat UI which already calls
+  // `setAgents(...)` directly. The mount-time `useState(loadAgents)`
+  // initializer covers the cold-start case. If cross-tab sync becomes
+  // a real requirement, wire a `window.storage` event listener here.
+  void loadAgents;
 
   /* ── Handlers ── */
 
@@ -228,7 +232,7 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
     setCreatingRoom(true);
     setCreateRoomError(null);
     try {
-      const room = await api.createGroupChatRoom(trimmed);
+      const room = await api.createGroupChatRoom(trimmed, newRoomStyle);
       setRooms((prev) => [
         ...prev,
         {
@@ -241,11 +245,15 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
           memberDisplayNames: {},
           announcement: room.announcement ?? null,
           announcementPublishedAt: room.announcement_published_at ?? null,
-          activeTask: room.active_task ?? null,
+          description: room.description ?? null,
+style: room.style ?? null,
+chatMode: (room.chat_mode === "free_chat" ? "free_chat" : "task_collab") as "task_collab" | "free_chat",
+activeTask: room.active_task ?? null,
         },
       ]);
       setActiveRoomId(room.id);
       setNewRoomName("");
+      setNewRoomStyle("modern");
       setShowNewRoom(false);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -259,6 +267,10 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
   const handleNewRoomNameChange = useCallback((v: string) => {
     setNewRoomName(v);
     setCreateRoomError((prev) => (prev ? null : prev));
+  }, []);
+
+  const handleNewRoomStyleChange = useCallback((v: string) => {
+    setNewRoomStyle(v);
   }, []);
 
   const handleDeleteRoom = useCallback(async (id: string) => {
@@ -277,6 +289,58 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
 toastError("删除聊天室失败");
     }
   }, []);
+
+  // P4 — Update the room's free-form description. Mirrors the pattern
+  // used by the announcement setter in TaskPanel's onAnnouncementChanged:
+  // optimistically update local state, then let the server reconcile
+  // via the next list_rooms poll / WebSocket event. Errors surface as
+  // toasts and leave the local state untouched so the user can retry.
+  const handleDescriptionChange = useCallback(
+    async (roomId: string, next: string | null) => {
+      try {
+        if (next === null) {
+          await api.clearGroupChatDescription(roomId);
+        } else {
+          await api.updateGroupChatDescription(roomId, next);
+        }
+        setRooms((prev) =>
+          prev.map((r) => (r.id === roomId ? { ...r, description: next } : r)),
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Failed to update description:", e);
+      toastError("更新房间描述失败:" + msg);
+    }
+  },
+  [],
+);
+
+  // Chat mode toggle: switch between "task_collab" (leader dispatches)
+  // and "free_chat" (members respond freely). Optimistic local update +
+  // server PATCH. Errors revert and toast.
+  const handleChatModeChange = useCallback(
+    async (roomId: string, mode: "task_collab" | "free_chat") => {
+      const prev = rooms.find((r) => r.id === roomId);
+      if (!prev || prev.chatMode === mode) return;
+      setRooms((curr) =>
+        curr.map((r) => (r.id === roomId ? { ...r, chatMode: mode } : r)),
+      );
+      try {
+        await api.updateGroupChatChatMode(roomId, mode);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("Failed to update chat mode:", e);
+        toastError("切换聊天模式失败:" + msg);
+        // Revert
+        if (prev) {
+          setRooms((curr) =>
+            curr.map((r) => (r.id === roomId ? { ...r, chatMode: prev.chatMode } : r)),
+          );
+        }
+      }
+    },
+    [rooms],
+  );
 
   const handleSendMessage = useCallback(async (textOverride?: string) => {
     const text = (textOverride ?? composerRef.current?.getValue() ?? "").trim();
@@ -311,7 +375,7 @@ toastError("删除聊天室失败");
 
   return (
     <>
-      <div className="h-full flex overflow-hidden bg-bg-primary p-3 gap-3">
+      <div className="h-full flex overflow-hidden bg-bg-secondary gap-3 p-3">
         <RoomList
           rooms={rooms}
           agents={agents}
@@ -320,20 +384,26 @@ toastError("删除聊天室失败");
           roomSearch={roomSearch}
           showNewRoom={showNewRoom}
           newRoomName={newRoomName}
+          newRoomStyle={newRoomStyle}
           createRoomError={createRoomError}
           creatingRoom={creatingRoom}
           onSelectRoom={setActiveRoomId}
           onDeleteRoom={handleDeleteRoom}
           onToggleNewRoom={setShowNewRoom}
           onNewRoomNameChange={handleNewRoomNameChange}
+          onNewRoomStyleChange={handleNewRoomStyleChange}
           onCreateRoom={handleCreateRoom}
           onRoomSearchChange={setRoomSearch}
         />
 
-        {/* Chat area */}
+        {/* Chat area — single card container: header + messages + input share the same background */}
         <div
-          className="flex-1 flex flex-col min-w-0 rounded-2xl overflow-hidden"
-          style={{ background: "var(--color-bg-secondary)" }}
+          className="flex-1 flex flex-col min-w-0 overflow-hidden"
+          style={{
+            background: "var(--color-bg-primary)",
+            border: "1px solid var(--color-border-subtle)",
+            borderRadius: 12,
+          }}
         >
           {activeRoom && roomTone ? (
             <>
@@ -345,7 +415,13 @@ toastError("删除聊天室失败");
                 onOpenTask={openTask}
                 onOpenMembers={openMembers}
                 onOpenSettings={openSettings}
+                onDescriptionChange={(next) => handleDescriptionChange(activeRoom.id, next)}
+                onChatModeChange={(mode) => handleChatModeChange(activeRoom.id, mode)}
+                onDeleteRoom={() => handleDeleteRoom(activeRoom.id)}
               />
+
+              {/* Divider between header and messages */}
+              <div className="mx-6 border-t" style={{ borderColor: "var(--color-border-subtle)" }} />
 
               <MessageList
                 messages={roomMessages}
@@ -355,24 +431,28 @@ toastError("删除聊天室失败");
                 roomTone={roomTone}
                 roomAgents={roomAgents}
                 hasLeader={!!activeRoom.leader}
+                roomStyle={activeRoom.style ?? "modern"}
                 onRetry={handleRetry}
                 onOpenMembers={openMembers}
+                ranks={ranksByRoom[activeRoom.id]}
+                modelOverrides={activeRoom.memberModels}
               />
 
-              {/* Input */}
-              <div className="px-5 py-3 bg-bg-primary">
+              {/* Input — flush with container, only top divider separates it from messages */}
+              <div className="px-6 border-t" style={{ borderColor: "var(--color-border-subtle)" }}>
                 <ChatComposerInput
                   ref={composerRef}
                   onSend={handleSendMessage}
                   isStreaming={loading}
+                  disabled={roomAgents.length === 0}
                   placeholder={
                     roomAgents.length > 0
-                      ? `向 ${roomAgents.length} 位成员提问…`
-                      : "邀请成员开始对话…"
+                      ? `给总管发送消息…`
+                      : "添加成员后可发送消息"
                   }
                 />
                 {loading && (
-                  <div className="flex items-center gap-1.5 mt-2 text-[12px] text-text-muted">
+                  <div className="flex items-center gap-1.5 pb-2 text-[12px] text-text-muted">
                     <span className="flex gap-0.5">
                       <span
                         className="w-1 h-1 rounded-full bg-text-muted animate-bounce"
@@ -398,8 +478,8 @@ toastError("删除聊天室失败");
                 <div className="empty-icon">
                   <Users size={24} />
                 </div>
-                <p className="empty-title">选择或创建聊天室</p>
-                <p className="empty-desc">在左侧创建聊天室并邀请成员开始对话</p>
+                <p className="empty-title">选择或创建房间</p>
+                <p className="empty-desc">在左侧创建房间并邀请成员开始协作</p>
               </div>
             </div>
           )}

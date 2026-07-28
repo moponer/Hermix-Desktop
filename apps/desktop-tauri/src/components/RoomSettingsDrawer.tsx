@@ -36,15 +36,20 @@ export function RoomSettingsDrawer({ roomId, roomName, onClose }: RoomSettingsDr
 
   const loadRules = useCallback(async () => {
     try {
-      const rooms = await api.listGroupChatRooms();
-      const room = rooms.find((r) => r.id === roomId);
+      // F4 — single-room lookup. Previously this called
+      // `listGroupChatRooms()` and `.find()`d the row, which paid the
+      // cost of fetching every other room + their member profiles just
+      // to read one room's rules. `GET /api/groupchat/rooms/{id}` is the
+      // dedicated single-room endpoint and returns 404 (mapped to `null`)
+      // when the room was deleted underneath the open drawer.
+      const room = await api.getGroupChatRoom(roomId);
       if (room) {
-        // Rules would come from the room's rules_json
-        // For now, load defaults
+        // Rules would come from the room's rules_json.
+        // For now, load defaults.
       }
     } catch (e) {
       console.error("Failed to load rules:", e);
-toastError("加载规则失败");
+      toastError("加载规则失败");
     }
   }, [roomId]);
 
@@ -124,7 +129,7 @@ toastError("保存聊天室设置失败");
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.4)", contain: "layout style paint" }} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "var(--color-overlay-scrim)", contain: "layout style paint" }} onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         className="w-full max-w-lg max-h-[80vh] rounded-2xl bg-bg-elevated border border-border-primary shadow-pop overflow-hidden flex flex-col"
