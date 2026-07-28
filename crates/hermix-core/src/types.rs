@@ -466,6 +466,81 @@ pub struct UsageStats {
     pub reasoning_tokens: u64,
 }
 
+impl UsageStats {
+    /// Build `UsageStats` from a provider's `usage` JSON object.
+    ///
+    /// Handles multiple known API response formats with a single
+    /// unified extraction path — built-in and custom providers both
+    /// benefit without per-provider parsing:
+    ///
+    /// | Format | prompt/completion | cache_read | cache_creation | reasoning |
+    /// |--------|-------------------|------------|----------------|-----------|
+    /// | OpenAI Chat Completions | `prompt_tokens` / `completion_tokens` | `prompt_tokens_details.cached_tokens` | — | `completion_tokens_details.reasoning_tokens` |
+    /// | Anthropic Messages | `input_tokens` / `output_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` | `reasoning_tokens` |
+    /// | OpenAI Responses | `input_tokens` / `output_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` | — |
+    ///
+    /// Fields absent from the response default to 0. `estimated_cost` is
+    /// always `None` — cost calculation is external (`CostGuard`).
+    pub fn from_json(usage: &serde_json::Value) -> Self {
+        // Try both naming conventions
+        let prompt = usage
+            .get("prompt_tokens")
+            .and_then(|v| v.as_u64())
+            .or_else(|| usage.get("input_tokens").and_then(|v| v.as_u64()))
+            .unwrap_or(0);
+        let completion = usage
+            .get("completion_tokens")
+            .and_then(|v| v.as_u64())
+            .or_else(|| usage.get("output_tokens").and_then(|v| v.as_u64()))
+            .unwrap_or(0);
+        let total = usage
+            .get("total_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(prompt + completion);
+
+        // Cache read: Anthropic / OpenAI Responses top-level, or
+        // OpenAI Chat Completions nested in prompt_tokens_details
+        let cache_read = usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+            .or_else(|| {
+                usage
+                    .get("prompt_tokens_details")
+                    .and_then(|d| d.get("cached_tokens"))
+                    .and_then(|v| v.as_u64())
+            })
+            .unwrap_or(0);
+
+        // Cache creation: Anthropic / OpenAI Responses only
+        let cache_creation = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        // Reasoning: Anthropic top-level, or OpenAI nested
+        let reasoning = usage
+            .get("reasoning_tokens")
+            .and_then(|v| v.as_u64())
+            .or_else(|| {
+                usage
+                    .get("completion_tokens_details")
+                    .and_then(|d| d.get("reasoning_tokens"))
+                    .and_then(|v| v.as_u64())
+            })
+            .unwrap_or(0);
+
+        Self {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            total_tokens: total,
+            estimated_cost: None,
+            cache_read_tokens: cache_read,
+            cache_creation_tokens: cache_creation,
+            reasoning_tokens: reasoning,
+        }
+    }
+}
+
 /// Helper for `skip_serializing_if` on `u64` zero values.
 fn is_zero_u64(v: &u64) -> bool {
     *v == 0

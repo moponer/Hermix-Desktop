@@ -203,19 +203,7 @@ impl CodexProvider {
             }
         }
 
-        let usage = json.get("usage").map(|u| {
-            let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            let output = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            UsageStats {
-                prompt_tokens: input,
-                completion_tokens: output,
-                total_tokens: input + output,
-                estimated_cost: None,
-                cache_read_tokens: 0,
-                cache_creation_tokens: 0,
-                reasoning_tokens: 0,
-            }
-        });
+        let usage = json.get("usage").map(UsageStats::from_json);
 
         let model = json
             .get("model")
@@ -474,19 +462,7 @@ impl LlmProvider for CodexProvider {
                             });
                         }
                         "response.completed" => {
-                            let usage = json.get("response").and_then(|r| r.get("usage")).map(|u| {
-                                let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                                let output = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-                                UsageStats {
-                                    prompt_tokens: input,
-                                    completion_tokens: output,
-                                    total_tokens: input + output,
-                                    estimated_cost: None,
-                                    cache_read_tokens: 0,
-                                    cache_creation_tokens: 0,
-                                    reasoning_tokens: 0,
-                                }
-                            });
+                            let usage = json.get("response").and_then(|r| r.get("usage")).map(UsageStats::from_json);
                             yield Ok(StreamChunk {
                                 delta: None,
                                 finish_reason: Some("stop".to_string()),

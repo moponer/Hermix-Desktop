@@ -1094,19 +1094,7 @@ impl AnthropicProvider {
             }
         }
 
-        let usage = json.get("usage").map(|u| {
-            let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            let output = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            UsageStats {
-                prompt_tokens: input,
-                completion_tokens: output,
-                total_tokens: input + output,
-                estimated_cost: None,
-                cache_read_tokens: u.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-                cache_creation_tokens: u.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-                reasoning_tokens: 0,
-            }
-        });
+        let usage = json.get("usage").map(UsageStats::from_json);
 
         let stop_reason = json
             .get("stop_reason")
@@ -1697,17 +1685,48 @@ fn parse_sse_chunk(json: &Value) -> Option<StreamChunk> {
     // Usage may appear in the final chunk as a top-level field, even when
     // `choices` is empty (OpenAI's `stream_options.include_usage` format).
     // Extract it FIRST so we never discard usage from a choices=[] chunk.
-    let usage = json.get("usage").map(|u| UsageStats {
-        prompt_tokens: u.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        completion_tokens: u
+    let usage = json.get("usage").map(|u| {
+        let prompt = u
+            .get("prompt_tokens")
+            .and_then(|v| v.as_u64())
+            .or_else(|| u.get("input_tokens").and_then(|v| v.as_u64()))
+            .unwrap_or(0);
+        let completion = u
             .get("completion_tokens")
             .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        total_tokens: u.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
-        estimated_cost: None,
-        cache_read_tokens: 0,
-        cache_creation_tokens: 0,
-        reasoning_tokens: 0,
+            .or_else(|| u.get("output_tokens").and_then(|v| v.as_u64()))
+            .unwrap_or(0);
+        UsageStats {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            total_tokens: u
+                .get("total_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(prompt + completion),
+            estimated_cost: None,
+            cache_read_tokens: u
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64())
+                .or_else(|| {
+                    u.get("prompt_tokens_details")
+                        .and_then(|d| d.get("cached_tokens"))
+                        .and_then(|v| v.as_u64())
+                })
+                .unwrap_or(0),
+            cache_creation_tokens: u
+                .get("cache_creation_input_tokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
+            reasoning_tokens: u
+                .get("reasoning_tokens")
+                .and_then(|v| v.as_u64())
+                .or_else(|| {
+                    u.get("completion_tokens_details")
+                        .and_then(|d| d.get("reasoning_tokens"))
+                        .and_then(|v| v.as_u64())
+                })
+                .unwrap_or(0),
+        }
     });
 
     let choices = json.get("choices").and_then(|c| c.as_array())?;
@@ -1896,29 +1915,7 @@ fn parse_openai_response(json: &Value) -> Result<LlmResponse, AgentError> {
 
     // Parse usage — tolerant of both OpenAI-style (prompt_tokens/completion_tokens)
     // and Anthropic-style (input_tokens/output_tokens) field names.
-    let usage = json.get("usage").map(|u| {
-        // Try OpenAI-style fields first, fall back to Anthropic-style.
-        let prompt = u.get("prompt_tokens")
-            .and_then(|v| v.as_u64())
-            .or_else(|| u.get("input_tokens").and_then(|v| v.as_u64()))
-            .unwrap_or(0);
-        let completion = u.get("completion_tokens")
-            .and_then(|v| v.as_u64())
-            .or_else(|| u.get("output_tokens").and_then(|v| v.as_u64()))
-            .unwrap_or(0);
-        let total = u.get("total_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(prompt + completion);
-        UsageStats {
-            prompt_tokens: prompt,
-            completion_tokens: completion,
-            total_tokens: total,
-            estimated_cost: None,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            reasoning_tokens: 0,
-        }
-    });
+    let usage = json.get("usage").map(UsageStats::from_json);
 
     let role = message_obj
         .get("role")
