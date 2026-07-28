@@ -806,6 +806,46 @@ pub enum StreamEvent {
 /// reconnects. This catches half-open connections where TCP stays
 /// up but packets are silently dropped.
 Pong,
+// ── Discussion events (P3.1) ────────────────────────────────
+/// Discussion mode started — leader initiated a multi-round discussion.
+DiscussionStarted {
+    room_id: String,
+    discussion_id: String,
+    topic: String,
+    participants: Vec<String>,
+    max_rounds: u8,
+},
+/// One streamed chunk during a discussion.
+DiscussionChunk {
+    room_id: String,
+    agent_id: String,
+    agent_name: String,
+    round: u8,
+    delta: String,
+},
+/// A participant's full message has been persisted to the room.
+DiscussionMessageSaved {
+    room_id: String,
+    discussion_id: String,
+    agent_id: String,
+    agent_name: String,
+    content: String,
+    round: u8,
+},
+/// One round completed — leader's summary + next action label.
+DiscussionRoundSummary {
+    room_id: String,
+    discussion_id: String,
+    round: u8,
+    summary: String,
+    next_action: String,
+},
+/// Discussion concluded (normal or cancelled).
+DiscussionConcluded {
+    room_id: String,
+    discussion_id: String,
+    total_rounds: u8,
+},
 }
 
 /// One row in the task list. Same shape as

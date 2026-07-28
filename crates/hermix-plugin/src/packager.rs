@@ -238,7 +238,16 @@ impl EsbuildPackager {
             // avoids "Could not resolve 'react'" during esbuild and prevents
             // duplicate React instances at runtime.
             cmd.arg("--external:react")
-                .arg("--external:react-dom/client");
+                .arg("--external:react-dom/client")
+                .arg("--external:react/jsx-runtime");
+            // Use automatic JSX runtime so that esbuild produces `_jsx()` calls
+            // instead of `React.createElement()`. This eliminates the need for
+            // `React` to be in scope (the classic runtime requires a default
+            // import of React which esbuild --external:react doesn't inject).
+            // The app-shell loader's `rewriteBareImports` rewrites
+            // `react/jsx-runtime` bare imports to the full esm.sh URL.
+            cmd.arg("--jsx=automatic")
+                .arg("--jsx-import-source=react");
         }
 
         cmd.stdout(Stdio::piped())

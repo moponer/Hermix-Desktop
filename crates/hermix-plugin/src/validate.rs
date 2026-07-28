@@ -164,7 +164,11 @@ fn esbuild_preflight(
         .arg("--log-level=warning")
         .arg("--color=false");
     if bundle_deps {
-        cmd.arg("--external:react").arg("--external:react-dom/client");
+        cmd.arg("--external:react")
+            .arg("--external:react-dom/client")
+            .arg("--external:react/jsx-runtime")
+            .arg("--jsx=automatic")
+            .arg("--jsx-import-source=react");
     }
 
     match cmd.output() {
