@@ -116,10 +116,7 @@
         };
 
         function rewriteBareImports(source) {
-            // 第一步: 检测是否有 React 默认导入 (如 import React from "react")
-            const hasReactDefault = /^\s*import\s+React\b/m.test(source);
-
-            // 第二步: 替换裸说明符为完整 URL
+            // 第一步: 替换所有 import ... from "specifier"（含无空格 minified）。
             let result = source.replace(
                 /(from\s*["'])([^"']+)(["'])/g,
                 (match, prefix, specifier, suffix) => {
@@ -130,7 +127,22 @@
                 }
             );
 
-            // 第三步: 检测是否使用了 React.createElement 但缺少默认导入。
+            // 第二步: 替换 side-effect import "specifier"（无 from，esbuild 可能产出）。
+            // Blob URL 模块图不继承 import map，因此必须把裸说明符展开。
+            result = result.replace(
+                /(import\s*["'])([^"']+)(["'])/g,
+                (match, prefix, specifier, suffix) => {
+                    if (IMPORT_MAP[specifier]) {
+                        return prefix + IMPORT_MAP[specifier] + suffix;
+                    }
+                    return match;
+                }
+            );
+
+            // 第三步: 检测是否有 React 默认导入 (如 import React from "react")
+            const hasReactDefault = /^\s*import\s+React\b/m.test(result);
+
+            // 第四步: 检测是否使用了 React.createElement 但缺少默认导入。
             // esbuild classic JSX transform 会产出 React.createElement() 调用，
             // 但 --external:react 只保留了用户的命名导入 (如 { useState })，
             // 没有自动注入 React 默认导入。
