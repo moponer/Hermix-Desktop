@@ -409,6 +409,85 @@ impl PatchBackend for LocalPatchBackend {
             ))),
         }
     }
+
+    /// Multi-edit implementation: read the file once, apply all edits
+    /// sequentially in memory, write once. If any edit fails to match,
+    /// the file is NOT modified and the error is returned immediately.
+    ///
+    /// This avoids N disk reads + N disk writes for N edits, and keeps
+    /// the operation atomic — either all edits apply or none do.
+    async fn patch_file_multi(
+        &self,
+        path: &str,
+        edits: &[(String, String, bool)],
+    ) -> Result<String, ToolError> {
+        // Read the file once.
+        let mut content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read '{}': {}", path, e)))?;
+
+        let mut applied: Vec<Value> = Vec::with_capacity(edits.len());
+
+        for (i, (old_string, new_string, replace_all)) in edits.iter().enumerate() {
+            if old_string.is_empty() {
+                // Empty old_string = append (same semantics as single patch).
+                // Only valid as the LAST edit — if it's not last, the
+                // subsequent edits would operate on appended text, which
+                // is rarely what the LLM intends.
+                content = if content.is_empty() {
+                    new_string.clone()
+                } else {
+                    format!("{}\n{}", content, new_string)
+                };
+                applied.push(json!({"edit": i + 1, "action": "appended"}));
+                continue;
+            }
+
+            if *replace_all {
+                if !content.contains(old_string.as_str()) {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "Edit {} (replace_all): could not find '{}' in '{}'",
+                        i + 1,
+                        &old_string[..old_string.len().min(100)],
+                        path
+                    )));
+                }
+                let count = content.matches(old_string.as_str()).count();
+                content = content.replace(old_string.as_str(), new_string.as_str());
+                applied.push(json!({"edit": i + 1, "replacements": count}));
+            } else {
+                match Self::fuzzy_find(&content, old_string) {
+                    Some((start, end)) => {
+                        let mut new_content = String::with_capacity(content.len());
+                        new_content.push_str(&content[..start]);
+                        new_content.push_str(new_string.as_str());
+                        new_content.push_str(&content[end..]);
+                        content = new_content;
+                        applied.push(json!({"edit": i + 1, "replacements": 1}));
+                    }
+                    None => {
+                        return Err(ToolError::ExecutionFailed(format!(
+                            "Edit {}: could not find a match for the specified text in '{}'",
+                            i + 1,
+                            path
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Write the final content once.
+        tokio::fs::write(path, &content)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write '{}': {}", path, e)))?;
+
+        Ok(json!({
+            "status": "ok",
+            "edits_applied": edits.len(),
+            "details": applied,
+        })
+        .to_string())
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -486,14 +486,36 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Run with `cargo test -- --ignored list_registered_tools --nocapture` to see the dump.
-    fn list_registered_tools_full() {
-        // Probe-driven: dump every schema name the registry actually
-        // exposes via `get_definitions()` (this is what the LLM sees
-        // when the agent loop calls `build_system_prompt`). The
-        // `list_registered_tools` test above only checks a hard-coded
-        // candidate list, which is why a "LLM says it has no
-        // terminal" regression could slip past it.
+    fn get_definitions_includes_critical_tools() {
+        // Regression guard: the four tools the user reported as
+        // "missing" in the original regression MUST appear in
+        // `get_definitions()` — this is what the LLM sees when
+        // the agent loop calls `build_system_prompt`. Note that
+        // the actual schema name for the code-execution tool is
+        // `execute_code` (the *toolset tag* is `code_execution`);
+        // the LLM sees the schema name, not the toolset tag.
+        let registry = registry_with_builtins();
+        let defs = registry.get_definitions();
+        let names: Vec<String> = defs.iter().map(|d| d.name.clone()).collect();
+        for required in ["terminal", "list_files", "execute_code", "list_tools"] {
+            assert!(
+                names.iter().any(|n| n == required),
+                "regression: get_definitions() does not include `{}`. \
+                 The LLM will say 'I don't have {}' even though the \
+                 tool is registered and ready to run.",
+                required,
+                required
+            );
+        }
+    }
+
+    #[test]
+    #[ignore] // Run with `cargo test -- --ignored dump_all_tool_names --nocapture` to see the dump.
+    fn dump_all_tool_names() {
+        // Pure diagnostic: prints every schema name the registry
+        // exposes via `get_definitions()`. Useful when updating
+        // DOCUMENTED_SAFE_TOOLS or adding new tools — not a
+        // regression test, kept ignored to avoid CI noise.
         let registry = registry_with_builtins();
         let defs = registry.get_definitions();
         let mut names: Vec<String> = defs.iter().map(|d| d.name.clone()).collect();
@@ -501,17 +523,6 @@ mod tests {
         eprintln!("get_definitions() returned {} tools:", names.len());
         for n in &names {
             eprintln!("  {}", n);
-        }
-        // Hard-pin the four tools the user reported as "missing" in
-        // the regression. Note that the actual schema name
-        // for the code-execution tool is `execute_code` (the *toolset
-        // tag* is `code_execution`); the LLM sees the schema name.
-        for required in ["terminal", "list_files", "execute_code", "list_tools"] {
-            assert!(
-                names.iter().any(|n| n == required),
-                "regression: get_definitions() does not include `{}`",
-                required
-            );
         }
     }
 

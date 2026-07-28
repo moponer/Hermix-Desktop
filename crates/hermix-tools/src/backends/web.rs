@@ -311,6 +311,116 @@ impl WebExtractBackend for SimpleExtractBackend {
         serde_json::to_string_pretty(&result)
             .map_err(|e| ToolError::ExecutionFailed(format!("Serialization error: {}", e)))
     }
+
+    /// Question-aware extraction: fetch the page, strip HTML, then
+    /// return only paragraphs that contain keywords from the question.
+    /// This is a "poor man's sub-model" — no LLM call needed, but
+    /// reduces a 50KB page to ~2-5KB of relevant content.
+    ///
+    /// Algorithm:
+    /// 1. Fetch + strip HTML (same as `extract`)
+    /// 2. Split into paragraphs (double-newline separated)
+    /// 3. Extract keywords from the question (alphanumeric tokens ≥ 3 chars)
+    /// 4. Score each paragraph by keyword hit count
+    /// 5. Return top N paragraphs (up to 5KB total)
+    /// 6. If no paragraph matches, return the first 5KB (fallback)
+    async fn extract_with_question(
+        &self,
+        url: &str,
+        _include_links: bool,
+        question: &str,
+    ) -> Result<String, ToolError> {
+        // Fetch the page (same logic as extract).
+        let resp = self.client.get(url).send().await.map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to fetch '{}': {}", url, e))
+        })?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(ToolError::ExecutionFailed(format!(
+                "HTTP {} when fetching '{}'",
+                status, url
+            )));
+        }
+
+        let bytes = resp.bytes().await.map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to read response body: {}", e))
+        })?;
+
+        // Cap at MAX_EXTRACT_BYTES even for question-aware path.
+        let bytes = if bytes.len() > MAX_EXTRACT_BYTES {
+            &bytes[..MAX_EXTRACT_BYTES]
+        } else {
+            &bytes[..]
+        };
+
+        let text = String::from_utf8_lossy(bytes);
+        let content = strip_html_tags(&text);
+
+        // Extract keywords from the question.
+        let keywords: Vec<String> = question
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| s.len() >= 3)
+            .map(|s| s.to_lowercase())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        // Split content into paragraphs.
+        let paragraphs: Vec<&str> = content.split("\n\n").collect();
+
+        // Score each paragraph by keyword hits (case-insensitive).
+        let mut scored: Vec<(usize, &str)> = paragraphs
+            .iter()
+            .map(|p| {
+                let lower = p.to_lowercase();
+                let score = keywords
+                    .iter()
+                    .filter(|kw| lower.contains(kw.as_str()))
+                    .count();
+                (score, *p)
+            })
+            .filter(|(score, p)| *score > 0 && p.len() > 20)
+            .collect();
+
+        // Sort by score descending, take top paragraphs up to 5KB.
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+
+        const MAX_QUESTION_RESULT_BYTES: usize = 5_000;
+        let mut result_content = String::with_capacity(MAX_QUESTION_RESULT_BYTES);
+        let mut paragraphs_used = 0;
+
+        for (_, para) in &scored {
+            if result_content.len() + para.len() + 2 > MAX_QUESTION_RESULT_BYTES {
+                break;
+            }
+            if !result_content.is_empty() {
+                result_content.push_str("\n\n");
+            }
+            result_content.push_str(para);
+            paragraphs_used += 1;
+        }
+
+        // Fallback: if no paragraphs matched keywords, return the first
+        // 5KB of content so the LLM at least gets something.
+        if result_content.is_empty() {
+            result_content = content.chars().take(MAX_QUESTION_RESULT_BYTES).collect();
+        }
+
+        let result = json!({
+            "url": url,
+            "question": question,
+            "content": result_content,
+            "paragraphs_returned": paragraphs_used,
+            "paragraphs_total": paragraphs.len(),
+            "keywords_matched": keywords.len(),
+            "truncated": content.len() > MAX_QUESTION_RESULT_BYTES,
+            "original_size": content.len(),
+        });
+
+        serde_json::to_string_pretty(&result)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Serialization error: {}", e)))
+    }
 }
 
 // ---------------------------------------------------------------------------

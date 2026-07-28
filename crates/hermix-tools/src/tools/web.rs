@@ -48,6 +48,23 @@ pub trait WebSearchBackend: Send + Sync {
 pub trait WebExtractBackend: Send + Sync {
     /// Extract content from a URL and return results as a string.
     async fn extract(&self, url: &str, include_links: bool) -> Result<String, ToolError>;
+
+    /// Extract content from a URL, filtered by a question. When the
+    /// backend supports question-aware extraction, it should return
+    /// only the paragraphs / sections relevant to the question —
+    /// dramatically reducing context bloat (50KB page → ~2-5KB
+    /// relevant excerpt). Default: ignores the question and returns
+    /// full content (backward compatible).
+    async fn extract_with_question(
+        &self,
+        url: &str,
+        include_links: bool,
+        question: &str,
+    ) -> Result<String, ToolError> {
+        // Default: ignore the question, fall back to full extract.
+        let _ = question;
+        self.extract(url, include_links).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +215,20 @@ impl ToolHandler for WebExtractHandler {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
+        // Question-aware extraction: when `question` is provided,
+        // delegate to `extract_with_question` so the backend can return
+        // only the paragraphs relevant to the question instead of the
+        // full page content. This is the zero-context-bloat path —
+        // a 50KB page becomes ~2-5KB of relevant excerpt.
+        if let Some(question) = params.get("question").and_then(|v| v.as_str()) {
+            if !question.trim().is_empty() {
+                return self
+                    .backend
+                    .extract_with_question(url, include_links, question)
+                    .await;
+            }
+        }
+
         self.backend.extract(url, include_links).await
     }
 
@@ -218,10 +249,17 @@ impl ToolHandler for WebExtractHandler {
                 "default": true
             }),
         );
+        props.insert(
+            "question".into(),
+            json!({
+                "type": "string",
+                "description": "Optional question about the page content. When provided, the tool returns only the paragraphs relevant to the question instead of the full page — reducing context bloat from ~50KB to ~2-5KB. STRONGLY RECOMMENDED: always pass a question when you know what you're looking for. Example: question='What is the default timeout value?' instead of dumping the entire page into context."
+            }),
+        );
 
         tool_schema(
             "web_extract",
-            "Extract clean content from a web page using Firecrawl. Returns the page text and optional links.",
+            "Extract clean content from a web page. Returns the page text and optional links. When 'question' is provided, returns only relevant paragraphs (context-efficient). Always pass 'question' when you know what you're looking for — a 50KB page becomes ~2-5KB.",
             JsonSchema::object(props, vec!["url".into()]),
         )
     }

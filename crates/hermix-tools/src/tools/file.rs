@@ -345,7 +345,7 @@ crate::credential_guard::check_path_traversal_advisory(path);
 /// Backend trait for file patching operations.
 #[async_trait]
 pub trait PatchBackend: Send + Sync {
-    /// Apply a patch to a file using fuzzy matching.
+    /// Apply a single patch to a file using fuzzy matching.
     async fn patch_file(
         &self,
         path: &str,
@@ -353,6 +353,27 @@ pub trait PatchBackend: Send + Sync {
         new_string: &str,
         replace_all: bool,
     ) -> Result<String, ToolError>;
+
+    /// Apply multiple patches to the same file atomically (read once,
+    /// apply all edits in memory, write once). If any edit fails, the
+    /// file is NOT modified — the entire operation aborts and returns
+    /// the first error.
+    ///
+    /// Default implementation calls `patch_file` sequentially. Real
+    /// backends should override this with an in-memory implementation
+    /// to avoid N disk reads/writes.
+    async fn patch_file_multi(
+        &self,
+        path: &str,
+        edits: &[(String, String, bool)],
+    ) -> Result<String, ToolError> {
+        let mut results = Vec::new();
+        for (i, (old, new, replace_all)) in edits.iter().enumerate() {
+            let r = self.patch_file(path, old, new, *replace_all).await?;
+            results.push(json!({"edit": i + 1, "result": r}));
+        }
+        Ok(json!({"status": "ok", "edits_applied": edits.len(), "details": results}).to_string())
+    }
 }
 
 /// Tool for patching files with fuzzy matching (find-and-replace).
@@ -389,6 +410,56 @@ impl ToolHandler for PatchHandler {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        // MultiEdit path: when `edits` array is present, apply multiple
+        // find-and-replace operations to the same file in one call.
+        // This reduces N tool calls (and N result entries in context) to
+        // a single call + single result — critical for zero-context-bloat.
+        if let Some(edits_arr) = params.get("edits").and_then(|v| v.as_array()) {
+            // `edits` and `old_string` are mutually exclusive — if both
+            // are present, the call is ambiguous and we reject it.
+            if params.get("old_string").is_some() {
+                return Err(ToolError::InvalidParams(
+                    "Cannot specify both 'edits' and 'old_string'. Use 'edits' for multi-edit, or 'old_string'/'new_string' for single edit.".into(),
+                ));
+            }
+            if edits_arr.is_empty() {
+                return Err(ToolError::InvalidParams(
+                    "'edits' array must not be empty.".into(),
+                ));
+            }
+            // Cap at 50 edits to prevent LLM from flooding a single call.
+            if edits_arr.len() > 50 {
+                return Err(ToolError::InvalidParams(format!(
+                    "'edits' array has {} entries — maximum is 50. Split into multiple patch calls.",
+                    edits_arr.len()
+                )));
+            }
+
+            // Parse each edit entry into (old_string, new_string, replace_all).
+            let mut edits: Vec<(String, String, bool)> = Vec::with_capacity(edits_arr.len());
+            for (i, entry) in edits_arr.iter().enumerate() {
+                let old = entry
+                    .get("old_string")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        ToolError::InvalidParams(format!(
+                            "edits[{i}] missing 'old_string'"
+                        ))
+                    })?;
+                let new = entry
+                    .get("new_string")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let ra = entry
+                    .get("replace_all")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                edits.push((old.to_string(), new.to_string(), ra));
+            }
+
+            return self.backend.patch_file_multi(path, &edits).await;
+        }
+
         self.backend
             .patch_file(path, old_string, new_string, replace_all)
             .await
@@ -422,10 +493,23 @@ impl ToolHandler for PatchHandler {
             "description": "Replace all occurrences instead of requiring a unique match (default: false)",
             "default": false
         }));
+        props.insert("edits".into(), json!({
+            "type": "array",
+            "description": "Multiple find-and-replace edits to apply atomically to the same file. Each entry: {old_string, new_string, replace_all?}. Edits are applied sequentially — the result of edit N is the input to edit N+1. If any edit fails to match, the entire operation aborts and the file is NOT modified. Use this instead of multiple separate patch calls to avoid context bloat (N calls = N results in ctx vs 1 call = 1 result). Mutually exclusive with 'old_string'. Max 50 entries.",
+            "items": json!({
+                "type": "object",
+                "properties": {
+                    "old_string": json!({"type": "string", "description": "Text to find (fuzzy matching supported)"}),
+                    "new_string": json!({"type": "string", "description": "Replacement text (empty string to delete)"}),
+                    "replace_all": json!({"type": "boolean", "description": "Replace all occurrences (default: false)", "default": false})
+                },
+                "required": ["old_string"]
+            })
+        }));
 
         tool_schema(
             "patch",
-            "Apply targeted find-and-replace edits to a file using fuzzy matching. Minor whitespace/indentation differences won't break matching.",
+            "Apply targeted find-and-replace edits to a file using fuzzy matching. Minor whitespace/indentation differences won't break matching. For multiple edits to the same file, pass an 'edits' array instead of separate old_string/new_string calls — this applies all edits atomically (read once, write once) and keeps context clean.",
             JsonSchema::object(props, vec!["path".into(), "old_string".into()]),
         )
     }
