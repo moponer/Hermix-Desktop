@@ -1,34 +1,34 @@
-import { useEffect, useState, useCallback } from "react";
+﻿﻿﻿﻿import { useEffect, useState, useCallback } from "react";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
+import { THEMES, isKnownTheme } from "../styles/themes/registry";
 
-export type ThemeMode = "light" | "dark" | "system";
-const STORAGE_KEY = STORAGE_KEYS.theme;
+// 主题 = 任一已发现的 .css (light / dark / rainforest / 用户新增)
+// 数据源：themes/registry.ts 的 THEMES 数组 (auto-discover)
+// 持久化键：hermix.desktop.theme
+export type ThemeMode = string;
 
-function getSystemPrefersDark(): boolean {
-  return typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-}
-
-function applyTheme(mode: ThemeMode) {
+function applyTheme(id: string) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   const body = document.body;
-  const wantDark = mode === "dark" || (mode === "system" && getSystemPrefersDark());
-  // 同时挂到 <html> 和 <body>：Tailwind 的 dark: 变体默认挂在
-  // <html> 上, 但我们 CSS 用了 .dark 选择器, 一旦某个 Tauri 顶层节点
-  // 把 .dark 拦下 (例如 OS-controlled root), <body> 这层能兜底.
-  root.classList.toggle("dark", wantDark);
-  if (body) body.classList.toggle("dark", wantDark);
-  root.dataset.theme = wantDark ? "dark" : "light";
-  if (body) body.dataset.theme = wantDark ? "dark" : "light";
+  // 单一 data-theme = 主题唯一来源
+  root.dataset.theme = id;
+  if (body) body.dataset.theme = id;
+  // 暗色主题集合：这些主题需要 colorScheme=dark 以正确渲染原生控件（滚动条等）
+  // 同时 dark 主题挂 .dark 以兼容 tokens.css 的 .dark 选择器
+  const DARK_THEMES = new Set(["dark", "rainforest"]);
+  const wantDark = DARK_THEMES.has(id);
+  root.classList.toggle("dark", id === "dark");
+  if (body) body.classList.toggle("dark", id === "dark");
   root.style.colorScheme = wantDark ? "dark" : "light";
 }
 
 function readStored(): ThemeMode {
   try {
-    const v = storage.getItem(STORAGE_KEY);
-    if (v === "light" || v === "dark" || v === "system") return v;
+    const v = storage.getItem(STORAGE_KEYS.theme);
+    if (v && isKnownTheme(v)) return v;
   } catch {}
-  return "system";
+  return "light";
 }
 
 export function useTheme() {
@@ -36,24 +36,23 @@ export function useTheme() {
 
   useEffect(() => {
     applyTheme(mode);
-    try { storage.setItem(STORAGE_KEY, mode); } catch {}
+    try { storage.setItem(STORAGE_KEYS.theme, mode); } catch {}
   }, [mode]);
 
-  // Track system preference changes when in system mode
+  // 主题不依赖 prefers-color-scheme (system 已退出) -- 保留监听以备扩展.
   useEffect(() => {
-    if (mode !== "system") return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = () => applyTheme("system");
+    const handler = () => { if (mode === "dark") applyTheme("dark"); };
     mq.addEventListener("change", handler);
     return () => mq.removeEventListener("change", handler);
   }, [mode]);
 
   const setMode = useCallback((next: ThemeMode) => setModeState(next), []);
   const cycle = useCallback(() => {
-    setModeState((cur) => (cur === "light" ? "dark" : cur === "dark" ? "system" : "light"));
+    setModeState((cur) => {
+      const idx = THEMES.findIndex((t) => t.id === cur);
+      return THEMES[(idx + 1) % THEMES.length]?.id ?? "light";
+    });
   }, []);
-
-  const resolvedDark = mode === "dark" || (mode === "system" && getSystemPrefersDark());
-
-  return { mode, setMode, cycle, resolvedDark };
+  return { mode, setMode, cycle };
 }

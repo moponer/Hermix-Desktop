@@ -1,0 +1,46 @@
+﻿/* Dark theme
+ * tokens.css 中 :root.dark 已经覆盖所有变量, 这里只声明选择器,
+ * 让 data-theme="dark" 也命中同一份变量, 与 .dark 兼容.
+ *
+ * NOTE: 非 @layer — 非层级化样式优先级高于 @theme 层级，
+ * 确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值。
+ */
+:root[data-theme="dark"] {
+  --color-bg-app:         #0f0f12;
+  --color-bg-primary:     #1c1c20;
+  --color-bg-secondary:   #232328;
+  --color-bg-tertiary:    #2e2e34;
+  --color-bg-hover:       #2a2a30;
+  --color-bg-active:      #353539;
+  --color-bg-card:        #1c1c20;
+  --color-bg-elevated:    #25252a;
+  --color-bg-code:        #1a1d23;
+  --color-bg-code-header: #22252b;
+  --color-bg-code-border: #33333a;
+
+  --color-border-primary:   #3a3a40;
+  --color-border-secondary: #4a4a52;
+  --color-border-subtle:    #34343a;
+
+  --color-text-primary:   #fafafa;
+  --color-text-secondary: #d4d4d8;
+  --color-text-tertiary:  #b0b0b8;
+  --color-text-muted:     #9b9ba4;
+  --color-text-faint:     #76767e;
+  --color-text-on-code:   #e0e0e6;
+
+  --color-accent:            #cbd5e1;
+  --color-accent-hover:      #e2e8f0;
+  --color-accent-soft:       rgba(203, 213, 225, 0.14);
+  --color-accent-soft-strong: rgba(203, 213, 225, 0.22);
+  --color-accent-on-text:    #0f172a;
+
+  --color-overlay-scrim:     rgba(0, 0, 0, 0.72);
+  --color-modal-outline:     rgba(250, 250, 250, 0.08);
+}
+/* 在暗色主题里清掉场景背景, 避免让人感觉在白底 + 飘雪 */
+:root[data-theme="dark"] {
+  --theme-bg-app: var(--color-bg-app);
+  --theme-bg-sidebar: var(--color-bg-secondary);
+  --theme-bg-titlebar: var(--color-bg-elevated);
+}

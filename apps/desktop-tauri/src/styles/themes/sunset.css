@@ -1,0 +1,51 @@
+/*
+ * Warm Sun Hope Theme (暖阳希望)
+ * 暖色调亮色主题：晨光般的暖底色 + 蜂蜜金强调色。
+ * 基底 = 暖奶白（非纯白，带金色底调），文字 = 暖深棕（非纯黑）。
+ * 背景为顶部散发淡金辉光的径向渐变，如晨阳从上方洒落。
+ *
+ * NOTE: 非 @layer — 非层级化样式优先级高于 @theme 层级，
+ * 确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值。
+ */
+:root[data-theme="sunset"] {
+  --color-bg-app:         #f0e6d4;
+  --color-bg-primary:     #fffdf8;
+  --color-bg-secondary:   #f5ede0;
+  --color-bg-tertiary:    #ede2d0;
+  --color-bg-hover:       #ece2cf;
+  --color-bg-active:      #e8dcc8;
+  --color-bg-card:        #fffdf8;
+  --color-bg-elevated:    #fffefb;
+  --color-bg-code:        #f5ede0;
+  --color-bg-code-header: #faf3e8;
+  --color-bg-code-border: #ddd0bc;
+
+  --color-chat-assistant-bg: var(--color-bg-primary);
+  --color-chat-tool-bg:     var(--color-bg-secondary);
+
+  --color-border-primary:   #ddd0bc;
+  --color-border-secondary: #c9b89c;
+  --color-border-subtle:    #e8ddc8;
+
+  --color-text-primary:   #3d2e1f;
+  --color-text-secondary: #5a4530;
+  --color-text-tertiary:  #75593e;
+  --color-text-muted:     #8a6f50;
+  --color-text-faint:     #b0977a;
+  --color-text-on-code:   #4a3825;
+
+  --color-accent:            #b8702a;
+  --color-accent-hover:      #9d5e1e;
+  --color-accent-soft:       rgba(184, 112, 42, 0.14);
+  --color-accent-soft-strong: rgba(184, 112, 42, 0.24);
+  --color-accent-on-text:    #ffffff;
+
+  --color-overlay-scrim:     rgba(60, 45, 25, 0.40);
+  --color-modal-outline:     rgba(60, 45, 25, 0.06);
+
+  /* 晨阳辉光：顶部散发淡金径向渐变，向下渐隐为暖奶白 */
+  --theme-bg-app: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800' preserveAspectRatio='xMidYMid slice'%3E%3Cdefs%3E%3CradialGradient id='g' cx='50%25' cy='0%25' r='95%25'%3E%3Cstop offset='0%25' stop-color='%23ffe9c0' stop-opacity='0.85'/%3E%3Cstop offset='35%25' stop-color='%23f5e6cc' stop-opacity='0.35'/%3E%3Cstop offset='100%25' stop-color='%23f0e6d4' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='1200' height='800' fill='%23f0e6d4'/%3E%3Crect width='1200' height='800' fill='url(%23g)'/%3E%3C/svg%3E");
+
+  --theme-bg-sidebar:  var(--color-bg-secondary);
+  --theme-bg-titlebar: var(--color-bg-elevated);
+}
