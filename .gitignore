@@ -136,3 +136,11 @@ apps/desktop-tauri/src-tauri/resources/ocr/
 # files here manually.
 apps/desktop-tauri/src-tauri/resources/shell/
 apps/desktop-tauri/src-tauri/resources/esbuild/
+
+# Editor / merge backup artifacts (never commit)
+*.orig
+*.original
+
+# Root-level ad-hoc preview / upload temp files
+/rainforest-bg-preview.html
+/upload_*.jpg
