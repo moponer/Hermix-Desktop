@@ -246,7 +246,7 @@ export function InlinePathPreview({ path, workspaceRoot, onClose, anchor }: Inli
             </pre>
           )}
           {state.status === "office" && (
-            <div className="w-full rounded-md overflow-hidden border border-border-subtle" style={{ background: "#fff", minHeight: "300px" }}>
+            <div className="w-full rounded-md overflow-hidden border border-border-subtle" style={{ background: "var(--color-bg-primary)", minHeight: "300px" }}>
               <iframe
                 srcDoc={state.htmlContent}
                 className="w-full border-0"

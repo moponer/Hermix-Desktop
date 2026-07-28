@@ -1,5 +1,5 @@
 /**
- * chatScroll unit tests — covers the 3 pure helpers driving ChatView's
+ * chatScroll unit tests — covers the pure helpers driving ChatView's
  * sticky-bottom + force-scroll behaviour.
  */
 import { describe, it, expect } from "vitest";
@@ -7,6 +7,7 @@ import {
   shouldFollowOnStreamChunk,
   computeBottomScrollTop,
   distanceFromBottomPx,
+  scrollToBottomWithSettle,
 } from "./chatScroll";
 
 describe("shouldFollowOnStreamChunk", () => {
@@ -15,19 +16,10 @@ describe("shouldFollowOnStreamChunk", () => {
   });
 
   it("does NOT follow when user has scrolled up to browse history (sticky)", () => {
-    // The "内容会在某个位置停住" bug from the owner report had the wrong
-    // polarity here — the streaming rAF used to call scrollIntoView but
-    // the messagesEndRef stayed inside the viewport and the browser didn't
-    // move scrollTop. The fix doesn't change this guard (sticky is correct
-    // when the user is actively browsing history), it changes the
-    // *scroll mechanism* so the *follow* branch actually scrolls.
     expect(shouldFollowOnStreamChunk(true, false)).toBe(false);
   });
 
   it("force-scroll overrides sticky-bottom guard (user just submitted)", () => {
-    // Owner report: "往上翻看对话内容后...发送消息出去不会自动滚动到
-    // 用户消息的这个位置". Submit is user-initiated; must land the user
-    // on the message they just sent regardless of prior scroll position.
     expect(shouldFollowOnStreamChunk(true, true)).toBe(true);
     expect(shouldFollowOnStreamChunk(false, true)).toBe(true);
   });
@@ -43,10 +35,6 @@ describe("computeBottomScrollTop", () => {
   });
 
   it("clamps to 0 when scrollHeight < clientHeight (transient reflow)", () => {
-    // Some browsers report scrollHeight below clientHeight during initial
-    // reflow; we'd otherwise set a negative scrollTop which the browser
-    // silently rounds to 0 anyway — but the explicit clamp is cheaper
-    // than letting it become NaN.
     expect(computeBottomScrollTop(500, 600)).toBe(0);
   });
 
@@ -66,8 +54,130 @@ describe("distanceFromBottomPx", () => {
   });
 
   it("is negative when the viewport extends past the bottom (large viewport)", () => {
-    // Only happens with oversized clientHeight; should be treated as
-    // "at or past the bottom" by sticky-bottom logic.
     expect(distanceFromBottomPx(0, 400, 600)).toBe(-200);
+  });
+});
+
+// Test helpers — see scrollToBottomWithSettle JSDoc for why this exists.
+// jsdom doesn't lay out content, so we mock scrollHeight/clientHeight
+// via getters that the test can update between frames.
+function makeMockEl(): {
+  el: HTMLElement;
+  setHeight: (h: number) => void;
+  setClient: (h: number) => void;
+  top: number;
+} {
+  let scrollHeight = 1000;
+  let clientHeight = 600;
+  const el = document.createElement("div");
+  Object.defineProperty(el, "scrollHeight", {
+    configurable: true,
+    get: () => scrollHeight,
+  });
+  Object.defineProperty(el, "clientHeight", {
+    configurable: true,
+    get: () => clientHeight,
+  });
+  return {
+    el,
+    setHeight: (h) => {
+      scrollHeight = h;
+    },
+    setClient: (h) => {
+      clientHeight = h;
+    },
+    get top() {
+      return el.scrollTop;
+    },
+  };
+}
+
+// Flush rAFs: schedules `frames` requestAnimationFrame ticks. Returns when
+// all of them have fired (or after a generous timeout for slow CI).
+async function flushFrames(frames: number): Promise<void> {
+  for (let i = 0; i < frames; i++) {
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+  }
+}
+
+describe("scrollToBottomWithSettle", () => {
+  it("one-shot scroll lands at bottom when scrollHeight is stable", async () => {
+    const m = makeMockEl();
+    m.setHeight(2000);
+    scrollToBottomWithSettle(m.el, 15);
+    await flushFrames(4);
+    expect(m.top).toBe(2000 - 600);
+  });
+
+  it("keeps re-applying scrollTop while scrollHeight is still growing", async () => {
+    const m = makeMockEl();
+    m.setHeight(1000);
+    scrollToBottomWithSettle(m.el, 15);
+
+    // Simulate messages loading in chunks across frames.
+    m.setHeight(1800);
+    await flushFrames(1);
+    m.setHeight(2400);
+    await flushFrames(1);
+    m.setHeight(3000);
+    await flushFrames(1);
+
+    // After growth stops, final scrollTop should match the latest height.
+    expect(m.top).toBe(3000 - 600);
+  });
+
+  it("stops after maxFrames even when scrollHeight keeps changing", async () => {
+    const m = makeMockEl();
+    m.setHeight(1000);
+    scrollToBottomWithSettle(m.el, 3);
+
+    // Grow on every frame; with cap=3 we should stop early.
+    for (let i = 0; i < 8; i++) {
+      m.setHeight(1000 + (i + 1) * 1000);
+      await flushFrames(1);
+    }
+    await flushFrames(2);
+    // Final scrollTop should reflect some early height, not the final
+    // one — otherwise the retry didn't respect the cap.
+    const finalHeight = 1000 + 9 * 1000;
+    expect(m.top).toBeLessThan(finalHeight - 600);
+  });
+
+  it("cancel() returned by the helper stops the retry loop", async () => {
+    const m = makeMockEl();
+    m.setHeight(1000);
+    const cancel = scrollToBottomWithSettle(m.el, 15);
+    await flushFrames(3);
+    const captured = m.top;
+    cancel();
+    m.setHeight(10000);
+    await flushFrames(5);
+    // After cancel, no more re-scrolls should happen.
+    expect(m.top).toBe(captured);
+  });
+
+  it("isCancelled callback aborts retry when user scrolls up mid-restore", async () => {
+    const m = makeMockEl();
+    m.setHeight(1000);
+    let aborted = false;
+    scrollToBottomWithSettle(m.el, 15, () => aborted);
+    await flushFrames(3);
+    aborted = true;
+    const captured = m.top;
+    m.setHeight(10000);
+    await flushFrames(5);
+    expect(m.top).toBe(captured);
+  });
+
+  it("maxFrames=0 skips retries — single scroll, no follow-up", async () => {
+    const m = makeMockEl();
+    m.setHeight(2000);
+    scrollToBottomWithSettle(m.el, 0);
+    await flushFrames(4);
+    const captured = m.top;
+    m.setHeight(8000);
+    await flushFrames(4);
+    expect(m.top).toBe(captured);
+    expect(captured).toBe(2000 - 600);
   });
 });

@@ -6,6 +6,7 @@ import {
 import {
   shouldFollowOnStreamChunk,
   computeBottomScrollTop,
+  scrollToBottomWithSettle,
 } from "../utils/chatScroll";
 import type { ChatMessage, TimelineStep, QueuedMessage, QueuedImage, SubAgentState } from "../types";
 import type { CompressMethod } from "../utils/imageCompressor";
@@ -1188,6 +1189,9 @@ useEffect(() => {
 
 const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
 const [filePaths, setFilePaths] = useState<string[]>([]);
+// 异步压缩进行中标志。防止竞态：用户粘贴图片→压缩中→用户发送消息→
+// clearPendingImages 清空空数组→压缩完成→setPendingImages 把图片加回来。
+const [isProcessingFiles, setIsProcessingFiles] = useState(false);
 
 // P0-9: Consume external file attachment from right-sidebar “加入对话”.
 // When the parent sets `pendingFileAttachment`, add it to `filePaths`
@@ -1224,44 +1228,49 @@ const [keepOriginalImage, setKeepOriginalImage] = useState(false);
  */
 const handleFilesAttach = useCallback(
   async (files: File[]) => {
-    // 分离图片和非图片文件
-    const images: File[] = [];
-    const nonImages: File[] = [];
-    for (const f of files) {
-      if (f.type.startsWith("image/")) images.push(f);
-      else nonImages.push(f);
-    }
+    setIsProcessingFiles(true);
+    try {
+      // 分离图片和非图片文件
+      const images: File[] = [];
+      const nonImages: File[] = [];
+      for (const f of files) {
+        if (f.type.startsWith("image/")) images.push(f);
+        else nonImages.push(f);
+      }
 
-    // 图片走压缩 + blobUrl 预览（保持现有逻辑）
-    if (images.length > 0) {
-      const results: CompressResult[] = await Promise.all(
-        images.map((f) => (keepOriginalImage ? skipCompression(f) : compressImage(f))),
-      );
-      const newImages: PendingImage[] = results.map((r) => ({
-        file: r.file,
-        blobUrl: URL.createObjectURL(r.file),
-        sizeBytes: r.compressedSize,
-        mimeType: r.file.type,
-        isCompressed: r.isCompressed,
-        method: r.method,
-        name: r.file.name,
-      }));
-      setPendingImages((prev) => [...prev, ...newImages]);
-    }
+      // 图片走压缩 + blobUrl 预览（保持现有逻辑）
+      if (images.length > 0) {
+        const results: CompressResult[] = await Promise.all(
+          images.map((f) => (keepOriginalImage ? skipCompression(f) : compressImage(f))),
+        );
+        const newImages: PendingImage[] = results.map((r) => ({
+          file: r.file,
+          blobUrl: URL.createObjectURL(r.file),
+          sizeBytes: r.compressedSize,
+          mimeType: r.file.type,
+          isCompressed: r.isCompressed,
+          method: r.method,
+          name: r.file.name,
+        }));
+        setPendingImages((prev) => [...prev, ...newImages]);
+      }
 
-    // 非图片文件：通过 Tauri IPC 获取本地路径
-    if (nonImages.length > 0) {
-      const paths: string[] = [];
-      for (const f of nonImages) {
-        // Tauri WebView2 暴露 file.path 属性（非标准 Chromium API）
-        const filePath = (f as File & { path?: string }).path;
-        if (filePath && typeof filePath === "string") {
-          paths.push(filePath);
+      // 非图片文件：通过 Tauri IPC 获取本地路径
+      if (nonImages.length > 0) {
+        const paths: string[] = [];
+        for (const f of nonImages) {
+          // Tauri WebView2 暴露 file.path 属性（非标准 Chromium API）
+          const filePath = (f as File & { path?: string }).path;
+          if (filePath && typeof filePath === "string") {
+            paths.push(filePath);
+          }
+        }
+        if (paths.length > 0) {
+          setFilePaths((prev) => [...prev, ...paths]);
         }
       }
-      if (paths.length > 0) {
-        setFilePaths((prev) => [...prev, ...paths]);
-      }
+    } finally {
+      setIsProcessingFiles(false);
     }
   },
   [keepOriginalImage],
@@ -1458,18 +1467,29 @@ const clearPendingImages = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
 
-    // Double rAF: first frame lets React commit the message DOM, second
-    // frame lets images / web fonts settle so `scrollHeight` is final.
-    // Without this, restoring a long history lands at the wrong offset
-    // because the container is still growing as child rows mount.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        el.scrollTop = computeBottomScrollTop(el.scrollHeight, el.clientHeight);
-        if (justRestoredRef.current) {
-          justRestoredRef.current = false;
-        }
-      });
-    });
+    // Session-restore force-scrolls must land at the actual bottom of
+    // the fully laid-out content. A double-rAF was the previous
+    // approximation, but rich content (markdown, images, web fonts,
+    // syntax-highlighted code) keeps the container growing past +2
+    // frames. Owner-reported bug: some restored conversations dont
+    // auto-scroll, have to scroll down manually. scrollToBottomWithSettle
+    // re-applies the scroll on every rAF until scrollHeight stops
+    // growing (or we hit the cap). For non-restore forces (handleSubmit)
+    // pass maxFrames=0 for a single one-shot scroll.
+    const isRestore = justRestoredRef.current;
+    scrollToBottomWithSettle(
+      el,
+      isRestore ? 15 : 0,
+      // User scrolled up mid-restore: stop pulling them back.
+      () => hasUserScrolledUpRef.current && !justRestoredRef.current,
+    );
+    // Clear justRestoredRef so a subsequent message-count change does
+    // not re-trigger the restore path. The settle loop reads this ref
+    // on every tick; once we set it false, the loop isCancelled
+    // callback takes over for any subsequent user scroll-up.
+    if (isRestore) {
+      justRestoredRef.current = false;
+    }
     // Reset the force-scroll counter once the effect has consumed it.
     // We compare against lastObservedForceSeqRef so we only reset when
     // we've actually applied the scroll; a fast double-submit before
@@ -1633,7 +1653,10 @@ const clearPendingImages = useCallback(() => {
 
   const handleSubmit = async () => {
     const trimmed = input.trim();
-    if (!trimmed) return;
+    // 允许纯图片/纯文件发送（无文字也能发送），但压缩进行中阻止发送。
+    // 防止竞态：压缩未完成→pendingImages 为空→发送→清空→压缩完成→图片残留。
+    if (!trimmed && pendingImages.length === 0 && filePaths.length === 0) return;
+    if (isProcessingFiles) return;
     // Snapshot the current attachments up-front so both the enqueue
     // (streaming) and direct-send paths share one source of truth.
     const attachedImages: QueuedImage[] = pendingImages.map((img) => ({
@@ -1670,6 +1693,11 @@ const clearPendingImages = useCallback(() => {
     // onError callback in App.tsx.
     onClearStreamError?.();
     setInput("");
+    // 立即清空附件预览：attachments 已经 snapshot，输入框图片无需再保留。
+    // 之前放在 finally 中，但 await onSendMessage 要等整个 LLM 流式回复结束才 resolve，
+    // 导致图片在输入框一直残留到回复完毕才消失。
+    clearPendingImages();
+    setFilePaths([]);
     // If currently streaming OR a previous send is still in flight,
     // enqueue instead of sending directly. The App.tsx auto-drain
     // `useEffect` ([streaming, messageQueue, handleSendMessage]) will
@@ -1694,8 +1722,7 @@ const clearPendingImages = useCallback(() => {
         images: attachedImages.length > 0 ? attachedImages : undefined,
         attachedFilePaths: attachedPaths.length > 0 ? attachedPaths : undefined,
       });
-      clearPendingImages();
-      setFilePaths([]);
+      // clearPendingImages / setFilePaths 已在 setInput("") 之后调用
       return;
     }
     setSending(true);
@@ -1766,8 +1793,8 @@ const clearPendingImages = useCallback(() => {
       await onSendMessage(trimmed, undefined, overrides, attachments);
     } finally {
       setSending(false);
-      clearPendingImages();
-      setFilePaths([]);
+      // clearPendingImages / setFilePaths 已在 setInput("") 之后立即调用，
+      // 无需在 finally 重复。
     }
   };
 
@@ -1911,6 +1938,7 @@ const clearPendingImages = useCallback(() => {
               onRestore={onRestore}
               onStop={onStop}
               pendingImages={pendingImages}
+              isProcessingFiles={isProcessingFiles}
               onRemoveImage={removePendingImage}
               onFilesAttach={handleFilesAttach}
               keepOriginalImage={keepOriginalImage}
@@ -2287,6 +2315,7 @@ and red at ≥95% of the window. */}
             onRestore={onRestore}
             onStop={onStop}
             pendingImages={pendingImages}
+            isProcessingFiles={isProcessingFiles}
             onRemoveImage={removePendingImage}
             onFilesAttach={handleFilesAttach}
             keepOriginalImage={keepOriginalImage}
@@ -2342,6 +2371,7 @@ interface ComposerProps {
   onRestore?: () => void;
   onFilesAttach?: (files: File[]) => void;
   pendingImages?: PendingImage[];
+  isProcessingFiles?: boolean;
   onRemoveImage?: (index: number) => void;
   keepOriginalImage?: boolean;
   setKeepOriginalImage?: (v: boolean) => void;
@@ -2401,7 +2431,7 @@ function Composer(p: ComposerProps) {
       style={{
         background: "var(--color-bg-primary)",
         border: "1px solid var(--color-border-primary)",
-        boxShadow: "0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)",
+        boxShadow: "var(--shadow-pop)",
         // 保留 popover 完整可见（之前 overflow-hidden 会切掉底部弹层）
         overflow: "visible",
       }}
@@ -2435,11 +2465,11 @@ function Composer(p: ComposerProps) {
         <div
           className="absolute inset-0 z-10 rounded-2xl flex items-center justify-center pointer-events-none"
           style={{
-            background: "rgba(15, 110, 86, 0.08)",
-            border: "2px dashed rgba(15, 110, 86, 0.5)",
+            background: "color-mix(in srgb, var(--color-chip-workspace-fg) 12%, transparent)",
+            border: "2px dashed color-mix(in srgb, var(--color-chip-workspace-fg) 60%, transparent)",
           }}
         >
-          <div className="text-[13px] text-[#0F6E56] font-medium bg-bg-elevated/90 px-3 py-1.5 rounded-lg">
+          <div className="text-[13px] text-[color:var(--color-chip-workspace-fg)] font-medium bg-bg-elevated/90 px-3 py-1.5 rounded-lg">
             松开以添加文件
           </div>
         </div>
@@ -2612,14 +2642,14 @@ function Composer(p: ComposerProps) {
                 toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[140px]"
               } ${
                 p.expert
-                  ? "text-[#185FA5] hover:bg-[#E6F1FB]/70 font-medium"
+                  ? "text-[color:var(--color-chip-model-fg)] hover:bg-[color:var(--color-chip-model-bg)] font-medium"
                   : expertPanelOpen
                   ? "bg-bg-hover text-text-primary"
                   : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
               }`}
               title={p.expert ? `已雇佣：${p.expert.name}` : "选择专家"}
             >
-              <Sparkles size={12} className={p.expert ? "text-[#185FA5]" : "text-text-muted"} />
+              <Sparkles size={12} className={p.expert ? "text-[color:var(--color-chip-model-fg)]" : "text-text-muted"} />
               <span
                 className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
               >
@@ -2662,7 +2692,7 @@ function Composer(p: ComposerProps) {
                 p.workspaceLocked
                   ? "text-text-faint cursor-not-allowed opacity-60"
                   : p.activeWorkspace
-                  ? "text-[#0F6E56] hover:bg-[#E1F5EE] font-medium cursor-pointer"
+                  ? "text-[color:var(--color-chip-workspace-fg)] hover:bg-[color:var(--color-chip-workspace-bg)] font-medium cursor-pointer"
                   : "text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer"
               }`}
               title={
@@ -2676,7 +2706,7 @@ function Composer(p: ComposerProps) {
               {p.workspaceLocked ? (
                 <Lock size={12} className="text-text-faint" />
               ) : (
-                <FolderOpen size={12} className={p.activeWorkspace ? "text-[#0F6E56]" : "text-text-faint"} />
+                <FolderOpen size={12} className={p.activeWorkspace ? "text-[color:var(--color-chip-workspace-fg)]" : "text-text-faint"} />
               )}
               <span
                 className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
@@ -2688,7 +2718,7 @@ function Composer(p: ComposerProps) {
               <PopoverShell containerRef={projContainerRef} triggerRef={projTriggerRef} width="sm" side="top">
                 <button
                   onClick={async () => { await p.onAddWorkspace(); setProjOpen(false); }}
-                  className="flex items-center justify-center gap-1.5 w-full px-2.5 py-2 text-[12px] text-[#0F6E56] hover:bg-[#E1F5EE] rounded-lg transition-colors font-medium"
+                  className="flex items-center justify-center gap-1.5 w-full px-2.5 py-2 text-[12px] text-[color:var(--color-chip-workspace-fg)] hover:bg-[color:var(--color-chip-workspace-bg)] rounded-lg transition-colors font-medium"
                   title="选择本地目录添加为工作区"
                 >
                   添加新工作区
@@ -2703,16 +2733,16 @@ function Composer(p: ComposerProps) {
                           key={ws.id}
                           onClick={() => { p.onSelectWorkspace(ws.path); setProjOpen(false); }}
                           className={`flex items-center gap-2.5 w-full px-2.5 py-2.5 text-left rounded-lg hover:bg-bg-hover transition-colors ${
-                            p.activeWorkspace?.id === ws.id ? "bg-[#E1F5EE]/60" : ""
+                            p.activeWorkspace?.id === ws.id ? "bg-[color:var(--color-chip-workspace-bg)]" : ""
                           }`}
                           title={ws.path}
                         >
-                          <FolderOpen size={15} className="shrink-0 text-[#0F6E56] opacity-70" />
+                          <FolderOpen size={15} className="shrink-0 text-[color:var(--color-chip-workspace-fg)] opacity-70" />
                           <div className="flex-1 min-w-0">
                             <div className="text-[12.5px] text-text-primary truncate">{ws.name}</div>
                             <div className="text-[10.5px] text-text-faint truncate">{ws.path}</div>
                           </div>
-                          {p.activeWorkspace?.id === ws.id && <Check size={14} className="text-[#0F6E56] shrink-0" />}
+                          {p.activeWorkspace?.id === ws.id && <Check size={14} className="text-[color:var(--color-chip-workspace-fg)] shrink-0" />}
                         </button>
                       ))}
                     </PopoverBody>
@@ -2738,13 +2768,13 @@ function Composer(p: ComposerProps) {
                 toolbarCompact ? "px-1.5 py-1" : "gap-1.5 px-2 py-1 max-w-[160px]"
               } ${
                 p.permissionLevel === "full"
-                  ? "text-[#993C1D] hover:bg-[#FAECE7]/70 font-medium"
+                  ? "text-[color:var(--color-chip-permission-fg)] hover:bg-[color:var(--color-chip-permission-bg)] font-medium"
                   : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
               }`}
               title="权限级别"
             >
               {p.permissionLevel === "full"
-                ? <AlertTriangle size={12} className="text-[#993C1D]" />
+                ? <AlertTriangle size={12} className="text-[color:var(--color-chip-permission-fg)]" />
                 : <ShieldCheck size={12} className="text-text-muted" />}
               <span
                 className={toolbarCompact ? "max-w-0 overflow-hidden whitespace-nowrap" : "truncate"}
@@ -2761,20 +2791,20 @@ function Composer(p: ComposerProps) {
                       key={lvl.id}
                       onClick={() => { p.setPermissionLevel(lvl.id); setPermOpen(false); }}
                       className={`w-full px-2.5 py-3 text-left rounded-lg hover:bg-bg-hover transition-colors ${
-                        p.permissionLevel === lvl.id ? "bg-[#F1EFE8]/60" : ""
+                        p.permissionLevel === lvl.id ? "bg-[color:var(--color-chip-permission-bg)]" : ""
                       }`}
                     >
                       <div className="flex items-start gap-2">
                         <span className="shrink-0 mt-0.5">
                           {lvl.id === "full"
-                            ? <AlertTriangle size={16} className="text-[#993C1D]" />
-                            : <ShieldCheck size={16} className="text-[#0F6E56]" />}
+                            ? <AlertTriangle size={16} className="text-[color:var(--color-chip-permission-fg)]" />
+                            : <ShieldCheck size={16} className="text-[color:var(--color-chip-workspace-fg)]" />}
                         </span>
                         <div className="flex-1 min-w-0">
                           <div className="text-[12.5px] text-text-primary font-medium">{lvl.label}</div>
                           <div className="text-[10.5px] text-text-faint mt-0.5 leading-snug">{lvl.description}</div>
                         </div>
-                        {p.permissionLevel === lvl.id && <Check size={14} className="text-[#185FA5] shrink-0 mt-0.5" />}
+                        {p.permissionLevel === lvl.id && <Check size={14} className="text-[color:var(--color-chip-model-fg)] shrink-0 mt-0.5" />}
                       </div>
                     </button>
                   ))}
@@ -2801,7 +2831,7 @@ function Composer(p: ComposerProps) {
               className={`flex items-center gap-1.5 px-2 py-1 text-[12.5px] transition-colors rounded-md max-w-[240px] ${
                 (p.byProvider && p.byProvider.length > 0)
                   ? "text-text-secondary hover:bg-bg-hover hover:text-text-primary cursor-pointer"
-                  : "text-[#993C1D] hover:bg-[#FAECE7]/60 cursor-pointer"
+                  : "text-[color:var(--color-chip-permission-fg)] hover:bg-[#FAECE7]/60 cursor-pointer"
               }`}
               title={(p.byProvider && p.byProvider.length > 0) ? "切换模型" : "未配置模型，点击前往 设置 → 模型管理"}
             >
@@ -2877,11 +2907,11 @@ function Composer(p: ComposerProps) {
                                     key={m.id}
                                     onClick={() => { p.setSelectedModel(m.id); setModelOpen(false); }}
                                     className={`flex items-center gap-2 w-full px-2 py-2 text-left rounded-md hover:bg-bg-hover transition-colors ${
-                                      p.selectedModel === m.id ? "bg-[#F1EFE8]/60" : ""
+                                      p.selectedModel === m.id ? "bg-[color:var(--color-chip-permission-bg)]" : ""
                                     }`}
                                   >
                                     <span className="truncate font-mono text-[12px] text-text-primary">{m.display}</span>
-                                    {p.selectedModel === m.id && <Check size={13} className="text-[#185FA5] shrink-0" />}
+                                    {p.selectedModel === m.id && <Check size={13} className="text-[color:var(--color-chip-model-fg)] shrink-0" />}
                                   </button>
                                 ))}
                               </div>
@@ -2932,11 +2962,11 @@ function Composer(p: ComposerProps) {
           ) : (
             <button
               onClick={p.handleSubmit}
-              disabled={!p.input.trim() && (!p.messageQueue || p.messageQueue.length === 0) || p.sending}
+              disabled={(!p.input.trim() && (!p.pendingImages || p.pendingImages.length === 0) && (!p.messageQueue || p.messageQueue.length === 0)) || p.sending || !!p.isProcessingFiles}
               className="flex items-center justify-center w-8 h-8 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed"
               style={{
-                background: (p.input.trim() || (p.messageQueue && p.messageQueue.length > 0)) ? "var(--color-accent)" : "var(--color-bg-tertiary)",
-                color: (p.input.trim() || (p.messageQueue && p.messageQueue.length > 0)) ? "var(--color-accent-on-text)" : "var(--color-text-faint)",
+                background: (p.input.trim() || (p.pendingImages && p.pendingImages.length > 0) || (p.messageQueue && p.messageQueue.length > 0)) ? "var(--color-accent)" : "var(--color-bg-tertiary)",
+                color: (p.input.trim() || (p.pendingImages && p.pendingImages.length > 0) || (p.messageQueue && p.messageQueue.length > 0)) ? "var(--color-accent-on-text)" : "var(--color-text-faint)",
               }}
               title="发送 (Enter)"
             >

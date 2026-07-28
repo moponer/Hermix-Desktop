@@ -1714,6 +1714,20 @@ export interface GroupChatRoom {
    *  the team is currently working on. */
   announcement?: string | null;
   announcement_published_at?: string | null;
+  /** Free-form description of the room (project background, goal, or
+   *  constraints). Surfaced in the chat header so members know what
+   *  the room is for at a glance. Edited via PATCH
+   *  /api/groupchat/rooms/{id}/description. Distinct from
+   *  `announcement` which is the leader's pinned "current goal". */
+  description?: string | null;
+  /** UI rendering style for this room: "modern" (default, bubble-based
+   *  like WeChat/Feishu), "classic" (IRC-style monospace linear log),
+   *  "compact" (denser bubble layout). Absent on old rooms → "modern". */
+  style?: string | null;
+  /** Chat mode: "task_collab" (default, leader dispatches tasks to
+   *  members) or "free_chat" (all members respond freely without
+   *  leader coordination). Absent on old rooms → "task_collab". */
+  chat_mode?: string | null;
   /** The currently in-flight task (one of pending/decomposing/executing/
    *  aggregating/awaiting_approval). Includes subtasks inline so the
    *  panel can render progress without a follow-up round trip.
@@ -1837,14 +1851,38 @@ export interface GroupChatAnnouncementResponse {
   announcement_published_at: string | null;
 }
 
+/** Response shape from PATCH /api/groupchat/rooms/{id}/description.
+ *  Mirror of GroupChatAnnouncementResponse for the description field. */
+export interface GroupChatDescriptionResponse {
+  description: string | null;
+}
+
 export const listGroupChatRooms = async (): Promise<GroupChatRoom[]> =>
   fetchJSON<GroupChatRoom[]>("/api/groupchat/rooms");
 
-export const createGroupChatRoom = async (name: string): Promise<GroupChatRoom> =>
+/** Fetch a single room by id. Cheaper than `listGroupChatRooms` when
+ *  you already know the id (e.g. the settings drawer opening on the
+ *  active room). Returns `null` when the server replies 404. Other
+ *  errors propagate so the caller's existing error-handling path can
+ *  surface a toast. Uses a raw fetch because the shared `fetchJSON`
+ *  helper throws a generic Error without status information. */
+export const getGroupChatRoom = async (roomId: string): Promise<GroupChatRoom | null> => {
+  const response = await fetch(apiUrl(`/api/groupchat/rooms/${encodeURIComponent(roomId)}`));
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Failed to fetch room ${roomId}: HTTP ${response.status}`);
+  }
+  return (await response.json()) as GroupChatRoom;
+};
+
+export const createGroupChatRoom = async (
+  name: string,
+  style?: string,
+): Promise<GroupChatRoom> =>
   fetchJSON<GroupChatRoom>("/api/groupchat/rooms", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, style }),
   });
 
 export const deleteGroupChatRoom = async (roomId: string): Promise<void> => {
@@ -2112,6 +2150,48 @@ export const clearAnnouncement = async (roomId: string): Promise<void> => {
     { method: "DELETE" },
   );
 };
+
+// ── GroupChat Description (P4) ──────────────────────────────────
+
+/** Publish (or replace) the room's free-form description. Pass an
+ *  empty string to clear — both verbs (PATCH with empty body, DELETE)
+ *  clear the description on the server side. Whitespace-only strings
+ *  are coerced to empty server-side, so the UI doesn't need to. */
+export const updateGroupChatDescription = async (
+  roomId: string,
+  description: string,
+): Promise<GroupChatDescriptionResponse> =>
+  fetchJSON<GroupChatDescriptionResponse>(
+    `/api/groupchat/rooms/${encodeURIComponent(roomId)}/description`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description }),
+    },
+  );
+
+export const clearGroupChatDescription = async (roomId: string): Promise<void> => {
+  await fetchVoid(
+    `/api/groupchat/rooms/${encodeURIComponent(roomId)}/description`,
+    { method: "DELETE" },
+  );
+};
+
+/** Switch the room's chat mode between "task_collab" (leader dispatches
+ *  tasks) and "free_chat" (members respond freely). Returns the updated
+ *  chat_mode value from the server. */
+export const updateGroupChatChatMode = async (
+  roomId: string,
+  chatMode: "task_collab" | "free_chat",
+): Promise<{ chat_mode: string | null }> =>
+  fetchJSON<{ chat_mode: string | null }>(
+    `/api/groupchat/rooms/${encodeURIComponent(roomId)}/chat-mode`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_mode: chatMode }),
+    },
+  );
 
 // ── GroupChat Tasks API (P2) ────────────────────────────────
 

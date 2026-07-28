@@ -2764,6 +2764,10 @@ return {
             onDeleteSession={handleDeleteSession}
             isCreatingSession={isCreatingSession}
             onRoomSelect={setSelectedRoomId}
+            onNewChatInWorkspace={(workspacePath) => {
+              storage.setItem(STORAGE_KEYS.draftWorkspace, workspacePath);
+              void handleNewChat();
+            }}
           />
           </ErrorBoundary>
           <div
@@ -2970,7 +2974,7 @@ function ArtifactPreviewModal({
       // is small on purpose — the desktop UI behind is the user's
       // own chat, over-blurring it would feel like the app froze.
       style={{
-        background: "rgba(0, 0, 0, 0.65)",
+        background: "var(--color-overlay-scrim)",
         backdropFilter: "blur(2px)",
         WebkitBackdropFilter: "blur(2px)",
       }}
@@ -2997,7 +3001,7 @@ function ArtifactPreviewModal({
           background: "var(--color-bg-primary)",
           color: "var(--color-text-primary)",
           boxShadow:
-            "0 24px 64px -12px rgba(0, 0, 0, 0.45), 0 8px 24px -8px rgba(0, 0, 0, 0.25)",
+            "var(--shadow-modal)",
         }}
       >
         <PreviewPanel

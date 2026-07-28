@@ -620,16 +620,26 @@
 .preview-pane .preview-md-body p {
   margin: 0 0 14px;
 }
-.preview-pane .preview-md-body ul,
+.preview-pane .preview-md-body ul {
+  margin: 0 0 14px;
+  padding-left: 28px;
+  list-style-type: disc;
+  list-style-position: outside;
+}
 .preview-pane .preview-md-body ol {
   margin: 0 0 14px;
   padding-left: 28px;
+  list-style-type: decimal;
+  list-style-position: outside;
 }
 .preview-pane .preview-md-body li {
   margin: 4px 0;
 }
 .preview-pane .preview-md-body li > p {
   margin-bottom: 6px;
+}
+.preview-pane .preview-md-body li::marker {
+  color: var(--color-text-secondary);
 }
 /* Inline code */
 .preview-pane .preview-md-body code {

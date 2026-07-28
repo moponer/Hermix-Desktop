@@ -27,11 +27,11 @@ function UserAvatar({ size, className }: { size: number; className: string }) {
       role="img"
       aria-label="用户头像"
     >
-      <rect x="0" y="0" width="40" height="40" rx="10" fill="var(--avatar-user-bg, #09090b)" />
-      <circle cx="20" cy="16" r="6" fill="var(--avatar-user-mark, #fafafa)" opacity="0.95" />
+      <rect x="0" y="0" width="40" height="40" rx="10" fill="var(--avatar-user-bg)" />
+      <circle cx="20" cy="16" r="6" fill="var(--avatar-user-mark)" opacity="0.95" />
       <path
         d="M 8 33 Q 8 24 20 24 Q 32 24 32 33 L 32 36 Q 32 38 30 38 L 10 38 Q 8 38 8 36 Z"
-        fill="var(--avatar-user-mark, #fafafa)"
+        fill="var(--avatar-user-mark)"
         opacity="0.95"
       />
     </svg>

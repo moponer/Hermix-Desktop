@@ -96,8 +96,8 @@ export function ArchiveRefsGraph({ refs }: { refs: ArchiveRef[] }) {
     }
   };
 
-  const accent = "var(--color-accent, #475569)";
-  const accentSoft = "var(--color-accent-soft, rgba(71,85,105,0.18))";
+  const accent = "var(--color-accent)";
+  const accentSoft = "var(--color-accent-soft)";
 
   return (
     <div className="px-3 py-2">
@@ -191,7 +191,7 @@ export function ArchiveRefsGraph({ refs }: { refs: ArchiveRef[] }) {
                       width={180}
                       height={22}
                       rx={4}
-                      fill="var(--color-bg-elevated, #1e1f24)"
+                      fill="var(--color-bg-elevated)"
                       stroke="var(--color-border)"
                       strokeWidth={1}
                       opacity={0.95}

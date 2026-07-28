@@ -731,7 +731,7 @@ export function PreviewPanel({
             </pre>
           )}
           {previewState.status === "office" && (
-            <div className="w-full h-full" style={{ background: "#fff" }}>
+            <div className="w-full h-full" style={{ background: "var(--color-bg-primary)" }}>
               <iframe
                 srcDoc={previewState.htmlContent}
                 className="w-full h-full border-0 block"
@@ -878,7 +878,7 @@ export function PreviewPanel({
                 </pre>
               )}
               {previewState.status === "office" && (
-                <div className="w-full h-full" style={{ background: "#fff" }}>
+                <div className="w-full h-full" style={{ background: "var(--color-bg-primary)" }}>
                   <iframe
                     srcDoc={previewState.htmlContent}
                     className="w-full h-full border-0 block"

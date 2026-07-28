@@ -106,9 +106,45 @@
             return r.text();
         }
 
+        // Import map 的裸说明符 → 完整 URL 映射表。
+        // Blob URL 创建的模块属于独立模块图，无法使用页面的 import map，
+        // 因此需要在源码中将裸导入替换为完整 URL。
+        const IMPORT_MAP = {
+            "react": "https://esm.sh/react@18.3.1",
+            "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+            "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+        };
+
+        function rewriteBareImports(source) {
+            // 第一步: 检测是否有 React 默认导入 (如 import React from "react")
+            const hasReactDefault = /^\s*import\s+React\b/m.test(source);
+
+            // 第二步: 替换裸说明符为完整 URL
+            let result = source.replace(
+                /(from\s*["'])([^"']+)(["'])/g,
+                (match, prefix, specifier, suffix) => {
+                    if (IMPORT_MAP[specifier]) {
+                        return prefix + IMPORT_MAP[specifier] + suffix;
+                    }
+                    return match;
+                }
+            );
+
+            // 第三步: 检测是否使用了 React.createElement 但缺少默认导入。
+            // esbuild classic JSX transform 会产出 React.createElement() 调用，
+            // 但 --external:react 只保留了用户的命名导入 (如 { useState })，
+            // 没有自动注入 React 默认导入。
+            if (result.includes('React.createElement') && !hasReactDefault) {
+                result = `import React from "${IMPORT_MAP["react"]}";\n` + result;
+            }
+
+            return result;
+        }
+
         async function importResourceModule(path) {
             const source = await readResourceText(path);
-            const blob = new Blob([source], { type: "text/javascript" });
+            const rewritten = rewriteBareImports(source);
+            const blob = new Blob([rewritten], { type: "text/javascript" });
             const url = URL.createObjectURL(blob);
             try {
                 return await import(url);

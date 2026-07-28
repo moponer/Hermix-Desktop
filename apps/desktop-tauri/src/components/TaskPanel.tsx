@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { X, ListChecks, AlertCircle, CheckCircle2, Loader2, Clock, ChevronDown, ChevronRight, Scale, Skull, Megaphone, Pencil, Check } from "lucide-react";
+import { X, ListChecks, AlertCircle, CheckCircle2, Loader2, Clock, ChevronDown, ChevronRight, Scale, Skull, Megaphone, Pencil, Check, MessageSquare } from "lucide-react";
 import { clsx } from "clsx";
 import * as api from "../api";
 import type { AgentPersona } from "./agents/types";
@@ -14,7 +14,9 @@ export type TaskEngineEvent =
   | { kind: "bus_delivered"; agent_id: string; message_kind: string; text: string }
   | { kind: "audit_verdict"; agent_id: string; violation_id: string; level: string; score_delta: number; score_after: number; reason: string }
   | { kind: "agent_expelled"; agent_id: string; agent_name: string; reason: string }
-  | { kind: "room_completed" };
+  | { kind: "room_completed" }
+  | { kind: "discussion_started"; discussion_id: string; topic: string; participants: string[]; max_rounds: number }
+  | { kind: "discussion_concluded"; total_rounds: number };
 
 const MAX_TIMELINE = 30;
 
@@ -98,6 +100,27 @@ export function TaskPanel({
     [onTaskChanged],
   );
 
+  // P7 — Approve / Reject the active task when it's parked at
+  // AwaitingApproval. Wired to /api/groupchat/rooms/{id}/{approve,reject}
+  // which on the server side actually transitions TaskStatus (was a no-op
+  // chat bubble before this refactor). One button at a time — both
+  // race-safe because the server gates on AwaitingApproval.
+  const [busyApprove, setBusyApprove] = useState<"approve" | "reject" | null>(null);
+  const decideTask = useCallback(
+    async (decision: "approve" | "reject") => {
+      setBusyApprove(decision);
+      try {
+        await api.approveGroupChatTask(roomId, decision === "approve", "");
+        if (onTaskChanged) await onTaskChanged();
+      } catch (e) {
+        console.error("Failed to decide task", e);
+      } finally {
+        setBusyApprove(null);
+      }
+    },
+    [roomId, onTaskChanged],
+  );
+
   const events = liveEvents ?? [];
   const timeline = events.slice(-MAX_TIMELINE);
   const audit = events.filter(
@@ -168,6 +191,8 @@ export function TaskPanel({
               onToggleSub={toggleSub}
               busySubtaskId={busySubtaskId}
               onSetSubtaskStatus={setSubtaskStatus}
+              onDecideTask={decideTask}
+              busyApprove={busyApprove}
             />
           ) : (
             <EmptyState />
@@ -251,6 +276,8 @@ function TaskDetail({
   onToggleSub,
   busySubtaskId,
   onSetSubtaskStatus,
+  onDecideTask,
+  busyApprove,
 }: {
   task: api.GroupChatTask;
   agentById: Map<string, AgentPersona>;
@@ -258,6 +285,9 @@ function TaskDetail({
   onToggleSub: (id: string) => void;
   busySubtaskId: string | null;
   onSetSubtaskStatus: (id: string, status: api.GroupChatSubtaskStatus) => void;
+  /** P7 — Approve/Reject the task when parked at AwaitingApproval. */
+  onDecideTask: (decision: "approve" | "reject") => void;
+  busyApprove: "approve" | "reject" | null;
 }) {
   return (
     <div className="flex flex-col gap-4">
@@ -289,6 +319,41 @@ function TaskDetail({
             <p className="text-[12px] text-text-secondary leading-relaxed whitespace-pre-wrap">
               {task.final_report}
             </p>
+          </div>
+        )}
+        {/* Approve / Reject row — only when the engine is parked at
+            AwaitingApproval. The buttons disappear the moment the
+            status flips, so the user never sees a stale "Approve" CTA
+            after a verdict has been recorded. */}
+        {task.status === "awaiting_approval" && (
+          <div className="mt-2.5 flex items-center gap-2" data-testid="task-approval-actions">
+            <button
+              type="button"
+              onClick={() => onDecideTask("approve")}
+              disabled={busyApprove !== null}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-semibold transition-opacity disabled:opacity-50"
+              style={{
+                background: "var(--color-success-soft)",
+                color: "var(--color-success)",
+                border: "1px solid color-mix(in srgb, var(--color-success) 35%, transparent)",
+              }}
+            >
+              <CheckCircle2 size={12} />
+              批准方案
+            </button>
+            <button
+              type="button"
+              onClick={() => onDecideTask("reject")}
+              disabled={busyApprove !== null}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-semibold transition-opacity disabled:opacity-50"
+              style={{
+                background: "var(--color-error-soft)",
+                color: "var(--color-error)",
+                border: "1px solid color-mix(in srgb, var(--color-error) 35%, transparent)",
+              }}
+            >
+              驳回方案
+            </button>
           </div>
         )}
       </div>
@@ -657,6 +722,25 @@ function TimelineRow({
         <div className="flex items-center gap-2 px-1.5 py-1 text-[11px] text-text-secondary font-semibold">
           <CheckCircle2 size={11} style={{ color: "var(--color-success)" }} />
           房间任务全部完成
+        </div>
+      );
+    case "discussion_started": {
+      return (
+        <div className="flex items-start gap-2 px-1.5 py-1 text-[11px] text-text-secondary">
+          <MessageSquare size={11} style={{ color: "var(--color-accent)" }} className="mt-0.5 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <span className="font-semibold">讨论开始</span>
+            <span className="text-text-muted ml-1">{event.topic}</span>
+            <span className="text-text-muted ml-1">（{event.participants.length}人 · {event.max_rounds}轮）</span>
+          </div>
+        </div>
+      );
+    }
+    case "discussion_concluded":
+      return (
+        <div className="flex items-center gap-2 px-1.5 py-1 text-[11px] text-text-secondary font-semibold">
+          <CheckCircle2 size={11} style={{ color: "var(--color-success)" }} />
+          讨论结束（共{event.total_rounds}轮）
         </div>
       );
   }

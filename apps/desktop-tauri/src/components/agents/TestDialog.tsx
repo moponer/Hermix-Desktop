@@ -86,7 +86,7 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.4)" }} onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "var(--color-overlay-scrim)" }} onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         className="w-full max-w-md h-[600px] max-h-[80vh] rounded-2xl bg-bg-card overflow-hidden flex flex-col shadow-2xl"

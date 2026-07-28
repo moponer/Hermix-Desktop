@@ -1,4 +1,4 @@
-/* ════════════════════════════════════════════════════════════════════
+﻿/* ════════════════════════════════════════════════════════════════════
    components-layout.css — App shell, panes, navigation, list items (§1-7)
    ──────────────────────────────────────────────────────────────────
    Part of the components.css split. Every UI pattern used in the app
@@ -105,7 +105,7 @@
   flex-shrink: 0;
   width: 100%;       /* fill parent wrapper (the wrapper controls the actual width) */
 }
-.pane-left   { background: var(--color-bg-secondary); }
+.pane-left   { background: var(--theme-bg-sidebar, var(--color-bg-secondary)); }
 /* .pane-main 的 min-width 故意不再写 — 由 .app-body 的 grid-template-columns
    里 minmax(720px, 1fr) 声明性保证, 避免与 grid track 的 min 双重约束造成
    奇怪的溢出行为 (历史教训: 同时给 track 和 item 设 min-width 在窄视口
@@ -113,8 +113,8 @@
 /* 主区背景 = 淡灰 (--color-bg-app = #f5f5f7) — 跟左栏/右栏/卡片(白)拉出 1 档色差,
    卡片 .bg-bg-card 白底就自然浮起来。
    修: 之前用 --color-bg-primary (白) 导致卡片跟主区贴墙。 */
-.pane-main   { background: var(--color-bg-app); flex: 1; border-top-left-radius: 12px; border-top-right-radius: 12px; }
-.pane-right  { background: var(--color-bg-secondary); }
+.pane-main   { background: var(--theme-bg-app, var(--color-bg-app)); background-size: cover; background-position: center top; background-attachment: fixed; flex: 1; border-top-left-radius: 12px; border-top-right-radius: 12px; }
+.pane-right  { background: var(--theme-bg-sidebar, var(--color-bg-secondary)); }
 
 .pane-resizer {
   position: absolute;
@@ -141,11 +141,13 @@
    § 2.  TITLE BAR
    ════════════════════════════════════════════════════════════════════ */
 
-.titlebar {
+.titlebar { background: var(--theme-bg-titlebar, var(--color-bg-secondary)); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   height: 40px;
-  background: var(--color-bg-secondary);
+  position: relative;
+  z-index: 100;
+  
   flex-shrink: 0;
   user-select: none;
 }
@@ -281,6 +283,48 @@
 }
 .section-header-add:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
 
+
+
+.sidebar-tree-section .section-header {
+  margin: 0;
+  padding: 2px 3px;
+}
+
+.sidebar-tree-section .section-header-toggle {
+  min-height: 28px;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--color-text-secondary);
+}
+
+.sidebar-tree-section .section-header-icon {
+  color: var(--color-text-muted);
+}
+
+.sidebar-tree-section .section-header-count,
+.sidebar-tree-section .list-row-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-bg-hover);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.sidebar-tree-section .section-header-add {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+}
+
 /* ════════════════════════════════════════════════════════════════════
    § 6.  LIST ITEMS (chat session / workspace / chat room)
    ════════════════════════════════════════════════════════════════════ */
@@ -289,14 +333,21 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
   border-radius: var(--radius-lg);
   cursor: pointer;
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
   color: var(--color-text-secondary);
 }
 .list-item:hover  { background: var(--color-bg-hover); }
-.list-item-active { background: var(--color-bg-active); color: var(--color-text-primary); }
+.list-item-active {
+  background: var(--color-bg-active);
+  border-color: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  color: var(--color-text-primary);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
 
 /* Main row: title + time + pulse indicator */
 .list-item-main {
@@ -307,8 +358,8 @@
   min-width: 0;
 }
 .list-item-title {
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 450;
   color: var(--color-text-primary);
   line-height: 1.3;
   overflow: hidden;
@@ -323,8 +374,8 @@
  * 已不再渲染这个 span，规则保留原始样式只作为占位（其它位置如有
  * 需要可恢复使用）。 */
 .list-item-time {
-  font-size: 13px;
-  color: var(--color-text-muted);
+  font-size: 11px;
+  color: var(--color-text-faint);
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -385,9 +436,12 @@
   cursor: pointer;
   transition: opacity var(--duration-fast) ease, color var(--duration-fast) ease, background var(--duration-fast) ease;
   flex-shrink: 0;
-  margin-top: 2px;
+  margin-top: 0;
 }
-.list-item:hover .list-item-action { opacity: 1; }
+.list-item:hover .list-item-time,
+.list-item:focus-within .list-item-time { display: none; }
+.list-item:hover .list-item-action,
+.list-item:focus-within .list-item-action { opacity: 1; }
 .list-item-action:hover { color: var(--color-error); }
 
 /* ── List group (嵌套 children, e.g. workspace 下的 session) ──
@@ -397,22 +451,24 @@
  * v3 用户反馈：工作区下的会话列表不应该有左侧的粗分隔线。
  */
 .list-group {
-  margin-left: 16px;
-  padding-left: 10px;
-  border-left: 1.5px solid var(--color-border-subtle);
+  margin-left: 18px;
+  margin-right: 3px;
+  padding: 4px 0 4px 8px;
+  border-left: 1px solid color-mix(in srgb, var(--color-accent) 24%, var(--color-border-subtle));
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 2px;
-  margin-bottom: 4px;
+  margin-top: 1px;
+  margin-bottom: 5px;
   max-height: 240px;
   overflow-y: auto;
 }
 .list-group-empty {
   font-size: 12px;
   color: var(--color-text-muted);
-  font-style: italic;
-  padding: 4px 8px;
+  font-style: normal;
+  padding: 8px 10px;
+  line-height: 1.5;
 }
 
 /* ── List row (workspace / chat room header with chevron) ──
@@ -422,18 +478,20 @@
 .list-row {
   display: flex;
   align-items: center;
-  border-radius: var(--radius-md);
-  padding: 3px 6px;
+  margin: 1px 2px;
+  border-radius: 8px;
+  padding: 2px 4px;
   transition: background var(--duration-fast) ease;
 }
 .list-row:hover { background: var(--color-bg-hover); }
 .list-row-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex: 1;
   min-width: 0;
-  padding: 6px;
+  min-height: 32px;
+  padding: 5px 6px;
   text-align: left;
   background: transparent;
   border: 0;
@@ -441,19 +499,27 @@
   color: var(--color-text-primary);
 }
 .list-row-chevron { color: var(--color-text-faint); flex-shrink: 0; }
-.list-row-icon    { color: var(--color-accent); flex-shrink: 0; }
+.list-row-icon    {
+  width: 22px;
+  height: 22px;
+  padding: 5px;
+  border-radius: 6px;
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  flex-shrink: 0;
+}
 .list-row-name    {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 550;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .list-row-count   {
-  font-size: 12px;
-  color: var(--color-text-muted);
   flex-shrink: 0;
-  margin-left: 4px;
+  margin-left: auto;
 }
 .list-row-action {
   opacity: 0;
@@ -515,3 +581,217 @@
 }
 .user-card-action:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
 
+/* ── Top action (菜单样式的新建对话等) ── */
+.sidebar-topnav {
+  padding: 12px 12px 4px;
+}
+.sidebar-topnav .nav-item-primary {
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-weight: 550;
+  position: relative;
+  box-shadow: inset 3px 0 0 transparent;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+.sidebar-topnav .nav-item-primary:hover {
+  background: var(--color-bg-hover);
+}
+.sidebar-topnav .nav-item-primary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 50%, transparent);
+  outline-offset: 1px;
+}
+.sidebar-topnav .nav-item-loading {
+  color: var(--color-text-muted);
+  cursor: progress;
+}
+/* 使首项与下方的横向导航有视觉分隔, 而不是顶着顶边 */
+.sidebar-topnav::after {
+  content: "";
+  display: block;
+  height: 1px;
+  background: var(--color-border-subtle);
+  margin: 8px 8px 0;
+}
+
+
+/* ── Sidebar Projects (项目 section, 参考 Notion/Apple 文件树) */
+.sidebar-projects {
+  margin: 6px 0 0;
+  padding: 2px 0;
+}
+
+.sidebar-projects-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px 4px;
+}
+.sidebar-projects-header .section-header-toggle {
+  flex: 1;
+  justify-content: flex-start;
+  min-height: 26px;
+  padding: 2px 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.02em;
+}
+.sidebar-projects-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+.sidebar-projects-header:hover .sidebar-projects-actions,
+.sidebar-projects-actions:focus-within { opacity: 1; }
+.sidebar-projects-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-projects-action:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.sidebar-projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.sidebar-project { display: flex; flex-direction: column; gap: 1px; }
+
+.sidebar-project-row {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 4px;
+  border-radius: 6px;
+  transition: background var(--duration-fast) ease;
+}
+.sidebar-project-row:hover { background: var(--color-bg-hover); }
+
+.sidebar-project-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  padding: 0 4px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--color-text-primary);
+  text-align: left;
+}
+.sidebar-project-toggle .list-row-chevron { color: var(--color-text-faint); flex-shrink: 0; }
+.sidebar-project-toggle .list-row-icon { color: var(--color-text-muted); flex-shrink: 0; }
+.sidebar-project-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.sidebar-project-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+  flex-shrink: 0;
+}
+.sidebar-project-row:hover .sidebar-project-row-actions,
+.sidebar-project-row:focus-within .sidebar-project-row-actions { opacity: 1; }
+.sidebar-project-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-project-action:hover {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+}
+
+.sidebar-project-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 0 2px 20px;
+}
+
+.sidebar-project-session {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  text-align: left;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-project-session:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.sidebar-project-session.is-active {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+.sidebar-project-session.is-streaming::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--color-accent) 55%, transparent);
+  flex-shrink: 0;
+  animation: li-pulse 1.4s ease-in-out infinite;
+}
+.sidebar-project-session > .truncate-1 { flex: 1; min-width: 0; }
+.sidebar-project-session-time {
+  font-size: 11px;
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+}
+
+.sidebar-project-empty {
+  padding: 4px 8px 4px 20px;
+  font-size: 11.5px;
+  color: var(--color-text-faint);
+  font-style: normal;
+}
