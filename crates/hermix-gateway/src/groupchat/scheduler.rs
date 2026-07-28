@@ -215,9 +215,13 @@ impl RoomSchedulerState {
             return false;
         }
         let terminal = |p: &TaskPhase| matches!(p, TaskPhase::Completed | TaskPhase::Cancelled);
+        let active = |p: &TaskPhase| matches!(p, TaskPhase::Planning | TaskPhase::Executing | TaskPhase::Review | TaskPhase::Revising | TaskPhase::Discussing);
         let done = self.nodes.values().all(|n| terminal(&n.phase));
-        self.all_completed = done;
-        done
+        // If any node is still in an active phase, we're not done yet.
+        // But also check: if there are no active nodes at all, and all
+        // are terminal, then we're done.
+        self.all_completed = done && !self.nodes.values().any(|n| active(&n.phase));
+        done && !self.nodes.values().any(|n| active(&n.phase))
     }
 
     /// All children of a node, sorted by `sort_order`.

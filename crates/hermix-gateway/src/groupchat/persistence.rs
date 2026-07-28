@@ -23,6 +23,24 @@ pub struct GroupChatRoom {
     pub announcement: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub announcement_published_at: Option<DateTime<Utc>>,
+    /// Optional free-form description of the room (project background,
+    /// goal, or constraints). Surfaced in the chat header so members know
+    /// what the room is for at a glance, and editable via
+    /// PATCH /api/groupchat/rooms/{id}/description. Distinct from
+    /// `announcement` which is the leader-pinned "current goal".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// UI rendering style for this room. One of: `"modern"` (default,
+    /// bubble-based like WeChat/Feishu), `"classic"` (IRC-style
+    /// monospace linear log), `"compact"` (denser bubble layout).
+    /// `None` on old rooms → frontend defaults to `"modern"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// Chat mode: `"task_collab"` (default, leader dispatches tasks to
+    /// members) or `"free_chat"` (all members respond freely without
+    /// leader coordination). `None` on old rooms → `"task_collab"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_mode: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -413,6 +431,7 @@ pub enum MessageType {
     Result,
     Approval,
     System,
+    Discussion,
 }
 
 impl std::fmt::Display for MessageType {
@@ -423,6 +442,7 @@ impl std::fmt::Display for MessageType {
             MessageType::Result => write!(f, "result"),
             MessageType::Approval => write!(f, "approval"),
             MessageType::System => write!(f, "system"),
+            MessageType::Discussion => write!(f, "discussion"),
         }
     }
 }
@@ -435,6 +455,7 @@ impl std::str::FromStr for MessageType {
             "result" => Ok(MessageType::Result),
             "approval" => Ok(MessageType::Approval),
             "system" => Ok(MessageType::System),
+            "discussion" => Ok(MessageType::Discussion),
             _ => Ok(MessageType::Chat),
         }
     }
@@ -556,6 +577,15 @@ pub trait RoomPersistence: Send + Sync {
     fn list_rooms(&self) -> Result<Vec<GroupChatRoom>, String>;
     fn update_room(&self, room: &GroupChatRoom) -> Result<(), String>;
     fn delete_room(&self, id: &str) -> Result<(), String>;
+    /// Set or clear the room's free-form description. `Some(text)` to
+    /// publish, `None` to clear. Like `set_announcement`, this is a
+    /// partial update that touches only the `description` column and
+    /// bumps `updated_at` so the caller doesn't need to round-trip
+    /// through `get_room` + `update_room` to edit the description while
+    /// leaving every other field alone.
+    /// /// Idempotent. Returns `Err("room {id} not found")` when the room
+    /// doesn't exist (the API layer turns this into 404).
+    fn set_description(&self, room_id: &str, description: Option<&str>) -> Result<(), String>;
     fn add_agent(&self, room_id: &str, agent_id: &str, role: AgentRole) -> Result<AgentRoomProfile, String>;
     fn remove_agent(&self, room_id: &str, agent_id: &str) -> Result<(), String>;
     fn get_agents(&self, room_id: &str) -> Result<Vec<AgentRoomProfile>, String>;

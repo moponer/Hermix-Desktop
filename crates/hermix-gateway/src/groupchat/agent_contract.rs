@@ -20,6 +20,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::persistence::{AgentRole, AgentRoomProfile};
+use super::discussion::DiscussionConfig;
 
 /// Runtime contract for one agent inside a room (openai-agents-python `Agent`
 /// analog). Built from `AgentRoomProfile` + room rules at dispatch time.
@@ -80,6 +81,12 @@ pub struct LeaderDecision {
     /// conversation to the named agent (openai-agents-python Handoff pattern).
     #[serde(default)]
     pub handoff: Option<HandoffDirective>,
+    /// Optional discussion mode: if set, the leader initiates a multi-round
+    /// discussion among team members instead of dispatching subtasks.
+    /// `discussion` and `subtasks` are mutually exclusive — when `discussion`
+    /// is `Some`, `subtasks` should be empty.
+    #[serde(default)]
+    pub discussion: Option<DiscussionConfig>,
 }
 
 /// One subtask assignment from the leader.
@@ -245,8 +252,18 @@ pub fn build_leader_decision_prompt(
   ],
   "announcement": "公告内容（可选，仅当用户明确了项目目标/主题时填写；否则为 null）",
   "needs_user_confirmation": false,
-  "handoff": null
+  "handoff": null,
+  "discussion": null
 }}
+
+## 模式说明
+你可以选择以下模式之一：
+1. **直接回答**：subtasks 为空数组 []，discussion 为 null
+2. **任务委派**：填写 subtasks，discussion 为 null
+3. **团队讨论**：填写 discussion，subtasks 为空。当你认为需要团队成员多轮讨论时使用：
+   {{"topic":"讨论话题","max_rounds":5,"participants":["agent_id1","agent_id2"]}}
+   - discussion 和 subtasks 互斥
+   - participants 必须是团队成员列表中存在的 id
 
 ## 规则
 1. `subtasks` 可以为空数组 `[]`——当你自己就能回答用户时，不要硬拆任务
@@ -255,11 +272,12 @@ pub fn build_leader_decision_prompt(
 4. `announcement` 仅在以下情况填写：用户明确了项目目标/主题/任务名、或需要持久化协作规则。闲聊、单一问题不要发公告
 5. `needs_user_confirmation` 设为 true 当你的方案需要用户点头才执行（默认 false）
 6. `handoff` 通常为 null。仅当你认为某个专家应该完全接管对话时填写：{{"kind":"transfer","agent_id":"xxx","reason":"..."}}
-7. 不要输出 JSON 之外的任何文字
+7. `discussion` 通常为 null。仅当你认为需要团队多轮讨论时填写
+8. 不要输出 JSON 之外的任何文字
 
 ## 工作流程参考
 1. 分析用户的目标和目的
-2. 如果需要团队协作，拆解为子任务并分配
+2. 如果需要团队协作，拆解为子任务并分配；或发起讨论
 3. 考虑子任务之间的依赖关系（并行/串行）
 4. 如果用户明确了项目方向，设置公告
 5. 如果方案有风险或需要用户决策，设置 needs_user_confirmation=true"#,

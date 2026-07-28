@@ -23,6 +23,8 @@ pub mod yanluo;
 pub mod runtime;
 pub mod agent_contract;
 pub mod handoff;
+pub mod discussion;
+pub mod discussion_prompt;
 
 pub use manager::GroupChatManager;
 pub use persistence::RoomPersistence;
@@ -52,3 +54,12 @@ pub use agent_contract::{
     parse_leader_decision, build_leader_decision_prompt,
 };
 pub use handoff::{ResolvedHandoff, HandoffKind, resolve_handoff};
+pub use discussion::{
+    DiscussionConfig, DiscussionState, DiscussionStatus, DiscussionMessage,
+    ModerationDecision, ModerationAction, ActiveDiscussion,
+    DiscussionEngine, DiscussionEventPublisher, parse_moderation_decision,
+};
+pub use discussion_prompt::{
+    build_discussion_message, build_moderation_message, build_conclusion_message,
+    is_pass, has_substantive_content,
+};

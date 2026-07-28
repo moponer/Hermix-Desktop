@@ -26,10 +26,14 @@ use chrono::Utc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use super::agent_contract::{HandoffDirective, LeaderDecision};
 use super::bus::{RoomBus, SharedMessageBus};
 use super::dispatcher::StreamDelta;
+use super::discussion::{
+    ActiveDiscussion, DiscussionConfig, DiscussionEngine, DiscussionEventPublisher,
+};
 use super::handoff::{resolve_handoff, HandoffKind};
 use super::leader::LeaderOrchestrator;
 use super::manager::GroupChatManager;
@@ -154,6 +158,48 @@ pub enum RoomEvent {
         /// "transfer" (permanent) or "delegate" (temporary).
         kind: String,
     },
+    /// Discussion mode started — leader initiated a multi-round discussion.
+    DiscussionStarted {
+        room_id: String,
+        discussion_id: String,
+        topic: String,
+        participants: Vec<String>,
+        max_rounds: u8,
+    },
+    /// One streamed chunk during a discussion. Same shape as
+    /// AgentThinkingChunk but tagged with the discussion round so the
+    /// frontend can render a round separator.
+    DiscussionChunk {
+        room_id: String,
+        agent_id: String,
+        agent_name: String,
+        round: u8,
+        delta: String,
+    },
+    /// A participant finished speaking in the discussion. The frontend
+    /// finalizes the streaming buffer into a discussion message bubble.
+    DiscussionMessageSaved {
+        room_id: String,
+        discussion_id: String,
+        agent_id: String,
+        agent_name: String,
+        content: String,
+        round: u8,
+    },
+    /// One round completed — leader's summary + next action.
+    DiscussionRoundSummary {
+        room_id: String,
+        discussion_id: String,
+        round: u8,
+        summary: String,
+        next_action: String,
+    },
+    /// Discussion concluded (normal or cancelled).
+    DiscussionConcluded {
+        room_id: String,
+        discussion_id: String,
+        total_rounds: u8,
+    },
 }
 
 /// Per-room mutable state held by the runtime.
@@ -164,6 +210,9 @@ pub struct RoomRuntime {
     pub yanluo_config: YanluoConfig,
     pub audit_trail: AuditTrail,
     pub bus: Arc<RoomBus>,
+    /// Active discussion (if any). Set when a discussion is spawned,
+    /// cleared when it concludes or is cancelled (P2.1).
+    pub active_discussion: Option<ActiveDiscussion>,
 }
 
 /// Process-wide task engine runtime.
@@ -268,6 +317,7 @@ impl TaskEngineRuntime {
                 yanluo_config: YanluoConfig::default(),
                 audit_trail: AuditTrail::default(),
                 bus,
+                active_discussion: None,
             }));
             w.insert(room_id.to_string(), runtime.clone());
             runtime
@@ -492,6 +542,32 @@ impl TaskEngineRuntime {
                                     {
                                         tracing::warn!(error = %e, "leader announcement persist failed");
                                     }
+                                }
+
+                                // 1.5. Discussion mode (P1.6): if the
+                                // leader's decision includes a discussion
+                                // config, spawn the discussion engine and
+                                // return early — discussion and subtasks
+                                // are mutually exclusive.
+                                let discussion_config = parsed_decision
+                                    .as_ref()
+                                    .and_then(|d| d.discussion.clone());
+                                if let Some(config) = discussion_config {
+                                    tracing::info!(
+                                        room_id = %room_id_owned,
+                                        topic = %config.topic,
+                                        participants = ?config.participants,
+                                        "leader initiated discussion mode"
+                                    );
+                                    rt_self.clone().spawn_discussion(
+                                        &room_id_owned,
+                                        &node_id_owned,
+                                        config,
+                                        &raw_output,
+                                    ).await;
+                                    // Discussion runs in the background;
+                                    // the current dispatch is done.
+                                    return emitted;
                                 }
 
                                 // 2. Resolve handoff directive
@@ -954,6 +1030,9 @@ impl TaskEngineRuntime {
         user_name: &str,
         content: &str,
     ) -> Vec<RoomEvent> {
+        // P2.1: Cancel any active discussion when a new user message arrives.
+        let _ = self.cancel_active_discussion(room_id).await;
+
         let mut emitted = Vec::new();
         let msg = match self
             .manager
@@ -1163,6 +1242,232 @@ impl TaskEngineRuntime {
         };
         self.clone().apply(room_id, event).await
     }
+
+    /// Spawn a discussion in the background (P1.6 + P2.1).
+    ///
+    /// Called from `dispatch_action` when the leader's decision includes
+    /// a `DiscussionConfig`. The discussion runs on a `tokio::spawn` task
+    /// so it doesn't block the current dispatch. The `CancellationToken`
+    /// is stored on `RoomRuntime.active_discussion` so a subsequent user
+    /// message can cancel it.
+    pub async fn spawn_discussion(
+        self: Arc<Self>,
+        room_id: &str,
+        node_id: &str,
+        config: DiscussionConfig,
+        trigger_message: &str,
+    ) {
+        let cancel_token = CancellationToken::new();
+        let discussion = ActiveDiscussion {
+            discussion_id: uuid::Uuid::new_v4().to_string(),
+            cancel_token: cancel_token.clone(),
+        };
+
+        // Set the node to Discussing phase.
+        {
+            let room = self.room(room_id).await;
+            let mut rt = room.write();
+            rt.active_discussion = Some(discussion);
+            if let Some(node) = rt.scheduler_state.nodes.get_mut(node_id) {
+                node.phase = TaskPhase::Discussing;
+            }
+        }
+
+        let engine = Arc::new(DiscussionEngine::new(
+            self.manager.clone(),
+            self.clone(),
+        ));
+
+        let room_id_owned = room_id.to_string();
+        let node_id_owned = node_id.to_string();
+        let trigger_owned = trigger_message.to_string();
+        let rt_self = self.clone();
+
+        tokio::spawn(async move {
+            let result = engine
+                .run(
+                    &room_id_owned,
+                    &node_id_owned,
+                    config,
+                    &trigger_owned,
+                    cancel_token,
+                )
+                .await;
+
+            // Clear active_discussion.
+            {
+                let room = rt_self.room(&room_id_owned).await;
+                let mut rt = room.write();
+                rt.active_discussion = None;
+                // Mark node as completed.
+                if let Some(node) = rt.scheduler_state.nodes.get_mut(&node_id_owned) {
+                    node.phase = TaskPhase::Completed;
+                }
+            }
+
+            match result {
+                Ok(state) => {
+                    tracing::info!(
+                        room_id = %room_id_owned,
+                        discussion_id = %state.discussion_id,
+                        rounds = state.current_round,
+                        "discussion completed"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        room_id = %room_id_owned,
+                        error = %e,
+                        "discussion failed"
+                    );
+                    rt_self.publish(
+                        &room_id_owned,
+                        RoomEvent::SoftError {
+                            room_id: room_id_owned.clone(),
+                            code: "discussion_failed".into(),
+                            message: format!("讨论失败: {}", e),
+                        },
+                    );
+                }
+            }
+        });
+    }
+
+    /// Cancel any active discussion in a room (P2.1).
+    ///
+    /// Called from `on_user_message` when a new user message arrives
+    /// during an active discussion. The cancellation token causes the
+    /// discussion task to exit at the next safe point.
+    pub async fn cancel_active_discussion(&self, room_id: &str) -> bool {
+        let room = self.room(room_id).await;
+        let mut rt = room.write();
+        if let Some(discussion) = rt.active_discussion.take() {
+            discussion.cancel_token.cancel();
+            tracing::info!(
+                room_id = %room_id,
+                discussion_id = %discussion.discussion_id,
+                "discussion cancelled by user message"
+            );
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Implementation of `DiscussionEventPublisher` for `TaskEngineRuntime`.
+///
+/// Bridges discussion engine events into the per-room `RoomEvent` broadcast
+/// channel so the WS handler can relay them to the frontend.
+impl DiscussionEventPublisher for TaskEngineRuntime {
+    fn publish_discussion_started(
+        &self,
+        room_id: &str,
+        discussion_id: &str,
+        topic: &str,
+        participants: &[String],
+        max_rounds: u8,
+    ) {
+        self.publish(
+            room_id,
+            RoomEvent::DiscussionStarted {
+                room_id: room_id.to_string(),
+                discussion_id: discussion_id.to_string(),
+                topic: topic.to_string(),
+                participants: participants.to_vec(),
+                max_rounds,
+            },
+        );
+    }
+
+    fn publish_discussion_chunk(
+        &self,
+        room_id: &str,
+        agent_id: &str,
+        agent_name: &str,
+        round: u8,
+        delta: &str,
+    ) {
+        self.publish(
+            room_id,
+            RoomEvent::DiscussionChunk {
+                room_id: room_id.to_string(),
+                agent_id: agent_id.to_string(),
+                agent_name: agent_name.to_string(),
+                round,
+                delta: delta.to_string(),
+            },
+        );
+    }
+
+    fn publish_discussion_message(
+        &self,
+        room_id: &str,
+        discussion_id: &str,
+        agent_id: &str,
+        agent_name: &str,
+        content: &str,
+        round: u8,
+    ) {
+        self.publish(
+            room_id,
+            RoomEvent::DiscussionMessageSaved {
+                room_id: room_id.to_string(),
+                discussion_id: discussion_id.to_string(),
+                agent_id: agent_id.to_string(),
+                agent_name: agent_name.to_string(),
+                content: content.to_string(),
+                round,
+            },
+        );
+    }
+
+    fn publish_round_summary(
+        &self,
+        room_id: &str,
+        discussion_id: &str,
+        round: u8,
+        summary: &str,
+        next_action: &str,
+    ) {
+        self.publish(
+            room_id,
+            RoomEvent::DiscussionRoundSummary {
+                room_id: room_id.to_string(),
+                discussion_id: discussion_id.to_string(),
+                round,
+                summary: summary.to_string(),
+                next_action: next_action.to_string(),
+            },
+        );
+    }
+
+    fn publish_discussion_concluded(
+        &self,
+        room_id: &str,
+        discussion_id: &str,
+        total_rounds: u8,
+    ) {
+        self.publish(
+            room_id,
+            RoomEvent::DiscussionConcluded {
+                room_id: room_id.to_string(),
+                discussion_id: discussion_id.to_string(),
+                total_rounds,
+            },
+        );
+    }
+
+    fn publish_soft_error(&self, room_id: &str, code: &str, message: &str) {
+        self.publish(
+            room_id,
+            RoomEvent::SoftError {
+                room_id: room_id.to_string(),
+                code: code.to_string(),
+                message: message.to_string(),
+            },
+        );
+    }
 }
 
 /// Human-readable label for a [`TaskPhase`].
@@ -1175,6 +1480,7 @@ fn phase_label(phase: &TaskPhase) -> &'static str {
         TaskPhase::Revising => "Revising",
         TaskPhase::Completed => "Completed",
         TaskPhase::Cancelled => "Cancelled",
+        TaskPhase::Discussing => "Discussing",
     }
 }
 

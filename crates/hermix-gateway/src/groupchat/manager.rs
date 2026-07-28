@@ -267,6 +267,7 @@ impl GroupChatManager {
                 super::task_types::TaskPhase::Revising => SubTaskStatus::Running,
                 super::task_types::TaskPhase::Completed => SubTaskStatus::Done,
                 super::task_types::TaskPhase::Cancelled => SubTaskStatus::Failed,
+                super::task_types::TaskPhase::Discussing => SubTaskStatus::Running,
             },
             result: if !node.output.is_empty() {
                 Some(node.output.clone())
@@ -450,8 +451,19 @@ impl GroupChatManager {
     pub async fn update_task_status(&self, task_id: &str, status: TaskStatus) -> Result<(), String> {
         if let Some(mut task) = self.db.get_task(task_id)? {
             task.status = status;
-            if task.status == TaskStatus::Completed {
-                task.completed_at = Some(Utc::now());
+            // Stamp the phase-specific timestamp so the API can show
+            // `approved_at` / `completed_at` without re-deriving. The
+            // `approve` / `reject` API handlers drive the AwaitingApproval
+            // -> Approved / Failed transitions; the engine drives the
+            // Executing -> Completed transition on its own.
+            match task.status {
+                TaskStatus::Approved => {
+                    task.approved_at = Some(Utc::now());
+                }
+                TaskStatus::Completed => {
+                    task.completed_at = Some(Utc::now());
+                }
+                _ => {}
             }
             self.db.save_task(&task)?;
         }
@@ -497,6 +509,17 @@ impl GroupChatManager {
     ) -> Result<(), String> {
         let published_at = if text.is_some() { Some(Utc::now()) } else { None };
         self.db.set_announcement(room_id, text, published_at)
+    }
+
+    /// Publish or clear the room's free-form description. The persistence
+    /// layer normalises empty/whitespace strings to `None` so the API
+    /// doesn't have to.
+    pub async fn set_description(
+        &self,
+        room_id: &str,
+        description: Option<&str>,
+    ) -> Result<(), String> {
+        self.db.set_description(room_id, description)
     }
 
     // ── Leader Access ──────────────────────────────────────────

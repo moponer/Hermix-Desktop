@@ -43,6 +43,9 @@ impl RoomPersistence for InMemoryRoomPersistence {
             rules: RoomRules::default(),
             announcement: None,
             announcement_published_at: None,
+            description: None,
+            style: None,
+            chat_mode: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -365,6 +368,29 @@ impl RoomPersistence for InMemoryRoomPersistence {
         if let Some(room) = rooms.get_mut(room_id) {
             room.announcement = text.map(|s| s.to_string());
             room.announcement_published_at = published_at;
+            room.updated_at = Utc::now();
+            Ok(())
+        } else {
+            Err(format!("room {} not found", room_id))
+        }
+    }
+
+    fn set_description(
+        &self,
+        room_id: &str,
+        description: Option<&str>,
+    ) -> Result<(), String> {
+        let mut rooms = self.rooms.lock().unwrap();
+        if let Some(room) = rooms.get_mut(room_id) {
+            // Mirror SQLite's empty/whitespace coercion so the in-memory
+            // and persistent implementations behave identically for the
+            // API layer (no surprises when the caller toggles storage).
+            let trimmed = description.map(|s| s.trim());
+            room.description = match trimmed {
+                Some(s) if s.is_empty() => None,
+                Some(s) => Some(s.to_string()),
+                None => None,
+            };
             room.updated_at = Utc::now();
             Ok(())
         } else {

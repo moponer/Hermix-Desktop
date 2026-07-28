@@ -246,6 +246,19 @@ pub fn router() -> Router<HttpServerState> {
             post(groupchat_api::publish_announcement)
                 .delete(groupchat_api::clear_announcement),
         )
+        // P4 — room description (free-form text shown in chat header).
+        // Same shape as announcement: PATCH publishes (or clears when the
+        // body is empty), DELETE clears unconditionally.
+        .route(
+            "/api/groupchat/rooms/{room_id}/description",
+            patch(groupchat_api::update_description)
+                .delete(groupchat_api::clear_description),
+        )
+        // Chat mode toggle: "task_collab" vs "free_chat".
+        .route(
+            "/api/groupchat/rooms/{room_id}/chat-mode",
+            patch(groupchat_api::update_chat_mode),
+        )
         // P2 — Tasks: history list + active single-get.
         .route(
             "/api/groupchat/rooms/{room_id}/tasks",
@@ -275,6 +288,15 @@ pub fn router() -> Router<HttpServerState> {
         .route(
             "/api/groupchat/rooms/{room_id}/overturn",
             post(groupchat_api::overturn_violation),
+        )
+        // P2.2 — discussion status query + cancel
+        .route(
+            "/api/groupchat/rooms/{room_id}/discussion",
+            get(groupchat_api::get_discussion_status),
+        )
+        .route(
+            "/api/groupchat/rooms/{room_id}/discussion/cancel",
+            post(groupchat_api::cancel_discussion),
         )
         // §2 Polish — doc rewrite endpoints used by the desktop
         // "润色" / "改写" affordances. `polish::post_polish_chat`

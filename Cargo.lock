@@ -2308,6 +2308,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.24.0",
+ "tokio-util",
  "tracing",
  "url",
  "urlencoding",
@@ -6052,6 +6053,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

@@ -26,6 +26,8 @@ pub enum TaskPhase {
     Completed,
     /// User cancelled.
     Cancelled,
+    /// Multi-agent discussion in progress.
+    Discussing,
 }
 
 /// A single node in the task tree.

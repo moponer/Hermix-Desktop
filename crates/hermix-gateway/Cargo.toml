@@ -33,6 +33,7 @@ hermix-core = { workspace = true }
 hermix-config = { workspace = true }
 hermix-tools = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
