@@ -328,6 +328,15 @@ pub struct AgentOverrides {
     /// When `None`, no workspace boundary is enforced.
     #[serde(default)]
     pub workspace: Option<String>,
+    /// Scoped memory directory for this turn. When `Some(dir)`, the
+    /// `memory` tool and the memory prompt/prefetch injections use `dir`
+    /// instead of the global `<hermix_home>/memories`, enabling per-room
+    /// (group chat) memory isolation so a group chat's manager/members
+    /// cannot read memories stored during a private 1:1 conversation.
+    /// Private chats resolve their own session-scoped directory inside
+    /// `LocalAgentService` and ignore this field.
+    #[serde(default)]
+    pub memory_dir: Option<String>,
     /// Permission policy for risk-bearing tool calls in this turn.
     #[serde(default)]
     pub permission: Option<PermissionLevel>,

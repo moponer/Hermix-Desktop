@@ -12,8 +12,10 @@ use futures::StreamExt;
 use serde_json::Value;
 
 use hermix_config::GatewayConfig;
-use hermix_core::{AgentError, LlmProvider};
+use hermix_core::{AgentError, LlmProvider, ToolHandler};
 use hermix_tools::{ToolCallContext, ToolRegistry};
+use hermix_tools::tools::memory::MemoryHandler;
+use tokio::runtime::Handle as TokioHandle;
 
 use crate::agent_loop::{
     CheapModelRouteConfig, RuntimeProviderConfig, SmartModelRoutingConfig,
@@ -165,10 +167,19 @@ pub fn build_agent_config(
 /// dispatch time without process-global mutable state. Each
 /// `send_message` call builds its own `ToolCallContext` and passes it
 /// here, so two concurrent sessions never share context.
+///
+/// `memory_handler`, when `Some`, overrides the process-global memory
+/// backend for the `"memory"` tool. This is the core of memory
+/// isolation: a per-session / per-room [`MemoryHandler`] (backed by its
+/// own [`FileMemoryBackend`] directory) is bridged in so the agent only
+/// ever reads/writes its own scoped memory and never the global
+/// `~/.hermix/memories`. When `None` the global handler is used (legacy
+/// behavior, kept for tools that do not yet pass a scope).
 pub fn bridge_tool_registry(
     tools: &ToolRegistry,
     allowed_tool_names: Option<&HashSet<String>>,
     ctx: Arc<ToolCallContext>,
+    memory_handler: Option<Arc<MemoryHandler>>,
 ) -> AgentToolRegistry {
     let mut agent_registry = AgentToolRegistry::new();
     for schema in tools.get_definitions() {
@@ -178,6 +189,35 @@ pub fn bridge_tool_registry(
             }
         }
         let name = schema.name.clone();
+        // Scoped memory: when a per-session/room handler is supplied, the
+        // `"memory"` tool must NOT dispatch through the global registry
+        // (which would hit the shared global FileMemoryBackend). Instead we
+        // register a dedicated closure that drives the isolated handler.
+        // The handler is async; the agent loop calls this closure
+        // synchronously, so we block_on the current tokio handle — the same
+        // adaption pattern already used by the tool executor bridge.
+        if name == "memory" {
+            if let Some(mh) = memory_handler.clone() {
+                agent_registry.register(
+                    name.clone(),
+                    schema,
+                    Arc::new(
+                        move |params: Value| -> Result<String, hermix_core::ToolError> {
+                            // `Fn` closures may be invoked many times, so we
+                            // clone the `Arc` on each call rather than moving
+                            // the captured one. The handler is async; the
+                            // agent loop calls this synchronously, so we
+                            // block_on the current tokio handle.
+                            let mh = mh.clone();
+                            TokioHandle::current().block_on(async move {
+                                mh.execute(params).await
+                            })
+                        },
+                    ),
+                );
+                continue;
+            }
+        }
         let tools_clone = tools.clone();
         let ctx_clone = ctx.clone();
         agent_registry.register(

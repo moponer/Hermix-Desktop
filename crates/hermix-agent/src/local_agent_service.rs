@@ -17,6 +17,8 @@ use hermix_focus::MemoryLayer;
 use hermix_core::types::ExecutionTimelineEvent;
 use hermix_core::{AgentError, ApprovalOutcome, LlmProvider, Message, MessageRole, PendingGrant, PermissionProfile, StreamChunk, StreamDelta, ToolCall};
 use hermix_tools::{TirithAction, TirithSecurity, ToolRegistry};
+use hermix_tools::backends::memory::FileMemoryBackend;
+use hermix_tools::tools::memory::MemoryHandler;
 use serde_json::Value;
 
 /// Wrapper that makes `Arc<ToolRegistry>` (hermix_tools) implement the
@@ -962,6 +964,14 @@ impl LocalAgentService {
         // unsafe in multi-threaded async contexts (data race on concurrent
         // sessions with different workspaces).
         config.permission = overrides.permission;
+        // Propagate a group-chat room-scoped memory directory (if any) so
+        // the agent reads/writes under its own room instead of the shared
+        // global `<hermix_home>/memories`. Private chats resolve their own
+        // session-scoped directory in `send_message` / `send_message_stream`
+        // and ignore this field.
+        if let Some(md) = overrides.memory_dir.as_ref() {
+            config.memory_dir = Some(md.clone());
+        }
         let allowed = overrides
             .tools
             .as_ref()
@@ -1401,11 +1411,26 @@ impl AgentService for LocalAgentService {
             active_call_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
         });
 
+        // P0 (memory isolation): give this agent its own scoped memory
+        // backend so the `memory` tool reads/writes only this session's
+        // (private 1:1) or room's (group chat) directory and never the
+        // shared global `~/.hermix/memories`. Group rooms arrive here with
+        // `config.memory_dir` already set by the gateway dispatcher; private
+        // chats derive `<home>/sessions/<sid>/memories` from session_id.
+        let memory_handler: Option<Arc<MemoryHandler>> = {
+            let dir = agent_config.resolved_memory_dir();
+            let _ = std::fs::create_dir_all(&dir);
+            Some(Arc::new(MemoryHandler::new(Arc::new(
+                FileMemoryBackend::with_dir(dir),
+            ))))
+        };
+
         // Bridge tool registry with optional whitelist from overrides
         let agent_tool_registry = Arc::new(bridge_tool_registry(
             &self.tool_registry,
             allowed_tools.as_ref(),
             tool_ctx.clone(),
+            memory_handler,
         ));
 
         // Pre-save: persist the user's message BEFORE running the agent.
@@ -1758,11 +1783,26 @@ impl AgentService for LocalAgentService {
             active_call_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
         });
 
+        // P0 (memory isolation): give this agent its own scoped memory
+        // backend so the `memory` tool reads/writes only this session's
+        // (private 1:1) or room's (group chat) directory and never the
+        // shared global `~/.hermix/memories`. Group rooms arrive here with
+        // `config.memory_dir` already set by the gateway dispatcher; private
+        // chats derive `<home>/sessions/<sid>/memories` from session_id.
+        let memory_handler: Option<Arc<MemoryHandler>> = {
+            let dir = agent_config.resolved_memory_dir();
+            let _ = std::fs::create_dir_all(&dir);
+            Some(Arc::new(MemoryHandler::new(Arc::new(
+                FileMemoryBackend::with_dir(dir),
+            ))))
+        };
+
         // Bridge tool registry with optional whitelist from overrides
         let agent_tool_registry = Arc::new(bridge_tool_registry(
             &self.tool_registry,
             allowed_tools.as_ref(),
             tool_ctx.clone(),
+            memory_handler,
         ));
 
         // Convert Arc to Box for AgentLoop
@@ -3048,6 +3088,7 @@ mod override_tests {
             on_event: None,
             pre_approval_checker: None,
             skills: None,
+            memory_dir: None,
             on_prefetch_intent: None,
             shutdown: None,
         };
@@ -3078,6 +3119,7 @@ mod override_tests {
             on_event: None,
             pre_approval_checker: None,
             skills: None,
+            memory_dir: None,
             on_prefetch_intent: None,
             shutdown: None,
         };

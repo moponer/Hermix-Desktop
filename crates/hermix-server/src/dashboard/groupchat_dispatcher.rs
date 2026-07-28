@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use async_trait::async_trait;
 
+use hermix_config::paths;
 use hermix_core::traits::{AgentService, AgentOverrides};
 use hermix_core::types::StreamChunk;
 use hermix_gateway::groupchat::dispatcher::{AgentDispatcher, StreamDelta};
@@ -14,13 +15,29 @@ impl ServerAgentDispatcher {
     pub fn new(agent_service: Arc<dyn AgentService>) -> Self {
         Self { agent_service }
     }
+
+    /// Derive the per-room memory directory used by every agent in a group
+    /// chat. All members (manager + participants) of the same `room_id`
+    /// share this directory, while different rooms — and private 1:1 chats —
+    /// never observe each other's data. This is the directory isolation that
+    /// stops a group chat from reading memories stored during a private
+    /// conversation.
+    fn room_memory_dir(room_id: &str) -> String {
+        paths::hermix_home()
+            .join("data")
+            .join("groupchat")
+            .join(room_id)
+            .join("memories")
+            .to_string_lossy()
+            .to_string()
+    }
 }
 
 #[async_trait]
 impl AgentDispatcher for ServerAgentDispatcher {
     async fn dispatch_to_agent(
         &self,
-        _room_id: &str,
+        room_id: &str,
         _agent_id: &str,
         session_id: &str,
         system_prompt: &str,
@@ -29,6 +46,7 @@ impl AgentDispatcher for ServerAgentDispatcher {
     ) -> Result<String, String> {
         let overrides = AgentOverrides {
             system_prompt: Some(system_prompt.to_string()),
+            memory_dir: Some(Self::room_memory_dir(room_id)),
             ..Default::default()
         };
 
@@ -60,7 +78,7 @@ impl AgentDispatcher for ServerAgentDispatcher {
 
     async fn dispatch_subtask_stream(
         &self,
-        _room_id: &str,
+        room_id: &str,
         _agent_id: &str,
         session_id: &str,
         system_prompt: &str,
@@ -70,6 +88,7 @@ impl AgentDispatcher for ServerAgentDispatcher {
     ) -> Result<String, String> {
         let overrides = AgentOverrides {
             system_prompt: Some(system_prompt.to_string()),
+            memory_dir: Some(Self::room_memory_dir(room_id)),
             ..Default::default()
         };
 

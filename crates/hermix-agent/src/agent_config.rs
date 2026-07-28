@@ -13,6 +13,7 @@
 //!   continue to compile without modification.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use hermix_core::traits::PermissionLevel;
 use hermix_core::{BudgetConfig, BudgetConfigError};
@@ -250,6 +251,21 @@ pub struct AgentConfig {
     /// HERMIX_HOME path — used by memory plugins for config resolution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hermix_home: Option<String>,
+
+    /// Scoped memory directory for this agent's memory backend.
+    ///
+    /// When `Some(dir)`, the `memory` tool and the memory prompt/
+    /// prefetch injections read/write under `dir` instead of the
+    /// global `<hermix_home>/memories`. This is what enables per-session
+    /// (private 1:1 chat) and per-room (group chat) memory isolation,
+    /// so a group chat's manager/members cannot read memories that were
+    /// stored during a private conversation, and different group-chat
+    /// rooms cannot read each other's memories.
+    ///
+    /// `None` keeps the legacy behaviour: fall back to the global
+    /// `<hermix_home>/memories` directory (single shared scope).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_dir: Option<String>,
 
     /// Skip memory integration (read prefetch + write hooks).
     /// The write-path methods iterate the memory router and fan out to each
@@ -849,6 +865,7 @@ impl Default for AgentConfig {
             memory_flush_interval: default_memory_flush_interval(),
             session_id: None,
             hermix_home: None,
+            memory_dir: None,
             skip_memory: false,
             memory_char_budget: default_memory_char_budget(),
             memory_min_salience: default_memory_min_salience(),
@@ -907,6 +924,51 @@ impl Default for AgentConfig {
             autonomous_mode: default_autonomous_mode(),
             ocr: OcrConfig::default(),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scoped memory resolution
+// ---------------------------------------------------------------------------
+
+impl AgentConfig {
+    /// Resolve the scoped memory directory for this agent's memory backend.
+    ///
+    /// * When `memory_dir` is set, it is used verbatim — this is the
+    ///   group-chat room scope (or any caller-supplied override) and points
+    ///   at `<hermix_home>/data/groupchat/<room_id>/memories`.
+    /// * Otherwise (private 1:1 chat) the directory is auto-derived per
+    ///   session as `<hermix_home>/sessions/<session_id>/memories`.
+    ///
+    /// This is the read/write root for both the `memory` tool
+    /// (`FileMemoryBackend`) and the prompt/prefetch memory injections, so
+    /// every scope physically owns its own `MEMORY.md` / `USER.md` and can
+    /// never observe another scope's data.
+    pub fn resolved_memory_dir(&self) -> PathBuf {
+        if let Some(md) = &self.memory_dir {
+            return PathBuf::from(md);
+        }
+        let home = self
+            .hermix_home
+            .clone()
+            .unwrap_or_else(|| hermix_config::paths::hermix_home().to_string_lossy().to_string());
+        PathBuf::from(home)
+            .join("sessions")
+            .join(self.session_id.clone().unwrap_or_default())
+            .join("memories")
+    }
+
+    /// Whether the read paths may fall back to the legacy global
+    /// `<hermix_home>/memories` when the scoped directory has no
+    /// `MEMORY.md` yet.
+    ///
+    /// Returns `true` only for the auto-derived private scope
+    /// (`memory_dir` is `None`), so existing private memories stay visible
+    /// right after the migration (they live in the global directory). Group
+    /// room scopes (`memory_dir` set) return `false` — they must never read
+    /// global, which is the entire point of the isolation fix.
+    pub fn memory_reads_global_fallback(&self) -> bool {
+        self.memory_dir.is_none()
     }
 }
 
@@ -1031,5 +1093,38 @@ mod tests {
             .remove("turn_transition_deadline_secs");
         let back: AgentConfig = serde_json::from_value(v).unwrap();
         assert_eq!(back.turn_transition_deadline_secs, 30);
+    }
+
+    /// P0 (memory isolation): `resolved_memory_dir` must yield the room
+    /// scope verbatim when `memory_dir` is set, and the per-session
+    /// directory (`<home>/sessions/<sid>/memories`) for the auto-derived
+    /// private scope. `memory_reads_global_fallback` must be `false` for
+    /// room scopes (never read global) and `true` for the private scope
+    /// (migration aid).
+    #[test]
+    fn memory_isolation_resolves_scoped_dirs() {
+        // Room scope: memory_dir wins verbatim, no global fallback.
+        let room = AgentConfig {
+            memory_dir: Some("/x/data/groupchat/room-7/memories".into()),
+            session_id: Some("ignored".into()),
+            ..AgentConfig::default()
+        };
+        assert_eq!(
+            room.resolved_memory_dir(),
+            std::path::PathBuf::from("/x/data/groupchat/room-7/memories")
+        );
+        assert!(!room.memory_reads_global_fallback());
+
+        // Private scope: derived per session, falls back to global for reads.
+        let private = AgentConfig {
+            hermix_home: Some("/home/hermix".into()),
+            session_id: Some("sess-9".into()),
+            ..AgentConfig::default()
+        };
+        assert_eq!(
+            private.resolved_memory_dir(),
+            std::path::PathBuf::from("/home/hermix/sessions/sess-9/memories")
+        );
+        assert!(private.memory_reads_global_fallback());
     }
 }

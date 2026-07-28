@@ -859,8 +859,11 @@ fn build_context_layer(
     let mut builder = SystemPromptBuilder::new();
 
     if !config.skip_memory {
-        let (memory_block, user_block) =
-            load_builtin_memory_snapshot(config.hermix_home.as_deref());
+        let memory_dir = config.resolved_memory_dir();
+        let (memory_block, user_block) = load_builtin_memory_snapshot(
+            &memory_dir,
+            config.memory_reads_global_fallback(),
+        );
         if let Some(block) = memory_block {
             builder = builder.with_block(&block);
         }

@@ -3487,6 +3487,7 @@ async fn send_message(
         image: None,
         image_mime_type: None,
         skills: req.skills.clone(),
+        memory_dir: None,
         approval_requester: None,
         on_event: None,
         pre_approval_checker: None,
@@ -3906,8 +3907,9 @@ async fn handle_ws(mut socket: WebSocket, state: HttpServerState, session_id: St
                     images: convert_wire_images(&request.images),
                     image: None,
                     image_mime_type: None,
-                    skills: request.skills.clone(),
-                    approval_requester: None,
+            skills: request.skills.clone(),
+            memory_dir: None,
+            approval_requester: None,
                     on_event: None,
                     pre_approval_checker: None,
                     on_prefetch_intent: None,
@@ -4333,6 +4335,7 @@ async fn handle_ws_stream_send(
         images: convert_wire_images(&request.images),
         image: request.image.clone(),
         image_mime_type: request.image_mime_type.clone(),
+        memory_dir: None,
         skills: request.skills.clone(),
         approval_requester: {
             let registry = state.approval_registry.clone();
@@ -6011,20 +6014,25 @@ async fn handle_ws_groupchat(
             },
         });
 
-        // Save completed response to DB
+        // Save completed response to DB.
+        // We lock-and-clone instead of `Arc::try_unwrap` because
+        // `send_message_stream` may retain a clone of the `on_chunk`
+        // Arc (which captures `response_clone`), causing `try_unwrap`
+        // to fail silently and the agent's reply to never persist.
         if result.is_ok() {
-            if let Ok(mutex) = Arc::try_unwrap(response_so_far) {
-                let final_text = mutex.into_inner().unwrap_or_default();
-                if !final_text.is_empty() {
-                    let stripped = hermix_agent::python_alignment::strip_think_blocks_for_ack(&final_text);
-                    let _ = manager.save_agent_message(
-                        &room_id,
-                        agent_id,
-                        agent_name,
-                        &stripped,
-                        hermix_gateway::groupchat::persistence::MessageType::Chat,
-                    ).await;
-                }
+            let final_text = response_so_far
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if !final_text.is_empty() {
+                let stripped = hermix_agent::python_alignment::strip_think_blocks_for_ack(&final_text);
+                let _ = manager.save_agent_message(
+                    &room_id,
+                    agent_id,
+                    agent_name,
+                    &stripped,
+                    hermix_gateway::groupchat::persistence::MessageType::Chat,
+                ).await;
             }
         }
     }
@@ -6117,9 +6125,9 @@ fn room_event_to_stream(
         // Streaming-think events from the dispatcher pipeline. The wire
         // shape is whatever the transport `GroupChatChunk` / `…Done`
         // variants already carry — we just route the role/agent_id
-        // through and let the frontend handle leader-vs-member routing
-        // (leader's chunks are visual-only; member's chunks get appended
-        // to the running bubble).
+        // through. The frontend renders ALL chunks (leader + member)
+        // as visible messages; thinking traces are sent separately via
+        // `GroupChatThinking` events and are not rendered as messages.
         RoomEvent::AgentThinkingChunk {
             room_id,
             agent_id,
@@ -6162,6 +6170,70 @@ fn room_event_to_stream(
             to_agent_name,
             reason,
             kind,
+        }),
+        // ── Discussion events (P3.1) ──
+        RoomEvent::DiscussionStarted {
+            room_id,
+            discussion_id,
+            topic,
+            participants,
+            max_rounds,
+        } => Some(StreamEvent::DiscussionStarted {
+            room_id,
+            discussion_id,
+            topic,
+            participants,
+            max_rounds,
+        }),
+        RoomEvent::DiscussionChunk {
+            room_id,
+            agent_id,
+            agent_name,
+            round,
+            delta,
+        } => Some(StreamEvent::DiscussionChunk {
+            room_id,
+            agent_id,
+            agent_name,
+            round,
+            delta,
+        }),
+        RoomEvent::DiscussionMessageSaved {
+            room_id,
+            discussion_id,
+            agent_id,
+            agent_name,
+            content,
+            round,
+        } => Some(StreamEvent::DiscussionMessageSaved {
+            room_id,
+            discussion_id,
+            agent_id,
+            agent_name,
+            content,
+            round,
+        }),
+        RoomEvent::DiscussionRoundSummary {
+            room_id,
+            discussion_id,
+            round,
+            summary,
+            next_action,
+        } => Some(StreamEvent::DiscussionRoundSummary {
+            room_id,
+            discussion_id,
+            round,
+            summary,
+            next_action,
+        }),
+        RoomEvent::DiscussionConcluded {
+            room_id,
+            discussion_id,
+            total_rounds,
+        } => Some(StreamEvent::DiscussionConcluded {
+            room_id,
+            discussion_id,
+            total_rounds,
         }),
     }
 }

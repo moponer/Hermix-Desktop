@@ -745,28 +745,46 @@ fn render_memory_block(target: &str, entries: &[String]) -> Option<String> {
 }
 
 /// Load the built-in memory snapshot used in the system prompt.
-/// /// This mirrors Python's MemoryStore snapshot semantics at session start:
+///
+/// `memory_dir` is the resolved scoped memory directory (already including
+/// the final `memories` segment) holding `MEMORY.md` / `USER.md`.
+///
+/// When `fallback_global` is `true` and neither file exists under
+/// `memory_dir`, the legacy global `<hermes_home>/memories` directory is
+/// consulted instead. This is the migration aid for the auto-derived
+/// private scope: until a private chat writes its first memory, its scoped
+/// directory is empty, so we still surface the user's pre-existing global
+/// memories. Group-room scopes pass `false` and must never read global.
+///
+/// This mirrors Python's MemoryStore snapshot semantics at session start:
 /// the returned blocks are read once and treated as a frozen prompt view.
 pub fn load_builtin_memory_snapshot(
-    hermes_home_override: Option<&str>,
+    memory_dir: &Path,
+    fallback_global: bool,
 ) -> (Option<String>, Option<String>) {
-    let base = resolve_hermes_home(hermes_home_override);
-    let memory_dir = base.join("memories");
-    let memory_path = memory_dir.join("MEMORY.md");
-    let user_path = memory_dir.join("USER.md");
+    let read_entries = |dir: &Path| -> (Vec<String>, Vec<String>) {
+        let mem = std::fs::read_to_string(dir.join("MEMORY.md"))
+            .ok()
+            .map(|s| dedup_entries(parse_memory_entries(&s)))
+            .unwrap_or_default();
+        let user = std::fs::read_to_string(dir.join("USER.md"))
+            .ok()
+            .map(|s| dedup_entries(parse_memory_entries(&s)))
+            .unwrap_or_default();
+        (mem, user)
+    };
 
-    let memory_entries = std::fs::read_to_string(&memory_path)
-        .ok()
-        .map(|s| dedup_entries(parse_memory_entries(&s)))
-        .unwrap_or_default();
-    let user_entries = std::fs::read_to_string(&user_path)
-        .ok()
-        .map(|s| dedup_entries(parse_memory_entries(&s)))
-        .unwrap_or_default();
+    let mut entries = read_entries(memory_dir);
+    if fallback_global && entries.0.is_empty() && entries.1.is_empty() {
+        let global = resolve_hermes_home(None).join("memories");
+        if global != *memory_dir {
+            entries = read_entries(&global);
+        }
+    }
 
     (
-        render_memory_block("memory", &memory_entries),
-        render_memory_block("user", &user_entries),
+        render_memory_block("memory", &entries.0),
+        render_memory_block("user", &entries.1),
     )
 }
 
@@ -2214,7 +2232,7 @@ let ctx = RouteContext {
         .unwrap();
 
         let (memory_block, user_block) =
-            load_builtin_memory_snapshot(Some(tmp.path().to_string_lossy().as_ref()));
+            load_builtin_memory_snapshot(&memories, false);
 
         let memory_block = memory_block.unwrap_or_default();
         let user_block = user_block.unwrap_or_default();

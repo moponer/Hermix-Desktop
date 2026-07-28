@@ -313,18 +313,34 @@ pub async fn memory_prefetch(
     let mut block = String::from("## Memory\n\n");
     let mut total_chars = 0;
 
-    // Include MEMORY.md content as high-priority hits (file-based memory)
-    if let Some(hh) = hermix_home {
-        let memory_path = hh.join("memories").join("MEMORY.md");
-        if let Ok(content) = std::fs::read_to_string(&memory_path) {
-            let trimmed = content.trim();
-            if !trimmed.is_empty() {
-                let line = format!("- [source=memo] {}\n", trimmed);
-                if total_chars + line.len() <= char_budget {
-                    block.push_str(&line);
-                    total_chars += line.len();
-                }
+    // Include the agent's scoped MEMORY.md as a high-priority hit
+    // (file-based memory). `config.resolved_memory_dir()` is this agent's
+    // isolated memory directory — either the per-session dir (private 1:1
+    // chat) or the per-room dir (group chat). For the auto-derived private
+    // scope only, fall back to the legacy global `<home>/memories` when the
+    // scoped dir has no MEMORY.md yet, so pre-existing private memories stay
+    // visible during migration. Group-room scopes must never read global.
+    let scope_dir = config.resolved_memory_dir();
+    let memory_path = scope_dir.join("MEMORY.md");
+    let global_path = hermix_home.map(|h| h.join("memories").join("MEMORY.md"));
+    let content = std::fs::read_to_string(&memory_path)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            if config.memory_reads_global_fallback() {
+                global_path
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .filter(|s| !s.trim().is_empty())
+            } else {
+                None
             }
+        });
+    if let Some(content) = content {
+        let trimmed = content.trim();
+        let line = format!("- [source=memo] {}\n", trimmed);
+        if total_chars + line.len() <= char_budget {
+            block.push_str(&line);
+            total_chars += line.len();
         }
     }
 

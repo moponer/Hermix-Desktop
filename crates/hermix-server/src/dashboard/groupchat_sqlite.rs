@@ -115,6 +115,8 @@ impl SqliteRoomPersistence {
                 rules_json TEXT DEFAULT '{}',
                 announcement TEXT,
                 announcement_published_at TEXT,
+                description TEXT,
+                style TEXT,
                 created_at TEXT,
                 updated_at TEXT
             );
@@ -183,6 +185,13 @@ impl SqliteRoomPersistence {
         // because the second run will fail harmlessly.
         let _ = conn.execute("ALTER TABLE groupchat_rooms ADD COLUMN announcement TEXT", []);
         let _ = conn.execute("ALTER TABLE groupchat_rooms ADD COLUMN announcement_published_at TEXT", []);
+        // Room description: free-form text shown in the header. Idempotent
+        // ALTER for pre-P4 databases; second run swallows "duplicate column".
+        let _ = conn.execute("ALTER TABLE groupchat_rooms ADD COLUMN description TEXT", []);
+        // Room UI style: "modern" | "classic" | "compact". NULL → modern.
+        let _ = conn.execute("ALTER TABLE groupchat_rooms ADD COLUMN style TEXT", []);
+        // Chat mode: "task_collab" | "free_chat". NULL → task_collab.
+        let _ = conn.execute("ALTER TABLE groupchat_rooms ADD COLUMN chat_mode TEXT", []);
         // P3 display_name: per-room alias for an agent.
         // Idempotent — pre-P3 rooms get the column added on first open.
         let _ = conn.execute("ALTER TABLE groupchat_room_agents ADD COLUMN display_name TEXT", []);
@@ -240,19 +249,23 @@ impl RoomPersistence for SqliteRoomPersistence {
             rules: RoomRules::default(),
             announcement: None,
             announcement_published_at: None,
+            description: None,
+            style: None,
+            chat_mode: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
         let leader_session_id = hermix_gateway::groupchat::persistence::new_session_id();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO groupchat_rooms (id, name, agent_ids_json, settings_json, rules_json, announcement, announcement_published_at, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, ?7)",
+            "INSERT INTO groupchat_rooms (id, name, agent_ids_json, settings_json, rules_json, announcement, announcement_published_at, description, style, chat_mode, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, NULL, NULL, ?7, ?8)",
             params![
                 room.id, room.name,
                 serde_json::to_string(&room.agent_ids).unwrap_or_default(),
                 serde_json::to_string(&room.settings).unwrap_or_default(),
                 serde_json::to_string(&room.rules).unwrap_or_default(),
+                room.description,
                 room.created_at.to_rfc3339(), room.updated_at.to_rfc3339(),
             ],
         ).map_err(|e| e.to_string())?;
@@ -282,7 +295,7 @@ impl RoomPersistence for SqliteRoomPersistence {
     fn get_room(&self, id: &str) -> Result<Option<GroupChatRoom>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, name, leader_id, agent_ids_json, settings_json, rules_json, announcement, announcement_published_at, created_at, updated_at FROM groupchat_rooms WHERE id = ?1")
+            .prepare("SELECT id, name, leader_id, agent_ids_json, settings_json, rules_json, announcement, announcement_published_at, description, style, chat_mode, created_at, updated_at FROM groupchat_rooms WHERE id = ?1")
             .map_err(|e| e.to_string())?;
         let result = stmt.query_row(params![id], |row| {
             Ok(GroupChatRoom {
@@ -295,8 +308,11 @@ impl RoomPersistence for SqliteRoomPersistence {
                 announcement: row.get(6)?,
                 announcement_published_at: row.get::<_, Option<String>>(7)?
                     .map(|s| Self::parse_dt(&s)),
-                created_at: Self::parse_dt(&row.get::<_, String>(8)?),
-                updated_at: Self::parse_dt(&row.get::<_, String>(9)?),
+                description: row.get(8)?,
+                style: row.get(9)?,
+                chat_mode: row.get(10)?,
+                created_at: Self::parse_dt(&row.get::<_, String>(11)?),
+                updated_at: Self::parse_dt(&row.get::<_, String>(12)?),
             })
         });
         match result {
@@ -309,7 +325,7 @@ impl RoomPersistence for SqliteRoomPersistence {
     fn list_rooms(&self) -> Result<Vec<GroupChatRoom>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, name, leader_id, agent_ids_json, settings_json, rules_json, announcement, announcement_published_at, created_at, updated_at FROM groupchat_rooms ORDER BY updated_at DESC")
+            .prepare("SELECT id, name, leader_id, agent_ids_json, settings_json, rules_json, announcement, announcement_published_at, description, style, chat_mode, created_at, updated_at FROM groupchat_rooms ORDER BY updated_at DESC")
             .map_err(|e| e.to_string())?;
         let rows = stmt.query_map([], |row| {
             Ok(GroupChatRoom {
@@ -322,8 +338,11 @@ impl RoomPersistence for SqliteRoomPersistence {
                 announcement: row.get(6)?,
                 announcement_published_at: row.get::<_, Option<String>>(7)?
                     .map(|s| Self::parse_dt(&s)),
-                created_at: Self::parse_dt(&row.get::<_, String>(8)?),
-                updated_at: Self::parse_dt(&row.get::<_, String>(9)?),
+                description: row.get(8)?,
+                style: row.get(9)?,
+                chat_mode: row.get(10)?,
+                created_at: Self::parse_dt(&row.get::<_, String>(11)?),
+                updated_at: Self::parse_dt(&row.get::<_, String>(12)?),
             })
         }).map_err(|e| e.to_string())?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -335,7 +354,8 @@ impl RoomPersistence for SqliteRoomPersistence {
             "UPDATE groupchat_rooms SET name = ?1, leader_id = ?2, agent_ids_json = ?3,
              settings_json = ?4, rules_json = ?5,
              announcement = ?6, announcement_published_at = ?7,
-             updated_at = ?8 WHERE id = ?9",
+             description = ?8, style = ?9, chat_mode = ?10,
+             updated_at = ?11 WHERE id = ?12",
             params![
                 room.name, room.leader_id,
                 serde_json::to_string(&room.agent_ids).unwrap_or_default(),
@@ -343,6 +363,9 @@ impl RoomPersistence for SqliteRoomPersistence {
                 serde_json::to_string(&room.rules).unwrap_or_default(),
                 room.announcement,
                 room.announcement_published_at.map(|d| d.to_rfc3339()),
+                room.description,
+                room.style,
+                room.chat_mode,
                 Utc::now().to_rfc3339(), room.id,
             ],
         ).map_err(|e| e.to_string())?;
@@ -1000,6 +1023,39 @@ impl RoomPersistence for SqliteRoomPersistence {
             params![
                 text,
                 published_at.map(|d| d.to_rfc3339()),
+                Utc::now().to_rfc3339(),
+                room_id,
+            ],
+        ).map_err(|e| e.to_string())?;
+        if rows == 0 {
+            Err(format!("room {} not found", room_id))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn set_description(
+        &self,
+        room_id: &str,
+        description: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        // Treat empty strings as "clear" — matches the announcement
+        // convention so the API layer doesn't have to special-case the
+        // two endpoints differently. Whitespace-only strings are also
+        // coerced to None (trimmed at the API layer too).
+        let trimmed = description.map(|s| s.trim());
+        let normalized = match trimmed {
+            Some(s) if s.is_empty() => None,
+            other => other,
+        };
+        let rows = conn.execute(
+            "UPDATE groupchat_rooms
+             SET description = ?1,
+                 updated_at = ?2
+             WHERE id = ?3",
+            params![
+                normalized,
                 Utc::now().to_rfc3339(),
                 room_id,
             ],

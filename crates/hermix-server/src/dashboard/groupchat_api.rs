@@ -23,6 +23,14 @@ fn msg_sender_name(agent: &AgentRoomProfile) -> String {
 #[derive(Deserialize)]
 pub struct CreateRoomRequest {
     pub name: String,
+    /// UI style for the room: "modern" (default), "classic", "compact".
+    /// When omitted or `None`, the room defaults to "modern".
+    #[serde(default)]
+    pub style: Option<String>,
+    /// Chat mode for the room: "task_collab" | "free_chat".
+    /// When omitted or `None`, the room defaults to the persistence default.
+    #[serde(default)]
+    pub chat_mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -48,6 +56,19 @@ pub struct RoomResponse {
     pub announcement: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub announcement_published_at: Option<String>,
+    /// Optional free-form description of the room (project background,
+    /// goal, or constraints). Edited via PATCH
+    /// /api/groupchat/rooms/{room_id}/description.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub description: Option<String>,
+    /// UI rendering style: "modern" | "classic" | "compact".
+    /// `None` means the room predates the style feature (treated as "modern").
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub style: Option<String>,
+    /// Room chat mode ("task_collab" | "free_chat"). `None` for rooms
+    /// predating the feature. Mirrors the persistence `chat_mode` column.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub chat_mode: Option<String>,
     /// The currently in-flight task, if any. Includes its subtasks so
     /// the panel can render progress without a follow-up round trip.
     /// `None` when there's no active task — typical for rooms that
@@ -174,6 +195,15 @@ fn task_to_response(
 pub struct AnnouncementRequest {
     /// The new announcement text. Empty string clears the announcement.
     pub text: String,
+}
+
+/// Body for PATCH /api/groupchat/rooms/{room_id}/description.
+/// `description` is the new free-form text; empty string clears it.
+/// Mirrors the announcement semantics so the chat header edit UX
+/// stays symmetric between the two endpoints.
+#[derive(Deserialize)]
+pub struct DescriptionRequest {
+    pub description: String,
 }
 
 #[derive(Deserialize)]
@@ -359,6 +389,9 @@ pub async fn list_rooms(
             leader,
             announcement: r.announcement,
             announcement_published_at: r.announcement_published_at.map(|d| d.to_rfc3339()),
+            description: r.description,
+            style: r.style.clone(),
+            chat_mode: r.chat_mode.clone(),
             active_task,
             created_at: r.created_at.to_rfc3339(),
         });
@@ -371,8 +404,23 @@ pub async fn create_room(
     Json(req): Json<CreateRoomRequest>,
 ) -> Result<(StatusCode, Json<RoomResponse>), StatusCode> {
     let manager = state.groupchat_manager();
-    let room = manager.create_room(&req.name).await
+    let mut room = manager.create_room(&req.name).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Apply the requested UI style if one was specified.
+    if let Some(ref style) = req.style {
+        if !style.is_empty() {
+            room.style = Some(style.clone());
+        }
+    }
+    // Apply the requested chat mode if one was specified.
+    if let Some(ref mode) = req.chat_mode {
+        if mode == "free_chat" || mode == "task_collab" {
+            room.chat_mode = Some(mode.clone());
+        }
+    }
+    if room.style.is_some() || room.chat_mode.is_some() {
+        let _ = manager.update_room(&room).await;
+    }
     // Newly created rooms always have the leader row (auto-inserted
     // by the persistence layer), so we can fetch it directly without
     // a separate get_room round trip.
@@ -388,6 +436,9 @@ pub async fn create_room(
         leader,
         announcement: None,
         announcement_published_at: None,
+        description: None,
+        style: room.style,
+        chat_mode: room.chat_mode,
         active_task: None,
         created_at: room.created_at.to_rfc3339(),
     })))
@@ -431,6 +482,9 @@ pub async fn get_room(
         leader,
         announcement: room.announcement,
         announcement_published_at: room.announcement_published_at.map(|d| d.to_rfc3339()),
+        description: room.description,
+        style: room.style.clone(),
+        chat_mode: room.chat_mode.clone(),
         active_task,
         created_at: room.created_at.to_rfc3339(),
     }))
@@ -1150,6 +1204,18 @@ pub async fn approve(
 ) -> Result<StatusCode, StatusCode> {
     let manager = state.groupchat_manager();
     let comment = req.comment.unwrap_or_default();
+
+    // E1 — actually transition the active task out of AwaitingApproval.
+    // Without this, the leader had no signal to continue execution; the
+    // chat bubble was misleading. We look up the room's active task and
+    // flip its status only when the gate is open. No-op when there's no
+    // in-flight task or it's already past the gate.
+    if let Ok(Some(task)) = manager.get_active_task(&room_id).await {
+        if task.status == hermix_gateway::groupchat::persistence::TaskStatus::AwaitingApproval {
+            let _ = manager.update_task_status(&task.id, hermix_gateway::groupchat::persistence::TaskStatus::Approved).await;
+        }
+    }
+
     let msg = format!("✅ 用户批准了方案{}", if comment.is_empty() { String::new() } else { format!("：{}", comment) });
     let _ = manager.send_message(&room_id, "system", "系统", &msg).await;
     Ok(StatusCode::OK)
@@ -1162,6 +1228,18 @@ pub async fn reject(
 ) -> Result<StatusCode, StatusCode> {
     let manager = state.groupchat_manager();
     let comment = req.comment.unwrap_or_default();
+
+    // E2 — flip the active task to Failed so the engine knows the user
+    // vetoed this plan and stops waiting. Same gating as approve: only
+    // transitions when the task is currently AwaitingApproval. We use
+    // Failed (not a separate Rejected variant) to keep the TaskStatus
+    // enum stable — the chat banner tells the user the difference.
+    if let Ok(Some(task)) = manager.get_active_task(&room_id).await {
+        if task.status == hermix_gateway::groupchat::persistence::TaskStatus::AwaitingApproval {
+            let _ = manager.update_task_status(&task.id, hermix_gateway::groupchat::persistence::TaskStatus::Failed).await;
+        }
+    }
+
     let msg = format!("❌ 用户驳回了方案{}", if comment.is_empty() { String::new() } else { format!("：{}", comment) });
     let _ = manager.send_message(&room_id, "system", "系统", &msg).await;
     Ok(StatusCode::OK)
@@ -1261,12 +1339,103 @@ pub async fn clear_announcement(
     Ok(StatusCode::OK)
 }
 
+/// Publish or replace the room's free-form description.
+/// `PATCH /api/groupchat/rooms/{room_id}/description`
+/// Body: `{ "description": "..." }`. Empty string clears the
+/// description (mirrors the announcement endpoint). Whitespace-only
+/// strings are also coerced to None by the persistence layer.
+/// Returns the canonical post-update state.
+pub async fn update_description(
+    State(state): State<HttpServerState>,
+    Path(room_id): Path<String>,
+    Json(req): Json<DescriptionRequest>,
+) -> Result<Json<DescriptionResponse>, StatusCode> {
+    let manager = state.groupchat_manager();
+
+    // Fail fast if the room doesn't exist; otherwise the persistence
+    // layer would surface a "room not found" error mapped to 500.
+    manager.get_room(&room_id).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let text = req.description.trim().to_string();
+    let text_opt = if text.is_empty() { None } else { Some(text.as_str()) };
+    manager.set_description(&room_id, text_opt).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Re-read so we return the canonical state.
+    let room = manager.get_room(&room_id).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(DescriptionResponse {
+        description: room.description,
+    }))
+}
+
+/// Clear the room's description (DELETE convenience).
+pub async fn clear_description(
+    State(state): State<HttpServerState>,
+    Path(room_id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let manager = state.groupchat_manager();
+    manager.set_description(&room_id, None).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::OK)
+}
+
+/// Body for PATCH /api/groupchat/rooms/{room_id}/chat-mode.
+#[derive(Deserialize)]
+pub struct ChatModeRequest {
+    /// "task_collab" or "free_chat". Any other value is rejected with 400.
+    pub chat_mode: String,
+}
+
+#[derive(Serialize)]
+pub struct ChatModeResponse {
+    pub chat_mode: Option<String>,
+}
+
+/// Switch the room's chat mode between "task_collab" (leader dispatches
+/// tasks to members) and "free_chat" (all members respond freely without
+/// leader coordination).
+///
+/// `PATCH /api/groupchat/rooms/{room_id}/chat-mode`
+/// Body: `{ "chat_mode": "free_chat" }`
+pub async fn update_chat_mode(
+    State(state): State<HttpServerState>,
+    Path(room_id): Path<String>,
+    Json(req): Json<ChatModeRequest>,
+) -> Result<Json<ChatModeResponse>, StatusCode> {
+    if req.chat_mode != "task_collab" && req.chat_mode != "free_chat" {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let manager = state.groupchat_manager();
+    let mut room = manager.get_room(&room_id).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    room.chat_mode = Some(req.chat_mode);
+    manager.update_room(&room).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(ChatModeResponse {
+        chat_mode: room.chat_mode,
+    }))
+}
+
 #[derive(Serialize)]
 pub struct AnnouncementResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub announcement: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub announcement_published_at: Option<String>,
+}
+
+/// Mirror of `AnnouncementResponse` for the description endpoint. We
+/// return the canonical post-update state so the client doesn't need
+/// to refetch the room list separately.
+#[derive(Serialize)]
+pub struct DescriptionResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 // ── Task Endpoints (P2) ─────────────────────────────────────────
@@ -1531,4 +1700,46 @@ pub struct OverturnRequest {
     pub violation_id: String,
     pub agent_id: String,
     pub comment: String,
+}
+
+// ── Discussion status API (P2.2) ───────────────────────────
+
+/// `GET /api/groupchat/rooms/{room_id}/discussion`
+///
+/// Returns the current discussion state for a room, or 404 if no
+/// discussion is active. Used by the frontend to check if a discussion
+/// is in progress when the user opens a room or reconnects.
+pub async fn get_discussion_status(
+    State(state): State<HttpServerState>,
+    Path(room_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let te = state.task_engine.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    // Check if there's an active discussion in the room runtime.
+    let room = te.room(&room_id).await;
+    let rt = room.read();
+
+    if let Some(ref discussion) = rt.active_discussion {
+        Ok(Json(serde_json::json!({
+            "active": true,
+            "discussion_id": discussion.discussion_id,
+        })))
+    } else {
+        Ok(Json(serde_json::json!({
+            "active": false,
+        })))
+    }
+}
+
+/// `POST /api/groupchat/rooms/{room_id}/discussion/cancel`
+///
+/// Cancels any active discussion in the room. Returns 200 with
+/// `{"cancelled": true/false}`.
+pub async fn cancel_discussion(
+    State(state): State<HttpServerState>,
+    Path(room_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let te = state.task_engine.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let cancelled = te.cancel_active_discussion(&room_id).await;
+    Ok(Json(serde_json::json!({ "cancelled": cancelled })))
 }
