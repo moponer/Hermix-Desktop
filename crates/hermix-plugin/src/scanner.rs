@@ -74,14 +74,23 @@ impl PluginScanner {
         manifest.validate().map_err(PluginError::InvalidManifest)?;
 
         let backend_path = dir_path.join("backend.ts");
-        if !backend_path.exists() {
-            return Err(PluginError::InvalidManifest(
-                "backend.ts not found".into()
-            ));
-        }
-
         let ui_path = dir_path.join("ui.tsx");
         let ui_path = if ui_path.exists() { Some(ui_path) } else { None };
+
+        let index_html_path = dir_path.join("index.html");
+        let index_html = if index_html_path.exists() {
+            Some(index_html_path)
+        } else {
+            None
+        };
+
+        // Require at least one app model: legacy (backend.ts) or new-loader
+        // (self-contained index.html).
+        if !backend_path.exists() && index_html.is_none() {
+            return Err(PluginError::InvalidManifest(
+                "backend.ts 与 index.html 均不存在 (自定义应用需要其一)".into(),
+            ));
+        }
 
         // Resolve icon_path from manifest.icon_file
         let icon_path = manifest.icon_file.as_ref().and_then(|name| {
@@ -96,6 +105,7 @@ impl PluginScanner {
             manifest,
             backend_path,
             ui_path,
+            index_html,
             icon_path,
             readme_path,
             dir: dir_path.to_path_buf(),

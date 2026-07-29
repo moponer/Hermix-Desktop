@@ -17,6 +17,7 @@
 pub mod manifest;
 pub mod scanner;
 pub mod packager;
+pub mod loader_packager;
 pub mod icon_library;
 pub mod validate;
 pub use validate::validate_custom_app;
@@ -31,6 +32,7 @@ use std::sync::{Arc, RwLock};
 
 pub use manifest::{PluginDependencies, PluginManifest, WindowConfig};
 pub use packager::{EsbuildPackager, PackageResult};
+pub use loader_packager::NewLoaderPackager;
 pub use scanner::PluginScanner;
 pub use window_manager::PluginWindowManager;
 
@@ -39,10 +41,12 @@ pub use window_manager::PluginWindowManager;
 pub struct PluginEntry {
     /// Plugin manifest parsed from manifest.json.
     pub manifest: PluginManifest,
-    /// Path to backend.ts
+    /// Path to backend.ts (legacy esbuild model; absent for new-loader apps)
     pub backend_path: PathBuf,
-    /// Path to ui.tsx (optional)
+    /// Path to ui.tsx (optional, legacy model)
     pub ui_path: Option<PathBuf>,
+    /// Path to self-contained index.html (new-loader model; absent for legacy)
+    pub index_html: Option<PathBuf>,
     /// Path to custom icon file, e.g. icon.png (optional)
     pub icon_path: Option<PathBuf>,
     /// Path to README.md (optional)
@@ -71,6 +75,9 @@ pub enum PluginError {
 
     #[error("esbuild not found: {0}")]
     EsbuildNotFound(String),
+
+    #[error("app loader not found: {0}")]
+    LoaderNotFound(String),
 
     #[error("packaging failed: {0}")]
     PackagingFailed(String),
@@ -133,28 +140,100 @@ pub fn resolve_esbuild_path() -> PathBuf {
     home.join("esbuild").join("esbuild.exe")
 }
 
+/// Resolve the path to the standalone app loader (`hermix-app-loader.exe`).
+///
+/// Candidate priority (mirrors the shell/esbuild resolvers):
+///   1. `HERMIX_HOME/loader/hermix-app-loader.exe` — extracted on first launch
+///      by the desktop app's resource unpacking.
+///   2. `current_exe/resources/loader/hermix-app-loader.exe` — installed build.
+///   3. `apps/custom-app-loader/target/release/hermix-app-loader.exe` —
+///      repo-dev fallback (so the host works straight from the source tree
+///      without a separate copy step).
+///   4. default `HERMIX_HOME/loader/hermix-app-loader.exe`.
+pub fn resolve_loader_path() -> PathBuf {
+    let home = hermix_config::paths::hermix_home();
+    let candidates = [
+        Some(home.join("loader").join("hermix-app-loader.exe")),
+        std::env::current_exe().ok().and_then(|e| {
+            e.parent()
+                .map(|d| d.join("resources").join("loader").join("hermix-app-loader.exe"))
+        }),
+        Some(
+            std::env::current_dir()
+                .ok()
+                .map(|d| d.join("apps").join("custom-app-loader").join("target").join("release").join("hermix-app-loader.exe"))
+                .unwrap_or_default(),
+        ),
+    ]
+    .into_iter()
+    .flatten();
+    for c in candidates {
+        if c.exists() {
+            return c;
+        }
+    }
+    home.join("loader").join("hermix-app-loader.exe")
+}
+
+/// Resolve the path to the `inject_app.exe` packer (companion to the loader).
+/// Same candidate priority as [`resolve_loader_path`].
+pub fn resolve_inject_path() -> PathBuf {
+    let home = hermix_config::paths::hermix_home();
+    let candidates = [
+        Some(home.join("loader").join("inject_app.exe")),
+        std::env::current_exe().ok().and_then(|e| {
+            e.parent()
+                .map(|d| d.join("resources").join("loader").join("inject_app.exe"))
+        }),
+        Some(
+            std::env::current_dir()
+                .ok()
+                .map(|d| d.join("apps").join("custom-app-loader").join("target").join("release").join("inject_app.exe"))
+                .unwrap_or_default(),
+        ),
+    ]
+    .into_iter()
+    .flatten();
+    for c in candidates {
+        if c.exists() {
+            return c;
+        }
+    }
+    home.join("loader").join("inject_app.exe")
+}
+
 /// The main plugin manager that coordinates all plugin operations.
 pub struct PluginManager {
     /// Directory where plugins are stored.
     plugins_dir: PathBuf,
     /// Loaded plugins indexed by ID.
     plugins: RwLock<HashMap<String, PluginEntry>>,
-    /// Packager for bundling plugins as standalone EXEs.
+    /// Legacy packager (esbuild + precompiled Tauri shell) for old-model apps.
     packager: Arc<EsbuildPackager>,
+    /// New packager (standalone wry loader + inject_app) for new-model apps.
+    loader_packager: Arc<NewLoaderPackager>,
     /// Path to the precompiled app shell (app-shell.exe).
     shell_path: PathBuf,
 }
 
 impl PluginManager {
     /// Create a new plugin manager.
-    /// /// `shell_path` is the path to the precompiled `app-shell.exe`.
+    /// `shell_path` is the path to the precompiled `app-shell.exe`.
     /// `esbuild_path` is the path to the bundled `esbuild.exe`.
+    ///
+    /// The new-loader paths (`hermix-app-loader.exe` + `inject_app.exe`) are
+    /// resolved internally via [`resolve_loader_path`]/[`resolve_inject_path`]
+    /// so callers (server, desktop) don't need to change their construction.
     pub fn new(plugins_dir: PathBuf, shell_path: PathBuf, esbuild_path: PathBuf) -> Self {
+        let loader_path = resolve_loader_path();
+        let inject_path = resolve_inject_path();
         let packager = Arc::new(EsbuildPackager::new(shell_path.clone(), esbuild_path));
+        let loader_packager = Arc::new(NewLoaderPackager::new(loader_path, inject_path));
         Self {
             plugins_dir,
             plugins: RwLock::new(HashMap::new()),
             packager,
+            loader_packager,
             shell_path,
         }
     }
@@ -197,8 +276,9 @@ impl PluginManager {
     pub fn install_plugin(
         &self,
         manifest: &PluginManifest,
-        backend_code: &str,
+        backend_code: Option<&str>,
         ui_code: Option<&str>,
+        index_html: Option<&str>,
         icon_data: Option<&str>,
     ) -> Result<PluginEntry, PluginError> {
         manifest
@@ -219,14 +299,35 @@ impl PluginManager {
         let manifest_json = serde_json::to_string_pretty(manifest)?;
         std::fs::write(plugin_dir.join("manifest.json"), manifest_json)?;
 
-        // Write backend.ts
-        std::fs::write(plugin_dir.join("backend.ts"), backend_code)?;
+        // Write backend.ts (legacy model) if provided
+        if let Some(code) = backend_code {
+            if !code.trim().is_empty() {
+                std::fs::write(plugin_dir.join("backend.ts"), code)?;
+            }
+        }
 
-        // Write ui.tsx if provided
+        // Write ui.tsx (legacy model) if provided
         let ui_path = if let Some(code) = ui_code {
-            let path = plugin_dir.join("ui.tsx");
-            std::fs::write(&path, code)?;
-            Some(path)
+            if !code.trim().is_empty() {
+                let path = plugin_dir.join("ui.tsx");
+                std::fs::write(&path, code)?;
+                Some(path)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Write self-contained index.html (new-loader model) if provided
+        let index_html_path = if let Some(code) = index_html {
+            if !code.trim().is_empty() {
+                let path = plugin_dir.join("index.html");
+                std::fs::write(&path, code)?;
+                Some(path)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -276,6 +377,7 @@ impl PluginManager {
             manifest: final_manifest,
             backend_path: plugin_dir.join("backend.ts"),
             ui_path,
+            index_html: index_html_path,
             icon_path,
             readme_path: None,
             dir: plugin_dir.clone(),
@@ -295,19 +397,38 @@ impl PluginManager {
         id: &str,
         backend_code: Option<&str>,
         ui_code: Option<&str>,
+        index_html: Option<&str>,
     ) -> Result<PluginEntry, PluginError> {
-        let entry = self
+        let mut entry = self
             .get_plugin(id)
             .ok_or_else(|| PluginError::NotFound(id.to_string()))?;
 
         if let Some(code) = backend_code {
-            std::fs::write(&entry.backend_path, code)?;
+            if !code.trim().is_empty() {
+                std::fs::write(&entry.backend_path, code)?;
+            }
         }
 
         if let Some(code) = ui_code {
-            let ui_path = entry.dir.join("ui.tsx");
-            std::fs::write(&ui_path, code)?;
+            if !code.trim().is_empty() {
+                let ui_path = entry.dir.join("ui.tsx");
+                std::fs::write(&ui_path, code)?;
+                entry.ui_path = Some(ui_path);
+            }
         }
+
+        if let Some(code) = index_html {
+            if !code.trim().is_empty() {
+                let idx_path = entry.dir.join("index.html");
+                std::fs::write(&idx_path, code)?;
+                entry.index_html = Some(idx_path);
+            }
+        }
+
+        // Re-register the updated entry in memory so get_plugin reflects it
+        // until the next scan_plugins.
+        let mut plugins = self.plugins.write().expect("plugin lock poisoned");
+        plugins.insert(id.to_string(), entry.clone());
 
         tracing::info!("updated custom app: {}", id);
         Ok(entry)
@@ -333,15 +454,45 @@ impl PluginManager {
     }
 
     /// Package a plugin as a standalone EXE.
-    /// /// This uses esbuild to bundle the TypeScript code and copies the
-    /// precompiled app shell — no Rust/Tauri toolchain needed.
+    ///
+    /// Routes by app model: new-model apps (self-contained `index.html`) are
+    /// packed via the standalone wry loader; legacy apps (`backend.ts`/`ui.tsx`)
+    /// keep using esbuild + the precompiled Tauri shell. Both emit
+    /// `dist/<id>.exe`, so run/launch logic is model-agnostic.
     pub async fn package_plugin(&self, id: &str) -> Result<PathBuf, PluginError> {
         let entry = self
             .get_plugin(id)
             .ok_or_else(|| PluginError::NotFound(id.to_string()))?;
 
-        let result = self.packager.package(&entry).await?;
+        let result = if entry.index_html.is_some() {
+            self.loader_packager.package(&entry).await?
+        } else {
+            self.packager.package(&entry).await?
+        };
         Ok(result.exe_path)
+    }
+
+    /// Launch a packaged app (model-agnostic: spawns `dist/<id>.exe`).
+    pub async fn run_plugin(&self, id: &str) -> Result<(), PluginError> {
+        let entry = self
+            .get_plugin(id)
+            .ok_or_else(|| PluginError::NotFound(id.to_string()))?;
+        let exe_name = if cfg!(windows) {
+            format!("{}.exe", entry.manifest.id)
+        } else {
+            entry.manifest.id.clone()
+        };
+        let exe_path = entry.dir.join("dist").join(&exe_name);
+        if !exe_path.exists() {
+            return Err(PluginError::ExecutionFailed(format!(
+                "应用尚未打包, 找不到可执行文件: {}",
+                exe_path.display()
+            )));
+        }
+        std::process::Command::new(&exe_path)
+            .spawn()
+            .map_err(|e| PluginError::ExecutionFailed(format!("启动应用失败: {e}")))?;
+        Ok(())
     }
 
     /// Get the plugins directory path.
@@ -354,9 +505,14 @@ impl PluginManager {
         &self.shell_path
     }
 
-    /// Get a reference to the packager.
+    /// Get a reference to the legacy esbuild packager.
     pub fn packager(&self) -> &Arc<EsbuildPackager> {
         &self.packager
+    }
+
+    /// Get a reference to the new-loader packager.
+    pub fn loader_packager(&self) -> &Arc<NewLoaderPackager> {
+        &self.loader_packager
     }
 }
 

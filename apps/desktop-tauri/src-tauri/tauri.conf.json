@@ -56,7 +56,9 @@
       "resources/ocr/ppocrv5_dict.txt",
       "resources/shell/app-shell.exe",
       "resources/shell/WebView2Loader.dll",
-      "resources/esbuild/esbuild.exe"
+      "resources/esbuild/esbuild.exe",
+      "resources/loader/hermix-app-loader.exe",
+      "resources/loader/inject_app.exe"
     ]
   },
   "plugins": {

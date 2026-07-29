@@ -80,7 +80,13 @@ pub async fn create_app(
 
     let icon_data = None; // icon_data is passed via LLM tool, not REST API
     let entry = manager
-        .install_plugin(&req.manifest, &req.backend_code, req.ui_code.as_deref(), icon_data)
+        .install_plugin(
+            &req.manifest,
+            req.backend_code.as_deref(),
+            req.ui_code.as_deref(),
+            req.index_html.as_deref(),
+            icon_data,
+        )
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -129,7 +135,12 @@ pub async fn update_app(
     let manager = get_manager(&state)?;
 
     let entry = manager
-        .update_plugin(&id, req.backend_code.as_deref(), req.ui_code.as_deref())
+        .update_plugin(
+            &id,
+            req.backend_code.as_deref(),
+            req.ui_code.as_deref(),
+            req.index_html.as_deref(),
+        )
         .map_err(|e| {
             let status = match &e {
                 hermix_plugin::PluginError::NotFound(_) => StatusCode::NOT_FOUND,
@@ -185,6 +196,9 @@ pub async fn package_app(
                 hermix_plugin::PluginError::EsbuildNotFound(_) => {
                     StatusCode::SERVICE_UNAVAILABLE
                 }
+                hermix_plugin::PluginError::LoaderNotFound(_) => {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             };
             (status, Json(json!({ "error": format!("打包应用失败: {e}") })))
@@ -210,17 +224,11 @@ pub async fn run_app(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let manager = get_manager(&state)?;
 
-    let entry = manager.get_plugin(&id).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("应用不存在: {id}") })),
-        )
-    })?;
-
     // Build first so the run reflects the latest source (dev/test loop).
     manager.package_plugin(&id).await.map_err(|e| {
         let status = match &e {
             hermix_plugin::PluginError::EsbuildNotFound(_) => StatusCode::SERVICE_UNAVAILABLE,
+            hermix_plugin::PluginError::LoaderNotFound(_) => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (
@@ -229,15 +237,18 @@ pub async fn run_app(
         )
     })?;
 
-    let wm = hermix_plugin::PluginWindowManager::new(manager.shell_path().to_path_buf());
-    wm.open_plugin(&entry)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("启动应用失败: {e}") })),
-            )
-        })?;
+    // Launch the packaged exe (model-agnostic: spawns dist/<id>.exe).
+    manager.run_plugin(&id).await.map_err(|e| {
+        let status = match &e {
+            hermix_plugin::PluginError::NotFound(_) => StatusCode::NOT_FOUND,
+            hermix_plugin::PluginError::LoaderNotFound(_) => StatusCode::SERVICE_UNAVAILABLE,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (
+            status,
+            Json(json!({ "error": format!("启动应用失败: {e}") })),
+        )
+    })?;
 
     Ok(Json(json!({
         "success": true,

@@ -209,6 +209,8 @@ fn ensure_app_shell_and_esbuild(
     let pairs = [
         ("resources/shell", "shell"),
         ("resources/esbuild", "esbuild"),
+        // New custom-app loader: hermix-app-loader.exe + inject_app.exe.
+        ("resources/loader", "loader"),
     ];
     for (src_rel, dst_rel) in pairs {
         let bundled = resource_dir.join(src_rel);

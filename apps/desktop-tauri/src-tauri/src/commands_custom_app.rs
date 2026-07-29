@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hermix_config::paths::hermix_home;
-use hermix_plugin::{run_smoke_test_async, validate_custom_app, PluginManager, PluginWindowManager};
+use hermix_plugin::{
+    resolve_loader_path, run_smoke_test_async, validate_custom_app, PluginManager,
+};
 
 /// Application state holding the PluginManager.
 pub struct CustomAppState {
@@ -90,6 +92,7 @@ fn resolve_apps_dir() -> PathBuf {
 pub async fn custom_app_init() -> Result<CustomAppInitResult, String> {
     let shell_path = resolve_shell_path();
     let esbuild_path = resolve_esbuild_path();
+    let loader_path = resolve_loader_path();
     let apps_dir = resolve_apps_dir();
 
     // Ensure the apps directory exists
@@ -101,6 +104,8 @@ pub async fn custom_app_init() -> Result<CustomAppInitResult, String> {
         shell_exists: shell_path.exists(),
         esbuild_path: esbuild_path.to_string_lossy().to_string(),
         esbuild_exists: esbuild_path.exists(),
+        loader_path: loader_path.to_string_lossy().to_string(),
+        loader_exists: loader_path.exists(),
         apps_dir: apps_dir.to_string_lossy().to_string(),
     })
 }
@@ -111,6 +116,8 @@ pub struct CustomAppInitResult {
     pub shell_exists: bool,
     pub esbuild_path: String,
     pub esbuild_exists: bool,
+    pub loader_path: String,
+    pub loader_exists: bool,
     pub apps_dir: String,
 }
 
@@ -185,18 +192,15 @@ pub async fn custom_app_run(id: String) -> Result<serde_json::Value, String> {
         .scan_plugins()
         .map_err(|e| format!("扫描应用失败: {e}"))?;
 
-    let entry = manager
-        .get_plugin(&id)
-        .ok_or_else(|| format!("应用不存在: {id}"))?;
-
     // 先编译最新源码，确保运行的是最新代码（测试场景：改完即看）
     manager
         .package_plugin(&id)
         .await
         .map_err(|e| format!("编译应用失败: {e}"))?;
 
-    let wm = PluginWindowManager::new(shell_path);
-    wm.open_plugin(&entry)
+    // 启动已打包的 exe (新架构为 wry 加载器产物, 旧架构为预编译壳; 均独立进程)
+    manager
+        .run_plugin(&id)
         .await
         .map_err(|e| format!("启动应用失败: {e}"))?;
 

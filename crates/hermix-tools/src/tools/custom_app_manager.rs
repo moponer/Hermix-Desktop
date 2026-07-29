@@ -70,9 +70,16 @@ impl CustomAppManagerHandler {
             .validate()
             .map_err(|e| ToolError::InvalidParams(format!("manifest 无效: {e}")))?;
 
+        let index_html = params.get("index_html").and_then(|v| v.as_str());
         let entry = self
             .manager
-            .install_plugin(&request.manifest, &request.backend_code, request.ui_code.as_deref(), icon_data)
+            .install_plugin(
+                &request.manifest,
+                request.backend_code.as_deref(),
+                request.ui_code.as_deref(),
+                index_html,
+                icon_data,
+            )
             .map_err(|e| ToolError::ExecutionFailed(format!("创建应用失败: {e}")))?;
 
         let response: AppResponse = (&entry).into();
@@ -92,16 +99,17 @@ impl CustomAppManagerHandler {
 
         let backend_code = params.get("backend_code").and_then(|v| v.as_str());
         let ui_code = params.get("ui_code").and_then(|v| v.as_str());
+        let index_html = params.get("index_html").and_then(|v| v.as_str());
 
-        if backend_code.is_none() && ui_code.is_none() {
+        if backend_code.is_none() && ui_code.is_none() && index_html.is_none() {
             return Err(ToolError::InvalidParams(
-                "至少需要提供 backend_code 或 ui_code 之一".into(),
+                "至少需要提供 backend_code / ui_code / index_html 之一".into(),
             ));
         }
 
         let entry = self
             .manager
-            .update_plugin(id, backend_code, ui_code)
+            .update_plugin(id, backend_code, ui_code, index_html)
             .map_err(|e| ToolError::ExecutionFailed(format!("更新应用失败: {e}")))?;
 
         let response: AppResponse = (&entry).into();
@@ -201,15 +209,13 @@ impl CustomAppManagerHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
 
-        let entry = self
-            .manager
+        // Existence check (run_plugin re-looks-up internally).
+        self.manager
             .get_plugin(id)
             .ok_or_else(|| ToolError::NotFound(format!("应用不存在: {id}")))?;
 
-        let wm = hermix_plugin::PluginWindowManager::new(
-            self.manager.shell_path().to_path_buf(),
-        );
-        wm.open_plugin(&entry)
+        self.manager
+            .run_plugin(id)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("启动应用失败: {e}")))?;
 
@@ -364,7 +370,7 @@ impl ToolHandler for CustomAppManagerHandler {
             "backend_code".into(),
             json!({
                 "type": "string",
-                "description": "backend.ts 源代码。使用 invoke('shell_fs_*') 进行文件操作，fetch() 进行网络请求。必须导出 execute(params) 函数。(create 必填, update 可选)"
+                "description": "backend.ts 源代码 (旧架构 esbuild 模型，可选)。使用 invoke('shell_fs_*') 进行文件操作。与 index_html 二选一：新架构应用用 index_html，旧架构应用用 backend_code + ui_code。"
             }),
         );
 
@@ -372,7 +378,15 @@ impl ToolHandler for CustomAppManagerHandler {
             "ui_code".into(),
             json!({
                 "type": "string",
-                "description": "ui.tsx 源代码。React 组件，使用 invoke('shell_*') 调用后端。必须默认导出一个 React 组件。(create/update 可选)"
+                "description": "ui.tsx 源代码 (旧架构 esbuild 模型，可选)。React 组件，使用 invoke('shell_*') 调用后端。"
+            }),
+        );
+
+        props.insert(
+            "index_html".into(),
+            json!({
+                "type": "string",
+                "description": "自包含 index.html 源代码 (新架构 wry 加载器模型，可选)。页面通过 fetch('app://localhost/rpc', {method:'POST', body: JSON.stringify({method, params})}) 调用桥接 (fs_*/exec/fetch/dialog_*/path_*/env_*/temp_*)。配合 manifest.permissions 声明所需权限。与 backend_code/ui_code 互斥，优先于旧架构。"
             }),
         );
 
@@ -386,7 +400,7 @@ impl ToolHandler for CustomAppManagerHandler {
 
         tool_schema(
             "custom_app_manager",
-            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行、开发期校验(validate)、运行时冒烟测试(smoke)。打包使用预编译壳+esbuild，用户无需安装Rust/Tauri。开发应用时应: 写代码→validate→失败则修复→再validate，直到 ok=true；如需进一步确认运行时无报错，可调用 smoke。",
+            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行、开发期校验(validate)、运行时冒烟测试(smoke)。新架构应用用 index_html (自包含 HTML + manifest.permissions)，由 wry 加载器打包为独立 exe；旧架构应用用 backend_code + ui_code (esbuild 编译 + 预编译壳)。两种模型均可打包/运行/校验。开发应用时应: 写代码→validate→失败则修复→再validate，直到 ok=true；如需进一步确认运行时无报错，可调用 smoke。",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }

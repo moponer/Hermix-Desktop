@@ -13,11 +13,15 @@ use crate::manifest::PluginManifest;
 pub struct CreateAppRequest {
     /// App manifest (id, name, version, description, etc.)
     pub manifest: PluginManifest,
-    /// backend.ts source code
-    pub backend_code: String,
-    /// ui.tsx source code (optional)
+    /// backend.ts source code (legacy esbuild model; omit for new-loader apps)
+    #[serde(default)]
+    pub backend_code: Option<String>,
+    /// ui.tsx source code (optional, legacy model)
     #[serde(default)]
     pub ui_code: Option<String>,
+    /// Self-contained index.html (new-loader model; omit for legacy apps)
+    #[serde(default)]
+    pub index_html: Option<String>,
 }
 
 /// Request to update an existing custom app's code.
@@ -29,6 +33,9 @@ pub struct UpdateAppRequest {
     /// New ui.tsx source code (optional)
     #[serde(default)]
     pub ui_code: Option<String>,
+    /// New self-contained index.html (optional, new-loader model)
+    #[serde(default)]
+    pub index_html: Option<String>,
 }
 
 /// Response containing app metadata and source code.
@@ -38,6 +45,9 @@ pub struct AppResponse {
     pub backend_code: String,
     #[serde(default)]
     pub ui_code: Option<String>,
+    /// Self-contained index.html source (new-loader model; empty if legacy)
+    #[serde(default)]
+    pub index_html: Option<String>,
     /// Whether the app has been packaged (dist/ exists)
     pub is_packaged: bool,
     /// Path to the dist directory (if packaged)
@@ -117,6 +127,10 @@ impl From<&crate::PluginEntry> for AppResponse {
             .ui_path
             .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok());
+        let index_html = entry
+            .index_html
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok());
         let dist_dir = entry.dir.join("dist");
         let is_packaged = dist_dir.exists();
 
@@ -124,6 +138,7 @@ impl From<&crate::PluginEntry> for AppResponse {
             manifest: entry.manifest.clone(),
             backend_code,
             ui_code,
+            index_html,
             is_packaged,
             dist_path: if is_packaged {
                 Some(dist_dir.to_string_lossy().to_string())

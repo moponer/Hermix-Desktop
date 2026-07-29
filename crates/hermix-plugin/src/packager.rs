@@ -233,21 +233,58 @@ impl EsbuildPackager {
             .arg("--color=false");
 
         if bundle_deps {
-            // UI bundles run inside the app-shell loader, which provides
-            // React/ReactDOM via an import map (esm.sh). Externalizing them
-            // avoids "Could not resolve 'react'" during esbuild and prevents
-            // duplicate React instances at runtime.
-            cmd.arg("--external:react")
-                .arg("--external:react-dom/client")
-                .arg("--external:react/jsx-runtime");
-            // Use automatic JSX runtime so that esbuild produces `_jsx()` calls
-            // instead of `React.createElement()`. This eliminates the need for
-            // `React` to be in scope (the classic runtime requires a default
-            // import of React which esbuild --external:react doesn't inject).
-            // The app-shell loader's `rewriteBareImports` rewrites
-            // `react/jsx-runtime` bare imports to the full esm.sh URL.
+            // UI bundles: try to inline React/ReactDOM into ui.bundle.js.
+            //
+            // Strategy:
+            //   A) If React vendor (node_modules) is available, inline React
+            //      with --jsx=automatic. This gives zero-network-delay loading.
+            //   B) If vendor is not available and cannot be installed (no npm),
+            //      fall back to --external:react + --jsx=automatic. The app-shell
+            //      loader's rewriteBareImports + import map will resolve React
+            //      from CDN at runtime.
+            //
+            // --jsx=automatic is used in both cases: it makes esbuild produce
+            // _jsx() calls instead of React.createElement(), so the classic
+            // "React must be in scope" issue is avoided regardless.
             cmd.arg("--jsx=automatic")
                 .arg("--jsx-import-source=react");
+
+            let vendor_dir = hermix_config::paths::hermix_home().join("vendor");
+            let react_marker = vendor_dir.join("node_modules").join("react").join("package.json");
+
+            let vendor_available = if react_marker.exists() {
+                true
+            } else {
+                // Try to install React vendor. If this fails (e.g. no npm),
+                // we'll fall back to --external:react.
+                match self.ensure_react_vendor(&vendor_dir) {
+                    Ok(()) => react_marker.exists(),
+                    Err(e) => {
+                        tracing::warn!("React vendor 安装失败，将使用 CDN 回退: {e}");
+                        false
+                    }
+                }
+            };
+
+            if vendor_available {
+                // esbuild has NO `--node-paths` CLI flag — that name only exists
+                // as the JS-API `nodePaths` option. The CLI-equivalent for extra
+                // module resolution paths is the `NODE_PATH` environment variable,
+                // which esbuild honors. Setting it here makes esbuild inline React
+                // from the vendor node_modules during `--bundle`.
+                let node_modules = vendor_dir.join("node_modules");
+                cmd.env("NODE_PATH", &node_modules);
+                tracing::info!(
+                    "UI 打包: React 内联模式 (vendor 可用, NODE_PATH={})",
+                    node_modules.display()
+                );
+            } else {
+                // Fallback: externalize React, resolve from CDN at runtime.
+                cmd.arg("--external:react")
+                    .arg("--external:react-dom/client")
+                    .arg("--external:react/jsx-runtime");
+                tracing::info!("UI 打包: React CDN 模式 (vendor 不可用)");
+            }
         }
 
         cmd.stdout(Stdio::piped())
@@ -275,6 +312,91 @@ impl EsbuildPackager {
         );
         Ok(())
     }
+
+    /// Ensure React/ReactDOM packages are available in the vendor directory
+    /// so that esbuild can resolve `import ... from "react"`.
+    ///
+    /// Tries `npm install`. If npm is not available (common on end-user
+    /// machines), returns an error so the caller can fall back to
+    /// `--external:react` (CDN resolution at runtime).
+    fn ensure_react_vendor(&self, vendor_dir: &Path) -> Result<(), PluginError> {
+        std::fs::create_dir_all(vendor_dir).map_err(|e| {
+            PluginError::PackagingFailed(format!("创建 vendor 目录失败: {e}"))
+        })?;
+
+        // Write a minimal package.json so npm doesn't walk up to repo root.
+        let pkg_json = vendor_dir.join("package.json");
+        if !pkg_json.exists() {
+            let _ = std::fs::write(&pkg_json, r#"{"name":"hermix-vendor","private":true}"#);
+        }
+
+        tracing::info!("安装 React vendor 到 {}...", vendor_dir.display());
+
+        // Find npm: try PATH first, then common install locations.
+        let npm_path = Self::find_npm();
+
+        let output = std::process::Command::new(npm_path.as_deref().unwrap_or("npm"))
+            .args([
+                "install",
+                "--no-save",
+                "--no-package-lock",
+                "--no-audit",
+                "--no-fund",
+                "react@18.3.1",
+                "react-dom@18.3.1",
+            ])
+            .current_dir(vendor_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| PluginError::PackagingFailed(format!("npm install 执行失败: {e}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(PluginError::PackagingFailed(format!(
+                "npm install react 失败 (exit {}): {}",
+                output.status,
+                stderr.chars().take(500).collect::<String>()
+            )));
+        }
+
+        tracing::info!("React vendor 安装完成 (via npm)");
+        Ok(())
+    }
+
+    /// Find the npm executable on the system.
+    ///
+    /// Tries in order:
+    /// 1. `npm` on PATH (via `which`/`where`)
+    /// 2. Common Windows install locations for Node.js
+    fn find_npm() -> Option<String> {
+        // Try the default PATH lookup first.
+        if std::process::Command::new("npm")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+        {
+            return Some("npm".to_string());
+        }
+
+        // On Windows, try common Node.js install paths.
+        if cfg!(windows) {
+            let candidates = [
+                r"C:\Program Files\nodejs\npm.cmd",
+                r"C:\Program Files (x86)\nodejs\npm.cmd",
+            ];
+            for path in &candidates {
+                if Path::new(path).exists() {
+                    tracing::debug!("找到 npm: {}", path);
+                    return Some(path.to_string());
+                }
+            }
+        }
+
+        None
+    }
 }
 
 /// Calculate the total size of a directory.
@@ -300,14 +422,21 @@ fn calculate_dir_size(path: &Path) -> u64 {
 }
 
 /// Generate a minimal default UI for apps without ui.tsx.
+/// Uses `window.React` (set by the app-shell loader before rendering).
+/// This code is NOT processed by esbuild — it's written directly to ui.bundle.js.
+/// NOTE: React must be read lazily inside the function body, not at module
+/// top-level, because window.React is set AFTER the module is imported but
+/// BEFORE the component is rendered.
 fn generate_default_ui(app_name: &str) -> String {
     format!(
         r#"// Auto-generated default UI for "{app_name}"
-import {{ createElement as e }} from "react";
+// window.React is set by the app-shell loader before rendering.
+// Must be read lazily (inside function), not at module top-level.
 function DefaultApp() {{
-  return e('div', {{ style: {{ padding: '40px', textAlign: 'center', fontFamily: 'system-ui' }} }},
-    e('h1', {{ style: {{ color: '#232328' }} }}, '{app_name}'),
-    e('p', {{ style: {{ color: '#888' }} }}, '此应用没有自定义 UI。后端结果将在控制台显示。'),
+  const React = window.React;
+  return React.createElement('div', {{ style: {{ padding: '40px', textAlign: 'center', fontFamily: 'system-ui' }} }},
+    React.createElement('h1', {{ style: {{ color: '#232328' }} }}, '{app_name}'),
+    React.createElement('p', {{ style: {{ color: '#888' }} }}, '此应用没有自定义 UI。后端结果将在控制台显示。'),
   );
 }}
 export default DefaultApp;

@@ -164,11 +164,26 @@ fn esbuild_preflight(
         .arg("--log-level=warning")
         .arg("--color=false");
     if bundle_deps {
-        cmd.arg("--external:react")
-            .arg("--external:react-dom/client")
-            .arg("--external:react/jsx-runtime")
-            .arg("--jsx=automatic")
+        // Match the real packaging flags: try inline React, fall back to external.
+        cmd.arg("--jsx=automatic")
             .arg("--jsx-import-source=react");
+        // Point esbuild at the React vendor if available.
+        // esbuild has no `--node-paths` CLI flag; the CLI-equivalent for extra
+        // resolution paths is the NODE_PATH env var, which esbuild honors.
+        let vendor_dir = hermix_config::paths::hermix_home().join("vendor");
+        if vendor_dir
+            .join("node_modules")
+            .join("react")
+            .join("package.json")
+            .exists()
+        {
+            cmd.env("NODE_PATH", vendor_dir.join("node_modules"));
+        } else {
+            // No vendor available — externalize React (same fallback as packager).
+            cmd.arg("--external:react")
+                .arg("--external:react-dom/client")
+                .arg("--external:react/jsx-runtime");
+        }
     }
 
     match cmd.output() {
@@ -246,18 +261,49 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
         }
     }
 
-    // ── L0: ui.tsx 导入白名单 ──
-    if let Ok(ui) = std::fs::read_to_string(app_dir.join("ui.tsx")) {
-        check_imports(&ui, &mut issues);
-    }
-    // backend.ts 同样做白名单 (后端也只允许相对/URL 导入, 不应依赖裸 npm 包)
-    if let Ok(be) = std::fs::read_to_string(app_dir.join("backend.ts")) {
-        check_imports(&be, &mut issues);
-    }
+    // 应用模型分支: 新架构 (index.html) 或 旧架构 (backend.ts/ui.tsx)
+    let index_html = app_dir.join("index.html");
+    let backend_ts = app_dir.join("backend.ts");
 
-    // ── L1: esbuild 预打包 ──
-    esbuild_preflight(app_dir, "ui.tsx", true, &mut issues);
-    esbuild_preflight(app_dir, "backend.ts", false, &mut issues);
+    if index_html.exists() {
+        // ── 新架构: self-contained index.html + manifest.permissions ──
+        if manifest
+            .get("permissions")
+            .and_then(|v| v.as_array())
+            .is_none()
+        {
+            issues.push(issue(
+                "warning",
+                "manifest",
+                "新架构应用建议在 manifest 中声明 `permissions` (如 [\"fs-read\",\"exec\",\"dialog\"]), \
+                 未声明则桥接调用会被沙箱默认拒绝。",
+            ));
+        }
+        let html = std::fs::read_to_string(&index_html).unwrap_or_default();
+        if !html.contains("app://localhost/rpc") {
+            issues.push(issue(
+                "warning",
+                "bridge",
+                "index.html 未发现对 `app://localhost/rpc` 的调用, 应用可能无法与桥接通信。",
+            ));
+        }
+    } else if backend_ts.exists() {
+        // ── 旧架构: ui.tsx 导入白名单 + esbuild 预打包 ──
+        if let Ok(ui) = std::fs::read_to_string(app_dir.join("ui.tsx")) {
+            check_imports(&ui, &mut issues);
+        }
+        if let Ok(be) = std::fs::read_to_string(&backend_ts) {
+            check_imports(&be, &mut issues);
+        }
+        esbuild_preflight(app_dir, "ui.tsx", true, &mut issues);
+        esbuild_preflight(app_dir, "backend.ts", false, &mut issues);
+    } else {
+        issues.push(issue(
+            "error",
+            "manifest",
+            "缺少 index.html 或 backend.ts, 无法确定应用模型。",
+        ));
+    }
 
     let ok = !issues.iter().any(|i| i.level == "error");
     ValidationReport { ok, issues }
@@ -290,6 +336,26 @@ mod tests {
         );
         let r = validate_custom_app(&tmp);
         assert!(r.ok, "应无 error: {:?}", r.issues);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn new_model_app_passes() {
+        let tmp = std::env::temp_dir().join(format!("va_new_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(
+            tmp.join("manifest.json"),
+            r#"{"name":"测试","id":"test-new","category":"developer","permissions":["fs-read","exec"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join("index.html"),
+            "<html><body><script>fetch('app://localhost/rpc',{method:'POST'})</script></body></html>",
+        )
+        .unwrap();
+        let r = validate_custom_app(&tmp);
+        assert!(r.ok, "新架构应用应无 error: {:?}", r.issues);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

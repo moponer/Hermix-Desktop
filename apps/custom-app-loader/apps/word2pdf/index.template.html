@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Word → PDF 转换器</title>
+    <style>
+      body {
+        font-family: system-ui, "Segoe UI", sans-serif;
+        background: #0f0f12;
+        color: #e0e0e0;
+        padding: 20px;
+        margin: 0;
+      }
+      h2 { margin-top: 0; }
+      button {
+        background: #2e2e34;
+        color: #e0e0e0;
+        border: 1px solid #3a3a40;
+        padding: 8px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+        margin: 6px 8px 6px 0;
+        font-size: 14px;
+      }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+      #status { margin: 10px 0; min-height: 20px; color: #9aa; }
+      pre {
+        background: #1c1c20;
+        border: 1px solid #2a2a30;
+        border-radius: 8px;
+        padding: 12px;
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 320px;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Word → PDF 转换器</h2>
+    <div>
+      <button id="pick">1. 选择 Word 文件</button>
+      <button id="convert" disabled>2. 转为 PDF</button>
+    </div>
+    <div id="status">就绪</div>
+    <pre id="out">（日志）</pre>
+
+    <!-- 转换器源码: 打包时由 build 脚本内联 __CONVERT_PY__ -->
+    <script type="text/plain" id="convert-py">__CONVERT_PY__</script>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const outEl = document.getElementById("out");
+      let docxPath = null;
+
+      function log(s) {
+        outEl.textContent += s + "\n";
+      }
+      async function rpc(method, params) {
+        const res = await fetch("app://localhost/rpc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: Date.now(), method, params }),
+        });
+        return await res.json();
+      }
+      async function pythonHasDocx(c) {
+        const r = await rpc("exec", {
+          cmd: c,
+          args: ["-c", "import docx"],
+          timeout_secs: 10,
+        });
+        return r.ok && r.result && r.result.exit_code === 0;
+      }
+      async function findPython() {
+        for (const c of [
+          "python",
+          "py",
+          "C:/Python313/python.exe",
+          "<USERPROFILE>/.workbuddy/binaries/python/versions/3.13.12/python.exe",
+        ]) {
+          if (await pythonHasDocx(c)) return c;
+        }
+        return null;
+      }
+
+      document.getElementById("pick").onclick = async () => {
+        const r = await rpc("dialog_open", {
+          title: "选择 Word 文件",
+          filters: [["Word", ["docx", "doc"]]],
+        });
+        if (r.ok && r.result) {
+          docxPath = r.result;
+          statusEl.textContent = "已选择: " + docxPath;
+          document.getElementById("convert").disabled = false;
+        } else {
+          statusEl.textContent = "选择失败: " + (r.error || "未知");
+        }
+      };
+
+      document.getElementById("convert").onclick = async () => {
+        statusEl.textContent = "转换中...";
+        const py = await findPython();
+        if (!py) {
+          statusEl.textContent = "未找到 python (需要 python-docx)";
+          return;
+        }
+        const tmp = (await rpc("temp_dir")).result;
+        const convPath = tmp + "/hermix_convert.py";
+        const convSrc = document.getElementById("convert-py").textContent;
+        const w = await rpc("fs_write", { path: convPath, content: convSrc });
+        if (!w.ok) {
+          statusEl.textContent = "写入转换器失败: " + w.error;
+          return;
+        }
+        const outPdf = docxPath.replace(/\.docx?$/i, ".pdf");
+        const r = await rpc("exec", {
+          cmd: py,
+          args: [convPath, docxPath, outPdf],
+          timeout_secs: 60,
+        });
+        log("exec exit_code=" + (r.result ? r.result.exit_code : "?"));
+        log("stdout: " + (r.result ? r.result.stdout : r.error));
+        if (r.ok && r.result && r.result.exit_code === 0) {
+          statusEl.textContent = "✅ 成功: " + outPdf;
+        } else {
+          statusEl.textContent = "❌ 转换失败";
+          log("stderr: " + (r.result ? r.result.stderr : ""));
+        }
+      };
+    </script>
+  </body>
+</html>
