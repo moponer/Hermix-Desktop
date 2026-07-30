@@ -795,3 +795,197 @@
   color: var(--color-text-faint);
   font-style: normal;
 }
+
+/* ── Sidebar sections: independent scrolling areas ──
+ *
+ * The middle area of the sidebar is split into three sections
+ * (对话 / 项目 / 聊天室). Each section has a fixed header and a
+ * scrollable body. The three sections share the remaining height
+ * of the sidebar equally. This fixes the "whole sidebar scrolls
+ * together" behavior where section headers scrolled out of view. */
+
+.sidebar-sections {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 4px 10px 0;
+  gap: 4px;
+}
+
+.sidebar-section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: 10px 4px 6px;
+}
+
+.sidebar-section-header .section-header-toggle {
+  flex: 1;
+  justify-content: flex-start;
+  min-height: 24px;
+  padding: 2px 4px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.sidebar-section-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+.sidebar-section-header:hover .sidebar-section-actions,
+.sidebar-section-actions:focus-within { opacity: 1; }
+
+.sidebar-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-action-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.sidebar-section-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 2px 4px;
+}
+
+.sidebar-section-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+/* ── Sidebar row (session / room / leaf item) ── */
+
+.sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+  color: var(--color-text-secondary);
+}
+.sidebar-row:hover { background: var(--color-bg-hover); }
+.sidebar-row.is-active {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+.sidebar-row.is-streaming::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--color-accent) 55%, transparent);
+  flex-shrink: 0;
+  animation: li-pulse 1.4s ease-in-out infinite;
+}
+
+.sidebar-row-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: left;
+}
+.sidebar-row-main .truncate-1 {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+  flex-shrink: 0;
+}
+.sidebar-row:hover .sidebar-row-actions,
+.sidebar-row:focus-within .sidebar-row-actions { opacity: 1; }
+
+.sidebar-row-meta {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+/* ── New chat room inline form in sidebar ── */
+
+.sidebar-new-room {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 6px 8px;
+}
+
+.sidebar-new-room-error {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sidebar-new-room-error button {
+  opacity: 0.6;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sidebar-new-room-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sidebar-new-room-row .input {
+  flex: 1;
+  padding: 5px 10px;
+  font-size: 13px;
+}

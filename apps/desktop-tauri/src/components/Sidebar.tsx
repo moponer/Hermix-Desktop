@@ -1,8 +1,8 @@
-﻿﻿import {
+﻿﻿﻿﻿import {
   MessageSquarePlus, Search, Sparkles, Clock, Settings,
-  X, User, ChevronDown, ChevronRight,
+  User, ChevronDown, ChevronRight,
   MessageSquare, Bot, Users, Plus, FolderOpen,
-  BarChart3, Boxes, ListFilter, List,
+  BarChart3, Boxes, Trash2, MoreHorizontal,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
@@ -42,32 +42,6 @@ interface ChatRoom {
   createdAt: number;
 }
 
-// 用户 v3 反馈：列表项只保留标题，去掉「多少条」「几小时前」「几天前」
-// 这类冗余 metadata。视觉噪声越多，扫视列表越慢。判定一个对话是否在
-// 跑模型用右侧的小脉冲点就够了。
-// PLAN_UI_ENHANCEMENT §3.3 (2026-06-22): 激活项用小圆点 + 不显示时间；
-// 非激活项显示相对时间（"2 天前" / "15 分钟前"）。这是激活态的最高
-// 视觉信号，避免和"正在生成"脉冲点混淆。
-
-function formatRelative(iso: string | undefined): string {
-  if (!iso) return "";
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return "";
-  const diff = Date.now() - t;
-  if (diff < 0) return "";
-  const m = Math.floor(diff / 60_000);
-  if (m < 1) return "刚刚";
-  if (m < 60) return `${m} 分钟前`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时前`;
-  const d = Math.floor(h / 24);
-  if (d < 30) return `${d} 天前`;
-  const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo} 个月前`;
-  const y = Math.floor(d / 365);
-  return `${y} 年前`;
-}
-
 
 /* ── Nav item (5 主功能) ── */
 
@@ -92,6 +66,7 @@ export function Sidebar({
   streamingSessionId,
   onNewChat,
   onSelectSession,
+  onDeleteSession,
   isCreatingSession = false,
   onRoomSelect,
   onNewChatInWorkspace,
@@ -101,7 +76,7 @@ export function Sidebar({
   // Group sessions by their bound workspace.
   // Source of truth: session.workspace (backend DB), not localStorage.
   // localStorage can be cleared or out of sync after app restart.
-  const { sessionsByWs, orphanPaths } = useMemo(() => {
+  const { sessionsByWs, ungrouped: ungroupedSessions, orphanPaths } = useMemo(() => {
     const byWs: Record<string, Session[]> = {};
     const rest: Session[] = [];
     const orphans = new Set<string>();
@@ -137,6 +112,7 @@ export function Sidebar({
   }, [orphanPaths, addWorkspace]);
 
   const [collapsedWs, setCollapsedWs] = useState<Set<string>>(new Set());
+  const [chatsCollapsed, setChatsCollapsed] = useState(false);
   const [spacesCollapsed, setSpacesCollapsed] = useState(false);
   const toggleWsCollapsed = (id: string) => {
     setCollapsedWs((prev) => {
@@ -172,6 +148,25 @@ export function Sidebar({
     addWorkspace(name, path);
   };
 
+  const handleDeleteAllSessions = useCallback(() => {
+    if (!confirm("确定删除所有未归类对话？")) return;
+    for (const s of ungroupedSessions) onDeleteSession(s.id);
+    for (const ws of workspaces) {
+      for (const s of sessionsByWs[ws.path] || []) onDeleteSession(s.id);
+    }
+  }, [ungroupedSessions, workspaces, sessionsByWs, onDeleteSession]);
+
+  const handleDeleteAllWorkspaces = useCallback(() => {
+    if (!confirm("确定删除所有项目？")) return;
+    for (const ws of workspaces) removeWorkspace(ws.id);
+  }, [workspaces, removeWorkspace]);
+
+  const handleDeleteAllRooms = useCallback(() => {
+    if (!confirm("确定删除所有聊天室？")) return;
+    // TODO: wire to API delete room when available; currently local-only list.
+    setChatRooms([]);
+  }, []);
+
   const handleCreateRoom = useCallback(async () => {
     const trimmed = newRoomName.trim();
     if (!trimmed || creatingRoom) return;
@@ -197,6 +192,19 @@ export function Sidebar({
       setCreatingRoom(false);
     }
   }, [newRoomName, creatingRoom, onPageChange, onRoomSelect]);
+
+  /* ── Section menus ── */
+  const chatsMenu: MenuItemSpec[] = [
+    { key: "delete-all", label: "删除全部对话", onClick: handleDeleteAllSessions, danger: true },
+  ];
+  const workspacesMenu: MenuItemSpec[] = [
+    { key: "add", label: "添加项目", onClick: handleAddWorkspace },
+    { key: "delete-all", label: "删除全部项目", onClick: handleDeleteAllWorkspaces, danger: true },
+  ];
+  const roomsMenu: MenuItemSpec[] = [
+    { key: "add", label: "新建聊天室", onClick: () => { setGroupChatCollapsed(false); setShowNewRoom(true); } },
+    { key: "delete-all", label: "删除全部聊天室", onClick: handleDeleteAllRooms, danger: true },
+  ];
 
   return (
     <aside className="pane pane-left">
@@ -231,11 +239,60 @@ export function Sidebar({
         ))}
       </nav>
 
-      {/* Spacer + scrollable workspaces / chat rooms */}
-      <div className="px-3 flex-1 overflow-y-auto min-h-0">
-        {/* Workspaces section */}
-                <section className="sidebar-projects">
-          <div className="section-header sidebar-projects-header">
+      {/* Three independent scrollable sections */}
+      <div className="sidebar-sections">
+        {/* ── 对话 ── */}
+        <section className="sidebar-section">
+          <div className="sidebar-section-header">
+            <button
+              onClick={() => setChatsCollapsed((v) => !v)}
+              className="section-header-toggle"
+              aria-expanded={!chatsCollapsed}
+            >
+              {chatsCollapsed
+                ? <ChevronRight size={12} className="section-header-chevron" />
+                : <ChevronDown  size={12} className="section-header-chevron" />}
+              <span>对话</span>
+              <span className="section-header-count">{ungroupedSessions.length}</span>
+            </button>
+            <div className="sidebar-section-actions">
+              <SidebarMenu label="对话操作" items={chatsMenu} />
+              <SidebarDeleteBtn label="删除全部对话" onClick={handleDeleteAllSessions} />
+            </div>
+          </div>
+          {!chatsCollapsed && (
+            <div className="sidebar-section-body">
+              {ungroupedSessions.length === 0 ? (
+                <p className="sidebar-section-empty">暂无对话</p>
+              ) : (
+                ungroupedSessions.map((s) => (
+                  <div
+                    key={s.id}
+                    className={clsx("sidebar-row", s.id === activeSessionId && "is-active", s.id === streamingSessionId && "is-streaming")}
+                  >
+                    <button
+                      onClick={() => onSelectSession(s.id)}
+                      className="sidebar-row-main"
+                    >
+                      <span className="truncate-1">{s.title || "新建对话"}</span>
+                    </button>
+                    <div className="sidebar-row-actions">
+                      <SidebarMenu
+                        label="对话操作"
+                        items={[{ key: "delete", label: "删除对话", onClick: () => onDeleteSession(s.id), danger: true }]}
+                      />
+                      <SidebarDeleteBtn label="删除对话" onClick={() => onDeleteSession(s.id)} />
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* ── 项目 ── */}
+        <section className="sidebar-section">
+          <div className="sidebar-section-header">
             <button
               onClick={() => setSpacesCollapsed((v) => !v)}
               className="section-header-toggle"
@@ -247,20 +304,15 @@ export function Sidebar({
               <span>项目</span>
               <span className="section-header-count">{workspaces.length}</span>
             </button>
-            <div className="sidebar-projects-actions no-drag">
-              <button onClick={onNewChat} disabled={isCreatingSession} title="新建对话" aria-label="新建对话" className="sidebar-projects-action"><MessageSquarePlus size={12} /></button>
-              <button onClick={() => {}} title="筛选" aria-label="筛选" className="sidebar-projects-action"><ListFilter size={12} /></button>
-              <button onClick={() => {}} title="排序" aria-label="排序" className="sidebar-projects-action"><List size={12} /></button>
-              <button onClick={handleAddWorkspace} title="添加项目" aria-label="添加项目" className="sidebar-projects-action"><Plus size={12} /></button>
+            <div className="sidebar-section-actions">
+              <SidebarMenu label="项目操作" items={workspacesMenu} />
+              <SidebarDeleteBtn label="删除全部项目" onClick={handleDeleteAllWorkspaces} />
             </div>
           </div>
           {!spacesCollapsed && (
-            <div className="sidebar-projects-list">
+            <div className="sidebar-section-body">
               {workspaces.length === 0 ? (
-                <p className="list-group-empty">
-                  还没有项目<br />
-                  <span style={{ fontSize: 12 }}>点 + 选择本地目录作为项目</span>
-                </p>
+                <p className="sidebar-section-empty">还没有项目</p>
               ) : workspaces.map((ws) => {
                 const wsSessions = sessionsByWs[ws.path] || [];
                 const collapsed = collapsedWs.has(ws.id);
@@ -274,36 +326,38 @@ export function Sidebar({
                         <FolderOpen size={12} className="list-row-icon" />
                         <span className="sidebar-project-name">{ws.name}</span>
                       </button>
-                      <div className="sidebar-project-row-actions no-drag">
-                        <button
-                          onClick={() => onNewChatInWorkspace && onNewChatInWorkspace(ws.path)}
-                          title={"在 " + ws.name + " 中新建对话"}
-                          aria-label={"在 " + ws.name + " 中新建对话"}
-                          className="sidebar-project-action"
-                        >
-                          <Plus size={11} />
-                        </button>
-                        <button
-                          onClick={() => removeWorkspace(ws.id)}
-                          title="删除项目"
-                          aria-label="删除项目"
-                          className="sidebar-project-action"
-                        >
-                          <X size={11} />
-                        </button>
+                      <div className="sidebar-row-actions">
+                        <SidebarMenu
+                          label="项目操作"
+                          items={[
+                            { key: "new-chat", label: "新建对话", onClick: () => onNewChatInWorkspace?.(ws.path) },
+                            { key: "delete", label: "删除项目", onClick: () => removeWorkspace(ws.id), danger: true },
+                          ]}
+                        />
+                        <SidebarDeleteBtn label="删除项目" onClick={() => removeWorkspace(ws.id)} />
                       </div>
                     </div>
                     {!collapsed && wsSessions.length > 0 && (
                       <div className="sidebar-project-sessions">
                         {wsSessions.map((s) => (
-                          <button
+                          <div
                             key={s.id}
-                            onClick={() => onSelectSession(s.id)}
-                            className={clsx("sidebar-project-session", s.id === activeSessionId && "is-active", s.id === streamingSessionId && "is-streaming")}
+                            className={clsx("sidebar-row sidebar-project-session", s.id === activeSessionId && "is-active", s.id === streamingSessionId && "is-streaming")}
                           >
-                            <span className="truncate-1">{s.title || "新建对话"}</span>
-                            <span className="sidebar-project-session-time">{formatRelative(s.updated_at)}</span>
-                          </button>
+                            <button
+                              onClick={() => onSelectSession(s.id)}
+                              className="sidebar-row-main"
+                            >
+                              <span className="truncate-1">{s.title || "新建对话"}</span>
+                            </button>
+                            <div className="sidebar-row-actions">
+                              <SidebarMenu
+                                label="对话操作"
+                                items={[{ key: "delete", label: "删除对话", onClick: () => onDeleteSession(s.id), danger: true }]}
+                              />
+                              <SidebarDeleteBtn label="删除对话" onClick={() => onDeleteSession(s.id)} />
+                            </div>
+                          </div>
                         ))}
                       </div>
                     )}
@@ -316,115 +370,109 @@ export function Sidebar({
             </div>
           )}
         </section>
-{/* Chat rooms */}
 
-        {/* Chat rooms */}
-        <section className="sidebar-tree-section">
-        <div className="section-header">
-          <button
-            onClick={() => setGroupChatCollapsed((v) => !v)}
-            className="section-header-toggle"
-          >
-            {groupChatCollapsed
-              ? <ChevronRight size={12} className="section-header-chevron" />
-              : <ChevronDown  size={12} className="section-header-chevron" />}
-            <Users size={12} className="section-header-icon" />
-            <span>聊天室</span>
-            {chatRooms.length > 0 && (
-              <span className="section-header-count">{chatRooms.length}</span>
-            )}
-          </button>
-          <button onClick={() => { setGroupChatCollapsed(false); setShowNewRoom(true); }} className="section-header-add" title="新建聊天室">
-            <Plus size={13} />
-          </button>
-        </div>
-
-        {!groupChatCollapsed && (
-          <div className="stack-v" style={{ gap: 2 }}>
-            {showNewRoom && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "4px 8px" }}>
-                {createRoomError && (
-                  <div
-                    role="alert"
-                    style={{
-                      fontSize: 12,
-                      padding: "4px 8px",
-                      borderRadius: 6,
-                      background: "var(--color-error-soft)",
-                      color: "var(--color-error)",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                    }}
-                  >
-                    <span style={{ flex: 1 }}>{createRoomError}</span>
+        {/* ── 聊天室 ── */}
+        <section className="sidebar-section">
+          <div className="sidebar-section-header">
+            <button
+              onClick={() => setGroupChatCollapsed((v) => !v)}
+              className="section-header-toggle"
+              aria-expanded={!groupChatCollapsed}
+            >
+              {groupChatCollapsed
+                ? <ChevronRight size={12} className="section-header-chevron" />
+                : <ChevronDown  size={12} className="section-header-chevron" />}
+              <Users size={12} className="section-header-icon" />
+              <span>聊天室</span>
+              {chatRooms.length > 0 && (
+                <span className="section-header-count">{chatRooms.length}</span>
+              )}
+            </button>
+            <div className="sidebar-section-actions">
+              <SidebarMenu label="聊天室操作" items={roomsMenu} />
+            </div>
+          </div>
+          {!groupChatCollapsed && (
+            <div className="sidebar-section-body">
+              {showNewRoom && (
+                <div className="sidebar-new-room">
+                  {createRoomError && (
+                    <div className="sidebar-new-room-error" role="alert">
+                      <span>{createRoomError}</span>
+                      <button
+                        onClick={() => setCreateRoomError(null)}
+                        title="关闭"
+                        type="button"
+                      >
+                        <span aria-hidden>×</span>
+                      </button>
+                    </div>
+                  )}
+                  <div className="sidebar-new-room-row">
+                    <input
+                      autoFocus
+                      value={newRoomName}
+                      onChange={(e) => {
+                        setNewRoomName(e.target.value);
+                        if (createRoomError) setCreateRoomError(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !creatingRoom) handleCreateRoom();
+                        if (e.key === "Escape") { setShowNewRoom(false); setNewRoomName(""); setCreateRoomError(null); }
+                      }}
+                      placeholder="聊天室名称"
+                      disabled={creatingRoom}
+                      className="input"
+                    />
                     <button
-                      onClick={() => setCreateRoomError(null)}
-                      style={{ opacity: 0.6 }}
-                      title="关闭"
-                      type="button"
+                      onClick={handleCreateRoom}
+                      disabled={!newRoomName.trim() || creatingRoom}
+                      className="icon-btn"
+                      title="创建"
+                      aria-label="创建"
                     >
-                      <X size={10} />
+                      <Plus size={14} />
+                    </button>
+                    <button
+                      onClick={() => { setShowNewRoom(false); setNewRoomName(""); setCreateRoomError(null); }}
+                      disabled={creatingRoom}
+                      className="icon-btn"
+                      title="取消"
+                      aria-label="取消"
+                    >
+                      <span aria-hidden>×</span>
                     </button>
                   </div>
-                )}
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <input
-                    autoFocus
-                    value={newRoomName}
-                    onChange={(e) => {
-                      setNewRoomName(e.target.value);
-                      if (createRoomError) setCreateRoomError(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !creatingRoom) handleCreateRoom();
-                      if (e.key === "Escape") { setShowNewRoom(false); setNewRoomName(""); setCreateRoomError(null); }
-                    }}
-                    placeholder="聊天室名称"
-                    disabled={creatingRoom}
-                    className="input"
-                    style={{ flex: 1, padding: "5px 10px", fontSize: 13 }}
-                  />
-                  <button
-                    onClick={handleCreateRoom}
-                    disabled={!newRoomName.trim() || creatingRoom}
-                    className="icon-btn"
-                    title="创建"
-                    style={{ opacity: !newRoomName.trim() || creatingRoom ? 0.4 : 1 }}
-                   aria-label="创建">
-                    <Plus size={14} />
-                  </button>
-                  <button
-                    onClick={() => { setShowNewRoom(false); setNewRoomName(""); setCreateRoomError(null); }}
-                    disabled={creatingRoom}
-                    className="icon-btn"
-                    title="取消"
-                  >
-                    <X size={14} />
-                  </button>
                 </div>
-              </div>
-            )}
-            {chatRooms.length === 0 && !showNewRoom && (
-              <p className="list-group-empty">暂无聊天室</p>
-            )}
-            {chatRooms.map((room) => (
-              <div
-                key={room.id}
-                onClick={() => { onRoomSelect?.(room.id); onPageChange("groupchat"); }}
-                className="list-item"
-              >
-                <Users size={13} className="list-item-icon" />
-                <div className="list-item-body">
-                  <p className="list-item-title">{room.name}</p>
+              )}
+              {chatRooms.length === 0 && !showNewRoom && (
+                <p className="sidebar-section-empty">暂无聊天室</p>
+              )}
+              {chatRooms.map((room) => (
+                <div
+                  key={room.id}
+                  onClick={() => { onRoomSelect?.(room.id); onPageChange("groupchat"); }}
+                  className="sidebar-row"
+                >
+                  <div className="sidebar-row-main">
+                    <Users size={13} />
+                    <span className="truncate-1">{room.name}</span>
+                  </div>
+                  <span className="sidebar-row-meta">{room.agentIds.length} 个成员</span>
+                  <div className="sidebar-row-actions">
+                    <SidebarMenu
+                      label="聊天室操作"
+                      items={[{ key: "delete", label: "删除聊天室", onClick: () => setChatRooms((prev) => prev.filter((r) => r.id !== room.id)), danger: true }]}
+                    />
+                    <SidebarDeleteBtn
+                      label="删除聊天室"
+                      onClick={() => setChatRooms((prev) => prev.filter((r) => r.id !== room.id))}
+                    />
+                  </div>
                 </div>
-                <span className="list-item-meta" style={{ marginTop: 2 }}>
-                  {room.agentIds.length} 个成员
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
         </section>
       </div>
 
@@ -448,6 +496,82 @@ export function Sidebar({
         </div>
       </div>
     </aside>
+  );
+}
+
+/* ── Scoped helpers ── */
+
+type MenuItemSpec = { key: string; label: string; onClick: () => void; danger?: boolean };
+
+function useSidebarMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onEsc);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onEsc);
+    };
+  }, [open]);
+  return { open, setOpen, ref };
+}
+
+function SidebarMenu({ label, items }: { label: string; items: MenuItemSpec[] }) {
+  const { open, setOpen, ref } = useSidebarMenu();
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="sidebar-action-btn"
+        title={label}
+        aria-label={label}
+      >
+        <MoreHorizontal size={14} />
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 top-full mt-1 min-w-[140px] rounded-lg border border-border-primary bg-bg-elevated shadow-pop py-1 z-[1000]"
+          role="menu"
+        >
+          {items.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => { setOpen(false); item.onClick(); }}
+              className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-[12.5px] hover:bg-bg-hover transition-colors ${
+                item.danger ? "text-[color:var(--color-error)]" : "text-text-primary"
+              }`}
+              role="menuitem"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SidebarDeleteBtn({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="sidebar-action-btn"
+      title={label}
+      aria-label={label}
+    >
+      <Trash2 size={13} />
+    </button>
   );
 }
 
