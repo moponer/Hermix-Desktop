@@ -1,8 +1,8 @@
-﻿﻿﻿﻿import {
+import {
   MessageSquarePlus, Search, Sparkles, Clock, Settings,
   User, ChevronDown, ChevronRight,
   MessageSquare, Bot, Users, Plus, FolderOpen,
-  BarChart3, Boxes, Trash2, MoreHorizontal,
+  BarChart3, Boxes, Trash2, MoreHorizontal, Loader2,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
@@ -23,7 +23,6 @@ interface SidebarProps {
   onNewChat: () => void;
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
-  isCreatingSession?: boolean;
   /** Called when a group chat room is selected or created in the sidebar. */
   onRoomSelect?: (roomId: string) => void;
   /** Create a blank chat with this workspace already selected. */
@@ -67,7 +66,6 @@ export function Sidebar({
   onNewChat,
   onSelectSession,
   onDeleteSession,
-  isCreatingSession = false,
   onRoomSelect,
   onNewChatInWorkspace,
 }: SidebarProps) {
@@ -128,6 +126,27 @@ export function Sidebar({
   const [showNewRoom, setShowNewRoom] = useState(false);
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [createRoomError, setCreateRoomError] = useState<string | null>(null);
+
+  // Delete animation state.
+  // removingIds  = user confirmed, playing collapse animation (still in list).
+  // deletingIds  = animation done, real delete dispatched (parent will unmount).
+  const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+
+  const requestDelete = useCallback((id: string, label: string, impact: string, onConfirm: () => void) => {
+    if (removingIds.has(id) || deletingIds.has(id)) return;
+    if (!window.confirm(`确定删除「${label}」？\n${impact}\n此操作不可恢复。`)) return;
+    setRemovingIds((prev) => new Set(prev).add(id));
+    window.setTimeout(() => {
+      setDeletingIds((prev) => new Set(prev).add(id));
+      try { onConfirm(); } catch (e) { console.error("[Sidebar] delete failed", e); }
+      // Give parent state a tick to filter the item out, then clean our sets.
+      window.setTimeout(() => {
+        setRemovingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+        setDeletingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+      }, 50);
+    }, 320);
+  }, [removingIds, deletingIds]);
 
   // Load rooms from API on mount
   useEffect(() => {
@@ -215,13 +234,12 @@ export function Sidebar({
         <button
           type="button"
           onClick={onNewChat}
-          disabled={isCreatingSession}
-          className={clsx("nav-item nav-item-primary", isCreatingSession && "nav-item-loading")}
+          className="nav-item nav-item-primary"
           title="新建对话"
           aria-label="新建对话"
         >
           <MessageSquarePlus size={16} />
-          <span>{isCreatingSession ? "创建中..." : "新建对话"}</span>
+          <span>新建对话</span>
         </button>
       </nav>
 
@@ -265,26 +283,45 @@ export function Sidebar({
               {ungroupedSessions.length === 0 ? (
                 <p className="sidebar-section-empty">暂无对话</p>
               ) : (
-                ungroupedSessions.map((s) => (
-                  <div
-                    key={s.id}
-                    className={clsx("sidebar-row", s.id === activeSessionId && "is-active", s.id === streamingSessionId && "is-streaming")}
-                  >
-                    <button
-                      onClick={() => onSelectSession(s.id)}
-                      className="sidebar-row-main"
+                ungroupedSessions.map((s) => {
+                  const isRemoving = removingIds.has(s.id);
+                  const isDeleting = deletingIds.has(s.id);
+                  const disabled = isRemoving || isDeleting;
+                  return (
+                    <div
+                      key={s.id}
+                      className={clsx(
+                        "sidebar-row",
+                        s.id === activeSessionId && "is-active",
+                        s.id === streamingSessionId && "is-streaming",
+                        isRemoving && "is-removing",
+                        isDeleting && "is-deleting"
+                      )}
+                      aria-busy={disabled}
                     >
-                      <span className="truncate-1">{s.title || "新建对话"}</span>
-                    </button>
-                    <div className="sidebar-row-actions">
-                      <SidebarMenu
-                        label="对话操作"
-                        items={[{ key: "delete", label: "删除对话", onClick: () => onDeleteSession(s.id), danger: true }]}
-                      />
-                      <SidebarDeleteBtn label="删除对话" onClick={() => onDeleteSession(s.id)} />
+                      <button
+                        onClick={() => !disabled && onSelectSession(s.id)}
+                        className="sidebar-row-main"
+                        disabled={disabled}
+                      >
+                        {isRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
+                        <span className={clsx("truncate-1", isRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
+                      </button>
+                      <div className="sidebar-row-actions">
+                        <SidebarMenu
+                          label="对话操作"
+                          items={[
+                            { key: "delete", label: "删除对话", onClick: () => requestDelete(s.id, s.title || "新建对话", "将清理该对话的全部消息记录。", () => onDeleteSession(s.id)), danger: true },
+                          ]}
+                        />
+                        <SidebarDeleteBtn
+                          label="删除对话"
+                          onClick={() => requestDelete(s.id, s.title || "新建对话", "将清理该对话的全部消息记录。", () => onDeleteSession(s.id))}
+                        />
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}
@@ -316,49 +353,75 @@ export function Sidebar({
               ) : workspaces.map((ws) => {
                 const wsSessions = sessionsByWs[ws.path] || [];
                 const collapsed = collapsedWs.has(ws.id);
+                const wsRemoving = removingIds.has(ws.id);
+                const wsDeleting = deletingIds.has(ws.id);
+                const wsDisabled = wsRemoving || wsDeleting;
                 return (
-                  <div key={ws.id} className="sidebar-project">
+                  <div key={ws.id} className={clsx("sidebar-project", wsRemoving && "is-removing", wsDeleting && "is-deleting")}>
                     <div className="sidebar-project-row">
-                      <button onClick={() => toggleWsCollapsed(ws.id)} className="sidebar-project-toggle">
+                      <button onClick={() => !wsDisabled && toggleWsCollapsed(ws.id)} className="sidebar-project-toggle" disabled={wsDisabled}>
                         {collapsed
                           ? <ChevronRight size={11} className="list-row-chevron" />
                           : <ChevronDown  size={11} className="list-row-chevron" />}
                         <FolderOpen size={12} className="list-row-icon" />
-                        <span className="sidebar-project-name">{ws.name}</span>
+                        {wsRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
+                        <span className={clsx("sidebar-project-name", wsRemoving && "opacity-60")}>{ws.name}</span>
                       </button>
                       <div className="sidebar-row-actions">
                         <SidebarMenu
                           label="项目操作"
                           items={[
                             { key: "new-chat", label: "新建对话", onClick: () => onNewChatInWorkspace?.(ws.path) },
-                            { key: "delete", label: "删除项目", onClick: () => removeWorkspace(ws.id), danger: true },
+                            { key: "delete", label: "删除项目", onClick: () => requestDelete(ws.id, ws.name, "将移除该项目及其在侧边栏的分组。", () => removeWorkspace(ws.id)), danger: true },
                           ]}
                         />
-                        <SidebarDeleteBtn label="删除项目" onClick={() => removeWorkspace(ws.id)} />
+                        <SidebarDeleteBtn
+                          label="删除项目"
+                          onClick={() => requestDelete(ws.id, ws.name, "将移除该项目及其在侧边栏的分组。", () => removeWorkspace(ws.id))}
+                        />
                       </div>
                     </div>
                     {!collapsed && wsSessions.length > 0 && (
                       <div className="sidebar-project-sessions">
-                        {wsSessions.map((s) => (
-                          <div
-                            key={s.id}
-                            className={clsx("sidebar-row sidebar-project-session", s.id === activeSessionId && "is-active", s.id === streamingSessionId && "is-streaming")}
-                          >
-                            <button
-                              onClick={() => onSelectSession(s.id)}
-                              className="sidebar-row-main"
+                        {wsSessions.map((s) => {
+                          const psRemoving = removingIds.has(s.id);
+                          const psDeleting = deletingIds.has(s.id);
+                          const psDisabled = psRemoving || psDeleting;
+                          return (
+                            <div
+                              key={s.id}
+                              className={clsx(
+                                "sidebar-row sidebar-project-session",
+                                s.id === activeSessionId && "is-active",
+                                s.id === streamingSessionId && "is-streaming",
+                                psRemoving && "is-removing",
+                                psDeleting && "is-deleting"
+                              )}
+                              aria-busy={psDisabled}
                             >
-                              <span className="truncate-1">{s.title || "新建对话"}</span>
-                            </button>
-                            <div className="sidebar-row-actions">
-                              <SidebarMenu
-                                label="对话操作"
-                                items={[{ key: "delete", label: "删除对话", onClick: () => onDeleteSession(s.id), danger: true }]}
-                              />
-                              <SidebarDeleteBtn label="删除对话" onClick={() => onDeleteSession(s.id)} />
+                              <button
+                                onClick={() => !psDisabled && onSelectSession(s.id)}
+                                className="sidebar-row-main"
+                                disabled={psDisabled}
+                              >
+                                {psRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
+                                <span className={clsx("truncate-1", psRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
+                              </button>
+                              <div className="sidebar-row-actions">
+                                <SidebarMenu
+                                  label="对话操作"
+                                  items={[
+                                    { key: "delete", label: "删除对话", onClick: () => requestDelete(s.id, s.title || "新建对话", "将清理该对话的全部消息记录。", () => onDeleteSession(s.id)), danger: true },
+                                  ]}
+                                />
+                                <SidebarDeleteBtn
+                                  label="删除对话"
+                                  onClick={() => requestDelete(s.id, s.title || "新建对话", "将清理该对话的全部消息记录。", () => onDeleteSession(s.id))}
+                                />
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                     {!collapsed && wsSessions.length === 0 && (
@@ -448,29 +511,38 @@ export function Sidebar({
               {chatRooms.length === 0 && !showNewRoom && (
                 <p className="sidebar-section-empty">暂无聊天室</p>
               )}
-              {chatRooms.map((room) => (
-                <div
-                  key={room.id}
-                  onClick={() => { onRoomSelect?.(room.id); onPageChange("groupchat"); }}
-                  className="sidebar-row"
-                >
-                  <div className="sidebar-row-main">
-                    <Users size={13} />
-                    <span className="truncate-1">{room.name}</span>
+              {chatRooms.map((room) => {
+                const roomRemoving = removingIds.has(room.id);
+                const roomDeleting = deletingIds.has(room.id);
+                const roomDisabled = roomRemoving || roomDeleting;
+                const doDeleteRoom = () => setChatRooms((prev) => prev.filter((r) => r.id !== room.id));
+                return (
+                  <div
+                    key={room.id}
+                    onClick={() => !roomDisabled && (onRoomSelect?.(room.id), onPageChange("groupchat"))}
+                    className={clsx("sidebar-row", roomRemoving && "is-removing", roomDeleting && "is-deleting")}
+                    aria-busy={roomDisabled}
+                  >
+                    <div className={clsx("sidebar-row-main", roomRemoving && "opacity-60")}>
+                      {roomRemoving ? <Loader2 size={13} className="animate-spin" /> : <Users size={13} />}
+                      <span className="truncate-1">{room.name}</span>
+                    </div>
+                    <span className="sidebar-row-meta">{room.agentIds.length} 个成员</span>
+                    <div className="sidebar-row-actions">
+                      <SidebarMenu
+                        label="聊天室操作"
+                        items={[
+                          { key: "delete", label: "删除聊天室", onClick: () => requestDelete(room.id, room.name, "将解散该聊天室。", doDeleteRoom), danger: true },
+                        ]}
+                      />
+                      <SidebarDeleteBtn
+                        label="删除聊天室"
+                        onClick={() => requestDelete(room.id, room.name, "将解散该聊天室。", doDeleteRoom)}
+                      />
+                    </div>
                   </div>
-                  <span className="sidebar-row-meta">{room.agentIds.length} 个成员</span>
-                  <div className="sidebar-row-actions">
-                    <SidebarMenu
-                      label="聊天室操作"
-                      items={[{ key: "delete", label: "删除聊天室", onClick: () => setChatRooms((prev) => prev.filter((r) => r.id !== room.id)), danger: true }]}
-                    />
-                    <SidebarDeleteBtn
-                      label="删除聊天室"
-                      onClick={() => setChatRooms((prev) => prev.filter((r) => r.id !== room.id))}
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>

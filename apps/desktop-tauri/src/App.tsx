@@ -358,8 +358,6 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
     setMessageQueue((prev) => prev.map((m, i) => (i === idx ? { ...m, text: newText } : m)));
   }, []);
 const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
-const isCreatingSessionRef = useRef(false);
-const [isCreatingSession, setIsCreatingSession] = useState(false);
 
   // v27: 视口自适应 — 窗口尺寸变化时重算面板最小宽度
   // 对应 computeMainMinWidth / computeLeftMin 的分档逻辑。
@@ -1032,79 +1030,18 @@ const [isCreatingSession, setIsCreatingSession] = useState(false);
     return text.slice(0, 28) + (text.length > 28 ? "…" : "");
   };
 
-const handleNewChat = useCallback(async () => {
-if (isCreatingSessionRef.current) return;
-// Do NOT cancel the active stream when creating a new chat.
-// The stream on the previous session should continue in the background.
-try { clearStreamError(); } catch (e) { console.warn("[App] clearStreamError failed:", e); }
+  const handleNewChat = useCallback(async () => {
+    // Do NOT cancel the active stream when creating a new chat.
+    // The stream on the previous session should continue in the background.
+    try { clearStreamError(); } catch (e) { console.warn("[App] clearStreamError failed:", e); }
 
-    // Read sessions from ref instead of closure — this callback must NOT
-    // depend on `sessions` in its dep array. If it does, every streaming
-    // chunk (which calls setSessions) recreates this callback, and the
-    // "find an existing empty session" logic below can pick a DIFFERENT
-    // empty session on each recreation, causing the UI to flicker between
-    // sessions instead of landing on the new one.
-    const currentSessions = sessionsRef.current;
-    const currentActiveId = activeSessionIdRef.current;
-
-    // Find an existing session with no messages (empty session),
-    // but skip the currently active session — the user clicked
-    // "新建对话" to get a *new* blank slate, not to re-select
-    // the one they're already looking at.
-    const emptySession = currentSessions.find(
-      (s) => s.id !== currentActiveId && (s.message_count ?? s.messages.length) === 0,
-    );
-
-    // (2026-07-12) `readDraftWorkspace` is defined at module scope so
-    // `handleSendMessage` can also send the welcome draft to the
-    // server on creation — see the hook below.
-    // Helper: migrate the welcome-screen draft workspace into the session so
-    // the sidebar groups it under the correct workspace instead of "未分组".
-    const applyDraftWorkspace = (sessionId: string): string | null => {
-      try {
-        const draftWorkspace = storage.getItem(STORAGE_KEYS.draftWorkspace);
-        if (draftWorkspace) {
-          storage.setItem(sessionKey(sessionId, "workspace"), draftWorkspace);
-        }
-        return draftWorkspace;
-      } catch {
-        return null;
-      }
-    };
-
-    if (emptySession) {
-      const ws = applyDraftWorkspace(emptySession.id);
-      if (ws) {
-        setSessions((prev) =>
-          prev.map((s) =>
-            s.id === emptySession.id ? { ...s, workspace: ws } : s
-          )
-        );
-      }
-      setActiveSessionId(emptySession.id);
-      setPage("chat");
-      return;
-    }
-
-    isCreatingSessionRef.current = true;
-    setIsCreatingSession(true);
-    try {
-      // send the welcome-state draft workspace to the
-      // server on creation so it lands in `sessions.workspace`
-      // (not just localStorage). Without this, the desktop sidebar
-      // bucketed every restarted session under "未分组" — the
-      // draft only ever lived in `hermix.session.<id>.workspace`
-      // localStorage, which the server doesn't see.
-      const draftWs = readDraftWorkspace();
-      const session = await api.createSession("新建对话", draftWs ?? undefined);
-      const ws = applyDraftWorkspace(session.id);
-      setSessions((prev) => [ws ? { ...session, workspace: ws } : session, ...prev]);
-      setActiveSessionId(session.id);
-      setPage("chat");
-    } finally {
-      isCreatingSessionRef.current = false;
-      setIsCreatingSession(false);
-    }
+    // New behavior (2026-07-30): "新建对话" only enters the welcome screen.
+    // We do NOT create a server session or add a sidebar entry yet.
+    // The real session is created when the user sends the first message
+    // (see handleSendMessage), at which point we know the workspace/group
+    // and can render a meaningful title.
+    setActiveSessionId(null);
+    setPage("chat");
   }, [clearStreamError, setActiveSessionId]);
 
   const handleSelectSession = useCallback(async (id: string) => {
@@ -2762,7 +2699,6 @@ return {
             onNewChat={handleNewChat}
             onSelectSession={handleSelectSession}
             onDeleteSession={handleDeleteSession}
-            isCreatingSession={isCreatingSession}
             onRoomSelect={setSelectedRoomId}
             onNewChatInWorkspace={(workspacePath) => {
               storage.setItem(STORAGE_KEYS.draftWorkspace, workspacePath);

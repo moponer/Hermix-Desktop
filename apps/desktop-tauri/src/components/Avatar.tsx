@@ -5,6 +5,8 @@
 /// @3x all stay crisp without per-density exports; also removes the
 /// `mascot-avatar-*.png` quartet from `src/assets/`.
 
+import { useState } from "react";
+
 interface AvatarProps {
   role: "user" | "assistant" | "system";
   size?: number;
@@ -39,30 +41,43 @@ function UserAvatar({ size, className }: { size: number; className: string }) {
 }
 
 function AssistantAvatar({ size, className }: { size: number; className: string }) {
-  // Vite asset URL — the `?url` suffix tells Vite to return the
-  // raw file URL (not a base64 inline) for files in `public/`.
-  // Using a hardcoded "/mascot-avatar-bg-64.png" string works in
-  // a plain browser but can fail in Tauri where the custom asset
-  // protocol origin (https://tauri.localhost) does not map the
-  // root path the same way.
+  // Files in `public/` should be referenced by root-relative string.
+  // `new URL("/...", import.meta.url)` can mis-resolve under Tauri's
+  // custom asset protocol and leave a broken-image alt text squeezed
+  // into the 22px circle.
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div
+        className={`inline-flex items-center justify-center ${className}`}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          background: "var(--color-bg-secondary)",
+          boxShadow: "0 0 0 1px var(--color-border-subtle)",
+          color: "var(--color-text-muted)",
+          fontSize: Math.max(10, size * 0.42),
+          fontWeight: 600,
+          flexShrink: 0,
+        }}
+        aria-label="Hermix 助手"
+      >
+        AI
+      </div>
+    );
+  }
   return (
     <img
-      src={new URL("/mascot-avatar-bg-64.png", import.meta.url).href}
+      src="/mascot-avatar-bg-64.png"
       width={size}
       height={size}
-      alt="Hermix 助手"
+      alt=""
       draggable={false}
-      // Avatar with slate-700 background — for chat bubble & desktop icon
-      // 128px (any future hero card). No need for per-density PNG exports.
+      onError={() => setFailed(true)}
       className={`block object-contain select-none ${className}`}
       style={{
-        // Pure circle — the user wants the AI avatar to read as a
-        // round dot, not a rounded square, so it visually matches
-        // the icon-sized avatar of typical chat UIs (Discord, iMessage).
         borderRadius: "50%",
-        // Subtle ring for visual definition against both light and
-        // dark backgrounds; the avatar is otherwise hard to spot
-        // when it sits in a card of the same tone.
         background: "var(--color-bg-secondary)",
         boxShadow: "0 0 0 1px var(--color-border-subtle)",
       }}
