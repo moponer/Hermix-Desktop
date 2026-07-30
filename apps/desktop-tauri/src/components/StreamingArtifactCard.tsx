@@ -48,6 +48,26 @@ function defaultName(lang: string, idx: number): string {
   return `代码片段 ${idx + 1}`;
 }
 
+/** 判断这个围栏块是否值得显示为“正在生成的文件”。
+ *  核心防御：LLM 的思考文本、总结说明经常被包在 ```text 里，
+ *  这种块没有文件名、没有代码结构，显示成“代码片段 1 text”
+ *  会让用户以为在生成文件。我们只保留：
+ *    - 有显式文件扩展名注释（// backend.ts、# ui.tsx）
+ *    - HTML 片段（<!doctype html|<html）
+ *    - 非 text 语言，且首行看起来是代码而非自然语言段落
+ */
+function looksLikeArtifact(lang: string, firstLine: string): boolean {
+  if (extractName(firstLine)) return true;
+  if (/^<!doctype html|<html/i.test(firstLine)) return true;
+  const t = lang.toLowerCase();
+  if (t && t !== "text") {
+    // 即便有语言标签，如果首行是完整英文句子（自然语言），也跳过。
+    // 典型反例：```python 后面跟 “Here is the implementation...”
+    return !/^[A-Z][a-zA-Z\s,]{15,}[.!?]\s*$/.test(firstLine.trim());
+  }
+  return false;
+}
+
 function parseArtifacts(text: string): Artifact[] {
   const fenceRe = /```([A-Za-z0-9_+\-]*)\n?/g;
   const matches: { start: number; lang: string }[] = [];
@@ -70,6 +90,10 @@ function parseArtifacts(text: string): Artifact[] {
       const closeStart = matches[i + 1].start;
       const content = text.slice(contentStart, closeStart);
       const firstLine = content.split("\n").find((l) => l.trim().length > 0) ?? "";
+      if (!looksLikeArtifact(matches[i].lang, firstLine)) {
+        i += 2;
+        continue;
+      }
       const name =
         extractName(firstLine) ??
         (firstLine.match(/^<!doctype html|<html/i) ? "index.html" : null) ??
@@ -86,6 +110,10 @@ function parseArtifacts(text: string): Artifact[] {
       // 未闭合块（模型还在写）
       const content = text.slice(contentStart);
       const firstLine = content.split("\n").find((l) => l.trim().length > 0) ?? "";
+      if (!looksLikeArtifact(matches[i].lang, firstLine)) {
+        i += 1;
+        break;
+      }
       const name =
         extractName(firstLine) ??
         (firstLine.match(/^<!doctype html|<html/i) ? "index.html" : null) ??
@@ -116,7 +144,7 @@ function StreamingArtifactCardImpl({ text, isStreaming }: StreamingArtifactCardP
   const openCount = artifacts.filter((a) => a.open).length;
 
   return (
-    <div className="my-2 rounded-md border border-[#2e2e34] bg-[#1c1c20] p-2.5">
+    <div className="my-2 rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-bg-secondary)] p-2.5">
       <div className="flex items-center gap-1.5 mb-1.5 text-text-faint">
         <Box size={13} className="shrink-0" />
         <span className="h-tiny">
@@ -140,10 +168,10 @@ function StreamingArtifactCardImpl({ text, isStreaming }: StreamingArtifactCardP
                 {a.name}
               </span>
               <span className="h-tiny text-text-faint shrink-0">{a.lang}</span>
-              <div className="flex-1 h-1 rounded bg-[#2e2e34] overflow-hidden">
+              <div className="flex-1 h-1 rounded bg-[var(--color-bg-tertiary)] overflow-hidden">
                 <div
                   className={
-                    a.open ? "h-full bg-[#6f9c7e] animate-pulse" : "h-full bg-[#6f9c7e]"
+                    a.open ? "h-full bg-[var(--color-accent)] animate-pulse" : "h-full bg-[var(--color-accent)]"
                   }
                   style={{ width: a.open ? `${pct}%` : "100%" }}
                 />

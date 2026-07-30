@@ -41,14 +41,30 @@ const BUILTIN_SKILLS: &[(&str, &str)] = &[
     ("hermix/custom-app-development", CUSTOM_APP_SKILL),
 ];
 
-/// Write built-in skills into `skills_dir` on first launch. Skips any skill
-/// whose target already exists, so user customizations are never clobbered.
+/// Write built-in skills into `skills_dir` on first launch. If the on-disk
+/// SKILL.md has a lower `version` in its YAML frontmatter than the embedded
+/// copy, the file is overwritten — this ensures schema/API changes in the
+/// skill documentation propagate to existing installations without requiring
+/// the user to manually delete old files. User-edited files whose version
+/// matches or exceeds the embedded version are left untouched.
 fn ensure_builtin_skills(skills_dir: &std::path::Path) {
     let mut wrote = 0u32;
     for (rel, content) in BUILTIN_SKILLS {
         let target = skills_dir.join(rel).join("SKILL.md");
         if target.exists() {
-            continue;
+            // Check if the embedded version is newer than the on-disk version.
+            let embedded_ver = extract_skill_version(content);
+            let disk_ver = std::fs::read_to_string(&target)
+                .ok()
+                .map(|s| extract_skill_version(&s))
+                .unwrap_or(0);
+            if disk_ver >= embedded_ver {
+                continue; // on-disk is up to date (or user has newer)
+            }
+            // Embedded version is newer — overwrite.
+            eprintln!(
+                "[Hermix] updating builtin skill {rel}: disk version {disk_ver} < embedded version {embedded_ver}"
+            );
         }
         if let Some(parent) = target.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
@@ -64,6 +80,41 @@ fn ensure_builtin_skills(skills_dir: &std::path::Path) {
     if wrote > 0 {
         println!("[Hermix] wrote {wrote} built-in skills to {}", skills_dir.display());
     }
+}
+
+/// Extract the `version` field from a SKILL.md YAML frontmatter.
+/// Returns 0 if the frontmatter is missing or the version cannot be parsed.
+/// The frontmatter is the text between the first `---` and second `---`.
+fn extract_skill_version(content: &str) -> u32 {
+    let mut start = None;
+    let mut end = None;
+    for (i, line) in content.lines().enumerate() {
+        if line.trim() == "---" {
+            if start.is_none() {
+                start = Some(i);
+            } else {
+                end = Some(i);
+                break;
+            }
+        }
+    }
+    let (Some(s), Some(e)) = (start, end) else {
+        return 0;
+    };
+    let frontmatter: String = content
+        .lines()
+        .enumerate()
+        .filter(|(i, _)| *i > s && *i < e)
+        .map(|(_, l)| l)
+        .collect::<Vec<&str>>()
+        .join("\n");
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("version:") {
+            return rest.trim().parse::<u32>().unwrap_or(0);
+        }
+    }
+    0
 }
 
 /// Ensure bundled skills (packaged via `tauri.conf.json` → `resources`)

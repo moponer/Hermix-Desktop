@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { BackendStatus } from "./BackendStatus";
 import type { Session, NavPage } from "../types";
 import { useWorkspaces } from "../hooks/useWorkspaces";
@@ -702,7 +703,12 @@ function DeleteConfirmDialog({
   onCancel: () => void;
 }) {
   if (!state) return null;
-  return (
+  // Render into <body> via portal so the `fixed inset-0` is relative to
+  // the viewport, not to the sidebar's transform containing block
+  // (App.tsx wraps <Sidebar> in a `translate-x-*` container for the
+  // mobile slide-in animation, which would otherwise trap this dialog
+  // inside the sidebar width and push it to the left edge).
+  return createPortal(
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
       <button
         type="button"
@@ -756,7 +762,8 @@ function DeleteConfirmDialog({
           <span className="ml-auto text-[10.5px] text-text-faint">此操作不可恢复</span>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

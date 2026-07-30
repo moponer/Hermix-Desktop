@@ -1,5 +1,6 @@
 ---
 name: storage-analyzer
+version: 1
 description: >
   Windows 只读存储分析助手。扫描整机/指定目录磁盘占用，找出占空间大户，
   把每一项分成 🟢可自动清理 / 🟡需人工判断 / 🔴谨慎清理 三级并给出可执行

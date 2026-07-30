@@ -232,23 +232,35 @@ async fn do_method(method: &str, params: &Value) -> Result<Value, String> {
 
         // ── 文件对话框 ──
         "dialog_open" => {
-            let mut dlg = rfd::AsyncFileDialog::new();
-            if let Some(t) = sp(params, "title") {
-                dlg = dlg.set_title(t);
-            }
-            if let Some(filters) = params.get("filters").and_then(|v| v.as_array()) {
-                for f in filters {
-                    let name = f.get(0).and_then(|x| x.as_str()).unwrap_or("");
-                    let exts: Vec<&str> = f
-                        .get(1)
-                        .and_then(|x| x.as_array())
-                        .map(|a| a.iter().filter_map(|e| e.as_str()).collect())
-                        .unwrap_or_default();
-                    dlg = dlg.add_filter(name, &exts);
+            let mode = sp(params, "type").unwrap_or_else(|| "file".to_string());
+            if mode == "folder" {
+                // 文件夹选择模式
+                let mut dlg = rfd::AsyncFileDialog::new();
+                if let Some(t) = sp(params, "title") {
+                    dlg = dlg.set_title(t);
                 }
+                let handle = dlg.pick_folder().await;
+                Ok(json!(handle.map(|h| h.path().to_string_lossy().to_string())))
+            } else {
+                // 文件选择模式（默认）
+                let mut dlg = rfd::AsyncFileDialog::new();
+                if let Some(t) = sp(params, "title") {
+                    dlg = dlg.set_title(t);
+                }
+                if let Some(filters) = params.get("filters").and_then(|v| v.as_array()) {
+                    for f in filters {
+                        let name = f.get(0).and_then(|x| x.as_str()).unwrap_or("");
+                        let exts: Vec<&str> = f
+                            .get(1)
+                            .and_then(|x| x.as_array())
+                            .map(|a| a.iter().filter_map(|e| e.as_str()).collect())
+                            .unwrap_or_default();
+                        dlg = dlg.add_filter(name, &exts);
+                    }
+                }
+                let handle = dlg.pick_file().await;
+                Ok(json!(handle.map(|h| h.path().to_string_lossy().to_string())))
             }
-            let handle = dlg.pick_file().await;
-            Ok(json!(handle.map(|h| h.path().to_string_lossy().to_string())))
         }
         "dialog_save" => {
             let mut dlg = rfd::AsyncFileDialog::new();

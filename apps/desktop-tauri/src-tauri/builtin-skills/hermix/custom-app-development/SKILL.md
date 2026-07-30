@@ -1,5 +1,6 @@
 ---
 name: custom-app-development
+version: 2
 description: >
   自定义应用开发助手。当用户要求创建桌面应用、桌面工具、独立程序、
   窗口应用、打包成 EXE 的程序时使用。通过 custom_app_manager 工具
@@ -166,7 +167,7 @@ async function rpc(method, params) {
 | 执行程序 | `exec` | `{cmd, args?, cwd?, timeout_secs?}` | `{stdout,stderr,exit_code}` |
 | Shell 命令 | `shell` | `{command, timeout_secs?}` | `{stdout,stderr,exit_code}` |
 | HTTP | `fetch` | `{url, method?, headers?, body?}` | `{status,body,headers}` |
-| 打开对话框 | `dialog_open` | `{title?, filters?}` | string\|null |
+| 打开对话框 | `dialog_open` | `{title?, filters?, type?}` | string\|null |
 | 保存对话框 | `dialog_save` | `{title?, default_name?}` | string\|null |
 | 拼路径 | `path_join` | `{parts:[...]}` | string |
 | 文件名 | `path_basename` | `{path}` | string |
@@ -179,6 +180,15 @@ async function rpc(method, params) {
 
 > `shell` 是 `exec` 的便捷方法：直接执行 PowerShell 命令字符串，不需要拆分 cmd+args。
 > 适合快速执行 `dir`、`python script.py` 等一行命令。
+
+> **`dialog_open` 的 `type` 参数**：默认 `"file"`（选文件），传 `"folder"` 可选择文件夹。
+> 选文件夹时 `filters` 参数无效。示例：
+> ```js
+> // 选择文件夹
+> const folder = await rpc('dialog_open', { title: '选择文件夹', type: 'folder' });
+> // 选择文件
+> const file = await rpc('dialog_open', { title: '选择音乐', filters: [['MP3', ['mp3']]] });
+> ```
 
 > 未声明 `permissions` 时调用会被拒绝，返回的 `error` 字段包含详细修复提示
 > （告诉你在 manifest 中添加哪个权限）。

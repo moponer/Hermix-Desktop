@@ -2071,6 +2071,63 @@ impl AgentService for LocalAgentService {
                         .lock()
                         .map(|mut g| *g = Some(tool_call_id.to_string()));
                 }
+
+                // File-write tools execute almost instantly, so the
+                // "running" badge is only visible for a split second.
+                // Emit an immediate `tool_stdout` progress note so the
+                // front-end ToolEventCard shows "正在写入 xxx（N 字节）"
+                // while the disk write is in flight and the user can see
+                // exactly what the agent is working on.
+                const WRITE_TOOLS: &[&str] = &["write_file", "patch", "edit", "edit_file"];
+                if WRITE_TOOLS.contains(&tool_name) {
+                    let args_v = args;
+                    if let Some(path) = args_v.get("path").and_then(|v| v.as_str()) {
+                            let size_hint = args_v
+                                .get("content")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.len())
+                                .or_else(|| {
+                                    args_v
+                                        .get("new_string")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.len())
+                                })
+                                .unwrap_or(0);
+                            let note = format!("正在写入 {}（{} 字节）", path, size_hint);
+                            {
+                                let mut buf = timeline_buffer.lock().unwrap();
+                                buf.push(ExecutionTimelineEvent {
+                                    event_type: "tool_stdout".to_string(),
+                                    tool: Some(tool_name.to_string()),
+                                    content: Some(note.clone()),
+                                    arguments: None,
+                                    chunk_index: Some(1),
+                                    chunk_total: Some(1),
+                                    created_at: chrono::Utc::now().to_rfc3339(),
+                                    tool_call_id: Some(tool_call_id.to_string()),
+                                    file_path: None,
+                                    change_type: None,
+                                    file_summary: None,
+                                });
+                            }
+                            tool_start_forwarder(StreamChunk {
+                                delta: Some(StreamDelta {
+                                    content: None,
+                                    tool_calls: None,
+                                    extra: Some(serde_json::json!({
+                                        "event": "tool_stdout",
+                                        "tool_call_id": tool_call_id,
+                                        "tool": tool_name,
+                                        "content": note,
+                                        "chunk_index": 1,
+                                        "chunk_total": 1,
+                                    })),
+                                }),
+                                finish_reason: None,
+                                usage: None,
+                            });
+                        }
+                }
             })),
             on_tool_complete: Some(Box::new(move |tool_call_id, tool_name, output, denial_kind| {
                 // Pre-cloned at the call-site (see `tl_for_tool_complete`).
