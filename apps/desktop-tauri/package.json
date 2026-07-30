@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev:vite": "vite",
-    "predev:vite": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/download-ocr-models.ps1 && powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/download-esbuild.ps1",
+    "predev:vite": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/download-ocr-models.ps1",
     "dev:backend": "cargo build -p hermix-server",
     "dev": "echo [dev] Building hermix-server... && cargo build -p hermix-server && echo [dev] Copying fresh binary to sidecar dir... && copy /y ..\\..\\release\\target\\debug\\hermix.exe src-tauri\\binaries\\hermix-x86_64-pc-windows-msvc.exe && echo [dev] Verifying sidecar is fresh... && forfiles /P src-tauri\\binaries /M hermix-x86_64-pc-windows-msvc.exe /C \"cmd /c echo [dev] Sidecar timestamp: @fdate @ftime size: @fsize bytes\" && echo [dev] Starting Tauri dev... && cargo tauri dev",
     "build:vite": "vite build",
-    "prebuild:vite": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/download-ocr-models.ps1 -Required && powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/download-esbuild.ps1 -Required && powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/build-app-shell.ps1",
+    "prebuild:vite": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/download-ocr-models.ps1 -Required",
     "build:backend": "cargo build -p hermix-server --release",
     "build": "npm run build:backend && cargo tauri build",
     "test": "vitest run",

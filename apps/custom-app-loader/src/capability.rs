@@ -50,7 +50,9 @@ pub fn from_manifest(m: &Manifest) -> CapabilitySet {
                 }
             }
             "exec" => {
-                set.insert("exec".to_string());
+                for m in ["exec", "shell"] {
+                    set.insert(m.to_string());
+                }
             }
             "network" => {
                 set.insert("fetch".to_string());

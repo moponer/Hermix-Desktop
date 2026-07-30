@@ -121,7 +121,7 @@ export function AutomationView() {
   );
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-6">
+    <div className="flex-1 overflow-y-auto px-8 py-6 min-h-0">
       <div className="max-w-4xl mx-auto">
         {/* Header */}
         <div className="flex items-start justify-between mb-6 gap-4">

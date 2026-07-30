@@ -49,7 +49,12 @@ impl Default for SignalClarifyBackend {
 
 #[async_trait]
 impl ClarifyBackend for SignalClarifyBackend {
-    async fn ask(&self, question: &str, choices: Option<&[String]>) -> Result<String, ToolError> {
+    async fn ask(
+        &self,
+        question: &str,
+        choices: Option<&[String]>,
+        _session_id: Option<String>,
+    ) -> Result<String, ToolError> {
         // Return a structured JSON response that signals the agent loop
         // to pause and ask the user for input.
         let result = json!({
@@ -78,7 +83,21 @@ const DEFAULT_CLARIFY_TIMEOUT_SECS: u64 = 300;
 /// `ExecutionFailed` error so the agent loop can retry or abandon.
 pub struct ChannelClarifyBackend {
     dispatcher: ClarifyDispatcher,
+    /// Optional legacy session-id provider. The desktop agent loop now
+    /// supplies the session id through `ClarifyBackend::ask` directly
+    /// (via the `ContextAware` dispatch path), so this is only a
+    /// fallback for scripted / test callers that still construct a
+    /// provider.
     session_provider: Option<Arc<dyn ClarifySessionProvider>>,
+}
+
+impl Clone for ChannelClarifyBackend {
+    fn clone(&self) -> Self {
+        Self {
+            dispatcher: self.dispatcher.clone(),
+            session_provider: self.session_provider.clone(),
+        }
+    }
 }
 
 impl ChannelClarifyBackend {
@@ -92,6 +111,10 @@ impl ChannelClarifyBackend {
     /// Attach a session-id provider so each [`PendingClarify`] is stamped
     /// with the session it came from. The server uses this to route the
     /// `ClarifyRequest` event to the right WebSocket.
+    ///
+    /// Deprecated in favour of [`SessionStamper`] wiring, which is set by the
+    /// agent loop per tool-call batch. Kept for backwards compatibility with
+    /// callers that already provide a provider.
     pub fn with_session_provider(
         mut self,
         provider: Arc<dyn ClarifySessionProvider>,
@@ -103,13 +126,19 @@ impl ChannelClarifyBackend {
 
 #[async_trait]
 impl ClarifyBackend for ChannelClarifyBackend {
-    async fn ask(&self, question: &str, choices: Option<&[String]>) -> Result<String, ToolError> {
+    async fn ask(
+        &self,
+        question: &str,
+        choices: Option<&[String]>,
+        session_id: Option<String>,
+    ) -> Result<String, ToolError> {
         let (tx, rx) = oneshot::channel::<String>();
         let request_id = format!("clarify-{}", uuid::Uuid::new_v4());
-        let session_id = self
-            .session_provider
-            .as_ref()
-            .map(|p| p.current_session_id())
+        // Prefer the session id supplied by the `ContextAware` dispatch
+        // path; fall back to the legacy provider (e.g. tests or callers
+        // that still use `with_session_provider`).
+        let session_id = session_id
+            .or_else(|| self.session_provider.as_ref().map(|p| p.current_session_id()))
             .unwrap_or_default();
         let req = PendingClarify {
             request_id: request_id.clone(),
@@ -312,7 +341,7 @@ mod tests {
 
         let ask = tokio::spawn(async move {
             backend
-                .ask("pick one?", Some(&["a".into(), "b".into()]))
+                .ask("pick one?", Some(&["a".into(), "b".into()]), None)
                 .await
         });
 
@@ -337,7 +366,7 @@ mod tests {
         let backend = ChannelClarifyBackend::new(dispatcher.clone());
         std::env::set_var("HERMIX_CLARIFY_TIMEOUT_SECS", "1");
 
-        let err = backend.ask("q?", None).await.unwrap_err();
+        let err = backend.ask("q?", None, None).await.unwrap_err();
         assert!(err.to_string().contains("timed out"));
     }
 }

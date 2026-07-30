@@ -551,7 +551,7 @@ export function PersonaView() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-6 min-h-0">
         {!loaded ? (
           <div className="flex items-center gap-2 text-text-muted text-[13px]">
             <Loader2 size={14} className="animate-spin" /> 加载中…

@@ -173,7 +173,7 @@ export function TaskPanel({
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0">
           {/* Pinned project announcement — sits at the very top so the
               user sees the goal / scope before the task tree below it. */}
           <AnnouncementSection

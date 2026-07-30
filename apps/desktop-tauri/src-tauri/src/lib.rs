@@ -190,26 +190,24 @@ fn ensure_ocr_models(resource_dir: &std::path::Path, ocr_dir: &std::path::Path) 
     }
 }
 
-/// Extract the custom-app runtime pieces (precompiled app shell + esbuild
-/// binary) from the bundled Tauri resources into `HERMIX_HOME` so they are
-/// reachable at a stable path regardless of whether the app is installed
-/// (portable) or run from source.
+/// Extract the custom-app runtime pieces (wry loader + inject_app) from
+/// the bundled Tauri resources into `HERMIX_HOME` so they are reachable
+/// at a stable path regardless of whether the app is installed (portable)
+/// or run from source.
 ///
-/// `commands_custom_app` resolves these via `hermix_home()/shell/app-shell.exe`
-/// and `hermix_home()/esbuild/esbuild.exe`; this function makes that path
-/// concrete on first launch. If the bundled resources are absent (dev build
-/// without `bundle.resources`, or resources already extracted), it is a
-/// silent no-op — the custom-app commands then fall back to the
-/// `current_exe/resources/` location, so packaging still works.
-fn ensure_app_shell_and_esbuild(
+/// `commands_custom_app` resolves these via `hermix_home()/loader/`;
+/// this function makes that path concrete on first launch. If the bundled
+/// resources are absent (dev build without `bundle.resources`, or resources
+/// already extracted), it is a silent no-op — the custom-app commands
+/// then fall back to the `current_exe/resources/` location, so packaging
+/// still works.
+fn ensure_loader(
     resource_dir: &std::path::Path,
     hermix_home: &std::path::Path,
 ) {
-    // Each entry is (bundled dir under resources/, target subdir under HERMIX_HOME/).
+    // New custom-app loader: hermix-app-loader.exe + inject_app.exe, unpacked
+    // to HERMIX_HOME/loader on first launch.
     let pairs = [
-        ("resources/shell", "shell"),
-        ("resources/esbuild", "esbuild"),
-        // New custom-app loader: hermix-app-loader.exe + inject_app.exe.
         ("resources/loader", "loader"),
     ];
     for (src_rel, dst_rel) in pairs {
@@ -414,7 +412,7 @@ pub fn run() {
             if let Ok(resource_dir) = app.path().resource_dir() {
                 ensure_bundled_skills(&resource_dir, &skills_dir);
                 ensure_ocr_models(&resource_dir, &hermix_home.join("ocr"));
-                ensure_app_shell_and_esbuild(&resource_dir, &hermix_home);
+                ensure_loader(&resource_dir, &hermix_home);
             } else {
                 eprintln!("[Hermix] cannot resolve resource_dir — bundled skills and OCR models will not be extracted");
             }

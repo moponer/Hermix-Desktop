@@ -367,7 +367,7 @@ export function RoomMemberDialog({
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto min-h-0">
           {tab === "current" && (
             <>
               {/* Leader row — fixed at the top of the current list. The

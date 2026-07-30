@@ -277,7 +277,7 @@ export const RoomList = memo(function RoomList({
       )}
 
       {/* Room list */}
-      <div className="flex-1 overflow-y-auto px-2 py-1 space-y-0.5">
+      <div className="flex-1 overflow-y-auto px-2 py-1 space-y-0.5 min-h-0">
         {rooms.length === 0 && !showNewRoom && (
           <div className="flex flex-col items-center py-10 text-center">
             <MessageCircle size={32} className="text-text-faint mb-3" />

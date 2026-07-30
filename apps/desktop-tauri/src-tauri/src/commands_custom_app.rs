@@ -2,9 +2,8 @@
 //!
 //! These commands provide a bridge between the frontend and the
 //! PluginManager. They handle:
-//! - Initializing the PluginManager with the correct paths
-//! - Providing shell and esbuild paths to the frontend
-//! - Opening packaged apps in standalone windows
+//! - Initializing the PluginManager with the loader path
+//! - Opening packaged apps in standalone windows (spawned dist exe)
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,69 +18,6 @@ pub struct CustomAppState {
     pub manager: Arc<PluginManager>,
 }
 
-/// Resolve the path to the precompiled app shell.
-///
-/// Priority:
-///   1. `HERMIX_HOME/shell/app-shell.exe` — extracted on first launch by
-///      `ensure_app_shell_and_esbuild` (lib.rs setup).
-///   2. `current_exe/resources/shell/app-shell.exe` — portable/installed
-///      build where the bundler placed the shell next to the exe.
-///   3. `current_exe/shell/app-shell.exe` — fallback for adjacent layout.
-///   4. `HERMIX_HOME/shell/app-shell.exe` — final default (may not exist;
-///      the packager reports a clear `ShellNotFound` error in that case).
-///
-/// Uses the canonical `hermix_home()` (same source as the rest of the app)
-/// rather than reading `HERMIX_HOME` directly, so portable-data-dir and
-/// env-override precedence are always correct.
-fn resolve_shell_path() -> PathBuf {
-    let home = hermix_home();
-
-    let candidates = [
-        Some(home.join("shell").join("app-shell.exe")),
-        std::env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(|d| d.join("resources").join("shell").join("app-shell.exe"))),
-        std::env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(|d| d.join("shell").join("app-shell.exe"))),
-    ]
-    .into_iter()
-    .flatten();
-
-    for c in candidates {
-        if c.exists() {
-            return c;
-        }
-    }
-
-    home.join("shell").join("app-shell.exe")
-}
-
-/// Resolve the path to the bundled esbuild executable.
-fn resolve_esbuild_path() -> PathBuf {
-    let home = hermix_home();
-
-    let candidates = [
-        Some(home.join("esbuild").join("esbuild.exe")),
-        std::env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(|d| d.join("resources").join("esbuild").join("esbuild.exe"))),
-        std::env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(|d| d.join("esbuild").join("esbuild.exe"))),
-    ]
-    .into_iter()
-    .flatten();
-
-    for c in candidates {
-        if c.exists() {
-            return c;
-        }
-    }
-
-    home.join("esbuild").join("esbuild.exe")
-}
-
 /// Resolve the custom apps directory.
 fn resolve_apps_dir() -> PathBuf {
     hermix_home().join("custom-apps")
@@ -90,8 +26,6 @@ fn resolve_apps_dir() -> PathBuf {
 /// Initialize the custom app system. Called once at startup.
 #[tauri::command]
 pub async fn custom_app_init() -> Result<CustomAppInitResult, String> {
-    let shell_path = resolve_shell_path();
-    let esbuild_path = resolve_esbuild_path();
     let loader_path = resolve_loader_path();
     let apps_dir = resolve_apps_dir();
 
@@ -100,10 +34,6 @@ pub async fn custom_app_init() -> Result<CustomAppInitResult, String> {
         .map_err(|e| format!("创建应用目录失败: {e}"))?;
 
     Ok(CustomAppInitResult {
-        shell_path: shell_path.to_string_lossy().to_string(),
-        shell_exists: shell_path.exists(),
-        esbuild_path: esbuild_path.to_string_lossy().to_string(),
-        esbuild_exists: esbuild_path.exists(),
         loader_path: loader_path.to_string_lossy().to_string(),
         loader_exists: loader_path.exists(),
         apps_dir: apps_dir.to_string_lossy().to_string(),
@@ -112,10 +42,6 @@ pub async fn custom_app_init() -> Result<CustomAppInitResult, String> {
 
 #[derive(serde::Serialize)]
 pub struct CustomAppInitResult {
-    pub shell_path: String,
-    pub shell_exists: bool,
-    pub esbuild_path: String,
-    pub esbuild_exists: bool,
     pub loader_path: String,
     pub loader_exists: bool,
     pub apps_dir: String,
@@ -124,11 +50,9 @@ pub struct CustomAppInitResult {
 /// Scan all custom apps and return their summaries.
 #[tauri::command]
 pub async fn custom_app_list() -> Result<serde_json::Value, String> {
-    let shell_path = resolve_shell_path();
-    let esbuild_path = resolve_esbuild_path();
     let apps_dir = resolve_apps_dir();
 
-    let manager = PluginManager::new(apps_dir, shell_path, esbuild_path);
+    let manager = PluginManager::new(apps_dir);
     let entries = manager
         .scan_plugins()
         .map_err(|e| format!("扫描应用失败: {e}"))?;
@@ -159,11 +83,9 @@ pub async fn custom_app_list() -> Result<serde_json::Value, String> {
 /// Package a custom app as a standalone EXE.
 #[tauri::command]
 pub async fn custom_app_package(id: String) -> Result<serde_json::Value, String> {
-    let shell_path = resolve_shell_path();
-    let esbuild_path = resolve_esbuild_path();
     let apps_dir = resolve_apps_dir();
 
-    let manager = PluginManager::new(apps_dir, shell_path, esbuild_path);
+    let manager = PluginManager::new(apps_dir);
     manager
         .scan_plugins()
         .map_err(|e| format!("扫描应用失败: {e}"))?;
@@ -183,11 +105,9 @@ pub async fn custom_app_package(id: String) -> Result<serde_json::Value, String>
 /// Run a custom app (build latest source then launch).
 #[tauri::command]
 pub async fn custom_app_run(id: String) -> Result<serde_json::Value, String> {
-    let shell_path = resolve_shell_path();
-    let esbuild_path = resolve_esbuild_path();
     let apps_dir = resolve_apps_dir();
 
-    let manager = PluginManager::new(apps_dir, shell_path.clone(), esbuild_path);
+    let manager = PluginManager::new(apps_dir);
     manager
         .scan_plugins()
         .map_err(|e| format!("扫描应用失败: {e}"))?;
@@ -250,8 +170,7 @@ pub async fn custom_app_open_dir(id: String) -> Result<(), String> {
 /// 开发期自验证: 在打包/运行前校验应用源码, 把打包期错误提前到开发期暴露。
 ///
 /// 校验内容 (见 `hermix_plugin::validate_custom_app`):
-/// - L0: manifest 完整性 + `ui.tsx`/`backend.ts` 导入白名单
-/// - L1: 用与真实打包同款的 esbuild 标志做预打包
+/// - manifest 完整性 + HTML 结构 + RPC 调用模式 + 权限一致性 + JS 括号匹配
 ///
 /// 返回结构化报告 `{ ok, issues: [{level, code, message}] }`。
 /// agent 开发循环应在生成/修改应用代码后调用本命令, `ok == false` 时继续
@@ -274,25 +193,23 @@ pub async fn custom_app_validate(id: String) -> Result<serde_json::Value, String
 /// 无运行时报错"这类问题也在开发期暴露, 而非用户点击启动后才发现.
 #[tauri::command]
 pub async fn custom_app_smoke_test(id: String) -> Result<serde_json::Value, String> {
-    let shell_path = resolve_shell_path();
-    let esbuild_path = resolve_esbuild_path();
     let apps_dir = resolve_apps_dir();
     let app_dir = apps_dir.join(&id);
     if !app_dir.exists() {
         return Err(format!("应用目录不存在: {}", app_dir.display()));
     }
 
-    let manager = PluginManager::new(apps_dir, shell_path.clone(), esbuild_path);
+    let manager = PluginManager::new(apps_dir);
     manager
         .scan_plugins()
         .map_err(|e| format!("扫描应用失败: {e}"))?;
 
-    // 刷新打包产物 (esbuild 打包 + 复制壳)
+    // 刷新打包产物 (wry loader + inject_app 注入)
     manager
         .package_plugin(&id)
         .await
         .map_err(|e| format!("编译应用失败: {e}"))?;
 
-    let report = run_smoke_test_async(app_dir, shell_path).await;
+    let report = run_smoke_test_async(app_dir).await;
     serde_json::to_value(&report).map_err(|e| format!("序列化冒烟报告失败: {e}"))
 }

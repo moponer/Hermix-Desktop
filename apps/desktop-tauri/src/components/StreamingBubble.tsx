@@ -49,6 +49,7 @@ import { InlineThinkingDot } from "./InlineThinkingDot";
 import { MarkdownBody } from "./MarkdownBody";
 import { parseContent } from "./messageParser";
 import { ProcessTimeline, MessageCopyAction } from "./MessageBubble";
+import { StreamingArtifactCard } from "./StreamingArtifactCard";
 import type { StreamPhase } from "../hooks/useStreamChat";
 import type { ExecutionTimelineEvent, TimelineStep } from "../types";
 
@@ -262,6 +263,10 @@ function StreamingBubbleImpl({
             )}
           </div>
         )}
+
+        {/* 产物级进度：LLM 正在写哪些文件 / 写到哪了。
+            仅在流式态显示，流结束后由 MessageBubble 接管。 */}
+        <StreamingArtifactCard text={deferred} isStreaming={isStreamingPhase} />
 
         {/* Process timeline (single foldable block) + final text prose.
             mirrors MessageBubble's new layout — every

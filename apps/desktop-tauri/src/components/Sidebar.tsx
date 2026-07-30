@@ -12,6 +12,7 @@ import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
 import { storage, sessionKey } from "../utils/storageCompat";
 import * as api from "../api";
+import { toastSuccess, toastError } from "../hooks/useToast";
 
 interface SidebarProps {
   page: NavPage;
@@ -127,19 +128,31 @@ export function Sidebar({
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [createRoomError, setCreateRoomError] = useState<string | null>(null);
 
-  // Delete animation state.
-  // removingIds  = user confirmed, playing collapse animation (still in list).
-  // deletingIds  = animation done, real delete dispatched (parent will unmount).
+  // Delete flow: in-app confirm dialog (replaces native window.confirm) +
+  // collapse animation + success/error toast.
+  // confirmState  = pending in-app confirm dialog (null = hidden).
+  // removingIds   = user confirmed, playing collapse animation (still in list).
+  // deletingIds   = animation done, real delete dispatched (parent will unmount).
   const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    body: string;
+    onConfirm: () => void;
+  } | null>(null);
 
-  const requestDelete = useCallback((id: string, label: string, impact: string, onConfirm: () => void) => {
+  const runDelete = useCallback((id: string, label: string, onConfirm: () => void) => {
     if (removingIds.has(id) || deletingIds.has(id)) return;
-    if (!window.confirm(`确定删除「${label}」？\n${impact}\n此操作不可恢复。`)) return;
     setRemovingIds((prev) => new Set(prev).add(id));
     window.setTimeout(() => {
       setDeletingIds((prev) => new Set(prev).add(id));
-      try { onConfirm(); } catch (e) { console.error("[Sidebar] delete failed", e); }
+      try {
+        onConfirm();
+        toastSuccess(`已删除「${label}」`);
+      } catch (e) {
+        console.error("[Sidebar] delete failed", e);
+        toastError(`删除「${label}」失败`);
+      }
       // Give parent state a tick to filter the item out, then clean our sets.
       window.setTimeout(() => {
         setRemovingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
@@ -147,6 +160,15 @@ export function Sidebar({
       }, 50);
     }, 320);
   }, [removingIds, deletingIds]);
+
+  const requestDelete = useCallback((id: string, label: string, impact: string, onConfirm: () => void) => {
+    if (removingIds.has(id) || deletingIds.has(id)) return;
+    setConfirmState({
+      title: `删除「${label}」`,
+      body: `${impact}\n此操作不可恢复。`,
+      onConfirm: () => runDelete(id, label, onConfirm),
+    });
+  }, [removingIds, deletingIds, runDelete]);
 
   // Load rooms from API on mount
   useEffect(() => {
@@ -168,22 +190,40 @@ export function Sidebar({
   };
 
   const handleDeleteAllSessions = useCallback(() => {
-    if (!confirm("确定删除所有未归类对话？")) return;
-    for (const s of ungroupedSessions) onDeleteSession(s.id);
-    for (const ws of workspaces) {
-      for (const s of sessionsByWs[ws.path] || []) onDeleteSession(s.id);
-    }
+    setConfirmState({
+      title: "删除所有对话",
+      body: "将清理全部未归类对话及各项目下的对话记录。\n此操作不可恢复。",
+      onConfirm: () => {
+        for (const s of ungroupedSessions) onDeleteSession(s.id);
+        for (const ws of workspaces) {
+          for (const s of sessionsByWs[ws.path] || []) onDeleteSession(s.id);
+        }
+        toastSuccess("已删除全部对话");
+      },
+    });
   }, [ungroupedSessions, workspaces, sessionsByWs, onDeleteSession]);
 
   const handleDeleteAllWorkspaces = useCallback(() => {
-    if (!confirm("确定删除所有项目？")) return;
-    for (const ws of workspaces) removeWorkspace(ws.id);
+    setConfirmState({
+      title: "删除所有项目",
+      body: "将移除全部项目及其在侧边栏的分组。\n此操作不可恢复。",
+      onConfirm: () => {
+        for (const ws of workspaces) removeWorkspace(ws.id);
+        toastSuccess("已删除全部项目");
+      },
+    });
   }, [workspaces, removeWorkspace]);
 
   const handleDeleteAllRooms = useCallback(() => {
-    if (!confirm("确定删除所有聊天室？")) return;
-    // TODO: wire to API delete room when available; currently local-only list.
-    setChatRooms([]);
+    setConfirmState({
+      title: "删除所有聊天室",
+      body: "将解散全部聊天室（当前为本地列表，后端同步待接入）。\n此操作不可恢复。",
+      onConfirm: () => {
+        // TODO: wire to API delete room when available; currently local-only list.
+        setChatRooms([]);
+        toastSuccess("已删除全部聊天室");
+      },
+    });
   }, []);
 
   const handleCreateRoom = useCallback(async () => {
@@ -567,6 +607,11 @@ export function Sidebar({
           </button>
         </div>
       </div>
+      <DeleteConfirmDialog
+        state={confirmState}
+        onConfirm={() => { const s = confirmState; setConfirmState(null); s?.onConfirm(); }}
+        onCancel={() => setConfirmState(null)}
+      />
     </aside>
   );
 }
@@ -644,6 +689,74 @@ function SidebarDeleteBtn({ label, onClick }: { label: string; onClick: () => vo
     >
       <Trash2 size={13} />
     </button>
+  );
+}
+
+function DeleteConfirmDialog({
+  state,
+  onConfirm,
+  onCancel,
+}: {
+  state: { title: string; body: string; onConfirm: () => void } | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  if (!state) return null;
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label="取消"
+        onClick={onCancel}
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+      />
+      <div
+        className={clsx(
+          "relative z-10 w-full max-w-[420px] flex flex-col",
+          "rounded-2xl border shadow-2xl",
+          "bg-bg-secondary border-border-subtle",
+        )}
+      >
+        <div className="flex items-start gap-3 px-5 py-4 border-b border-border-subtle">
+          <div
+            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: "hsla(150, 60%, 50%, 0.12)" }}
+          >
+            <Trash2 size={16} style={{ color: "hsl(150, 60%, 45%)" }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-[14px] font-bold text-text-primary">{state.title}</h2>
+            <p className="mt-1 text-[12px] text-text-muted whitespace-pre-wrap leading-relaxed">
+              {state.body}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2.5 px-5 py-4">
+          <button
+            type="button"
+            onClick={onConfirm}
+            className={clsx(
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-bold",
+              "text-white transition-opacity hover:opacity-90",
+            )}
+            style={{ background: "hsl(0, 70%, 50%)" }}
+          >
+            删除
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className={clsx(
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-semibold",
+              "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors",
+            )}
+          >
+            取消
+          </button>
+          <span className="ml-auto text-[10.5px] text-text-faint">此操作不可恢复</span>
+        </div>
+      </div>
+    </div>
   );
 }
 

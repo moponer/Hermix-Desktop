@@ -109,7 +109,7 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-3.5 space-y-2">
+        <div className="flex-1 overflow-y-auto p-3.5 space-y-2 min-h-0">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center text-text-muted">
               <MessageSquare size={28} className="mb-2 opacity-30" />

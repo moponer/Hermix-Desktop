@@ -796,26 +796,26 @@
   font-style: normal;
 }
 
-/* ── Sidebar sections: independent scrolling areas ──
+/* ── Sidebar sections: compact, content-sized groups ──
  *
- * The middle area of the sidebar is split into three sections
- * (对话 / 项目 / 聊天室). Each section has a fixed header and a
- * scrollable body. The three sections share the remaining height
- * of the sidebar equally. This fixes the "whole sidebar scrolls
- * together" behavior where section headers scrolled out of view. */
+ * The middle area lists 对话 / 项目 / 聊天室. Each section is only
+ * as tall as its content; empty sections do NOT stretch and create
+ * huge fixed gaps. When the total list exceeds sidebar height the
+ * whole area scrolls. */
 
 .sidebar-sections {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 4px 10px 0;
   gap: 4px;
 }
 
 .sidebar-section {
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -871,10 +871,8 @@
 }
 
 .sidebar-section-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  flex: 0 0 auto;
+  overflow: visible;
   padding: 0 2px 4px;
 }
 

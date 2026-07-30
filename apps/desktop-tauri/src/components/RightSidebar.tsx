@@ -1020,7 +1020,7 @@ export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArt
       )}
 
       {activeTab === "products" && (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
           {/* Search + filter */}
           <div className="px-3 pb-3 space-y-2 mt-1">
             <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-bg-tertiary focus-within:ring-1 focus-within:ring-accent/30 transition">
@@ -1056,7 +1056,7 @@ export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArt
           </div>
 
           {/* File list */}
-          <div className="flex-1 overflow-y-auto border-t border-border-subtle px-3 py-2">
+          <div className="flex-1 overflow-y-auto border-t border-border-subtle px-3 py-2 min-h-0">
             {filtered.length === 0 ? (
               <div className="px-1 py-8 text-center">
                 <p className="h-meta text-text-faint leading-relaxed whitespace-pre-line">
@@ -1370,7 +1370,7 @@ function ComputerTab({
   const breadcrumbs = useMemo(() => pathToBreadcrumbs(currentPath), [currentPath]);
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden computer-tab">
+    <div className="flex-1 flex flex-col overflow-hidden min-h-0 computer-tab">
       {/* Toolbar: back, up, refresh, address bar, view toggle */}
       <div className="computer-toolbar">
         <div className="computer-toolbar-left">
@@ -1471,7 +1471,7 @@ function ComputerTab({
       </div>
 
       {/* File listing body */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto computer-body">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto computer-body min-h-0">
         {loading && (
           <div className="flex items-center gap-2 px-3 py-8 justify-center text-xs text-text-muted">
             <Loader2 size={14} className="animate-spin" />
@@ -1773,7 +1773,7 @@ function BrowserTab() {
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden min-h-0">
       {/* URL Input */}
       <div className="px-3 py-3 border-b border-border-primary">
         <div className="flex items-center gap-2">

@@ -47,5 +47,9 @@
   --theme-bg-app: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800' preserveAspectRatio='xMidYMid slice'%3E%3Cdefs%3E%3CradialGradient id='g' cx='50%25' cy='0%25' r='95%25'%3E%3Cstop offset='0%25' stop-color='%23ffe9c0' stop-opacity='0.85'/%3E%3Cstop offset='35%25' stop-color='%23f5e6cc' stop-opacity='0.35'/%3E%3Cstop offset='100%25' stop-color='%23f0e6d4' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='1200' height='800' fill='%23f0e6d4'/%3E%3Crect width='1200' height='800' fill='url(%23g)'/%3E%3C/svg%3E");
 
   --theme-bg-sidebar:  var(--color-bg-secondary);
-  --theme-bg-titlebar: var(--color-bg-elevated);
+  /* 标题栏：暖金奶油，明显区别于纯白，呼应暖阳主题（原值 var(--color-bg-elevated)=#fffefb 接近纯白） */
+  --theme-bg-titlebar: #f8eed6;
+  /* 对话区底色：暖奶咖，明显区别于纯白（原被 ChatView 的 var(--color-bg-primary)=#fffdf8 盖成白）。
+     其他主题未在 themes/*.css 定义此变量，ChatView 回退到 var(--color-bg-primary)，无回归。 */
+  --theme-bg-chat:     #f4e8d2;
 }

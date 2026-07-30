@@ -21,7 +21,7 @@ export function SearchView({ sessions, onSelectSession }: SearchViewProps) {
   }, [query, sessions]);
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-6">
+    <div className="flex-1 overflow-y-auto px-8 py-6 min-h-0">
       <div className="max-w-2xl mx-auto">
         <h1 className="text-2xl font-semibold text-text-primary mb-4">搜索</h1>
 

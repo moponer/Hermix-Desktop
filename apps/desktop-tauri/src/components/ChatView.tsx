@@ -1813,7 +1813,7 @@ const clearPendingImages = useCallback(() => {
     return (
       <div
         className="flex-1 flex flex-col items-center justify-center px-8 min-h-0"
-        style={{ background: "var(--color-bg-primary)", overflow: "visible" }}
+        style={{ background: "var(--theme-bg-chat, var(--color-bg-primary))", overflow: "visible" }}
       >
         <div className="w-full max-w-md flex flex-col items-center py-12 text-center">
           <div
@@ -1876,7 +1876,7 @@ const clearPendingImages = useCallback(() => {
     return (
       <div
         className="flex-1 flex flex-col items-center justify-center px-8 min-h-0"
-        style={{ background: "var(--color-bg-primary)" }}
+        style={{ background: "var(--theme-bg-chat, var(--color-bg-primary))" }}
       >
         <div className="flex flex-col items-center gap-3 text-center">
           <div
@@ -1892,7 +1892,7 @@ const clearPendingImages = useCallback(() => {
   // Empty state — show welcome when no session or session has no messages
   if (!session || session.messages.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center px-8 min-h-0" style={{ background: "var(--color-bg-primary)", overflow: "visible" }}>
+      <div className="flex-1 flex flex-col items-center justify-center px-8 min-h-0" style={{ background: "var(--theme-bg-chat, var(--color-bg-primary))", overflow: "visible" }}>
         <div className="w-full max-w-3xl flex flex-col items-center py-12">
           {/* Hero — mascot */}
           <div className="relative mb-4">
@@ -1977,7 +1977,7 @@ const clearPendingImages = useCallback(() => {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ background: "var(--color-bg-primary)" }}>
+    <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ background: "var(--theme-bg-chat, var(--color-bg-primary))" }}>
       <ModelStatusBar
         title={session?.title}
         rightOpen={rightOpen}

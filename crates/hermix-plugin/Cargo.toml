@@ -16,6 +16,7 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 walkdir = "2"
 base64 = "0.22"
+regex-lite = "0.1"
 # 内置图标库: 纯 Rust SVG 栅格化 (无系统字体依赖) + 轻量绘制
 resvg = "0.42"
 usvg = "0.42"

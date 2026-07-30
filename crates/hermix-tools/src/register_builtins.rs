@@ -164,6 +164,7 @@ mod tests {
         TerminalBackend,
     };
     use crate::essential::ESSENTIAL_TOOLSETS;
+    use hermix_plugin::PluginManager;
 
     /// Minimal no-op terminal backend for `register_builtin_tools`. The
     /// backend is only used to wire handlers; we never invoke it in
@@ -284,7 +285,15 @@ mod tests {
             None,
             None,
             None,
-            None,
+            // Register `custom_app_manager` here (matching the production
+            // `build_with_hermes_home` path, which passes `Some`). Without
+            // it the `"custom_app"` toolset has no registered tool and the
+            // `essential_toolset_floor_aligns_with_runtime_registration`
+            // floor test fails — the floor only re-asserts toolsets that
+            // actually have a wired tool.
+            Some(Arc::new(PluginManager::new(
+                std::env::temp_dir().join("hermix-test-custom-apps"),
+            ))),
         );
         registry
     }

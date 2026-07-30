@@ -37,7 +37,15 @@ pub fn dispatch(body: &[u8], caps: &CapabilitySet) -> String {
         Err(e) => return err_json(0, &format!("无效请求: {e}")),
     };
     if !caps.allows(&req.method) {
-        return err_json(req.id, "permission denied");
+        return err_json(req.id, &format!(
+            "permission denied: 方法 '{}' 未在 manifest.permissions 中声明。\
+             提示: 在 manifest.json 的 permissions 数组中添加对应权限即可。\
+             权限→方法映射: fs-read→fs_read/fs_read_bytes/fs_list/fs_exists,\
+             fs-write→fs_write/fs_write_bytes/fs_mkdir/fs_move/fs_copy/fs_delete,\
+             exec→exec/shell, network→fetch, dialog→dialog_open/dialog_save,\
+             env→env_get/env_list, temp→temp_dir/temp_file",
+            req.method
+        ));
     }
     let res = rt().block_on(do_method(&req.method, &req.params));
     match res {
@@ -140,7 +148,7 @@ async fn do_method(method: &str, params: &Value) -> Result<Value, String> {
 
         // ── 进程执行 ──
         "exec" => {
-            let cmd = sp(params, "cmd").ok_or("exec 缺少 cmd")?;
+            let cmd = sp(params, "cmd").ok_or("exec 缺少 cmd 参数。用法: rpc('exec', {cmd: 'python', args: ['script.py']})")?;
             let args = sa(params, "args");
             let cwd = sp(params, "cwd");
             let timeout = params.get("timeout_secs").and_then(|v| v.as_u64()).unwrap_or(120);
@@ -152,12 +160,35 @@ async fn do_method(method: &str, params: &Value) -> Result<Value, String> {
             command.stdout(std::process::Stdio::piped());
             command.stderr(std::process::Stdio::piped());
             command.kill_on_drop(true);
-            let child = command.spawn().map_err(|e| e.to_string())?;
+            let child = command.spawn().map_err(|e| format!("exec 启动失败: 命令='{}' 错误='{e}'。请确认命令路径正确且程序已安装", cmd))?;
             let to = std::time::Duration::from_secs(timeout);
             let out = tokio::time::timeout(to, child.wait_with_output())
                 .await
-                .map_err(|_| "exec 超时".to_string())?
-                .map_err(|e| e.to_string())?;
+                .map_err(|_| format!("exec 超时 ({timeout}s): 命令='{}'。可增加 timeout_secs 参数", cmd))?
+                .map_err(|e| format!("exec 执行失败: {e}"))?;
+            Ok(json!({
+                "stdout": String::from_utf8_lossy(&out.stdout).to_string(),
+                "stderr": String::from_utf8_lossy(&out.stderr).to_string(),
+                "exit_code": out.status.code().unwrap_or(-1),
+            }))
+        }
+
+        // ── Shell 便捷方法 (Windows PowerShell) ──
+        // 一行命令执行，不需要拆 cmd+args
+        "shell" => {
+            let command_str = sp(params, "command").ok_or("shell 缺少 command 参数。用法: rpc('shell', {command: 'dir C:\\Users'})")?;
+            let timeout = params.get("timeout_secs").and_then(|v| v.as_u64()).unwrap_or(120);
+            let mut cmd = tokio::process::Command::new("powershell.exe");
+            cmd.args(["-NoProfile", "-NonInteractive", "-Command", &command_str]);
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+            cmd.kill_on_drop(true);
+            let child = cmd.spawn().map_err(|e| format!("shell 启动 PowerShell 失败: {e}"))?;
+            let to = std::time::Duration::from_secs(timeout);
+            let out = tokio::time::timeout(to, child.wait_with_output())
+                .await
+                .map_err(|_| format!("shell 超时 ({timeout}s)"))?
+                .map_err(|e| format!("shell 执行失败: {e}"))?;
             Ok(json!({
                 "stdout": String::from_utf8_lossy(&out.stdout).to_string(),
                 "stderr": String::from_utf8_lossy(&out.stderr).to_string(),
@@ -381,7 +412,7 @@ mod tests {
             &serde_json::to_vec(&json!({"id":3,"method":"fs_read","params":{"path":"x"}})).unwrap(),
             &caps,
         );
-        assert!(r.contains("permission denied"), "应被拒绝: {r}");
+        assert!(r.contains("permission denied"), "应被拒绝: {r}"); // 新版包含详细提示，仍含 "permission denied"
     }
 
     #[test]

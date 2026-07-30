@@ -13,13 +13,7 @@ use crate::manifest::PluginManifest;
 pub struct CreateAppRequest {
     /// App manifest (id, name, version, description, etc.)
     pub manifest: PluginManifest,
-    /// backend.ts source code (legacy esbuild model; omit for new-loader apps)
-    #[serde(default)]
-    pub backend_code: Option<String>,
-    /// ui.tsx source code (optional, legacy model)
-    #[serde(default)]
-    pub ui_code: Option<String>,
-    /// Self-contained index.html (new-loader model; omit for legacy apps)
+    /// Self-contained index.html source code
     #[serde(default)]
     pub index_html: Option<String>,
 }
@@ -27,25 +21,19 @@ pub struct CreateAppRequest {
 /// Request to update an existing custom app's code.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateAppRequest {
-    /// New backend.ts source code (optional)
-    #[serde(default)]
-    pub backend_code: Option<String>,
-    /// New ui.tsx source code (optional)
-    #[serde(default)]
-    pub ui_code: Option<String>,
-    /// New self-contained index.html (optional, new-loader model)
+    /// New self-contained index.html source code (optional)
     #[serde(default)]
     pub index_html: Option<String>,
+    /// Updated manifest (optional, e.g. to add missing permissions)
+    #[serde(default)]
+    pub manifest: Option<PluginManifest>,
 }
 
 /// Response containing app metadata and source code.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppResponse {
     pub manifest: PluginManifest,
-    pub backend_code: String,
-    #[serde(default)]
-    pub ui_code: Option<String>,
-    /// Self-contained index.html source (new-loader model; empty if legacy)
+    /// Self-contained index.html source
     #[serde(default)]
     pub index_html: Option<String>,
     /// Whether the app has been packaged (dist/ exists)
@@ -122,11 +110,6 @@ impl From<&crate::PluginEntry> for AppSummary {
 
 impl From<&crate::PluginEntry> for AppResponse {
     fn from(entry: &crate::PluginEntry) -> Self {
-        let backend_code = std::fs::read_to_string(&entry.backend_path).unwrap_or_default();
-        let ui_code = entry
-            .ui_path
-            .as_ref()
-            .and_then(|p| std::fs::read_to_string(p).ok());
         let index_html = entry
             .index_html
             .as_ref()
@@ -136,8 +119,6 @@ impl From<&crate::PluginEntry> for AppResponse {
 
         Self {
             manifest: entry.manifest.clone(),
-            backend_code,
-            ui_code,
             index_html,
             is_packaged,
             dist_path: if is_packaged {

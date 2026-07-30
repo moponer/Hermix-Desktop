@@ -57,7 +57,7 @@ export function PluginsView() {
   const [query, setQuery] = useState("");
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-6">
+    <div className="flex-1 overflow-y-auto px-8 py-6 min-h-0">
       <div className="max-w-5xl mx-auto">
         <div className="flex items-center gap-4 mb-6 text-sm">
           <TabButton active={tab === "plugins"} onClick={() => setTab("plugins")} icon={Plug} label="插件" />

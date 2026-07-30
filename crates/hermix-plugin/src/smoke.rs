@@ -1,8 +1,8 @@
-//! 运行时冒烟测试 (L2) — 启动打包后的壳加载应用, 捕获运行时错误.
+//! 运行时冒烟测试 (L2) — 启动打包后的 loader exe, 捕获运行时错误.
 //!
-//! 壳在 `HERMIX_SMOKE=1` 时进入冒烟模式: 隐藏窗口, 并通过 `smoke_report`
-//! IPC 把 JS 运行时错误 / 挂载结果写入 `HERMIX_SMOKE_LOG` 指定的日志文件.
-//! 本模块负责启动该壳、轮询日志、解析结果, 供 agent 工具 (`custom_app_manager`
+//! 打包产物 (loader exe) 在 `HERMIX_SMOKE=1` 时进入冒烟模式: 隐藏窗口,
+//! 并通过 `HERMIX_SMOKE_LOG` 日志文件写入 `{"level":"ready"|"error",...}` 行.
+//! 本模块负责启动该 exe、轮询日志、解析结果, 供 agent 工具 (`custom_app_manager`
 //! 的 `smoke` action) 与桌面 Tauri 命令 (`custom_app_smoke_test`) 共用.
 
 use std::path::{Path, PathBuf};
@@ -77,11 +77,11 @@ pub fn parse_smoke_log(content: &str) -> (bool, Vec<SmokeError>, Vec<String>) {
     (ready, errors, detail)
 }
 
-/// 启动壳并冒烟测试指定应用. 同步阻塞, 最多约 20s.
+/// 启动打包产物 (`dist/<id>.exe`) 并冒烟测试指定应用. 同步阻塞, 最多约 20s.
 ///
 /// 调用方应先确保已打包 (`manager.package_plugin`). `app_dir` 为插件目录
 /// (`<plugins_dir>/<id>`), 其下 `dist/` 必须存在并有 `<id>.exe`.
-pub fn run_smoke_test(app_dir: &Path, _shell_path: &Path) -> SmokeReport {
+pub fn run_smoke_test(app_dir: &Path) -> SmokeReport {
     let id = app_dir
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -182,8 +182,8 @@ pub fn run_smoke_test(app_dir: &Path, _shell_path: &Path) -> SmokeReport {
 /// 异步包装: 在 blocking 线程上跑 [`run_smoke_test`], 避免阻塞 async runtime.
 ///
 /// 调用方无需直接依赖 tokio —— 本函数内部使用 `spawn_blocking`.
-pub async fn run_smoke_test_async(app_dir: PathBuf, shell_path: PathBuf) -> SmokeReport {
-    match tokio::task::spawn_blocking(move || run_smoke_test(&app_dir, &shell_path)).await {
+pub async fn run_smoke_test_async(app_dir: PathBuf) -> SmokeReport {
+    match tokio::task::spawn_blocking(move || run_smoke_test(&app_dir)).await {
         Ok(r) => r,
         Err(e) => SmokeReport {
             ok: false,
@@ -217,8 +217,7 @@ mod tests {
         // 用一个不存在的 app_dir → dist 缺失, 不应启动任何进程
         let tmp = std::env::temp_dir()
             .join(format!("hermix_smoke_nonexist_{}", std::process::id()));
-        let shell = tmp.join("shell.exe");
-        let report = run_smoke_test(&tmp, &shell);
+        let report = run_smoke_test(&tmp);
         assert!(!report.ok);
         assert!(!report.packaged);
         assert!(!report.errors.is_empty());

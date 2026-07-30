@@ -33,7 +33,6 @@ interface AppDetailModalProps {
 }
 
 type Tab = "overview" | "code";
-type CodeFile = "backend" | "ui";
 
 const PERM_HINTS: Record<string, string> = {
   "fs-read": "读取本地文件系统",
@@ -50,10 +49,8 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
   const [app, setApp] = useState<CustomAppResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("overview");
-  const [codeFile, setCodeFile] = useState<CodeFile>("backend");
   const [editing, setEditing] = useState(false);
-  const [backendCode, setBackendCode] = useState("");
-  const [uiCode, setUiCode] = useState("");
+  const [indexHtml, setIndexHtml] = useState("");
   const [saving, setSaving] = useState(false);
   const [packaging, setPackaging] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,8 +66,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
     try {
       const data = await getCustomApp(appId);
       setApp(data);
-      setBackendCode(data.backend_code);
-      setUiCode(data.ui_code ?? "");
+      setIndexHtml(data.index_html ?? "");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -84,8 +80,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
     setError(null);
     try {
       const updated = await updateCustomApp(appId, {
-        backend_code: backendCode !== app.backend_code ? backendCode : undefined,
-        ui_code: uiCode !== (app.ui_code ?? "") ? uiCode : undefined,
+        index_html: indexHtml !== (app.index_html ?? "") ? indexHtml : undefined,
       });
       setApp(updated);
       setEditing(false);
@@ -102,8 +97,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
   const cancelEdit = () => {
     if (!app) return;
     setEditing(false);
-    setBackendCode(app.backend_code);
-    setUiCode(app.ui_code ?? "");
+    setIndexHtml(app.index_html ?? "");
   };
 
   const handlePackage = async () => {
@@ -142,16 +136,6 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
       setError(e instanceof Error ? e.message : String(e));
     }
   };
-
-  const setActiveCode = (value: string) => {
-    if (codeFile === "backend") {
-      setBackendCode(value);
-    } else {
-      setUiCode(value);
-    }
-  };
-
-  const activeCode = codeFile === "backend" ? backendCode : uiCode;
 
   if (loading) {
     return (
@@ -334,31 +318,22 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
           {tab === "code" && (
             <div className="app-detail-code-panel">
               <div className="app-detail-filebar">
-                <button
-                  className={`app-detail-filebar__item ${codeFile === "backend" ? "app-detail-filebar__item--active" : ""}`}
-                  onClick={() => setCodeFile("backend")}
-                >
-                  <FileCode2 size={14} /> backend.ts
-                </button>
-                <button
-                  className={`app-detail-filebar__item ${codeFile === "ui" ? "app-detail-filebar__item--active" : ""}`}
-                  onClick={() => setCodeFile("ui")}
-                >
-                  <FileCode2 size={14} /> ui.tsx
-                </button>
+                <span className="app-detail-filebar__item app-detail-filebar__item--active">
+                  <FileCode2 size={14} /> index.html
+                </span>
               </div>
               <div className="app-detail-code__editor-wrap">
                 {editing ? (
                   <textarea
                     className="app-detail-code__editor"
-                    value={activeCode}
-                    onChange={(e) => setActiveCode(e.target.value)}
+                    value={indexHtml}
+                    onChange={(e) => setIndexHtml(e.target.value)}
                     spellCheck={false}
-                    placeholder={codeFile === "ui" ? "此应用没有 UI 代码" : undefined}
+                    placeholder="应用 HTML 源代码"
                   />
                 ) : (
                   <pre className="app-detail-code__view">
-                    <code>{codeFile === "ui" && !uiCode ? "// 此应用没有 UI 代码" : activeCode}</code>
+                    <code>{indexHtml || "// 此应用没有 HTML 源代码"}</code>
                   </pre>
                 )}
               </div>

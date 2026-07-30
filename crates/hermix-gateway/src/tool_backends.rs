@@ -88,7 +88,12 @@ impl ChannelClarifyBackend {
 
 #[async_trait]
 impl ClarifyBackend for ChannelClarifyBackend {
-    async fn ask(&self, question: &str, choices: Option<&[String]>) -> Result<String, ToolError> {
+    async fn ask(
+        &self,
+        question: &str,
+        choices: Option<&[String]>,
+        _session_id: Option<String>,
+    ) -> Result<String, ToolError> {
         let (tx, rx) = oneshot::channel::<String>();
         let req = PendingClarify {
             question: question.to_string(),
@@ -182,7 +187,7 @@ mod tests {
 
         let ask = tokio::spawn(async move {
             backend
-                .ask("pick one?", Some(&["a".into(), "b".into()]))
+                .ask("pick one?", Some(&["a".into(), "b".into()]), None)
                 .await
         });
 
@@ -205,7 +210,7 @@ mod tests {
         let backend = ChannelClarifyBackend::new(dispatcher.clone());
         std::env::set_var("HERMIX_CLARIFY_TIMEOUT_SECS", "1");
 
-        let err = backend.ask("q?", None).await.unwrap_err();
+        let err = backend.ask("q?", None, None).await.unwrap_err();
         assert!(err.to_string().contains("timed out"));
     }
 }

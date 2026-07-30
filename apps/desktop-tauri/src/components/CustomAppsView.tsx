@@ -1,6 +1,6 @@
 // CustomAppsView — the main view for browsing and managing custom apps
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { RefreshCw, Search, Boxes } from "lucide-react";
 import type { CustomAppSummary } from "../lib/customAppApi";
 import {
@@ -14,6 +14,10 @@ import { AppCard } from "./custom-apps/AppCard";
 import { AppDetailModal } from "./custom-apps/AppDetailModal";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
 
+/** Auto-refresh interval (ms) — keeps the list in sync when apps are
+ *  created/updated/deleted via the LLM tool while this page is open. */
+const AUTO_REFRESH_INTERVAL_MS = 5_000;
+
 export function CustomAppsView() {
   const safeSetTimeout = useSafeTimeout();
   const [apps, setApps] = useState<CustomAppSummary[]>([]);
@@ -23,22 +27,41 @@ export function CustomAppsView() {
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [packagingId, setPackagingId] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const mountedRef = useRef(true);
 
-  const loadApps = useCallback(async () => {
-    setLoading(true);
+  const loadApps = useCallback(async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
     setError(null);
     try {
       const list = await listCustomApps();
-      setApps(list);
+      if (mountedRef.current) setApps(list);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mountedRef.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (mountedRef.current && showSpinner) setLoading(false);
     }
   }, []);
 
+  // Initial load + auto-refresh polling
   useEffect(() => {
+    mountedRef.current = true;
     loadApps();
+
+    // Poll every N seconds so apps created via the LLM tool appear
+    // without the user needing to click the refresh button.
+    const id = setInterval(() => loadApps(false), AUTO_REFRESH_INTERVAL_MS);
+    return () => {
+      mountedRef.current = false;
+      clearInterval(id);
+    };
+  }, [loadApps]);
+
+  // Refresh when the window regains focus (user switches back from
+  // the chat tab where the LLM just created an app).
+  useEffect(() => {
+    const onFocus = () => loadApps(false);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [loadApps]);
 
   const handlePackage = async (id: string) => {
@@ -112,7 +135,7 @@ export function CustomAppsView() {
           </h1>
           <button
             className="custom-apps-view__refresh"
-            onClick={loadApps}
+            onClick={() => loadApps()}
             disabled={loading}
             title="刷新"
           >

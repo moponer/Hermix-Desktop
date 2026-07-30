@@ -82,8 +82,6 @@ pub async fn create_app(
     let entry = manager
         .install_plugin(
             &req.manifest,
-            req.backend_code.as_deref(),
-            req.ui_code.as_deref(),
             req.index_html.as_deref(),
             icon_data,
         )
@@ -137,9 +135,8 @@ pub async fn update_app(
     let entry = manager
         .update_plugin(
             &id,
-            req.backend_code.as_deref(),
-            req.ui_code.as_deref(),
             req.index_html.as_deref(),
+            req.manifest.as_ref(),
         )
         .map_err(|e| {
             let status = match &e {
@@ -193,9 +190,6 @@ pub async fn package_app(
         .map_err(|e| {
             let status = match &e {
                 hermix_plugin::PluginError::NotFound(_) => StatusCode::NOT_FOUND,
-                hermix_plugin::PluginError::EsbuildNotFound(_) => {
-                    StatusCode::SERVICE_UNAVAILABLE
-                }
                 hermix_plugin::PluginError::LoaderNotFound(_) => {
                     StatusCode::SERVICE_UNAVAILABLE
                 }
@@ -212,12 +206,11 @@ pub async fn package_app(
     })))
 }
 
-/// POST /api/custom-apps/{id}/run — build (latest source) and launch the app.
+/// POST /api/custom-apps/{id}/run — (re)package latest source and launch the app.
 ///
-/// Always recompiles the app's source (backend.ts + ui.tsx via esbuild)
-/// before launching, so the running build reflects the latest code — this
-/// is the "test locally" path. Packaging for distribution reuses the same
-/// `package_plugin` step but without spawning the window.
+/// Always re-runs `package_plugin` (new-loader model: injects index.html into
+/// the standalone wry loader) before launching, so the running build reflects
+/// the latest code — this is the "test locally" path.
 pub async fn run_app(
     State(state): State<HttpServerState>,
     Path(id): Path<String>,
@@ -227,7 +220,6 @@ pub async fn run_app(
     // Build first so the run reflects the latest source (dev/test loop).
     manager.package_plugin(&id).await.map_err(|e| {
         let status = match &e {
-            hermix_plugin::PluginError::EsbuildNotFound(_) => StatusCode::SERVICE_UNAVAILABLE,
             hermix_plugin::PluginError::LoaderNotFound(_) => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };

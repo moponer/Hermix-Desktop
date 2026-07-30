@@ -48,6 +48,14 @@
 //!   PDF summarization as a use case.
 //! - `core` — the `list_tools` introspection meta-tool, which is
 //!   the LLM's escape hatch when it gets an "Unknown tool" error.
+//! - `custom_app` — create, package, and run user-facing desktop
+//!   applications (the headline "build me an app" feature). Without
+//!   it the LLM silently falls back to writing app files by hand
+//!   into arbitrary paths (`release/apps/`, project root, …) which
+//!   the custom-app UI can never load — exactly the "目录不对 /
+//!   应用加载不到" failure mode. Keeping it on the floor means a
+//!   hand-edited or migrated `enabled_toolsets.json` can never
+//!   drop the one tool that produces loadable apps.
 //!
 //! Everything else (`browser`, `tts`, `homeassistant`,
 //! `image_gen`, etc.) is genuinely optional and respects the
@@ -95,6 +103,7 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
     "browser",
     "cua",
     "storage",
+    "custom_app",
 ];
 
 /// Re-enable the essential toolsets on a [`ToolRegistry`]. Idempotent;
@@ -141,6 +150,7 @@ mod tests {
                 "browser",
                 "cua",
                 "storage",
+                "custom_app",
             ],
             "ESSENTIAL_TOOLSETS changed — update the tests in \
              hermix_tools::essential and any UI copy that lists \

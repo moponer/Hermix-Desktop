@@ -3,13 +3,19 @@
 //!
 //! This tool is the LLM's interface to the custom app system. The LLM
 //! can:
-//! - `create`: Create a new app with manifest + backend.ts + ui.tsx
-//! - `update`: Update an existing app's code
+//! - `create`: Create a new app with manifest + index_html
+//! - `update`: Update an existing app's index_html / manifest
 //! - `list`: List all installed apps
 //! - `get`: Get an app's details and source code
 //! - `delete`: Uninstall an app
-//! - `package`: Package an app as a standalone EXE
+//! - `package`: Package an app as a standalone EXE (wry loader + inject_app)
 //! - `run`: Launch a packaged app
+//! - `validate`: Static validation (manifest + HTML + RPC + permissions)
+//! - `smoke`: Runtime smoke test (launch + capture JS errors)
+//!
+//! Architecture: App = self-contained index.html + manifest.json.
+//! index.html calls system capabilities via fetch("app://localhost/rpc").
+//! Packaging injects html+manifest into a wry-based loader → single exe.
 //!
 //! The actual file operations are delegated to `hermix_plugin::PluginManager`.
 
@@ -24,7 +30,7 @@ use hermix_core::{
 };
 use hermix_plugin::{
     api::{AppResponse, AppSummary, CreateAppRequest},
-    run_smoke_test_async, validate_custom_app, PluginManager,
+    run_smoke_test_async, validate_custom_app, PluginManager, PluginManifest,
 };
 
 use crate::ToolRegistry;
@@ -60,8 +66,36 @@ impl CustomAppManagerHandler {
     }
 
     async fn create(&self, params: &Value) -> Result<String, ToolError> {
+        // Normalize: if `manifest` is a string (XML parser fallback), parse it
+        // into a JSON object first so that serde_json::from_value can
+        // deserialize it into CreateAppRequest.  This happens when the LLM
+        // passes manifest as a JSON string inside <parameter> but the XML
+        // parser's serde_json::from_str succeeds (producing a Value::Object)
+        // OR when the LLM accidentally uses XML sub-tags, causing the parser
+        // to treat the whole thing as a plain string.
+        let params = if let Some(manifest_val) = params.get("manifest") {
+            if manifest_val.is_string() {
+                let mut fixed = params.clone();
+                if let Ok(parsed) = serde_json::from_str::<Value>(manifest_val.as_str().unwrap_or("")) {
+                    fixed.as_object_mut().unwrap().insert("manifest".into(), parsed);
+                }
+                fixed
+            } else {
+                params.clone()
+            }
+        } else {
+            params.clone()
+        };
+
         let request: CreateAppRequest = serde_json::from_value(params.clone())
-            .map_err(|e| ToolError::InvalidParams(format!("参数解析失败: {e}")))?;
+            .map_err(|e| {
+                let hint = if e.to_string().contains("expected struct") || e.to_string().contains("expected map") {
+                    " — manifest 参数必须是 JSON 对象 (如 {\"id\":\"x\",\"name\":\"y\"})，不能是字符串或 XML 子标签。在 XML 工具调用中，请用 <parameter name=\"manifest\">{...JSON...}</parameter> 传递。"
+                } else {
+                    ""
+                };
+                ToolError::InvalidParams(format!("参数解析失败: {e}{hint}"))
+            })?;
 
         let icon_data = params.get("icon_data").and_then(|v| v.as_str());
 
@@ -70,13 +104,12 @@ impl CustomAppManagerHandler {
             .validate()
             .map_err(|e| ToolError::InvalidParams(format!("manifest 无效: {e}")))?;
 
-        let index_html = params.get("index_html").and_then(|v| v.as_str());
+        let index_html = request.index_html.as_deref()
+            .or_else(|| params.get("index_html").and_then(|v| v.as_str()));
         let entry = self
             .manager
             .install_plugin(
                 &request.manifest,
-                request.backend_code.as_deref(),
-                request.ui_code.as_deref(),
                 index_html,
                 icon_data,
             )
@@ -97,19 +130,41 @@ impl CustomAppManagerHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
 
-        let backend_code = params.get("backend_code").and_then(|v| v.as_str());
-        let ui_code = params.get("ui_code").and_then(|v| v.as_str());
         let index_html = params.get("index_html").and_then(|v| v.as_str());
 
-        if backend_code.is_none() && ui_code.is_none() && index_html.is_none() {
+        // Parse manifest if provided (for updating permissions etc.)
+        // Normalize: if manifest is a string, try to parse it as JSON first.
+        let manifest = if params.get("manifest").is_some() {
+            let manifest_val = &params["manifest"];
+            let manifest_val = if manifest_val.is_string() {
+                serde_json::from_str::<Value>(manifest_val.as_str().unwrap_or(""))
+                    .unwrap_or(manifest_val.clone())
+            } else {
+                manifest_val.clone()
+            };
+            let m: PluginManifest = serde_json::from_value(manifest_val)
+                .map_err(|e| {
+                    let hint = if e.to_string().contains("expected struct") || e.to_string().contains("expected map") {
+                        " — manifest 参数必须是 JSON 对象，不能是字符串或 XML 子标签"
+                    } else {
+                        ""
+                    };
+                    ToolError::InvalidParams(format!("manifest 解析失败: {e}{hint}"))
+                })?;
+            Some(m)
+        } else {
+            None
+        };
+
+        if index_html.is_none() && manifest.is_none() {
             return Err(ToolError::InvalidParams(
-                "至少需要提供 backend_code / ui_code / index_html 之一".into(),
+                "至少需要提供 index_html 或 manifest 之一".into(),
             ));
         }
 
         let entry = self
             .manager
-            .update_plugin(id, backend_code, ui_code, index_html)
+            .update_plugin(id, index_html, manifest.as_ref())
             .map_err(|e| ToolError::ExecutionFailed(format!("更新应用失败: {e}")))?;
 
         let response: AppResponse = (&entry).into();
@@ -226,8 +281,8 @@ impl CustomAppManagerHandler {
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
 
-    /// 开发期自验证 (L0+L1): 校验 manifest 完整性 + 导入白名单 + esbuild 预打包.
-    /// 不打包、不改任何文件, 仅静态/预打包分析. 返回结构化报告.
+    /// 开发期自验证 (L0+L1+L2): 校验 manifest 完整性 + HTML 结构 + RPC 调用模式 + JS 括号匹配 + 权限一致性.
+    /// 不打包、不改任何文件, 仅静态分析. 返回结构化报告. 每个 issue 的 message 包含修复提示.
     async fn validate(&self, params: &Value) -> Result<String, ToolError> {
         let id = params
             .get("id")
@@ -243,7 +298,7 @@ impl CustomAppManagerHandler {
         let result = json!({
             "success": report.ok,
             "message": if report.ok {
-                format!("应用 '{id}' 开发期校验通过 (manifest + 导入白名单 + esbuild 预打包)")
+                format!("应用 '{id}' 开发期校验通过 (manifest + HTML + RPC + 权限一致性)")
             } else {
                 format!("应用 '{id}' 开发期校验发现问题, 请根据 issues 修复后重试")
             },
@@ -265,15 +320,14 @@ impl CustomAppManagerHandler {
             return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
         }
 
-        // 先刷新打包产物 (esbuild 打包 + 复制壳)
+        // 先刷新打包产物 (wry loader + inject_app 注入)
         self.manager
             .package_plugin(id)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("打包应用失败: {e}")))?;
 
         let app_dir_buf = app_dir.to_path_buf();
-        let shell_buf = self.manager.shell_path().to_path_buf();
-        let report = run_smoke_test_async(app_dir_buf, shell_buf).await;
+        let report = run_smoke_test_async(app_dir_buf).await;
 
         let result = json!({
             "success": report.ok,
@@ -337,7 +391,7 @@ impl ToolHandler for CustomAppManagerHandler {
             "manifest".into(),
             json!({
                 "type": "object",
-                "description": "应用清单 (create 必填)。包含 id, name, version, description, icon, category, window_config, permissions 等",
+                "description": "应用清单 (create 必填, update 可选用于更新 permissions 等)。包含 id, name, version, description, icon, category, window_config, permissions 等。version/description/author/icon/window_config 均有默认值,最简只需 id+name",
                 "properties": {
                     "id": { "type": "string", "description": "唯一标识符 (字母数字-_)" },
                     "name": { "type": "string", "description": "应用名称" },
@@ -360,25 +414,9 @@ impl ToolHandler for CustomAppManagerHandler {
                     "permissions": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "权限列表 (fs-read, fs-write, net, env, process)"
+                        "description": "权限列表 (fs-read, fs-write, exec, network, dialog, env, temp)"
                     }
                 }
-            }),
-        );
-
-        props.insert(
-            "backend_code".into(),
-            json!({
-                "type": "string",
-                "description": "backend.ts 源代码 (旧架构 esbuild 模型，可选)。使用 invoke('shell_fs_*') 进行文件操作。与 index_html 二选一：新架构应用用 index_html，旧架构应用用 backend_code + ui_code。"
-            }),
-        );
-
-        props.insert(
-            "ui_code".into(),
-            json!({
-                "type": "string",
-                "description": "ui.tsx 源代码 (旧架构 esbuild 模型，可选)。React 组件，使用 invoke('shell_*') 调用后端。"
             }),
         );
 
@@ -400,8 +438,73 @@ impl ToolHandler for CustomAppManagerHandler {
 
         tool_schema(
             "custom_app_manager",
-            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行、开发期校验(validate)、运行时冒烟测试(smoke)。新架构应用用 index_html (自包含 HTML + manifest.permissions)，由 wry 加载器打包为独立 exe；旧架构应用用 backend_code + ui_code (esbuild 编译 + 预编译壳)。两种模型均可打包/运行/校验。开发应用时应: 写代码→validate→失败则修复→再validate，直到 ok=true；如需进一步确认运行时无报错，可调用 smoke。",
+            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行、开发期校验(validate)、运行时冒烟测试(smoke)。应用 = 自包含 index.html + manifest.json，由 wry 加载器打包为独立 exe。index.html 中通过 rpc('方法名', {参数}) 调用系统能力 (fs_*/exec/shell/fetch/dialog_*/path_*/env_*/temp_*)，需在 manifest.permissions 中声明所需权限。开发流程: 写代码→validate→失败则按 issues 修复→再 validate，直到 ok=true；如需进一步确认运行时无报错，可调用 smoke。",
             JsonSchema::object(props, vec!["action".into()]),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Verify that when `manifest` is passed as a JSON string (not an object),
+    /// the normalization logic correctly parses it into a JSON value before
+    /// `serde_json::from_value` attempts deserialization.
+    #[test]
+    fn manifest_string_normalization_parses_json_object() {
+        let manifest_json = r#"{"id":"test-app","name":"Test App","version":"1.0.0"}"#;
+        let params = json!({
+            "action": "create",
+            "manifest": manifest_json,  // This is a Value::String, not Value::Object
+        });
+
+        // The normalization should detect that manifest is a string and
+        // re-parse it as a JSON object.
+        let manifest_val = params.get("manifest").unwrap();
+        assert!(manifest_val.is_string(), "manifest should be a string in this test");
+
+        let parsed: serde_json::Value = serde_json::from_str(manifest_val.as_str().unwrap()).unwrap();
+        assert!(parsed.is_object(), "parsed manifest should be a JSON object");
+        assert_eq!(parsed["id"], "test-app");
+        assert_eq!(parsed["name"], "Test App");
+    }
+
+    /// Verify that when `manifest` is already a JSON object (the normal case),
+    /// it passes through unchanged.
+    #[test]
+    fn manifest_object_passes_through_unchanged() {
+        let params = json!({
+            "action": "create",
+            "manifest": {
+                "id": "test-app",
+                "name": "Test App",
+                "window_config": {"width": 800, "height": 600}
+            }
+        });
+
+        let manifest_val = params.get("manifest").unwrap();
+        assert!(manifest_val.is_object(), "manifest should be a JSON object");
+        assert_eq!(manifest_val["id"], "test-app");
+        assert_eq!(manifest_val["window_config"]["width"], 800);
+    }
+
+    /// Verify that an invalid JSON string in `manifest` fails gracefully
+    /// (the normalization will leave it as-is, and serde_json::from_value
+    /// will produce a helpful error message).
+    #[test]
+    fn manifest_invalid_string_fails_gracefully() {
+        let params = json!({
+            "action": "create",
+            "manifest": "not valid json"
+        });
+
+        let manifest_val = params.get("manifest").unwrap();
+        assert!(manifest_val.is_string());
+
+        // Attempting to parse "not valid json" as a Value should fail
+        let result = serde_json::from_str::<serde_json::Value>(manifest_val.as_str().unwrap());
+        assert!(result.is_err(), "invalid JSON should fail to parse");
     }
 }

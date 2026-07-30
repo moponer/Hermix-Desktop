@@ -193,33 +193,95 @@ pub(crate) async fn resolve_pre_dispatch(
     let mut decisions = HashMap::with_capacity(tool_calls.len());
     for tc in tool_calls {
         let id = tc.id.clone();
+        let tool_name = tc.function.name.clone();
         let outcome = match hook(tc) {
-            ToolDispatchDecision::Allow => Ok(()),
-            ToolDispatchDecision::Deny { reason } => Err(ToolDenial {
-                kind: DenialKind::Policy,
-                reason,
-            }),
+            ToolDispatchDecision::Allow => {
+                tracing::info!(
+                    tool = %tool_name,
+                    tool_call_id = %id,
+                    "resolve_pre_dispatch: Allow",
+                );
+                Ok(())
+            }
+            ToolDispatchDecision::Deny { reason } => {
+                tracing::info!(
+                    tool = %tool_name,
+                    tool_call_id = %id,
+                    reason = %reason,
+                    "resolve_pre_dispatch: Deny",
+                );
+                Err(ToolDenial {
+                    kind: DenialKind::Policy,
+                    reason,
+                })
+            }
             ToolDispatchDecision::AwaitApproval(rx) => {
-                // Race: registry timeout (30s default) vs server-side
+                tracing::info!(
+                    tool = %tool_name,
+                    tool_call_id = %id,
+                    "resolve_pre_dispatch: AwaitApproval — blocking until user resolves",
+                );
+                // Race: registry timeout vs server-side
                 // WebSocket-disconnect soft-shutdown. Without this race,
                 // a stale-click + disconnect leaves the agent task
                 // parked here until the server `abort()`s it (which
                 // also kills any chance of writing the denial note to
                 // the context before exit).
+                //
+                // CRITICAL (2026-07-29): DEFAULT_APPROVAL_TIMEOUT is
+                // Duration::ZERO (user requested no auto-deny). If the
+                // `request_approval` event is lost or the frontend
+                // doesn't render the card, the agent blocks HERE
+                // forever. The only unblock paths are: (1) user clicks,
+                // (2) WS disconnect → shutdown Notify fires →
+                // ChannelClosed. The INFO log above is the primary
+                // diagnostic for this stuck state.
                 let resolved = match shutdown {
                     Some(notify) => {
                         let notified = notify.notified();
                         tokio::pin!(notified);
+                        // Safety-net timeout: 5 minutes. This is NOT the
+                        // approval-card timeout (DEFAULT_APPROVAL_TIMEOUT
+                        // is zero per user request — the user has
+                        // unlimited time to decide). This fires ONLY when
+                        // the `request_approval` event was lost or the
+                        // frontend didn't render the card, so the user
+                        // never saw the prompt and the oneshot would
+                        // otherwise park forever. 5 minutes is long
+                        // enough that a real user clicking a real card
+                        // will never hit it, but short enough that a
+                        // stuck agent recovers instead of hanging
+                        // indefinitely.
+                        let safety_net = tokio::time::sleep(
+                            std::time::Duration::from_secs(300),
+                        );
+                        tokio::pin!(safety_net);
                         tokio::select! {
                             biased;
                             _ = notified => Ok(ApprovalOutcome::ChannelClosed),
                             res = rx => res,
+                            _ = &mut safety_net => {
+                                tracing::warn!(
+                                    tool = %tool_name,
+                                    tool_call_id = %id,
+                                    "resolve_pre_dispatch: safety-net timeout (300s) — \
+                                     request_approval event may have been lost or \
+                                     frontend didn't render the card; auto-denying \
+                                     to unblock the agent",
+                                );
+                                Ok(ApprovalOutcome::TimedOut { timeout_secs: 300 })
+                            }
                         }
                     }
                     None => rx.await,
                 };
-                match resolved {
+                let outcome = match resolved {
                     Ok(ApprovalOutcome::Approved) => {
+                        tracing::info!(
+                            tool = %tool_name,
+                            tool_call_id = %id,
+                            "resolve_pre_dispatch: AwaitApproval resolved — Approved",
+                        );
                         // P6 direction 3: notify caller that the user
                         // approved this resource so it can update the
                         // declarative permission profile (next time the
@@ -229,41 +291,77 @@ pub(crate) async fn resolve_pre_dispatch(
                         }
                         Ok(())
                     }
-                    Ok(ApprovalOutcome::DeniedByUser) => Err(ToolDenial {
-                        kind: DenialKind::UserDenied,
-                        reason: format!(
-                            "User denied the tool call.{}",
-                            denial_repick_hint(&tc.function.name, &tc.function.arguments),
-                        ),
-                    }),
-                    Ok(ApprovalOutcome::TimedOut { timeout_secs }) => Err(ToolDenial {
-                        kind: DenialKind::TimedOut,
-                        reason: format!(
-                            "The {timeout_secs}-second approval window expired before a decision \
-                             was made, so the tool was not executed (the agent defaulted to \
-                             deny).{hint}",
-                            hint = denial_repick_hint(&tc.function.name, &tc.function.arguments),
-                        ),
-                    }),
-                    Ok(ApprovalOutcome::ChannelClosed) => Err(ToolDenial {
-                        kind: DenialKind::ChannelClosed,
-                        reason: "Approval channel closed before a response arrived (the \
-                                 connection dropped, the server restarted, or the session was \
-                                 reloaded). The tool was not executed."
-                            .to_string(),
-                    }),
-                    Err(_) => Err(ToolDenial {
-                        kind: DenialKind::ChannelClosed,
-                        reason: "Approval channel closed before a response arrived (the \
-                                 connection dropped, the server restarted, or the session was \
-                                 reloaded). The tool was not executed."
-                            .to_string(),
-                    }),
-                }
+                    Ok(ApprovalOutcome::DeniedByUser) => {
+                        tracing::info!(
+                            tool = %tool_name,
+                            tool_call_id = %id,
+                            "resolve_pre_dispatch: AwaitApproval resolved — DeniedByUser",
+                        );
+                        Err(ToolDenial {
+                            kind: DenialKind::UserDenied,
+                            reason: format!(
+                                "User denied the tool call.{}",
+                                denial_repick_hint(&tc.function.name, &tc.function.arguments),
+                            ),
+                        })
+                    }
+                    Ok(ApprovalOutcome::TimedOut { timeout_secs }) => {
+                        tracing::info!(
+                            tool = %tool_name,
+                            tool_call_id = %id,
+                            timeout_secs,
+                            "resolve_pre_dispatch: AwaitApproval resolved — TimedOut",
+                        );
+                        Err(ToolDenial {
+                            kind: DenialKind::TimedOut,
+                            reason: format!(
+                                "The {timeout_secs}-second approval window expired before a decision \
+                                 was made, so the tool was not executed (the agent defaulted to \
+                                 deny).{hint}",
+                                hint = denial_repick_hint(&tc.function.name, &tc.function.arguments),
+                            ),
+                        })
+                    }
+                    Ok(ApprovalOutcome::ChannelClosed) => {
+                        tracing::info!(
+                            tool = %tool_name,
+                            tool_call_id = %id,
+                            "resolve_pre_dispatch: AwaitApproval resolved — ChannelClosed",
+                        );
+                        Err(ToolDenial {
+                            kind: DenialKind::ChannelClosed,
+                            reason: "Approval channel closed before a response arrived (the \
+                                     connection dropped, the server restarted, or the session was \
+                                     reloaded). The tool was not executed."
+                                .to_string(),
+                        })
+                    }
+                    Err(_) => {
+                        tracing::info!(
+                            tool = %tool_name,
+                            tool_call_id = %id,
+                            "resolve_pre_dispatch: AwaitApproval resolved — ChannelClosed (rx error)",
+                        );
+                        Err(ToolDenial {
+                            kind: DenialKind::ChannelClosed,
+                            reason: "Approval channel closed before a response arrived (the \
+                                     connection dropped, the server restarted, or the session was \
+                                     reloaded). The tool was not executed."
+                                .to_string(),
+                        })
+                    }
+                };
+                outcome
             },
         };
         decisions.insert(id, outcome);
     }
+    tracing::info!(
+        total = decisions.len(),
+        allowed = decisions.values().filter(|r| r.is_ok()).count(),
+        denied = decisions.values().filter(|r| r.is_err()).count(),
+        "resolve_pre_dispatch: all tool calls resolved",
+    );
     decisions
 }
 

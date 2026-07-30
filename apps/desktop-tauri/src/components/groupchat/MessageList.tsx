@@ -156,7 +156,7 @@ export const MessageList = memo(function MessageList({
   // ── Classic style: IRC-like linear log ──
   if (isClassic) {
     return (
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5 min-h-0">
         {messages.length === 0 && inlineEvents.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="flex items-center justify-center mb-3" style={{ width: 64, height: 64 }}>
@@ -196,7 +196,7 @@ const compactSpacing = isCompact ? "space-y-1.5" : "space-y-2";
 const compactPadding = isCompact ? "px-4 py-2" : "px-4 py-3";
 
   return (
-    <div className={`flex-1 overflow-y-auto ${compactPadding} ${compactSpacing}`}>
+    <div className={`flex-1 overflow-y-auto min-h-0 ${compactPadding} ${compactSpacing}`}>
       {messages.length === 0 && inlineEvents.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-full text-center" style={{ minHeight: "100%" }}>
           {/* Icon — 24px line icon, brand-blue */}

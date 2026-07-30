@@ -6,10 +6,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
 export interface CustomAppInitResult {
-  shell_path: string;
-  shell_exists: boolean;
-  esbuild_path: string;
-  esbuild_exists: boolean;
+  /** Path to the wry app loader (hermix-app-loader.exe) */
+  loader_path: string;
+  /** Whether the loader binary exists at the resolved path */
+  loader_exists: boolean;
+  /** Path to the custom-apps directory */
   apps_dir: string;
 }
 

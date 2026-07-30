@@ -1,9 +1,6 @@
 //! New-loader packager — bundles a self-contained custom app via the
 //! standalone wry loader (`hermix-app-loader.exe`) + `inject_app.exe`.
 //!
-//! This is the NEW custom-app architecture (replaces the esbuild +
-//! precompiled-Tauri-shell path in `packager.rs`):
-//!
 //! - The app is a **self-contained `index.html`** (talks to the bridge via
 //!   `fetch("app://localhost/rpc", { method: "POST" })`) + a `manifest.json`
 //!   declaring `permissions`.
@@ -17,7 +14,18 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use crate::{packager::PackageResult, PluginEntry, PluginError};
+use crate::{PluginEntry, PluginError};
+
+/// Result of a packaging operation.
+#[derive(Debug, Clone)]
+pub struct PackageResult {
+    /// Path to the output directory containing the standalone app.
+    pub output_dir: PathBuf,
+    /// Path to the standalone EXE.
+    pub exe_path: PathBuf,
+    /// Size of the output directory in bytes.
+    pub total_size: u64,
+}
 
 /// Packs a new-model custom app into a standalone EXE using the loader.
 pub struct NewLoaderPackager {

@@ -103,7 +103,7 @@ export const PlanConfirmationDialog = memo(function PlanConfirmationDialog({
         </div>
 
         {/* Plan content */}
-        <div className="flex-1 overflow-y-auto px-5 py-4">
+        <div className="flex-1 overflow-y-auto px-5 py-4 min-h-0">
           <div
             className="rounded-xl p-3 border"
             style={{
