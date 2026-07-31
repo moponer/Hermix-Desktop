@@ -141,17 +141,106 @@ pub fn apply_stream_collect_chunk(
             // the live stream never shows leaked XML).
             let visible_text = tool_call_sanitizer.feed(&clean_text);
             if !visible_text.is_empty() {
-                content.push_str(&visible_text);
-                if let Some(ref cb) = callbacks.on_stream_delta {
-                    cb(&visible_text);
+                // ── Streaming untagged-reasoning detection ──────────
+                // Some models (MiniMax M3 in certain modes, open-weight
+                // fine-tunes) put their reasoning monologue directly in
+                // `delta.content` WITHOUT `<think>` tags and WITHOUT
+                // `delta.reasoning_content`. The flush-time
+                // `looks_like_untagged_reasoning` check (below at line
+                // ~785) catches this for the persisted message, but
+                // during streaming the text has already been forwarded
+                // as `StreamEvent::Text` → the frontend rendered it as
+                // body text (visible, not folded) instead of a
+                // reasoning block (folded inside ProcessTimeline).
+                //
+                // Fix: check on EVERY chunk. Once the accumulated
+                // `content` matches the untagged-reasoning heuristic:
+                // 1. Clear `content` (previous text was already sent
+                //    as `StreamEvent::Text`; the frontend
+                //    retroactively converts those text steps to
+                //    reasoning steps when the first
+                //    `StreamEvent::Thinking` arrives — see
+                //    App.tsx `onReasoningChunk`).
+                // 2. Route THIS chunk's `visible_text` to
+                //    `on_thinking` → `StreamEvent::Thinking`.
+                // 3. For all SUBSEQUENT chunks, the
+                //    `is_untagged_reasoning_mode` check below
+                //    catches them and routes to `on_thinking` too.
+                //
+                // Detection condition: `reasoning_content` is empty
+                // (no explicit thinking from `<think>` tags or
+                // `delta.extra.thinking` yet) AND we haven't already
+                // entered untagged-reasoning mode.
+                //
+                // Continuation condition: once detected, subsequent
+                // chunks are caught by checking `reasoning_content` is
+                // non-empty AND `content` is empty AND
+                // `think_parser.is_in_think() == false` — that
+                // combination can only mean we swapped content into
+                // reasoning via this path (if `<think>` tags were
+                // used, `think_parser` would be in think mode; if
+                // `delta.extra.thinking` was used, `content` would
+                // have the model's actual reply).
+                let is_untagged_reasoning_mode = !reasoning_content.is_empty()
+                    && content.is_empty()
+                    && !think_parser.is_in_think();
+                if !is_untagged_reasoning_mode
+                    && reasoning_content.is_empty()
+                    && !thinking_emitted_this_chunk
+                {
+                    // Tentatively push to content so the heuristic
+                    // can evaluate the full accumulated text.
+                    content.push_str(&visible_text);
+                    if let Some(ref cb) = callbacks.on_stream_delta {
+                        cb(&visible_text);
+                    }
+                    if crate::python_alignment::looks_like_untagged_reasoning(content) {
+                        // Detected! Move ALL accumulated content to
+                        // reasoning. Previous chunks were already
+                        // forwarded as `StreamEvent::Text` — the
+                        // frontend's `onReasoningChunk` handler will
+                        // retroactively convert those text steps to
+                        // reasoning steps (see App.tsx).
+                        let moved = std::mem::take(content);
+                        reasoning_content.push_str(&moved);
+                        // Only call on_thinking for THIS chunk's text
+                        // (previous chunks' text was already sent as
+                        // StreamEvent::Text; calling on_thinking with
+                        // the full `moved` would duplicate it).
+                        if let Some(ref cb) = callbacks.on_thinking {
+                            cb(&visible_text);
+                        }
+                        thinking_emitted_this_chunk = true;
+                        // Don't forward as text — clear delta.content.
+                        *text = String::new();
+                    } else {
+                        // Not reasoning — keep as visible text.
+                        *text = visible_text;
+                    }
+                } else if is_untagged_reasoning_mode {
+                    // Already in untagged-reasoning mode — route
+                    // directly to reasoning, don't touch content.
+                    reasoning_content.push_str(&visible_text);
+                    if let Some(ref cb) = callbacks.on_thinking {
+                        cb(&visible_text);
+                    }
+                    thinking_emitted_this_chunk = true;
+                    *text = String::new();
+                } else {
+                    // Normal text (reasoning_content non-empty from
+                    // <think> tags or delta.extra.thinking — this is
+                    // the model's actual reply body).
+                    content.push_str(&visible_text);
+                    if let Some(ref cb) = callbacks.on_stream_delta {
+                        cb(&visible_text);
+                    }
+                    *text = visible_text;
                 }
+            } else {
+                // visible_text is empty — still update *text so
+                // downstream on_chunk sees the sanitized (empty) text.
+                *text = visible_text;
             }
-            // If the sanitizer ate the whole clean text,
-            // rewrite `delta.content` to the (possibly empty)
-            // visible text so the downstream `on_chunk` wrapper
-            // doesn't forward the raw XML. This is the part
-            // that fixes the user-visible leak.
-            *text = visible_text;
             if !think_text.is_empty() {
                 reasoning_content.push_str(&think_text);
                 if let Some(ref cb) = callbacks.on_thinking {

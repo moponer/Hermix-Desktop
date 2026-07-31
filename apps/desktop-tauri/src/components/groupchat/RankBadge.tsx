@@ -9,13 +9,14 @@ import { Trophy } from "lucide-react";
 import type * as api from "@/api";
 
 // Allowed accent hues only — NO blue/indigo/violet/purple (project iron law).
-// silver remapped from 220 (blue) → 150 (emerald); star from 268 (violet) → 340 (rose).
+// silver remapped from 220 (blue) → 150 (emerald); star from 268 (violet) → 340 (rose);
+// diamond remapped from 195 (cyan) → 168 (teal) — 195 read as blue per iron law.
 const TIER_HUE: Record<string, number> = {
   bronze: 28,
   silver: 150,
   gold: 43,
   platinum: 175,
-  diamond: 195,
+  diamond: 168,
   star: 340,
   king: 0,
   king_legend: 320,
@@ -38,7 +39,7 @@ const TIER_CN: Record<string, string> = {
 };
 
 export function tierColor(tier: string): { bg: string; text: string; ring: string } {
-  const hue = TIER_HUE[tier] ?? 195;
+  const hue = TIER_HUE[tier] ?? 168;
   return {
     bg: `hsl(${hue}, 55%, 55%, 0.16)`,
     text: `hsl(${hue}, 60%, 38%)`,

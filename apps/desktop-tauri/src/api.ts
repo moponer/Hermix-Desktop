@@ -2319,3 +2319,21 @@ export const updateGroupChatRoomSettings = async (
     },
   );
 };
+
+// ── Server-only routes (no frontend call needed) ─────────────────
+//
+// The following backend routes exist but are intentionally NOT called
+// from the frontend. Documented here so developers don't add redundant
+// calls and know these are server-internal:
+//
+// | Route | Method | Purpose | Why server-only |
+// |-------|--------|---------|-----------------|
+// | /v1/protocol/schema | GET | Protocol JSON schema | Debug only; available via curl |
+// | /v1/telemetry/client-event | POST | Client telemetry ingest | Server-internal; frontend uses WS for events |
+// | /metrics | GET | Prometheus metrics | For monitoring tools, not the SPA |
+// | /v1/metrics | GET | Metrics snapshot | For monitoring tools |
+// | /v1/sessions/{id}/lineage | GET | Session lineage tree | Available via API but not yet surfaced in UI |
+// | /v1/commands | POST | Execute a command | SECURITY: no auth, should be disabled in production |
+// | /api/researcher/* | GET/POST | Researcher loop (5 routes) | Experimental feature, not yet wired to UI |
+// | /api/migration/* | GET/POST | Config migration (4 routes) | Server-side migration, not user-facing |
+// | /ws/consciousness | GET(WS) | Consciousness ECG stream | Experimental; not yet connected to frontend |

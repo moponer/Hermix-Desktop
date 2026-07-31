@@ -66,8 +66,15 @@ pub(crate) enum ConvergenceReason {
 #[derive(Debug, Clone)]
 pub(crate) struct ConvergenceConfig {
     /// Max consecutive turns with tool calls but no visible text before
-    /// issuing a WARN (not a hard stop).
+    /// issuing a WARN (advisory).
     pub max_no_progress_turns: u32,
+    /// Max consecutive turns with tool calls but no visible text before
+    /// issuing a HARD STOP. This is the escalation threshold: after the
+    /// advisory warning at `max_no_progress_turns`, the LLM gets
+    /// `max_no_progress_hard_stop_turns - max_no_progress_turns` extra
+    /// turns to produce visible text before the loop is killed.
+    /// Set to 0 to disable escalation (keep old advisory-only behavior).
+    pub max_no_progress_hard_stop_turns: u32,
     /// Max consecutive turns where ALL tool calls errored.
     /// This triggers a hard stop (Converge).
     pub max_error_turns: u32,
@@ -75,8 +82,12 @@ pub(crate) struct ConvergenceConfig {
     /// other tools succeeded). This triggers an advisory WARN.
     pub max_per_tool_error_turns: u32,
     /// Max consecutive turns with similar visible text before issuing
-    /// a WARN (not a hard stop).
+    /// a WARN (advisory).
     pub max_similar_content_turns: u32,
+    /// Max consecutive turns with similar visible text before issuing
+    /// a HARD STOP. Escalation threshold after the advisory warning.
+    /// Set to 0 to disable escalation.
+    pub max_similar_content_hard_stop_turns: u32,
     /// Similarity threshold (0.0-1.0) for content comparison.
     pub similarity_threshold: f64,
 }
@@ -86,21 +97,24 @@ impl Default for ConvergenceConfig {
         Self {
             // 15 turns of tool-only (no visible text) → advisory warning.
             // The LLM might legitimately be doing a long chain of reads.
-            // Do NOT kill the loop — just nudge the LLM to summarize.
             max_no_progress_turns: 15,
+            // 25 turns of tool-only → HARD STOP. After the advisory
+            // warning at 15, the LLM gets 10 more turns to produce
+            // visible text. If it doesn't, the loop is killed to prevent
+            // infinite tool chaining and context bloat.
+            // (2026-07-30: was advisory-only; escalated to hard stop
+            // because LLM tends to "persist in current strategy" rather
+            // than self-correct, leading to context exhaustion.)
+            max_no_progress_hard_stop_turns: 25,
             // 3 consecutive turns of ALL-error tool calls → hard stop.
-            // Lowered from 8: if every tool fails for 3 turns straight,
-            // the LLM is truly stuck. 8 was too many — the user would
-            // watch 8 rounds of failures before the loop stopped.
             max_error_turns: 3,
             // 3 consecutive turns where the SAME tool errored → advisory.
-            // Even if other tools succeeded, if one tool keeps failing
-            // the LLM should switch approach.
             max_per_tool_error_turns: 3,
             // 5 consecutive turns of >80% similar visible text → advisory.
-            // The LLM might be giving progress updates that look similar
-            // but aren't stuck. Warn but don't kill.
             max_similar_content_turns: 5,
+            // 10 consecutive turns of similar content → HARD STOP.
+            // After the advisory at 5, give 5 more turns to diverge.
+            max_similar_content_hard_stop_turns: 10,
             similarity_threshold: 0.8,
         }
     }
@@ -207,6 +221,23 @@ impl ConvergenceDetector {
             };
         }
 
+        // --- No-progress escalation to HARD STOP ---
+        // After the advisory warning, if the LLM continues without
+        // visible text past the hard-stop threshold, kill the loop.
+        // This prevents infinite tool chaining that exhausts the
+        // context budget.
+        if self.config.max_no_progress_hard_stop_turns > 0
+            && self.no_progress_count >= self.config.max_no_progress_hard_stop_turns
+        {
+            let count = self.no_progress_count;
+            self.no_progress_count = 0; // reset after firing
+            self.no_progress_warned = false;
+            return ConvergenceSignal::Converge {
+                reason: ConvergenceReason::NoProgressWithTools,
+                consecutive_count: count,
+            };
+        }
+
         // --- Per-tool error tracking (advisory WARN) ---
         // Even if not ALL tools errored, if the SAME tool keeps failing,
         // the LLM should switch approach. This catches the case where
@@ -285,6 +316,20 @@ impl ConvergenceDetector {
                      If you're stuck, try a different approach.",
                     count
                 ),
+            };
+        }
+
+        // --- Similar content escalation to HARD STOP ---
+        if self.config.max_similar_content_hard_stop_turns > 0
+            && self.similar_content_count >= self.config.max_similar_content_hard_stop_turns
+        {
+            let count = self.similar_content_count;
+            self.similar_content_count = 0; // reset after firing
+            self.similar_content_warned = false;
+            self.last_visible_text.clear();
+            return ConvergenceSignal::Converge {
+                reason: ConvergenceReason::SimilarContent,
+                consecutive_count: count,
             };
         }
 
@@ -456,6 +501,53 @@ mod tests {
     fn test_default_no_progress_threshold_is_15() {
         let config = ConvergenceConfig::default();
         assert_eq!(config.max_no_progress_turns, 15);
+        assert_eq!(config.max_no_progress_hard_stop_turns, 25);
+    }
+
+    #[test]
+    fn test_no_progress_warns_then_escalates_to_hard_stop() {
+        let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
+            max_no_progress_turns: 3,
+            max_no_progress_hard_stop_turns: 5,
+            ..Default::default()
+        });
+
+        // Turns 1-2: no warning yet
+        assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
+        assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
+        // Turn 3: advisory warning
+        assert!(matches!(
+            d.check(false, 1, 0, "", &[], &[]),
+            ConvergenceSignal::Warn { reason: ConvergenceReason::NoProgressWithTools, .. }
+        ));
+        // Turn 4: no repeat warning, still Continue
+        assert_eq!(d.check(false, 1, 0, "", &[], &[]), ConvergenceSignal::Continue);
+        // Turn 5: HARD STOP
+        let signal = d.check(false, 1, 0, "", &[], &[]);
+        assert_eq!(
+            signal,
+            ConvergenceSignal::Converge {
+                reason: ConvergenceReason::NoProgressWithTools,
+                consecutive_count: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn test_no_progress_hard_stop_disabled_when_zero() {
+        let mut d = ConvergenceDetector::with_config(ConvergenceConfig {
+            max_no_progress_turns: 2,
+            max_no_progress_hard_stop_turns: 0, // disabled
+            ..Default::default()
+        });
+
+        d.check(false, 1, 0, "", &[], &[]);
+        let _ = d.check(false, 1, 0, "", &[], &[]); // warns
+        // With hard stop disabled, should never Converge
+        for _ in 0..20 {
+            let signal = d.check(false, 1, 0, "", &[], &[]);
+            assert!(!matches!(signal, ConvergenceSignal::Converge { .. }));
+        }
     }
 
     #[test]
@@ -468,6 +560,7 @@ mod tests {
     fn test_default_similar_content_threshold_is_5() {
         let config = ConvergenceConfig::default();
         assert_eq!(config.max_similar_content_turns, 5);
+        assert_eq!(config.max_similar_content_hard_stop_turns, 10);
     }
 
     #[test]

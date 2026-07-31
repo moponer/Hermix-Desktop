@@ -30,12 +30,21 @@
 //! `tool_dispatch.rs`, and vice versa.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use hermix_core::{ToolCall, ToolErrorRecord, ToolResult};
 use serde_json::Value;
 use tokio::task::JoinSet;
+use tokio::sync::Semaphore;
 
 use crate::agent_loop::AgentLoop;
+
+/// Maximum number of tool calls that execute concurrently in the JoinSet.
+/// LLM can emit N tool_calls per turn; without a cap, N=10 web_search calls
+/// would fire 10 simultaneous HTTP requests and trigger rate limits.
+/// This semaphore limits concurrency to 5 — enough for parallelism, low
+/// enough to avoid overwhelming external services.
+const MAX_CONCURRENT_TOOLS: usize = 5;
 
 impl AgentLoop {
     /// Execute a batch of tool calls in parallel using a JoinSet.
@@ -100,6 +109,11 @@ impl AgentLoop {
         let max_delegate_depth = self.resolve_max_delegate_depth();
         let current_delegate_depth = self.delegate_depth;
         let orchestrator = self.sub_agent_orchestrator.clone();
+        // Semaphore limits concurrent tool execution in the JoinSet.
+        // Each spawned task acquires a permit before running the handler;
+        // the permit is released when the task completes. This prevents
+        // a burst of N tool calls from overwhelming external services.
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_TOOLS));
 
         // Run orchestrated `delegate_task` calls sequentially in the caller's
         // task — this keeps the inner AgentLoop future out of the Send-bound
@@ -372,7 +386,12 @@ impl AgentLoop {
             let pre_decision = pre_dispatch.get(&tool_call_id).cloned();
 
             let per_call_timeout = std::time::Duration::from_secs(60);
+            let sem = semaphore.clone();
             join_set.spawn(async move {
+                // Acquire a concurrency permit before executing the handler.
+                // This blocks (await) until a slot is free, throttling
+                // the batch to MAX_CONCURRENT_TOOLS simultaneous calls.
+                let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
                 // Honor the pre-dispatch hook: skip handler invocation entirely
                 // when the user (or upstream policy) denied this tool call.
                 if let Some(Err(denial)) = pre_decision.as_ref() {

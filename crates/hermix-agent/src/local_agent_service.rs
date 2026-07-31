@@ -243,6 +243,110 @@ fn is_quota_exhausted_error(s: &str) -> bool {
 }
 
 impl LocalAgentService {
+    /// LAST-RESORT GUARD for empty assistant replies.
+    ///
+    /// When the model stops without producing any visible text AND with no
+    /// `reasoning_content` to fall back on, the user would otherwise get a
+    /// completely blank assistant bubble — a dead-end with no summary of
+    /// what happened. This scans the conversation for the last assistant
+    /// message's `execution_timeline` (the real, recorded tool-run events)
+    /// and synthesizes a short, honest status report from it: how many tools
+    /// ran, and which (if any) failed. The report is built purely from
+    /// recorded events — it never invents tool outcomes.
+    ///
+    /// Returns an empty string when no tool activity is found, letting the
+    /// caller fall through to a generic "done" line.
+    fn summarize_tool_results_for_empty_reply(messages: &[Message]) -> String {
+        // Find the LAST assistant message that carries a timeline.
+        let timeline = messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                if m.role == MessageRole::Assistant {
+                    m.execution_timeline.as_ref()
+                } else {
+                    None
+                }
+            });
+
+        let events = match timeline {
+            Some(events) => events,
+            None => return String::new(),
+        };
+
+        // Collect tool_start events and their completion status.
+        struct ToolRun {
+            tool: String,
+            failed: bool,
+            detail: String,
+        }
+        let mut runs: Vec<ToolRun> = Vec::new();
+        let mut failed_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for ev in events {
+            match ev.event_type.as_str() {
+                "tool_start" => {
+                    if let Some(tool) = &ev.tool {
+                        runs.push(ToolRun {
+                            tool: tool.clone(),
+                            failed: false,
+                            detail: String::new(),
+                        });
+                    }
+                }
+                "tool_complete" => {
+                    if let Some(tool) = &ev.tool {
+                        let content = ev.content.clone().unwrap_or_default();
+                        let is_err = content.contains("[ERROR]")
+                            || content.contains("failed")
+                            || content.to_lowercase().contains("error");
+                        if is_err {
+                            failed_names.insert(tool.clone());
+                        }
+                        // Attach detail to the most recent matching run.
+                        if let Some(run) = runs.iter_mut().rev().find(|r| r.tool == *tool) {
+                            run.failed = is_err;
+                            run.detail = content;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if runs.is_empty() {
+            return String::new();
+        }
+
+        let total = runs.len();
+        let failed: Vec<&ToolRun> = runs.iter().filter(|r| r.failed).collect();
+
+        let mut out = String::new();
+        out.push_str(&format!(
+            "## 执行摘要\n\n本次共调用工具 {} 个",
+            total
+        ));
+        if failed.is_empty() {
+            out.push_str("，全部成功完成。");
+        } else {
+            out.push_str(&format!(
+                "，其中 {} 个失败：\n",
+                failed.len()
+            ));
+            for f in &failed {
+                out.push_str(&format!("- `{}`", f.tool));
+                let d = f.detail.trim();
+                if !d.is_empty() {
+                    // Keep the failure reason concise.
+                    let head: String = d.chars().take(160).collect();
+                    out.push_str(&format!(": {}", head));
+                }
+                out.push('\n');
+            }
+        }
+        out
+    }
+
     /// Pick a sensible default model when neither the request nor
     /// `config.model` specify one. The previous implementation silently
     /// returned `"gpt-4o"` (which `parse_model_string` then resolved to
@@ -1592,6 +1696,11 @@ impl AgentService for LocalAgentService {
         // Return the LLM's raw content as-is. If content is empty but
         // reasoning_content exists (MiniMax puts its response in reasoning),
         // use reasoning_content so the user sees the LLM's actual response.
+        // LAST-RESORT GUARD (2026-07-30): never return an empty body. A blank
+        // assistant bubble is a dead-end for the user with no summary of what
+        // happened. If BOTH content and reasoning are empty, synthesize a
+        // short summary from the tool results already in the conversation so
+        // the user always sees *something* concrete (what ran, what failed).
         let reply_text = messages
             .iter()
             .rev()
@@ -1607,7 +1716,17 @@ impl AgentService for LocalAgentService {
                         .filter(|s| !s.is_empty())
                 }
             })
-            .unwrap_or_default();
+            .or_else(|| {
+                let summary = Self::summarize_tool_results_for_empty_reply(&messages);
+                if !summary.is_empty() {
+                    Some(summary)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                "✅ 已执行完毕（本轮未生成可见文本总结）。".to_string()
+            });
 
         // Phase 3 (session isolation): terminal approval context is
         // carried by ToolCallContext; code_execution stdout_cb and
@@ -2115,7 +2234,7 @@ impl AgentService for LocalAgentService {
                                     content: None,
                                     tool_calls: None,
                                     extra: Some(serde_json::json!({
-                                        "event": "tool_stdout",
+                                        "event": "tool_chunk",
                                         "tool_call_id": tool_call_id,
                                         "tool": tool_name,
                                         "content": note,
@@ -2629,6 +2748,11 @@ impl AgentService for LocalAgentService {
         // Return the LLM's raw content as-is. If content is empty but
         // reasoning_content exists (MiniMax puts its response in reasoning),
         // use reasoning_content so the user sees the LLM's actual response.
+        // LAST-RESORT GUARD (2026-07-30): never return an empty body. A blank
+        // assistant bubble is a dead-end for the user with no summary of what
+        // happened. If BOTH content and reasoning are empty, synthesize a
+        // short summary from the tool results already in the conversation so
+        // the user always sees *something* concrete (what ran, what failed).
         let reply_text = messages
             .iter()
             .rev()
@@ -2644,7 +2768,17 @@ impl AgentService for LocalAgentService {
                         .filter(|s| !s.is_empty())
                 }
             })
-            .unwrap_or_default();
+            .or_else(|| {
+                let summary = Self::summarize_tool_results_for_empty_reply(&messages);
+                if !summary.is_empty() {
+                    Some(summary)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                "✅ 已执行完毕（本轮未生成可见文本总结）。".to_string()
+            });
 
         // Persist updated session. Log on failure rather than silently
         // swallow: see the matching call in `send_message_sync` for the

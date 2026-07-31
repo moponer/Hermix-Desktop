@@ -813,7 +813,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
    * `clarify_response` WS frame.
    */
   const clarifyResolversRef = useRef<
-    Map<string, (answer: string) => void>
+    Map<string, ((answer: string) => void)[]>
   >(new Map());
   const { workspaceRoot, setWorkspaceRoot } = useWorkspaceRoot();
 
@@ -1388,9 +1388,9 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
    * resolved footer takes over without a server round-trip wait.
    */
   const handleAnswerClarify = useCallback((requestId: string, answer: string) => {
-    const resolver = clarifyResolversRef.current.get(requestId);
-    if (resolver) {
-      resolver(answer);
+    const resolvers = clarifyResolversRef.current.get(requestId);
+    if (resolvers && resolvers.length > 0) {
+      resolvers.forEach((resolve) => resolve(answer));
       clarifyResolversRef.current.delete(requestId);
     }
     setSessions((prev) =>
@@ -1704,39 +1704,52 @@ streamPhaseRef.current = null;
       choices: string[];
       sessionId: string;
     }): Promise<{ answer: string }> => {
-      const nextAssistantId = `reply-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      currentAssistantIdRef.current = nextAssistantId;
+      // Defensive dedup: the backend clarify pump re-broadcasts pending
+      // requests when new ones arrive, and WebSocket reconnects can replay
+      // events. If we already have a card for this requestId, just wire the
+      // new promise to the existing resolver(s) instead of spawning another
+      // identical card.
+      const existing = sessions.find((s) => s.id === sessionId)?.messages.some(
+        (m) => m.role === "clarify" && m.clarify?.requestId === req.requestId
+      );
 
-      const clarifyMsg: ChatMessage = {
-        id: `clarify-${req.requestId}`,
-        role: "clarify",
-        content: req.question,
-        timestamp: new Date().toISOString(),
-        clarify: {
-          requestId: req.requestId,
-          question: req.question,
-          choices: req.choices ?? [],
-          answer: null,
-        },
-      };
-      const newAssistantMsg: ChatMessage = {
-        id: nextAssistantId,
-        role: "assistant",
-        content: "",
-        timestamp: new Date().toISOString(),
-      };
+      if (!existing) {
+        const nextAssistantId = `reply-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        currentAssistantIdRef.current = nextAssistantId;
 
-      setSessions((prev) => prev.map((s) => {
-        if (s.id !== sessionId) return s;
-        return {
-          ...s,
-          messages: [...s.messages, clarifyMsg, newAssistantMsg],
-          updated_at: new Date().toISOString(),
+        const clarifyMsg: ChatMessage = {
+          id: `clarify-${req.requestId}`,
+          role: "clarify",
+          content: req.question,
+          timestamp: new Date().toISOString(),
+          clarify: {
+            requestId: req.requestId,
+            question: req.question,
+            choices: req.choices ?? [],
+            answer: null,
+          },
         };
-      }));
+        const newAssistantMsg: ChatMessage = {
+          id: nextAssistantId,
+          role: "assistant",
+          content: "",
+          timestamp: new Date().toISOString(),
+        };
+
+        setSessions((prev) => prev.map((s) => {
+          if (s.id !== sessionId) return s;
+          return {
+            ...s,
+            messages: [...s.messages, clarifyMsg, newAssistantMsg],
+            updated_at: new Date().toISOString(),
+          };
+        }));
+      }
 
       return new Promise<{ answer: string }>((resolve) => {
-        clarifyResolversRef.current.set(req.requestId, (answer) => resolve({ answer }));
+        const list = clarifyResolversRef.current.get(req.requestId) ?? [];
+        list.push((answer) => resolve({ answer }));
+        clarifyResolversRef.current.set(req.requestId, list);
       });
     };
 
@@ -2102,15 +2115,74 @@ return {
               if (s.id !== sessionId) return s;
               return {
                 ...s,
-                messages: s.messages.map((m) =>
-                  m.id === target
-                    ? {
-                        ...m,
-                        reasoningContent: (m.reasoningContent ?? "") + piece,
-                        unified_steps: appendReasoningStep(m.unified_steps, piece),
+                messages: s.messages.map((m) => {
+                  if (m.id !== target) return m;
+                  // Retroactive text→reasoning conversion:
+                  // When the backend detects untagged reasoning
+                  // mid-stream (stream_collect.rs
+                  // `looks_like_untagged_reasoning`), the first few
+                  // chunks were already sent as `StreamEvent::Text`
+                  // and accumulated as `text` steps in
+                  // `unified_steps`. Now that a `StreamEvent::Thinking`
+                  // has arrived, we know those text steps were actually
+                  // reasoning. Convert the trailing text step(s) to a
+                  // reasoning step so the UI folds them inside
+                  // ProcessTimeline instead of showing as body text.
+                  // Also move the text from `content` to
+                  // `reasoningContent` so the persisted state matches.
+                  let steps = m.unified_steps ? [...m.unified_steps] : [];
+                  let contentFix = m.content;
+                  let reasoningFix = m.reasoningContent ?? "";
+                  // Walk backwards: convert trailing text steps to
+                  // reasoning. Stop at the first non-text step (tools,
+                  // existing reasoning) — those are real phase
+                  // boundaries.
+                  const convertedTexts: string[] = [];
+                  for (let i = steps.length - 1; i >= 0; i--) {
+                    if (steps[i].kind !== "text") break;
+                    const textContent = (steps[i] as { content: string }).content;
+                    convertedTexts.unshift(textContent);
+                    // Remove this text step — it'll be re-added as
+                    // reasoning via appendReasoningStep below.
+                    steps.splice(i, 1);
+                  }
+                  if (convertedTexts.length > 0) {
+                    // The converted text was previously in
+                    // `message.content` (accumulated by onChunk).
+                    // Move it to `reasoningContent` so the final
+                    // persisted state is correct.
+                    const fullConverted = convertedTexts.join("");
+                    // Remove the converted text from the end of
+                    // `content` (it was appended by onChunk).
+                    if (contentFix && fullConverted) {
+                      // Strip the retro-converted text from the end of
+                      // `content`. The fragment originated from `content`
+                      // (appended by appendChunk), so it is normally an
+                      // exact suffix. Tolerate trailing whitespace that may
+                      // have crept in between chunks (the fragile
+                      // `endsWith` below used to miss those cases and leave
+                      // the body text double-rendered as both body and
+                      // reasoning).
+                      const tail = contentFix.replace(/\s+$/, "");
+                      if (tail.endsWith(fullConverted)) {
+                        contentFix = contentFix.slice(0, tail.length - fullConverted.length);
+                      } else if (contentFix.trim() === fullConverted.trim()) {
+                        // Whole body was retro-converted (untagged-reasoning
+                        // case) — nothing should remain as body text.
+                        contentFix = "";
                       }
-                    : m
-                ),
+                    }
+                    reasoningFix = fullConverted + reasoningFix;
+                  }
+                  // Now append the new reasoning piece.
+                  steps = appendReasoningStep(steps, piece);
+                  return {
+                    ...m,
+                    content: contentFix,
+                    reasoningContent: reasoningFix + piece,
+                    unified_steps: steps,
+                  };
+                }),
                 updated_at: new Date().toISOString(),
               };
             }));
@@ -2456,7 +2528,9 @@ return {
             // (cancel, ws close) so we drop any pending resolver with
             // an empty answer; the server's tool call will time out
             // and the agent loop will surface the error.
-            clarifyResolversRef.current.forEach((resolver) => resolver(""));
+            clarifyResolversRef.current.forEach((resolvers) =>
+              resolvers.forEach((resolve) => resolve(""))
+            );
             clarifyResolversRef.current.clear();
             // M5: clear the ACUI card stack — any cards still in
             // flight belong to the now-finished turn and shouldn't

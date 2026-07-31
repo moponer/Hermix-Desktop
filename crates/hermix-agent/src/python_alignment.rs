@@ -183,6 +183,7 @@ pub fn looks_like_untagged_reasoning(content: &str) -> bool {
     }
     let head = trimmed.chars().take(240).collect::<String>().to_lowercase();
     const SIGNALS: &[&str] = &[
+        // English
         "trying to",
         "i think",
         "i see",
@@ -201,6 +202,42 @@ pub fn looks_like_untagged_reasoning(content: &str) -> bool {
         "i suspect",
         "i'm trying",
         "i am trying",
+        // Chinese — reasoning models (MiniMax-M3, Qwen, DeepSeek-R1)
+        // often reason in Chinese without <think> tags, so the
+        // stream_collect untagged-reasoning detector must recognise
+        // these openings or the whole monologue leaks as body text.
+        "让我",
+        "我需要",
+        "我应该",
+        "我可以",
+        "我先",
+        "我直接",
+        "我来看",
+        "我去找",
+        "我打算",
+        "我想",
+        "我认为",
+        "我觉得",
+        "看起来",
+        "实际上",
+        "首先",
+        "接下来",
+        "然后",
+        "先按",
+        "调用",
+        "创建",
+        "用户想",
+        "用户需要",
+        "这个任务",
+        "这个问题",
+        "要做一个",
+        "需要分析",
+        "来分析",
+        "思路是",
+        "方案是",
+        "步骤",
+        "目标是",
+        "为了",
     ];
     SIGNALS.iter().any(|s| head.contains(s))
 }

@@ -2556,8 +2556,15 @@ async fn rename_session(
         .session_persistence
         .persist_session(
             &session_id,
-            &messages,
-            state.config.model.as_deref(),
+                    &messages,
+                    // model: None — preserve the session's existing model
+                    // binding (a per-session override or the global default).
+                    // Passing `config.model` here would clobber a per-session
+                    // override on every rename, a regression once the
+                    // ON CONFLICT branch in `save_session_atomic` updates
+                    // `model` (COALESCE keeps the stored value when we pass
+                    // None).
+                    None,
             Some(HTTP_PLATFORM),
             Some(req.title.trim()),
             None,

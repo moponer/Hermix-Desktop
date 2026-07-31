@@ -92,8 +92,8 @@ export interface AgentTone {
 }
 
 // Allowed accent hues only — NO blue/indigo/violet/purple (project iron law).
-// amber / gold / emerald / teal / cyan / rose / magenta / red.
-const AGENT_HUE_PALETTE = [28, 43, 150, 175, 195, 340, 320, 0];
+// amber / gold / emerald / teal / rose / magenta / red (195 cyan dropped → 168 teal).
+const AGENT_HUE_PALETTE = [28, 43, 150, 175, 168, 340, 320, 0];
 
 /** Derive a stable accent hue from an agent id, drawn from a fixed allowed
  *  palette so no agent ever renders in a banned blue/violet hue (project

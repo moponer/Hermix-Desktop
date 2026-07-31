@@ -241,7 +241,18 @@ failure status, you MUST report the actual failure state to the user — do NOT 
 the operation did not happen. Do not describe what you *tried* to do as if it *did* \
 happen.
 3. **Do NOT retry the same call twice.** If a tool fails twice, switch approach or \
-ask the user.";
+ask the user.
+4. **A single tool failure is NOT a reason to stop.** Analyze the error, switch tools \
+or fix arguments, and continue making progress. Only stop when the task is complete \
+or you have genuinely exhausted every reasonable approach — and then clearly tell the \
+user what failed and what blocked you.
+5. **You MUST end with a visible summary — never with an empty reply.** Before you \
+decide to stop (finish_reason=\"stop\"), you MUST emit a natural-language summary in \
+the visible channel (NOT inside a <think> block): what you did, what succeeded, what \
+failed, and — if the task is incomplete — what the user should do next. A turn that \
+stops with zero visible text is a failure regardless of how much tool work happened. \
+If your draft was all reasoning, move the conclusion into the visible reply before \
+stopping.";
 
 /// Environment awareness + Shell compatibility + tool fallback priority.
 /// /// Always-on: tells the model what OS/shell it runs on, how to call

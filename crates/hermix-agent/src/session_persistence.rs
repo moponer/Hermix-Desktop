@@ -1207,6 +1207,7 @@ impl SessionPersistence {
                 "INSERT INTO sessions (id, model, platform, created_at, updated_at, title, message_count, system_prompt, compressed_summary, parent_session_id, workspace, expert_id, last_context_usage)
                  VALUES (?1, ?2, ?3, ?4, ?4, ?5, 0, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(id) DO UPDATE SET
+                    model = COALESCE(?2, sessions.model),
                     updated_at = ?4,
                     title = COALESCE(?5, sessions.title),
                     system_prompt = COALESCE(?6, sessions.system_prompt),
@@ -1217,7 +1218,7 @@ impl SessionPersistence {
                     last_context_usage = COALESCE(?11, sessions.last_context_usage)",
                 rusqlite::params![
                     session_id,
-                    model.unwrap_or("unknown"),
+                    model,
                     platform.unwrap_or("cli"),
                     now,
                     title,
@@ -2267,7 +2268,7 @@ impl SessionPersistence {
              VALUES (?1, ?2, ?3, ?4, ?4, ?5, 1, ?6, ?7, ?8)",
             rusqlite::params![
                 child_id,
-                model.unwrap_or("unknown"),
+                model,
                 platform.unwrap_or("local"),
                 now,
                 title,

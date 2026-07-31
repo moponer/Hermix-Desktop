@@ -49,12 +49,13 @@ license = "MIT"
 repository = "https://github.com/nousresearch/hermes-engine"
 
 [workspace.lints.rust]
-# Workspace-wide lint policy. The `unused_*` family is promoted to `allow`
-# because the codebase mixes server/CLI/test modules where a binding is
-# genuinely used in one path but flagged in another. Individual crates can
-# still override with stricter rules.
-unused_variables = "allow"
-unused_imports = "allow"
+# Workspace-wide lint policy (2026-07-30: promoted unused_* to `warn`).
+# The codebase was initially `allow` during the Python→Rust port to reduce
+# noise, but the port is complete and the accumulated dead imports/variables
+# are now a maintenance burden. `dead_code` stays `allow` for now — it needs
+# a per-file audit before promotion.
+unused_variables = "warn"
+unused_imports = "warn"
 dead_code = "allow"
 
 [workspace.lints.clippy]

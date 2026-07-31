@@ -16,3 +16,8 @@
 @import "./inline-thinking-dot.css";
 @import "./code-view.css";
 @import "./utilities.css";
+
+/* Make Tailwind v4 `dark:` variant follow the `.dark` class (project mounts
+   `.dark` on <html>/<body>), not the default `prefers-color-scheme` media
+   query — otherwise `dark:` utilities never trigger on theme toggle. */
+@custom-variant dark (&:where(.dark, .dark *));

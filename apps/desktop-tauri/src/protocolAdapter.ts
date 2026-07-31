@@ -282,8 +282,9 @@ export function wireToChatMessage(
 function looksLikeUntaggedReasoning(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length < 40) return false;
-  const head = trimmed.slice(0, 240).toLowerCase();
+  const head = trimmed.slice(0, 360).toLowerCase();
   const signals = [
+    // English
     "trying to",
     "i think",
     "i see",
@@ -302,6 +303,28 @@ function looksLikeUntaggedReasoning(text: string): boolean {
     "i suspect",
     "i'm trying",
     "i am trying",
+    // Chinese — model often reasons in Chinese without <think> tags
+    "让我",
+    "我需要",
+    "我应该",
+    "我可以",
+    "我先",
+    "我直接",
+    "我来看一下",
+    "我想",
+    "我认为",
+    "我觉得",
+    "看起来",
+    "实际上",
+    "首先",
+    "接下来",
+    "然后",
+    "先按",
+    "调用",
+    "创建",
+    "我去找",
+    "找到了",
+    "看下",
   ];
   return signals.some((s) => head.includes(s));
 }

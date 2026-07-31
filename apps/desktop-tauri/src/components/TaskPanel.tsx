@@ -674,7 +674,7 @@ function agentHsl(agentId: string): number {
   for (let i = 0; i < agentId.length; i++) {
     h = (h * 31 + agentId.charCodeAt(i)) & 0xffff;
   }
-  const SAFE_HUES = [28, 43, 150, 175, 195, 340, 320, 0];
+  const SAFE_HUES = [28, 43, 150, 175, 168, 340, 320, 0];
   return SAFE_HUES[Math.abs(h) % SAFE_HUES.length];
 }
 

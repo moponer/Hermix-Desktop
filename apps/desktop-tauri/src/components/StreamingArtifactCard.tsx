@@ -49,22 +49,19 @@ function defaultName(lang: string, idx: number): string {
 }
 
 /** 判断这个围栏块是否值得显示为“正在生成的文件”。
- *  核心防御：LLM 的思考文本、总结说明经常被包在 ```text 里，
- *  这种块没有文件名、没有代码结构，显示成“代码片段 1 text”
- *  会让用户以为在生成文件。我们只保留：
- *    - 有显式文件扩展名注释（// backend.ts、# ui.tsx）
+ *  核心防御：LLM 回答里的普通代码块（```tsx / ```python …）不该被
+ *  当成“正在生成的文件”卡片刷屏。只有「显式声明了文件名」的块才视为
+ *  文件产物：
+ *    - 首行有文件扩展名注释（// backend.ts、# ui.tsx、-- main.rs）
  *    - HTML 片段（<!doctype html|<html）
- *    - 非 text 语言，且首行看起来是代码而非自然语言段落
+ *  其余代码块一律不显示此卡片，交由正文 MarkdownBody 正常渲染成代码块。
+ *  真正的「后端正在写文件」进度由 ToolEventCard（write_file 工具事件）呈现。
  */
-function looksLikeArtifact(lang: string, firstLine: string): boolean {
+function looksLikeArtifact(_lang: string, firstLine: string): boolean {
   if (extractName(firstLine)) return true;
   if (/^<!doctype html|<html/i.test(firstLine)) return true;
-  const t = lang.toLowerCase();
-  if (t && t !== "text") {
-    // 即便有语言标签，如果首行是完整英文句子（自然语言），也跳过。
-    // 典型反例：```python 后面跟 “Here is the implementation...”
-    return !/^[A-Z][a-zA-Z\s,]{15,}[.!?]\s*$/.test(firstLine.trim());
-  }
+  // 不再仅凭「非 text 语言」就当文件——那会把模型的最终答案代码刷成
+  // 一堆「代码片段.tsx」卡片。
   return false;
 }
 

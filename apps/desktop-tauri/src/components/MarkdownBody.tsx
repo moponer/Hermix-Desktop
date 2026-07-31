@@ -143,6 +143,20 @@ const LANG_LABEL: Record<string, string> = {
 // Exported so PreviewPanel can reuse the same code
 // block rendering (language label + copy button + syntax highlighting)
 // instead of rendering plain <pre><code> elements.
+
+/**
+ * 当 LLM 在围栏 ``` 后面漏写语言标签时，尝试从首行文件名注释推断语言。
+ * 例如 `// backend.ts` → `ts`，`# ui.tsx` → `tsx`。
+ * 这能挽救大量“代码块没高亮、标题显示 CODE”的情况。
+ */
+function inferLangFromCode(code: string): string | null {
+  const firstLine = code.split("\n")[0]?.trim() ?? "";
+  const m = firstLine.match(
+    /^\s*(?:\/\/|#|;|--|rem|::)\s*([\w.\/\\-]+\.([A-Za-z0-9]+))$/
+  );
+  return m ? m[2].toLowerCase() : null;
+}
+
 function CodeBlockImpl({ language, code, isDark = false }: { language: string; code: string; isDark?: boolean }) {
   const safeSetTimeout = useSafeTimeout();
   const [copied, setCopied] = useState(false);
@@ -354,8 +368,12 @@ export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
           code({ className, children, ...props }) {
             const match = /language-([\w-]+)/.exec(className || "");
             const codeString = String(children).replace(/\n$/, "");
-            if (match) {
-              const lang = match[1].toLowerCase();
+            const inferred =
+              !match && codeString.includes("\n")
+                ? inferLangFromCode(codeString)
+                : null;
+            const lang = (match?.[1] ?? inferred ?? "").toLowerCase();
+            if (lang) {
               return <CodeBlock language={lang} code={codeString} isDark={isDark} />;
             }
             return <code {...props}>{children}</code>;

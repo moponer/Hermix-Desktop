@@ -81,7 +81,7 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
           ? healthy
             ? "bg-emerald-500/5 border-emerald-500/20"
             : "bg-amber-500/5 border-amber-500/20"
-          : "bg-purple-500/[0.06] border-purple-400/20"
+          : "bg-accent/[0.06] border-accent/20"
       }`}
     >
       {/* Header: phase name + tick counter + live spinner */}
@@ -93,7 +93,7 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
             <AlertTriangle size={12} className="text-amber-300 shrink-0" />
           )
         ) : (
-          <Sparkles size={12} className="text-purple-300 shrink-0" />
+          <Sparkles size={12} className="text-accent shrink-0" />
         )}
         <span className="text-[12.5px] font-semibold text-text-primary truncate">
           {phase}
@@ -107,7 +107,7 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
           {tick}/{totalTicks}
         </span>
         {!completed && (
-          <Loader2 size={11} className="text-purple-300 animate-spin shrink-0" />
+          <Loader2 size={11} className="text-accent animate-spin shrink-0" />
         )}
       </div>
 
@@ -124,9 +124,9 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
               key={`tick-${i}`}
               className={`h-1 rounded-full transition-colors duration-200 ${
                 isCurrent
-                  ? "w-3 bg-purple-300"
+                  ? "w-3 bg-accent"
                   : filled
-                    ? "flex-1 min-w-[6px] bg-purple-400/70"
+                    ? "flex-1 min-w-[6px] bg-accent/70"
                     : "flex-1 min-w-[6px] bg-white/[0.06]"
               }`}
             />

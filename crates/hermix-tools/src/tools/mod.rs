@@ -37,6 +37,8 @@ pub mod memory;
 pub mod messaging;
 pub mod model_providers;
 pub mod office_cli;
+pub mod ppt_themes;
+pub mod create_presentation;
 pub mod pdf;
 pub mod platforms;
 pub mod security_guidance;
@@ -157,6 +159,10 @@ pub fn register_all(
     // tool to re-assert and `set_enabled_toolsets("office", false)`
     // actually disables something.
     office_cli::register(registry, terminal_backend.clone(), registry.terminal_workspace_handle());
+    // High-level PPT generator: LLM provides JSON spec (theme + slides),
+    // tool generates all office_cli commands internally.
+    // Inspired by oh-my-ppt's JSON→slide approach.
+    create_presentation::register(registry, terminal_backend.clone(), registry.terminal_workspace_handle());
     // P1.8 (2026-07-02): `read_pdf` was previously tagged
     // `"file"` and *never wired into `register_all`*, so the LLM
     // had no PDF-reading tool at all. Re-tag it with the dedicated

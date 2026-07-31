@@ -639,17 +639,24 @@ export function buildFallbackSteps(message: ChatMessage): TimelineStep[] {
   const parsed = parseContent(message.content);
   const hasBody = !!(parsed.body && parsed.body.trim());
 
-  // When the LLM doesn't close its <think> tag, the
-  // ThinkBlockParser routes ALL text (including body) to
-  // reasoning_content, leaving content empty. On reload, we need
-  // to show that text as body — NOT as a reasoning block — to
-  // match what the user saw during streaming (the onDone handler
-  // uses reply_text which falls back to reasoning_content).
-  // Rule: if content has body text, show reasoning as a reasoning
-  // block + body as text (normal case). If content is empty but
-  // reasoning has text, show reasoning AS the body text (fallback
-  // case) — don't also show it as a reasoning block to avoid
-  // duplication.
+  // When content has body text, show reasoning as a reasoning
+  // block (folded) + body as text (normal case).
+  //
+  // When content is empty but reasoning has text, this typically
+  // means one of two things:
+  // 1. The LLM didn't close its <think> tag → ThinkBlockParser
+  //    routed ALL text to reasoning_content.
+  // 2. The backend's `looks_like_untagged_reasoning` check
+  //    swapped content → reasoning_content at flush time.
+  // In both cases, the text IS reasoning — it was in
+  // `reasoning_content` on the backend. Show it as a reasoning
+  // step (folded inside ProcessTimeline), NOT as body text.
+  // The previous behavior showed it as body text to "match what
+  // the user saw during streaming", but with the streaming fix
+  // (stream_collect.rs untagged reasoning detection + App.tsx
+  // retroactive text→reasoning conversion), the user now sees it
+  // as a folded reasoning block during streaming too. Showing it
+  // as body text on reload would be inconsistent.
   if (hasBody) {
     if (reasoning) {
       steps.push({ kind: "reasoning", content: reasoning });
@@ -659,12 +666,12 @@ export function buildFallbackSteps(message: ChatMessage): TimelineStep[] {
     }
     steps.push({ kind: "text", content: parsed.body });
   } else if (reasoning) {
-    // Fallback: content is empty, reasoning has the text.
-    // Show it as body text, not as a reasoning block.
+    // Content is empty, reasoning has text → show as reasoning
+    // step (folded), matching the streaming behavior.
     if (toolEvents.length > 0) {
       steps.push({ kind: "tools", events: toolEvents });
     }
-    steps.push({ kind: "text", content: reasoning });
+    steps.push({ kind: "reasoning", content: reasoning });
   } else {
     if (toolEvents.length > 0) {
       steps.push({ kind: "tools", events: toolEvents });

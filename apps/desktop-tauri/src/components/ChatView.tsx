@@ -86,6 +86,35 @@ const MemoMessageBubble = memo(MessageBubble, (prev, next) => {
  * merged and are returned as-is, in original order, separated by the
  * merged assistant runs.
  */
+/**
+ * Remove text steps that verbatim duplicate a reasoning step.
+ *
+ * When the backend emits untagged reasoning (or an unclosed `<think>`
+ * tag), the same text can land in both `reasoningContent` (rendered
+ * inside the collapsed thinking block) and `content` (rendered as body
+ * text). If the streaming retro-conversion in App.tsx fails to strip it
+ * from `content`, the body shows twice. This is a render-time safety
+ * net: any text step whose trimmed content equals a reasoning step's
+ * trimmed content is dropped, so the body is never a copy of the
+ * thinking block. Genuine answers (body ≠ thinking) pass through
+ * untouched.
+ */
+function dedupeTextSteps(steps: TimelineStep[] | undefined): TimelineStep[] | undefined {
+  if (!steps || steps.length === 0) return steps;
+  const reasoningTrimmed = new Set(
+    steps
+      .filter((s) => s.kind === "reasoning")
+      .map((s) => (s as { content?: string }).content?.trim() ?? ""),
+  );
+  const deduped = steps.filter((s) => {
+    if (s.kind !== "text") return true;
+    const t = (s as { content?: string }).content?.trim() ?? "";
+    if (t.length === 0) return false; // drop empty text steps too
+    return !reasoningTrimmed.has(t);
+  });
+  return deduped.length > 0 ? deduped : undefined;
+}
+
 function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   let i = 0;
@@ -135,10 +164,9 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
       );
       const hasBody = !!(single.content && single.content.trim());
       // When content has body text: show reasoning as reasoning block + body as text.
-      // When content is empty but reasoning has text: the LLM didn't close its
-      // <think> tag, so ALL text (including body) is in reasoningContent.
-      // Show it as body text (not reasoning block) to match the streaming
-      // onDone fallback behavior.
+      // When content is empty but reasoning has text: the text IS reasoning
+      // (either unclosed <think> tag or untagged reasoning swap). Show as
+      // reasoning step (folded), matching the streaming behavior.
       if (hasBody) {
         if (reasoning) {
           singleSteps.push({ kind: "reasoning", content: reasoning });
@@ -151,13 +179,13 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
         if (toolEvents.length > 0) {
           singleSteps.push({ kind: "tools", events: toolEvents });
         }
-        singleSteps.push({ kind: "text", content: reasoning });
+        singleSteps.push({ kind: "reasoning", content: reasoning });
       } else if (toolEvents.length > 0) {
         singleSteps.push({ kind: "tools", events: toolEvents });
       }
       out.push({
         ...single,
-        unified_steps: singleSteps.length > 0 ? singleSteps : single.unified_steps,
+        unified_steps: dedupeTextSteps(singleSteps.length > 0 ? singleSteps : single.unified_steps),
       });
       i = j;
       continue;
@@ -208,12 +236,13 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
         }
         unifiedSteps.push({ kind: "text", content: r.content });
       } else if (isLastRow && reasoning) {
-        // Fallback: last row has no content but has reasoning —
-        // unclosed <think> tag, show reasoning as body text.
+        // Last row has no content but has reasoning — the text IS
+        // reasoning (unclosed <think> or untagged reasoning swap).
+        // Show as reasoning step (folded), matching streaming behavior.
         if (toolEvents.length > 0) {
           unifiedSteps.push({ kind: "tools", events: toolEvents });
         }
-        unifiedSteps.push({ kind: "text", content: reasoning });
+        unifiedSteps.push({ kind: "reasoning", content: reasoning });
       } else {
         // Intermediate row with no content: reasoning is genuine
         // thinking, show as reasoning block (not body text).
@@ -247,7 +276,7 @@ function mergeConsecutiveAssistantMessages(messages: ChatMessage[]): ChatMessage
         mergedReasoning.length > 0
           ? mergedReasoning
           : last.reasoningContent,
-      unified_steps: unifiedSteps.length > 0 ? unifiedSteps : undefined,
+      unified_steps: dedupeTextSteps(unifiedSteps.length > 0 ? unifiedSteps : undefined),
       stopReason: mergedStopReason ?? last.stopReason,
     });
     i = j;
@@ -1177,7 +1206,15 @@ useEffect(() => {
   // Always sync expert from backend — even when expert_id is null,
   // we must clear the stale DRAFT_EXPERT_KEY from the previous session.
   setExpert(session.expert_id ?? null);
-  if (session.model) {
+  // Guard against a poisoned session model. The backend historically
+  // persisted the literal sentinel "unknown" into the sessions.model
+  // column whenever no global config.model was set at session creation
+  // (session_persistence.rs: `model.unwrap_or("unknown")` + an early
+  // persist that passes model=None and an ON CONFLICT that never updates
+  // model). Adopting that value silently forces an invalid provider
+  // selection, so we only restore a real `provider:model` id and let the
+  // computed default win otherwise.
+  if (session.model && session.model.includes(":") && session.model !== "unknown") {
     setSelectedModel(session.model);
   }
 // 用户反馈「对话中 agent 不看工作区目录」。
@@ -1731,7 +1768,12 @@ const clearPendingImages = useCallback(() => {
       // 把用户在下拉里选的模型塞进 overrides，让 backend 真的切到
       // 那个 provider（之前 bug：UI 看着切了，但 payload 不带 model，backend
       // 永远在跑 config.yaml 默认模型）。格式 "provider:model"。
-      if (selectedModel) overrides.model = selectedModel;
+      // Guard: never forward a corrupted/empty selection (e.g. the "unknown"
+      // sentinel a poisoned session can carry) — let the backend fall back to
+      // its configured default instead of failing on a dead provider.
+      if (selectedModel && selectedModel.includes(":") && selectedModel !== "unknown") {
+        overrides.model = selectedModel;
+      }
       if (expert) {
         overrides.systemPromptOverride = expert.systemPrompt;
         markRecentUsed(expert.id);
