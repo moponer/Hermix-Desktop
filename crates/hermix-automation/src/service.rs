@@ -5,7 +5,7 @@
 //! - Runtime state maintenance (last/next run, run count)
 //! - Run history recording
 //!
-//! (Phase 5 — P5-3, P5-4)
+//!
 
 use std::sync::Arc;
 

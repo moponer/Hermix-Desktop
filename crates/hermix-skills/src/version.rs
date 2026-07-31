@@ -29,7 +29,7 @@ pub struct SkillVersion {
 // ---------------------------------------------------------------------------
 
 /// Compute a deterministic version string from skill content using SHA-256.
-/// /// The result is prefixed with `sha256:` and truncated to 16 hex chars for
+/// The result is prefixed with `sha256:` and truncated to 16 hex chars for
 /// readability while still providing strong collision resistance for
 /// content changes.
 pub fn compute_version(content: &str) -> String {
@@ -45,7 +45,7 @@ pub fn compute_version(content: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Compare two version strings.
-/// /// Supports two formats:
+/// Supports two formats:
 /// - **Semantic versions** (e.g. "1.2.3"): compared component-by-component.
 /// - **Hash-based versions** (e.g. "sha256:abcdef"): compared
 /// lexicographically (not meaningful for ordering, but consistent).

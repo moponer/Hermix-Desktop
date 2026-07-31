@@ -1,4 +1,4 @@
-//! BDI (Belief-Desire-Intention) cognitive modeling (Phase 1.4).
+//! BDI (Belief-Desire-Intention) cognitive modeling .
 //!
 //! Implements a classical BDI architecture where:
 //! - **Beliefs**: Facts the agent knows about the world, with confidence
@@ -265,7 +265,7 @@ impl MentalState {
     // -----------------------------------------------------------------------
 
     /// Derive intentions from beliefs + desires.
-    /// /// Strategy:
+    /// Strategy:
     /// 1. Sort desires by priority (highest first).
     /// 2. For each desire, check if there's a supporting belief.
     /// 3. If not already committed, create a single-step intention.

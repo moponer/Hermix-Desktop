@@ -1,4 +1,4 @@
-//! Element recognition — Phase 2-B.
+//! Element recognition (top-level window enumeration).
 //!
 //! Two-layer strategy:
 //!
@@ -8,11 +8,11 @@
 //!    Covers ~80% of LLM-driven automation ("open Notepad",
 //!    "click into this app", "what's on screen now?").
 //!
-//! 2. **UIA COM layer (Phase 3 stretch)** — full UI Automation
+//! 2. **UIA COM layer ** — full UI Automation
 //!    tree via direct `IUIAutomation`/`IUIAutomationElement`
 //!    COM calls against `UIAutomationClient.dll`. Declared as
 //!    a `TODO` here; the Win32 layer above already satisfies
-//!    the Phase 2 surface contract (`find_at_point`,
+//!    the element-recognition surface contract (`find_at_point`,
 //!    `find_by_title`, `enumerate_children`).
 //!
 //! All entry points are gated on `cfg(windows)`; non-Windows

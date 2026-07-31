@@ -80,7 +80,7 @@ fn push_warn(
 }
 
 /// Evaluate enabled-platform credential requirements.
-/// /// Fatal issues mirror legacy [`crate::gateway_requirement_issues`] strings.
+/// Fatal issues mirror legacy [`crate::gateway_requirement_issues`] strings.
 /// Scope currently affects optional warns (e.g. partial adapter implementations).
 #[allow(unused_mut, unused_variables)]
 pub fn evaluate_gateway_requirements(

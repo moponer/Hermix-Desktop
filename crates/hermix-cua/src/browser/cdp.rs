@@ -46,7 +46,7 @@ struct CdpClientInner {
     /// Outbound command channel: `call()` pushes `Message`s here and
     /// `reader_loop` drains them onto the socket inside its `select!`.
     ///
-    /// (P0-4 / STABILITY-PLAN §2.1): Previously a shared
+    /// Previously a shared
     /// `Mutex<WebSocketStream>` was used and `reader_loop` held the
     /// lock for the entire `ws.next().await`, starving `call()`'s
     /// `send().await`. Now the socket is owned exclusively by
@@ -70,7 +70,7 @@ impl CdpClient {
     /// Open a WebSocket connection to Chrome's
     /// `webSocketDebuggerUrl` (typically
     /// `ws://127.0.0.1:9222/devtools/browser/<uuid>`).
-    /// /// Spins up a dedicated `current_thread` tokio runtime and
+    /// Spins up a dedicated `current_thread` tokio runtime and
     /// launches a single background task that owns the socket,
     /// pumping inbound frames into the pending/event maps and
     /// draining outbound commands from the command channel.
@@ -91,7 +91,7 @@ impl CdpClient {
         // Command channel for outbound writes. `reader_loop` owns the
         // socket exclusively and drains this channel inside its
         // `select!` — no lock is ever held across `ws.next().await`
-        // (P0-4).
+        //.
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let inner = Arc::new(CdpClientInner {
             cmd_tx,
@@ -152,7 +152,7 @@ impl CdpClient {
         // Push the command onto the channel; `reader_loop` writes it
         // to the socket inside its `select!`. The channel send only
         // fails if the receiver was dropped (socket closed) — convert
-        // to the same error shape the old direct-send produced (P0-4).
+        //to the same error shape the old direct-send produced .
         if self.inner.cmd_tx.send(Message::Text(payload)).is_err() {
             // Clean up the pending entry so a future retry can
             // claim a new id cleanly.
@@ -229,7 +229,7 @@ impl Drop for CdpClient {
 /// (events), and draining outbound commands from `cmd_rx` onto the
 /// socket.
 ///
-/// (P0-4 / STABILITY-PLAN §2.1): Previously a shared
+/// Previously a shared
 /// `Mutex<WebSocketStream>` was used, and this loop held the lock for
 /// the entire `ws.next().await`, starving `call()`'s `send().await`.
 /// Now the socket is owned exclusively by this task — reads never

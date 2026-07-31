@@ -122,7 +122,7 @@ impl RoomBus {
     }
 
     /// 订阅：返回 Receiver，actor 在自己的 task 里 select 这个 channel
-    /// /// 同名 agent 重复订阅会替换旧 channel（防止泄漏）。
+    /// 同名 agent 重复订阅会替换旧 channel（防止泄漏）。
     pub async fn subscribe(&self, agent_id: impl Into<String>) -> mpsc::Receiver<BusMessage> {
         let agent_id = agent_id.into();
         let (tx, rx) = mpsc::channel(self.capacity);
@@ -136,7 +136,7 @@ impl RoomBus {
     }
 
     /// 广播：所有订阅者都会收到
-    /// /// 如果某个订阅者 channel 满了，跳过它（不阻塞其他订阅者），
+    /// 如果某个订阅者 channel 满了，跳过它（不阻塞其他订阅者），
     /// 但会记录一次"溢出"事件（返回值里给调用方一个 hint）。
     pub async fn broadcast(&self, msg: BusMessage) -> BusSendReport {
         let subs = self.subscribers.read().await;

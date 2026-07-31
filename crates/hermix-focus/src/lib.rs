@@ -1,8 +1,8 @@
 //! # hermix-focus
 //!
-//! Phase 8 H5: Unified memory layer + focus stack + salience scoring.
+//! H5: Unified memory layer + focus stack + salience scoring.
 //!
-//! Reference: `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §2.2 + §3 H5 + §五 Phase 8.
+//! Reference: `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §2.2 + §3 H5 + §五 .
 //!
 //! ## What this crate provides
 //!

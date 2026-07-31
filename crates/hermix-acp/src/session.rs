@@ -126,7 +126,7 @@ impl From<&SessionState> for SessionInfo {
 // ---------------------------------------------------------------------------
 
 /// Thread-safe manager for ACP sessions.
-/// /// Sessions are held in-memory for fast access. A persistence callback can be
+/// Sessions are held in-memory for fast access. A persistence callback can be
 /// provided to sync state to a database or disk.
 pub struct SessionManager {
     sessions: Mutex<HashMap<String, SessionState>>,

@@ -214,7 +214,7 @@ pub struct PermissionProfile {
 
 impl PermissionProfile {
     /// True if `path` lives under one of the granted directory roots.
-    /// /// Both `path` and the granted prefix are normalised through
+    /// Both `path` and the granted prefix are normalised through
     /// [`normalize_path`] (which collapses `.`/`..`), so a granted
     /// `c:/users/alice` cannot be bypassed via
     /// `c:/users/alice/../../windows/...` — that request canonicalises
@@ -229,7 +229,7 @@ impl PermissionProfile {
     }
 
     /// True if `command` begins with one of the granted command prefixes.
-    /// /// A prefix only matches at a **word boundary** — so `git` matches
+    /// A prefix only matches at a **word boundary** — so `git` matches
     /// `git status` but not `gitx init`. After the prefix matches we
     /// also reject any command that would let the agent chain
     /// additional shell actions past the granted prefix (`;`, `&&`,
@@ -301,14 +301,14 @@ pub struct PendingGrant {
 
 impl PendingGrant {
     /// Extract a sensible grant from a tool call's parsed arguments.
-    /// /// For file tools we strip the file name and keep only the leading
+    /// For file tools we strip the file name and keep only the leading
     /// directory components — granting access to
     /// `C:\Users\alice\file.txt` should not implicitly grant
     /// `C:\Windows\System32`, but should grant everything under
     /// `C:\Users\alice`. Same rationale for Git Bash roots.
     /// For terminal/code_execution we keep the first whitespace
     /// token as the command prefix.
-    /// /// Bulk-path tools (`disk_cleanup`, etc.) accept a `paths` array
+    /// Bulk-path tools (`disk_cleanup`, etc.) accept a `paths` array
     /// instead of a single `path`. We grant the directory root of the
     /// **first** non-empty entry — refusing to grant the whole array
     /// would be too narrow (the user clearly approved cleaning those

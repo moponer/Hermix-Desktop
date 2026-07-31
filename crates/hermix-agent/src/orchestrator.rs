@@ -1,6 +1,6 @@
 //! Orchestrator mode gate — Task-level Craft/Plan/Ask enforcement.
 //!
-//! (Phase 2 — P2-2)
+//!
 //!
 //! The mode gate sits between the agent loop and the tool execution layer.
 //! It enforces the Task's working mode:
@@ -33,7 +33,7 @@ use hermix_core::JsonSchema;
 
 /// Tool names that perform filesystem mutations, shell execution, or other
 /// side effects. In `Ask` mode, these are blocked.
-/// /// The list is intentionally conservative — if a tool isn't in this list,
+/// The list is intentionally conservative — if a tool isn't in this list,
 /// it's allowed in Ask mode. Better to allow a harmless read tool than to
 /// block a legitimate one.
 const WRITE_CLASS_TOOLS: &[&str] = &[
@@ -59,7 +59,7 @@ const WRITE_CLASS_TOOLS: &[&str] = &[
 ];
 
 /// Check whether a tool name is a write-class tool.
-/// /// Write-class tools mutate the filesystem, execute shell commands, or
+/// Write-class tools mutate the filesystem, execute shell commands, or
 /// have other persistent side effects. In `Ask` mode, these are blocked.
 pub fn is_write_tool(name: &str) -> bool {
     let lower = name.to_lowercase();
@@ -67,14 +67,14 @@ pub fn is_write_tool(name: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Orchestration stage (P3-1)
+//Orchestration stage
 // ---------------------------------------------------------------------------
 
 /// Coarse-grained orchestration stage, mapped from the fine-grained
 /// `LoopPhase` (9 phases). Used for observability and UI progress display.
-/// /// The four stages correspond to the perception-reasoning-action-observation
+/// The four stages correspond to the perception-reasoning-action-observation
 /// cycle:
-/// /// 1. **Perception** — setup, context gathering, prefetch
+/// 1. **Perception** — setup, context gathering, prefetch
 /// 2. **Reasoning** — LLM call and post-response processing
 /// 3. **Action** — tool validation and execution
 /// 4. **Observation** — post-tool iteration, hooks, finalization
@@ -121,13 +121,13 @@ pub enum ModeGateDecision {
 }
 
 /// Task-level mode gate. Enforces Craft/Plan/Ask semantics.
-/// /// Created per-run (or per-task) and consulted by the agent loop at
+/// Created per-run (or per-task) and consulted by the agent loop at
 /// two points:
 /// 1. Before sending tool schemas to the LLM — `filter_tool_schemas()`
 /// removes write tools in Ask mode.
 /// 2. Before executing each tool call — `check_tool_call()` blocks
 /// any write tool that slipped through (defense in depth).
-/// /// For Plan mode, the gate tracks whether the plan has been confirmed.
+/// For Plan mode, the gate tracks whether the plan has been confirmed.
 /// `should_pause_for_confirmation()` returns true until
 /// `mark_plan_confirmed()` is called.
 #[derive(Debug, Clone)]
@@ -141,10 +141,10 @@ pub struct ModeGate {
     write_tools: HashSet<String>,
     /// L1 Domain Mode override: write-class tools that are safe to
     /// allow in Ask mode for the current domain.
-    /// /// Example: Code+Ask allows `write_file` and `patch` because
+    /// Example: Code+Ask allows `write_file` and `patch` because
     /// the user might want to see code and make small edits without
     /// switching to Craft mode. Research+Ask has no overrides.
-    /// /// Source: `DomainPreset::safe_write_override`.
+    /// Source: `DomainPreset::safe_write_override`.
     safe_write_override: HashSet<String>,
 }
 
@@ -169,7 +169,7 @@ impl ModeGate {
     }
 
     /// Set the safe-write override list (from `DomainPreset`).
-    /// /// Tools in this list are allowed even in Ask mode.
+    /// Tools in this list are allowed even in Ask mode.
     /// Typically set from `DomainPreset::safe_write_override`.
     pub fn with_safe_write_override(mut self, tools: &[&str]) -> Self {
         self.safe_write_override = tools.iter().map(|s| s.to_lowercase()).collect();
@@ -222,7 +222,7 @@ impl ModeGate {
     /// mode. This is a defense-in-depth check — even if a write tool
     /// somehow appears in the LLM's response (e.g. via a plugin that
     /// registered it after schema filtering), this method will block it.
-    /// /// L1 Domain Mode override: tools in `safe_write_override` are
+    /// L1 Domain Mode override: tools in `safe_write_override` are
     /// allowed even in Ask mode (e.g. `write_file` in Code+Ask).
     pub fn check_tool_call(&self, call: &ToolCall) -> ModeGateDecision {
         if self.mode == TaskMode::Ask

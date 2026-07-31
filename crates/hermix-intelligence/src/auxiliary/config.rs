@@ -33,7 +33,7 @@ pub struct TaskOverride {
 }
 
 /// Top-level configuration consumed by [`super::client::AuxiliaryClient`].
-/// /// Typically populated from the user's `config.yaml` `auxiliary` section but
+/// Typically populated from the user's `config.yaml` `auxiliary` section but
 /// can also be assembled programmatically.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuxiliaryConfig {
@@ -79,7 +79,7 @@ pub struct ResolvedTaskSettings {
 }
 
 /// Resolve the effective routing settings for a single call.
-/// /// `explicit` carries any per-call overrides (from `AuxiliaryRequest`); they
+/// `explicit` carries any per-call overrides (from `AuxiliaryRequest`); they
 /// always win over env / config / defaults.
 pub fn resolve_task_settings(
     task: &AuxiliaryTask,

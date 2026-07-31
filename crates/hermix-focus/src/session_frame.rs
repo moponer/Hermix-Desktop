@@ -2,7 +2,7 @@
 //! agent loop.
 //!
 //! Reference: `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §2.2 (BaiLongma 焦点栈) +
-//! M1 ("FocusStack 抽象").
+//! ("FocusStack 抽象").
 //!
 //! Each top-level session is rooted in one `SessionFrame`; every
 //! `delegate_task` invocation pushes a child frame; when the sub-agent
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(restored.frames()[1].payload.depth, 1);
     }
 
-    // ── M1 lifecycle contract tests ──
+    //── lifecycle contract tests ──
     // These exercise the full push → finish → mark_clear → pop →
     // drain flow that AgentLoop::note_delegation_start +
     // note_delegation_end + drain_focus_conclusions_to_memory_router

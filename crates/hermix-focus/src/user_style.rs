@@ -1,4 +1,4 @@
-//! P2-6 (2026-06-27): dialectic user-style detector — rule-based,
+//! : dialectic user-style detector — rule-based,
 //! zero-LLM, writeable as a `kind=user.style` fact row.
 //!
 //! Honcho's full dialectic profile is a moving target — they recompute

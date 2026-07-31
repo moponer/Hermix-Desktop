@@ -239,7 +239,7 @@ impl ToolHandler for SkillManageHandler {
                     })
                     .unwrap_or_default();
 
-                // P0-1: quality gate. Reject skills that are obviously
+                //quality gate. Reject skills that are obviously
                 // noise — too short, all whitespace, or the
                 // placeholder default. Without this, an LLM that gets
                 // distracted mid-extraction writes empty skills that
@@ -275,7 +275,7 @@ impl ToolHandler for SkillManageHandler {
                     ));
                 }
 
-                // P0-1: frontmatter. Without `---\nname: ...\n---`
+                //frontmatter. Without `---\nname: ...\n---`
                 // frontmatter, `SkillOrchestrator::parse_frontmatter`
                 // still works (it falls back to directory name) but
                 // the skill becomes ambiguous when the LLM later
@@ -295,7 +295,7 @@ impl ToolHandler for SkillManageHandler {
                     content.push_str(&format!("{}. {}\n", idx + 1, s));
                 }
 
-                // P0-1: dedup. If a skill with the same name
+                //dedup. If a skill with the same name
                 // already exists, route to `update_skill` instead
                 // of creating a duplicate. Without this, every
                 // `skill_creation_nudge_interval` ticks the LLM
@@ -322,7 +322,7 @@ impl ToolHandler for SkillManageHandler {
                 }
             }
             "auto_extract_from_conversation" => {
-                // P0-1: deterministic extraction path. The
+                //deterministic extraction path. The
                 // `SKILL_REVIEW_PROMPT` background-review loop is
                 // stochastic — the LLM may decide to write
                 // "Nothing to save." even when a clear reusable
@@ -429,7 +429,7 @@ impl ToolHandler for SkillManageHandler {
             }
             "sync" => Ok("Skill sync request accepted (provider-specific hub sync path).".to_string()),
             "import_from_url" => {
-                // P2-8 (2026-06-27): ingest a community SKILL.md from
+                //: ingest a community SKILL.md from
                 // a URL, parse the agentskills.io open-standard
                 // frontmatter, write it to ~/.hermix/skills/<slug>/SKILL.md.
                 // Why HTTP fetch and not just `download_skill` from
@@ -845,7 +845,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // P0-1: auto_create quality gate
+    //auto_create quality gate
     // -----------------------------------------------------------------
 
     fn valid_auto_create_payload() -> Value {
@@ -946,7 +946,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // P0-1: auto_extract_from_conversation
+    //auto_extract_from_conversation
     // -----------------------------------------------------------------
 
     fn valid_extract_payload() -> Value {

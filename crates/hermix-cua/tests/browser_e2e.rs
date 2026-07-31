@@ -42,7 +42,7 @@ fn launch_opts_isolated() -> (LaunchOptions, tempfile::TempDir) {
 
 /// Test: full lifecycle — launch, navigate, screenshot, evaluate, close.
 ///
-/// This exercises the core Phase 2-E CDP client pipeline end to end.
+/// This exercises the core self-hosted CDP client pipeline end to end.
 #[test]
 #[ignore]
 fn browser_full_lifecycle() {

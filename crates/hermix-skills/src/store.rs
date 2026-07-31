@@ -58,7 +58,7 @@ struct SkillFrontmatter {
 // ---------------------------------------------------------------------------
 
 /// File-system backed skill store.
-/// /// Skills are stored as `<skills_dir>/<category>/<name>/SKILL.md`.
+/// Skills are stored as `<skills_dir>/<category>/<name>/SKILL.md`.
 /// Each file contains a YAML frontmatter block followed by the skill
 /// content in Markdown.
 pub struct FileSkillStore {
@@ -72,7 +72,7 @@ impl FileSkillStore {
     }
 
     /// Return the default skills directory.
-    /// /// Resolves to `$HERMIX_PORTABLE_DATA_DIR/skills`, `$HERMIX_HOME/skills`,
+    /// Resolves to `$HERMIX_PORTABLE_DATA_DIR/skills`, `$HERMIX_HOME/skills`,
     /// or `~/.hermix/skills` — same precedence chain as `hermix_home()`.
     pub fn default_dir() -> PathBuf {
         hermix_config::paths::hermix_home().join("skills")
@@ -412,7 +412,7 @@ pub enum SkillEvent {
 pub type SkillEventCallback = Box<dyn Fn(SkillEvent) + Send + Sync>;
 
 /// Watches a skills directory for SKILL.md changes and emits events.
-/// /// Uses the `notify` crate for cross-platform file system watching.
+/// Uses the `notify` crate for cross-platform file system watching.
 /// The watcher runs in a background thread and emits events via a callback.
 pub struct SkillWatcher {
     _watcher: notify::RecommendedWatcher,
@@ -420,7 +420,7 @@ pub struct SkillWatcher {
 
 impl SkillWatcher {
     /// Create a new watcher for the given skills directory.
-    /// /// The `callback` is called whenever a SKILL.md file is created,
+    /// The `callback` is called whenever a SKILL.md file is created,
     /// modified, or deleted. The watcher runs in a background thread.
     pub fn new(
         skills_dir: PathBuf,

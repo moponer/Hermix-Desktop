@@ -1,6 +1,6 @@
 //! Protocol fallback single point (C2 refactor).
 //!
-//! ## Design philosophy (revised 2026-07-09)
+//! ## Design philosophy (revised )
 //!
 //! The normal flow is simple:
 //! 1. LLM thinks → `</think>` goes to collapsible block in the UI
@@ -20,7 +20,7 @@
 //!    LLM hasn't used any tools yet, push it to start. (One time only.)
 //! 3. **Finalize** — default: let the loop end naturally.
 //!
-//! Removed (2026-07-09):
+//! Removed :
 //! - **Patch blank bubble** — previously, if the LLM produced no visible text
 //!   but a previous turn had visible text alongside tool calls, we'd reuse
 //!   that text to fill the blank bubble. This is **fabricating LLM output**.
@@ -29,7 +29,7 @@
 //!   counterproductive: the reasoning-only message was added to context, so
 //!   the LLM saw its own "answer" and returned reasoning-only again.
 //!
-//! Added (2026-07-09):
+//! Added :
 //! - **Post-tool nudge** — when the LLM stops after tool execution with only
 //!   reasoning_content (no visible text, no tool calls), inject ONE system
 //!   message asking it to produce visible text or continue working. This gives
@@ -38,7 +38,7 @@
 //!   `local_agent_service` falls back to `reasoning_content` as the visible
 //!   reply so the user always sees something.
 //!
-//! Added (2026-07-23):
+//! Added :
 //! - **Tool-failure-retry nudge** — when the LLM stops after a *failed* tool
 //!   call (e.g. memory "No entry matched") with visible text but no tool
 //!   calls, the old code went straight to `Finalize` and the task was over
@@ -57,7 +57,7 @@ use hermix_core::Message;
 /// Coarse classification of a tool failure, used by
 /// `decide_empty_response` to decide whether the LLM should be nudged
 /// to retry with a different approach.
-/// /// introduced alongside the tool-failure-retry nudge.
+/// introduced alongside the tool-failure-retry nudge.
 /// Without this, the agent loop couldn't tell apart "the LLM gave up"
 /// (worth a Finalize) from "the LLM wants to retry but forgot to call a
 /// tool" (worth a nudge).
@@ -109,7 +109,7 @@ impl ToolFailureRecord {
     /// current turn produced no tool errors — so the section 2c nudge
     /// stays a pure "LLM was about to give up after a real failure"
     /// guard and never misfires on a genuine completion.
-    /// /// `ToolErrorRecord` only carries the formatted error string (not
+    /// `ToolErrorRecord` only carries the formatted error string (not
     /// the `ToolError` variant), so classification is by stable string
     /// markers emitted by the backends.
     pub fn from_recent_error(errors: &[hermix_core::ToolErrorRecord], current_turn: u32) -> Option<Self> {
@@ -127,7 +127,7 @@ impl ToolFailureRecord {
 }
 
 /// Map a formatted tool-error string to a coarse [`ToolFailureKind`].
-/// /// The `[PERMISSION_DENIED]` prefix is the stable marker the runtime
+/// The `[PERMISSION_DENIED]` prefix is the stable marker the runtime
 /// emits for ACL / sandbox / environment restrictions (handled by the
 /// permission-giveup nudge, so we route it there to avoid double-nudging).
 fn classify_failure(msg: &str) -> ToolFailureKind {
@@ -153,7 +153,7 @@ fn classify_failure(msg: &str) -> ToolFailureKind {
 pub const CODEX_MAX_ACK_CONTINUATIONS: u32 = 2;
 
 /// Max post-tool nudges before respecting the LLM's stop signal.
-/// /// When the LLM stops after tool execution with only reasoning_content
+/// When the LLM stops after tool execution with only reasoning_content
 /// (no visible text, no tool calls), we inject a system nudge to push it
 /// to produce visible output or continue working. Previously this fired
 /// only once (`== 0` check), which was too aggressive: the LLM often
@@ -161,7 +161,7 @@ pub const CODEX_MAX_ACK_CONTINUATIONS: u32 = 2;
 /// - The `<think>` tag wasn't closed, routing all text to reasoning
 /// - The LLM was confused by a tool error and needs to re-orient
 /// - The LLM's first nudge response was still thinking-only
-/// /// After `MAX_POST_TOOL_NUDGES` attempts, we respect the LLM's decision
+/// After `MAX_POST_TOOL_NUDGES` attempts, we respect the LLM's decision
 /// and finalize. The `local_agent_service` falls back to
 /// `reasoning_content` as the visible reply so the user always sees
 /// something.
@@ -169,7 +169,7 @@ pub const MAX_POST_TOOL_NUDGES: u32 = 3;
 
 /// Max "agent-recovery" nudges (permission-giveup + tool-failure-retry
 /// combined) before respecting the LLM's stop signal.
-/// /// this cap is shared between permission-giveup and
+/// this cap is shared between permission-giveup and
 /// tool-failure-retry because both nudges are aimed at the same situation
 /// — the LLM has a visible-text answer but the underlying task isn't
 /// done yet, and we want one more push before we Finalize. Using a
@@ -179,7 +179,7 @@ pub const MAX_AGENT_RECOVERY_NUDGES: u32 = 3;
 
 /// Max "completion-verification" nudges before respecting the LLM's
 /// stop signal.
-/// /// (用户反馈 #2): the agent must NOT declare a task complete
+/// ( #2): the agent must NOT declare a task complete
 /// on the strength of a visible-text reply alone. When tools were used
 /// this session and the LLM is about to finalize (visible text, no new
 /// tool call, no recoverable failure), we inject ONE verification nudge
@@ -253,7 +253,7 @@ pub struct EmptyResponseOutput {
 
 /// Detect if the LLM's visible text looks like it's giving up due to
 /// perceived permission/sandbox restrictions.
-/// /// The LLM may produce visible text like "I don't have permission" or
+/// The LLM may produce visible text like "I don't have permission" or
 /// "I'm in a sandbox and can't access X" without actually trying the
 /// command. This is a false give-up — the system is NOT a sandbox and
 /// the LLM has full filesystem access.
@@ -303,11 +303,11 @@ fn looks_like_permission_giveup(text: &str) -> bool {
 
 /// Single authority for "what should the loop do when the LLM produces
 /// no tool calls this turn".
-/// /// Priority order:
+/// Priority order:
 /// 1. Codex ack continuation (protocol need)
 /// 2. Post-tool nudge (push LLM to produce visible text after tools — one time only)
 /// 2b. Permission-give-up nudge (LLM claims it lacks permissions — push it to try alternatives)
-/// 2c. Tool-failure-retry nudge (LLM had a recoverable tool error but didn't retry — push it to keep going) [2026-07-23]
+/// 2c. Tool-failure-retry nudge (LLM had a recoverable tool error but didn't retry — push it to keep going) []
 /// 3. Autonomous pre-tool nudge (push LLM to start working — one time only)
 /// 4. Finalize (default — trust the LLM's stop signal)
 pub fn decide_empty_response(
@@ -530,7 +530,7 @@ pub fn decide_empty_response(
         };
     }
 
-    // 2d. Completion-verification gate — (用户反馈 #2).
+    //2d. Completion-verification gate — ( #2).
     // The agent must NOT declare a task complete on the strength of
     // a visible-text reply alone. When tools were used this session
     // and the LLM is about to finalize (visible text, no new tool

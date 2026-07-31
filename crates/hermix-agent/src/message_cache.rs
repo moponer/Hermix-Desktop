@@ -1,12 +1,12 @@
 //! Per-loop message bookkeeping cache.
 //!
-//! Phase 5 (2026-07-03): the 2 fields (`last_checkpoint_messages`,
+//! : the 2 fields (`last_checkpoint_messages`,
 //! `last_content_with_tools`) that used to live inline on `LoopState`
 //! were extracted into one struct so `publish_from` and the helpers
 //! in `process_post_response` don't have to pass them as individual
 //! `&mut Option<...>` arguments.
 //!
-//! Physically split out of `agent_loop.rs` (2026-07-04); API contract
+//! Physically split out of `agent_loop.rs` ; API contract
 //! unchanged. Fields stay `pub(crate)` so existing
 //! `state.message_cache.last_content_with_tools` test-code
 //! assertions keep compiling without accessor-method churn.
@@ -14,7 +14,7 @@
 use hermix_core::Message;
 
 /// Per-loop message bookkeeping cache.
-/// /// The two fields stay co-located on `self.message_cache` and mutate
+/// The two fields stay co-located on `self.message_cache` and mutate
 /// in place via the `store_*` / `take_*` / `checkpoint` methods.
 /// Reset / `Default` produce the same all-`None` state as before,
 /// so `LoopState::default()` semantics are unchanged.

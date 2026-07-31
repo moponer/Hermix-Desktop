@@ -20,7 +20,7 @@ base64 = { workspace = true }
 # lock here, not a tokio Mutex.
 parking_lot = "0.12"
 
-# Phase 2-E: Self-hosted CDP client (browser automation).
+# Self-hosted CDP client (browser automation).
 # The CDP stack is the only place in hermix-cua that pulls in
 # tokio — everything else is synchronous + blocking, exposed via
 # `run_blocking` from the hermix-tools handlers. We deliberately
@@ -40,18 +40,17 @@ reqwest = { workspace = true, default-features = false, features = ["json", "rus
 # that we hand to tungstenite).
 url = { workspace = true }
 
-# Screen capture (Phase 1: BitBlt + GetDesktopWindow).
-# Phase 2 will switch the capture backend to DXGI Output
-# Duplication (`IDXGIOutputDuplication`) for sub-frame latency;
-# the `BitBlt` path is a fallback that always works on any
-# Windows 10/11 install with no extra runtime.
+# Screen capture (BitBlt + GetDesktopWindow). The capture backend
+# also supports DXGI Output Duplication (`IDXGIOutputDuplication`)
+# for sub-frame latency; the `BitBlt` path is a fallback that always
+# works on any Windows 10/11 install with no extra runtime.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
-    # Phase 2: DXGI Output Duplication + D3D11 staging texture.
+    # DXGI Output Duplication + D3D11 staging texture.
     # Provides IDXGIFactory1, IDXGIAdapter1, IDXGIOutput1,
     # IDXGIOutputDuplication::AcquireNextFrame, and the D3D11
     # device / device-context / texture surface used to copy the
@@ -60,13 +59,13 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
-    # Phase 2: UIAutomation client COM interfaces.
+    # UIAutomation client COM interfaces.
     # Provides IUIAutomation, IUIAutomationElement, IUIAutomationCondition,
     # IUIAutomationTreeWalker, CUIAutomation, control-type IDs, property IDs.
     "Win32_UI_Accessibility",
     # COM runtime for CoCreateInstance / CoInitializeEx / CLSCTX_ALL.
     "Win32_System_Com",
-    # Phase 2-D: OCR via Windows.Media.Ocr WinRT API.
+    # OCR via Windows.Media.Ocr WinRT API.
     "Media_Ocr",
     "Graphics_Imaging",
     "Storage_Streams",

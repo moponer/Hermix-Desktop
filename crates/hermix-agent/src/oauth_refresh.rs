@@ -216,7 +216,7 @@ impl OAuthRefresh {
             expires_in: Option<i64>,
         }
 
-        // (P1-5): mandatory connect + request timeouts so a stalled
+        //: mandatory connect + request timeouts so a stalled
         // OAuth token endpoint doesn't block the agent indefinitely.
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))

@@ -50,7 +50,7 @@ use rusqlite::params;
 use hermix_gateway::groupchat::persistence::*;
 
 /// SQLite implementation of [`RoomPersistence`].
-/// /// Construct via [`SqliteRoomPersistence::new(hermix_home)`] — this resolves
+/// Construct via [`SqliteRoomPersistence::new(hermix_home)`] — this resolves
 /// the database path under `<hermix_home>/data/groupchat.db` and runs
 /// `ensure_db()` to create tables/indexes if missing.
 pub struct SqliteRoomPersistence {
@@ -753,7 +753,7 @@ impl RoomPersistence for SqliteRoomPersistence {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
-    /// M4 — paginated message loading. Returns up to `limit` messages
+    /// — paginated message loading. Returns up to `limit` messages
     /// older than the message identified by `before_id` (using created_at).
     fn get_messages_paginated(
         &self,
@@ -1068,7 +1068,7 @@ impl RoomPersistence for SqliteRoomPersistence {
     }
 }
 
-/// M4 — shared row parser for message queries.
+/// — shared row parser for message queries.
 fn parse_message_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<ChatMessage> {

@@ -1,6 +1,6 @@
 //! Standalone prompt-assembly helpers used by `agent_loop`.
 //!
-//! Extracted from `agent_loop.rs` (P2.x, 2026-07-04) so the 10k-line
+//! Extracted from `agent_loop.rs` (P2.x, ) so the 10k-line
 //! `agent_loop.rs` can focus on the `impl AgentLoop` block. **No behavior
 //! change** — pure relocation of pure functions.
 //!
@@ -45,7 +45,7 @@ pub fn should_inject_tool_enforcement(model: &str) -> bool {
 /// Short format hint string that nudges the model toward the
 /// appropriate output style for the active platform (CLI / chat / email / SMS).
 /// Returns `None` when no platform-specific hint applies.
-/// /// When `AgentConfig::platform_hint_override` is set:
+/// When `AgentConfig::platform_hint_override` is set:
 /// - If the override starts with `+`, it is **appended** to the built-in hint.
 /// - Otherwise it **replaces** the built-in hint entirely.
 pub fn platform_hint_text(config: &AgentConfig) -> Option<String> {
@@ -274,7 +274,7 @@ pub fn messages_for_api_call(config: &AgentConfig, ctx: &ContextManager) -> Vec<
         messages.push(Message::system(ephemeral));
     }
 
-    // --- Phase 0: Normalization pipeline (Claude Code-inspired) ---
+    //Normalization pipeline (Claude Code-inspired) ---
 
     // 0a. Merge consecutive user messages (Bedrock rejects them).
     // 显式写 `Vec<Message>` 而非靠推断：上游 `messages = merged;` 之后
@@ -385,10 +385,10 @@ pub fn apply_prompt_cache_markers(config: &AgentConfig, messages: &mut [Message]
 }
 
 /// Build the per-turn dynamic suffix of the system prompt.
-/// /// This is the only part of the system prompt that changes every turn:
+/// This is the only part of the system prompt that changes every turn:
 /// - the timestamp block (model + provider name)
 /// - the optional session_id line (when `pass_session_id` is on)
-/// /// The rest of the prompt is split into two independently cached
+/// The rest of the prompt is split into two independently cached
 /// layers (`build_stable_layer` and `build_context_layer`) so that a
 /// mutation to one layer does not force the other to re-render.
 pub fn build_dynamic_suffix(config: &AgentConfig, model_for_prompt: &str) -> String {
@@ -410,7 +410,7 @@ pub fn build_dynamic_suffix(config: &AgentConfig, model_for_prompt: &str) -> Str
     suffix.build().to_string()
 }
 
-/// P4-T2 (tool error demotion): same as [`build_system_prompt`] but
+/// (tool error demotion): same as [`build_system_prompt`] but
 /// takes a snapshot of the running tool error counts. Tools at or above
 /// `config.tool_error_demotion_threshold` errors are surfaced as a
 /// soft hint block in the system prompt. `None` disables the
@@ -489,7 +489,7 @@ pub fn build_system_prompt_with_tool_errors(
         b.build().to_string()
     };
 
-    // P4-T2: append the tool-error demotion block as a separate
+    //append the tool-error demotion block as a separate
     // `## Tool Failures` section after the directions. Empty when
     // `tool_error_counts` is None or no tool has reached the configured
     // threshold. Capped at the configured max rows.
@@ -517,7 +517,7 @@ pub fn build_system_prompt_with_tool_errors(
     let prompt = format!("{stable_text}{directions_text}{context_text}{suffix_text}");
     tracing::Span::current().record("out_chars", prompt.len());
 
-    // ★ Cache-effectiveness summary (2026-07-05): one info event per
+    //★ Cache-effectiveness summary : one info event per
     // turn so operators can compare token usage before vs after the
     // three-tier cache was enabled.  Token estimates use chars ÷ 4.
     let stable_est = stable_text.len() / 4;
@@ -550,11 +550,11 @@ pub fn build_system_prompt_with_tool_errors(
 }
 
 /// Build the full system prompt including identity, memory, and plugin context.
-/// /// Aligns with Python behavior:
+/// Aligns with Python behavior:
 /// - prefer `~/.hermix/SOUL.md` as identity
 /// - fallback to `DEFAULT_AGENT_IDENTITY`
 /// - then append optional configured `system_prompt`
-/// /// Three-tier cache layout (2026-07-04):
+/// Three-tier cache layout :
 /// - **stable**  — soul, configured system_prompt, directions, tools
 /// section, personality profile, alibaba hint, platform hint,
 /// workspace block. Invalidates on model / personality /
@@ -649,7 +649,7 @@ pub fn build_system_prompt(
     let prompt = format!("{stable_text}{directions_text}{context_text}{suffix_text}");
     tracing::Span::current().record("out_chars", prompt.len());
 
-    // ★ Cache-effectiveness summary (2026-07-05): one info event per
+    //★ Cache-effectiveness summary : one info event per
     // turn so operators can compare token usage before vs after the
     // three-tier cache was enabled.  Token estimates use chars ÷ 4.
     let stable_est = stable_text.len() / 4;
@@ -731,7 +731,7 @@ fn build_stable_layer(
     }
 
     // ★ directions[] moved to the per-turn dynamic layer in
-    // `build_system_prompt` (2026-07-08). Previously directions were
+    //`build_system_prompt` . Previously directions were
     // baked into the stable cache with tool_call_count=0, which meant
     // HadAnyToolUse / MultiStepTask routes never fired — summary and
     // stopping guidance were silently skipped every turn, leaving the
@@ -908,13 +908,13 @@ fn build_context_layer(
     rendered
 }
 
-/// P4-T2 wire: same as [`resolve_initial_system_prompt`] but threads
+/// wire: same as [`resolve_initial_system_prompt`] but threads
 /// the running per-tool error counter into the rendered prompt.
 /// `tool_error_counts == None` falls back to the legacy build path;
 /// `Some(map)` triggers the `[Tool Failure Hints]` block via
 /// [`build_system_prompt_with_tool_errors`].
-/// /// All other behavior — cached prompt restoration, SectionGate audit,
-/// M2 protocol-completeness — is byte-identical to
+/// All other behavior — cached prompt restoration, SectionGate audit,
+/// protocol-completeness — is byte-identical to
 /// [`resolve_initial_system_prompt`].
 pub fn resolve_initial_system_prompt_with_tool_errors(
     config: &AgentConfig,
@@ -988,7 +988,7 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
             false,
         )
     };
-    // ★ M2: protocol-completeness single choke point. Audit the
+    //★ : protocol-completeness single choke point. Audit the
     // produced prompt against the section gate; if any required
     // marker is missing, splice in the default body. This is the
     // *only* function in `agent_loop` that mutates the system
@@ -1039,7 +1039,7 @@ pub fn resolve_initial_system_prompt_with_tool_errors(
 /// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
 /// Thin shim over [`resolve_initial_system_prompt_with_tool_errors`] with
 /// `tool_error_counts = None`. Preserves the legacy call sites that
-/// pre-date P4-T2 (17 callers in `agent_loop` tests).
+/// pre-date (17 callers in `agent_loop` tests).
 pub fn resolve_initial_system_prompt(
     config: &AgentConfig,
     prompt_cache: &Mutex<crate::agent_helpers::PromptCache>,
@@ -1075,7 +1075,7 @@ mod tests {
     /// every call, *then* store it in the slot, but still use the
     /// freshly-rendered text for the prompt. The cache never actually
     /// short-circuited the second-call computation.
-    /// /// (round 5): split into two layers (stable + context);
+    /// (round 5): split into two layers (stable + context);
     /// pin that the **stable** slot is still read-before-write and the
     /// second call with identical config does not re-render the
     /// stable layer.
@@ -1144,7 +1144,7 @@ mod tests {
         );
     }
 
-    /// Round 5 (three-tier split): the context layer is rendered
+    /// (three-tier split): the context layer is rendered
     /// independently of the stable layer. When the underlying context
     /// store is the same (no epoch bump), the second call reuses the
     /// context slot. When the config changes (e.g. skip_memory flips),
@@ -1174,7 +1174,7 @@ mod tests {
         );
     }
 
-    /// Round 5 sanity: with `skip_memory = true` the context layer
+    /// sanity: with `skip_memory = true` the context layer
     /// must still render (just shorter) and the resulting prompt must
     /// be smaller than with memory on — proving the context layer is
     /// wired up correctly.
@@ -1229,7 +1229,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------
-    // P4-T2 wire tests
+    //wire tests
     // -------------------------------------------------------------
 
     #[test]

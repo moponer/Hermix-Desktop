@@ -686,7 +686,7 @@ impl TelegramAdapter {
     }
 
     /// Fetch updates with exponential backoff on failures.
-    /// /// On success the backoff resets to zero. On failure the delay doubles
+    /// On success the backoff resets to zero. On failure the delay doubles
     /// each time (1 s → 2 s → 4 s … capped at 60 s). The caller can inspect
     /// `PollResult::Backoff` and decide whether to sleep or abort.
     pub async fn poll_with_backoff(&self) -> PollResult {
@@ -740,7 +740,7 @@ impl TelegramAdapter {
     // -----------------------------------------------------------------------
 
     /// Parse a Telegram Update into an IncomingMessage.
-    /// /// Handles both regular messages and callback queries.
+    /// Handles both regular messages and callback queries.
     pub fn parse_update(update: &Update) -> Option<IncomingMessage> {
         if let Some(ref cq) = update.callback_query {
             return Self::parse_callback_query(cq);
@@ -898,7 +898,7 @@ impl TelegramAdapter {
     }
 
     /// Check whether a text message mentions this bot (for group filtering).
-    /// /// Returns `true` if the message contains `@bot_username` or if the
+    /// Returns `true` if the message contains `@bot_username` or if the
     /// bot_username is not configured (pass-through).
     pub fn is_mentioned_in(&self, text: &str) -> bool {
         match self.config.bot_username {
@@ -926,7 +926,7 @@ impl TelegramAdapter {
     // -----------------------------------------------------------------------
 
     /// POST JSON to a Telegram API endpoint and deserialize the response.
-    /// /// Detects HTTP 429 (rate limited) responses, extracts `retry_after`
+    /// Detects HTTP 429 (rate limited) responses, extracts `retry_after`
     /// from the response body, sleeps, then retries up to
     /// `RATE_LIMIT_MAX_RETRIES` times.
     async fn post_json<T: serde::de::DeserializeOwned>(

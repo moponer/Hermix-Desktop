@@ -1,6 +1,6 @@
 //! Pre-dispatch + per-call tool routing helpers.
 //!
-//! Phase 5 module reshape (2026-07-04). Mirrors the OAuthRefresh /
+//! module reshape . Mirrors the OAuthRefresh /
 //! CostGuard / ContextPressureMonitor / RetryCounters / runtime_provider
 //! / cost_routing sibling layout established earlier today.
 //!
@@ -130,7 +130,7 @@ pub(crate) fn hydrate_session_search_args(session_id: Option<&str>, tc: &mut Too
 /// Build a per-tool hint that we append to a user-denial reason so the
 /// LLM, on its next turn, has a concrete suggestion for *which* tool
 /// would have been more appropriate.
-/// /// Static string table; no `self` dependency. Lives here so
+/// Static string table; no `self` dependency. Lives here so
 /// `resolve_pre_dispatch` (also here) keeps the hint generation close.
 pub(crate) fn denial_repick_hint(tool_name: &str, raw_args: &str) -> &'static str {
     match tool_name {
@@ -165,13 +165,13 @@ pub(crate) fn denial_repick_hint(tool_name: &str, raw_args: &str) -> &'static st
 }
 
 /// Resolve the pre-tool-dispatch hook for every tool call up front.
-/// /// When `AgentCallbacks::on_pre_tool_dispatch` is set, this invokes the
+/// When `AgentCallbacks::on_pre_tool_dispatch` is set, this invokes the
 /// hook once per tool call. `Allow` and `Deny` decisions resolve
 /// synchronously; `AwaitApproval` blocks on a `oneshot::Receiver` until
 /// the upstream layer (e.g. `LocalAgentService`) sends a verdict. The
 /// returned map is keyed by `ToolCall::id` and consumed by both the
 /// orchestrated `delegate_task` path and the `JoinSet` path.
-/// /// (type-B root-cause): when `shutdown` is `Some`, the
+/// (type-B root-cause): when `shutdown` is `Some`, the
 /// `AwaitApproval` arm races the oneshot against `Notify::notified()`
 /// so a server-side WebSocket disconnect unblocks the agent task as
 /// `ApprovalOutcome::ChannelClosed` instead of stranding it in a bare
@@ -228,7 +228,7 @@ pub(crate) async fn resolve_pre_dispatch(
                 // also kills any chance of writing the denial note to
                 // the context before exit).
                 //
-                // CRITICAL (2026-07-29): DEFAULT_APPROVAL_TIMEOUT is
+                //CRITICAL : DEFAULT_APPROVAL_TIMEOUT is
                 // Duration::ZERO (user requested no auto-deny). If the
                 // `request_approval` event is lost or the frontend
                 // doesn't render the card, the agent blocks HERE
@@ -481,8 +481,8 @@ mod tests {
     use super::*;
 
     /// Stable, canonical key for cross-turn tool-call deduplication.
-    /// /// Moved to `#[cfg(test)]` — the cross-turn dedup feature was removed
-    /// (2026-07-09), so this function only lives on for its test.
+    /// Moved to `#[cfg(test)]` — the cross-turn dedup feature was removed
+    /// , so this function only lives on for its test.
     fn tool_call_dedup_key(tc: &ToolCall) -> String {
         let name = tc.function.name.to_lowercase();
         let args = tc.function.arguments.trim();

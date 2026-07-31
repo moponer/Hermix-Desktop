@@ -1,4 +1,4 @@
-//! In-memory per-run trace recorder (Telemetry future② — Tracing, 2026-07-19).
+//! In-memory per-run trace recorder (Telemetry future② — Tracing, ).
 //!
 //! Goal: give the agent loop / groupchat runtime a queryable per-`trace_id`
 //! timeline of phase boundaries, tool calls, and LLM call start/end — useful

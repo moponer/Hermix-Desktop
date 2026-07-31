@@ -126,7 +126,7 @@ impl WhatsAppAdapter {
     }
 
     /// Verify a WhatsApp webhook subscription challenge.
-    /// /// Returns `Some(challenge)` if `mode` is `"subscribe"` and `token` matches
+    /// Returns `Some(challenge)` if `mode` is `"subscribe"` and `token` matches
     /// the configured `verify_token`; otherwise returns `None`.
     pub fn verify_webhook(
         mode: &str,
@@ -142,7 +142,7 @@ impl WhatsAppAdapter {
     }
 
     /// Parse incoming messages from a WhatsApp webhook notification body.
-    /// /// Walks through `entry[].changes[].value.messages[]` and extracts text
+    /// Walks through `entry[].changes[].value.messages[]` and extracts text
     /// messages (other types are recorded with an empty `text` field).
     pub fn parse_webhook_event(body: &serde_json::Value) -> Vec<IncomingWhatsAppMessage> {
         let mut messages = Vec::new();

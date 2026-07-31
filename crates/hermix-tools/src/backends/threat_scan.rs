@@ -33,7 +33,7 @@ use regex::Regex;
 use serde_json::json;
 use std::sync::LazyLock;
 
-// (P1-1): Helper to compile static regex patterns without
+//: Helper to compile static regex patterns without
 // .unwrap(). Uses .expect() with a semantic message as required by
 // the code hardening plan (static init cannot use `?`).
 fn re(pattern: &'static str) -> Regex {

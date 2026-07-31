@@ -20,7 +20,7 @@ use hermix_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema, t
 use crate::ToolRegistry;
 use std::sync::Arc;
 
-// (P1-1): Helper to compile static regex patterns without
+//: Helper to compile static regex patterns without
 // .unwrap(). Uses .expect() with a semantic message as required by
 // the code hardening plan (static init cannot use `?`).
 fn re(pattern: &'static str) -> Regex {
@@ -67,7 +67,7 @@ pub trait CodeExecutionBackend: Send + Sync {
     ) -> Result<String, ToolError>;
 
     /// Languages this backend can serve **right now** on this host.
-    /// /// Used by [`ExecuteCodeHandler::schema`] to populate the `language`
+    /// Used by [`ExecuteCodeHandler::schema`] to populate the `language`
     /// enum (and the description) with what's actually available, so
     /// the LLM doesn't keep calling `language="typescript"` on a host
     /// without `npx`. Synchronous because it's a cheap probe (PATH
@@ -171,7 +171,7 @@ pub struct CodeExecutionGuard;
 
 impl CodeExecutionGuard {
     /// Check `code` against built-in denied and confirmation patterns.
-    /// /// Returns [`CodeExecutionDecision::Denied`] if a destructive pattern
+    /// Returns [`CodeExecutionDecision::Denied`] if a destructive pattern
     /// is found, [`CodeExecutionDecision::RequiresConfirmation`] if a
     /// risky but possibly legitimate pattern is found, or
     /// [`CodeExecutionDecision::Approved`] if the code looks safe.

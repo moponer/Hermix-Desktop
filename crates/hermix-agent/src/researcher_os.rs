@@ -4,13 +4,13 @@
 // (struct + small policy function + tests); orchestration lives
 // elsewhere.
 //
-// P5-T1 SourceRegistry         - registered external sources
-// P5-T2 MechanismRegistry      - mechanism hypotheses
-// P5-T3 ClaimProvenance        - claim <-> source links
-// P5-T4 CorpusIndex            - FTS5-friendly document index
-// P5-T5 RunStateMachine        - background run lifecycle
-// P5-T6 AdversarialBenchmark   - adversarial regression cases
-// P5-T7 ContinuousLoop         - the orchestrator signature
+//SourceRegistry - registered external sources
+//MechanismRegistry - mechanism hypotheses
+//ClaimProvenance - claim <-> source links
+//CorpusIndex - FTS5-friendly document index
+//RunStateMachine - background run lifecycle
+//AdversarialBenchmark - adversarial regression cases
+//ContinuousLoop - the orchestrator signature
 //
 // All public surfaces return Result. The agent loop MUST swallow
 // errors at the call site so a partial research state can never
@@ -37,7 +37,7 @@ fn now_unix_secs() -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// P5-T1 - SourceRegistry
+//SourceRegistry
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,7 +110,7 @@ impl SourceRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// P5-T2 - MechanismRegistry
+//MechanismRegistry
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -168,7 +168,7 @@ pub enum MechanismUpdate {
 }
 
 // ---------------------------------------------------------------------------
-// P5-T3 - ClaimProvenance
+//ClaimProvenance
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -230,7 +230,7 @@ impl ClaimProvenance {
 }
 
 // ---------------------------------------------------------------------------
-// P5-T4 - CorpusIndex
+//CorpusIndex
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -310,7 +310,7 @@ impl CorpusIndex {
 }
 
 // ---------------------------------------------------------------------------
-// P5-T5 - RunStateMachine
+//RunStateMachine
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,7 +374,7 @@ pub fn transition(from: RunStatus, to: RunStatus) -> Result<RunStatus, Transitio
 }
 
 // ---------------------------------------------------------------------------
-// P5-T6 - AdversarialBenchmark
+//AdversarialBenchmark
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -426,7 +426,7 @@ impl AdversarialBenchmark {
 }
 
 // ---------------------------------------------------------------------------
-// P5-T7 - ContinuousLoop
+//ContinuousLoop
 // ---------------------------------------------------------------------------
 
 /// Snapshot of the loop state. The actual orchestration (timers,
@@ -476,7 +476,7 @@ impl ContinuousLoop {
 }
 
 // ---------------------------------------------------------------------------
-// Disk layer (reuses the append-only JSONL pattern from P4-T5/6)
+//Disk layer (reuses the append-only JSONL pattern from /6)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
@@ -541,7 +541,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> JsonlStore<T> {
 mod tests {
     use super::*;
 
-    // P5-T1
+    //
     #[test]
     fn source_registry_basic_ops() {
         let mut r = SourceRegistry::new();
@@ -580,7 +580,7 @@ mod tests {
         assert_eq!(r.get("a").unwrap().url, "u2");
     }
 
-    // P5-T2
+    //
     #[test]
     fn mechanism_registry_strictly_increasing_version_wins() {
         let mut r = MechanismRegistry::new();
@@ -623,7 +623,7 @@ mod tests {
         }
     }
 
-    // P5-T3
+    //
     #[test]
     fn claim_provenance_round_trip() {
         let mut p = ClaimProvenance::new();
@@ -639,7 +639,7 @@ mod tests {
         assert_eq!(p.claims_for_source("nope").len(), 0);
     }
 
-    // P5-T4
+    //
     #[test]
     fn corpus_entry_tokenises_lowercases_alphanumeric() {
         let e = CorpusEntry::build("d1", "/tmp/d1.md", "Hello, World! 99% sure.");
@@ -661,7 +661,7 @@ mod tests {
         assert_eq!(idx.search("missing").len(), 0);
     }
 
-    // P5-T5
+    //
     #[test]
     fn run_state_pending_to_running_ok() {
         assert!(transition(RunStatus::Pending, RunStatus::Running).is_ok());
@@ -688,7 +688,7 @@ mod tests {
         assert!(transition(RunStatus::Pending, RunStatus::Succeeded).is_err());
     }
 
-    // P5-T6
+    //
     #[test]
     fn adversarial_matches_by_substring_case_insensitive() {
         let mut b = AdversarialBenchmark::new();
@@ -702,7 +702,7 @@ mod tests {
         assert_eq!(b.matching("unrelated").len(), 0);
     }
 
-    // P5-T7
+    //
     #[test]
     fn continuous_loop_increments_tick_id_monotonically() {
         let mut l = ContinuousLoop::new();

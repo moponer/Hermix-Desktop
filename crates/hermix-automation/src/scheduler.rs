@@ -4,7 +4,7 @@
 //! firing time, and dispatches any automation whose `next_run_at` has elapsed.
 //! Dispatch is fire-and-forget — we don't block the tick loop on a slow run.
 //!
-//! (Phase 5 — P5-2)
+//!
 //!
 //! The scheduler is decoupled from the execution layer via a callback:
 //! the caller provides a `TriggerFn` that receives the automation and
@@ -31,7 +31,7 @@ pub struct AutomationScheduler {
 
 impl AutomationScheduler {
     /// Start the background tick loop.
-    /// /// - `service`: the automation service for querying + updating state
+    /// - `service`: the automation service for querying + updating state
     /// - `trigger`: callback invoked for each due automation
     /// - `tick_interval`: how often to check for due automations (default 30s)
     pub fn start(

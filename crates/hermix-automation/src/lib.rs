@@ -1,6 +1,6 @@
 //! # hermix-automation
 //!
-//! Automation engine with three-table separation (Phase 5):
+//! Automation engine with three-table separation :
 //!
 //! - **`automations`** — definition table: name, prompt, schedule, status
 //! - **`automation_runtime_state`** — runtime table: last_run, next_run, run_count
@@ -10,7 +10,7 @@
 //! decoupled from execution history, enabling independent queries and
 //! efficient updates without touching the definition row.
 //!
-//! (Phase 5 — P5-1 through P5-5)
+//!
 
 pub mod repository;
 pub mod scheduler;

@@ -4,7 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
 repository = { workspace = true }
-description = "Unified MemoryLayer abstraction + FocusStack (5-state frame stack) + salience scoring, backed by embedded SQLite. Phase 8 H5 of the BaiLongma-inspired design."
+description = "Unified MemoryLayer abstraction + FocusStack (5-state frame stack) + salience scoring, backed by embedded SQLite (BaiLongma-inspired design)."
 
 [dependencies]
 hermix-core = { workspace = true }

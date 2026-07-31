@@ -1,4 +1,4 @@
-//! Phase A — contract scenarios (see `python_alignment` module docs in `hermes-agent`).
+//! Contract scenarios (see `python_alignment` module docs in `hermes-agent`).
 
 use hermix_agent::{
     leading_system_prompt_for_persist, python_alignment, AgentConfig, AgentLoop, SessionPersistence,

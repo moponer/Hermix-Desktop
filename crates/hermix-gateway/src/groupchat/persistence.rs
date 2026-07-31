@@ -50,12 +50,12 @@ pub struct GroupChatRoom {
 /// user-invited agent — but it still occupies a row in
 /// `groupchat_room_agents` so the existing send_message leader-driven
 /// flow can find and dispatch to it without any code changes.
-/// /// Frontend treats this id as a magic string and renders the leader
+/// Frontend treats this id as a magic string and renders the leader
 /// distinctly (👑, centered message bubble, no kick/model controls).
 /// API endpoints that mutate per-agent state (invite / kick /
 /// update_member_model) reject this id with 400 to prevent the user
 /// from accidentally removing or configuring the built-in leader.
-/// /// IMPORTANT: this id MUST NOT appear in `room.agent_ids` — only in
+/// IMPORTANT: this id MUST NOT appear in `room.agent_ids` — only in
 /// the `groupchat_room_agents` table's `agent_id` column for the leader
 /// row. The room's `agent_ids` list is the user-facing member roster.
 pub const LEADER_AGENT_ID: &str = "__leader__";
@@ -378,7 +378,7 @@ impl RankSnapshot {
     /// Recompute `tier` / `tier_cn` / `badge_emoji` from `score`. Call
     /// this after mutating `score` so the persisted snapshot stays
     /// consistent (otherwise the badge would drift from the score).
-    /// /// P1.5 — returns the result of the transition detection so the
+    /// P1.5 — returns the result of the transition detection so the
     /// caller can decide whether to emit a 升段/掉段 event. `NoTransition`
     /// when the tier hasn't changed.
     pub fn refresh_tier(&mut self) -> TierTransition {
@@ -583,7 +583,7 @@ pub trait RoomPersistence: Send + Sync {
     /// bumps `updated_at` so the caller doesn't need to round-trip
     /// through `get_room` + `update_room` to edit the description while
     /// leaving every other field alone.
-    /// /// Idempotent. Returns `Err("room {id} not found")` when the room
+    /// Idempotent. Returns `Err("room {id} not found")` when the room
     /// doesn't exist (the API layer turns this into 404).
     fn set_description(&self, room_id: &str, description: Option<&str>) -> Result<(), String>;
     fn add_agent(&self, room_id: &str, agent_id: &str, role: AgentRole) -> Result<AgentRoomProfile, String>;
@@ -648,7 +648,7 @@ pub trait RoomPersistence: Send + Sync {
     fn update_settings(&self, room_id: &str, settings: &RoomSettings) -> Result<(), String>;
     fn save_message(&self, msg: &ChatMessage) -> Result<(), String>;
     fn get_messages(&self, room_id: &str, limit: u32) -> Result<Vec<ChatMessage>, String>;
-    /// M4 — paginated message loading. Returns up to `limit` messages
+    /// — paginated message loading. Returns up to `limit` messages
     /// older than `before_id`. When `before_id` is `None`, returns
     /// the most recent messages. Default impl delegates to `get_messages`.
     fn get_messages_paginated(

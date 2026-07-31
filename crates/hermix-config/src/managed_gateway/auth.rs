@@ -118,7 +118,7 @@ fn access_token_is_expiring(expires_at: Option<&str>, skew_seconds: i64) -> bool
 }
 
 /// Read a Nous OAuth subscriber access token.
-/// /// Returns `None` when no token can be sourced from any layer. The
+/// Returns `None` when no token can be sourced from any layer. The
 /// optional `reader` is invoked when the cached token is missing or close
 /// to expiry; pass `None` to skip refresh (tests, server contexts without
 /// the CLI loaded).

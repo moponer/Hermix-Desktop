@@ -1,13 +1,13 @@
 //! Context-pressure warning state.
 //!
-//! Phase 5 (2026-07-03): the 3 sibling fields (`warned_tier`,
+//! : the 3 sibling fields (`warned_tier`,
 //! `last_warn_at`, `last_warn_percent`) that used to live inline on
 //! `LoopState` are folded into [`ContextPressureMonitor`]. The shared
 //! [`ContextPressureMonitor::should_emit_warning`] method owns the
 //! cooldown + tier-upgrade + percent-step rules and is unit-testable
 //! without spinning up an `AgentLoop`.
 //!
-//! Physically split out of `agent_loop.rs` (2026-07-04) so the file
+//! Physically split out of `agent_loop.rs` so the file
 //! that owns the type also owns the type — no API change to callers
 //! (`state.context_pressure.*` call paths work unchanged).
 //!
@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 /// rules live in one place (and can be unit-tested without spinning
 /// up an `AgentLoop`).
 ///
-/// Phase 5 (2026-07-03): replaces 3 fields (`context_pressure_warned_at`,
+/// replaces 3 fields (`context_pressure_warned_at`,
 /// `context_pressure_last_warn_at`, `context_pressure_last_warn_percent`)
 /// scattered across `LoopState`. The shared [`should_emit_warning`]
 /// method now owns the cooldown + tier-upgrade + percent-step rules.
@@ -40,7 +40,7 @@ pub struct ContextPressureMonitor {
 impl ContextPressureMonitor {
     /// Returns true if we should emit a context-pressure warning for the
     /// current `progress_ratio` (0.0..=1.0) at the given `tier`.
-    /// /// Rules (unchanged from the pre-extraction free function):
+    /// Rules (unchanged from the pre-extraction free function):
     /// - `tier <= 0.0` is a no-op (caller suppressed this tier).
     /// - Emit when the tier increased OR (cooldown elapsed AND
     /// progress advanced by ≥ `WARN_PERCENT_STEP` since last warn).

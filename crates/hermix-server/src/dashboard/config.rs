@@ -25,7 +25,7 @@ pub struct AutoCorrectResponse {
 
 /// `POST /api/config/auto-correct` — point `config.model` at a
 /// provider the user actually has a key for.
-/// /// Idempotent: if `config.model` already references a configured
+/// Idempotent: if `config.model` already references a configured
 /// provider the call returns `{report: null, message: "already
 /// valid"}` without touching anything. Otherwise it picks a
 /// provider in the priority order
@@ -137,7 +137,7 @@ pub async fn update_config(
     Ok(Json(OkResponse { ok: true }))
 }
 /// GET /api/model/info — return current model information.
-/// /// Reads from the *live* agent service config (which may differ from
+/// Reads from the *live* agent service config (which may differ from
 /// `state.config` after `/api/config/auto-correct` has been called),
 /// so the desktop model selector and chat default always reflect
 /// the model the next chat will actually use. When no model is set
@@ -208,7 +208,7 @@ pub struct ModelListRequest {
 }
 
 /// GET /api/model/list — return the authoritative enabled-model list.
-/// /// The desktop model switcher keeps an immediate copy in `localStorage`,
+/// The desktop model switcher keeps an immediate copy in `localStorage`,
 /// but `localStorage` is volatile (some Tauri storage evictions / dev HMR
 /// wipe it), which used to make the switcher "forget" configured models and
 /// fall back to showing only the backend default. This endpoint serves the
@@ -250,7 +250,7 @@ pub async fn get_model_list(State(state): State<HttpServerState>) -> Json<ModelL
 }
 
 /// PUT /api/model/list — persist the full enabled-model list.
-/// /// Writes `GatewayConfig::model_selector` to `config.yaml` and pushes the
+/// Writes `GatewayConfig::model_selector` to `config.yaml` and pushes the
 /// updated config to the live agent service, so the model switcher is stable
 /// across app restarts even if `localStorage` is wiped.
 pub async fn update_model_list(

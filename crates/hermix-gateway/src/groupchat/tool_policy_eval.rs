@@ -1,4 +1,4 @@
-//! Tool policy evaluator (Groupchat 未来③ — 工具权限运行时拦截, 2026-07-19).
+//! Tool policy evaluator (Groupchat 未来③ — 工具权限运行时拦截, ).
 //!
 //! Bridges the declarative [`RoomRules`] policy (prompt-time only today)
 //! with a queryable view of "which tools can this agent actually call right

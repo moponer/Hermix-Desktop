@@ -1,4 +1,4 @@
-//! Researcher OS queue infrastructure (Phase 2.2).
+//! Researcher OS queue infrastructure .
 //!
 //! Four-level JSONL queue with atomic writes.
 //!
@@ -71,7 +71,7 @@ impl ItemStatus {
 // ---------------------------------------------------------------------------
 
 /// A researcher queue backed by JSONL files.
-/// /// Uses a Mutex for in-process concurrency safety. Cross-process
+/// Uses a Mutex for in-process concurrency safety. Cross-process
 /// file locking (`fs4`) will be added in a follow-up.
 #[derive(Debug)]
 pub struct ResearcherQueue {

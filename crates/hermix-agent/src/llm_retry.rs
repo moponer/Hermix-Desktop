@@ -88,12 +88,12 @@ async fn execute_llm_call(
 }
 
 /// Single retry-instrumented LLM call (non-streaming).
-/// /// Retry discipline:
+/// Retry discipline:
 /// - Route build failures → fall back to primary runtime, do NOT consume retry slot
 /// - Auth (401) failures → refresh OAuth token once, retry; still fatal if refresh fails
 /// - RateLimit / Retryable → retry with backoff, up to max_retries
 /// - After all retries exhausted → try fallback_model once if configured
-/// /// Returns the successful [`LlmResponse`] or an [`AgentError::LlmApi`]
+/// Returns the successful [`LlmResponse`] or an [`AgentError::LlmApi`]
 /// when all attempts (including fallback) are exhausted.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(

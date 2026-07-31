@@ -326,7 +326,7 @@ fn domain_glob_matches(pattern: &str, domain: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Default path to the user-editable Tirith rules file.
-/// /// Resolved relative to `$HERMIX_HOME` (default `~/.hermix`) and
+/// Resolved relative to `$HERMIX_HOME` (default `~/.hermix`) and
 /// falls back to `~/.hermix/tirith_rules.yaml` when neither the
 /// env var nor the home dir override is set. The `tirith`
 /// subsystem is the canonical **tool-call** policy layer (the
@@ -347,7 +347,7 @@ pub fn default_tirith_rules_path() -> std::path::PathBuf {
 /// their own `tirith_rules.yaml`. The goal is *not* to be a
 /// comprehensive security policy; it's to catch the common
 /// LLM-fabrication cases that have been observed in production:
-/// /// - Windows raw path namespace (`\\?\`, `\\.\`, `\\?\UNC\`)
+/// - Windows raw path namespace (`\\?\`, `\\.\`, `\\?\UNC\`)
 /// - Reads of system directories the LLM has no business touching
 /// (`C:\Windows\System32`, `C:\Windows\SysWOW64`,
 /// `C:\Windows\WinSxS`)
@@ -355,9 +355,9 @@ pub fn default_tirith_rules_path() -> std::path::PathBuf {
 /// (leading `-n` / `-e` / `-o` / backtick)
 /// - `find` / `rm` / `chmod` on the system root (defense in
 /// depth — `approval` already catches `rm -rf` variants)
-/// /// Rules are evaluated first-match-wins, so the explicit
+/// Rules are evaluated first-match-wins, so the explicit
 /// `\\?\`-prefix block sits at the top.
-/// /// Pattern syntax: each `pattern` is a regex evaluated against
+/// Pattern syntax: each `pattern` is a regex evaluated against
 /// the JSON-serialized form of the tool-call parameters. To keep
 /// the regex readable we use YAML **single-quoted** scalars, so
 /// `\\` is two literal characters in the regex and `\\?` in the
@@ -445,9 +445,9 @@ rules:
 "#;
 
 /// Tirith security policy — tool-call-level pre-check engine.
-/// /// Evaluates rules before any tool call to decide whether to allow, block,
+/// Evaluates rules before any tool call to decide whether to allow, block,
 /// or require approval. Rules are loaded from `~/.hermix/tirith_rules.yaml`.
-/// /// Rule format:
+/// Rule format:
 /// ```yaml
 /// rules:
 /// - tool: "terminal"
@@ -508,7 +508,7 @@ pub struct TirithSecurity {
 
 impl TirithSecurity {
     /// Load with a user override on top of the bundled defaults.
-    /// /// Resolution order:
+    /// Resolution order:
     /// 1. If `~/.hermix/tirith_rules.yaml` exists → load it as-is
     /// (user takes full control; no defaults merged).
     /// 2. Else fall back to the bundled [`DEFAULT_TIRITH_RULES_YAML`]
@@ -772,7 +772,7 @@ pub enum SsrfCategory {
     Reserved,
     /// 0.0.0.0 or ::
     UnspecifiedAddress,
-    /// ::ffff:0:0/96 — caller wrapped a private v4 in v6 to bypass checks
+    ///ffff:0:0/96 — caller wrapped a private v4 in v6 to bypass checks
     Ipv4MappedIpv6,
 }
 
@@ -820,7 +820,7 @@ impl SsrfGuard {
     }
 
     /// Check a URL against the SSRF blocklist.
-    /// /// Returns `Ok(())` if the URL is safe to dispatch to a fetcher,
+    /// Returns `Ok(())` if the URL is safe to dispatch to a fetcher,
     /// `Err(SsrfViolation)` otherwise. **No DNS resolution is
     /// performed** — hostnames pass through; IP literals are
     /// classified. See the module-level docs.
@@ -901,7 +901,7 @@ impl SsrfGuard {
     }
 
     /// Classify a single IPv4 address against the SSRF blocklist.
-    /// /// Public so HTTP backends that do their own DNS resolution can
+    /// Public so HTTP backends that do their own DNS resolution can
     /// re-check the resolved IP with the same rules `check` applies
     /// to literal IPv4 hosts in URLs.
     pub fn classify_v4(url: &str, v4: Ipv4Addr) -> Result<(), SsrfViolation> {

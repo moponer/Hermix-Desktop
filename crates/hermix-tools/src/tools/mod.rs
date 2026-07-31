@@ -3,7 +3,7 @@
 //! Each submodule implements one or more tool handlers that conform
 //! to the `ToolHandler` trait from `hermes-core`.
 //!
-//! Cleanup history (2026-06-30, Plan v2):
+//! Cleanup history (, Plan v2):
 //! - Removed dead tools: audio_gen, tts_premium, transcription, voice_mode,
 //!   process_registry, credential_files, env_passthrough, osv_check,
 //!   managed_tool_gateway, mixture_of_agents, tool_result_storage.
@@ -76,7 +76,7 @@ pub mod web;
 /// Register all migrated tools via their self-registration functions.
 /// During migration, unmigrated tools still go through `register_builtins.rs`.
 /// Once all tools are migrated, `register_builtins.rs` is deleted.
-/// /// P1.3 (2026-07-02) signature change: `register_all` now accepts the
+/// P1.3 signature change: `register_all` now accepts the
 /// three backends that tools needed but didn't fit into a default
 /// constructor:
 /// - `terminal_backend`: shared by `terminal`, `read_file`,
@@ -97,7 +97,7 @@ pub fn register_all(
     browser_backend: Arc<dyn BrowserBackend>,
     todo_event_tx: Option<tokio::sync::broadcast::Sender<todo::TodoChange>>,
 ) {
-    // P1.2 per-tool migration (completed 2026-07-01):
+    //P1.2 per-tool migration (completed ):
     disk_cleanup::register(registry);
     storage_analyzer::register(registry);
     storage_clean::register(registry);
@@ -142,7 +142,7 @@ pub fn register_all(
             as Arc<dyn code_execution::CodeExecutionBackend>,
     );
     cua::register(registry);
-    // P1.3 (2026-07-02): file tools (read_file / write_file / patch /
+    //P1.3 : file tools (read_file / write_file / patch /
     // search_files) share `terminal_backend` with the terminal tool so
     // every code path that opens files uses the same backend. Patch +
     // search get local backends (LocalPatchBackend / LocalSearchBackend)
@@ -153,7 +153,7 @@ pub fn register_all(
     // apply renames by recognised identity fields. Registered DANGEROUS so
     // the destructive (dry_run:false) call fires an approval card.
     batch_ocr_rename::register(registry);
-    // P1.8 (2026-07-02): office_cli was previously implemented but
+    //P1.8 : office_cli was previously implemented but
     // never registered. Add it next to `file` and `terminal` so the
     // `essential::ESSENTIAL_TOOLSETS["office"]` floor finds a real
     // tool to re-assert and `set_enabled_toolsets("office", false)`
@@ -163,7 +163,7 @@ pub fn register_all(
     // tool generates all office_cli commands internally.
     // Inspired by oh-my-ppt's JSON→slide approach.
     create_presentation::register(registry, terminal_backend.clone(), registry.terminal_workspace_handle());
-    // P1.8 (2026-07-02): `read_pdf` was previously tagged
+    //P1.8 : `read_pdf` was previously tagged
     // `"file"` and *never wired into `register_all`*, so the LLM
     // had no PDF-reading tool at all. Re-tag it with the dedicated
     // `"pdf"` toolset (matches `essential::ESSENTIAL_TOOLSETS`) and
@@ -176,13 +176,13 @@ pub fn register_all(
     // handle is also owned by the registry; `LocalAgentService`
     // writes a fresh `TerminalApprovalContext` per turn so the
     // terminal's `RequiresConfirmation` path can emit
-    // `request_approval` events on the active WS channel (2026-07-17).
+    //`request_approval` events on the active WS channel .
     terminal::register(
         registry,
         terminal_backend,
         registry.terminal_workspace_handle(),
         registry.terminal_approval_ctx_handle(),
-        // TODO(P6-wire-terminal): pass registry.terminal_permission_profile_handle()
+        //TODO(-terminal): pass registry.terminal_permission_profile_handle
         // once `TerminalHandler::new` accepts the handle and gates commands/paths
         // against `PermissionProfile.granted_commands` / `granted_paths`. Until
         // then the terminal tool always prompts regardless of profile state.

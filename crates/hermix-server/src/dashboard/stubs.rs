@@ -115,8 +115,8 @@ fn plugin_bundles_root(hermix_home: &Path) -> std::path::PathBuf {
 /// Used on first start to populate `$HERMIX_HOME/dashboard-plugins/` so the
 /// front-end PluginsView has real content immediately, without depending on
 /// the user cloning the official repo or running an installer.
-/// /// This list mirrors `https://github.com/NousResearch/hermes-agent/tree/main/plugins`
-/// as of 2026-06-02. Each entry corresponds to one `manifest.json` written
+/// This list mirrors `https://github.com/NousResearch/hermes-agent/tree/main/plugins`
+/// as of . Each entry corresponds to one `manifest.json` written
 /// to `<hermix_home>/dashboard-plugins/<id>/manifest.json` on first start.
 /// `availability: "seeded"` marks these as "official catalog, not yet wired
 /// into the local Rust backend" — distinct from `availability: "ready"`
@@ -351,10 +351,10 @@ fn builtin_plugin_seeds() -> Vec<(&'static str, Value)> {
 /// `$HERMIX_HOME/dashboard-plugins/<id>/manifest.json` so the front-end
 /// PluginsView has a populated catalog right away. This is idempotent —
 /// existing files (i.e. user-customized) are never overwritten.
-/// /// We mark the seeds as `availability: "seeded"` or `"ready"` so the UI can
+/// We mark the seeds as `availability: "seeded"` or `"ready"` so the UI can
 /// distinguish "official catalog, not yet wired into Rust backend" from
 /// "fully usable today".
-/// /// **T1-C (2026-06-20)**: previously marked dead — but it is called by
+/// **T1-C **: previously marked dead — but it is called by
 /// [`discover_plugin_manifests`]. Restored.
 pub fn seed_official_plugin_manifests(hermix_home: &Path) -> std::io::Result<usize> {
     let root = plugin_bundles_root(hermix_home);
@@ -383,7 +383,7 @@ pub fn seed_official_plugin_manifests(hermix_home: &Path) -> std::io::Result<usi
 
 /// Read the manifest files under `<hermix_home>/dashboard-plugins/<id>/manifest.json`,
 /// merging in the `id` field if missing. Returns manifests sorted by name.
-/// /// **T1-C (2026-06-20)**: previously marked dead — but it is called by
+/// **T1-C **: previously marked dead — but it is called by
 /// [`rescan_plugins`] and [`get_plugin_manifests`]. Restored.
 pub fn discover_plugin_manifests(hermix_home: &Path) -> Vec<Value> {
     let dir = plugin_bundles_root(hermix_home);
@@ -440,8 +440,8 @@ pub fn discover_plugin_manifests(hermix_home: &Path) -> Vec<Value> {
 /// `toolset_alias` field in the manifest. This lets `video_gen` map to
 /// the `video` toolset (where the Rust implementation actually lives)
 /// without renaming the catalog id the user sees in the UI.
-/// /// Returns the id itself when no alias is set.
-/// /// **T1-C (2026-06-20)**: previously marked dead — but it is called by
+/// Returns the id itself when no alias is set.
+/// **T1-C **: previously marked dead — but it is called by
 /// [`super::plugins_inspect`]. Restored.
 pub fn resolve_toolset_for(id: &str) -> String {
     for (seed_id, manifest) in builtin_plugin_seeds() {

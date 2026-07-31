@@ -175,7 +175,7 @@ impl AcpServer {
 }
 
 /// Generate an MCP server config block for embedding in an ACP session.
-/// /// This creates a stdio-based MCP server entry that points to the hermes
+/// This creates a stdio-based MCP server entry that points to the hermes
 /// binary, suitable for inclusion in the ACP session's `mcp_servers` list.
 pub fn generate_mcp_server_config(hermes_binary: &str) -> serde_json::Value {
     serde_json::json!({

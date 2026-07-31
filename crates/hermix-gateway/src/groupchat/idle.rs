@@ -144,7 +144,7 @@ pub(super) async fn tick_idle_round(
 }
 
 /// Select 1-2 agents for idle chat based on role.
-/// M2 — uses round-robin instead of `timestamp % len` so
+/// — uses round-robin instead of `timestamp % len` so
 /// consecutive ticks always pick a different member when possible.
 fn select_idle_agents(agents: &[AgentRoomProfile]) -> Vec<AgentRoomProfile> {
     use std::sync::atomic::{AtomicUsize, Ordering};

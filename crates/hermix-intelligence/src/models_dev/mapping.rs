@@ -42,7 +42,7 @@ pub fn forward_map() -> &'static HashMap<&'static str, &'static str> {
 }
 
 /// Reverse map: models.dev provider ID → Hermes provider ID.
-/// /// When two Hermes IDs share one models.dev ID (e.g. both `gemini` and
+/// When two Hermes IDs share one models.dev ID (e.g. both `gemini` and
 /// `google` map to `google`), the **last entry in [`PAIRS`] wins** — this
 /// matches Python's `{v: k for k, v in PROVIDER_TO_MODELS_DEV.items()}`
 /// semantics where later iterations overwrite earlier ones.
@@ -68,7 +68,7 @@ pub fn to_hermes(mdev_id: &str) -> Option<&'static str> {
 }
 
 /// Resolve to a models.dev ID, falling back to the input when unmapped.
-/// /// Mirrors `PROVIDER_TO_MODELS_DEV.get(provider_id, provider_id)` in the
+/// Mirrors `PROVIDER_TO_MODELS_DEV.get(provider_id, provider_id)` in the
 /// Python `get_provider_info` / `get_model_info` helpers.
 pub fn resolve_models_dev_id(provider_id: &str) -> &str {
     to_models_dev(provider_id).unwrap_or(provider_id)

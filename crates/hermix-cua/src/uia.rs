@@ -210,11 +210,11 @@ pub struct UiaAutomation {
 impl UiaAutomation {
     /// Initialise COM on the **current thread** and create the
     /// `CUIAutomation` instance.
-    /// /// ## Errors
-    /// /// Returns `CuaError::Uia` if `CoInitializeEx` or
+    /// ## Errors
+    /// Returns `CuaError::Uia` if `CoInitializeEx` or
     /// `CoCreateInstance` fails.
-    /// /// # Safety
-    /// /// Must be called on a thread with a valid COM apartment (STA or MTA).
+    /// # Safety
+    /// Must be called on a thread with a valid COM apartment (STA or MTA).
     /// The `COINIT_MULTITHREADED` flag initialises the thread for MTA;
     /// callers must ensure no conflicting STA initialisation exists.
     pub unsafe fn new() -> CuaResult<Self> {
@@ -236,8 +236,8 @@ impl UiaAutomation {
     // -- Root / HWND / Point ----------------------------------------------
 
     /// Root desktop element.
-    /// /// # Safety
-    /// /// The `UiaAutomation` instance must have been created with `new()`
+    /// # Safety
+    /// The `UiaAutomation` instance must have been created with `new()`
     /// on a COM-initialised thread. The returned `UiElement` is valid
     /// for the lifetime of the underlying COM object.
     pub unsafe fn get_root_element(&self) -> CuaResult<UiElement> {
@@ -249,8 +249,8 @@ impl UiaAutomation {
     }
 
     /// Element for a given `HWND`.
-    /// /// # Safety
-    /// /// `hwnd` must be a valid window handle on the current desktop.
+    /// # Safety
+    /// `hwnd` must be a valid window handle on the current desktop.
     pub unsafe fn element_from_handle(&self, hwnd: isize) -> CuaResult<UiElement> {
         let raw = self
             .inner
@@ -260,8 +260,8 @@ impl UiaAutomation {
     }
 
     /// Element at screen coordinates `(x, y)`.
-    /// /// # Safety
-    /// /// Must be called on a COM-initialised thread.
+    /// # Safety
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn element_from_point(&self, x: i32, y: i32) -> CuaResult<UiElement> {
         let pt = POINT { x, y };
         let raw = self
@@ -274,8 +274,8 @@ impl UiaAutomation {
     // -- Element finding --------------------------------------------------
 
     /// Find first element matching `condition`, starting from the root.
-    /// /// # Safety
-    /// /// Must be called on a COM-initialised thread.
+    /// # Safety
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn find_first(&self, condition: &UiaCondition) -> CuaResult<Option<UiElement>> {
         let root = self
             .inner
@@ -285,8 +285,8 @@ impl UiaAutomation {
     }
 
     /// Find first element matching `condition` under a given parent.
-    /// /// # Safety
-    /// /// Must be called on a COM-initialised thread.
+    /// # Safety
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn find_first_from(
         &self,
         parent: &IUIAutomationElement,
@@ -304,8 +304,8 @@ impl UiaAutomation {
     }
 
     /// Find all elements matching `condition`, starting from the root.
-    /// /// # Safety
-    /// /// Must be called on a COM-initialised thread.
+    /// # Safety
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn find_all(&self, condition: &UiaCondition) -> CuaResult<Vec<UiElement>> {
         let root = self
             .inner
@@ -315,8 +315,8 @@ impl UiaAutomation {
     }
 
     /// Find all elements matching `condition` under a given parent.
-    /// /// # Safety
-    /// /// Must be called on a COM-initialised thread.
+    /// # Safety
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn find_all_from(
         &self,
         parent: &IUIAutomationElement,
@@ -341,14 +341,14 @@ impl UiaAutomation {
 
     /// Find first element matching `condition` and return the raw
     /// COM `IUIAutomationElement` pointer.
-    /// /// This is used by the CUA handlers that need to call COM
+    /// This is used by the CUA handlers that need to call COM
     /// methods (GetClickablePoint, SetFocus, GetCurrentPattern)
     /// directly, rather than going through a `UiElement` snapshot.
-    /// /// **Important**: the returned pointer is only valid on the
+    /// **Important**: the returned pointer is only valid on the
     /// thread that called this method (the COM apartment thread).
     /// Do NOT stash it in a static or send it across threads.
-    /// /// # Safety
-    /// /// Must be called on a COM-initialised thread. The returned
+    /// # Safety
+    /// Must be called on a COM-initialised thread. The returned
     /// `IUIAutomationElement` COM pointer is not thread-safe.
     pub unsafe fn find_first_raw(
         &self,
@@ -372,10 +372,10 @@ impl UiaAutomation {
 
     /// Walk the control view tree up to `max_depth` and return
     /// all elements as a depth-first, flattened `Vec`.
-    /// /// A `max_depth` of 0 means only the root element (no children).
+    /// A `max_depth` of 0 means only the root element (no children).
     /// Use `u32::MAX` to walk the full tree (may be very large — 10k+).
-    /// /// # Safety
-    /// /// Must be called on a COM-initialised thread.
+    /// # Safety
+    /// Must be called on a COM-initialised thread.
     pub unsafe fn get_control_view_tree(&self, max_depth: u32) -> CuaResult<Vec<UiElement>> {
         let true_cond = self
             .inner

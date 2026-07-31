@@ -1,11 +1,11 @@
 //! Per-loop retry counters for malformed / truncated tool-call recovery.
 //!
-//! Phase 5 (2026-07-03): 3 sibling `u32` fields (`invalid_tool`,
+//! : 3 sibling `u32` fields (`invalid_tool`,
 //! `invalid_json`, `truncated_tool`) consolidated into one struct so
 //! `LoopState` doesn't carry them as siblings and `publish_from`
 //! doesn't take 3 sibling `u32` arguments.
 //!
-//! Physically split out of `agent_loop.rs` (2026-07-04); API unchanged.
+//! Physically split out of `agent_loop.rs` ; API unchanged.
 //! Fields stay `pub(crate)` so existing `state.retry_counters.*` call
 //! paths (run-stream truncation handling, invalid-tool recovery, and
 //! the `LoopState::default` invariant test) keep compiling without a

@@ -49,7 +49,7 @@ pub(crate) fn ocr_engine() -> Result<&'static OarOcrEngine, OcrError> {
 /// `search_files`. The same `terminal_backend` shared with the terminal
 /// tool is reused so that read/write go through the same path the
 /// shell uses; patch/search get their own local backends.
-/// /// The handler registration mirrors the toolset tag + risk levels that
+/// The handler registration mirrors the toolset tag + risk levels that
 /// `register_builtins.rs` had before the migration:
 /// - `read_file` → Safe (read-only, no env deps)
 /// - `write_file` → Caution (writes to disk)
@@ -155,7 +155,7 @@ pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBacke
 /// Resolve a path to an absolute string for display in LLM-visible tool
 /// output. The rule is **literal pass-through**: the path the user typed or
 /// configured is the path we report. We deliberately do NOT canonicalize.
-/// /// Why no canonicalize: on Windows, `std::fs::canonicalize` follows
+/// Why no canonicalize: on Windows, `std::fs::canonicalize` follows
 /// junctions / symlinks AND prepends the `\\?\` long-path prefix. So if the
 /// user is in `D:\data` (a junction) and the LLM calls `read_file("D:\\qcc\\foo")`,
 /// the OS opens the file fine, but `canonicalize` would surface
@@ -164,14 +164,14 @@ pub fn register(registry: &ToolRegistry, terminal_backend: Arc<dyn TerminalBacke
 /// subsequent reasoning and tool calls, and `subdirectory_hints` /
 /// `_files.txt` would all drift. The user's configured workspace root and
 /// the path they typed are the source of truth.
-/// /// For relative paths we still need a base directory to make the result
+/// For relative paths we still need a base directory to make the result
 /// absolute, so we fall back to:
-/// /// 1. `TERMINAL_CWD` env var (set by `LocalAgentService::send_message_stream`
+/// 1. `TERMINAL_CWD` env var (set by `LocalAgentService::send_message_stream`
 /// from the per-turn `AgentOverrides::workspace`, i.e. the desktop
 /// "工作区" picker).
 /// 2. Server process current working directory.
-/// /// The cwd itself is not canonicalized — same reason.
-/// /// Trade-off: `..` segments are not resolved in the display string. This is
+/// The cwd itself is not canonicalized — same reason.
+/// Trade-off: `..` segments are not resolved in the display string. This is
 /// fine; the OS resolves `..` on actual file open, and the LLM-visible
 /// header doesn't need to be "lexically resolved".
 pub fn to_absolute_path(path: &str) -> String {
@@ -212,7 +212,7 @@ impl ToolHandler for ReadFileHandler {
             .ok_or_else(|| ToolError::InvalidParams("Missing 'path' parameter".into()))?;
 
         CredentialGuard::new().check_read_access(Path::new(path))?;
-        // (P1-8): advisory path traversal check — logs but does not block.
+        //: advisory path traversal check — logs but does not block.
         crate::credential_guard::check_path_traversal_advisory(path);
 
         let offset = params.get("offset").and_then(|v| v.as_u64());
@@ -293,7 +293,7 @@ impl ToolHandler for WriteFileHandler {
             .ok_or_else(|| ToolError::InvalidParams("Missing 'content' parameter".into()))?;
 
         CredentialGuard::new().check_write_access(Path::new(path), content)?;
-// (P1-8): advisory path traversal check — logs but does not block.
+//: advisory path traversal check — logs but does not block.
 crate::credential_guard::check_path_traversal_advisory(path);
 
         self.backend

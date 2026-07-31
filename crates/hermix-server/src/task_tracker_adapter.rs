@@ -1,7 +1,7 @@
 //! Adapter that implements `hermix_tools::tools::task_tracker::TaskTrackerBackend`
 //! using `hermix_task::TaskService`.
 //!
-//! (Phase 4 — P4-1)
+//!
 //!
 //! This bridges the tool layer (hermix-tools) to the domain layer
 //! (hermix-task) without creating a direct dependency between them.

@@ -29,7 +29,7 @@ use crate::AgentConfig;
 // ---------------------------------------------------------------------------
 
 /// Split a `"provider:model"` string into `(provider, model)`.
-/// /// If no colon is present the provider defaults to `"openai"`.
+/// If no colon is present the provider defaults to `"openai"`.
 pub fn parse_model_string(model: &str) -> (&str, &str) {
     model.split_once(':').unwrap_or(("openai", model))
 }
@@ -39,7 +39,7 @@ pub fn parse_model_string(model: &str) -> (&str, &str) {
 // ---------------------------------------------------------------------------
 
 /// Build an [`AgentConfig`] from a [`GatewayConfig`] and a model string.
-/// /// `platform` lets callers tag the config with their origin (`"cli"`,
+/// `platform` lets callers tag the config with their origin (`"cli"`,
 /// `"http"`, `"gateway"`, …).  When `None` the field is left unset.
 pub fn build_agent_config(
     config: &GatewayConfig,
@@ -97,7 +97,7 @@ pub fn build_agent_config(
             }),
         },
         memory_nudge_interval: config.agent.memory_nudge_interval,
-        // P6 direction 3 (2026-07-20): copy the persisted permission
+        //P6 direction 3 : copy the persisted permission
         // profile from GatewayConfig into AgentConfig so the runtime
         // gate sees the same scope the user authorised via the
         // dashboard "Always Allow" button. Without this copy, the
@@ -106,7 +106,7 @@ pub fn build_agent_config(
         permission_profile: config.permission_profile.clone(),
         skill_creation_nudge_interval: config.agent.skill_creation_nudge_interval,
         background_review_enabled: config.agent.background_review_enabled,
-        // P0-1: explicit master off-switch from
+        //explicit master off-switch from
         // `~/.hermix/config.yaml` `agent.auto_skill_extraction`.
         // The user can opt out without touching the broader
         // background_review_enabled flag. We also honor the
@@ -124,7 +124,7 @@ pub fn build_agent_config(
         // Forward compaction pressure threshold so ContextManager uses the
         // user-configured ratio instead of the hardcoded 0.50 default.
         context_pressure_ratio: config.compaction.pressure_threshold_percent,
-        // P0-1 (Frontend Audit 2026-07-13): forward the desktop Settings →
+        //forward the desktop Settings →
         // Advanced tab values into the live AgentConfig. Each field is
         // `Option<…>` on the hermix-config side, so a `None` means "user
         // didn't customise" and we keep the hardcoded default from
@@ -281,12 +281,12 @@ pub fn env_var_name_for_provider(provider: &str) -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// Build an `Arc<dyn LlmProvider>` from a [`GatewayConfig`] and model string.
-/// /// Returns `Err(AgentError::Config(...))` when no API key can be resolved for
+/// Returns `Err(AgentError::Config(...))` when no API key can be resolved for
 /// the requested provider. **This is intentional** — silently falling back to
 /// a no-op `StubProvider` was the root cause of the "stuck thinking" desktop
 /// bug: the LLM stream returned an immediate error chunk the front-end never
 /// surfaced, leaving the user staring at a "正在思考..." spinner forever.
-/// /// Callers are expected to propagate the error to the user (the desktop
+/// Callers are expected to propagate the error to the user (the desktop
 /// server turns it into a structured WS error event; the CLI exits with a
 /// clear hint).
 pub fn build_provider(

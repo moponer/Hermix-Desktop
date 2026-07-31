@@ -41,7 +41,7 @@ fn user(text: impl Into<String>) -> Message {
 }
 
 /// Build a title-generation request from a snippet of conversation.
-/// /// Mirrors the Python `agent/title_generator.py` prompt — a tight system
+/// Mirrors the Python `agent/title_generator.py` prompt — a tight system
 /// instruction plus the trimmed conversation as user content.
 pub fn build_title_request(conversation: &str) -> AuxiliaryRequest {
     let messages = vec![

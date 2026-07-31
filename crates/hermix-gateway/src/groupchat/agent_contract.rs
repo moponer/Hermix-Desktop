@@ -59,7 +59,7 @@ impl RoomAgentContract {
 }
 
 /// Leader's structured decision output — replaces regex-parsed `TaskPlan`.
-/// /// The leader LLM is asked to emit this as strict JSON. The parser is
+/// The leader LLM is asked to emit this as strict JSON. The parser is
 /// tolerant of ```json fences and surrounding prose (see
 /// [`parse_leader_decision`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,11 +131,11 @@ pub enum HandoffDirective {
 }
 
 /// Tolerant JSON parser for `LeaderDecision`.
-/// /// Survives:
+/// Survives:
 /// - ```json ... ``` code fences
 /// - leading/trailing prose (uses first `{` to last `}`)
 /// - missing optional fields (defaults applied via `#[serde(default)]`)
-/// /// Returns `Err` with a human-readable message on hard parse failure so the
+/// Returns `Err` with a human-readable message on hard parse failure so the
 /// runtime can surface it as a `SoftError` instead of silently falling back.
 pub fn parse_leader_decision(raw: &str) -> Result<LeaderDecision, String> {
     let trimmed = raw.trim();
@@ -153,7 +153,7 @@ pub fn parse_leader_decision(raw: &str) -> Result<LeaderDecision, String> {
     // Chinese prose and bails out before reaching the JSON object.
     let body = strip_code_fence(trimmed);
 
-    // Tolerant path (M8): use the streaming deserializer so surrounding
+    //Tolerant path : use the streaming deserializer so surrounding
     // prose — including a trailing `}` inside commentary after the JSON
     // object — doesn't break parsing. The old `find('{')` + `rfind('}')`
     // slice truncated on the **last** `}` in the reply, which corrupted
@@ -198,7 +198,7 @@ fn strip_code_fence(s: &str) -> String {
 }
 
 /// Build the prompt that asks the leader to return a `LeaderDecision` JSON.
-/// /// This replaces both `build_leader_prompt` (system prompt) and
+/// This replaces both `build_leader_prompt` (system prompt) and
 /// `build_announcement_decision_prompt` (separate LLM call) — the leader
 /// emits analysis + subtasks + announcement in one structured response.
 pub fn build_leader_decision_prompt(

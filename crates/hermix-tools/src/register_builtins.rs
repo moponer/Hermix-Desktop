@@ -15,17 +15,17 @@ use crate::tools::clarify::ClarifyBackend;
 use crate::ToolRegistry;
 
 /// Register all built-in tool handlers into the given registry.
-/// /// `terminal_backend` is shared by terminal, file read/write handlers.
+/// `terminal_backend` is shared by terminal, file read/write handlers.
 /// `skill_provider` is shared by the three skills handlers.
 /// `clarify_backend` backs the `clarify` tool. Callers that want a
 /// blocking user-prompt experience (e.g. the desktop app via
 /// [`ChannelClarifyBackend`](crate::backends::clarify::ChannelClarifyBackend))
 /// should pass it here; otherwise the default [`SignalClarifyBackend`](crate::backends::clarify::SignalClarifyBackend)
 /// returns a JSON envelope without waiting.
-/// /// Backends that depend on environment variables (e.g. `OPENAI_API_KEY`,
+/// Backends that depend on environment variables (e.g. `OPENAI_API_KEY`,
 /// `FAL_KEY`, `HASS_URL`) are constructed eagerly; if the vars are absent
 /// the tools will return a clear error at *runtime*, not at registration.
-/// /// P1.4 (2026-07-02): the body is now an honest three-step pipeline
+/// P1.4 : the body is now an honest three-step pipeline
 /// (build browser backend → register_all → reconcile whitelist + floor).
 /// The three `browser_*_from_config` helpers were merged into
 /// [`BrowserConfig::from_env`] (single IO instead of three) and the
@@ -303,9 +303,9 @@ mod tests {
     /// gates). If any of these regress to `Caution`/`Dangerous`,
     /// the dispatch gate will start firing unnecessary
     /// approval cards.
-    /// /// When adding a new Safe tool: add it here. When removing
+    /// When adding a new Safe tool: add it here. When removing
     /// one: remove the line and document the rationale.
-    /// /// Tools that are conditionally registered (e.g. require
+    /// Tools that are conditionally registered (e.g. require
     /// `HASS_URL`, `OPENAI_API_KEY`, or a browser driver) are
     /// *not* listed here — they are exercised by separate
     /// integration tests in the consumer crates.
@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn essential_toolset_floor_aligns_with_runtime_registration() {
-        // P1.8 (2026-07-02): regression guard for a class of bugs
+        //P1.8 : regression guard for a class of bugs
         // where the floor lists a toolset name that no tool is
         // actually tagged with. The symptom is silent: the floor
         // calls `set_toolset_enabled(<name>, true)`, the registry
@@ -681,7 +681,7 @@ mod tests {
 
 /// Read `browser.allowed_domains` / `browser.cdp_port` / `browser.headless`
 /// from `~/.hermix/config.yaml`.
-/// /// Hand-rolled YAML scan — we don't want a full YAML dep here for
+/// Hand-rolled YAML scan — we don't want a full YAML dep here for
 /// three fields. The expected shape is:
 /// ```yaml
 /// browser:
@@ -691,7 +691,7 @@ mod tests {
 /// cdp_port: 9223
 /// headless: true
 /// ```
-/// /// P1.4 (2026-07-02): the previous design had three separate
+/// P1.4 : the previous design had three separate
 /// `browser_*_from_config()` helpers, each of which independently
 /// re-`read_to_string`'d the file and re-scanned for its own key.
 /// That was three filesystem reads per `register_builtin_tools`
@@ -730,7 +730,7 @@ impl BrowserConfig {
     /// Test-only entry point: read `config.yaml` from an explicit
     /// directory. Lets unit tests exercise the disk round-trip
     /// without mutating the process-global `$HERMIX_HOME` env var.
-    /// /// Why a parallel API: `from_env` reads `HERMIX_HOME` via
+    /// Why a parallel API: `from_env` reads `HERMIX_HOME` via
     /// `hermix_config::paths::hermix_home()`, which re-reads the env
     /// var on every call. Concurrent tests that mutate
     /// `$HERMIX_HOME` to point at their own temp dir race even when
@@ -751,7 +751,7 @@ impl BrowserConfig {
     /// Parse the three browser sub-fields out of an already-read YAML
     /// string. Pure function (no IO) — every test exercises this
     /// path so we don't need to set `HERMIX_HOME` per case.
-    /// /// P1.8 (2026-07-02): rewritten via `serde_yaml` so we get a
+    /// P1.8 : rewritten via `serde_yaml` so we get a
     /// declarative schema instead of a 90-line line scanner. The
     /// shape is exactly the same as before — `Some(vec)` for a
     /// populated list, `None` for "absent" — so callers (and the
@@ -845,8 +845,8 @@ impl BrowserConfig {
     /// Read the canonical `$HERMIX_HOME/config.yaml` (resolved via
     /// [`hermix_home`], which honors `HERMIX_PORTABLE_DATA_DIR` for
     /// the Tauri portable-desktop launcher).
-    /// /// **Deliberate non-features** vs. the previous implementation:
-    /// /// * **No `$HERMES_HOME` fallback.** The original NousResearch
+    /// **Deliberate non-features** vs. the previous implementation:
+    /// * **No `$HERMES_HOME` fallback.** The original NousResearch
     /// `hermes-agent` uses the same env var name; silently picking
     /// it up would let two unrelated projects fight over one data
     /// dir. Users running the old agent should set `HERMIX_HOME`
@@ -855,7 +855,7 @@ impl BrowserConfig {
     /// through `hermix_home()` ensures the portable launcher and
     /// the standard install resolve to the same file (this is the
     /// same P0 fix that already cleaned up `session_search`).
-    /// /// Returns `None` when the home is empty or `config.yaml` is
+    /// Returns `None` when the home is empty or `config.yaml` is
     /// unreadable — startup should not panic on a missing config.
     fn read_home_yaml() -> Option<String> {
         let home = hermix_home();

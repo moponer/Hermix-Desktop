@@ -1,10 +1,10 @@
-//! P4-T4 — auto-patch a skill when it underperforms.
+//! — auto-patch a skill when it underperforms.
 //!
 //! When [`SkillLoader`] matches a skill but the user reports it
 //! failed (tool result \u2192 negative rating, or repeated failure code),
 //! the agent may call `skill_patch` to update the SKILL.md with a
 //! better body. The patch step:\//!
-//! - Refuses to overwrite an **auto** skill (P4-T3 owns that).
+//! - Refuses to overwrite an **auto** skill ( owns that).
 //! - Backs up the existing SKILL.md to a timestamped `.bak` file
 //!   before writing the new one, so a bad patch is one undo away.
 //! - Validates the slug the same way [`skill_auto_create::skill_slug`]
@@ -89,7 +89,7 @@ pub fn now_unix_secs() -> u64 {
 
 /// Walk `root` looking for `<dir>/<slug>/SKILL.md`. Returns the path
 /// on hit, [`SkillPatchError::SkillNotFound`] on miss. Does not
-/// cross the boundary into `auto/`\u2014those are managed by P4-T3 and
+/// cross the boundary into `auto/`\u2014those are managed by and
 /// are reported as [`SkillPatchError::RefusingToPatchAutoSkill`] when
 /// they are explicitly addressed.
 pub fn locate_skill(root: &Path, slug_raw: &str) -> Result<PathBuf, SkillPatchError> {

@@ -22,7 +22,7 @@ pub struct BackendManager {
 
 impl BackendManager {
     /// Create a new `BackendManager` with the given configuration.
-    /// /// The initial backend is selected based on `config.backend`.
+    /// The initial backend is selected based on `config.backend`.
     /// If the selected backend type is not available (e.g. compiled without
     /// the corresponding feature), falls back to [`LocalBackend`].
     pub fn new(config: TerminalConfig) -> Self {
@@ -100,7 +100,7 @@ impl BackendManager {
     }
 
     /// Switch to a different backend type at runtime.
-    /// /// Creates a new backend of the specified type and replaces the active one.
+    /// Creates a new backend of the specified type and replaces the active one.
     /// If the feature for the requested backend is not compiled in, returns an error.
     pub fn switch_backend(&mut self, backend_type: TerminalBackendType) -> Result<(), AgentError> {
         // Validate that the backend type is available

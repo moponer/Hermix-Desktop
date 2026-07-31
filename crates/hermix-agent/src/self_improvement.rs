@@ -1,4 +1,4 @@
-// P4-T6 - self-improvement rules.
+//self-improvement rules.
 //
 // When the same failure pattern fires >= SELF_RULE_TRIGGER times
 // across sessions, the harness drops a SelfRule into

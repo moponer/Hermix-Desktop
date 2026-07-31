@@ -51,7 +51,7 @@ impl TextDelta {
 }
 
 /// Consumer invoked once per completed sentence.
-/// /// Implementors typically do at least two things:
+/// Implementors typically do at least two things:
 /// 1. Render the sentence for the user (print, display callback, ...).
 /// 2. Optionally trigger TTS synthesis (non-streaming file output, or the
 /// streaming PCM path via [`PcmSink`]).
@@ -128,7 +128,7 @@ impl SentenceSink for VecSentenceSink {
 // ---------------------------------------------------------------------------
 
 /// Build-and-run harness for a single TTS streaming session.
-/// /// Use [`TtsStreamingPipeline::builder`] to configure sinks, then call
+/// Use [`TtsStreamingPipeline::builder`] to configure sinks, then call
 /// [`feed`](Self::feed) with each [`TextDelta`] and finally wait for
 /// [`finish`](Self::finish).
 pub struct TtsStreamingPipeline {

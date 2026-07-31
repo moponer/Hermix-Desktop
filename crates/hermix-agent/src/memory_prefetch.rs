@@ -1,6 +1,6 @@
 //! Memory subsystem helpers used by `agent_loop`.
 //!
-//! Extracted from `agent_loop.rs` (P2.x, 2026-07-04) so the 10k-line
+//! Extracted from `agent_loop.rs` (P2.x, ) so the 10k-line
 //! `agent_loop.rs` can focus on the `impl AgentLoop` block. **No behavior
 //! change** — pure relocation.
 //!
@@ -52,7 +52,7 @@ use hermix_core::{Message, MessageRole, ToolCall, ToolResult};
 use hermix_focus::SessionFrameStatus;
 use serde_json::Value;
 
-// ── Memory-operation surfacing (2026-07-14) ──────────────────────
+//── Memory-operation surfacing ──────────────────────
 // These types describe a single memory mutation so the agent can
 // emit a `StreamEvent::MemoryUpdate` (bridged via the
 // `status_callback` "memory_update" event) and the front-end can
@@ -104,7 +104,7 @@ pub enum MemoryKind {
     Tool,
     /// A frozen session snapshot.
     Snapshot,
-    /// Phase 19 (E): a session-end reflection (template-driven,
+    /// (E): a session-end reflection (template-driven,
     /// not LLM-generated). Surfaced as a `MemoryUpdate` so the user
     /// sees "what the agent thinks it learned".
     Reflection,
@@ -164,7 +164,7 @@ pub fn emit_memory_update_event(
 
 /// Run the memory prefetch pipeline and return a markdown block
 /// (`"## Memory\n\n..."`) sized to the configured char budget.
-/// /// Honours `config.skip_memory` (returns empty), `config.memory_min_salience`
+/// Honours `config.skip_memory` (returns empty), `config.memory_min_salience`
 /// (drops low-signal hits), `config.memory_char_budget` (clamps total chars),
 /// and `config.memory_recall_limit_{first,subsequent}` (caps hit count).
 pub async fn memory_prefetch(
@@ -181,7 +181,7 @@ pub async fn memory_prefetch(
         return String::new();
     }
 
-    // M2 (2026-07-03): recall gating + budget pulled from config.
+    //: recall gating + budget pulled from config.
     // Defaults are 50 first / 5 subsequent recall, 4000 char block
     // cap, 0.30 salience floor. Tunables were previously hardcoded.
     let is_seeded = recall_seeded.load(Ordering::Relaxed);
@@ -193,7 +193,7 @@ pub async fn memory_prefetch(
     let char_budget = config.memory_char_budget;
     let min_salience = config.memory_min_salience;
 
-    // --- Phase 15: Time-aware recall via MemoryLayer path ----------
+    //Time-aware recall via MemoryLayer path ----------
     let time_window = extract_time_window(query);
 
     // Extract task context from recent messages for better recall
@@ -248,7 +248,7 @@ pub async fn memory_prefetch(
         recall_seeded.store(true, Ordering::Release);
     }
 
-    // Phase 18 (P1-1): record recall_audit row — gives operators a
+    //: record recall_audit row — gives operators a
     // window into recall quality without inspecting logs. Skipped
     // silently if the embedded backend isn't wired (e.g. server
     // mode with remote backends only).
@@ -277,7 +277,7 @@ pub async fn memory_prefetch(
         }
     }
 
-    // Phase 18 (P2-2): dedup hits by content (recurring facts
+    //: dedup hits by content (recurring facts
     // surface from frames + facts + memory_tool). Keep the
     // highest-salience copy and merge access_count if visible.
     let mut deduped: Vec<MemoryHit> = Vec::with_capacity(structured_hits.len());
@@ -308,7 +308,7 @@ pub async fn memory_prefetch(
     });
 
     // Inject structured hits as a markdown block with token budget.
-    // M2: char budget + salience floor come from config (defaults
+    //char budget + salience floor come from config (defaults
     // 4000 chars / 0.30 salience — see AgentConfig).
     let mut block = String::from("## Memory\n\n");
     let mut total_chars = 0;
@@ -345,7 +345,7 @@ pub async fn memory_prefetch(
     }
 
     for h in &deduped {
-        // M2: salience noise floor — drop low-signal fragments
+        //salience noise floor — drop low-signal fragments
         // before they consume char_budget.
         if h.salience < min_salience {
             continue;
@@ -375,7 +375,7 @@ pub async fn memory_prefetch(
         total_chars += line.len();
     }
 
-    // P4-T1 (reflection → 行为改写闭环): append a `## Prior
+    //(reflection → 行为改写闭环): append a `## Prior
     // Reflections` section listing the most recent cross-session
     // reflections so the agent's next turn starts with the lessons
     // learned last session. Disabled when config.prior_reflection_max_items
@@ -478,7 +478,7 @@ pub fn memory_sync(
     if let Some(router) = router {
         router.sync_turn(user, assistant, session_id);
     }
-    // Phase 18 (P0-3): facts 表 caller — 从 user turn 抽取关键陈述
+    //: facts 表 caller — 从 user turn 抽取关键陈述
     // 并写入 SQLite `facts` 表，让跨 session 召回（memory_prefetch
     // 里的 `MemoryRouter::recognize`）能命中 user-asserted facts。
     // 仅对 embedded backend 调用（其他 backend 没 facts 表）。
@@ -521,7 +521,7 @@ pub fn memory_sync(
         }
     }
 
-    // P2-6 (2026-06-27): dialectic user-style detection. We write
+    //: dialectic user-style detection. We write
     // ONE fact per turn with `kind = user.style:<style>` so the
     // tag dedups across sessions via `canonical_key UNIQUE`. The
     // LLM never has to ask the user "are you direct or
@@ -578,12 +578,12 @@ pub fn memory_sync(
     }
     records
 }
-/// Phase 18 (架构-1): freeze the current session state into a
+/// (架构-1): freeze the current session state into a
 /// `session_snapshots` row. Called every N turns (default 50)
 /// and on `on_session_end`. The `frame_ids` and `summary` are
 /// extracted from the router's embedded backend so this method
 /// is a no-op when the embedded backend is absent.
-/// /// Designed to be cheap: the embedded SQLite path is O(visible
+/// Designed to be cheap: the embedded SQLite path is O(visible
 /// frames) on `total_turns.is_multiple_of(N)` boundary calls,
 /// and O(1) on all other turns.
 pub fn maybe_freeze_snapshot(
@@ -632,7 +632,7 @@ pub fn maybe_freeze_snapshot(
     }
 }
 
-/// Phase 18 (架构-2): enforce a hard cap on visible frames so
+/// (架构-2): enforce a hard cap on visible frames so
 /// memory.db doesn't grow unbounded. Called every 100 turns as a
 /// background cleanup. Default cap is 10000 — enough for ~3
 /// months of heavy chat, soft-hidden rows stay on disk for the
@@ -786,7 +786,7 @@ pub fn memory_pre_compress_note(
 /// Drain pending `FocusConclusion`s from the focus stack and forward
 /// them to the long-term memory backend. Returns the number of
 /// conclusions processed.
-/// /// No-op when no router is attached — conclusions are still drained
+/// No-op when no router is attached — conclusions are still drained
 /// from the focus stack so they don't pile up. Each conclusion is
 /// persisted via `router.upsert_conclusion` (async, fan-out to all
 /// backends) and, when the embedded backend is present, a
@@ -819,7 +819,7 @@ pub fn drain_focus_conclusions(
     // caller's borrow free after we return.
     let router: Arc<MemoryRouter> = Arc::clone(router_ref);
     let count = conclusions.len();
-    // Phase 17 (BaiLongma compression backfill): deterministic
+    //(BaiLongma compression backfill): deterministic
     // fact extraction. Each conclusion becomes a row in the
     // `facts` table with a canonical_key derived from
     // (session_id, source_frame_id) so re-running is idempotent.
@@ -867,7 +867,7 @@ pub fn drain_focus_conclusions(
 /// session never used `delegate_task`.
 /// 2. Drain any pending focus conclusions from the focus stack.
 /// 3. Route `on_session_end` through `MemoryRouter`.
-/// /// No-op when `skip_memory` is set. The session-level conclusion is
+/// No-op when `skip_memory` is set. The session-level conclusion is
 /// spawned on the runtime so the agent loop doesn't block on SQLite
 /// writes; errors are logged and swallowed.
 #[allow(clippy::too_many_arguments)]
@@ -896,7 +896,7 @@ pub fn memory_on_session_end(
         return;
     };
     let router_owned: Arc<MemoryRouter> = Arc::clone(router_ref);
-    // M1.6.5: persist a session-level FocusConclusion to the
+    //persist a session-level FocusConclusion to the
     // embedded SQLite (memory.db) so cross-session recall works
     // even when the session never used `delegate_task`. Without
     // this hook the only writes to memory.db came from
@@ -971,7 +971,7 @@ pub fn memory_on_session_end(
         .collect();
     router_owned.on_session_end(&as_values);
 
-    // (Phase 19 E): emit per-session reflections
+    //emit per-session reflections
     // (what_went_well / what_to_improve / user_preferences_observed /
     // next_session_hint). No LLM — pure template aggregation over
     // facts + tool_errors + user.style. The user sees these in chat
@@ -1018,7 +1018,7 @@ pub fn memory_on_session_end(
 /// `FocusConclusion` is buffered for the next drain.
 /// 3. Drain pending focus conclusions to long-term memory.
 /// 4. Broadcast the live focus depth to the consciousness tracker.
-/// /// M1 wires (1)–(3); M1.6.3 added (4). The push side
+/// wires (1)–(3); added (4). The push side
 /// (`note_delegation_start`) is invoked from the tool-dispatch
 /// path; the pop side here is a safe no-op when no matching frame
 /// is on the stack.

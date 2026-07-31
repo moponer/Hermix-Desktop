@@ -9,9 +9,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CuaError {
-    /// `DXGI` subsystem failure (Phase 2 — currently unused because
-    /// Phase 1 captures via BitBlt; surfaced by the DXGI backend
-    /// once it lands).
+    /// `DXGI` subsystem failure (currently unused because capture goes
+    /// through BitBlt; surfaced by the DXGI backend).
     #[error("DXGI: {0}")]
     Dxgi(String),
 
@@ -25,15 +24,15 @@ pub enum CuaError {
     #[error("Win32 GDI: {0}")]
     Gdi(String),
 
-    /// UIAutomation failure (Phase 2 stub).
+    /// UIAutomation failure .
     #[error("UIA: {0}")]
     Uia(String),
 
-    /// OCR failure (Phase 2 stub).
+    /// OCR failure .
     #[error("OCR: {0}")]
     Ocr(String),
 
-    /// CDP failure (Phase 2 stub).
+    /// CDP failure .
     #[error("CDP: {0}")]
     Cdp(String),
 

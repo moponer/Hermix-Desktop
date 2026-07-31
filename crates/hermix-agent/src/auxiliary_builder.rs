@@ -37,15 +37,15 @@ pub struct AuxiliaryWiringSummary {
 }
 
 /// Build an [`AuxiliaryClient`] from environment variables.
-/// /// Resolution rules:
-/// /// * `OPENROUTER_API_KEY` → registers an `openrouter` candidate
+/// Resolution rules:
+/// * `OPENROUTER_API_KEY` → registers an `openrouter` candidate
 /// * `ANTHROPIC_API_KEY` → registers an `anthropic` candidate
 /// * `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`) → registers a `custom`
 /// candidate
 /// * `ZAI_API_KEY`, `KIMI_API_KEY`, `MINIMAX_API_KEY`, `GEMINI_API_KEY` →
 /// register direct-key candidates (OpenAI-compatible base URLs)
-/// /// Order matches Python: OpenRouter > Custom > Anthropic > direct keys.
-/// /// **Deprecated**: prefer [`build_auxiliary_client_with_config`] which also
+/// Order matches Python: OpenRouter > Custom > Anthropic > direct keys.
+/// **Deprecated**: prefer [`build_auxiliary_client_with_config`] which also
 /// reads API keys from `config.yaml`'s `[llm_providers]` section. This
 /// env-only constructor is kept for backward compatibility (tests, CLI).
 pub fn build_default_auxiliary_client(
@@ -55,10 +55,10 @@ pub fn build_default_auxiliary_client(
 }
 
 /// Build an [`AuxiliaryClient`] from both `config.yaml` and environment variables.
-/// /// For each provider, the key is resolved as:
+/// For each provider, the key is resolved as:
 /// 1. `config.llm_providers[provider].api_key` (from config.yaml)
 /// 2. Environment variable (e.g. `MINIMAX_API_KEY`)
-/// /// This mirrors the main provider's resolution logic in `build_provider`,
+/// This mirrors the main provider's resolution logic in `build_provider`,
 /// ensuring the compression auxiliary client uses the same API key as the
 /// main conversation. Without this, a user who configured their key only in
 /// config.yaml (not as an env var) would see 401 errors from the compression

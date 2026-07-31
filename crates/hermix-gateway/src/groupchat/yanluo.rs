@@ -257,7 +257,7 @@ impl Detector for SummaryConsistencyDetector {
 // ── 3. LoopDetector ──────────────────────────────────────
 
 /// 同一 topic 轮次计数
-/// /// state 由 AuditEngine 维护（每个 agent 一个 ring buffer of last N topics）
+/// state 由 AuditEngine 维护（每个 agent 一个 ring buffer of last N topics）
 pub struct LoopDetector {
     /// 每个 agent 最近 8 轮的 topic 记录
     pub history: std::sync::Mutex<HashMap<String, VecDeque<String>>>,
@@ -680,7 +680,7 @@ impl AuditEngine {
     }
 
     /// 跑一次审计。返回本轮所有违规记录（已写入 trail）。
-    /// /// `score_before` 是 agent 进入本房间时的有效积分（global + shadow delta）。
+    /// `score_before` 是 agent 进入本房间时的有效积分（global + shadow delta）。
     pub fn evaluate(
         &mut self,
         ctx: &AuditContext,

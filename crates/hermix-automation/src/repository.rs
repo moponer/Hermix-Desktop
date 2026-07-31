@@ -4,7 +4,7 @@
 //! All operations go through [`open_with_wal`] to ensure WAL mode +
 //! busy_timeout are set on every connection.
 //!
-//! (Phase 5 — P5-1)
+//!
 
 use std::path::{Path, PathBuf};
 
@@ -51,7 +51,7 @@ fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, AutomationReposito
 // ---------------------------------------------------------------------------
 
 /// SQLite-backed repository for automation entities.
-/// /// Stateless — each method opens a fresh connection to the DB.
+/// Stateless — each method opens a fresh connection to the DB.
 pub struct AutomationRepository {
     db_path: PathBuf,
 }

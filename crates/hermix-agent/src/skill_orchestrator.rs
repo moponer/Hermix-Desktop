@@ -33,7 +33,7 @@ pub struct SkillCommandInfo {
 }
 
 /// Parsed SKILL.md frontmatter.
-/// /// P2-8 (2026-06-27): extended with the agentskills.io open-standard
+/// extended with the agentskills.io open-standard
 /// fields so we can ingest community SKILL.md files verbatim. Only
 /// `name` and `description` are still required to be present — the
 /// others are optional and gracefully degrade to `None`.
@@ -42,7 +42,7 @@ pub struct SkillFrontmatter {
     pub name: Option<String>,
     pub description: Option<String>,
     pub platform: Option<Vec<String>>,
-    /// P2-8: agentskills.io standard fields. None when the source
+    /// agentskills.io standard fields. None when the source
     /// SKILL.md predates the standard or uses a private format.
     pub version: Option<String>,
     pub author: Option<String>,
@@ -57,7 +57,7 @@ pub struct SkillFrontmatter {
 // ---------------------------------------------------------------------------
 
 /// Parse YAML frontmatter from a SKILL.md file.
-/// /// Expects the file to start with `---\n...\n---\n` followed by the body.
+/// Expects the file to start with `---\n...\n---\n` followed by the body.
 /// Returns (frontmatter, body).
 pub fn parse_frontmatter(content: &str) -> (SkillFrontmatter, &str) {
     let trimmed = content.trim_start();
@@ -82,9 +82,9 @@ pub fn parse_frontmatter(content: &str) -> (SkillFrontmatter, &str) {
 }
 
 /// Minimal YAML frontmatter parser (no full YAML dependency needed).
-/// /// P2-8 (2026-06-27): extended to ingest the agentskills.io open
+/// extended to ingest the agentskills.io open
 /// standard. We handle these shapes:
-/// /// ```yaml
+/// ```yaml
 /// name: foo                       # scalar
 /// description: bar                # scalar (no quotes required)
 /// tags: [a, b, c]                 # inline YAML list
@@ -95,7 +95,7 @@ pub fn parse_frontmatter(content: &str) -> (SkillFrontmatter, &str) {
 /// - bash
 /// - read_file
 /// ```
-/// /// Comments (`# ...`) and blank lines are skipped. Empty values
+/// Comments (`# ...`) and blank lines are skipped. Empty values
 /// become `None` rather than `Some("")` so callers can detect the
 /// missing case without a separate `is_empty()` check.
 fn parse_yaml_frontmatter(yaml: &str) -> SkillFrontmatter {
@@ -251,7 +251,7 @@ pub struct SkillOrchestrator {
     /// Always scanned first; commands from here win name conflicts
     /// against secondary dirs (first-write-wins, deterministic).
     skills_dir: PathBuf,
-    /// P2-T5: secondary roots scanned after `skills_dir` for
+    /// secondary roots scanned after `skills_dir` for
     /// cross-tool compatibility (e.g. Open-Plugins / agentskills.io
     /// standard `.agents/skills/`, `.cursor/skills/`,
     /// `.claude/skills/`). Optional; empty by default. Duplicates
@@ -271,7 +271,7 @@ impl SkillOrchestrator {
     }
 
     /// Create an orchestrator using the default `<HERMIX_HOME>/skills/` directory.
-    /// /// Delegates to `hermix_config::paths::hermix_home()` so
+    /// Delegates to `hermix_config::paths::hermix_home()` so
     /// `$HERMIX_HOME` and portable mode both work. The previous
     /// implementation only read `$HOME`, which on Windows is often
     /// unset (cmd.exe), causing skills to be silently loaded from
@@ -280,7 +280,7 @@ impl SkillOrchestrator {
         Self::new(hermix_config::paths::hermix_home().join("skills"))
     }
 
-    /// P2-T5: register an additional skills root to scan in
+    /// register an additional skills root to scan in
     /// addition to `skills_dir`. Used by the Open-Plugins /
     /// agentskills.io compatibility layer (`~/.agents/skills/`,
     /// `~/.cursor/skills/`, `~/.claude/skills/`). Order matters:
@@ -308,7 +308,7 @@ impl SkillOrchestrator {
     pub fn scan_skill_commands(&mut self) -> &HashMap<String, SkillCommandInfo> {
         self.commands.clear();
 
-        // P2-T3: while we have every SKILL.md in hand for the scan,
+        //while we have every SKILL.md in hand for the scan,
         // we also compute its health score and warn on anything
         // below 0.5. The score is NOT used to gate loading — we
         // never want a stale skill to silently disappear — but the
@@ -336,7 +336,7 @@ impl SkillOrchestrator {
 
     /// Recursively scan a directory for SKILL.md files, scoring
     /// each one's health for log diagnostics.
-    /// /// `dir` is the directory to scan now (we process it
+    /// `dir` is the directory to scan now (we process it
     /// unconditionally, regardless of its name). Subsequent
     /// recursion skips hidden subdirectories so a malicious /
     /// junk sibling like `.git/` can't smuggle in stray SKILL.md
@@ -435,7 +435,7 @@ impl SkillOrchestrator {
         // use lexical, not canonical, to keep this cheap —
         // `walkdir` / `read_dir` already de-duped realpath
         // collisions downstream). Mirrors upstream's
-        // `path_security.validate_within_dir` check. P2-T5
+        //`path_security.validate_within_dir` check.
         // extended the test from primary-only to all roots so
         // Open-Plugins secondary directories register too.
         let mut allowed_root = Some(self.skills_dir.as_path());
@@ -526,7 +526,7 @@ impl SkillOrchestrator {
     }
 
     /// Resolve a user-typed `/command` to its canonical key.
-    /// /// Hyphens and underscores are treated interchangeably.
+    /// Hyphens and underscores are treated interchangeably.
     pub fn resolve_skill_command_key(&self, command: &str) -> Option<String> {
         if command.is_empty() {
             return None;
@@ -576,7 +576,7 @@ impl SkillOrchestrator {
     }
 
     /// Load multiple skills for session-wide preloading.
-    /// /// Returns (prompt_text, loaded_skill_names, missing_identifiers).
+    /// Returns (prompt_text, loaded_skill_names, missing_identifiers).
     pub fn build_preloaded_skills_prompt(
         &self,
         identifiers: &[String],
@@ -649,7 +649,7 @@ mod tests {
         assert!(body.contains("Just a body"));
     }
 
-    // P2-8 (2026-06-27): agentskills.io open-standard frontmatter
+    //: agentskills.io open-standard frontmatter
     // fields. We test the new scalars + block-list shapes in isolation
     // so a refactor can't silently drop a field that community skills
     // depend on.
@@ -866,7 +866,7 @@ allowed-tools:
         assert!(prompt.contains("preloaded"));
     }
 
-    // --- P2-T5: multi-root skill scanning ---
+    //multi-root skill scanning ---
 
     #[test]
     fn p2_t5_scan_merges_primary_and_extra_dirs_with_first_wins() {

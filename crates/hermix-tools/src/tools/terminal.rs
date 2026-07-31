@@ -20,11 +20,11 @@ use crate::ToolRegistry;
 // ---------------------------------------------------------------------------
 
 /// Register the `terminal` tool with the registry (P1.2 migration).
-/// /// Pass the same `terminal_workspace` handle used by other terminal-touching
+/// Pass the same `terminal_workspace` handle used by other terminal-touching
 /// tools (and the agent service) so per-turn workspace updates propagate
 /// here too. Test-only callers without a registry workspace can pass
 /// `Arc::new(RwLock::new(None))`.
-/// /// Pass the registry's shared `terminal_approval_ctx` handle
+/// Pass the registry's shared `terminal_approval_ctx` handle
 /// (`registry.terminal_approval_ctx_handle()`) so `LocalAgentService`
 /// can wire the WS approval hook per turn without re-registering the
 /// tool. The handle starts as `default()` (both fields `None`); the
@@ -56,7 +56,7 @@ pub fn register(
         RiskLevel::Caution,
         false,
     );
-    // Phase 1 (session isolation): register as ContextAware so
+    //(session isolation): register as ContextAware so
     // dispatch_with_context routes to execute_with_context with
     // per-session ctx instead of reading process-global Arcs.
     let context_aware: Arc<dyn ContextAware> = handler as Arc<dyn ContextAware>;
@@ -77,7 +77,7 @@ pub struct TerminalHandler {
     /// default `current_dir` for the spawned process — so terminal
     /// commands always run in the user's "工作区", not the server CWD.
     default_workspace: std::sync::Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
-    /// Per-request approval hook (2026-07-17). When populated,
+    /// Per-request approval hook . When populated,
     /// `RequiresConfirmation` is surfaced as a `request_approval` event
     /// on the active WS channel (so the desktop's `InlineApprovalCard`
     /// renders instead of bouncing the user through LLM text). When
@@ -92,7 +92,7 @@ impl TerminalHandler {
     /// update the per-turn workspace without holding a direct reference to
     /// this handler. Tests that don't care about workspace semantics can
     /// pass `Arc::new(RwLock::new(None))`.
-    /// /// Pass a shared `terminal_approval_ctx` handle from
+    /// Pass a shared `terminal_approval_ctx` handle from
     /// [`ToolRegistry::terminal_approval_ctx_handle`] so the agent
     /// service can swap the WS approval hook per request without
     /// re-registering the tool. Tests / headless callers can pass
@@ -123,7 +123,7 @@ impl TerminalHandler {
     /// `on_event` channel), emit a `request_approval` event on the WS
     /// stream and `.await` the user's `approved` / `denied` click via
     /// the registry's oneshot receiver.
-    /// /// Returns:
+    /// Returns:
     /// - `Some(ApprovalOutcome::Approved)` — user approved; caller
     /// should fall through and execute. We also `approve_for_session`
     /// so the same command string is implicit-allow for the rest of
@@ -139,7 +139,7 @@ impl TerminalHandler {
         effective_cmd: &str,
         approval_ctx: &TerminalApprovalContext,
     ) -> Option<ApprovalOutcome> {
-        // Phase 2: the context is now passed in directly — no mutex
+        //the context is now passed in directly — no mutex
         // lock needed. The caller (execute_inner) obtained it from
         // either the global Arc (execute path) or ctx (ContextAware
         // path), so it's already scoped to this call.
@@ -225,7 +225,7 @@ static NEXT_REQUEST_ID: std::sync::atomic::AtomicU64 =
 #[async_trait]
 impl ToolHandler for TerminalHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
-        // Phase 2: read from global Arcs (backward compat for
+        //read from global Arcs (backward compat for
         // non-context dispatch path — tests, headless callers).
         let workspace = self
             .default_workspace
@@ -582,10 +582,10 @@ impl TerminalHandler {
 }
 
 // ---------------------------------------------------------------------------
-// ContextAware impl (Phase 1: session isolation)
+//ContextAware impl
 // ---------------------------------------------------------------------------
 
-/// Phase 2: directly reads from `ctx` — no global Arc swap/restore.
+/// directly reads from `ctx` — no global Arc swap/restore.
 /// This eliminates the race window entirely: the workspace and
 /// approval context come from the per-session `ToolCallContext`
 /// captured in the bridge closure, not from process-global
@@ -1068,7 +1068,7 @@ mod tests {
         assert_eq!(captured.lock().unwrap().clone(), None);
     }
 
-    // ---------- WS approval path (2026-07-17, "Caution tool needs UI prompts") ----------
+    //WS approval path (, "Caution tool needs UI prompts") ----------
 
     /// Helper: build a `TerminalApprovalContext` plus a registry of
     /// pending oneshot senders so the test can resolve the user's

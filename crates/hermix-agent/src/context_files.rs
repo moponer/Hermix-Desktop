@@ -19,7 +19,7 @@ const TRUNCATE_TAIL_RATIO: f64 = 0.2;
 
 /// Context file names that `load_workspace_context` will scan in the
 /// working directory (walking up to the git root).
-/// /// **Why no `AGENTS.md` / `HERMES.md` (ALL-CAPS):** those are the
+/// **Why no `AGENTS.md` / `HERMES.md` (ALL-CAPS):** those are the
 /// monorepo-dev-guide convention — `hermes-agent-rs/AGENTS.md` is a
 /// 23k-char in-tree guide for code contributors and is **not** meant
 /// for the desktop chat's system prompt. When the desktop app is
@@ -30,7 +30,7 @@ const TRUNCATE_TAIL_RATIO: f64 = 0.2;
 /// is case-insensitive so the lowercase-list vs uppercase-list
 /// distinction was unreliable. If you want a project-specific guide
 /// in the prompt, copy it to `agents.md`.
-/// /// We always scan `agents.md` (lowercase) and `.hermes.md` (dotfile).
+/// We always scan `agents.md` (lowercase) and `.hermes.md` (dotfile).
 /// Both names require deliberate creation, so the cost of a false
 /// positive is bounded and the user is in control.
 const WORKSPACE_CONTEXT_FILES: &[&str] = &["agents.md", ".hermes.md"];
@@ -88,7 +88,7 @@ pub fn scan_context_content(content: &str, filename: &str) -> String {
 }
 
 /// Load all context files from `~/.hermix/context/` directory.
-/// /// Returns concatenated content of all `.md` and `.txt` files found,
+/// Returns concatenated content of all `.md` and `.txt` files found,
 /// sorted alphabetically by filename.
 pub fn load_hermes_context_files(hermix_home: &Path) -> String {
     let context_dir = hermix_home.join("context");
@@ -158,7 +158,7 @@ fn load_context_dir(dir: &Path) -> String {
 
 /// Load workspace-level context file (AGENTS.md, .hermes.md, etc.) from the
 /// working directory.
-/// /// Searches the working directory and walks up to the git root looking for
+/// Searches the working directory and walks up to the git root looking for
 /// context files.
 pub fn load_workspace_context(working_dir: &Path) -> Option<String> {
     let git_root = find_git_root(working_dir);
@@ -338,7 +338,7 @@ mod tests {
     /// them, which was the root cause of the 23k-char prompt leak
     /// (the desktop launched from a monorepo root and inherited
     /// `AGENTS.md` as system-prompt context).
-    /// /// On Windows NTFS the `is_file` check is case-insensitive, so a
+    /// On Windows NTFS the `is_file` check is case-insensitive, so a
     /// query for `agents.md` will still hit a disk entry `AGENTS.md`
     /// at the dir-lookup level. That's fine here because the user
     /// who *deliberately* writes an `AGENTS.md` in their cwd

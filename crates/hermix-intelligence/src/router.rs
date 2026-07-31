@@ -96,7 +96,7 @@ impl SmartModelRouter {
     }
 
     /// Select the best model for the given prompt and requirements.
-    /// /// Scoring strategy:
+    /// Scoring strategy:
     /// 1. Filter out models that don't match **all** required capabilities.
     /// 2. Filter out models whose context window is smaller than `max_context`.
     /// 3. Estimate cost for the prompt and filter out models that exceed `max_cost`.

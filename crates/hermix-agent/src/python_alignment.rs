@@ -1,6 +1,6 @@
 //! Python `run_agent.py` alignment helpers (budget pressure, history hygiene).
 //!
-//! # Phase A — contract scenarios (mirrors Python tests)
+//! # Contract scenarios (mirrors Python tests)
 //!
 //! 1. **New session**: empty `stored_system_prompt`, fresh `build_system_prompt`, `on_session_start` may fire.
 //! 2. **Continue session**: `stored_system_prompt` from SQLite matches prior turn — stable Anthropic prefix cache.
@@ -140,10 +140,10 @@ fn is_utf16_surrogate_scalar(c: char) -> bool {
 
 /// Replace lone surrogate code points with U+FFFD (Python `_sanitize_surrogates`).
 /// Strip common reasoning / thinking wrappers for Codex ack heuristics (subset of Python `_strip_think_blocks`).
-/// /// This is the **post-hoc** cleaner used when we already have the full assistant content.
+/// This is the **post-hoc** cleaner used when we already have the full assistant content.
 /// For **streaming** content where `<think>...</think>` may straddle two chunks, use
 /// [`ThinkBlockParser`] instead.
-/// /// `ACK_THINK` matches both `<thinking>...</thinking>` and the bare
+/// `ACK_THINK` matches both `<thinking>...</thinking>` and the bare
 /// `<think>...</think>` form used by MiniMax M2.7 / Qwen / DeepSeek-R1.
 pub fn strip_think_blocks_for_ack(content: &str) -> String {
     let mut c = content.to_string();
@@ -164,13 +164,13 @@ pub fn strip_think_blocks_for_ack(content: &str) -> String {
 /// Heuristic: detect a reasoning monologue that the model forgot to wrap
 /// in a think block. These are internal monologues that should render as
 /// collapsed reasoning blocks, not as user-visible reply text.
-/// /// Only triggers when:
+/// Only triggers when:
 /// * there is no ` <think` / `</think` tag anywhere in the text (so the
 /// normal parser already had its chance), and
 /// * the text is non-trivial, and
 /// * the opening words read like self-directed analysis rather than an
 /// answer to the user.
-/// /// This is intentionally conservative — false positives would hide real
+/// This is intentionally conservative — false positives would hide real
 /// user-facing answers. It targets the common failure mode where a model
 /// emits "I think..." / "trying to reconstruct..." before any visible reply.
 pub fn looks_like_untagged_reasoning(content: &str) -> bool {
@@ -263,11 +263,11 @@ pub fn looks_like_untagged_reasoning(content: &str) -> bool {
 const MAX_PENDING_CHARS: usize = 32;
 
 /// Safety net for models that forget to emit `</think>`.
-/// /// If the parser has already emitted more than this many reasoning chars
+/// If the parser has already emitted more than this many reasoning chars
 /// without seeing the close tag, it forcibly exits think mode on the next
 /// `feed()` call. This prevents the model from swallowing the entire visible
 /// reply as invisible reasoning just because it dropped the closing tag.
-/// /// (The previous `THINK_FALLBACK_CHARS` force-close safety net was removed:
+/// (The previous `THINK_FALLBACK_CHARS` force-close safety net was removed:
 /// the front-end now renders think content inline with the visible reply,
 /// so silently re-routing a never-closed block to the reply stream would
 /// jumble the two. If the model forgets `</think>`, the user simply sees
@@ -292,9 +292,9 @@ impl ThinkBlockParser {
     }
 
     /// Feed one chunk of assistant content. Returns `(content_part, reasoning_part)`:
-    /// /// * `content_part` is text that belongs to the user-visible reply.
+    /// * `content_part` is text that belongs to the user-visible reply.
     /// * `reasoning_part` is text that belongs to the hidden `<think>` block.
-    /// /// Chars that look like the start of a tag may be held back briefly to
+    /// Chars that look like the start of a tag may be held back briefly to
     /// disambiguate; call [`Self::flush`] at end-of-stream to drain any leftover.
     pub fn feed(&mut self, chunk: &str) -> (String, String) {
         if chunk.is_empty() {
@@ -772,7 +772,7 @@ mod tests {
         let mut p = ThinkBlockParser::new();
         let (c, r) = feed_all(
             &mut p,
-            // Realistic M3 streaming: chunk 1 ends right after `<think`,
+            //Realistic streaming: chunk 1 ends right after `<think`,
             // chunk 2 starts with `\n<model thought>`.
             &["<think", "\n用户问我是谁", "，用中文回答"],
         );

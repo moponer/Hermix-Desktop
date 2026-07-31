@@ -236,7 +236,7 @@ fn match_keywords(query_lower: &str, keywords: &[&str]) -> Option<String> {
 }
 
 /// 检查 query 中是否包含任一文件扩展名。
-/// /// 使用正则确保扩展名前面是单词字符（文件名），
+/// 使用正则确保扩展名前面是单词字符（文件名），
 /// 后面是非单词字符或行尾，避免 `.c` 匹配 `.com` 等。
 fn match_extensions(query_lower: &str, extensions: &[&str]) -> Option<String> {
     for ext in extensions {
@@ -271,10 +271,10 @@ fn char_count(s: &str) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Domain Mode 检测器
-/// /// 维护检测历史和工具使用历史，在 per-turn 级别
+/// 维护检测历史和工具使用历史，在 per-turn 级别
 /// 自动检测用户当前的工作域。
-/// /// ## 用法
-/// /// ```ignore
+/// ## 用法
+/// ```ignore
 /// let mut detector = DomainModeDetector::new();
 /// let detection = detector.detect("帮我修复 main.rs 的编译错误", Some("/project"));
 /// assert_eq!(detection.mode, DomainMode::Code);
@@ -345,8 +345,8 @@ impl DomainModeDetector {
     // -----------------------------------------------------------------------
 
     /// 检测用户输入的工作域。
-    /// /// 在 `AgentLoop::run()` 的 Prefetch 阶段调用。
-    /// /// # 参数
+    /// 在 `AgentLoop::run()` 的 Prefetch 阶段调用。
+    /// # 参数
     /// - `query`: 用户最新输入文本
     /// - `workspace_path`: 当前工作区路径（可选）
     pub fn detect(
@@ -570,7 +570,7 @@ impl DomainModeDetector {
 
         // —— 低置信度回退 ——
         if best_score < self.config.llm_classifier_threshold {
-            // TODO Phase 4: 调用 cheap model 做意图分类
+            //TODO : 调用 cheap model 做意图分类
             // 目前回退到默认
             let mode = if best_score > 0.0 {
                 best_mode

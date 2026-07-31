@@ -57,7 +57,7 @@ pub use approval::{
     TerminalApprovalContext, UserAllowlist, UserAllowlistEntry,
 };
 
-// Re-export context types (Phase 1: session isolation)
+//Re-export context types
 pub use context::{ContextAware, ToolCallContext};
 
 // Re-export credential guard
@@ -123,10 +123,10 @@ pub use backends::todo::FileTodoBackend;
 pub use backends::tts::MultiTtsBackend;
 pub use backends::web::{BaiduHtmlSearchBackend, SimpleExtractBackend};
 
-// Re-export tool metadata types (P6-1)
+//Re-export tool metadata types
 pub use tool_meta::{LoadingStrategy, ToolMeta, ToolMetaRegistry, DEFAULT_RESIDENT_TOOLS};
 
-// Re-export deferred loader types (P6-2)
+//Re-export deferred loader types
 pub use deferred_loader::{assemble_tool_schemas_with_meta, DeferredToolLoader};
 
 // Re-export builtin registration helper

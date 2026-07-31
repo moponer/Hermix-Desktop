@@ -73,13 +73,13 @@ pub struct MemoryQuery {
     /// vector search (`cosine_topk`) include a cosine-recall leg in
     /// their `recognize` result. Backends without vector support
     /// silently ignore this field.
-    /// /// Carried as `Vec<f32>` (not `Arc<[f32]>`) because:
+    /// Carried as `Vec<f32>` (not `Arc<[f32]>`) because:
     /// 1. MemoryQuery is cloned per-query in agent loops; Vec is
     /// cheap to clone for typical 384-1024-dim embeddings.
     /// 2. The router constructs the embedding once and passes the
     /// same Vec into multiple backends' recognize calls.
     pub embedding: Option<Vec<f32>>,
-    /// Phase 18 (session isolation): when set, backends scope recall
+    /// (session isolation): when set, backends scope recall
     /// to entries whose `source` matches this session id. `None`
     /// means global recall (all sessions) — the legacy behaviour.
     pub session_id: Option<String>,
@@ -128,7 +128,7 @@ impl MemoryQuery {
 }
 
 /// A single memory hit returned by [`MemoryLayer::recognize`].
-/// /// Salience is **assigned by the backend**, not by the router. The router
+/// Salience is **assigned by the backend**, not by the router. The router
 /// may re-rank by combining backend salience with router-level signals
 /// (recency, frequency), but the backend is the source of truth for
 /// "how relevant does this backend think this is".
@@ -224,7 +224,7 @@ pub type Result<T> = std::result::Result<T, MemoryError>;
 
 /// The unified memory interface. All 8 external plugins + the embedded
 /// backend adapt to this.
-/// /// Methods are async because the 8 external backends are HTTPS APIs.
+/// Methods are async because the 8 external backends are HTTPS APIs.
 /// The embedded backend is sync internally but exposes the async signature
 /// for trait uniformity.
 #[async_trait]
@@ -243,12 +243,12 @@ pub trait MemoryLayer: Send + Sync {
     /// with no prompt-block concept may return an empty Vec.
     async fn inject(&self, hits: &[MemoryHit]) -> Result<Vec<SystemPromptBlock>>;
 
-    /// M1.6.4: persist a `FocusConclusion` from the focus stack.
+    /// persist a `FocusConclusion` from the focus stack.
     /// Default returns `MemoryError::NotImplemented` so the 9
     /// external HTTPS plugins don't have to grow a write surface
     /// they don't actually need. Only the embedded SQLite
     /// backend overrides this to call `upsert_conclusion`.
-    /// /// The router fans out every conclusion to every backend;
+    /// The router fans out every conclusion to every backend;
     /// backends that don't implement this are skipped silently
     /// (the `NotImplemented` error is filtered, not surfaced).
     async fn upsert_conclusion(&self, _c: &FocusConclusion) -> Result<()> {
@@ -265,7 +265,7 @@ pub trait MemoryLayer: Send + Sync {
     /// cosine search can skip rows that came from a different
     /// embedding model (cosine is only meaningful between
     /// vectors of the same dim and ideally the same model).
-    /// /// Default returns `NotImplemented`. Only the embedded
+    /// Default returns `NotImplemented`. Only the embedded
     /// SQLite backend overrides this in L1.3.
     async fn upsert_embedding(
         &self,
@@ -284,9 +284,9 @@ pub trait MemoryLayer: Send + Sync {
     /// doesn't match the provided `model` (pass an empty string
     /// to skip the model check, useful for cross-model cosine
     /// in tests). `min_score` filters low-similarity hits.
-    /// /// Default returns `NotImplemented`. Only the embedded
+    /// Default returns `NotImplemented`. Only the embedded
     /// SQLite backend overrides this in L1.3.
-    /// /// O(N) scan: fine for the L1.5 target corpus of "30+ tools
+    /// O(N) scan: fine for the L1.5 target corpus of "30+ tools
     /// → top-5". When the corpus grows to millions of rows we
     /// graduate to `usearch` HNSW in a later phase.
     async fn cosine_topk(
@@ -347,7 +347,7 @@ pub trait MemoryLayer: Send + Sync {
 
     // ---------------------------------------------------------------
     // Write-path hooks — unified from the legacy `MemoryProviderPlugin`
-    // trait (Phase 17). Every backend defaults to a no-op so the 8
+    //trait . Every backend defaults to a no-op so the 8
     // external HTTPS plugins don't have to grow a write surface they
     // don't actually need. The agent loop fans out to every registered
     // `MemoryLayer` via `PluginManager::memory_providers`.

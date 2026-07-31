@@ -5,24 +5,24 @@
 //! populate [`TaskContext::references`] which the agent loop can use
 //! to preload files or resolve context.
 //!
-//! (Phase 1 — P1-3)
+//!
 
 use hermix_core::{TaskContext, TaskContextRef, TaskContextRefKind};
 
 /// Parse `@`-references from user input text.
-/// /// Recognizes:
+/// Recognizes:
 /// - `@path/to/file.rs` → `File`
 /// - `@path/to/dir/` → `Directory` (trailing slash)
 /// - `@http://example.com` / `@https://...` → `Url`
 /// - `@session:abc123` → `Session`
 /// - `@anything_else` → `Unknown`
-/// /// References are extracted by scanning for `@` followed by
+/// References are extracted by scanning for `@` followed by
 /// non-whitespace characters. The `@` itself is not included in
 /// the `target` field.
-/// /// # Example
+/// # Example
 /// ```
 /// use hermix_task::context::parse_at_references;
-/// /// let refs = parse_at_references("Fix @src/main.rs and check @https://example.com");
+/// let refs = parse_at_references("Fix @src/main.rs and check @https://example.com");
 /// assert_eq!(refs.len(), 2);
 /// assert_eq!(refs[0].target, "src/main.rs");
 /// assert_eq!(refs[0].kind, hermix_core::TaskContextRefKind::File);

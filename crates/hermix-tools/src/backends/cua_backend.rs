@@ -1,7 +1,7 @@
-//! CuaBrowserBackend — Phase 2-E 自研 CDP 客户端后端。
+//! CuaBrowserBackend — -E 自研 CDP 客户端后端。
 //!
 //! 使用 `hermix-cua::browser::BrowserHandle` 实现 `BrowserBackend` trait。
-//! 这是 Phase 2-E 的官方实现（零云服务，自研为主）。
+//! 这是 -E 的官方实现（零云服务，自研为主）。
 
 use std::sync::Arc;
 

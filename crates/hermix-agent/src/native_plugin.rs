@@ -1,4 +1,4 @@
-//! Runtime native plugin loader (2026-07-05).
+//! Runtime native plugin loader .
 //!
 //! Loads `.dll` (Windows) / `.so` (Linux) plugins from
 //! `$HERMIX_HOME/plugins/tools/` and `$HERMIX_HOME/plugins/memory/`.
@@ -10,7 +10,7 @@
 //! `NativeToolAdapter` implementing `ToolHandler` and registers it
 //! into the `ToolRegistry`.
 //!
-//! ## Trust Model (M13)
+//! ## Trust Model
 //!
 //! **WARNING**: Native plugins run with full host process privileges.
 //! A plugin can:
@@ -98,7 +98,7 @@ impl Drop for LoadedNativePlugin {
 
 impl LoadedNativePlugin {
     /// # Safety
-    /// /// Caller must ensure `dll_path` points to a valid shared library
+    /// Caller must ensure `dll_path` points to a valid shared library
     /// that exports `hermix_plugin_init` with the correct C ABI signature.
     /// The returned pointer from the init function must remain valid for
     /// the lifetime of the `LoadedNativePlugin`.
@@ -163,7 +163,7 @@ impl LoadedNativePlugin {
     /// Create tool handler #0 (present if `self.kind == Tools && tool_count > 0`).
     /// For multi-tool plugins, callers can pass `index` 0..tool_count.
     /// # Safety
-    /// /// Caller must ensure `index < self.tool_count` and that the plugin
+    /// Caller must ensure `index < self.tool_count` and that the plugin
     /// remains loaded (i.e. the originating `LoadedNativePlugin` is not
     /// dropped) for the lifetime of the returned handler.
     pub unsafe fn create_tool_handler(
@@ -192,7 +192,7 @@ impl LoadedNativePlugin {
     }
 
     /// # Safety
-    /// /// Caller must ensure the returned pointer is properly managed
+    /// Caller must ensure the returned pointer is properly managed
     /// by the plugin's memory provider contract.
     pub unsafe fn create_memory_provider(&self) -> Option<*mut std::ffi::c_void> {
         // SAFETY: `self.descriptor` is valid for the lifetime of `self._lib`.

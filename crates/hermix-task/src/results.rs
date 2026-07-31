@@ -1,14 +1,14 @@
 //! Results model — `TaskResultRef` collection helpers.
 //!
 //! Provides utilities for managing the `result_refs` collection on a
-//! Task, supporting the `present_files` equivalent (P7-1).
+//! Task, supporting the `present_files` equivalent .
 //!
-//! (Phase 1 — P1-4)
+//!
 
 use hermix_core::{TaskArtifactType, TaskResultRef};
 
 /// Helper wrapper for managing a collection of `TaskResultRef`.
-/// /// Provides deduplication, type filtering, and summary generation
+/// Provides deduplication, type filtering, and summary generation
 /// for the frontend's "产物" tab.
 #[derive(Debug, Clone, Default)]
 pub struct TaskResults {

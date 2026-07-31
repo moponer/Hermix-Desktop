@@ -32,15 +32,15 @@ enum PreTurnAction {
 }
 
 // ---------------------------------------------------------------------------
-// P2-T1: skill auto-activation helper
+//skill auto-activation helper
 // ---------------------------------------------------------------------------
 
 /// Build the `<active-skills>` block to inject into ctx this turn.
-/// /// Returns `None` when no skills match or when `user_text` is empty.
+/// Returns `None` when no skills match or when `user_text` is empty.
 /// The block lists up to 3 skill names with their bodies (each body
 /// capped at 500 lines by the loader, plus a total `char_budget`
 /// cap here so even many skills can't blow the context).
-/// /// Failure modes — none. We never panic or error out: missing
+/// Failure modes — none. We never panic or error out: missing
 /// `skills_dir`, empty matches, FS errors all degrade to `None`.
 pub fn build_active_skills_block(
     skills_dir: &std::path::Path,
@@ -72,7 +72,7 @@ pub fn build_active_skills_block(
 
 /// Outcome of [`AgentLoop::do_tool_turn`] — tells the caller what
 /// to do after the tool execution block completes.
-/// /// (P1-3): extracted from the duplicated tool-execution
+/// extracted from the duplicated tool-execution
 /// blocks in `run()` and `run_stream()` (~120 lines saved).
 enum ToolTurnOutcome {
     /// Rollback threshold was hit; the caller should `continue`
@@ -126,7 +126,7 @@ impl AgentLoop {
             )));
         }
 
-        // --- P1 (2026-07-18): poll any background-spawned compression ---
+        // poll any background-spawned compression ---
         // Non-blocking probe: if a previous spawn finished while the
         // agent loop was processing the last turn, roll the result
         // into `ctx` *before* anything else reads `ctx` (memory
@@ -223,7 +223,7 @@ impl AgentLoop {
         self.maybe_freeze_snapshot(session_id, state.total_turns);
         self.maybe_enforce_frame_cap(state.total_turns);
 
-        // --- Phase 19 (A): per-turn memory recall ---
+        //(A): per-turn memory recall ---
         // Cheap heuristic: every Nth turn (default 5) OR when the
         // user turn's first token differs from the previous recall,
         // we re-pull the top-N salient facts and emit a
@@ -254,7 +254,7 @@ impl AgentLoop {
             }
         }
 
-        // --- Phase 2 (P2-T1): auto-activate matching skills ---
+        //: auto-activate matching skills ---
         // Cheap keyword + subsequence-fuzzy match the user's message
         // against the skill directory and inject up to 3 skills'
         // full bodies into ctx. The skill bodies are appended as a
@@ -571,7 +571,7 @@ impl AgentLoop {
                 tool_calls,
                 &result,
             );
-            // (sandbox-permission fix P3): if the tool failed with
+            // (sandbox-permission fix): if the tool failed with
             // a PERMISSION_DENIED error, inject the "ask the user to grant
             // access" guidance right after the denial note (the two are
             // orthogonal — a denial is a user refusal, a permission error is a
@@ -701,7 +701,7 @@ impl AgentLoop {
         // parameter was hoisted into `LoopState`); no copy-back needed.
     }
 
-    // (P1-3): shared tool-execution + post-tool + convergence +
+    //: shared tool-execution + post-tool + convergence +
     // TurnReport block. Both `run()` and `run_stream()` had identical
     // ~60-line copies of this code. The only real differences are:
     // - log level (info vs debug for phase notification)
@@ -727,7 +727,7 @@ impl AgentLoop {
         stream_needs_break: Option<&Arc<AtomicBool>>,
         on_chunk: Option<&(dyn Fn(StreamChunk) + Send + Sync)>,
     ) -> ToolTurnOutcome {
-        // --- Phase: ToolExecution ---
+        // --- tool execution ---
         let tool_start = Instant::now();
         if is_stream {
             tracing::debug!(
@@ -777,7 +777,7 @@ impl AgentLoop {
             }
         }
 
-        // --- Phase: PostToolExec ---
+        // --- post-tool execution ---
         tracing::debug!(
             phase = %LoopPhase::PostToolExec,
             turn = total_turns,
@@ -923,8 +923,8 @@ impl AgentLoop {
         )
     )]
     //
-    // LESSON: read path 不得套 streaming state machine
-    //   根因：早期设计试图在 read path（DB → ctx）中嵌入 streaming
+    //read path 不得套 streaming state machine
+    //早期设计试图在 read path（DB → ctx）中嵌入 streaming
     //   状态机，导致 read 延迟不可预测 + 状态不一致。
     //   修复规则：read path 只做纯数据加载，streaming 逻辑只在
     //   write path（LLM → ctx → DB）中运行。
@@ -967,11 +967,11 @@ let mut post_tool_nudge_count: u32 = 0;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
 
-        // Phase 1.1 (2026-07-03) introduced `state` as a bridge — every
+        //introduced `state` as a bridge — every
         // loop-local mutable would eventually live in `state` so a future
         // `run_shared_loop(state, llm_caller)` helper could take only
         // `&mut LoopState` instead of the original 11+ locals.
-        // Phase 5 (2026-07-03..2026-07-04) collapsed the bridge to its
+        //(..) collapsed the bridge to its
         // minimum: 4 manager structs (`cost_guard` / `retry_counters` /
         // `context_pressure` / `timings` / `message_cache`) own the
         // in-place-mutated fields, and `total_turns` is the only scalar
@@ -1135,10 +1135,10 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                     self.emit_usage_update(u);
                 }
 
-                // Phase 4.2 (2026-07-03): ~40 lines of has_tools /
+                //: ~40 lines of has_tools /
                 // visible_text / reasoning-retry / empty-retry /
                 // exhausted classification now lives in
-                // `classify_post_llm_response` (Phase 4.1). The
+                //`classify_post_llm_response` . The
                 // per-attempt state (`inner_thinking` / `inner_empty`)
                 // is owned by the loop and threaded through.
                 match self.classify_post_llm_response(
@@ -1152,19 +1152,19 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                 }
             };
             let api_elapsed = api_start.elapsed().as_millis() as u64;
-            // Phase 5 (2026-07-04): record timings on `state.timings`
+            //: record timings on `state.timings`
             // directly (saturating-add inside) instead of accumulating
             // to a local and bridging back via the now-removed
             // `publish_from` helper.
             state.timings.record_api(api_elapsed);
 
-            // Phase 1.3b (2026-07-03): post-LLM hook + usage accumulate +
+            //.3b : post-LLM hook + usage accumulate +
             // cost guard extracted into `process_post_response`. ~60 lines
             // of duplication with `run_stream()` collapsed into one helper
             // call.
             tracing::debug!(phase = %LoopPhase::PostLlmCall, turn = total_turns, "run: post-LLM response processing");
 self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
-            // Round 28 follow-up: both `CostGuardTripped` and `Finalize`
+            //follow-up: both `CostGuardTripped` and `Finalize`
             // must short-circuit here. The previous version only matched
             // `CostGuardTripped` and silently fell through to the
             // `decide_empty_response` block below, which in autonomous_mode
@@ -1354,7 +1354,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                     continue;
                 }
                     tracing::debug!("No tool calls in response, finishing naturally");
-                    // Phase 2.4: terminal-persistence shared with run_stream
+                    //terminal-persistence shared with run_stream
                     self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
                     return Ok(self.finalize_agent_result(
                         &ctx,
@@ -1383,7 +1383,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 self.hydrate_session_search_args(tc);
             }
 
-            // AL-7 (2026-07-09): Unified tool-call validation.
+            //AL-7 : Unified tool-call validation.
             let available = self.tool_registry.names().join(", ");
             let outcome = crate::tool_call_validator::validate(
                 &mut tool_calls,
@@ -1613,7 +1613,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
             });
 
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
-        // Phase 3.1 (2026-07-03): `run_stream` setup was an open-coded
+        //: `run_stream` setup was an open-coded
         // re-implementation of `prepare_run_context`. The two functions
         // diverge only in their *non-prepare* concerns — `run()` is
         // non-stream, `run_stream()` wraps the chunk callback and
@@ -1648,7 +1648,7 @@ self.notify_phase(&LoopPhase::Init, 0);
         let session_id = self.config.session_id.as_deref().unwrap_or("");
 
         let mut state = LoopState::default();
-        // Phase 5 (2026-07-04): same as in `run()`. Only `total_turns`
+        //: same as in `run`. Only `total_turns`
         // keeps the local-alias pattern. The two message caches live
         // on `state.message_cache` (mutated in place) and the two
         // timings live on `state.timings` (mutated in place).
@@ -1918,11 +1918,11 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                     self.emit_usage_update(u);
                 }
 
-                // Phase 4.2 (2026-07-03): mirrors the run() side —
+                //: mirrors the run side —
                 // ~40 lines of has_tools / visible_text /
                 // reasoning-retry / empty-retry / exhausted
                 // classification collapse into a single `match` on
-                // `classify_post_llm_response` (Phase 4.1). The
+                //`classify_post_llm_response` . The
                 // `inner_attempt` counter (stream-only) is bumped
                 // outside this match; per-attempt state is owned by
                 // the loop.
@@ -1942,7 +1942,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
             // reports under-count stream-path API time.
             state.timings.record_api(api_elapsed_ms);
 
-            // Phase 1.3c (2026-07-03): mirrors 1.3b on the run_stream()
+            //.3c : mirrors 1.3b on the run_stream
             // side. Post-LLM hook + usage accumulate + cost guard move
             // into `process_post_response`. The stream-specific
             tracing::debug!(phase = %LoopPhase::PostLlmCall, turn = total_turns, "run_stream: post-LLM response processing");
@@ -1952,7 +1952,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
             // `last_finish_reason` was already updated inside the
             // stream retry loop (line ~5640) to the final response's
             // finish_reason — no need to refresh it here.
-            // Round 28 follow-up (2026-07-08): `process_post_response` returns
+            //follow-up : `process_post_response` returns
             // `Finalize` when there are no tool calls in the response — its
             // doc-comment (agent_loop/types.rs:156-165) explicitly says
             // "the caller should `return` Ok(self.finalize_agent_result(...))".
@@ -2142,7 +2142,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                         last_finish_reason.clone(),
                     ));
                 }
-                // (P1-3 streaming hang fix): when the LLM
+                //( streaming hang fix): when the LLM
                 // returned tool_calls but all were filtered out AND the
                 // turn history already contains tool results, the
                 // decide_empty_response path can loop forever —
@@ -2224,7 +2224,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 ) {
                     continue;
                 }
-                // Phase 2.4: terminal-persistence shared with run()
+                //terminal-persistence shared with run
                 self.persist_session_terminal(&ctx, session_id, total_turns, review_memory_at_end);
                 Self::emit_mute_transition(&on_chunk, &stream_mute, false);
                 return Ok(self.finalize_agent_result(
@@ -2260,7 +2260,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 all_housekeeping && Self::assistant_visible_text_after_think_blocks(&assistant_msg);
             Self::emit_mute_transition(&on_chunk, &stream_mute, should_mute_post);
 
-            // AL-7 (2026-07-09): Unified tool-call validation.
+            //AL-7 : Unified tool-call validation.
             let available = self.tool_registry.names().join(", ");
             let outcome = crate::tool_call_validator::validate(
                 &mut tool_calls,
@@ -2397,7 +2397,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
     // -----------------------------------------------------------------------
 
     /// Verify tool execution results and inject verification status.
-    /// /// This is the "verify work" step from Claude Code's gather→act→verify pattern.
+    /// This is the "verify work" step from Claude Code's gather→act→verify pattern.
     /// Checks file modifications, terminal exit codes, and tool errors.
     pub fn verify_tool_results(
         &self,
@@ -2464,7 +2464,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
 }
 
 // ---------------------------------------------------------------------------
-// P2-T1 tests for `build_active_skills_block`
+//tests for `build_active_skills_block`
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]

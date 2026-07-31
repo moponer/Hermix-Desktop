@@ -6,7 +6,7 @@
 //! - Emit orchestration events on lifecycle changes
 //! - Context and results management
 //!
-//! (Phase 1 — P1-2)
+//!
 
 use std::sync::Arc;
 
@@ -61,7 +61,7 @@ impl Default for CreateTaskParams {
 // ---------------------------------------------------------------------------
 
 /// Lifecycle management service for Tasks.
-/// /// Stateless except for the repository reference — all state is in
+/// Stateless except for the repository reference — all state is in
 /// the database. Thread-safe via `Arc<TaskRepository>`.
 pub struct TaskService {
     repo: Arc<TaskRepository>,
@@ -74,7 +74,7 @@ impl TaskService {
     }
 
     /// Create a new Task.
-    /// /// For `Plan` mode, the task starts in `Pending` and transitions
+    /// For `Plan` mode, the task starts in `Pending` and transitions
     /// to `Planning` when the agent begins planning. For `Craft`, the
     /// task starts in `Pending` and transitions directly to
     /// `InProgress` when execution begins. For `Ask`, the task stays
@@ -104,10 +104,10 @@ impl TaskService {
     }
 
     /// Transition a Task to a new status.
-    /// /// Validates the transition via [`TaskStatus::validate_transition`].
+    /// Validates the transition via [`TaskStatus::validate_transition`].
     /// For `Plan` mode, `pending → planning` is the expected first
     /// transition; for `Craft`, `pending → in_progress` is expected.
-    /// /// Returns the updated Task.
+    /// Returns the updated Task.
     pub fn transition(
         &self,
         id: &str,

@@ -35,7 +35,7 @@ impl CodexProvider {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: api_key.into(),
             model: "codex-mini-latest".to_string(),
-            // (P1-5): mandatory connect + request timeouts, same as
+            //: mandatory connect + request timeouts, same as
             // GenericProvider / AnthropicProvider in provider.rs.
             client: Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
@@ -91,7 +91,7 @@ impl CodexProvider {
     }
 
     /// Convert internal messages to the Responses API input format.
-    /// /// The Responses API uses a flat `input` array with items of different types:
+    /// The Responses API uses a flat `input` array with items of different types:
     /// - `{ "role": "user", "content": "..." }`
     /// - `{ "role": "assistant", "content": "..." }`
     /// - `{ "type": "function_call", "name": "...", "arguments": "...", "call_id": "..." }`

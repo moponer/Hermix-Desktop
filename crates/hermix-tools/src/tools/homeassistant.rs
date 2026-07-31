@@ -12,7 +12,7 @@ use crate::ToolRegistry;
 
 /// Register all 4 Home Assistant tools (list/get/list_services/call_service)
 /// with the registry (P1.2 per-tool migration).
-/// /// Shares one `HaRestBackend` across the four handlers. Tools stay
+/// Shares one `HaRestBackend` across the four handlers. Tools stay
 /// registered even when HASS_URL/HASS_TOKEN are missing; the env_deps
 /// gate the pre-exec approval hook instead of removing the tools.
 pub fn register(registry: &ToolRegistry) {

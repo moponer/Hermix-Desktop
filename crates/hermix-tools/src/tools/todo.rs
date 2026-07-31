@@ -20,7 +20,7 @@ pub const TODO_EVENT_CHANNEL_CAPACITY: usize = 256;
 /// (defined in `hermix_transport`) — but we keep it as `serde_json::Value`
 /// here to avoid hermix-tools depending on hermix-transport (that would
 /// form a cycle hermix-server → hermix-tools → hermix-transport).
-/// /// `session_id` is `None` for "no active session" (e.g. CLI mode) and
+/// `session_id` is `None` for "no active session" (e.g. CLI mode) and
 /// the WS layer must filter it out before forwarding to clients.
 #[derive(Debug, Clone)]
 pub struct TodoChange {
@@ -57,7 +57,7 @@ pub enum TodoChangeKind {
     /// fetch, and so the WS layer can fan out the same shape on
     /// `Connected` (hydration). Items are already filtered by
     /// session_id at the backend level (`list_for_session`).
-    /// /// `serde_json::Value` here instead of `TodoSnapshotItem`
+    /// `serde_json::Value` here instead of `TodoSnapshotItem`
     /// because `hermix-tools` deliberately does NOT depend on
     /// `hermix-transport` (that would form a cycle
     /// `hermix-server → hermix-tools → hermix-transport`). The
@@ -99,7 +99,7 @@ pub fn register(
         false,
     );
     registry.set_session_stamper("todo", stamper);
-    // Phase 1 (session isolation): register as ContextAware so
+    //(session isolation): register as ContextAware so
     // dispatch_with_context routes to execute_with_context with
     // per-session ctx instead of reading process-global Arcs.
     let context_aware: Arc<dyn ContextAware> = handler as Arc<dyn ContextAware>;
@@ -114,7 +114,7 @@ pub fn register(
 #[async_trait]
 pub trait TodoBackend: Send + Sync {
     /// Create a new todo item.
-    /// /// `group_id` and `group_title` let the LLM attach this task to an
+    /// `group_id` and `group_title` let the LLM attach this task to an
     /// existing plan (`group_id`) or start a new one (`group_title`).
     /// When neither is provided, the backend synthesizes a fresh
     /// group_id so each call lands in its own plan card.
@@ -135,7 +135,7 @@ pub trait TodoBackend: Send + Sync {
         // Stamped from `set_active_message_id` at the top of the
         // turn. Anchors the inline plan card to the originating
         // assistant message after reload. `None` for legacy paths.
-        // P0-T1.
+        //.
         origin_message_id: Option<&str>,
     ) -> Result<String, ToolError>;
     /// Update a todo item.
@@ -194,7 +194,7 @@ pub struct TodoHandler {
     /// front-end can anchor the inline card to the originating
     /// assistant message. Set via `set_active_message_id` from
     /// `agent_loop` before each tool-call batch.
-    /// P0-T1 (Frontend Audit 2026-07-13).
+    /// .
     active_message_id: std::sync::Mutex<Option<String>>,
     /// Group ids we have already announced via `TodoChangeKind::GroupStarted`
     /// for this process lifetime. Ensures the front-end gets exactly one
@@ -260,11 +260,11 @@ impl TodoHandler {
     }
 
     /// After any mutation (create / update / depend / record_execution
-    /// / delete), re-list the **active session's** authoritative state
+    /// delete), re-list the **active session's** authoritative state
     /// from the backend and emit a `Snapshot` event. This is what the
     /// WS layer forwards as `StreamEvent::TodoSnapshot` so reconnecting
     /// clients get full state without a separate HTTP fetch.
-    /// /// No-op if no session is active (CLI mode) or if the backend
+    /// No-op if no session is active (CLI mode) or if the backend
     /// `list_for_session` fails — the per-item `Upsert` / `Delete`
     /// already published, so the UI still gets *something*. Commit C.
     async fn publish_snapshot(&self) {
@@ -293,7 +293,7 @@ impl TodoHandler {
     /// row matching `target_id`. This guarantees the broadcast carries
     /// the **authoritative current state** (including side effects
     /// from `record_execution` like `last_result` / `execution_count`).
-    /// /// Returns `None` if the backend rejected the action or the row
+    /// Returns `None` if the backend rejected the action or the row
     /// can't be found (callers should still publish a best-effort
     /// upsert from the input params in that case).
     async fn snapshot_after_mutation(
@@ -658,12 +658,12 @@ impl ToolHandler for TodoHandler {
 }
 
 // ---------------------------------------------------------------------------
-// ContextAware impl (Phase 1: session isolation)
+//ContextAware impl
 // ---------------------------------------------------------------------------
 
 /// Transitional "swap, call, restore" using `SessionStamper` methods.
 /// `set_active_session` / `set_active_message_id` return the previous
-/// value so we can restore it after the call. Once Phase 2 removes
+/// value so we can restore it after the call. Once removes
 /// the global stamper state, this will read directly from `ctx`.
 #[async_trait]
 impl ContextAware for TodoHandler {
@@ -766,7 +766,7 @@ mod tests {
         assert_eq!(handler.schema().name, "todo");
     }
 
-    /// P0-T1 (Frontend Audit 2026-07-13) regression: when an
+    /// regression: when an
     /// `assistant_message_id` is set via the SessionStamper before
     /// the first `todo.create`, the emitted `TodoChangeKind::GroupStarted`
     /// must carry that id so the WS forwarder can stamp the front-end
@@ -879,7 +879,7 @@ mod tests {
         }
     }
 
-    /// P0-T1 follow-up: when no message_id is set (legacy CLI / HTTP
+    /// follow-up: when no message_id is set (legacy CLI / HTTP
     /// paths), `GroupStarted.message_id` is `None` — the front-end
     /// falls back to the timestamp-based anchoring path.
     #[tokio::test]

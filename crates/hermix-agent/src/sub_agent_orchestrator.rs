@@ -1,6 +1,6 @@
 //! In-process sub-agent orchestrator.
 //!
-//! Python v2026.4.16 parity: when the primary agent calls `delegate_task`, we
+//! Python parity: when the primary agent calls `delegate_task`, we
 //! actually spawn a bounded child [`AgentLoop`] rather than just returning a
 //! signal envelope. The orchestrator is responsible for:
 //!
@@ -50,13 +50,13 @@ pub const SUB_AGENT_MAX_TURNS_CAP: u32 = 12;
 /// would inject that entire text as a single `tool_result` into
 /// the parent's `ContextManager`, causing context explosion — the
 /// very problem `delegate_task` is meant to prevent.
-/// /// 8,000 chars ≈ 2,000 tokens, which is the same order as a single
+/// 8,000 chars ≈ 2,000 tokens, which is the same order as a single
 /// `read_image` blob. This is large enough for a detailed structured
 /// analysis but small enough to keep the parent context lean.
 pub const SUB_AGENT_RESULT_MAX_CHARS: usize = 8_000;
 
 /// Lineage record persisted to disk for each spawned sub-agent.
-/// /// One record is written at `started` and rewritten at terminal state. The file
+/// One record is written at `started` and rewritten at terminal state. The file
 /// layout stays intentionally flat so it can also be inspected / tailed by
 /// other tooling (Python baseline uses a similar per-sub-agent JSON file).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,10 +89,10 @@ pub struct SubAgentLineage {
     pub estimated_cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// P6-4: Role of the sub-agent.
+    /// Role of the sub-agent.
     #[serde(default)]
     pub role: SubAgentRole,
-    /// P6-4: Parent task ID for linking sub-agents to the task tree.
+    /// Parent task ID for linking sub-agents to the task tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_task_id: Option<String>,
 }
@@ -117,8 +117,8 @@ pub enum SubAgentStatus {
 pub const DEFAULT_DELEGATION_MAX_ITERATIONS: u32 = 50;
 
 /// Role for a sub-agent. Determines the toolset and system prompt.
-/// /// (Phase 6 — P6-4)
-/// /// - **General** — full toolset, general-purpose task execution.
+///
+/// - **General** — full toolset, general-purpose task execution.
 /// Suitable for most delegation scenarios.
 /// - **Explore** — read-only toolset. Used for information gathering,
 /// code exploration, web search. Cannot modify files or execute
@@ -218,7 +218,7 @@ const PLAN_ROLE_TOOLS: &[&str] = &[
 ];
 
 /// Image (or other attachment) passed from parent to sub-agent.
-/// /// The orchestrator reads the file from disk, base64-encodes it, and
+/// The orchestrator reads the file from disk, base64-encodes it, and
 /// injects it as a multimodal `ContentPart::ImageUrl` into the
 /// child's first user message so the child LLM can actually SEE it
 /// via native vision. Without this, the child would only receive a
@@ -250,10 +250,10 @@ pub struct SubAgentRequest {
     /// When set, overrides the derived max_turns from parent budget.
     /// Default: `DEFAULT_DELEGATION_MAX_ITERATIONS` (50).
     pub max_iterations: Option<u32>,
-    /// P6-4: Role of the sub-agent. Determines the toolset and system prompt.
+    /// Role of the sub-agent. Determines the toolset and system prompt.
     /// Defaults to `General` (full tool access).
     pub role: SubAgentRole,
-    /// P6-4: Parent task ID for linking sub-agents to the task tree.
+    /// Parent task ID for linking sub-agents to the task tree.
     /// When set, the sub-agent's results are attributed to this task.
     pub parent_task_id: Option<String>,
     /// Image / file attachments forwarded from the parent.
@@ -298,7 +298,7 @@ impl SubAgentOrchestrator {
     }
 
     /// Default orchestrator that mirrors the current `AgentLoop`'s wiring.
-    /// /// The returned orchestrator inherits the parent's tool registry, provider
+    /// The returned orchestrator inherits the parent's tool registry, provider
     /// and interrupt handle so cancellation propagates from the parent to any
     /// actively running child.
     pub fn from_parent(
@@ -322,9 +322,9 @@ impl SubAgentOrchestrator {
 
     /// Execute a `delegate_task` request synchronously from the perspective of
     /// the caller, returning a JSON string suitable for use as the tool result.
-    /// /// The returned JSON always contains `sub_agent_id` at the top level so
+    /// The returned JSON always contains `sub_agent_id` at the top level so
     /// existing delegation-event wiring in [`AgentLoop`] continues to work.
-    /// /// Returning `BoxSendFuture` (rather than an `async fn`) is load-bearing:
+    /// Returning `BoxSendFuture` (rather than an `async fn`) is load-bearing:
     /// the parent `AgentLoop::execute_tool_calls` awaits this future, and the
     /// child may eventually call back into an orchestrator of its own. A
     /// concrete `impl Future` type would force the compiler to recursively
@@ -602,7 +602,7 @@ impl SubAgentOrchestrator {
         // call). `tokio::spawn` requires `Send + 'static`, which forces child
         // `AgentLoop::run` to already be Send — this is also what the existing
         // `spawn_background_review` relies on.
-        // Phase 18+ safety: strip the sub-agent blocklist
+        //+ safety: strip the sub-agent blocklist
         // (delegate_task, clarify, memory, send_message,
         // cronjob) from the child's tool registry. This is
         // the *physical* enforcement — even a misbehaving
@@ -614,7 +614,7 @@ impl SubAgentOrchestrator {
         let child_tool_registry = tool_registry
             .without_tools(crate::sub_agent_safety::BLOCKED_TOOLS_FOR_SUBAGENT.iter().copied());
 
-        // P6-4: Apply role-based toolset restriction. For Explore and Plan
+        //Apply role-based toolset restriction. For Explore and Plan
         // roles, strip all tools that aren't in the role's allowed list.
         // General role has no restriction (beyond the blocklist above).
         let child_tool_registry = if let Some(allowed) = req.role.allowed_tools() {
@@ -746,7 +746,7 @@ impl std::fmt::Display for SubAgentError {
 }
 
 /// Build the initial messages for a child agent.
-/// /// The child receives:
+/// The child receives:
 /// 1. A **system message** with sub-agent-specific guidance — most importantly
 /// the hard ban on `delegate_task` (overrides any parent prompt that says
 /// "use delegate_task for images") and the batching strategy that prevents
@@ -754,7 +754,7 @@ impl std::fmt::Display for SubAgentError {
 /// 2. A **user message** with the task description, optional context, optional
 /// `output_schema` hint, and any image attachments as multimodal content
 /// (text + `ImageUrl` parts so the child LLM can actually SEE the images).
-/// /// The system message is critical because the child's `AgentLoop` builds its
+/// The system message is critical because the child's `AgentLoop` builds its
 /// system prompt via `build_system_prompt` (which includes the full
 /// `directions.rs`), but that prompt is generic — it doesn't know the child
 /// is a sub-agent with specific constraints (no `delegate_task`, limited
@@ -903,7 +903,7 @@ async fn initial_messages(
 /// `read_image` handler so the resize/encode logic stays in one place.
 /// Read each attachment from disk and return `(mime, base64)` pairs ready
 /// to plug into `Message::user_with_images`. Uses the dedicated
-/// `hermix_tools::read_image_for_llm` helper (added 2026-07-23) so the
+/// `hermix_tools::read_image_for_llm` helper (added ) so the
 /// resize/encode logic lives in exactly one place — the same code path
 /// as the `read_image` tool, without depending on the full
 /// `ToolRegistry::dispatch_async` machinery (which is unavailable on the

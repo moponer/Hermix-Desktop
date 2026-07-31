@@ -116,7 +116,7 @@ pub struct EnvConfig {
     /// - `setup_task` skips file-system mutations (repo clones, Docker starts)
     /// - `teardown_task` is a no-op
     /// - Agent tools that write files are disabled
-    /// /// Useful for dry-run validation and CI pipelines that should
+    /// Useful for dry-run validation and CI pipelines that should
     /// not leave artifacts behind.
     #[serde(default)]
     pub read_only: bool,
@@ -162,7 +162,7 @@ pub trait HermesEpisode: Send {
 }
 
 /// Environment that loads tasks, runs the agent loop, emits trajectories.
-/// /// Implementations may wrap Docker, local shell, or remote runners.
+/// Implementations may wrap Docker, local shell, or remote runners.
 #[async_trait]
 pub trait HermesBaseEnv: Send + Sync {
     /// Dataset / benchmark identifier.
@@ -196,7 +196,7 @@ pub trait HermesBaseEnv: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Load a HuggingFace dataset via Python subprocess.
-/// /// This avoids reimplementing the `datasets` library in Rust. The Python
+/// This avoids reimplementing the `datasets` library in Rust. The Python
 /// script outputs JSON lines to stdout.
 pub async fn load_hf_dataset_via_python(
     dataset_id: &str,

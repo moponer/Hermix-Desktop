@@ -32,7 +32,7 @@ pub enum ContextError {
 #[async_trait]
 pub trait ContextEngine: Send + Sync {
     /// Compress messages to fit within `target_tokens`.
-    /// /// Returns the compressed messages.  The implementation decides
+    /// Returns the compressed messages.  The implementation decides
     /// how to condense — summarization, truncation, importance-based
     /// filtering, or a combination.
     async fn compress(
@@ -62,7 +62,7 @@ pub trait ContextEngine: Send + Sync {
 
 /// Default context engine that compresses by removing older messages
 /// and replacing them with a summary marker.
-/// /// In a full implementation, this would call an LLM to generate a summary
+/// In a full implementation, this would call an LLM to generate a summary
 /// of the removed messages.  The current version uses a simple truncation
 /// strategy with a placeholder summary.
 pub struct DefaultContextEngine {

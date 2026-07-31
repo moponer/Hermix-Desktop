@@ -1,4 +1,4 @@
-//! Local process isolation backend (Phase 1.3).
+//! Local process isolation backend .
 //!
 //! A [`TerminalBackend`] implementation that runs commands in an
 //! isolated temporary directory using `std::process::Command` (via
@@ -249,7 +249,7 @@ impl TerminalBackend for LocalIsolationBackend {
 // ---------------------------------------------------------------------------
 
 /// A pool of pre-warmed local isolation instances.
-/// /// Maintains a small pool of ready-to-use `LocalIsolationBackend`
+/// Maintains a small pool of ready-to-use `LocalIsolationBackend`
 /// instances so that agent delegation doesn't pay the temp-dir
 /// creation cost on the hot path.
 pub struct HostedAgentPool {

@@ -17,7 +17,7 @@ const DEFAULT_TOOL_GATEWAY_SCHEME: &str = "https";
 
 /// Validation error for `TOOL_GATEWAY_SCHEME`. The only allowed values
 /// are `"http"` and `"https"`; anything else is rejected.
-/// /// We deliberately don't depend on `hermix_core::ToolError` here so this
+/// We deliberately don't depend on `hermix_core::ToolError` here so this
 /// module can live in `hermix-config` without dragging tool-layer types
 /// into the lower layer. Callers that want a `ToolError` can convert at
 /// the boundary.
@@ -40,7 +40,7 @@ impl fmt::Display for GatewaySchemeError {
 impl std::error::Error for GatewaySchemeError {}
 
 /// Resolved configuration for a single vendor passthrough.
-/// /// Equivalent to Python's frozen `ManagedToolGatewayConfig` dataclass.
+/// Equivalent to Python's frozen `ManagedToolGatewayConfig` dataclass.
 /// Always carries `managed_mode = true`; the boolean is kept for parity
 /// with downstream call-sites that branch on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +76,7 @@ impl GatewayBuilder for EnvGatewayBuilder {
 }
 
 /// Return the configured shared gateway URL scheme (`http` or `https`).
-/// /// Errors when `TOOL_GATEWAY_SCHEME` is set to something other than the
+/// Errors when `TOOL_GATEWAY_SCHEME` is set to something other than the
 /// two supported values. Mirrors Python's `get_tool_gateway_scheme`.
 pub fn get_tool_gateway_scheme() -> Result<String, GatewaySchemeError> {
     let raw = std::env::var("TOOL_GATEWAY_SCHEME").unwrap_or_default();
@@ -91,7 +91,7 @@ pub fn get_tool_gateway_scheme() -> Result<String, GatewaySchemeError> {
 }
 
 /// Build the gateway origin URL for a single vendor.
-/// /// Equivalent to Python's `build_vendor_gateway_url`. Trailing slashes are
+/// Equivalent to Python's `build_vendor_gateway_url`. Trailing slashes are
 /// stripped; vendor identifiers are converted to upper-snake-case for the
 /// per-vendor env var lookup (e.g. `openai-audio` → `OPENAI_AUDIO_GATEWAY_URL`).
 pub fn build_vendor_gateway_url(vendor: &str) -> String {

@@ -21,7 +21,7 @@ use hermix_core::ToolError;
 // ---------------------------------------------------------------------------
 
 /// Messaging backend that enqueues a delivery request as JSON.
-/// /// The gateway's delivery loop picks these up and routes them to the
+/// The gateway's delivery loop picks these up and routes them to the
 /// appropriate platform adapter. This is the default backend when the
 /// gateway is not running in-process.
 pub struct SignalMessagingBackend;
@@ -100,7 +100,7 @@ impl MessagingBackend for SignalMessagingBackend {
 // ---------------------------------------------------------------------------
 
 /// Callback-based messaging backend that delegates to a delivery function.
-/// /// The gateway layer constructs this with a closure that calls
+/// The gateway layer constructs this with a closure that calls
 /// `DeliveryRouter::send_to_platform`. This avoids a direct dependency
 /// from `hermes-tools` to `hermes-gateway`.
 pub struct GatewayMessagingBackend {

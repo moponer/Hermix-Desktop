@@ -1,4 +1,4 @@
-//! Structured Turn Report for observability (AL-10, 2026-07-09).
+//! Structured Turn Report for observability (AL-10, ).
 //!
 //! Each completed turn in the agent loop produces a `TurnReport` that
 //! captures what happened — which phase was entered, how long it took,
@@ -10,7 +10,7 @@
 //! references) so it can be serialized and shipped to the dashboard
 //! without holding any locks on the agent loop state.
 //!
-//! P3-4 (2026-07-10): extended with `mode`, `task_id`, and `stage`
+//! : extended with `mode`, `task_id`, and `stage`
 //! fields to support the orchestration engine's Task-level tracking.
 
 use serde::Serialize;
@@ -56,7 +56,7 @@ pub(crate) struct TurnReport {
     pub turn: u32,
     /// Which phase the turn ended in.
     pub end_phase: LoopPhase,
-    /// Coarse-grained orchestration stage (P3-1). Mapped from
+    /// Coarse-grained orchestration stage . Mapped from
     /// `end_phase` via `LoopPhase::as_orchestration_stage()`.
     pub stage: OrchestrationStage,
     /// API call duration in ms.
@@ -78,11 +78,11 @@ pub(crate) struct TurnReport {
     pub context_tokens: u64,
     /// Outcome of this turn.
     pub outcome: TurnOutcome,
-    /// Working mode for the Task associated with this run (P3-4).
+    /// Working mode for the Task associated with this run .
     /// `None` when running outside a Task context (e.g. legacy sessions).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<hermix_core::TaskMode>,
-    /// Task ID associated with this run (P3-4).
+    /// Task ID associated with this run .
     /// `None` when running outside a Task context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,

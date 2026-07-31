@@ -89,22 +89,22 @@ pub struct ProtocolMessage {
     /// client uses this to restore the collapsible "思考过程" block
     /// on session reload — without it the user sees the reply but
     /// not the thinking that produced it.
-    /// /// Populated for `role == "assistant"` only; `None` for all
+    /// Populated for `role == "assistant"` only; `None` for all
     /// other roles (user, system, tool, approval).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
     /// Execution timeline (tool_start / tool_stdout / tool_complete
-    /// / status / file_change events) emitted by the agent during
+    /// status / file_change events) emitted by the agent during
     /// this assistant turn. Mirrors `Message::execution_timeline`,
     /// which the server persists to `messages.execution_timeline`
     /// on flush.
-    /// /// The desktop client feeds these straight into
+    /// The desktop client feeds these straight into
     /// `expandTimelineToMessages` / `groupTimeline` to redraw the
     /// inline tool cards the user saw mid-stream — same status
     /// (running/done/error), same arguments, same stdout. Without
     /// it the reloaded session renders every tool call as a stale
     /// "运行中" pill.
-    /// /// added — previous reloads had no way to
+    /// added — previous reloads had no way to
     /// reconstruct tool state because the WS stream wasn't
     /// persisted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,7 +128,7 @@ pub struct ProtocolMessage {
     /// header so the user can tell which rows are history vs
     /// active. `None` for messages that were never archived.
     /// Added back to fix the `protocolMessage.compressed` field
-    /// resolution error reported on 2026-07-24 (the field was
+    /// resolution error reported on (the field was
     /// referenced by `server::get_session_messages` but the
     /// transport struct definition was missing it, so the server
     /// crate no longer compiled).
@@ -137,9 +137,9 @@ pub struct ProtocolMessage {
 }
 
 /// User's choice on a `RequestApproval` card.
-/// /// Mirrors the upstream Hermes 4-state approval model
+/// Mirrors the upstream Hermes 4-state approval model
 /// (`once / session / always / deny`):
-/// /// - `Once`   — approve this single invocation. Server resolves to
+/// - `Once`   — approve this single invocation. Server resolves to
 /// `approved`; nothing is persisted.
 /// - `Session` — approve for the rest of this session (or until the
 /// agent process restarts, whichever comes first). Server resolves
@@ -154,7 +154,7 @@ pub struct ProtocolMessage {
 /// via the explicit `Deny` button in some clients, but the WS
 /// protocol's `Deny` is single-shot — a future v3 protocol can add
 /// `deny_session` / `deny_always` if needed.)
-/// /// Free-form `String` on the wire so future variants (e.g.
+/// Free-form `String` on the wire so future variants (e.g.
 /// `smart_skip` after an LLM risk-evaluation pass) don't require a
 /// protocol bump. Server-side, unknown values are logged and
 /// downgraded to `Deny` (fail-closed).
@@ -296,7 +296,7 @@ pub struct SendMessageResponse {
     pub trace_id: String,
 }
 
-/// One image attached to a chat turn (2026-06-25).
+/// One image attached to a chat turn .
 /// `bytes` is the raw image file (PNG/JPEG/WebP), already compressed by
 /// the client. Server-side decoding is a no-op since `Vec<u8>` is
 /// directly usable as the data URL body for vision APIs.
@@ -425,7 +425,7 @@ pub enum StreamEvent {
         /// default — see `hermix_server::DEFAULT_APPROVAL_TIMEOUT`),
         /// but the field is `Option` for back-compat with older
         /// servers that pre-date the countdown feature
-        /// (2026-06-14). New clients should fall back to a sensible
+        /// . New clients should fall back to a sensible
         /// default (60s upstream-mirrored) if absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expires_at: Option<i64>,
@@ -448,7 +448,7 @@ pub enum StreamEvent {
     /// `UsageUpdate` is bridged). One event per operation, or one
     /// batched event per turn when several facts are extracted at
     /// once (`count` carries the batch size).
-    /// /// `action` is one of: `"write"` | `"update"` | `"delete"` |
+    /// `action` is one of: `"write"` | `"update"` | `"delete"` |
     /// `"summarize"` | `"cleanup"` | `"snapshot"`.
     /// `memory_type` is one of: `"fact"` | `"style"` | `"summary"` |
     /// `"tool"` | `"snapshot"`.
@@ -477,11 +477,11 @@ pub enum StreamEvent {
         /// refused run, which preserves their existing semantics.
         decision: String,
     },
-    /// Phase 19 (A): server → client: the agent recalled N related
+    /// (A): server → client: the agent recalled N related
     /// facts from memory this turn. Surfaced as a small "💭 想到 N 条"
     /// chip in the conversation. Different from `MemoryUpdate`
     /// (which fires on writes): this fires on reads.
-    /// /// The full recall content is injected into the system prompt
+    /// The full recall content is injected into the system prompt
     /// by `prompt_assembly`; this event only carries metadata
     /// (count + a small preview of `canonical_key`s) for the UI.
     MemoryRecall {
@@ -526,10 +526,10 @@ pub enum StreamEvent {
         /// Tools that were dispatched speculatively and their output.
         results: Vec<PrefetchResultEntry>,
     },
-    /// M5: ACUI (Agent-Controlled UI) directive.
-    /// /// Agent 主动推送结构化 UI 卡片给前端。前端按 directive.id 维护
+    /// ACUI (Agent-Controlled UI) directive.
+    /// Agent 主动推送结构化 UI 卡片给前端。前端按 directive.id 维护
     /// 一组"已 show 未 hide"的卡片，按 `directive.kind` 查注册表渲染。
-    /// /// 协议层独立于渲染实现（可换 React / Vue / Web Components）。
+    /// 协议层独立于渲染实现（可换 React / Vue / Web Components）。
     Acui {
         /// The directive itself (`AcuiShow` / `AcuiUpdate` / `AcuiHide`).
         /// Tag is `"op"`; on the wire the inner variant is flattened.
@@ -706,7 +706,7 @@ pub enum StreamEvent {
     /// fresh group_id. Front-end creates a new inline card anchored to
     /// the assistant message with `message_id`. Subsequent TodoItemUpserted
     /// for the same group_id updates the existing card in place.
-    /// /// `message_id` lets the front-end know where in the message stream
+    /// `message_id` lets the front-end know where in the message stream
     /// to render the new card. `None` means the change came from outside
     /// an agent loop (HTTP PATCH / direct WS) and the front-end should
     /// fall back to anchoring at the end of the stream.
@@ -718,7 +718,7 @@ pub enum StreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group_title: Option<String>,
     },
-    // ── Orchestration Engine events (Phase 0 / P0-4) ───────────
+    //── Orchestration Engine events ───────────
     /// A new Task was created. Front-end can open a task card or
     /// refresh the task list panel.
     TaskCreated {
@@ -758,7 +758,7 @@ pub enum StreamEvent {
         task_id: String,
         result_refs: Vec<hermix_core::TaskResultRef>,
     },
-    /// Agent loop entered a new phase (P3-2). Front-end can display
+    /// Agent loop entered a new phase . Front-end can display
     /// a progress indicator showing which stage the agent is in
     /// (perception / reasoning / action / observation).
     LoopPhaseChanged {
@@ -777,7 +777,7 @@ pub enum StreamEvent {
         turn: u32,
     },
     /// Plan mode: the agent has produced a plan and is waiting for
-    /// user confirmation before executing (P2-2). Front-end should
+    /// user confirmation before executing . Front-end should
     /// display the plan confirmation dialog.
     PlanConfirmationRequired {
         task_id: String,
@@ -795,11 +795,11 @@ pub enum StreamEvent {
     /// event as a liveness ping, so the message body is empty
     /// after serde — only the envelope is required.
     /// Added back to fix the `StreamEvent::Heartbeat` variant
-    /// resolution error reported on 2026-07-24 (the variant
+    /// resolution error reported on (the variant
     /// was referenced by `server::handle_ws_stream_send` but
     /// the transport enum definition was missing it).
     Heartbeat,
-/// (P1-7 / STABILITY-PLAN §2.6): server→client pong response to
+/// ( / ): server→client pong response to
 /// a client-initiated application-level ping. The client sends
 /// `WsClientMessage::Ping` every 10s; if it doesn't receive a
 /// `Pong` for 2 consecutive cycles (20s), it closes the WS and
@@ -852,7 +852,7 @@ DiscussionConcluded {
 /// `hermix_tools::backends::todo::TodoItem`, but defined here so the
 /// transport crate doesn't depend on hermix-tools (which would form
 /// a cycle hermix-server → hermix-tools → hermix-transport).
-/// /// Fields mirror `TodoItem` 1:1 — when adding a field there, mirror
+/// Fields mirror `TodoItem` 1:1 — when adding a field there, mirror
 /// it here too and bump the todo event protocol version in
 /// `AGENTS.md`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -888,7 +888,7 @@ pub struct TodoSnapshotItem {
     /// which created this todo (`${session_id}-${rowIdx}`). Anchors
     /// the inline plan card to the originating assistant message
     /// after reload — same formula reproduces the same id from the
-    /// persisted row order. `None` for legacy items. P0-T1 / C.
+    /// persisted row order. `None` for legacy items. / C.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_message_id: Option<String>,
 }
@@ -937,7 +937,7 @@ pub enum WsClientMessage {
         skills: Option<Vec<String>>,
     },
     /// Response to a [`StreamEvent::RequestApproval`].
-    /// /// The `decision` field is a free-form string that maps to
+    /// The `decision` field is a free-form string that maps to
     /// [`ApprovalChoice`]: `"once"`, `"session"`, `"always"`, or
     /// `"deny"` (case-insensitive). The legacy 2-state values
     /// `"approved"` and `"denied"` are also accepted for backward
@@ -998,7 +998,7 @@ pub enum WsClientMessage {
         agent_id: String,
         comment: String,
     },
-    /// (P1-7 / STABILITY-PLAN §2.6): client→server application-level
+    /// ( / ): client→server application-level
     /// ping. The client sends this every 10s; the server responds with
     /// `StreamEvent::Pong`. If the client doesn't receive a Pong for 2
     /// consecutive cycles (20s), it closes the WS and reconnects.

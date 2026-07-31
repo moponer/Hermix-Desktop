@@ -4,7 +4,7 @@
 //! All operations go through [`open_with_wal`] to ensure WAL mode +
 //! busy_timeout are set on every connection.
 //!
-//! (Phase 1 — P1-1)
+//!
 
 use std::path::{Path, PathBuf};
 
@@ -54,7 +54,7 @@ fn open_with_wal(path: &Path) -> Result<rusqlite::Connection, TaskRepositoryErro
 // ---------------------------------------------------------------------------
 
 /// SQLite-backed repository for `Task` entities.
-/// /// Stateless — each method opens a fresh connection to the DB. This
+/// Stateless — each method opens a fresh connection to the DB. This
 /// matches the pattern used by `SessionPersistence` and avoids
 /// connection lifecycle issues in multi-threaded contexts.
 pub struct TaskRepository {
@@ -63,7 +63,7 @@ pub struct TaskRepository {
 
 impl TaskRepository {
     /// Create a new repository pointing at the given SQLite database.
-    /// /// In production, pass `hermix_config::paths::tasks_db_path()`.
+    /// In production, pass `hermix_config::paths::tasks_db_path()`.
     /// In tests, pass a `tempfile` path.
     pub fn new(db_path: impl AsRef<Path>) -> Self {
         Self {

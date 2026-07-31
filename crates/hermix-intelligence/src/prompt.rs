@@ -89,7 +89,7 @@ impl PromptBuilder {
     }
 
     /// Build the complete system prompt string.
-    /// /// The prompt is assembled in this order:
+    /// The prompt is assembled in this order:
     /// 0. Output format rules (fixed, always present)
     /// 1. Personality / SOUL.md
     /// 2. Skills list
@@ -184,7 +184,7 @@ impl PromptBuilder {
     }
 
     /// Add Anthropic-style cache control markers to a message list.
-    /// /// Strategy:
+    /// Strategy:
     /// - Mark the system message as `Persistent` (cache for the whole session).
     /// - Mark the last N user/assistant message turns as `Ephemeral` (short-lived cache).
     /// - The number of turns to mark is configurable via `ephemeral_turns`.

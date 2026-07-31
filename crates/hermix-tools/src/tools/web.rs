@@ -270,7 +270,7 @@ impl ToolHandler for WebExtractHandler {
 // ---------------------------------------------------------------------------
 
 /// Register both `web_search` and `web_extract` with the registry.
-/// /// Backends are keyless — no API key required. Uses multi-engine fallback:
+/// Backends are keyless — no API key required. Uses multi-engine fallback:
 /// DuckDuckGo → Baidu → Bing.
 pub fn register(registry: &ToolRegistry) {
     // web_search — multi-engine keyless backend

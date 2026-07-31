@@ -34,7 +34,7 @@ fn io_to_config_error(e: std::io::Error) -> ConfigError {
 // ---------------------------------------------------------------------------
 
 /// Load variables from `$HERMIX_HOME/.env` into the process environment.
-/// /// Only sets a variable if it is not already present in the environment,
+/// Only sets a variable if it is not already present in the environment,
 /// so real env vars always win. Supports `#` comments, blank lines, and
 /// optional single/double quoting of values.
 pub fn load_dotenv() {
@@ -79,8 +79,8 @@ fn strip_quotes(s: &str) -> &str {
 // ---------------------------------------------------------------------------
 
 /// Load the full configuration, applying the priority chain:
-/// /// env vars  >  .env  >  cli-config.yaml > config.yaml > gateway.json > defaults
-/// /// If `home_dir` is provided it overrides the `HERMIX_HOME` env var.
+/// env vars  >  .env  >  cli-config.yaml > config.yaml > gateway.json > defaults
+/// If `home_dir` is provided it overrides the `HERMIX_HOME` env var.
 pub fn load_config(home_dir: Option<&str>) -> Result<GatewayConfig, ConfigError> {
     // Load .env before anything else so env overrides see those values.
     load_dotenv();
@@ -189,7 +189,7 @@ fn mask_secret(s: &str) -> String {
 }
 
 /// Apply a single scalar field used by `hermes config set` (does not touch other keys).
-/// /// Supports dotted keys aligned with `GatewayConfig`:
+/// Supports dotted keys aligned with `GatewayConfig`:
 /// - `budget.max_result_size_chars`, `budget.max_aggregate_chars`
 /// - `proxy.http` / `proxy.http_proxy`, `proxy.socks` / `proxy.socks_proxy`
 /// - `llm.<provider>.api_key`, `llm.<provider>.base_url`, `llm.<provider>.model`
@@ -510,7 +510,7 @@ pub fn load_from_json(path: &Path) -> Result<GatewayConfig, ConfigError> {
 // ---------------------------------------------------------------------------
 
 /// Override configuration fields from environment variables.
-/// /// Environment variable mapping:
+/// Environment variable mapping:
 /// HERMES_MODEL           -> config.model
 /// HERMES_PERSONALITY     -> config.personality
 /// HERMIX_HOME            -> config.home_dir
@@ -531,7 +531,7 @@ pub fn load_from_json(path: &Path) -> Result<GatewayConfig, ConfigError> {
 /// NOUS_API_KEY               -> llm_providers["nous"].api_key
 /// GITHUB_COPILOT_TOKEN       -> llm_providers["copilot"].api_key
 /// HERMES_BASE_URL            -> all llm_providers[*].base_url
-/// /// 另见 [`crate::python_platform_env::apply_python_named_platform_env`]：
+/// 另见 [`crate::python_platform_env::apply_python_named_platform_env`]：
 /// `WEIXIN_*`、`DINGTALK_*` 等与 Python `gateway/platforms/*.py` 一致的键写入 `platforms`。
 pub fn apply_env_overrides(config: &mut GatewayConfig) {
     if let Some(v) = env_compat("HERMIX_MODEL", "HERMES_MODEL") {
@@ -788,11 +788,11 @@ pub struct AutoCorrectReport {
 /// key, or references an unknown provider. The function is idempotent: if
 /// `config.model` already points to a configured provider it returns `None`
 /// and makes no change.
-/// /// Used at server startup and after the desktop Settings UI saves a new key
+/// Used at server startup and after the desktop Settings UI saves a new key
 /// (the latter via the `/api/config/auto-correct` REST endpoint), so the
 /// common "I configured a key but the chat still asks for openai" failure
 /// mode can't bite twice.
-/// /// The return value is `Some(report)` only when a change was actually made.
+/// The return value is `Some(report)` only when a change was actually made.
 pub fn auto_correct_model(config: &mut GatewayConfig) -> Option<AutoCorrectReport> {
     // Build a stable, deduplicated list of providers that DO have a key
     // (config or env). This is the universe we are allowed to pick from.
@@ -940,7 +940,7 @@ pub fn auto_correct_model(config: &mut GatewayConfig) -> Option<AutoCorrectRepor
 // ---------------------------------------------------------------------------
 
 /// Validate a fully-loaded configuration.
-/// /// Checks:
+/// Checks:
 /// - max_turns > 0
 /// - SessionResetPolicy::Daily at_hour in 0..=23
 /// - All LLM providers with an api_key set have a non-empty value

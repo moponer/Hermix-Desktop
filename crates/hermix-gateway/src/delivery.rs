@@ -73,7 +73,7 @@ pub enum DeliveryTarget {
 }
 
 /// Parse a target string into a `DeliveryTarget`.
-/// /// Supported formats:
+/// Supported formats:
 /// - `"origin"` -> `DeliveryTarget::Origin`
 /// - `"local"` -> `DeliveryTarget::Local`
 /// - `"telegram:12345"` -> `DeliveryTarget::Platform { name: "telegram", chat_id: "12345" }`
@@ -134,7 +134,7 @@ impl DeliveryRouter {
     }
 
     /// Route a delivery to the appropriate target.
-    /// /// - `Origin` target requires `origin_platform` and `origin_chat_id` to be provided.
+    /// - `Origin` target requires `origin_platform` and `origin_chat_id` to be provided.
     /// - `Local` target enqueues to the fallback queue for internal processing.
     /// - `Platform` target sends directly to the named adapter.
     pub async fn route_delivery(

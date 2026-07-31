@@ -55,7 +55,7 @@ pub async fn get_status(State(state): State<HttpServerState>) -> Json<StatusResp
         };
 
     // Query active session count from SQLite directly.
-    // (P0-3 / STABILITY-PLAN §2.2): the sync SQLite query runs on the
+    //( / ): the sync SQLite query runs on the
     // blocking pool so concurrent dashboard polls don't starve the
     // async runtime workers.
     let db_path = hermix_config::sessions_db_path_in(&state.hermix_home);

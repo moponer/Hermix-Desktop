@@ -1,6 +1,6 @@
 //! Soak test for long-running session stability.
 //!
-//! (P2-2 / STABILITY-PLAN §2.8) A synthetic session that runs for an
+//! ( / ) A synthetic session that runs for an
 //! extended period, monitoring memory, file descriptors, and task count
 //! for leaks.
 //!

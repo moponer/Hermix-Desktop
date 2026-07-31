@@ -1,7 +1,7 @@
 //! Salience scoring — combined recency × frequency × pin score.
 //!
 //! Reference: `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §2.2 ("salience 重排") +
-//! §五 Phase 8 (FocusStack + salience 打分).
+//! §五 (FocusStack + salience 打分).
 //!
 //! ## Algorithm
 //!

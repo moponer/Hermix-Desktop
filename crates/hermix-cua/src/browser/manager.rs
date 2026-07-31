@@ -227,7 +227,7 @@ impl ChromeManager {
     }
 
     /// Sentinel value: a manager with no owned child process.
-    /// /// Used by [`BrowserHandle::attach`] (in `mod.rs`) when we
+    /// Used by [`BrowserHandle::attach`] (in `mod.rs`) when we
     /// connect to an externally-started Chrome — `Drop` then
     /// does nothing, and `is_alive` returns `false`.
     pub(crate) fn sentinel(port: u16) -> Self {
@@ -252,11 +252,11 @@ impl Drop for ChromeManager {
 // ---------------------------------------------------------------------------
 
 /// Default profile dir.
-/// /// Windows: `%LOCALAPPDATA%\hermix\cua\chrome-profile\`
+/// Windows: `%LOCALAPPDATA%\hermix\cua\chrome-profile\`
 /// (the LOCALAPPDATA env var is always set on Win10/11, even
 /// in service contexts where the `directories` crate would
 /// fall back to roaming profile paths that are read-only.)
-/// /// Non-Windows: `$XDG_DATA_HOME/hermix/cua/chrome-profile/` or
+/// Non-Windows: `$XDG_DATA_HOME/hermix/cua/chrome-profile/` or
 /// `$HOME/.local/share/hermix/cua/chrome-profile/`. Hermix-cua is
 /// Windows-only in practice; the non-Windows branch exists only
 /// so `cargo check --target x86_64-unknown-linux-gnu` succeeds

@@ -4,21 +4,21 @@
 //! Targets Windows 10/11 x64. Zero cloud / zero third-party runtime
 //! dependency (no `browser-use`, no `OpenAI CUA`, no Playwright).
 //!
-//! ## Scope (Phase 1 / PoC)
+//! ## Scope
 //!
 //! - **Screen capture** via `BitBlt` against the desktop window DC
-//!   (Phase 2 will swap this for `IDXGIOutputDuplication` once the
-//!   DXGI swap chain path is validated; the public API is stable).
+//!   (The DXGI swap-chain path may later replace this once validated;
+//!   the public API is kept stable so the wire payload never changes).
 //! - **Mouse + keyboard** via `SendInput` (`INPUT` / `MOUSEINPUT` /
 //!   `KEYBDINPUT`).
 //! - **Safety layer** — blacklisted key chords, rate limiting, and
 //!   an approval-mode flag surfaced via [`safety::ApprovalMode`].
 //! - **Trace recorder** — JSONL audit log every action lands in.
 //!
-//! ## Out of scope (Phase 2+)
+//! ## Out of scope
 //!
 //! - **Element recognition** — UIAutomation (`IUIAutomation`). Stub
-//!   in [`element`]; real implementation lands in Phase 2 alongside
+//!   in [`element`]; the real implementation is planned alongside
 //!   the browser CDP client.
 //! - **OCR** — `Windows.Media.Ocr` (WinRT). Stub in [`ocr`].
 //! - **Browser automation** — self-hosted minimal CDP client
@@ -47,14 +47,14 @@ pub mod action;
 #[cfg(windows)]
 pub mod capture;
 
-// Phase 2+ stubs — kept non-`cfg(windows)` so consumer code can
+// Forward-compat stubs — kept non-`cfg(windows)` so consumer code can
 // `use hermix_cua::element::...` from any platform without a
 // missing-import failure on macOS / Linux CI.
 pub mod element;
 pub mod ocr;
 pub mod browser;
 
-// Phase 2-C: UIAutomation COM client (IUIAutomation element tree).
+// UIAutomation COM client (IUIAutomation element tree).
 // This adds another ~170 KB of generated windows crate code but
 // provides the full UIA element tree (buttons, textboxes, etc.)
 // beyond what Win32 EnumWindows can give.

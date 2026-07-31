@@ -85,7 +85,7 @@ pub struct ToolEntry {
 /// (e.g. the agent_loop `JoinSet` worker thread that just pulled a
 /// `dyn Fn(Value) -> Result<String, ToolError>` handler off the
 /// `agent_loop::ToolRegistry`).
-/// /// **Why this helper exists.** `agent_loop` stores tool handlers as
+/// **Why this helper exists.** `agent_loop` stores tool handlers as
 /// synchronous closures (see `agent_loop::ToolEntry::handler`); inside
 /// the closure they call into `ToolRegistry::dispatch` which has an
 /// async `ToolHandler` underneath. A naïve
@@ -94,7 +94,7 @@ pub struct ToolEntry {
 /// from within a tokio worker — the exact "Cannot drop a runtime in
 /// a context where blocking is not allowed" panic reported by the
 /// user when they typed "你好" into the chat box.
-/// /// The canonical fix is `block_in_place(|| block_on(...))` (see
+/// The canonical fix is `block_in_place(|| block_on(...))` (see
 /// `tokio` docs, "Bridging with sync code"). `block_in_place`
 /// converts the current worker into a dedicated blocking thread so
 /// its inner `block_on` is free to spin up its own scheduler. On a
@@ -174,7 +174,7 @@ pub struct ToolRegistryInner {
     /// extra coupling between the two crates beyond this single handle.
     pub terminal_workspace: Arc<std::sync::RwLock<Option<std::path::PathBuf>>>,
     /// Shared handle to the terminal tool's per-request approval hook
-    /// (2026-07-17, "Caution tool needs UI prompts"). The `TerminalHandler`
+    /// (, "Caution tool needs UI prompts"). The `TerminalHandler`
     /// clones this on construction; `LocalAgentService::send_message`
     /// writes a fresh `TerminalApprovalContext` (capturing the active WS
     /// `ApprovalRegistry` + `on_event`) on every turn so the terminal
@@ -287,10 +287,10 @@ impl ToolRegistry {
 
     /// Get a clone of the shared terminal-permission-profile handle.
     /// Register a new tool.
-    /// /// If a tool with the same name already exists, the call is rejected
+    /// If a tool with the same name already exists, the call is rejected
     /// (logged + no-op). Pass `override_existing: true` to force a
     /// replacement — used by tests and legitimate hot-swap paths. Plugin
-    /// / MCP / dynamic registrars should call the **non-overriding**
+    /// MCP / dynamic registrars should call the **non-overriding**
     /// variant by default so a buggy plugin cannot silently clobber a
     /// built-in handler.
     pub fn register(
@@ -326,13 +326,13 @@ impl ToolRegistry {
     /// Same as [`Self::register`] but lets the caller attach a non-default
     /// [`RiskLevel`] **and** choose whether to permit overwriting a
     /// pre-existing entry with the same name.
-    /// /// `override_existing: false` (the safe default) makes registration
+    /// `override_existing: false` (the safe default) makes registration
     /// **idempotent by name**: a second call for a name that's already
     /// in the registry logs an error and returns without touching the
     /// entry. This stops plugins / MCP servers from accidentally
     /// shadowing a built-in tool like `terminal` or `web_search` and
     /// silently disabling the original handler.
-    /// /// `override_existing: true` is the original "last writer wins"
+    /// `override_existing: true` is the original "last writer wins"
     /// behaviour, kept for the two legitimate scenarios where it's
     /// needed: (a) the test suite re-creating a registry per case and
     /// (b) an admin-level hot-swap that intentionally wants to replace
@@ -461,7 +461,7 @@ impl ToolRegistry {
     }
 
     /// Attach a [`SessionStamper`] to an already-registered tool.
-    /// /// Registration flows through `register_with_risk` which has no
+    /// Registration flows through `register_with_risk` which has no
     /// `session_stamper` parameter (keeping the blast radius tiny — only
     /// the `todo` tool needs one). After registering, the tool's
     /// `register` helper calls this with the same `Arc<TodoHandler>` it
@@ -498,14 +498,14 @@ impl ToolRegistry {
     }
 
     /// Replace the schema of an already-registered tool.
-    /// /// Background (P1.2.4, Plan v2): a few tools have parameters
+    /// Background (P1.2.4, Plan v2): a few tools have parameters
     /// that vary with the operator's configuration — e.g.
     /// `delegate_task` lists the available expert roles by name,
     /// and `model_providers` enumerates which providers are
     /// currently configured. When the configuration changes we
     /// want the next LLM turn to see the fresh schema without
     /// the operator having to restart the desktop app.
-    /// /// This entry point mutates **only the schema** of an
+    /// This entry point mutates **only the schema** of an
     /// existing entry; the handler, check_fn, risk_level, and
     /// all other metadata stay. If no entry with `name` exists
     /// the call is a silent no-op (the operator probably hasn't
@@ -518,13 +518,13 @@ impl ToolRegistry {
     }
 
     /// Coerce `params` into the JSON types declared by `schema`.
-    /// /// Background (P1.2.2, Plan v2): LLM providers sometimes hand us
+    /// Background (P1.2.2, Plan v2): LLM providers sometimes hand us
     /// a `String` like `"42"` for a field whose schema is `integer`,
     /// or a `"true"` string for a boolean. The naïve fix would be to
     /// have every handler validate + cast, but that leaks the LLM's
     /// permissive JSON typing into every tool. Instead we do it once
     /// here, on the dispatch path, before the handler is called.
-    /// /// Scope of coercions (intentionally small — keep it boring):
+    /// Scope of coercions (intentionally small — keep it boring):
     /// - `string` ↔ `number` / `integer` (when the string parses cleanly)
     /// - `string` → `boolean` (`"true"` / `"false"`, case-insensitive)
     /// - `string` → `array` (when the string is valid JSON array)
@@ -533,7 +533,7 @@ impl ToolRegistry {
     /// - Missing fields declared as `required` in the schema are
     /// **not** filled in here (that's the caller's job — coercing
     /// is a narrow type fixup, not a defaults injector).
-    /// /// Returns the coerced `Value`. The original is consumed.
+    /// Returns the coerced `Value`. The original is consumed.
     pub fn coerce_args(schema: &ToolSchema, params: Value) -> Value {
         let mut out = params;
         if let Some(properties) = schema.parameters.properties.as_ref() {
@@ -642,13 +642,13 @@ impl ToolRegistry {
 
     /// Enable or disable every tool whose `toolset` field matches
     /// `toolset`. Returns the number of entries flipped. Used by:
-    /// /// 1. `register_builtin_tools` at startup to apply the
+    /// 1. `register_builtin_tools` at startup to apply the
     /// `enabled_toolsets` startup filter (now re-implemented as
     /// "register all, then disable some" so toggling back on
     /// works without a re-register).
     /// 2. The Settings UI's `PUT /api/tools/toolsets/enabled`
     /// handler to flip user choices at runtime.
-    /// /// Lock-then-iterate under the same inner mutex that
+    /// Lock-then-iterate under the same inner mutex that
     /// `get_definitions` / `is_available` hold, so dispatch
     /// observers see a consistent snapshot (either all-flip or
     /// none-flip, no half-applied state). The actual atomic
@@ -674,7 +674,7 @@ impl ToolRegistry {
     }
 
     /// Deregister a tool by name.
-    /// /// Returns `true` if the tool was present and removed.
+    /// Returns `true` if the tool was present and removed.
     pub fn deregister(&self, name: &str) -> bool {
         let mut inner = self.inner.write().expect("registry rwlock not poisoned");
         inner.tools.remove(name).is_some()
@@ -682,7 +682,7 @@ impl ToolRegistry {
 
     /// Get tool definitions for all tools whose `check_fn` returns true
     /// **and** whose `is_enabled` flag is set.
-    /// /// Both gates are required: a tool that is capability-OK (env
+    /// Both gates are required: a tool that is capability-OK (env
     /// vars present) but user-disabled will be hidden from the LLM;
     /// a tool that is capability-broken (missing env) will also be
     /// hidden even if user-enabled. This is used to build the tool
@@ -737,7 +737,7 @@ impl ToolRegistry {
     }
 
     /// Dispatch a tool call by name, catching all errors.
-    /// /// On success, returns the tool result string.
+    /// On success, returns the tool result string.
     /// On failure, returns a JSON error string: `{"error": "..."}`.
     pub fn dispatch(&self, name: &str, params: Value) -> String {
         let inner = self.inner.read().expect("registry rwlock not poisoned");
@@ -970,7 +970,7 @@ impl ToolRegistry {
     }
 
     /// Get a reference to a tool entry by name.
-    /// /// Note: This returns a cloned `Arc<ToolEntry>` because we cannot return
+    /// Note: This returns a cloned `Arc<ToolEntry>` because we cannot return
     /// a reference to data behind a Mutex lock. Returns `None` if not found.
     pub fn get_tool(&self, name: &str) -> Option<ToolEntryInfo> {
         let inner = self.inner.read().expect("registry rwlock not poisoned");
@@ -1053,11 +1053,11 @@ impl ToolRegistry {
     /// `SessionStamper`. Returns `true` if the tool exists AND
     /// implements the trait; `false` otherwise. The trait lookup is
     /// an `Arc::clone` + `Any` downcast on the registered handler.
-    /// /// Used by `agent_loop.execute_tool_calls` at the top of every
+    /// Used by `agent_loop.execute_tool_calls` at the top of every
     /// tool-call batch to give the `todo` tool the originating
     /// session id, so the WS layer can route its todo events back
     /// only to the originating pane.
-    /// /// Why not a default trait method on `ToolHandler` itself?
+    /// Why not a default trait method on `ToolHandler` itself?
     /// `ToolHandler` is in `hermix-core` — adding a method there
     /// ripples through 18+ tool implementations for a feature only
     /// one tool needs. The opt-in `SessionStamper` marker keeps the
@@ -1089,7 +1089,7 @@ impl ToolRegistry {
     /// handler impls `SessionStamper`. Returns `true` if the tool
     /// exists AND opted in. See
     /// [`SessionStamper::set_active_message_id`] for the full
-    /// rationale (P0-T1 Frontend Audit 2026-07-13).
+    /// rationale .
     pub fn set_active_message_id_for_tool(
         &self,
         name: &str,
@@ -1116,7 +1116,7 @@ impl ToolRegistry {
     /// (the default returns `None`). Used by the WS layer to
     /// hydrate the front-end todo panel on connect and after every
     /// mutation.
-    /// /// / Commit B.
+    /// Commit B.
     pub async fn build_snapshot_json_for_tool(
         &self,
         name: &str,

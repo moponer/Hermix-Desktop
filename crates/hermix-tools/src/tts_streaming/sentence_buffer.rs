@@ -82,7 +82,7 @@ impl SentenceBuffer {
     }
 
     /// Append a delta and return any completed sentences in order.
-    /// /// Sentences shorter than `min_sentence_len` (after trimming) are merged
+    /// Sentences shorter than `min_sentence_len` (after trimming) are merged
     /// back into the buffer and will be concatenated with the next sentence.
     /// Duplicate sentences (case-insensitive, ignoring trailing `.!,`) are
     /// dropped.
@@ -110,7 +110,7 @@ impl SentenceBuffer {
 
     /// Emit the buffer right now if it has exceeded the force-flush length.
     /// Returns `None` if the buffer is shorter than `long_flush_len`.
-    /// /// Unlike [`finish`](Self::finish), the buffer is only flushed when big
+    /// Unlike [`finish`](Self::finish), the buffer is only flushed when big
     /// enough — this mirrors Python's timeout-based flush in the queue-read
     /// loop.
     pub fn force_flush(&mut self) -> Option<String> {

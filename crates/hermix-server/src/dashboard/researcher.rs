@@ -1,4 +1,4 @@
-//! Researcher OS API endpoints (Phase 2.3).
+//! Researcher OS API endpoints .
 //!
 //! Exposes the Researcher OS continuous loop operations through
 //! the Hermix Dashboard API (axum). Frontend can call these endpoints

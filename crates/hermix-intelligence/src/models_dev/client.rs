@@ -98,7 +98,7 @@ pub struct SearchHit {
 }
 
 /// Client for the models.dev registry.
-/// /// Construction is cheap; one client per process is normally enough. Use
+/// Construction is cheap; one client per process is normally enough. Use
 /// [`crate::models_dev::default_client`] for the global singleton.
 pub struct ModelsDevClient {
     base_url: String,
@@ -287,7 +287,7 @@ impl ModelsDevClient {
     }
 
     /// Fuzzy search across the registry.
-    /// /// Algorithm matches Python's `search_models_dev`:
+    /// Algorithm matches Python's `search_models_dev`:
     /// 1. Substring matches first (case-insensitive), in declaration order.
     /// 2. Fill remaining slots via normalized-levenshtein matches with a
     /// similarity ≥ 0.4 (Python's `difflib.cutoff=0.4`).
@@ -338,7 +338,7 @@ impl ModelsDevClient {
         let mut seen: std::collections::HashSet<(String, String)> = Default::default();
         let mut results: Vec<SearchHit> = Vec::new();
 
-        // Phase 1: substring matches.
+        //substring matches.
         for (prov, mid, entry) in &candidates {
             if mid.to_lowercase().contains(&query_lower) {
                 let key = (prov.clone(), mid.clone());
@@ -355,7 +355,7 @@ impl ModelsDevClient {
             }
         }
 
-        // Phase 2: fuzzy matches by normalized Levenshtein similarity.
+        //fuzzy matches by normalized Levenshtein similarity.
         // Score every remaining candidate then take top-N over the cutoff.
         let mut scored: Vec<(f64, &(String, String, Value))> = candidates
             .iter()

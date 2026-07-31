@@ -1,13 +1,13 @@
 //! Crash dump writer for post-mortem diagnostics.
 //!
-//! (P2-4 / STABILITY-PLAN §2.8) When the agent task's `catch_unwind`
+//! ( / ) When the agent task's `catch_unwind`
 //! catches a panic, this module writes a structured JSON dump to
 //! `hermix_home()/crash_dumps/` containing:
 //! - Timestamp + session ID
 //! - Panic message + backtrace status
 //! - Last N turns of conversation (truncated)
 //!
-//! Design constraints (from STABILITY-PLAN §4 F10):
+//! Design constraints (from F10):
 //! - Dump failure must NOT block the main flow — fallback to `tracing::error!`.
 //! - Dump files are rotated: keep at most 50 most recent.
 //! - All I/O is synchronous (called from within `catch_unwind` recovery
@@ -54,7 +54,7 @@ pub struct TurnSummary {
 ///
 /// This function is infallible — if any I/O step fails, it logs an
 /// error and returns silently. The panic recovery path must never
-/// be blocked by dump-write failures (STABILITY-PLAN §4 F10).
+/// be blocked by dump-write failures ( F10).
 pub fn write_crash_dump(
     hermix_home: &Path,
     session_id: &str,

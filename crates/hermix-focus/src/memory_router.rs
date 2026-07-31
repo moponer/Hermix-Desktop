@@ -35,7 +35,7 @@ use crate::time_aware_recall::TimeAwareRecall;
 /// salience.
 pub struct MemoryRouter {
     backends: Vec<DynMemoryLayer>,
-    /// Phase 17 (BaiLongma compression backfill): a parallel
+    /// (BaiLongma compression backfill): a parallel
     /// strong reference to the embedded SQLite backend if one was
     /// wired. The router keeps this separate from `backends` so
     /// callers can reach the concrete `EmbeddedMemoryBackend`
@@ -74,7 +74,7 @@ impl std::fmt::Debug for MemoryRouter {
 
 impl MemoryRouter {
     pub fn new(backends: Vec<DynMemoryLayer>) -> Self {
-        // Phase 18 (P2-1) footgun guard: if the caller constructed a
+        //footgun guard: if the caller constructed a
         // router with zero backends *and* no concrete embedded
         // handle, every `sync_turn` / `on_memory_write` call will
         // silently no-op. That's almost always a wiring bug.
@@ -101,7 +101,7 @@ impl MemoryRouter {
         }
     }
 
-    /// Phase 17 helper: build a router with a concrete pointer to
+    /// helper: build a router with a concrete pointer to
     /// the embedded backend. Use this when you need to call
     /// embedded-specific methods (compression backfill, fact
     /// upsert) from the agent loop.
@@ -109,7 +109,7 @@ impl MemoryRouter {
         backends: Vec<DynMemoryLayer>,
         embedded: Arc<crate::embedded::EmbeddedMemoryBackend>,
     ) -> Self {
-        // Phase 18 (P2-1): when backends list is empty, the trait-object
+        //: when backends list is empty, the trait-object
         // fan-out is dead but `find_embedded_backend()` still works.
         // That's actually OK for single-backend setups (write
         // hooks need at least one backend, but recognize still
@@ -138,12 +138,12 @@ impl MemoryRouter {
         self.backends.push(backend);
     }
 
-    /// Phase 17 (BaiLongma compression backfill): return a clone
+    /// (BaiLongma compression backfill): return a clone
     /// of the first embedded SQLite backend if the router has
     /// one. The agent loop uses this to call embedded-specific
     /// methods (`backfill_compression_fact`, `upsert_fact`)
     /// without going through the trait object.
-    /// /// We clone the inner `Arc<EmbeddedMemoryBackend>` so we can
+    /// We clone the inner `Arc<EmbeddedMemoryBackend>` so we can
     /// hand out a concrete pointer. The backend was originally
     /// wrapped in `Arc::new(embedded) as DynMemoryLayer`; we keep
     /// a parallel `Arc<EmbeddedMemoryBackend>` in the router
@@ -152,7 +152,7 @@ impl MemoryRouter {
         self.embedded.clone()
     }
 
-    /// Phase 17 (safety net): bind every backend to the given
+    /// (safety net): bind every backend to the given
     /// session + hermix_home. Most call sites already call
     /// `initialize()` on each backend as they construct it (e.g.
     /// `memory_layer_adapter` does this for the
@@ -348,12 +348,12 @@ impl MemoryLayer for MemoryRouter {
         Ok(all_blocks)
     }
 
-    /// M1.6.4: fan out a focus conclusion to every backend that
+    /// fan out a focus conclusion to every backend that
     /// implements `upsert_conclusion`. Backends returning
     /// `NotImplemented` are silently skipped — they don't grow a
     /// write surface they don't need. Returns the number of
     /// backends that actually persisted the conclusion.
-    /// /// Honours `config.tolerate_errors` — when false, a single
+    /// Honours `config.tolerate_errors` — when false, a single
     /// backend failure surfaces as `MemoryError::Other` instead
     /// of being silently logged.
     async fn upsert_conclusion(&self, c: &crate::focus_stack::FocusConclusion) -> Result<()> {

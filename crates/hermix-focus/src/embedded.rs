@@ -1,7 +1,7 @@
 //! Embedded SQLite-backed `MemoryLayer`.
 //!
 //! This is the "local-first" backend the调研 recommended (`PROPOSAL_BAILONGMA_INSPIRED.md`
-//! §2.2 "本地计算 cosine", §五 Phase 8 L1).
+//! §2.2 "本地计算 cosine", §五 L1).
 //!
 //! ## Storage location
 //!
@@ -38,7 +38,7 @@
 //!
 //! CREATE VIRTUAL TABLE IF NOT EXISTS frames_fts USING fts5(
 //!     id UNINDEXED,
-//!     payload_text,        -- extracted string from payload (M4: bigram-preprocessed for CJK)
+//! payload_text, -- extracted string from payload (: bigram-preprocessed for CJK)
 //!     tags_text,
 //!     tokenize = 'unicode61 remove_diacritics 2'
 //! );
@@ -68,20 +68,20 @@ pub struct EmbeddedMemoryBackend {
     /// H5: salience config used by `rerank_by_salience` and
     /// `conclude` to apply the recency × freq × pin algorithm.
     salience_cfg: SalienceConfig,
-    /// Phase 17: session_id bound via `initialize()`. Used as
+    /// session_id bound via `initialize`. Used as
     /// `frame.source` for entries written by the write-path hooks
     /// (`sync_turn`, `on_memory_write`, `on_session_end`).
     session_id: Mutex<Option<String>>,
-    /// Phase 17: hermix_home bound via `initialize()`. Currently
+    /// hermix_home bound via `initialize`. Currently
     /// informational (we already know `path`) but kept on the struct
     /// so external observers (status panels, telemetry) can confirm
     /// which home directory the backend is bound to.
     hermix_home: Mutex<Option<String>>,
-    /// Phase 17: monotonic turn counter incremented by
+    /// monotonic turn counter incremented by
     /// `on_turn_start`. Used to gate the Hermes-Agent-inspired
     /// curation hook (`CURATE_INTERVAL`).
     turn_count: Mutex<u32>,
-    /// Phase 17: log of the last N (user, assistant) turn pairs for
+    /// log of the last N (user, assistant) turn pairs for
     /// the `on_pre_compress` hook to summarize. Bounded to avoid
     /// unbounded memory growth; we keep the last 20 pairs in
     /// memory.
@@ -218,7 +218,7 @@ impl EmbeddedMemoryBackend {
 
     /// Open a DB at `<data_dir>/memory.db`. `None` falls back to
     /// in-memory (used in tests).
-    /// /// Uses [`hermix_config::paths::data_dir`] so the path is identical
+    /// Uses [`hermix_config::paths::data_dir`] so the path is identical
     /// in normal mode (`~/.hermix/data/memory.db`) and portable mode
     /// (`<install_root>/data/memory.db`).
     pub fn open_at_hermix_home() -> Result<Self> {
@@ -228,7 +228,7 @@ impl EmbeddedMemoryBackend {
 
     fn migrate(&self) -> Result<()> {
         let conn = self.conn.lock();
-        // Phase 18 (P1-3): PRAGMA user_version 跟踪 schema 演进。
+        //: PRAGMA user_version 跟踪 schema 演进。
         // 已存在的 CREATE TABLE / ALTER TABLE 仍然全部跑（向后兼容），
         // 但新增的 schema 块（janitor、recall_audit、session_snapshots）
         // 用 version 守卫，避免每次 open() 跑 14 个 SQL。
@@ -338,7 +338,7 @@ impl EmbeddedMemoryBackend {
                 }
             }
         }
-        // Phase 17 (BaiLongma soft-hide): drop frames that were
+        //(BaiLongma soft-hide): drop frames that were
         // marked hidden more than 30 days ago. The audit trail in
         // `frames_visibility_idx` lets SRE / dashboard queries see
         // hidden frames; the periodic janitor only purges really
@@ -483,7 +483,7 @@ impl EmbeddedMemoryBackend {
             tracing::warn!("FTS5 not available, falling back to LIKE search: {e}");
         }
 
-        // ---- Phase 18 (P1-3): version-gated incremental migrations ----
+        //: version-gated incremental migrations ----
         // v2: janitor + audit (already running above — keep behaviour
         // for backward compatibility, just bump the version so future
         // opens know it ran).
@@ -491,7 +491,7 @@ impl EmbeddedMemoryBackend {
             // Already executed above; we only need to mark it done.
             let _ = conn.execute_batch("PRAGMA user_version = 2");
         }
-        // v3: recall_audit table (Phase 18 P1-1: query/timestamp/hit_count/latency).
+        //recall_audit table .
         if current_version < 3 {
             conn.execute_batch(
                 r#"
@@ -514,7 +514,7 @@ impl EmbeddedMemoryBackend {
             )?;
             let _ = conn.execute_batch("PRAGMA user_version = 3");
         }
-        // v4: session_snapshots table (Phase 18 架构-1: frozen snapshot).
+        //session_snapshots table .
         if current_version < 4 {
             conn.execute_batch(
                 r#"
@@ -625,7 +625,7 @@ impl EmbeddedMemoryBackend {
     }
 
     /// Persist a focus frame (or update an existing one by id).
-    /// /// This is the main write path used by `FocusStack::drain_conclusions()`
+    /// This is the main write path used by `FocusStack::drain_conclusions()`
     /// or by the agent loop after each turn.
     pub fn upsert_frame<T: serde::Serialize + Clone>(&self, frame: &FocusFrame<T>) -> Result<()> {
         self.upsert_frame_with_source(frame, "focus")
@@ -711,7 +711,7 @@ impl EmbeddedMemoryBackend {
     }
 
     /// Delete a frame by id.
-    /// /// Phase 17: prefer [`Self::soft_hide_frame`] so the audit trail
+    /// prefer [`Self::soft_hide_frame`] so the audit trail
     /// is preserved. `delete_frame` is kept for the rare cases where
     /// the caller is sure they want a hard delete (e.g. tests, the
     /// 30-day janitor on hidden rows).
@@ -722,11 +722,11 @@ impl EmbeddedMemoryBackend {
         Ok(n > 0)
     }
 
-    /// Phase 17 (BaiLongma soft-hide): mark a frame invisible to
+    /// (BaiLongma soft-hide): mark a frame invisible to
     /// `recognize()` queries without losing the row. Use this when
     /// the agent decides a memory is no longer relevant (TTL
     /// expiry, semantic eviction, manual `memory` tool remove).
-    /// /// Returns `true` if a frame was actually hidden (i.e. it
+    /// Returns `true` if a frame was actually hidden (i.e. it
     /// existed and was visible before).
     pub fn soft_hide_frame(&self, id: FocusFrameId) -> Result<bool> {
         let conn = self.conn.lock();
@@ -739,7 +739,7 @@ impl EmbeddedMemoryBackend {
         Ok(n > 0)
     }
 
-    /// Phase 17: undo a previous [`Self::soft_hide_frame`]. Returns
+    /// undo a previous [`Self::soft_hide_frame`]. Returns
     /// `true` if a frame was actually restored.
     pub fn show_frame(&self, id: FocusFrameId) -> Result<bool> {
         let conn = self.conn.lock();
@@ -751,12 +751,12 @@ impl EmbeddedMemoryBackend {
         Ok(n > 0)
     }
 
-    /// Phase 17 (write-path hook target): persist a single
+    /// (write-path hook target): persist a single
     /// user/assistant turn pair as a low-salience (0.3) frame tagged
     /// `turn`. Stored separately from the focus-stack conclusions
     /// (which are higher salience) so recall can prefer user-asserted
     /// facts over raw turns.
-    /// /// `turn_number` is monotonic per session. When the user message
+    /// `turn_number` is monotonic per session. When the user message
     /// is empty or only whitespace, the call is a no-op (avoids
     /// polluting recall with accidental empty rows).
     pub fn record_turn(
@@ -791,7 +791,7 @@ impl EmbeddedMemoryBackend {
         Ok(Some(id))
     }
 
-    /// Phase 17 (write-path hook target): persist an explicit
+    /// (write-path hook target): persist an explicit
     /// `memory` tool call. Higher salience (0.7) than raw turns
     /// because the user actively asserted this fact via a tool.
     pub fn record_memory_write(
@@ -819,7 +819,7 @@ impl EmbeddedMemoryBackend {
         Ok(Some(id))
     }
 
-    /// Phase 17 (write-path hook target): persist a delegation
+    /// (write-path hook target): persist a delegation
     /// event. Medium salience (0.5) — useful for cross-session
     /// recall of "what did I delegate to whom" without dominating
     /// the recall ranking.
@@ -846,7 +846,7 @@ impl EmbeddedMemoryBackend {
         Ok(Some(id))
     }
 
-    /// Phase 17: insert or replace a `fact` row. Used by the
+    /// insert or replace a `fact` row. Used by the
     /// Hermes-Agent-inspired curation hook (every N turns, or after
     /// a complex task) and by external callers that already
     /// extracted a structured fact.
@@ -949,7 +949,7 @@ impl EmbeddedMemoryBackend {
         Ok(Some(id))
     }
 
-    /// Phase 17: bump a fact's `access_count` (called on every
+    /// bump a fact's `access_count` (called on every
     /// recall hit so frequently-accessed facts naturally float up
     /// the salience ranking).
     pub fn boost_fact_access(&self, canonical_key: &str) -> Result<bool> {
@@ -962,13 +962,13 @@ impl EmbeddedMemoryBackend {
         Ok(n > 0)
     }
 
-    /// Phase 18 (P1-1): record one row in `recall_audit`. Called by
+    /// record one row in `recall_audit`. Called by
     /// the agent loop on every `memory_prefetch` invocation so
     /// operators can later ask:
     /// - "what queries did this session issue?"
     /// - "what was the hit count distribution?"
     /// - "what's the p99 latency?"
-    /// /// `query_text` is truncated to 500 chars to keep audit rows
+    /// `query_text` is truncated to 500 chars to keep audit rows
     /// small (long questions are usually less interesting to replay
     /// than their hash + hit_count + latency).
     pub fn record_recall_audit(
@@ -991,7 +991,7 @@ impl EmbeddedMemoryBackend {
         Ok(())
     }
 
-    /// Phase 18 (架构-1): freeze a `summary` of the last `frame_ids`
+    /// (架构-1): freeze a `summary` of the last `frame_ids`
     /// into the `session_snapshots` table. Called by the agent loop
     /// every N turns or on `on_session_end`. Snapshots are immutable
     /// once written (the `id` is autoincrement and we never UPDATE
@@ -1018,7 +1018,7 @@ impl EmbeddedMemoryBackend {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Phase 18 (架构-1): load the most recent snapshot for a
+    /// (架构-1): load the most recent snapshot for a
     /// session. Returns `None` if no snapshot exists yet (cold
     /// session). Used by the agent loop when starting a new turn to
     /// inject the frozen summary instead of replaying every frame.
@@ -1053,12 +1053,12 @@ impl EmbeddedMemoryBackend {
         }
     }
 
-    /// Phase 18 (架构-2): enforce a hard cap on the number of visible
+    /// (架构-2): enforce a hard cap on the number of visible
     /// frames. When `total > cap`, the oldest frames (lowest salience
     /// first, then oldest `created_at`) are soft-hidden so `recognize()`
     /// stops surfacing them but they remain on disk for the audit
     /// trail. Returns the number of frames newly hidden.
-    /// /// Called on `open()` and after each `sync_turn` to keep the
+    /// Called on `open()` and after each `sync_turn` to keep the
     /// active working set bounded.
     pub fn enforce_frame_cap(&self, cap: usize) -> Result<usize> {
         let conn = self.conn.lock();
@@ -1096,7 +1096,7 @@ impl EmbeddedMemoryBackend {
         Ok(n)
     }
 
-    /// Phase 18 (架构-2): count of visible frames. Test helper used
+    /// (架构-2): count of visible frames. Test helper used
     /// to assert `enforce_frame_cap` correctly hides the right
     /// number of rows.
     pub fn count_visible_frames(&self) -> Result<i64> {
@@ -1109,7 +1109,7 @@ impl EmbeddedMemoryBackend {
         Ok(n)
     }
 
-    /// Phase 17 (BaiLongma compression backfill): when a `Cleared`
+    /// (BaiLongma compression backfill): when a `Cleared`
     /// focus frame is popped, the focus stack pushes a
     /// `FocusConclusion` onto the drain queue. The agent loop calls
     /// `drain_focus_conclusions_to_memory_router` which already
@@ -1118,7 +1118,7 @@ impl EmbeddedMemoryBackend {
     /// needed) from the conclusion's text + tags and writes it to
     /// the `facts` table so cross-session recall surfaces it via
     /// the unified `recognize()` pipeline.
-    /// /// `canonical_key` is derived deterministically from
+    /// `canonical_key` is derived deterministically from
     /// `(session_id, source_frame_id)` so re-running this on the
     /// same conclusion is idempotent.
     pub fn backfill_compression_fact(
@@ -1147,8 +1147,8 @@ impl EmbeddedMemoryBackend {
         self.upsert_fact(&key, payload, c.salience, &tags, "compression_backfill")
     }
 
-    /// Phase 19 (A): top-N visible facts by stored salience.
-    /// /// Used by `recall_scheduler` to pull candidates for re-rank.
+    /// (A): top-N visible facts by stored salience.
+    /// Used by `recall_scheduler` to pull candidates for re-rank.
     /// We don't recompute salience here (no `salience_cfg` access
     /// without rebuilding one per call) — the stored value already
     /// reflects the most-recent write's salience, which is good
@@ -1178,7 +1178,7 @@ impl EmbeddedMemoryBackend {
     }
 
     // =================================================================
-    // Phase 19 (E): reflections table API
+    //(E): reflections table API
     // Reflections are written by `reflection_generator` at session
     // end. We deliberately keep these helpers minimal — no full-text
     // search, no embedding (the content is short and meta-cognitive;
@@ -1187,7 +1187,7 @@ impl EmbeddedMemoryBackend {
     // =================================================================
 
     /// Persist one reflection row. Returns the new id.
-    /// /// Visibility defaults to 1 (visible). Caller doesn't need to
+    /// Visibility defaults to 1 (visible). Caller doesn't need to
     /// pre-set timestamps — we record the UTC RFC3339 now() here
     /// to avoid drift between Rust and SQLite clocks if a future
     /// caller runs from a different time zone.
@@ -1256,13 +1256,13 @@ impl EmbeddedMemoryBackend {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
-    /// P4-T1 (reflection → 行为改写闭环): return the most recent
+    /// (reflection → 行为改写闭环): return the most recent
     /// reflections across **all sessions EXCEPT `exclude_session_id`**,
     /// newest first. The agent loop calls this in
     /// `memory_prefetch` of session N+1 so the next session's system
     /// prompt can carry over the lessons learned from session N's
     /// reflection notes.
-    /// /// Empty `exclude_session_id` means "all sessions".
+    /// Empty `exclude_session_id` means "all sessions".
     pub fn list_cross_session_reflections(
         &self,
         exclude_session_id: &str,
@@ -1301,8 +1301,8 @@ impl EmbeddedMemoryBackend {
     /// Count tool_error rows for this session — drives the
     /// `what_to_improve` reflection. Returns 0 if no errors
     /// (which is the happy case).
-    /// /// We scan `recall_audit` because every `tool_error` already
-    /// gets audited there in Phase 18; duplicating into a new
+    /// We scan `recall_audit` because every `tool_error` already
+    /// gets audited there in ; duplicating into a new
     /// table would just create two sources of truth.
     pub fn count_session_tool_errors(&self, session_id: &str) -> Result<u32> {
         let conn = self.conn.lock();
@@ -1334,7 +1334,7 @@ impl EmbeddedMemoryBackend {
         Ok(n.max(0) as u32)
     }
 
-    /// Phase 19 (E): pick the most-frequently-accessed user.style
+    /// (E): pick the most-frequently-accessed user.style
     /// fact (`canonical_key = user.style:<style>`). Returns None if
     /// no style has been recorded yet (early session, no rules
     /// matched).
@@ -1361,11 +1361,11 @@ impl EmbeddedMemoryBackend {
     }
 
     /// L1.3: persist (or replace) the embedding for a frame.
-    /// /// The frame must already exist (call `upsert_frame` first). The
+    /// The frame must already exist (call `upsert_frame` first). The
     /// embedding is stored as f32 little-endian bytes; `dim` is
     /// cached separately so `cosine_topk` can `WHERE dim = ?1`
     /// instead of loading BLOBs to check length.
-    /// /// `model` is recorded verbatim. Cosine is only meaningful
+    /// `model` is recorded verbatim. Cosine is only meaningful
     /// between vectors from the same model, so `cosine_topk`
     /// filters mismatched models when a non-empty `model` is
     /// passed to it.
@@ -1569,7 +1569,7 @@ impl EmbeddedMemoryBackend {
 
     /// Re-rank hits by salience (recency × freq × pin), descending.
     /// `now` is the reference time; pass `Utc::now()` in production.
-    /// /// H5: this used to be a no-op that just sorted by the
+    /// H5: this used to be a no-op that just sorted by the
     /// backend-assigned `hit.salience`. The new implementation
     /// re-derives salience from the algorithm using `hit.created_at`
     /// and the backend's stored `touch_count` / `pin_count` (if
@@ -1644,7 +1644,7 @@ impl EmbeddedMemoryBackend {
         // Build an FTS5 MATCH expression from the text. We split on
         // whitespace and quote each token; tokens that look like FTS5
         // operators are skipped.
-        // M4: CJK query expansion — pre-segment the query with the same
+        //CJK query expansion — pre-segment the query with the same
         // bigram splitter used at write time so single-word queries
         // like "喜欢" still hit "我喜欢 Rust" (which is stored as
         // "我 喜欢 Rust" after bigram preprocessing).
@@ -2106,15 +2106,15 @@ fn extract_text(v: &Value) -> String {
     }
 }
 
-/// M4 (2026-07-03): CJK bigram preprocessor for FTS5 indexing.
-/// /// SQLite's bundled FTS5 (without `SQLITE_ENABLE_FTS5_TOKENIZER_TRIGRAM`)
+/// CJK bigram preprocessor for FTS5 indexing.
+/// SQLite's bundled FTS5 (without `SQLITE_ENABLE_FTS5_TOKENIZER_TRIGRAM`)
 /// uses the `unicode61` tokenizer which splits on whitespace — a CJK
 /// string like `"我喜欢 Rust"` tokenizes as `["我喜欢", "Rust"]`. Querying
 /// for just `"喜欢"` returns 0 hits because there's no `喜欢` token.
-/// /// Application-layer fix: insert overlapping bigrams separated by spaces
+/// Application-layer fix: insert overlapping bigrams separated by spaces
 /// before passing to FTS5. `"我喜欢"` becomes `"我 喜欢"` (one bigram). The
 /// query side needs the same bigram expansion to match.
-/// /// Idempotency: re-running on already-bigrammed text produces single-char
+/// Idempotency: re-running on already-bigrammed text produces single-char
 /// "words" but no new bigrams — safe to call repeatedly.
 fn cjk_bigram_segment(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
@@ -2175,7 +2175,7 @@ pub struct StoredFrame {
     pub touch_count: u32,
 }
 
-/// Phase 18 (架构-1): a frozen snapshot of a session's recent
+/// (架构-1): a frozen snapshot of a session's recent
 /// frames. Written every N turns (default 50) or on
 /// `on_session_end`. The agent loop reads the latest snapshot via
 /// [`EmbeddedMemoryBackend::latest_session_snapshot`] when starting
@@ -2191,11 +2191,11 @@ pub struct SessionSnapshot {
     pub ts: String,
 }
 
-/// Phase 19 (E: memory evolution) — reflective note recorded at
+/// (E: memory evolution) — reflective note recorded at
 /// session end. Written by `reflection_generator` (no LLM) and
 /// surfaced as a `StreamEvent::MemoryUpdate { kind: "reflection" }`
 /// so the user can see "what the agent thinks it learned" in chat.
-/// /// Distinct from `facts` (atomic user/assistant assertions) and
+/// Distinct from `facts` (atomic user/assistant assertions) and
 /// from `session_snapshots` (state freezes for replay). Reflections
 /// are **short, meta-cognitive notes** about the session itself.
 #[derive(Debug, Clone)]
@@ -2462,7 +2462,7 @@ impl MemoryLayer for EmbeddedMemoryBackend {
     }
 
     fn system_prompt_block(&self) -> String {
-        // Phase 17: a one-line description of the local backend so
+        //a one-line description of the local backend so
         // the agent knows where its cross-session recall comes
         // from. We intentionally keep this short — long prose
         // here dilutes the system prompt.
@@ -2484,7 +2484,7 @@ impl MemoryLayer for EmbeddedMemoryBackend {
     }
 
     async fn recognize(&self, query: &MemoryQuery) -> Result<Vec<MemoryHit>> {
-        // Phase 17 (BaiLongma soft-hide): every recall leg filters
+        //(BaiLongma soft-hide): every recall leg filters
         // `visibility = 1` so soft-hidden frames never reach the
         // LLM. Hidden frames are kept on disk for the audit trail
         // and 30-day janitor.
@@ -2572,7 +2572,7 @@ impl MemoryLayer for EmbeddedMemoryBackend {
         }])
     }
 
-    /// M1.6.4: persist a `FocusConclusion` from the agent loop's
+    /// persist a `FocusConclusion` from the agent loop's
     /// focus stack. Delegates to the synchronous
     /// `upsert_conclusion` on the underlying backend. The SQLite
     /// write is guarded by an internal `Mutex<Connection>` so the
@@ -2615,7 +2615,7 @@ mod tests {
     use super::*;
 
     // ------------------------------------------------------------------
-    // M4 (2026-07-03): CJK bigram preprocessor unit tests
+    //: CJK bigram preprocessor unit tests
     // ------------------------------------------------------------------
 
     #[test]
@@ -2678,7 +2678,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // M6 (2026-07-03): SQLite WAL + synchronous=NORMAL — disk lock
+    //: SQLite WAL + synchronous=NORMAL — disk lock
     // contention relief for the every-turn `sync_turn` write path.
     // ------------------------------------------------------------------
 
@@ -2710,7 +2710,7 @@ mod tests {
 
         assert_eq!(mode, "wal", "journal_mode must be WAL after migrate()");
         // bumped from 5 → 6 when the v6 reflections migration
-        // (2026-07-14) was promoted from "gated CREATE TABLE IF NOT EXISTS"
+        //was promoted from "gated CREATE TABLE IF NOT EXISTS"
         // into a version-tracked migration. CURRENT_SCHEMA_VERSION was
         // bumped in lockstep; this assertion follows.
         assert_eq!(version, 6, "user_version must be 6 after migrate()");
@@ -3137,7 +3137,7 @@ mod tests {
         assert!((dot(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-5);
     }
 
-    // ── Phase 17 (2026-06-26): write-path hooks ─────────────────────
+    //── : write-path hooks ─────────────────────
 
     /// `sync_turn` writes a low-salience (0.3) frame tagged `turn`.
     /// Empty input is a no-op so callers can fire-and-forget.
@@ -3321,7 +3321,7 @@ mod tests {
         );
     }
 
-    // ---- Phase 18 (P1-1 / 架构-1 / 架构-2): audit + snapshot + cap ----
+    //( / 架构-1 / 架构-2): audit + snapshot + cap ----
 
     #[tokio::test]
     async fn p18_record_recall_audit_persists_row() {
@@ -3404,7 +3404,7 @@ mod tests {
         assert_eq!(hidden, 0);
     }
 
-    /// Round 5: opening the embedded backend must set
+    /// opening the embedded backend must set
     /// `PRAGMA busy_timeout` so concurrent writers serialise instead
     /// of immediately failing with `database is locked`. Read the
     /// PRAGMA back through `PRAGMA busy_timeout` (returns integer ms).
@@ -3423,7 +3423,7 @@ mod tests {
         );
     }
 
-    /// Round 5: the PRAGMA path is safe to evaluate on in-memory
+    /// the PRAGMA path is safe to evaluate on in-memory
     /// connections (it returns 0 there because :memory: has no
     /// contention) — the test pins that the PRAGMA call in `open`
     /// does not panic on either backend type.
@@ -3441,7 +3441,7 @@ mod tests {
 }
 
 // =================================================================
-// Phase 19 (E): reflections API round-trip
+//(E): reflections API round-trip
 // =================================================================
 
 #[cfg(test)]

@@ -112,7 +112,7 @@ pub enum RoomEvent {
     /// — the frontend flips its typing indicator on when it sees the
     /// first chunk for a previously-quiet agent_id, no separate Started
     /// event needed.
-    /// /// `agent_name` and `role` are sent on the **first** chunk only
+    /// `agent_name` and `role` are sent on the **first** chunk only
     /// (i.e. they are empty strings on subsequent chunks) so the
     /// frontend can set up the avatar tint / display name once.
     AgentThinkingChunk {
@@ -534,7 +534,7 @@ impl TaskEngineRuntime {
                                     }
                                 };
 
-                                // M5: `needs_user_confirmation` is parsed but
+                                //`needs_user_confirmation` is parsed but
                                 // not yet gated by a user-confirmation round
                                 // trip. Surface it instead of silently
                                 // proceeding so the leader's promise isn't a
@@ -623,7 +623,7 @@ impl TaskEngineRuntime {
                                         // The handoff task text: for Transfer
                                         // reuse the original task; for
                                         // Delegate use the delegated task.
-                                        // (M7: Delegate now also synthesizes
+                                        //(: Delegate now also synthesizes
                                         // a subtask so the target actually
                                         // receives work instead of only a
                                         // separator being shown.)
@@ -691,7 +691,7 @@ impl TaskEngineRuntime {
                                     // usable response. (H5) Persist the
                                     // leader's answer as a visible message;
                                     // only if there is truly nothing do we
-                                    // surface a SoftError (M4) instead of
+                                    //surface a SoftError instead of
                                     // silently advancing and showing blank.
                                     let direct_answer: Option<String> =
                                         match &parsed_decision {
@@ -1389,7 +1389,7 @@ impl TaskEngineRuntime {
     }
 
     /// Inbound review verdict from leader / human reviewer.
-    /// /// P1 reward hook: passing/failing a review moves the *assigned*
+    /// P1 reward hook: passing/failing a review moves the *assigned*
     /// agent's rank by ±5 (设计 §一). The delta is applied after the
     /// scheduler runs so we can read the node's `assigned_agent` from
     /// the room state without re-querying the DB. The score write is
@@ -2018,7 +2018,7 @@ mod tests {
     /// `on_review_verdict`; we synthesize a node with a real
     /// assigned_agent, send a review verdict, and assert the
     /// post-hook rank readback.
-    /// /// adjust_member_score upserts at `default_for()` (score 10) on
+    /// adjust_member_score upserts at `default_for()` (score 10) on
     /// first touch, so the post-pass score is 10+5=15, not 5.
     #[tokio::test]
     async fn review_pass_credits_assigned_agent() {

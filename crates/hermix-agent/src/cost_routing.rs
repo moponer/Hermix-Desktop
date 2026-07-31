@@ -1,6 +1,6 @@
 //! Smart-model routing + cost-guard route construction.
 //!
-//! Phase 5 module reshape (2026-07-04). Mirrors the OAuthRefresh /
+//! module reshape . Mirrors the OAuthRefresh /
 //! CostGuard sibling layout: each helper set gets its own file so
 //! `agent_loop.rs` can shrink toward pure orchestration.
 //!
@@ -35,7 +35,7 @@ use crate::smart_model_routing::{
 /// cost-guard downgrade path (or any other path that wants to force
 /// a specific route for the rest of the session).
 ///
-/// Phase 5b (2026-07-04): extracted from `CostGuard::forced_runtime_route`
+/// extracted from `CostGuard::forced_runtime_route`
 /// — that field belonged to routing, not spend accounting. The cost
 /// guard now reads `route_state.forced_runtime_route` via `&RouteState`
 /// in `evaluate_thresholds` and writes it via [`RouteState::install_downgrade`].

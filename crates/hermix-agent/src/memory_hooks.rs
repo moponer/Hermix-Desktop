@@ -1,6 +1,6 @@
 //! Pure helper functions used by `agent_loop`'s memory hooks.
 //!
-//! Extracted from `agent_loop.rs` (P2.x, 2026-07-04) so the 10k-line
+//! Extracted from `agent_loop.rs` (P2.x, ) so the 10k-line
 //! `agent_loop.rs` can focus on the `impl AgentLoop` block. **No behavior
 //! change** — pure relocation.
 //!

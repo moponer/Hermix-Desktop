@@ -129,7 +129,7 @@ fn patterns() -> &'static Vec<(&'static str, Regex)> {
 /// Redact PII / secrets from `text`. The returned string
 /// contains placeholders in place of any matched secret;
 /// surrounding text is preserved verbatim.
-/// /// This is the primary entry point. Call it on:
+/// This is the primary entry point. Call it on:
 /// - `Message::content` before INSERT into the sessions DB
 /// - `Message::tool_calls` JSON before INSERT
 /// - Any error message logged to disk that originated from
@@ -174,7 +174,7 @@ fn redact_secrets_with(text: &str, default_marker: &str) -> String {
 /// to live inside a JSON string key.
 /// 2. The output is canonical (sorted keys, no whitespace)
 /// so it's stable for hashing / dedup.
-/// /// Non-JSON input is returned unchanged after a
+/// Non-JSON input is returned unchanged after a
 /// `redact_secrets` pass.
 pub fn redact_tool_calls_json(json_str: &str) -> String {
     if json_str.is_empty() {

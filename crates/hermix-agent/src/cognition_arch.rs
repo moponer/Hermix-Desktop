@@ -1,9 +1,9 @@
 // P7 - Cognitive architecture upgrades.
 //
 // Three cooperating modules:
-// P7-T1 BdiModel          - beliefs / desires / intentions state
-// P7-T2 LatentBriefing    - delegate_task KV-cache friendly
-// P7-T3 FilesystemContext - multi-file memory addressed by path
+//BdiModel - beliefs / desires / intentions state
+//LatentBriefing - delegate_task KV-cache friendly
+//FilesystemContext - multi-file memory addressed by path
 //
 // All are pure data + small policy helpers. They live here so the
 // agent loop can hold the *shape* of cognition without depending on
@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 // ===========================================================================
-// P7-T1 - BDI (Beliefs / Desires / Intentions)
+//BDI (Beliefs / Desires / Intentions)
 // ===========================================================================
 
 /// World facts the agent currently holds as true. Each belief has
@@ -116,7 +116,7 @@ impl BdiModel {
 }
 
 // ===========================================================================
-// P7-T2 - LatentBriefing
+//LatentBriefing
 // ===========================================================================
 
 /// A scratchpad that travels WITH a delegated turn. KV-cache
@@ -226,7 +226,7 @@ impl LatentBriefing {
 }
 
 // ===========================================================================
-// P7-T3 - FilesystemContext
+//FilesystemContext
 // ===========================================================================
 
 /// Addressable multi-file memory. Paths are POSIX-style for
@@ -336,7 +336,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
 
-    // P7-T1
+    //
     #[test]
     fn bdi_add_belief_dedupes_by_statement() {
         let mut m = BdiModel::new();
@@ -396,7 +396,7 @@ mod tests {
         assert!(m.intention_satisfies("missing").is_empty());
     }
 
-    // P7-T2
+    //
     #[test]
     fn briefing_render_has_all_sections() {
         let b = LatentBriefing::new("draft RFC")
@@ -421,7 +421,7 @@ mod tests {
         assert_eq!(a, c);
     }
 
-    // P7-T3
+    //
     #[test]
     fn fs_context_write_read_delete() {
         let mut c = FilesystemContext::new();

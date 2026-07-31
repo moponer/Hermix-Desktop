@@ -1,7 +1,7 @@
 //! Cost-guard bookkeeping — tracks session spend across turns and
 //! decides when to warn or trip the configured `max_cost_usd`.
 //!
-//! Phase 5 (2026-07-03): the 4 sibling fields (`accumulated_usage`,
+//! : the 4 sibling fields (`accumulated_usage`,
 //! `session_cost_usd`, `cost_warned`, `forced_runtime_route`) used to
 //! live directly on `LoopState` and were passed one-by-one as 4 sibling
 //! `&mut` arguments into [`AgentLoop::process_post_response`](crate::agent_loop::AgentLoop).
@@ -9,13 +9,13 @@
 //! fields and makes `process_post_response`'s `publish_from` shrink
 //! another 4 args.
 //!
-//! Phase 5b (2026-07-04): the `forced_runtime_route` field was moved
+//! : the `forced_runtime_route` field was moved
 //! out — it is a routing decision, not a spend-tracking value. It now
 //! lives in [`crate::cost_routing::RouteState`], a sibling manager in
 //! `LoopState`. `evaluate_thresholds` reads `RouteState` via `&RouteState`
 //! and `install_downgrade` became a method on `RouteState`.
 //!
-//! Physically split out of `agent_loop.rs` (2026-07-04) so the file
+//! Physically split out of `agent_loop.rs` so the file
 //! that owns the type also owns the type — no API change to callers
 //! (`state.cost_guard.*` call paths work unchanged).
 //!
@@ -32,7 +32,7 @@ use crate::cost_routing::RouteState;
 /// sibling fields (`accumulated_usage`, `session_cost_usd`,
 /// `cost_warned`) mutate in place via `record_usage` /
 /// `evaluate_thresholds`. The forced-route state lives in
-/// [`RouteState`] — see the Phase 5b note in the module docs.
+/// [`RouteState`] — see the note in the module docs.
 #[derive(Debug)]
 pub struct CostGuard {
     /// Cumulative usage stats across turns.
@@ -55,8 +55,8 @@ impl Default for CostGuard {
 
 /// Fallback cost-per-million-USD pricing for known model families
 /// when [`AgentConfig`] does not pin a rate.
-/// /// Phase 5 (2026-07-03): used by `estimate_usage_cost_usd` in the
-/// cost guard. Physically moved with the cost guard (2026-07-04)
+/// used by `estimate_usage_cost_usd` in the
+/// cost guard. Physically moved with the cost guard
 /// because no other call site in `agent_loop.rs` needs it.
 pub(crate) fn default_model_cost_per_million(model: &str) -> Option<(f64, f64)> {
     let m = model.to_lowercase();
@@ -122,7 +122,7 @@ impl CostGuard {
     /// accumulate the per-turn USD cost into `session_cost_usd` using
     /// the model's pricing config. No-op when the provider did not
     /// return usage for the turn.
-    /// /// Pre-extraction this block was open-coded inside
+    /// Pre-extraction this block was open-coded inside
     /// `process_post_response` immediately after the post-LLM hook;
     /// it stays identical otherwise.
     pub fn record_usage(
@@ -146,7 +146,7 @@ impl CostGuard {
     /// the returned `model` (the struct doesn't have access to
     /// `AgentLoop::turn_route_cost_guard` which depends on
     /// `self.primary_runtime_snapshot()`).
-    /// /// Phase 5b (2026-07-04): takes `&RouteState` so it can skip the
+    /// takes `&RouteState` so it can skip the
     /// warn path when the session has already been downgraded. The
     /// downgrade state itself is owned by `RouteState`, not by this
     /// struct — passing `&RouteState` keeps `CostGuard` focused on
@@ -199,7 +199,7 @@ impl CostGuard {
 
 /// Result of [`CostGuard::evaluate_thresholds`]. The caller drives
 /// the side effects (route build + system message) from the variant.
-/// /// `warn` and `trip` can co-exist on the same call when spend jumped
+/// `warn` and `trip` can co-exist on the same call when spend jumped
 /// past both thresholds in one turn (e.g. the per-turn usage report
 /// pushed total spend above `max_cost_usd` while also clearing the
 /// warn ratio). The caller fires the warn side effect (system

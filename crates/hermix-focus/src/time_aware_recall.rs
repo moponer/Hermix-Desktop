@@ -76,7 +76,7 @@ impl RecallIntent {
     }
 
     /// Heuristic classifier from a time expression.
-    /// /// Mapping:
+    /// Mapping:
     /// - [`TimeExpression::JustNow`] / `JustNow` text markers
     /// ("earlier", "a moment ago") → `Resume`
     /// - [`TimeExpression::Today`] with a `Summarize` keyword in
@@ -129,7 +129,7 @@ impl RecallSpan {
             | TimeExpression::JustNow => 0.8,
             TimeExpression::ThisWeek | TimeExpression::LastWeek => 0.6,
             TimeExpression::ThisMonth | TimeExpression::LastMonth => 0.4,
-            // Phase 18: forward-tense 时间词 — 召回未来 reminder/plan
+            //forward-tense 时间词 — 召回未来 reminder/plan
             // 时置信度低（当前无数据，模型只能凭语义判断）。
             TimeExpression::Tomorrow
             | TimeExpression::DayAfterTomorrow
@@ -155,7 +155,7 @@ impl RecallSpan {
             TimeExpression::LastMonth => "last month".to_string(),
             TimeExpression::HoursAgo(n) => format!("{n}h ago"),
             TimeExpression::DaysAgo(n) => format!("{n}d ago"),
-            // Phase 18: forward-tense descriptions.
+            //forward-tense descriptions.
             TimeExpression::Tomorrow => "tomorrow (0h–48h)".to_string(),
             TimeExpression::DayAfterTomorrow => "day after (0h–72h)".to_string(),
             TimeExpression::NextWeek => "next week (now → +14d)".to_string(),
@@ -228,7 +228,7 @@ impl TimeAwareRecall {
     }
 
     /// Extract all time expressions from a free-form query.
-    /// /// Order of returned spans matches order of appearance in the
+    /// Order of returned spans matches order of appearance in the
     /// query. The first span is the *primary* filter; the rest are
     /// kept for context (e.g. an agent that wants to mention "also
     /// saw something last week") but are not used for filtering.
@@ -287,7 +287,7 @@ impl TimeAwareRecall {
     /// pass to its backends. This is the canonical entry point —
     /// `MemoryRouter::recognize` calls this and threads the hint
     /// through.
-    /// /// Behaviour:
+    /// Behaviour:
     /// - No time expression → `RecallHint::unfiltered()` with
     /// `Recall` intent.
     /// - Time expression present → window + classified intent +
@@ -323,7 +323,7 @@ impl TimeAwareRecall {
             | TimeExpression::JustNow => 0.8,
             TimeExpression::ThisWeek | TimeExpression::LastWeek => 0.6,
             TimeExpression::ThisMonth | TimeExpression::LastMonth => 0.4,
-            // Phase 18: forward-tense 时间词 — 置信度低于过去时（无未来数据）。
+            //forward-tense 时间词 — 置信度低于过去时（无未来数据）。
             TimeExpression::Tomorrow
             | TimeExpression::DayAfterTomorrow
             | TimeExpression::HoursLater(_) => 0.5,
@@ -408,7 +408,7 @@ mod tests {
     use chrono::{Duration, TimeZone, Utc};
 
     fn fixed_now() -> DateTime<Utc> {
-        // 12:00:00 UTC (a Tuesday — start_of_week = 2026-06-08)
+        //12:00:00 UTC (a Tuesday — start_of_week = )
         Utc.with_ymd_and_hms(2026, 6, 9, 12, 0, 0).unwrap()
     }
 

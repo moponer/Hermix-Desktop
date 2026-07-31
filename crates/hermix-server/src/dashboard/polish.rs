@@ -312,7 +312,7 @@ mod tests {
     /// export becomes a stale read-only mirror while the live call
     /// uses the server copy (or vice-versa), and the user-visible
     /// rewrite quality regresses without an obvious error.
-    /// /// If the snapshot tests in `apps/desktop-tauri` ever fail in
+    /// If the snapshot tests in `apps/desktop-tauri` ever fail in
     /// CI, edit both copies in the same PR — never one side only.
     #[test]
     fn chat_prompt_template_locked() {

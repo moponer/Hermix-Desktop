@@ -1,11 +1,11 @@
-//! Skill health scoring (P2-T3, extended Phase 0.3).
+//! Skill health scoring (, extended ).
 //!
 //! Skills can drift over time — wrong examples, dead URLs,
 //! duplicated boilerplate — and we want the scanner to flag
 //! suspicious ones without outright refusing to load them.
 //!
 //! The score is a 0.0–1.0 composite of **nine** deterministic
-//! signals (expanded from the original four in Phase 0.3):
+//! signals (expanded from the original four in ):
 //!
 //! | # | Dimension                         | Weight | Source     |
 //! |---|-----------------------------------|--------|------------|
@@ -30,14 +30,14 @@
 //! the loader still indexes the skill (we never want the
 //! scanner to silently drop a skill the agent was relying on).
 //!
-//! Plan reference: `.workbuddy/SKILL_SYSTEM_REFACTOR_PLAN.md` §P2-T3.
+//! Plan reference: `.workbuddy/SKILL_SYSTEM_REFACTOR_PLAN.md` §.
 
 /// Weighted components of the composite score. Public so tests
 /// can assert individual dimensions without baking the entire
 /// rubric into a single opaque number.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HealthBreakdown {
-    // --- Core 9 dimensions (Phase 0.3) ---
+    //Core 9 dimensions ---
     /// Frontmatter `name` present (0.10 weight).
     pub frontmatter_name: f32,
     /// Frontmatter `description` present and contains trigger phrase (0.15 weight).
@@ -420,7 +420,7 @@ mod tests {
         assert!((b.frontmatter_description - 1.0).abs() < f32::EPSILON);
     }
 
-    // --- Phase 0.3: New dimension tests ---
+    //New dimension tests ---
 
     #[test]
     fn new_dimensions_when_to_activate() {

@@ -40,7 +40,7 @@ lopdf = "0.34"
 # FileMemoryBackend. Picked over `fs2` because `fs2` hasn't shipped
 # since 2017 and `fs4` is the de-facto replacement.
 fs4 = "0.13"
-# Phase 18: cross-platform desktop automation tool (`computer_use`)
+# cross-platform desktop automation tool (`computer_use`)
 enigo = { workspace = true }
 xcap = { workspace = true }
 arboard = { workspace = true }

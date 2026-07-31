@@ -1,4 +1,4 @@
-//! P1-T1/T2 integration test.
+//! /T2 integration test.
 //!
 //! Goal: verify that the `SkillOrchestrator` can scan all 17 skills
 //! from the [Agent-Skills-for-Context-Engineering](https://github.com/muratcankoylan/Agent-Skills-for-Context-Engineering)
@@ -19,7 +19,7 @@
 //! (no internal `skill_orchestrator.rs` access required), which is
 //! the same path the production agent exercises at session start.
 //!
-//! Status: P1-T1 (skill scaffolding), P1-T2 (validation). P1-T3
+//! Status: (skill scaffolding), (validation).
 //! (Chinese translation) is intentionally deferred — see plan doc.
 
 use std::fs;

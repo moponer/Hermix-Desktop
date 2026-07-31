@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 /// Side tasks that the main agent loop routes through the auxiliary client.
-/// /// Names are deliberately short / lowercase so they double as env var
+/// Names are deliberately short / lowercase so they double as env var
 /// suffixes (`AUXILIARY_VISION_PROVIDER`, `AUXILIARY_COMPRESSION_MODEL`, ...).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AuxiliaryTask {

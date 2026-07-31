@@ -48,11 +48,11 @@ pub struct OcrWord {
 // ---------------------------------------------------------------------------
 
 /// Recognise text from a PNG-encoded screenshot.
-/// /// The PNG bytes are loaded into a WinRT `InMemoryRandomAccessStream`,
+/// The PNG bytes are loaded into a WinRT `InMemoryRandomAccessStream`,
 /// decoded via `BitmapDecoder`, converted to a `SoftwareBitmap`, and
 /// fed to `OcrEngine::RecognizeAsync`.
-/// /// # Errors
-/// /// - `Ocr` — engine initialisation or recognition failure.
+/// # Errors
+/// - `Ocr` — engine initialisation or recognition failure.
 /// - `NotFound` — no OCR engine available for the user's language
 /// (e.g. no language pack installed).
 pub fn recognize_from_png(png_data: &[u8]) -> CuaResult<OcrResponse> {
@@ -67,8 +67,8 @@ pub fn recognize_from_png(png_data: &[u8]) -> CuaResult<OcrResponse> {
 }
 
 /// Recognise text from raw RGBA pixels (width × height × 4).
-/// /// Not yet implemented — prefer the PNG path because the DXGI
-/// / BitBlt screenshot tools already produce PNG output.
+/// Not yet implemented — prefer the PNG path because the DXGI
+/// BitBlt screenshot tools already produce PNG output.
 pub fn recognize_from_rgba(
     _rgba: &[u8],
     _width: u32,
@@ -80,12 +80,12 @@ pub fn recognize_from_rgba(
 }
 
 /// Recognise text from a **local image file** (PNG / JPEG / GIF / WEBP / ...).
-/// /// The file is read from disk and decoded by `BitmapDecoder`, which
+/// The file is read from disk and decoded by `BitmapDecoder`, which
 /// auto-detects the container format, then fed to the OCR engine. This
 /// is the path-based, no-API-key entry point used for images that already
 /// exist on disk (e.g. a folder of scanned documents / licence plates).
-/// /// # Errors
-/// /// - `Ocr` — file unreadable, decode failure, or recognition failure
+/// # Errors
+/// - `Ocr` — file unreadable, decode failure, or recognition failure
 /// (e.g. no OCR language pack for the user's profile languages).
 pub fn recognize_from_path(path: &str) -> CuaResult<OcrResponse> {
     #[cfg(windows)]

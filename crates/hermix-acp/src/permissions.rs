@@ -103,7 +103,7 @@ pub fn default_permission_options() -> Vec<PermissionOption> {
 
 /// A synchronous approval callback that can be used by the agent's tool
 /// execution layer to gate dangerous operations.
-/// /// When the ACP client is connected, this bridges to the client's
+/// When the ACP client is connected, this bridges to the client's
 /// `request_permission` flow. When no client is connected, it auto-denies.
 pub type ApprovalCallback = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
 

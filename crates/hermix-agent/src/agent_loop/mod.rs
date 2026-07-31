@@ -48,7 +48,7 @@ pub use crate::smart_model_routing::{ApiMode, CheapModelRouteConfig, SmartModelR
 pub(crate) use crate::cost_guard::WarnKind;
 
 // ---------------------------------------------------------------------------
-// Backwards-compat re-exports (P2.2.4, 2026-06-30)
+//Backwards-compat re-exports (P2.2.4, )
 // ---------------------------------------------------------------------------
 // `AgentConfig`, `RetryConfig`, and `RuntimeProviderConfig` moved to
 // `crate::agent_config` on (REFACTOR_PLAN §4). Two test files
@@ -72,7 +72,7 @@ pub use crate::agent_helpers::{
 };
 
 // ---------------------------------------------------------------------------
-// OAuth credential + refresh manager (extracted 2026-07-04)
+//OAuth credential + refresh manager (extracted )
 // ---------------------------------------------------------------------------
 // `OAuthRefresh` + `OAuthStoreCredential` moved to `crate::oauth_refresh`.
 // Kept as `pub use` aliases so `hermix_agent::agent_loop::OAuthRefresh`
@@ -93,16 +93,16 @@ mod types;
 
 // ---------------------------------------------------------------------------
 /// The main agent loop.
-/// /// Owns the configuration, a tool registry, and an LLM provider.
+/// Owns the configuration, a tool registry, and an LLM provider.
 /// Call `run()` or `run_stream()` to begin an autonomous loop.
-/// /// ## Lock ordering
-/// /// When acquiring multiple locks, always follow this order to prevent deadlocks:
+/// ## Lock ordering
+/// When acquiring multiple locks, always follow this order to prevent deadlocks:
 /// 1. `tool_registry` (RwLock)
 /// 2. `plugin_manager` (Mutex)
 /// 3. `focus_stack` (Mutex)
 /// 4. `compression` (Mutex)
 /// 5. Other Mutex fields (evolution_counters, tool_error_counter, etc.)
-/// /// Never hold a lock from a later tier while calling code that acquires
+/// Never hold a lock from a later tier while calling code that acquires
 /// an earlier-tier lock.
 pub struct AgentLoop {
     pub config: AgentConfig,
@@ -119,7 +119,7 @@ pub struct AgentLoop {
     pub primary_credential_pool: Option<Arc<CredentialPool>>,
     /// Memory/skill nudge counters (persist for the lifetime of this `AgentLoop`).
     pub evolution_counters: Arc<Mutex<EvolutionCounters>>,
-    /// P4-T2: per-tool error counter, drained from every
+    /// per-tool error counter, drained from every
     /// `finalize_agent_result` call so the agent loop can see its own
     /// repeated-failure pattern and demote tools via the
     /// `[Tool Failure Hints]` block. Lives on the same `AgentLoop`
@@ -130,25 +130,25 @@ pub struct AgentLoop {
     /// Optional in-process sub-agent orchestrator. When set, `delegate_task`
     /// tool calls are executed by the orchestrator (spawn/timeout/cancel/
     /// lineage) instead of simply returning a signal envelope.
-    /// /// `pub(crate)` so `tool_executor.rs` can read it from the moved
-    /// `execute_tool_calls` method (2026-07-04). The field stays
+    /// `pub(crate)` so `tool_executor.rs` can read it from the moved
+    /// `execute_tool_calls` method . The field stays
     /// crate-private — external callers must use the agent builder API.
     pub(crate) sub_agent_orchestrator: Option<Arc<crate::sub_agent_orchestrator::SubAgentOrchestrator>>,
     /// Mid-run `/steer` buffer (Python `AIAgent._pending_steer`).
     pending_steer: Arc<Mutex<Option<String>>>,
     /// Optional tool schema router. When set, the LLM only sees the routed
-    /// subset of `tool_registry` (Phase 7 H1 — token saving, see
+    /// subset of `tool_registry` ( H1 — token saving, see
     /// `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §3). When `None`, the full
     /// registry is sent (legacy behavior).
     pub tool_router: Option<Arc<dyn ToolSchemaRouter>>,
-    /// Phase 15: Time-aware recall. When set, `memory_prefetch`
+    /// Time-aware recall. When set, `memory_prefetch`
     /// extracts a `time_window` from the user query, fans out to all
     /// `MemoryLayer` backends through the router, deduplicates and
     /// re-ranks hits by salience, and injects the resulting structured
     /// blocks as a `## Memory` section of the system prompt. This is
     /// the **only** read path; the legacy `MemoryManager::prefetch_all`
-    /// markdown path was removed in Phase 16.
-    /// /// Phase 17: the **write** path is also wired through this
+    /// markdown path was removed in .
+    /// the **write** path is also wired through this
     /// struct's sibling `plugin_manager: PluginManager`. The seven
     /// write-path helpers (`memory_sync`, `notify_memory_writes`,
     /// `notify_delegations`, `memory_on_turn_start`,
@@ -159,7 +159,7 @@ pub struct AgentLoop {
     pub memory_router: Option<Arc<hermix_focus::MemoryRouter>>,
     /// Always-include whitelist (read_file/write_file/memory by default).
     pub always_include: Vec<String>,
-    /// Phase 15 H2: Intent-aware prefetcher. When set, the agent loop
+    /// H2: Intent-aware prefetcher. When set, the agent loop
     /// classifies the user message into a `PrefetchIntent` *before*
     /// the LLM call, dispatches read-only (Safe) tools in parallel,
     /// and injects results as a system-prompt block. This reduces
@@ -168,17 +168,17 @@ pub struct AgentLoop {
     pub prefetcher: Option<Arc<Prefetcher>>,
     /// Learned prefetch stats (persisted across turns/sessions).
     learned_prefetch_stats: Arc<Mutex<hermix_intelligence::prefetch::IntentStats>>,
-    /// M1: per-session `FocusStack<SessionFrame>`. The agent loop
+    /// per-session `FocusStack<SessionFrame>`. The agent loop
     /// pushes a frame on every `delegate_task` invocation and pops
     /// it on completion; a `FocusConclusion` is auto-generated and
     /// fed to the memory router for long-term indexing. See
-    /// `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §2.2 + M1.
-    /// /// The stack starts empty; callers push the session root
+    /// `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §2.2 + .
+    /// The stack starts empty; callers push the session root
     /// (one frame per session) at `run()` start via
     /// `note_session_started`, and sub-agents push/pop via
     /// `note_delegation_start` / `note_delegation_end`.
     pub focus_stack: Arc<Mutex<FocusStack<SessionFrame>>>,
-    /// M1.6.3: optional consciousness tracker for broadcasting
+    /// optional consciousness tracker for broadcasting
     /// `focus_depth` changes when the focus stack pushes/pops.
     /// Wired by `LocalAgentService::spawn_agent_loop` so the
     /// "ECG" stream the desktop renders reflects nested
@@ -209,9 +209,9 @@ pub struct AgentLoop {
     /// Most recent archive refs produced by
     /// [`archive_context_section`]. Surfaced to the frontend so the
     /// user can open the archive file at a specific node anchor.
-    /// See `crates/hermix-agent/src/archive.rs` (v2: 2026-06-21).
+    /// See `crates/hermix-agent/src/archive.rs` (v2: ).
     last_archive_refs: std::sync::Mutex<Vec<ArchiveRef>>,
-    /// P1 (2026-07-18): background-spawned compression bookkeeping.
+    /// P1 : background-spawned compression bookkeeping.
     /// When `Some`, the agent loop has fired a `tokio::spawn` to
     /// compress a snapshot of `ctx.messages` and is waiting for it
     /// to finish — the agent loop is *not* blocking on the LLM
@@ -222,16 +222,16 @@ pub struct AgentLoop {
     /// the old slot (the spawned task keeps running in the
     /// background but its outcome is discarded — see
     /// `CompressionInFlight` design notes in `types.rs`).
-    /// /// `std::sync::Mutex` because the slot is only ever touched from
+    /// `std::sync::Mutex` because the slot is only ever touched from
     /// the single-threaded agent loop body — no contention, so we
     /// avoid the `Send`/`Sync` tax of `tokio::sync::Mutex` here.
     compression_in_flight: std::sync::Mutex<Option<types::CompressionInFlight>>,
-    /// Phase 18 (memory recall gating): `false` until the first full
+    /// (memory recall gating): `false` until the first full
     /// memory recall completes. Once `true`, subsequent `memory_prefetch`
     /// calls use a smaller limit to avoid re-injecting the same memory
     /// every turn — the LLM already has it in the active context window.
     memory_recall_seeded: std::sync::atomic::AtomicBool,
-    /// Phase 18 (prompt caching): three-tier prompt cache. Holds the
+    /// (prompt caching): three-tier prompt cache. Holds the
     /// rendered stable layer (identity, directions, tool block,
     /// personality, workspace, provider hint) and context layer
     /// (memory / skills / context files), each independently keyed so
@@ -279,15 +279,15 @@ impl Drop for AgentLoop {
 /// logic uses. Lifted out of [`LoopState`] so the cooldown/throttle
 /// rules live in one place (and can be unit-tested without spinning
 /// up an `AgentLoop`).
-/// /// Phase 5 (2026-07-03): replaces 3 fields (`context_pressure_warned_at`,
+/// replaces 3 fields (`context_pressure_warned_at`,
 /// `context_pressure_last_warn_at`, `context_pressure_last_warn_percent`)
 /// scattered across `LoopState`. The shared [`should_emit_warning`]
 /// method now owns the cooldown + tier-upgrade + percent-step rules.
-/// /// Physically split to `context_pressure.rs` (2026-07-04); re-exported
+/// Physically split to `context_pressure.rs` ; re-exported
 /// here so existing `state.context_pressure.*` call paths compile unchanged.
 pub use crate::context_pressure::ContextPressureMonitor;
 
-/// Phase 5 (2026-07-03): cost-guard bookkeeping consolidated into one
+/// cost-guard bookkeeping consolidated into one
 /// struct. The four sibling fields (`accumulated_usage`,
 /// `session_cost_usd`, `cost_warned`, `forced_runtime_route`) used to
 /// live directly on `LoopState` and were passed one-by-one as 4 sibling
@@ -299,11 +299,11 @@ pub use crate::context_pressure::ContextPressureMonitor;
 /// - keeps the 4-field atomic-mutation at the cost-guard code path
 /// where it belongs (a single helper can read + write the state),
 /// - lets `publish_from` drop another 4 args.
-/// /// The 4 fields stay co-located on `self.cost_guard` and mutate in
+/// The 4 fields stay co-located on `self.cost_guard` and mutate in
 /// place via the `record_usage` / `apply_route_downgrade` methods.
 /// Reset / `Default` produce the same all-zeros state as before, so
 /// `LoopState::default()` semantics are unchanged.
-/// /// Physically split to `cost_guard.rs` (2026-07-04); re-exported here
+/// Physically split to `cost_guard.rs` ; re-exported here
 /// so existing `state.cost_guard.*` call paths compile unchanged.
 /// `TurnRuntimeRoute` was lifted to `pub(crate)` so the new module
 /// can name it; the field visibility stays `pub(crate)` so the
@@ -312,22 +312,22 @@ pub use crate::context_pressure::ContextPressureMonitor;
 pub use crate::cost_guard::{CostGuard, CostGuardAction};
 pub(crate) use crate::cost_routing::RouteState;
 
-/// Phase 5 (2026-07-03): per-loop retry counters consolidated into one
+/// per-loop retry counters consolidated into one
 /// struct so `LoopState` doesn't have to carry 3 sibling `u32` fields and
 /// `publish_from` doesn't have to take 3 sibling `u32` arguments.
-/// /// All three counters follow the same shape:
+/// All three counters follow the same shape:
 /// - `bump_*` saturating-increments and returns the new value.
 /// - `reset_*` clears the counter (called on the success path).
 /// - The `< max` / `>= max` comparison stays at the call site because
 /// the action on max differs between the three (finalize vs.
 /// continue-with-error vs. fall-through) — folding that decision
 /// into the helper would force one path on all three.
-/// /// Physically split to `retry_counters.rs` (2026-07-04); re-exported
+/// Physically split to `retry_counters.rs` ; re-exported
 /// here so existing `state.retry_counters.*` call paths compile
 /// unchanged.
 pub use crate::retry_counters::RetryCounters;
 
-/// Phase 5 (follow-up): per-run LLM-result caches consolidated
+/// (follow-up): per-run LLM-result caches consolidated
 /// into one struct. The two sibling `Option` fields
 /// (`last_checkpoint_messages`, `last_content_with_tools`) used to live
 /// directly on `LoopState` and were bridged back from `run()`'s
@@ -342,15 +342,15 @@ pub use crate::retry_counters::RetryCounters;
 /// alias and re-publishing each iteration,
 /// - collapses 2 helper-arg slots (`&mut Option<String>` for
 /// `last_content_with_tools`) to 1 (`&mut MessageCache`).
-/// /// The 2 fields stay co-located on `self.message_cache` and mutate
+/// The 2 fields stay co-located on `self.message_cache` and mutate
 /// in place. Reset / `Default` produce the same all-`None` state as
 /// before, so `LoopState::default()` semantics are unchanged.
-/// /// Physically split to `message_cache.rs` (2026-07-04); re-exported
+/// Physically split to `message_cache.rs` ; re-exported
 /// here so existing `state.message_cache.*` call paths compile
 /// unchanged.
 pub use crate::message_cache::MessageCache;
 
-/// Phase 5 (follow-up): turn-level timing bookkeeping consolidated
+/// (follow-up): turn-level timing bookkeeping consolidated
 /// into one struct. The two sibling `u64` fields (`total_api_time_ms`,
 /// `total_tool_time_ms`) used to live directly on `LoopState` and were
 /// bridged back from `run()`'s loop-locals via 2 sibling arguments in
@@ -360,24 +360,24 @@ pub use crate::message_cache::MessageCache;
 /// - lets `run()` mutate the timings in place via `record_api` /
 /// `record_tool` instead of accumulating to a local `_total_*` and
 /// re-publishing each iteration (the local accumulation was the
-/// pre-extraction pattern that the Phase 1.1 bridge set up for
+/// pre-extraction pattern that the bridge set up for
 /// `total_turns`; timings don't need that bridge because nothing
 /// reads `state.timings` from outside this file — they're just
 /// collected for future inspection / metrics).
-/// /// The 2 fields stay co-located on `self.timings` and mutate in
+/// The 2 fields stay co-located on `self.timings` and mutate in
 /// place. Reset / `Default` produce the same all-zeros state as
 /// before, so `LoopState::default()` semantics are unchanged.
-/// /// Physically split to `turn_timings.rs` (2026-07-04); re-exported
+/// Physically split to `turn_timings.rs` ; re-exported
 /// here so existing `state.timings.*` call paths compile unchanged.
 pub use crate::turn_timings::TurnTimings;
 
 // ---------------------------------------------------------------------------
-// Backwards-compat re-exports (P2.2.4, 2026-06-30)
+//Backwards-compat re-exports (P2.2.4, )
 // ---------------------------------------------------------------------------
 
 impl AgentLoop {
     /// Populate [`AgentConfig::stored_system_prompt`] from SQLite (`sessions.system_prompt`) for session continuation.
-    /// /// Call before [`AgentLoop::run`] when resuming a gateway/CLI session so Anthropic prefix cache matches Python.
+    /// Call before [`AgentLoop::run`] when resuming a gateway/CLI session so Anthropic prefix cache matches Python.
     pub fn hydrate_stored_system_prompt_from_hermes_home(
         config: &mut AgentConfig,
         hermix_home: &std::path::Path,
@@ -483,8 +483,8 @@ impl AgentLoop {
         )
     }
 
-    /// P3-2: Notify upstream listeners that the loop entered a new phase.
-    /// /// Calls the `on_loop_phase_changed` callback if set. The callback
+    /// Notify upstream listeners that the loop entered a new phase.
+    /// Calls the `on_loop_phase_changed` callback if set. The callback
     /// receives `(phase_name, stage_name, turn)` as `&str, &str, u32`.
     /// The upstream layer (e.g. `LocalAgentService`) bridges this into
     /// a `LoopPhaseChanged` WS event via the orchestration bus.
@@ -503,8 +503,8 @@ impl AgentLoop {
         }
     }
 
-    /// P3-5: Notify upstream listeners that the agent loop is finalizing.
-    /// /// Calls the `on_task_complete` callback if set. The callback
+    /// Notify upstream listeners that the agent loop is finalizing.
+    /// Calls the `on_task_complete` callback if set. The callback
     /// receives `(success, task_id)` where `success` is true for
     /// natural completion and false for errors/interrupts.
     /// The upstream layer uses this to transition the Task status
@@ -529,12 +529,12 @@ impl AgentLoop {
         interrupted: bool,
         finish_reason: Option<String>,
     ) -> AgentResult {
-        // P4-T2 wire: drain this run's tool errors into the cross-run
+        //wire: drain this run's tool errors into the cross-run
         // counter so the next prompt can surface the demotion block.
         self.drain_tool_errors_into_counter(tool_errors);
-        // P3-2: emit Finalize phase boundary
+        //emit Finalize phase boundary
         self.notify_phase(&LoopPhase::Finalize, total_turns);
-        // P3-5: notify upstream that the task is complete.
+        //notify upstream that the task is complete.
         // success = finished naturally without interruption.
         let success = finished_naturally && !interrupted;
         self.notify_task_complete(success, None);
@@ -560,16 +560,16 @@ impl AgentLoop {
         )
     }
 
-    /// Phase 1.3a (2026-07-03): the post-LLM logic that was duplicated
+    /// .3a : the post-LLM logic that was duplicated
     /// ~200 lines in `run()` and `run_stream()`. Fires the PostLlmCall
     /// hook, accumulates usage, runs the cost guard (with auto-degrade
     /// to the configured cheap model), and decides between
     /// `Finalize` (no tool calls → caller returns) and `Continue`
     /// (tool calls → caller falls through to `execute_tool_calls`).
-    /// /// `stream_mode` is `true` for `run_stream()` — the helper uses
+    /// `stream_mode` is `true` for `run_stream()` — the helper uses
     /// this to emit a stream-specific `tracing` line and to forward
     /// the `finish_reason` through the finalize path.
-    /// /// Phase 5 (2026-07-03): 7 mutable scalar args collapsed to
+    /// 7 mutable scalar args collapsed to
     /// `&mut CostGuard` + `&mut Option<String>` (4 args shrunk to 1
     /// struct). `record_usage` / `evaluate_thresholds` / `install_downgrade`
     /// on [`CostGuard`] absorb the 4-field atomic-mutation, so the
@@ -578,7 +578,7 @@ impl AgentLoop {
     /// helper signature because they're stored on `LoopState` (used by
     /// the codex-ack continuation logic on the next turn) and not on
     /// `CostGuard`.
-    /// /// Phase 5 (follow-up): `&mut Option<String>` for
+    /// (follow-up): `&mut Option<String>` for
     /// `last_content_with_tools` collapsed to `&mut MessageCache`,
     /// dropping the helper to 6 mutable args (the `Option<String>` is
     /// now reached via `cache.store_content_with_tools(...)` inside
@@ -614,14 +614,14 @@ impl AgentLoop {
         )
     }
 
-    /// Phase 2.2 (2026-07-03): shared per-turn post-LLM setup that
+    /// shared per-turn post-LLM setup that
     /// `run()` and `run_stream()` previously open-coded after the
     /// `process_post_response` call. Builds the local `assistant_msg`,
     /// appends it to the context, updates `last_content_with_tools` if
     /// the assistant content came bundled with tool calls (used by the
     /// codex-ack continuation logic on the next turn), and reports
     /// whether any prior tool result exists in the history.
-    /// /// Returns the three locals the caller needs:
+    /// Returns the three locals the caller needs:
     /// - `history_includes_tool`: did any earlier turn leave a `Tool`
     /// message in the context? Used by
     /// `decide_empty_response` to know whether tool
@@ -640,7 +640,7 @@ impl AgentLoop {
         crate::session_lifecycle::prepare_assistant_turn(ctx, response, message_cache)
     }
 
-    /// Phase 2.3 (2026-07-03): centralised `mute_post_response`
+    /// centralised `mute_post_response`
     /// control chunk emit. The same AtomicBool-swap-then-conditional-
     /// emit pattern was open-coded in two places inside `run_stream()`:
     /// the housekeeping block after tool dispatch (line ~5980) and the
@@ -657,14 +657,14 @@ impl AgentLoop {
         crate::session_lifecycle::emit_mute_transition(on_chunk, stream_mute, next_muted)
     }
 
-    /// Phase 2.1 (2026-07-03): apply the four-variant
+    /// apply the four-variant
     /// `EmptyResponseAction` outcome produced by
     /// `crate::empty_response_handler::decide_empty_response`.
     /// Both `run()` and `run_stream()` previously open-coded this
     /// match arm — the only difference between the two call sites
     /// was the tracing message text. This helper centralises the
     /// match and parameterises the stream-mode log suffix.
-    /// /// Returns `true` when a `ContinueWithUserMsg` or
+    /// Returns `true` when a `ContinueWithUserMsg` or
     /// `ContinueWithSystemNudge` variant injected a message into the
     /// context — the caller should `continue;` to restart the loop
     /// with the injected message. Returns `false` when the variant
@@ -802,7 +802,7 @@ always_include: vec![
         }
     }
 
-    /// Attach a memory router for Phase 15 time-aware recall.
+    /// Attach a memory router for time-aware recall.
     pub fn with_memory_router(mut self, router: Arc<hermix_focus::MemoryRouter>) -> Self {
         self.memory_router = Some(router);
         self
@@ -841,7 +841,7 @@ always_include: vec![
         self
     }
 
-    /// M1: replace the per-loop `FocusStack<SessionFrame>`. Default
+    /// replace the per-loop `FocusStack<SessionFrame>`. Default
     /// is an empty stack (constructed in `new` / `with_interrupt`).
     /// Tests use this to inject a pre-populated stack; production
     /// callers should leave the default.
@@ -850,7 +850,7 @@ always_include: vec![
         self
     }
 
-    /// M1.6.3: attach the consciousness tracker so the focus stack
+    /// attach the consciousness tracker so the focus stack
     /// depth is reflected in the "ECG" stream the desktop renders.
     /// Called from `LocalAgentService::spawn_agent_loop`; tests
     /// typically leave the default (`None`).
@@ -887,7 +887,7 @@ always_include: vec![
     }
 
     /// Attach a tool schema router. When set, the LLM only sees the
-    /// router's output instead of the full tool registry (Phase 7 H1).
+    /// router's output instead of the full tool registry .
     /// Wrap your router with [`AlwaysInclude`] if you want a fixed
     /// must-have set to bypass the router.
     pub fn with_tool_router(mut self, router: Arc<dyn ToolSchemaRouter>) -> Self {
@@ -901,7 +901,7 @@ always_include: vec![
         self
     }
 
-    /// Attach an intent-aware prefetcher (Phase 15 H2).
+    /// Attach an intent-aware prefetcher .
     /// When set, the agent loop runs the prefetcher before each LLM call,
     /// dispatches Safe tools in parallel, and injects results as a
     /// system-prompt block.
@@ -927,14 +927,14 @@ always_include: vec![
         self
     }
 
-    // -- M5 ACUI emit ------------------------------------------------------
+    //ACUI emit ------------------------------------------------------
 
     /// Emit an ACUI directive to upstream listeners (if any).
-    /// /// No-op if no `on_acui_directive` callback was wired (e.g. unit
+    /// No-op if no `on_acui_directive` callback was wired (e.g. unit
     /// tests, batched runs). The directive is JSON-serialized and passed
     /// to the callback as a string; the upstream layer is responsible
     /// for deserializing and forwarding it as a `StreamEvent::Acui`.
-    /// /// This method never blocks and never returns an error — the ACUI
+    /// This method never blocks and never returns an error — the ACUI
     /// pipeline is best-effort. A failure in the callback is logged
     /// and swallowed (the agent keeps running).
     pub fn emit_acui(&self, directive: AcuiDirective) {
@@ -971,7 +971,7 @@ always_include: vec![
     }
 
     /// Resolve the tool schemas to send to the LLM this turn.
-    /// /// Behavior:
+    /// Behavior:
     /// - If `tool_router` is `None`: return `candidates` unchanged.
     /// - If `tool_router` is `Some`: build a [`TurnContext`] from the
     /// last user message + recent history, call `route`, and return
@@ -1028,7 +1028,7 @@ always_include: vec![
 
     /// Queue mid-run user guidance (Python `AIAgent.steer`).
     /// Queue mid-run user guidance (Python `AIAgent.steer`).
-    /// /// Returns `false` when the text is empty/whitespace-only.
+    /// Returns `false` when the text is empty/whitespace-only.
     pub fn steer(&self, text: &str) -> bool {
         crate::steer::steer(&self.pending_steer, text)
     }
@@ -1038,7 +1038,7 @@ always_include: vec![
         crate::steer::clear_pending_steer(&self.pending_steer)
     }
 
-    // ── M1: FocusStack plumbing ────────────────────────────────────
+    //── : FocusStack plumbing ────────────────────────────────────
     // The agent loop owns a per-session `FocusStack<SessionFrame>`.
     // Tool-dispatch paths can call `note_delegation_start` to push a
     // frame for each `delegate_task` invocation and
@@ -1059,7 +1059,7 @@ always_include: vec![
     /// `sub_agent_id` is the UUID the orchestrator / sub-agent
     /// returns; pass an empty string if not yet known (it will be
     /// matched by depth in `note_delegation_end`).
-    /// /// Returns the frame id, or `None` if the lock is poisoned.
+    /// Returns the frame id, or `None` if the lock is poisoned.
     pub fn note_delegation_start(
         &self,
         task: impl Into<String>,
@@ -1077,7 +1077,7 @@ always_include: vec![
     /// `sub_agent_id` (or the topmost delegation frame if
     /// `sub_agent_id` is empty). The popped frame is `mark_clear`-ed
     /// first so the next `pop` generates a `FocusConclusion`.
-    /// /// Returns the depth the popped frame was at, or `None` if no
+    /// Returns the depth the popped frame was at, or `None` if no
     /// matching frame was on the stack.
     pub fn note_delegation_end(
         &self,
@@ -1098,9 +1098,9 @@ always_include: vec![
     /// Drain pending `FocusConclusion`s from the focus stack and
     /// forward them to the long-term memory backend. Returns the
     /// number of conclusions processed.
-    /// /// No-op if `memory_router` is `None` (conclusions are still
+    /// No-op if `memory_router` is `None` (conclusions are still
     /// drained from the focus stack — they don't pile up).
-    /// /// M1.6.4: this now actually persists via the router's
+    /// this now actually persists via the router's
     /// `upsert_conclusion` fan-out. Backends that don't implement
     /// the write surface (8 HTTPS plugins) return
     /// `MemoryError::NotImplemented` and the router skips them
@@ -1196,12 +1196,12 @@ always_include: vec![
         }
     }
 
-    /// Phase 18 (架构-1): freeze the current session state into a
+    /// (架构-1): freeze the current session state into a
     /// `session_snapshots` row. Called every N turns (default 50)
     /// and on `on_session_end`. The `frame_ids` and `summary` are
     /// extracted from the router's embedded backend so this method
     /// is a no-op when the embedded backend is absent.
-    /// /// Designed to be cheap: the embedded SQLite path is O(visible
+    /// Designed to be cheap: the embedded SQLite path is O(visible
     /// frames) on `total_turns.is_multiple_of(N)` boundary calls,
     /// and O(1) on all other turns.
     pub(crate) fn maybe_freeze_snapshot(&self, session_id: &str, turn_number: u32) {
@@ -1213,7 +1213,7 @@ always_include: vec![
         )
     }
 
-    /// Phase 18 (架构-2): enforce a hard cap on visible frames so
+    /// (架构-2): enforce a hard cap on visible frames so
     /// memory.db doesn't grow unbounded. Called every 100 turns as a
     /// background cleanup. Default cap is 10000 — enough for ~3
     /// months of heavy chat, soft-hidden rows stay on disk for the
@@ -1282,16 +1282,16 @@ always_include: vec![
         );
     }
 
-    /// Phase 19 (A): per-turn memory recall. Cheap heuristic
+    /// (A): per-turn memory recall. Cheap heuristic
     /// scheduler that decides whether to emit a `memory_recall`
     /// event this turn (so the user sees "the agent thought of N
     /// related facts"), and updates the next-turn drift baseline.
-    /// /// The caller (`run_loop::do_pre_turn_setup`) injects the
+    /// The caller (`run_loop::do_pre_turn_setup`) injects the
     /// rendered `RecallPlan` into message history as a system
     /// message via `ctx.add_message(Message::system(...))`, so the
     /// LLM can actually use the recalled facts. We also emit the
     /// visibility event so the user sees "thought of N items".
-    /// /// Returns `Some(RecallPlan)` if a recall was emitted; the
+    /// Returns `Some(RecallPlan)` if a recall was emitted; the
     /// caller stores the keys in `state.last_recall_keys` for the
     /// next drift check.
     pub(crate) fn maybe_recall(
@@ -1408,7 +1408,7 @@ always_include: vec![
         )
     }
 
-    /// P4-T2 wire: snapshot the running per-tool error counter for
+    /// wire: snapshot the running per-tool error counter for
     /// callers that want to compose the demotion block outside the
     /// normal `resolve_initial_system_prompt` path (e.g. when the
     /// `user_message` differs from a request body — tests, REPL).
@@ -1419,7 +1419,7 @@ always_include: vec![
             .unwrap_or_default()
     }
 
-    /// P4-T2 wire: drain a slice of fresh `ToolErrorRecord`s into
+    /// wire: drain a slice of fresh `ToolErrorRecord`s into
     /// the per-tool error counter so the next prompt carries the
     /// failure pattern in its `[Tool Failure Hints]`. Called from
     /// [`AgentLoop::finalize_agent_result`] on every termination,
@@ -1440,16 +1440,16 @@ always_include: vec![
     }
 
     /// Compress when total chars exceed 80% of the context budget (Python auto-compaction).
-    /// /// Uses the advanced LLM-powered compressor when available (set via
+    /// Uses the advanced LLM-powered compressor when available (set via
     /// `with_compressor`), falling back to the simple character-based
     /// compressor otherwise.
-    /// /// before the LLM compressor replaces the middle
+    /// before the LLM compressor replaces the middle
     /// of the conversation with a summary, we **archive** the same
     /// slice to disk via [`archive_context_section`]. The summary
     /// becomes lossy-by-design; the archive file is the lossless
     /// evidence the user can re-open from the chat UI. The archive
     /// refs are stashed in `last_archive_refs` for the frontend.
-    /// /// also emit `compaction_status` snapshots at
+    /// also emit `compaction_status` snapshots at
     /// the pressure-detected and post-attempt boundaries so the
     /// `CompactionStatusBanner` can render in real time. We clone
     /// the snapshot before dropping the compressor lock so the
@@ -1470,7 +1470,7 @@ always_include: vec![
         .await
     }
 
-    /// P1 (2026-07-18): background-spawned streaming compression
+    /// P1 : background-spawned streaming compression
     /// entry point. Replaces the synchronous
     /// `auto_compress_if_over_threshold` call from the preflight and
     /// `do_pre_turn_setup` paths when pressure is moderate
@@ -1478,7 +1478,7 @@ always_include: vec![
     /// summary call**: the heavy work runs in a `tokio::spawn` task
     /// and the result is rolled in by
     /// [`poll_in_flight_compression`] on the next turn.
-    /// /// Decision matrix:
+    /// Decision matrix:
     /// - pressure < 50% — no-op (return immediately).
     /// - pressure >= 50% and compressor wired and slot empty —
     /// `tokio::spawn` a full compress; the agent loop body
@@ -1578,12 +1578,12 @@ always_include: vec![
         );
     }
 
-    /// P1 (2026-07-18): poll the in-flight background compression
+    /// P1 : poll the in-flight background compression
     /// (if any) and roll the outcome into `ctx` when the spawn has
     /// finished. Called at the top of every `do_pre_turn_setup` so
     /// the agent loop sees the compressed state by the time it
     /// builds the next LLM request.
-    /// /// `wait_for_finish` controls whether we await the join handle
+    /// `wait_for_finish` controls whether we await the join handle
     /// with a timeout. The high-pressure red-line path
     /// ([`maybe_spawn_compression`]) sets it to `true` after
     /// cancelling the spawn, but in practice the high-pressure path
@@ -1618,7 +1618,7 @@ always_include: vec![
         applied
     }
 
-    /// P1 (2026-07-18): copy the engine-side compression state
+    /// P1 : copy the engine-side compression state
     /// (summary / archived turns / metrics) into the agent loop's
     /// persistence-bound slots so `finalize_agent_result` can
     /// forward them to `local_agent_service`. The spawn task
@@ -1661,7 +1661,7 @@ always_include: vec![
         }
     }
 
-    /// P1 (2026-07-18): emit the `CompactionStatusBanner` post-snap
+    /// P1 : emit the `CompactionStatusBanner` post-snap
     /// the spawn task produced. The synchronous path emits it inline
     /// in `auto_compress_if_over_threshold`; the spawn path emits it
     /// here on the next `do_pre_turn_setup` when the outcome lands.
@@ -1703,7 +1703,7 @@ always_include: vec![
     /// hermix-server handler in `lib.rs` can convert it to the
     /// `StreamEvent::UsageUpdate` variant without needing a new
     /// callback type.
-    /// /// Honors `quiet_mode` like `emit_status` so log-replay jobs
+    /// Honors `quiet_mode` like `emit_status` so log-replay jobs
     /// don't spam the WS stream with usage chips.
     pub(crate) fn emit_usage_update(&self, usage: &hermix_core::UsageStats) {
         if self.config.quiet_mode {
@@ -1789,12 +1789,12 @@ always_include: vec![
     }
 
     /// Apply one streaming [`StreamChunk`] during [`Self::collect_stream_llm_response`].
-    /// /// `think_parser` is a stateful splitter that pulls `<think>...</think>` text
+    /// `think_parser` is a stateful splitter that pulls `<think>...</think>` text
     /// out of the visible content stream in real time and routes it to
     /// `reasoning_content` instead. Without this, providers that embed their
     /// reasoning in `delta.content` (MiniMax M2.7, Qwen, DeepSeek-R1) would
     /// leak the whole thinking monologue into the user-visible reply.
-    /// /// `tool_call_sanitizer` is a stateful redactor that pulls raw
+    /// `tool_call_sanitizer` is a stateful redactor that pulls raw
     /// `<minimax:tool_call>…</minimax:tool_call>` /
     /// `<invoke name="…">…</invoke>` blocks out of the *clean* (post-think)
     /// text. Without it, providers that emit tool calls as raw XML inside
@@ -1854,7 +1854,7 @@ always_include: vec![
             .and_then(|m| m.content.clone())
             .unwrap_or_default();
 
-        // Determine which tools to expose (Phase 7 H1: route through tool_router
+        //Determine which tools to expose ( H1: route through tool_router
         // when configured; otherwise send the full registry as before).
         let tool_schemas: Vec<ToolSchema> = match tools {
             Some(t) => self.route_tools(t.clone(), &messages),
@@ -1950,7 +1950,7 @@ always_include: vec![
             ctx.add_message(Message::system(&mem_ctx_raw));
         }
 
-        // Phase 18 (BaiLongma gatherer): pre-fetch file context referenced
+        //(BaiLongma gatherer): pre-fetch file context referenced
         // in the user message so the LLM doesn't need to call read_file
         // on the first turn. Best-effort; failures are silently ignored.
         if !first_user.is_empty() {
@@ -1966,7 +1966,7 @@ always_include: vec![
         }
 
         if self.config.preflight_context_compress {
-            // P1 (2026-07-18): background-spawned compression.
+            //P1 : background-spawned compression.
             // `maybe_spawn_compression` decides between spawn (no
             // block), sync fast (>=85% red line), or no-op (under
             // threshold). The preflight path used to block on the
@@ -1992,7 +1992,7 @@ always_include: vec![
 
 
     /// Run the agent loop with streaming.
-    /// /// Uses the LLM provider's streaming API and invokes `on_chunk` for each
+    /// Uses the LLM provider's streaming API and invokes `on_chunk` for each
     /// incremental delta. The stream is collected into a complete response
     /// before tool execution proceeds.
     /// Remove duplicate tool calls that share the same function name and arguments.
@@ -2048,28 +2048,28 @@ always_include: vec![
     /// Build a per-tool hint that we append to a user-denial reason so the
     /// LLM, on its next turn, has a concrete suggestion for *which* tool
     /// would have been more appropriate.
-    /// /// ## Why this exists
-    /// /// Regression (2026-06-14): user said "看下 D:\data 下有啥". The model
+    /// ## Why this exists
+    /// Regression : user said "看下 D:\data 下有啥". The model
     /// chose `computer_use` with `action=screenshot`. The user denied.
     /// The model then claimed "I have no terminal / list_files / read_file
     /// tool" — even though all three are registered and pinned to the top
     /// of the `<tools>` block.
-    /// /// Two layers of defense had been added (descriptions + system-prompt
+    /// Two layers of defense had been added (descriptions + system-prompt
     /// reminder) but neither was anchored to the deny path. By the time
     /// the user hits Deny, the model has already committed to its choice;
     /// a plain "User denied the tool call." gives it no signal to re-pick.
     /// The hint below is the *third* defense: when the user rejects,
     /// surface the right next move in the very tool-result message the
     /// model will read.
-    /// /// ## Design constraints
-    /// /// - **Short** — the tool-result string is fed back to the LLM, and
+    /// ## Design constraints
+    /// - **Short** — the tool-result string is fed back to the LLM, and
     /// every extra token here competes with the user's original prompt
     /// in the next turn. We aim for one sentence, not a paragraph.
     /// - **Tool-specific** — generic "consider another tool" hints are
     /// too vague. We map the most-mis-picked tools to the right
     /// replacement so the LLM has a concrete noun to call.
     /// Resolve the pre-tool-dispatch hook for every tool call up front.
-    /// /// When `AgentCallbacks::on_pre_tool_dispatch` is set, this invokes the
+    /// When `AgentCallbacks::on_pre_tool_dispatch` is set, this invokes the
     /// hook once per tool call. `Allow` and `Deny` decisions resolve
     /// synchronously; `AwaitApproval` blocks on a `oneshot::Receiver` until
     /// the upstream layer (e.g. `LocalAgentService`) sends a verdict. The
@@ -2116,7 +2116,7 @@ always_include: vec![
         });
     }
 
-    /// Phase 2.4: terminal-persistence shared by `run()` and `run_stream()`
+    /// terminal-persistence shared by `run` and `run_stream`
     /// natural-finish paths. Extracted to keep the two call sites in
     /// lock-step (P3 added `maybe_freeze_snapshot` to run_stream and we
     /// don't want that fix to drift again).
@@ -2129,7 +2129,7 @@ always_include: vec![
     ) {
         let (u, a) = extract_last_user_assistant(ctx.get_messages());
         self.memory_sync(&u, &a, session_id);
-        // Phase 18: freeze a final snapshot at session end so the next
+        //freeze a final snapshot at session end so the next
         // session can pick up without replaying every frame.
         self.maybe_freeze_snapshot(session_id, total_turns);
         self.spawn_background_review(total_turns, ctx, review_memory_at_end);
@@ -2142,7 +2142,7 @@ always_include: vec![
             return;
         }
         let mut review_skills = false;
-        // P0-1: only fire the skill review when the user hasn't
+        //only fire the skill review when the user hasn't
         // opted out via `auto_skill_extraction: false` in
         // ~/.hermix/config.yaml. Without this guard, the master
         // off-switch would be ignored by the background loop.
@@ -2178,7 +2178,7 @@ always_include: vec![
         cfg.background_review_metrics_enabled = false;
         cfg.memory_nudge_interval = 0;
         cfg.skill_creation_nudge_interval = 0;
-        // P0-1: child session must NOT write skills back to the
+        //child session must NOT write skills back to the
         // user's primary skill library — the background-review
         // task is itself a child of the parent's agent loop, and
         // a misbehaving reflection would pollute
@@ -2257,19 +2257,19 @@ pub(crate) struct FileChangeInfo {
     pub summary: Option<String>,
 }
 
-/// Phase 4.1 (2026-07-03): the per-attempt classification that sits
+/// the per-attempt classification that sits
 /// inside the `let response = loop { ... }` retry block in both
 /// `run()` and `run_stream()`. Identical ~40 lines in both call
 /// sites — has_tools / visible_text / reasoning-retry / empty-retry /
 /// exhausted. Extracted here so the two retry loops can keep their
 /// own transport (sync vs stream-first) and call sites can `match`
 /// on the resulting action.
-/// /// The helper takes `r` by value because the caller is going to
+/// The helper takes `r` by value because the caller is going to
 /// hand ownership of the response to either a downstream consumer
 /// (`Break(r)`) or the context (the reasoning-retry branch already
 /// pushed `r.message` onto `ctx` before returning `RetryReasoning`,
 /// so `r` itself is dropped on the caller side).
-/// /// `pub(crate)` so the `mod tests` block below can `match` on the
+/// `pub(crate)` so the `mod tests` block below can `match` on the
 /// variants; an impl-block-local enum would be private to the
 /// `AgentLoop` impl and unreachable from tests.
 #[derive(Debug)]
@@ -2279,7 +2279,7 @@ pub(crate) enum PostLlmAction {
     Break(hermix_core::LlmResponse),
     /// Reasoning-only response; the message has been pushed onto
     /// `ctx` and the caller should re-enter the retry loop.
-    /// /// No longer constructed — reasoning-only responses
+    /// No longer constructed — reasoning-only responses
     /// now Break immediately. Kept for pattern-match exhaustiveness
     /// and future use.
     #[allow(dead_code)]
@@ -2426,7 +2426,7 @@ fn summarize_background_review_result(messages: &[Message]) -> Option<String> {
     Some(format!("💾 {}", deduped.join(" · ")))
 }
 
-// Physically moved to `cost_guard.rs` (2026-07-04) alongside the
+//Physically moved to `cost_guard.rs` alongside the
 // rest of `cost_guard::*`. Kept behind `#[cfg(test)]` because the only
 // callers (test_merge_usage / test_merge_usage_none) live in the
 // `mod tests` block below — without this gate Rust lints the import
@@ -2443,10 +2443,10 @@ mod tests {
 
     #[test]
     pub(crate) fn p1_loop_state_defaults_to_zero() {
-        // Phase 1 (2026-07-03): `LoopState::default` must produce a
+        //: `LoopState::default` must produce a
         // zero-initialized struct that is `#[derive(Default)]` so the
         // refactor of `run()` / `run_stream()` can keep using `..Default::default()`.
-        // Phase 5 (2026-07-04): `total_api_time_ms` / `total_tool_time_ms`
+        //: `total_api_time_ms` / `total_tool_time_ms`
         // moved into `state.timings`; access path now `s.timings.*`.
         // `last_checkpoint_messages` / `last_content_with_tools` moved
         // into `state.message_cache`; access path now
@@ -2475,7 +2475,7 @@ mod tests {
         // Sanity: the per-turn counters can be updated without touching
         // unrelated state — required because `run()` and `run_stream()`
         // will both mutate these fields on every turn.
-        // Phase 5 (2026-07-04): timings now use `state.timings.record_*`
+        //: timings now use `state.timings.record_*`
         // (saturating-add) instead of a top-level `+= 1`. We exercise
         // the new path here and assert it doesn't bleed into other
         // counters.
@@ -2499,7 +2499,7 @@ mod tests {
 
     #[test]
     pub(crate) fn p5_turn_timings_record_independently() {
-        // Phase 5 (2026-07-04): `record_api` and `record_tool` must
+        //: `record_api` and `record_tool` must
         // accumulate independently (each on its own `u64`), saturating
         // on overflow (a long session shouldn't wrap around). Default
         // must be all zeros so `LoopState::default()` semantics stay
@@ -2524,7 +2524,7 @@ mod tests {
 
     #[test]
     pub(crate) fn p5_message_cache_store_and_take_independently() {
-        // Phase 5 (2026-07-04): `store_checkpoint` /
+        //: `store_checkpoint` /
         // `store_content_with_tools` / `take_content_with_tools` /
         // `checkpoint` / `content_with_tools` must all behave
         // independently (the two caches are unrelated fields, not
@@ -2561,28 +2561,28 @@ mod tests {
 
     #[test]
     pub(crate) fn p1_1_loop_state_round_trip() {
-        // Phase 1.1 (2026-07-03): the bridge between `run()`'s 14
+        //: the bridge between `run`'s 14
         // loop-local aliases and the 14 `state` fields. Publishing the
         // locals back into `state` is what makes the future
         // `run_shared_loop(state, llm_caller)` extraction possible
         // (the shared body only sees `&mut LoopState`).
-        // Phase 5 (2026-07-03): the `publish_from` bridge shrank from
+        //: the `publish_from` bridge shrank from
         // 9 args to 5 args. The 4 cost-guard args (accumulated_usage /
         // session_cost_usd / cost_warned / forced_runtime_route) are
         // owned by `state.cost_guard` and are no longer bridged. The 3
         // retry-counter args and the 3 context-pressure args were
-        // already removed in earlier Phase 5 sub-commits.
-        // Phase 5 (2026-07-04, 1st follow-up): shrank from 5 args to
+        //already removed in earlier sub-commits.
+        //(, 1st follow-up): shrank from 5 args to
         // 3 args. The 2 timing args (`total_api_time_ms` /
         // `total_tool_time_ms`) are owned by `state.timings` and
         // mutated in place by `record_api` / `record_tool`.
-        // Phase 5 (2026-07-04, 2nd follow-up): shrank from 3 args to
+        //(, 2nd follow-up): shrank from 3 args to
         // 1 arg. The 2 message-cache args
         // (`last_checkpoint_messages` / `last_content_with_tools`) are
         // owned by `state.message_cache` and mutated in place by
         // `store_checkpoint` / `store_content_with_tools`. We
         // exercise all 4 in-place paths in this test.
-        // Phase 5 (2026-07-04, 3rd follow-up): the `publish_from`
+        //(, 3rd follow-up): the `publish_from`
         // helper is removed entirely. The single remaining arg
         // (`total_turns`) is written directly to `state.total_turns`
         // in both `run()` and `run_stream()`. The bridge is dead.
@@ -2616,7 +2616,7 @@ mod tests {
         assert!(s.cost_guard.accumulated_usage.is_none());
         assert_eq!(s.cost_guard.session_cost_usd, 0.0);
         assert!(!s.cost_guard.cost_warned);
-        // Phase 5b (2026-07-04): forced_runtime_route moved out of
+        //forced_runtime_route moved out of
         // cost_guard into the sibling route_state manager.
         assert!(s.route_state.forced_runtime_route.is_none());
         // retry_counters live on the inner struct — set directly here
@@ -2665,7 +2665,7 @@ mod tests {
         assert!(config.background_review_metrics_enabled);
     }
 
-    // ── M1.6.5: build_session_summary regression tests ──
+    //── : build_session_summary regression tests ──
     // These exercise the helper that produces the session-level
     // FocusConclusion written to memory.db at session end. Without
     // this, single-shot sessions (no delegate_task) leave memory.db
@@ -3102,7 +3102,7 @@ mod tests {
         // Match `context_length` to the ctx max below (100 tokens) so the
         // engine's own `threshold_tokens` (100 * 0.8 = 80) agrees with the
         // outer `ContextManager.pressure_threshold_tokens()` (also 80). When
-        // they disagreed (cfg 1000 vs ctx 100) the post-2026-07-22
+        //they disagreed (cfg 1000 vs ctx 100) the post-
         // `should_compress` opt-out in `auto_compress_if_over_threshold`
         // short-circuited before the post-attempt snapshot fired.
         cfg.context_length = 100;
@@ -4446,7 +4446,7 @@ mod tests {
             }
         }
 
-        // Fixture-style cases distilled from Python v2026.4.16:
+        //Fixture-style cases distilled from Python :
         // - counter persists across runs
         // - resets to 0 when hitting interval threshold
         #[derive(Clone, Copy)]
@@ -5114,7 +5114,7 @@ let u = UsageStats {
         assert!((cost - 0.75).abs() < 1e-9);
     }
 
-    // ── ContextPressureMonitor unit tests (2026-07-03) ──
+    //── ContextPressureMonitor unit tests ──
     // The helper is the gate that decides whether `run()` / `run_stream()`
     // should fire a `lifecycle` warning when the context window fills up.
     // It had no direct unit tests — coverage only came through the
@@ -5125,7 +5125,7 @@ let u = UsageStats {
 
     #[test]
     pub(crate) fn cp_monitor_default_is_all_zero_and_none() {
-        // Phase 5: the freshly-extracted ContextPressureMonitor must
+        //the freshly-extracted ContextPressureMonitor must
         // behave like the old 3 inline fields when not yet primed —
         // otherwise the first call inside run() / run_stream() would
         // see stale defaults.
@@ -5186,7 +5186,7 @@ let u = UsageStats {
         assert!(m.last_warn_at.is_some());
     }
 
-    // ── Phase 5 (2026-07-03): RetryCounters unit tests ──
+    //── : RetryCounters unit tests ──
     // The 3 sibling retry counters on LoopState (invalid_tool_retries,
     // invalid_json_retries, truncated_tool_call_retries) collapsed into
     // a single RetryCounters struct. These tests pin the bump + reset
@@ -5195,7 +5195,7 @@ let u = UsageStats {
 
     #[test]
     pub(crate) fn retry_counters_default_is_all_zero() {
-        // Phase 5: the freshly-constructed RetryCounters must start at
+        //the freshly-constructed RetryCounters must start at
         // zero for all three slots — otherwise a stale value would leak
         // into the first call inside run() / run_stream().
         let c = RetryCounters::default();
@@ -5265,7 +5265,7 @@ let u = UsageStats {
         assert_eq!(c.truncated_tool, 0);
     }
 
-    // ── Phase 5 (2026-07-03): CostGuard struct + evaluate_thresholds ──
+    //── : CostGuard struct + evaluate_thresholds ──
     // The 4 cost-guard fields that used to be 4 sibling `&mut` args on
     // `process_post_response` now live on a single `CostGuard` struct.
     // `evaluate_thresholds` returns an enum (NoAction / Downgrade /
@@ -5278,7 +5278,7 @@ let u = UsageStats {
         assert!(cg.accumulated_usage.is_none());
         assert_eq!(cg.session_cost_usd, 0.0);
         assert!(!cg.cost_warned);
-        // Phase 5b (2026-07-04): forced_runtime_route moved out
+        //forced_runtime_route moved out
         // (route_state owns it now).
     }
 
@@ -5420,7 +5420,7 @@ let u = UsageStats {
         ));
     }
 
-    // ── Phase 1.3a (2026-07-03): process_post_response unit tests ──
+    //── .3a : process_post_response unit tests ──
     // The shared post-LLM helper extracted in 1.3a replaces ~200 lines
     // of duplication between `run()` and `run_stream()`. These tests
     // exercise the two return paths (Finalize / Continue) and the
@@ -5474,11 +5474,11 @@ let u = UsageStats {
             finish_reason: Some("stop".into()),
         };
         let mut cost_guard = CostGuard::default();
-        // Phase 5 (2026-07-04): `&mut Option<String>` arg became
+        //: `&mut Option<String>` arg became
         // `&mut MessageCache`; the old `last_content` local is gone,
         // we exercise the same final-answer path through
         // `message_cache.last_content_with_tools`.
-        // Phase 5b (2026-07-04): added `&mut RouteState` — the
+        //added `&mut RouteState` — the
         // forced-route state used to live on `CostGuard`.
         let mut route_state = RouteState::default();
         let mut message_cache = MessageCache::default();
@@ -5752,7 +5752,7 @@ let u = UsageStats {
     }
 
     // -----------------------------------------------------------------------
-    // M1.6.2: push/pop pair — `note_delegation_start` is wired into the
+    //push/pop pair — `note_delegation_start` is wired into the
     // tool-dispatch paths and `note_delegation_end` matches by empty id
     // (topmost Delegation). Verify the pair generates exactly one
     // FocusConclusion per delegation.
@@ -5884,7 +5884,7 @@ let u = UsageStats {
         assert!(!hits.is_empty(), "conclusion should be retrievable from embedded backend");
     }
 
-    // -- M5 ACUI emit tests ---------------------------------------------
+    //ACUI emit tests ---------------------------------------------
 
     /// Helper: build a minimal agent with no callbacks wired.
     pub(crate) fn bare_agent() -> AgentLoop {
@@ -5985,7 +5985,7 @@ let u = UsageStats {
     /// ("用户，目录共 198 条...") was gone — only user + assistant1(tool_call)
     /// + tool landed in the DB. Streaming had shown the text live via WS
     /// chunks but the server-side ctx / persist call had skipped it.
-    /// /// The fix in `run_loop.rs`: call `prepare_assistant_turn` inside the
+    /// The fix in `run_loop.rs`: call `prepare_assistant_turn` inside the
     /// `Finalize → has_visible_text` branch **before** the terminal
     /// persist / finalize. This regression test simulates exactly that
     /// two-turn shape and asserts the final assistant message survives

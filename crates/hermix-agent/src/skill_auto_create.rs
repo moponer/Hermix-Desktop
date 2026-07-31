@@ -1,4 +1,4 @@
-//! P4-T3 — Agent self-created skills.
+//! — Agent self-created skills.
 //!
 //! When a session demonstrates a useful, repeatable tool sequence
 //! (>= `[AUTO_SKILL_MIN_TOOL_STEPS]` distinct tool calls), the agent
@@ -225,7 +225,7 @@ pub fn render_skill_md(name: &str, body: &str) -> String {
 /// Persist a new auto skill. Refuses to overwrite an existing file
 /// — even another auto skill — so the agent can't thrash skills via
 /// repeated calls during a single session. (Use
-/// `skill_manage patch` for intentional updates; see P4-T4.)
+/// `skill_manage patch` for intentional updates; see .)
 ///
 /// Returns the absolute path of the new file on success.
 pub fn write_auto_skill(

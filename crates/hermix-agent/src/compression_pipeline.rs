@@ -1,4 +1,4 @@
-//! Compression pipeline primitives — Phase A + Phase B (2026-07-17).
+//! Compression pipeline primitives — the pre-summary compression passes.
 //!
 //! Designed after reading the Headroom article
 //! (<https://www.chenxutan.com/d/4104.html>) but adapted to a Rust
@@ -11,7 +11,7 @@
 //! - `dedup_adjacent_user()` — Pass 0 user-text dedup.
 //! - `TokenScorer` + `score()` — 4-dim heuristic scorer
 //!   (recency / role_position / frequency / instructional_marker).
-//! - `drop_low_score()` — Phase B pre-summary drop.
+//! - `drop_low_score()` — pre-summary score drop.
 //! - `CompressionReport` — structured log of one compression pass.
 //!
 //! **Design constraint:** we do NOT introduce an embedding model.
@@ -245,7 +245,7 @@ impl TokenScorer {
     /// Build a scorer aware of the current task: extracts keywords
     /// (CJK bigrams + latin words ≥ 2 chars, minus stopwords) from
     /// the most recent `User` message in `messages`.
-    /// /// This is the no-embedding proxy for Headroom's
+    /// This is the no-embedding proxy for Headroom's
     /// `semantic_centrality = cosine_similarity(embed(task), embed(block))`.
     /// Keyword overlap is a cruder signal but costs nothing and
     /// never increases binary size.
@@ -306,7 +306,7 @@ impl TokenScorer {
 
     fn score_inner(&self, msg: &Message, n: usize, idx: usize, tcid_refs: usize) -> f64 {
         // recency: linear ramp from 0.0 (oldest) to 1.0 (newest).
-        // P2 note (2026-07-18): `idx` is the position within the
+        // note: `idx` is the position within the
         // `messages` slice passed to *this* compress() call. It is
         // a correct recency proxy inside a single pass (messages
         // arrive in chronological order, so larger idx == newer).
@@ -316,7 +316,7 @@ impl TokenScorer {
         // reflects its true age. We accept this because (a) each
         // compress() pass makes independent drop decisions — no
         // cross-call consistency is needed — and (b) the
-        // `query_relevance` dimension (P0) rescues task-critical
+        // `query_relevance` dimension rescues task-critical
         // messages that recency would otherwise starve. Adding a
         // stable `turn_seq` field to `Message` would fix it
         // rigorously but requires DB schema + frontend + every
@@ -494,7 +494,7 @@ pub fn drop_low_score(
     // pass O(n²) on long histories. We also drop the previous
     // `messages.clone()` (a full deep copy of the message list) by
     // classifying against a borrowed slice and only moving messages
-    // out in Phase 3 — so the only allocation here is the ref-count
+    //out in — so the only allocation here is the ref-count
     // map, sized to the number of distinct tool_call_ids.
     let mut ref_counts: std::collections::HashMap<&str, usize> =
         std::collections::HashMap::new();
@@ -504,9 +504,9 @@ pub fn drop_low_score(
         }
     }
 
-    // Phase 1: classify each message. `keep[i]` = true means
+    //classify each message. `keep[i]` = true means
     // "survives every pass". Candidates for dropping land in
-    // `drop_candidates` with their score, so Phase 2 can rescue
+    //`drop_candidates` with their score, so can rescue
     // the highest-scoring ones if the min_keep floor is breached.
     let mut keep = vec![false; n];
     let mut drop_candidates: Vec<(usize, f64)> = Vec::new();
@@ -535,7 +535,7 @@ pub fn drop_low_score(
         }
     }
 
-    // Phase 2: enforce the min_keep floor. If dropping every
+    //enforce the min_keep floor. If dropping every
     // candidate would leave fewer than `min_keep` messages,
     // rescue the highest-scoring candidates back into the kept
     // set. Sorted descending by score so the "least bad" drops
@@ -549,7 +549,7 @@ pub fn drop_low_score(
         }
     }
 
-    // Phase 3: partition by the final keep flags.
+    //partition by the final keep flags.
     let mut kept = Vec::with_capacity(n);
     let mut dropped: Vec<Message> = Vec::new();
     for (idx, msg) in messages.into_iter().enumerate() {

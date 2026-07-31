@@ -1,4 +1,4 @@
-//! Phase 19 (A): memory evolution — per-turn recall scheduler.
+//! (A): memory evolution — per-turn recall scheduler.
 //!
 //! The agent loop calls [`maybe_recall`] from `run_stream`'s turn
 //! prelude. We answer one question: "given this turn's user text,
@@ -6,7 +6,7 @@
 //!
 //! ## Why this exists
 //!
-//! Phase 18 only recalled at session-start (one shot in
+//! only recalled at session-start (one shot in
 //! `memory_prefetch`). Mid-session drift — the user changes topic —
 //! would never re-trigger recall, so the agent kept hallucinating
 //! facts it already had on disk. This scheduler runs **every turn**
@@ -155,7 +155,7 @@ pub fn gather_recall_items(
     if user_text.trim().is_empty() {
         return None;
     }
-    // Phase 19 (A) v1: salience-rank the existing visible facts
+    //(A) v1: salience-rank the existing visible facts
     // and take the top MAX_RECALLS_PER_TURN. We deliberately
     // don't embed-and-search here — `recall_scheduler` must be
     // fast enough to call every turn. Future work: plug in

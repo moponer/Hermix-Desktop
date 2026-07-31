@@ -1,4 +1,4 @@
-//! Stable C-ABI plugin interface (2026-07-05).
+//! Stable C-ABI plugin interface .
 //!
 //! Native plugins (.dll on Windows / .so on Linux) export a single
 //! entry-point:

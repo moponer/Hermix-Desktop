@@ -36,12 +36,12 @@ use axum::Router;
 use crate::HttpServerState;
 
 /// Build the dashboard API router.
-/// /// All routes are prefixed with `/api/` and share the same `HttpServerState`.
+/// All routes are prefixed with `/api/` and share the same `HttpServerState`.
 pub fn router() -> Router<HttpServerState> {
     Router::new()
         // Status
         .route("/api/status", get(status::get_status))
-        // Sessions — T2-A (2026-06-20): moved to /v1/sessions in lib.rs.
+        //Sessions — T2-A : moved to /v1/sessions in lib.rs.
         // The dashboard router no longer mounts any session routes; the
         // SPA uses `/v1/sessions/*` exclusively now.
         // Config
@@ -71,7 +71,7 @@ pub fn router() -> Router<HttpServerState> {
                 .delete(env::delete_env_var),
         )
         // Reveal a single env var's value (POST so the key doesn't end up in URL/access logs).
-        // 修复：之前忘了注册这个 route → SettingsView mount 时
+        //之前忘了注册这个 route → SettingsView mount 时
         // `POST /api/env/reveal` 直接 404 → 全部 provider fetch 静默失败
         // → localStorage 的 model_config.enabled 永远是空 → ChatView 弹窗
         // 只剩后端当前在跑的默认模型（fallback 合成的那 1 个）。
@@ -89,7 +89,7 @@ pub fn router() -> Router<HttpServerState> {
         )
         // Analytics
         .route("/api/analytics/usage", get(analytics::get_usage))
-        // Phase 2: diagnostic view of the stats DB (existence / row
+        //diagnostic view of the stats DB (existence / row
         // counts / sample rows / applied migrations) so a user can
         // pinpoint where the pipeline is broken without poking at
         // SQLite by hand.
@@ -173,7 +173,7 @@ pub fn router() -> Router<HttpServerState> {
             "/api/persona/overrides",
             get(persona::get_overrides).put(persona::put_overrides),
         )
-        // Migration (Phase 11: legacy ~/.hermes → ~/.hermix import dialog).
+        //Migration .
         .route("/api/migration/probe", get(migration::probe_migration))
         .route("/api/migration/apply", post(migration::apply_migration))
         .route("/api/migration/skip", post(migration::skip_migration))

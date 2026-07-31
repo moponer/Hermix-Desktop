@@ -71,7 +71,7 @@ pub struct PlatformConfig {
 
 impl PlatformConfig {
     /// Deep-merge a JSON overlay into this configuration.
-    /// /// Values present in `overlay` take precedence; missing keys in the
+    /// Values present in `overlay` take precedence; missing keys in the
     /// overlay are left unchanged. The `extra` map is merged recursively.
     pub fn merge_with_json(&mut self, overlay: &serde_json::Value) {
         if let serde_json::Value::Object(map) = overlay {

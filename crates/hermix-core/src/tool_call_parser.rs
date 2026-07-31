@@ -24,7 +24,7 @@ pub trait ToolCallParser: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// The default Hermes-format tool call parser.
-/// /// Parses `<function_calls>` XML blocks containing `<invoke>` and
+/// Parses `<function_calls>` XML blocks containing `<invoke>` and
 /// `<parameter>` elements.
 #[derive(Clone)]
 pub struct HermesToolCallParser;
@@ -39,7 +39,7 @@ fn next_call_id() -> String {
 
 /// Parse MiniMax M3 native tool-call format:
 /// `<terminal><command>ls -la</command></terminal>`
-/// /// Uses manual byte-scanning with nesting tracking because regex
+/// Uses manual byte-scanning with nesting tracking because regex
 /// alone cannot correctly match the outer close tag when the inner
 /// content also contains `</word>` tags.
 fn parse_m3_tool_tags(content: &str, calls: &mut Vec<ToolCall>) {
@@ -350,7 +350,7 @@ impl ToolCallParser for HermesToolCallParser {
             parse_m3_tool_tags(content, &mut calls);
         }
 
-        // Format 6 — *best-effort* unclosed-block extractor (2026-06-14).
+        //Format 6 — *best-effort* unclosed-block extractor .
         // When MiniMax-M3 (or M2.x / older Hermes fine-tunes) hits
         // finish_reason="stop" while still inside a tool-call XML
         // block, the structured extractors above return nothing:
@@ -434,7 +434,7 @@ pub fn parse_tool_calls(content: &str) -> Result<Vec<ToolCall>, AgentError> {
 }
 
 /// Strip MiniMax M3 native tool-call tags from text content.
-/// /// Removes blocks like `<terminal><command>ls</command></terminal>`
+/// Removes blocks like `<terminal><command>ls</command></terminal>`
 /// and `<read_file><path>/tmp</path></read_file>` where the outer
 /// tag name is the tool name and inner tags are parameters.
 fn remove_m3_tool_tags(text: &mut String) {
@@ -563,7 +563,7 @@ fn remove_m3_tool_tags(text: &mut String) {
 }
 
 /// Separate plain text from tool calls in LLM output content.
-/// /// Returns a tuple of (plain_text, tool_calls).
+/// Returns a tuple of (plain_text, tool_calls).
 pub fn separate_text_and_calls(content: &str) -> (String, Vec<ToolCall>) {
     let calls = parse_tool_calls(content).unwrap_or_default();
     let mut result = content.to_string();
@@ -617,7 +617,7 @@ pub fn get_parser(name: &str) -> Option<Box<dyn ToolCallParser>> {
 // ---------------------------------------------------------------------------
 
 /// Format a list of tool calls back into the Hermes `<function_calls>` XML format.
-/// /// This enables round-trip fidelity: parsing then formatting should be
+/// This enables round-trip fidelity: parsing then formatting should be
 /// semantically equivalent to the original input.
 pub fn format_tool_calls(calls: &[ToolCall]) -> String {
     if calls.is_empty() {
@@ -848,7 +848,7 @@ Hello! Let me search for that.
         assert!(text.contains("结果如上。"));
     }
 
-    // ---- MiniMax M3 native format (2026-06-12) ----
+    //MiniMax M3 native format ----
     // Tool name as outer XML tag, parameters as child tags.
     // <terminal> <command>ls</command> </terminal>
 
@@ -921,7 +921,7 @@ Hello! Let me search for that.
         assert!(text.contains("现在呢"));
     }
 
-    // ---- Unclosed-block extraction (2026-06-14) -----------------------
+    //Unclosed-block extraction -----------------------
     // When MiniMax-M3 hits finish_reason="stop" while still inside a
     // tool-call XML block, the structured extractors return nothing.
     // We need a best-effort fallback that records a skeletal ToolCall

@@ -208,7 +208,7 @@ proptest! {
 }
 
 // -----------------------------------------------------------------
-// P0-1: skills.auto_extraction + agent.auto_skill_extraction
+//skills.auto_extraction + agent.auto_skill_extraction
 // These are deterministic rather than proptest because the
 // `default = "..."` serde attribute only kicks in for *missing*
 // fields, and proptest would either always populate the field

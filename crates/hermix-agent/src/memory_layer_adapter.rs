@@ -26,7 +26,7 @@ pub fn all_plugins_as_router(session_id: &str, hermix_home: &str) -> MemoryRoute
     let db_path = hermix_config::paths::data_dir_in(hermix_home).join("memory.db");
     match hermix_focus::EmbeddedMemoryBackend::open(&db_path) {
         Ok(embedded) => {
-            // Phase 17: bind the backend to the session so its
+            //bind the backend to the session so its
             // write-path hooks (`on_session_end`,
             // `record_turn`'s session_id tag) carry the right
             // identifier. Without this, the embedded backend
@@ -39,7 +39,7 @@ pub fn all_plugins_as_router(session_id: &str, hermix_home: &str) -> MemoryRoute
             backends.push(embedded_arc);
         }
         Err(e) => {
-            // M1.6.5: was a silent `if let Ok(...)` drop until now —
+            //was a silent `if let Ok(...)` drop until now —
             // the router would silently run with no backends and
             // the user had no idea why memory.db never grew. Make
             // the failure loud so it's visible in production logs.
@@ -127,11 +127,11 @@ mod tests {
         assert!(router.backend_count() >= 1);
     }
 
-    /// M1.6.5: an unwritable parent directory (read-only mount or
+    /// an unwritable parent directory (read-only mount or
     /// permission-denied path) must NOT silently produce an empty
     /// router — it must log loudly. Before this fix the
     /// `if let Ok(embedded) = ...` arm dropped the failure silently.
-    /// /// on Windows there's no `/dev/null` equivalent.
+    /// on Windows there's no `/dev/null` equivalent.
     /// Use a real file path (not a directory) — `create_dir_all`
     /// on a path whose parent is a regular file fails with
     /// `NotADirectory` on Linux and `AccessDenied`/`AlreadyExists`

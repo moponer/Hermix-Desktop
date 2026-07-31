@@ -21,7 +21,7 @@ use tokio::time::Instant;
 // ---------------------------------------------------------------------------
 
 /// Events that flow through the stream pipeline.
-/// /// Maps to the Python sentinels `_DONE`, `_NEW_SEGMENT`, `_COMMENTARY`, and
+/// Maps to the Python sentinels `_DONE`, `_NEW_SEGMENT`, `_COMMENTARY`, and
 /// plain string deltas.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamSegmentEvent {
@@ -231,7 +231,7 @@ impl StreamManager {
     }
 
     /// Update a streaming session with new content.
-    /// /// Returns `true` if the content should be flushed (edited on platform)
+    /// Returns `true` if the content should be flushed (edited on platform)
     /// based on the buffer threshold or edit interval.
     pub async fn update_stream(&self, stream_id: &str, new_content: &str) -> Option<bool> {
         let mut streams = self.streams.write().await;
@@ -258,7 +258,7 @@ impl StreamManager {
     }
 
     /// Mark a streaming session as finished. Returns the final content.
-    /// /// Removes the stream handle from the manager.
+    /// Removes the stream handle from the manager.
     pub async fn finish_stream(&self, stream_id: &str) -> Option<String> {
         let mut streams = self.streams.write().await;
         streams.remove(stream_id).map(|h| h.content)
@@ -324,10 +324,10 @@ impl StreamManager {
 
 /// Single-stream lifecycle manager — the Rust analogue of
 /// `GatewayStreamConsumer` in Python.
-/// /// Accumulates deltas, enforces rate-limited edit intervals, handles
+/// Accumulates deltas, enforces rate-limited edit intervals, handles
 /// flood-control backoff, cursor animation, segment breaks (tool boundaries),
 /// and fallback delivery when progressive edits stop working.
-/// /// This struct is *transport-agnostic*: it decides **what** to display and
+/// This struct is *transport-agnostic*: it decides **what** to display and
 /// **when** to flush, but the actual send/edit calls remain the caller's
 /// responsibility (via the returned decisions from `should_flush`,
 /// `get_display_text`, `needs_new_message`, etc.).
@@ -447,7 +447,7 @@ impl StreamConsumer {
     // -- Flush decision -----------------------------------------------------
 
     /// Should the caller flush an edit right now?
-    /// /// Returns `true` when enough time has elapsed since the last edit *or*
+    /// Returns `true` when enough time has elapsed since the last edit *or*
     /// the buffer has grown past the threshold.
     pub fn should_flush(&self) -> bool {
         if self.accumulated.is_empty() {
@@ -520,11 +520,11 @@ impl StreamConsumer {
     }
 
     /// Record a failed edit.
-    /// /// When `is_flood` is true, uses adaptive backoff: doubles the edit
+    /// When `is_flood` is true, uses adaptive backoff: doubles the edit
     /// interval and increments the flood-strike counter.  After
     /// `max_flood_strikes` consecutive flood failures, permanently disables
     /// progressive edits and enters fallback mode.
-    /// /// Non-flood failures immediately enter fallback mode.
+    /// Non-flood failures immediately enter fallback mode.
     pub fn mark_edit_failed(&mut self, is_flood: bool) {
         if is_flood {
             self.flood_strikes += 1;

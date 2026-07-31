@@ -1,4 +1,4 @@
-//! P4-T2 — tool error demotion hints.
+//! — tool error demotion hints.
 //!
 //! When the same tool errored 2+ times in a session, the agent loop
 //! should know — but not as a hard ban. We expose the failed tools

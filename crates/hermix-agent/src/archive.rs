@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// One message that has been archived to disk.
-/// /// Returned to the caller so the frontend can render a "see archived
+/// Returned to the caller so the frontend can render a "see archived
 /// context" affordance and so the agent loop can stuff the list into
 /// a follow-up system-prompt block.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,7 +85,7 @@ fn make_node_id(timestamp: &DateTime<Local>, idx: usize, content: &str) -> Strin
 }
 
 /// Pick the *middle* slice of `messages` that should be archived.
-/// /// Rules:
+/// Rules:
 /// - System messages at the head (if any) stay in `ctx`.
 /// - The last two messages (most recent user turn + assistant reply)
 /// stay in `ctx` so the LLM still has the immediate context.
@@ -103,7 +103,7 @@ fn pick_archivable(messages: &[Message]) -> std::ops::Range<usize> {
 }
 
 /// Render a single message into Markdown with a leading anchor.
-/// /// Format example:
+/// Format example:
 /// ```text
 /// ## Message 3
 /// <!-- node_id: a3b9c1f0 -->
@@ -149,7 +149,7 @@ fn archive_dir_for(hermix_home: &Path, now: &DateTime<Local>) -> PathBuf {
 }
 
 /// Per-session index file path: `<hermix_home>/sessions/<sid>/archive-index.jsonl`.
-/// /// The directory layout deliberately matches the existing markdown
+/// The directory layout deliberately matches the existing markdown
 /// session log (`<hermix_home>/sessions/<sid>/*.md`) so the user can
 /// `ls sessions/<sid>/` and find both the readable log and the
 /// machine-readable archive index in one place. The index is a
@@ -216,7 +216,7 @@ fn append_session_index(
 /// Read all archived refs for a session from its index file. Returns
 /// an empty `Vec` when the session has never been archived (the
 /// common case for short sessions).
-/// /// Used by the hermix-server `GET /v1/sessions/{id}/archive-refs`
+/// Used by the hermix-server `GET /v1/sessions/{id}/archive-refs`
 /// endpoint. Malformed lines are skipped (best-effort) — a single
 /// corrupt line should not take the whole UI down.
 pub fn read_session_index(
@@ -249,10 +249,10 @@ pub fn read_session_index(
 
 /// Write the section to disk and return a [`ArchiveRef`] per archived
 /// message.
-/// /// On success the returned refs always carry `file_path` and
+/// On success the returned refs always carry `file_path` and
 /// `node_id`; `line_range` is filled in by re-scanning the file we
 /// just wrote so the frontend can jump to a precise line.
-/// /// `session_id` is optional — when `Some`, refs are also appended to
+/// `session_id` is optional — when `Some`, refs are also appended to
 /// `<hermix_home>/sessions/<sid>/archive-index.jsonl` so the UI can
 /// list them later without re-scanning every archive file. When
 /// `None`, the archive file is still written but no index is kept
@@ -339,14 +339,14 @@ pub fn archive_context_section(
 }
 
 /// Render the list of refs as a Markdown block the LLM can quote.
-/// /// Output example:
+/// Output example:
 /// ```text
 /// ## Archived context
 /// 12 messages totalling 4 567 chars have been archived to disk for
 /// this session. To inspect a specific turn, reference one of the
 /// following anchors (anchors resolve when this Markdown is rendered
 /// alongside the archive file):
-/// /// - node:`a3b9c1f0` — user (321 chars) — `<archive_dir>/<file>.md#L42`
+/// - node:`a3b9c1f0` — user (321 chars) — `<archive_dir>/<file>.md#L42`
 /// - node:`5d4e2a87` — assistant (812 chars) — `<archive_dir>/<file>.md#L48`
 /// ...
 /// ```

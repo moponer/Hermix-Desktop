@@ -90,12 +90,12 @@ pub async fn toggle_skill(
 }
 
 /// GET /api/tools/toolsets
-/// /// Returns the **toolset categories** actually registered in the
+/// Returns the **toolset categories** actually registered in the
 /// in-process `ToolRegistry` (e.g. `web`, `terminal`, `file`,
 /// `memory`, `browser`, ...), not individual tool definitions —
 /// the previous implementation conflated the two and the UI
 /// displayed one entry per tool. For each category we attach:
-/// /// * `tools` — the list of tool names belonging to it
+/// * `tools` — the list of tool names belonging to it
 /// (filtered by `e.toolset == category`),
 /// * `enabled` — the persisted + runtime current state (we read
 /// the per-tool `is_enabled` flag and AND-reduce across the
@@ -242,7 +242,7 @@ pub fn load_toolset_state_for_home(hermix_home: &Path) -> EnabledToolsetState {
 /// show the user's saved preferences on the *Settings* tab but
 /// the LLM would see the default (everything-on) state until the
 /// user re-toggled every toolset.
-/// /// Toolset names not present in the persisted file are flipped
+/// Toolset names not present in the persisted file are flipped
 /// to `is_enabled=false` so a *new* toolset added in a later
 /// binary version starts out off (acceptable — the user has not
 /// seen it in the UI yet, and toggling it on costs one click).
@@ -351,7 +351,7 @@ fn canonical_enabled_set(toggle: &ToolsetToggle) -> HashSet<String> {
 }
 
 /// PUT /api/tools/toolsets/enabled
-/// /// Apply the user's toolset enable/disable choices to the
+/// Apply the user's toolset enable/disable choices to the
 /// in-process `ToolRegistry` *and* persist them to
 /// `enabled_toolsets.json`. Idempotent: re-sending the same
 /// payload is a no-op. Unknown toolset names (typos, removed
@@ -427,7 +427,7 @@ pub async fn set_enabled_toolsets(
 /// the canonical enabled list (sorted, with the floor folded in)
 /// that the caller should both report to the UI and persist to
 /// `enabled_toolsets.json`.
-/// /// Why one helper, not two? The floor re-assertion is part of the
+/// Why one helper, not two? The floor re-assertion is part of the
 /// toggle contract: a user-facing toggle of `terminal` to "off"
 /// is overridden by the floor, and that override has to be
 /// reflected in **both** the in-process state *and* the persisted
@@ -435,7 +435,7 @@ pub async fn set_enabled_toolsets(
 /// path silently drop the floor (P1.7 bug) — the floor was
 /// applied at startup but not at toggle time, and the toggle
 /// path did not see a reason to consult the floor.
-/// /// Splitting out a helper also makes the toggle logic testable
+/// Splitting out a helper also makes the toggle logic testable
 /// without spinning up the full `HttpServerState` (which the
 /// test module in this file already does for the seed path).
 fn apply_toggle_with_floor(
@@ -581,7 +581,7 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
 
 /// Materialise the bundled builtin skills into `skills_dir`. Returns the
 /// number of files actually written (i.e. fresh installs on first run).
-/// /// Idempotent: a SKILL.md that already exists is left alone so user edits
+/// Idempotent: a SKILL.md that already exists is left alone so user edits
 /// survive. To re-seed a specific skill, the user must delete its
 /// `<category>/<name>/SKILL.md` file first.
 pub fn seed_builtin_skills(skills_dir: &Path) -> std::io::Result<usize> {
@@ -740,7 +740,7 @@ mod tests {
             _content: &str,
             _category: Option<&str>,
         ) -> Result<hermix_core::Skill, hermix_core::AgentError> {
-            // (P1-3 / STABILITY-PLAN §2.3): return a structured error
+            //( / ): return a structured error
             // instead of unreachable!() so a routing mistake degrades
             // gracefully instead of panicking the dashboard.
             Err(hermix_core::AgentError::ToolExecution(

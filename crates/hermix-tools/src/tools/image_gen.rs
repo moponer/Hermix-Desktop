@@ -129,7 +129,7 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// P1.2 register shim — migrated from register_builtins.rs (2026-06-30)
+//P1.2 register shim — migrated from register_builtins.rs
 // ---------------------------------------------------------------------------
 
 use crate::ToolRegistry;

@@ -1,6 +1,6 @@
 //! Tool schema router — selectively expose tools to the LLM.
 //!
-//! 目标(参考 `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §3 H1,§五 Phase 7):
+//! 目标(参考 `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §3 H1,§五 ):
 //!
 //! > **30+ 工具的"全量注入"问题**:每次 turn 把所有 tool schema 拼进 system prompt,
 //! > 一个 schema 约 150-200 token,30+ 就是 4500-6000 token/turn,白白烧光上下文窗口和钱。
@@ -53,10 +53,10 @@ pub struct TurnContext {
     pub recent_messages: Vec<Message>,
     /// 当前激活的 toolset 名列表(由前端 Settings 决定)
     pub active_toolsets: Vec<String>,
-    /// 最多返回多少个 tool schema(默认 5,Phase 7 §验收 给定)
+    /// 最多返回多少个 tool schema(默认 5, §验收 给定)
     pub max_tools: usize,
     /// L1 Domain Mode 优先工具列表。
-    /// /// 来自 `DomainPreset::priority_tools`，
+    /// 来自 `DomainPreset::priority_tools`，
     /// 在路由打分后给这些工具加分(+5.0)。
     /// 空列表 = 无优先工具(默认)。
     pub priority_tools: Vec<String>,
@@ -121,7 +121,7 @@ pub struct RoutedSchema {
 
 pub trait ToolSchemaRouter: Send + Sync {
     /// Route a set of candidate tool schemas down to a top-N list.
-    /// /// Implementations must:
+    /// Implementations must:
     /// 1. Return at most `ctx.max_tools` items.
     /// 2. Return *no more* than the input candidate set (subset).
     /// 3. Preserve order is not required, but results should be sorted by score desc.
@@ -371,7 +371,7 @@ impl VectorRouter {
     }
 
     /// L1.4: Build a vector router from an async [`EmbeddingProvider`].
-    /// /// The provider's `dimension()` is recorded at construction so
+    /// The provider's `dimension()` is recorded at construction so
     /// `index_tool` can verify each tool embedding has the right shape
     /// (mismatched dims silently score 0 — they would otherwise poison
     /// the cosine calculation). The closure does an **async** `embed`

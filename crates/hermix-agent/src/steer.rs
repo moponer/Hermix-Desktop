@@ -36,7 +36,7 @@ fn append_user_guidance_to_text(base: &str, guidance: &str) -> String {
 }
 
 /// Apply pending steer guidance to the last `MessageRole::Tool` message in `messages`.
-/// /// Returns `true` when a tool message was found and mutated.
+/// Returns `true` when a tool message was found and mutated.
 pub fn apply_pending_steer_to_last_tool_message(messages: &mut [Message], guidance: &str) -> bool {
     let Some(idx) = messages.iter().rposition(|m| m.role == MessageRole::Tool) else {
         return false;
@@ -104,7 +104,7 @@ pub fn post_tool_apply_pending_steer(
 }
 
 /// Queue mid-run user guidance (Python `AIAgent.steer`).
-/// /// Returns `false` when the text is empty/whitespace-only.
+/// Returns `false` when the text is empty/whitespace-only.
 pub fn steer(pending_steer: &Mutex<Option<String>>, text: &str) -> bool {
     let Some(next) = normalize_accepted_steer_text(text) else {
         return false;

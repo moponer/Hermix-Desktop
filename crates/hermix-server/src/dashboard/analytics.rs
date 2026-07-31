@@ -25,8 +25,8 @@ fn default_days() -> u32 {
 }
 
 /// GET /api/analytics/usage
-/// /// Returns real aggregates from `token_usage` + `messages.tool_calls`.
-/// Errors are NO LONGER swallowed into an all-zero 200 (Phase 1): a
+/// Returns real aggregates from `token_usage` + `messages.tool_calls`.
+/// Errors are NO LONGER swallowed into an all-zero 200 : a
 /// failed aggregation returns `500` with a structured
 /// `AnalyticsErrorResponse` so the frontend can show the real cause.
 pub async fn get_usage(
@@ -48,7 +48,7 @@ pub async fn get_usage(
 
     let config = &state.config;
 
-    // Per-model estimated cache hit rate (Phase 5): only when the
+    //Per-model estimated cache hit rate : only when the
     // provider reports 0 cache reads but is known to support caching.
     let by_model: Vec<AnalyticsModelEntry> = agg
         .by_model
@@ -117,7 +117,7 @@ pub async fn get_usage(
         })
         .collect();
 
-    // Global estimated cache hit rate (Phase 5): used by the totals card
+    //Global estimated cache hit rate : used by the totals card
     // when the real cache_read total is 0.
     let totals_est = if agg.total_cache_read_tokens > 0 {
         None
@@ -141,13 +141,13 @@ pub async fn get_usage(
             total_archived_turns: agg.total_archived_turns,
             estimated_cache_hit_rate: totals_est,
         },
-        // Phase 4: real skill usage, no longer hardcoded to zeros.
+        //real skill usage, no longer hardcoded to zeros.
         skills: build_skills(&agg.skills),
         by_tool,
     }))
 }
 
-/// Build the skills response from the real aggregate (Phase 4).
+/// Build the skills response from the real aggregate .
 fn build_skills(skills: &SkillUsageAggregate) -> AnalyticsSkillsResponse {
     let total_activity: u64 = skills
         .entries
@@ -189,7 +189,7 @@ fn build_skills(skills: &SkillUsageAggregate) -> AnalyticsSkillsResponse {
 }
 
 /// GET /api/analytics/debug
-/// /// Phase 2: one-shot diagnostic of the stats DB. Surfaces the DB path,
+/// one-shot diagnostic of the stats DB. Surfaces the DB path,
 /// per-table existence/row-count/sample, and the applied migrations so
 /// a user can pinpoint where the pipeline is broken without opening
 /// SQLite by hand.

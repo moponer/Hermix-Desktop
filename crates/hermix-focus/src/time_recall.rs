@@ -40,7 +40,7 @@ pub enum TimeExpression {
     JustNow,
     HoursAgo(i64),
     DaysAgo(i64),
-    // Phase 18 (P0-4): forward-tense 时间词（明天/下周/N 天后）。
+    //: forward-tense 时间词（明天/下周/N 天后）。
     // 默认窗口为 [now, now + N days]，recall 在该时间范围内查找
     // 未来事件。当前没有未来数据，所以这类 query 通常返回空集——
     // 但语义正确，当未来 reminder / plan 入库后会自动命中。
@@ -420,7 +420,7 @@ mod tests {
         assert!(extract_time_window("").is_none());
     }
 
-    // ---- Phase 18 (P0-4): forward-tense 时间词 ----
+    //: forward-tense 时间词 ----
 
     #[test]
     fn chinese_tomorrow() {

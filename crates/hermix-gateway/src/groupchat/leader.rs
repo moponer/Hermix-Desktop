@@ -3,7 +3,7 @@ use super::persistence::*;
 
 /// Result of leader's secondary decision: should we publish a
 /// room-wide announcement, and if so what should it say?
-/// /// Returned by [`LeaderOrchestrator::parse_announcement_decision`]
+/// Returned by [`LeaderOrchestrator::parse_announcement_decision`]
 /// after a short follow-up LLM call in `send_message`. The decision
 /// is fail-safe: any parse error or unexpected shape resolves to
 /// `should_announce = false` so the main dispatch flow is never
@@ -21,7 +21,7 @@ impl Default for AnnouncementDecision {
 }
 
 /// Leader (总管) orchestrator — the built-in decision-making agent.
-/// /// The leader has a fixed behavior pattern:
+/// The leader has a fixed behavior pattern:
 /// 1. Receive user task → analyze goals
 /// 2. Delegate to specialized agents for discussion
 /// 3. Collect suggestions → aggregate into feasible plan
@@ -108,7 +108,7 @@ impl LeaderOrchestrator {
 
     /// Build the short decision prompt that asks the leader whether to
     /// publish a room-wide announcement.
-    /// /// Kept separate from `build_leader_prompt` because the decision
+    /// Kept separate from `build_leader_prompt` because the decision
     /// surface is narrow (one yes/no + one text) and we want a tight,
     /// short response that won't be confused with the main analysis.
     /// The prompt instructs the model to emit *only* a JSON object —
@@ -159,7 +159,7 @@ impl LeaderOrchestrator {
     /// - leading/trailing prose (uses first `{` to last `}`)
     /// - missing/null text when `should_announce` is false
     /// - whitespace-padded text
-    /// /// Returns `should_announce: false` on any parse error or when
+    /// Returns `should_announce: false` on any parse error or when
     /// the response is empty. The whole point is that the main
     /// dispatch flow MUST keep working even if this side-channel
     /// gives garbage.
@@ -200,7 +200,7 @@ impl LeaderOrchestrator {
         }
     }
 
-    /// Parse announcement decision from the leader's main reply (M3 — merged).
+    /// Parse announcement decision from the leader's main reply ( — merged).
     /// Returns `Some(announcement_text)` if the reply contains `---ANNOUNCE---`,
     /// otherwise `None`.
     pub fn parse_announcement_from_reply(reply: &str) -> Option<String> {
@@ -216,12 +216,12 @@ impl LeaderOrchestrator {
     }
 
     /// Parse the leader's structured decision from its JSON reply.
-    /// /// This is the **primary** path after the 2026-07 refactor — the leader
+    /// This is the **primary** path after the 2026-07 refactor — the leader
     /// is asked to emit a `LeaderDecision` JSON (see
     /// [`super::agent_contract::build_leader_decision_prompt`]). On success
     /// the caller gets analysis + subtasks + announcement + handoff in one
     /// shot, eliminating the fragile regex-based `parse_task_plan`.
-    /// /// On parse failure the caller should fall back to [`parse_task_plan`]
+    /// On parse failure the caller should fall back to [`parse_task_plan`]
     /// (legacy) and surface a `SoftError` so the user knows the structured
     /// path failed.
     pub fn parse_decision(raw: &str) -> Result<LeaderDecision, String> {
@@ -230,7 +230,7 @@ impl LeaderOrchestrator {
 
     /// Convert a parsed `LeaderDecision` into the legacy `TaskPlan` shape so
     /// the existing `runtime.rs` dispatch path can consume it without changes.
-    /// /// This adapter bridges the new structured output to the old scheduler,
+    /// This adapter bridges the new structured output to the old scheduler,
     /// letting us roll out the structured prompt incrementally.
     pub fn decision_to_task_plan(decision: &LeaderDecision) -> TaskPlan {
         // Build a map from subtask id → index so we can resolve
@@ -263,7 +263,7 @@ impl LeaderOrchestrator {
                             // Self-referential dependency is ignored.
                             Some(idx) if idx != i => Some(idx),
                             Some(_) => None,
-                            // M6: a reference to an id that isn't a real
+                            //a reference to an id that isn't a real
                             // subtask used to be silently dropped by
                             // `filter_map`. Log it so the dependency graph
                             // isn't silently corrupted.

@@ -86,7 +86,7 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub compaction: CompactionConfig,
 
-    /// P0-1 (Frontend Audit 2026-07-13): sub-agent / delegation
+    /// sub-agent / delegation
     /// tuning surfaced by the desktop Settings → Advanced tab.
     /// All fields optional; old config.yaml without this block
     /// uses the agent's hardcoded defaults.
@@ -145,7 +145,7 @@ pub struct GatewayConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_selector: Option<ModelSelectorConfig>,
 
-    /// P6 (2026-07-20): declarative permission profile. The agent
+    /// P6 : declarative permission profile. The agent
     /// gates resource-bearing tool calls (file/terminal) against this
     /// scope — anything outside triggers an approval prompt instead
     /// of silently hitting OS `access denied`. The profile is
@@ -295,7 +295,7 @@ pub struct AgentLoopBehaviorConfig {
     /// When true (default), spawn the extra LLM pass for memory/skill review — Python has no master off-switch.
     #[serde(default = "default_agent_background_review_enabled")]
     pub background_review_enabled: bool,
-    /// P0-1: master off-switch for the auto-skill learning loop.
+    /// master off-switch for the auto-skill learning loop.
     /// When `true` (default), the background skill review may
     /// invoke `skill_manage(action='auto_extract_from_conversation')`
     /// to crystallize a learned workflow into a reusable skill.
@@ -339,10 +339,10 @@ impl Default for AgentLoopBehaviorConfig {
 // ---------------------------------------------------------------------------
 
 /// Compaction / context-pressure tuning knobs.
-/// /// **Backward compatibility**: every field uses `#[serde(default)]` so
+/// **Backward compatibility**: every field uses `#[serde(default)]` so
 /// existing `~/.hermix/config.yaml` files load unchanged. New fields can
 /// be added in any order without breaking deployments.
-/// /// Mirrors `hermix_agent::compression::CompressorConfig` (the runtime
+/// Mirrors `hermix_agent::compression::CompressorConfig` (the runtime
 /// single-source-of-truth), but is intentionally an independent struct so
 /// the hermix-config crate does not depend on hermix-agent. The agent
 /// loop bridges them via `CompressorConfig::from(compaction: CompactionConfig)`.
@@ -394,7 +394,7 @@ pub struct CompactionConfig {
     /// keeping a more capable model for chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_model: Option<String>,
-    /// P0-1 (Frontend Audit 2026-07-13): minimum token budget the
+    /// minimum token budget the
     /// LLM-compressor must produce. Mirrors
     /// `hermix_agent::compression::CompressorConfig::min_summary_tokens`
     /// so the desktop Settings → Advanced tab can tune it via the
@@ -405,7 +405,7 @@ pub struct CompactionConfig {
     /// hardcoded default" so existing deployments are unaffected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_summary_tokens: Option<u64>,
-    /// P0-1 (Frontend Audit 2026-07-13): maximum token budget the
+    /// maximum token budget the
     /// LLM-compressor is allowed to emit. Mirrors
     /// `hermix_agent::compression::CompressorConfig::summary_tokens_ceiling`.
     /// Backend default is `12_000`.
@@ -417,7 +417,7 @@ pub struct CompactionConfig {
 /// Sits at `advanced.sub_agent_*` / `advanced.delegation_*` in
 /// config.yaml. Defaults match `hermix_agent::agent_config::AgentConfig`
 /// so existing deployments without this block still behave identically.
-/// /// P0-1 (Frontend Audit 2026-07-13): exposed by the desktop
+/// exposed by the desktop
 /// Settings → Advanced tab. The values are forwarded to the live
 /// agent service via `agent_service.set_config`; the agent
 /// re-reads them on every turn.
@@ -591,7 +591,7 @@ pub struct ModelSelectorEntry {
 }
 
 /// Durable, backend-persisted mirror of the desktop model-selector UI state.
-/// /// See `GatewayConfig::model_selector` for why this exists: `localStorage`
+/// See `GatewayConfig::model_selector` for why this exists: `localStorage`
 /// is volatile, so the chat switcher can "forget" configured models after a
 /// restart. This lets `GET /api/model/list` serve the full enabled list as
 /// the authoritative source of truth.
@@ -705,7 +705,7 @@ pub struct TerminalConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
 
-    /// P1-5: target container name/id when `backend = docker`. The
+    /// target container name/id when `backend = docker`. The
     /// container must already be running — we deliberately don't
     /// auto-spawn one. Defaults to `hermix-sandbox`; override via
     /// `~/.hermix/config.yaml` to point at a user-managed dev
@@ -799,7 +799,7 @@ pub struct SkillsSettings {
     pub enabled: Vec<String>,
     #[serde(default)]
     pub disabled: Vec<String>,
-    /// P0-1: when true (default), tasks that complete ≥
+    /// when true (default), tasks that complete ≥
     /// `skill_creation_nudge_interval` iters prompt the LLM to
     /// auto-extract a reusable skill via
     /// `skill_manage(action='auto_extract_from_conversation')`.

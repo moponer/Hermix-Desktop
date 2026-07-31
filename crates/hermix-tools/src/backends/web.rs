@@ -17,12 +17,12 @@ use hermix_core::ToolError;
 // ---------------------------------------------------------------------------
 
 /// Returns `true` when `url`'s host matches at least one entry in `allowed`.
-/// /// Match rules (case-insensitive on both sides):
+/// Match rules (case-insensitive on both sides):
 /// - exact host equality (e.g. `"baidu.com"` matches `https://baidu.com/x`)
 /// - wildcard `*.suffix` matches `suffix` itself and any subdomain
 /// (e.g. `"*.baidu.com"` matches `www.baidu.com`, `tieba.baidu.com`, ...)
-/// /// Returns `false` for unparseable URLs or URLs without a host.
-/// /// This intentionally replaces the previous `url.contains(d)` substring
+/// Returns `false` for unparseable URLs or URLs without a host.
+/// This intentionally replaces the previous `url.contains(d)` substring
 /// match, which permitted trivially bypassing an allowlist with e.g.
 /// `https://evil.com/?redirect=https://baidu.com/x`.
 fn host_in_allowlist(url: &str, allowed: &[String]) -> bool {
@@ -53,7 +53,7 @@ fn host_in_allowlist(url: &str, allowed: &[String]) -> bool {
 const BAIDU_MAX_BYTES: usize = 1_048_576; // 1 MB
 
 /// A web search backend that scrapes the public Baidu HTML search endpoint.
-/// /// Baidu does not require authentication for the `GET /s?wd=...` HTML page.
+/// Baidu does not require authentication for the `GET /s?wd=...` HTML page.
 /// We parse the result list with a tolerant regex (Baidu does not expose a
 /// stable JSON API without a key).
 pub struct BaiduHtmlSearchBackend {

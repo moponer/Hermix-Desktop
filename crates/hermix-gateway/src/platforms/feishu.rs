@@ -315,7 +315,7 @@ impl FeishuAdapter {
     // -----------------------------------------------------------------------
 
     /// Verify an incoming event's token matches the configured verification token.
-    /// /// For v2 schema events the token lives in `header.token`; for v1 / URL
+    /// For v2 schema events the token lives in `header.token`; for v1 / URL
     /// verification callbacks it may be a top-level `token` field.
     pub fn verify_event(event: &FeishuEvent, verification_token: &str) -> bool {
         let token_from_header = event.header.as_ref().and_then(|h| h.token.as_deref());
@@ -508,7 +508,7 @@ impl FeishuAdapter {
     // -----------------------------------------------------------------------
 
     /// Send a rich text (post) message with a title and structured content blocks.
-    /// /// Each inner `Vec<PostElement>` represents one line/paragraph.
+    /// Each inner `Vec<PostElement>` represents one line/paragraph.
     pub async fn send_post(
         &self,
         chat_id: &str,
@@ -623,7 +623,7 @@ impl FeishuAdapter {
     // -----------------------------------------------------------------------
 
     /// Upload an image to Feishu and return the `image_key`.
-    /// /// Uses the `/im/v1/images` endpoint (distinct from file upload).
+    /// Uses the `/im/v1/images` endpoint (distinct from file upload).
     pub async fn upload_image(
         &self,
         image_bytes: Vec<u8>,
@@ -725,7 +725,7 @@ impl FeishuAdapter {
     // -----------------------------------------------------------------------
 
     /// Upload audio and send it as an audio message.
-    /// /// Feishu requires opus-encoded audio for the `audio` message type. The file
+    /// Feishu requires opus-encoded audio for the `audio` message type. The file
     /// is uploaded via `/im/v1/files` with `file_type=opus` then sent as `msg_type=audio`.
     pub async fn send_audio(
         &self,

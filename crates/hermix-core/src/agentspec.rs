@@ -1,4 +1,4 @@
-//! Shared agent-spec data model (Groupchat 未来④ — Agent 抽象统一, 2026-07-19).
+//! Shared agent-spec data model (Groupchat 未来④ — Agent 抽象统一, ).
 //!
 //! Pulls the openai-agents-python `Agent` dataclass vocabulary
 //! (`agent_id`, `display_name`, `instructions`, `tools`, `handoffs`,

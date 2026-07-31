@@ -1,6 +1,6 @@
 //! ACUI directive dispatch helpers used by `agent_loop`.
 //!
-//! Extracted from `agent_loop.rs` (P2.x, 2026-07-04) so the 10k-line
+//! Extracted from `agent_loop.rs` (P2.x, ) so the 10k-line
 //! `agent_loop.rs` can focus on the `impl AgentLoop` block. **No
 //! behavior change** — pure relocation.
 //!
@@ -22,7 +22,7 @@ use hermix_intelligence::{AlwaysInclude, KeywordRouter, ToolSchemaRouter};
 use crate::agent_helpers::AgentCallbacks;
 
 /// Fire an `AcuiDirective` through `AgentCallbacks::on_acui_directive`.
-/// /// This function never blocks and never returns an error — the ACUI
+/// This function never blocks and never returns an error — the ACUI
 /// pipeline is best-effort. A failure in the callback is logged and
 /// swallowed (the agent keeps running).
 pub fn emit_acui(callbacks: &AgentCallbacks, directive: AcuiDirective) {
@@ -64,7 +64,7 @@ pub fn emit_acui_hide(callbacks: &AgentCallbacks, id: impl Into<String>) {
 /// Build a default router (KeywordRouter + AlwaysInclude).
 /// Construct the canonical tool schema router (`KeywordRouter +
 /// AlwaysInclude`). The whitelist is the **union** of:
-/// /// 1. **System-level always-forward tools** (hardcoded): tool families
+/// 1. **System-level always-forward tools** (hardcoded): tool families
 /// the LLM must always see because `KeywordRouter`'s scoring on
 /// CJK-heavy or generic-language queries can score them ≈ 0. Without
 /// always-forwarding, the agent falls back to `terminal cd/ls` to
@@ -72,7 +72,7 @@ pub fn emit_acui_hide(callbacks: &AgentCallbacks, id: impl Into<String>) {
 /// the browser tools when the user asks "open the website". This
 /// list is intentionally not user-configurable — it's a safety /
 /// capability gate, not a routing preference.
-/// /// 2. **User-configurable `always_include` whitelist**: caller-supplied
+/// 2. **User-configurable `always_include` whitelist**: caller-supplied
 /// via `AgentLoop::always_include` (e.g. user adds `"delegate_task"`
 /// via `.with_always_include()`). Plumbed in previously
 /// the field existed but the router ignored it.
@@ -168,7 +168,7 @@ mod tests {
     /// inner router's `max_tools = 5` truncation by name drops the
     /// user-supplied entry — then `AlwaysInclude` re-adds it with
     /// `force_included = true`.
-    /// /// Pre-the `AgentLoop::always_include` field was
+    /// Pre-the `AgentLoop::always_include` field was
     /// never wired into `default_tool_router`, so this assertion
     /// would have failed for any non-system default entry.
     #[test]

@@ -20,7 +20,7 @@ pub mod test_state;
 pub use security::parse_allowed_ips;
 pub use security::PolicyGuardConfig;
 
-// Re-export orchestration event bus types (Phase 0 / P0-5)
+//Re-export orchestration event bus types
 pub use orchestration_bus::{
     OrchestrationEvent, OrchestrationEventBus, SharedOrchestrationBus,
 };
@@ -62,7 +62,7 @@ use hermix_transport::{
     WsClientMessage, WsEnvelope,
 };
 
-// T2-A (2026-06-20): Session search types live in `dashboard::types` (they
+//T2-A : Session search types live in `dashboard::types` (they
 // are dashboard-shaped and not part of the core transport). Will move them
 // to `hermix-transport` if the SPA ever needs them on /v1/.
 use crate::dashboard::types::{SessionSearchResponse, SessionSearchResult};
@@ -77,7 +77,7 @@ use tower_http::services::ServeDir;
 pub const HTTP_PLATFORM: &str = "http";
 
 /// Default timeout for pending tool-call approval requests.
-/// /// Mirrors the upstream `approvals.timeout: 60s` in the Hermes
+/// Mirrors the upstream `approvals.timeout: 60s` in the Hermes
 /// 7-layer defense model: if the WS client doesn't send an
 /// `ApprovalResponse` within this window, the request is
 /// auto-resolved to `false` (deny) and removed from the
@@ -85,7 +85,7 @@ pub const HTTP_PLATFORM: &str = "http";
 /// loop indefinitely, and it shifts the burden of stale
 /// requests to deny-by-default (fail-closed) -- which is the
 /// only safe direction for a destructive-tool approval.
-/// /// **bump:** raised from 60s → 300s. The 60s
+/// **bump:** raised from 60s → 300s. The 60s
 /// ceiling produced a user-facing race: a user who paused to
 /// read the risk level, then clicked "允许" at second 61, saw
 /// the card flip to "已允许" client-side, but the backend
@@ -96,11 +96,11 @@ pub const HTTP_PLATFORM: &str = "http";
 /// enough to read a command and make a decision, short
 /// enough that a stuck UI still resolves. The frontend
 /// shows a countdown so the user always knows the budget.
-/// /// lowered 300s → 30s after type-B recurrence
+/// lowered 300s → 30s after type-B recurrence
 /// showed that 5 minutes of "● ● ● 正在思考" felt permanent to
 /// Zero means **no auto-deny timeout** — the approval card stays
 /// open indefinitely until the user explicitly clicks 允许 or 拒绝.
-/// This is the user's explicit requirement (2026-07-25): "审批不该
+/// This is the user's explicit requirement : "审批不该
 /// 有超时，如果不审批默认就等待，不再继续往下". The agent loop
 /// blocks on the oneshot receiver until the user resolves it; the
 /// only other unblock paths are WS disconnect (→ `ChannelClosed`)
@@ -136,7 +136,7 @@ chrono::Utc::now().timestamp_millis()
 // ---------------------------------------------------------------------------
 
 /// Thread-safe registry for pending tool-call approval requests.
-/// /// When the agent needs user approval before executing a risky tool, it
+/// When the agent needs user approval before executing a risky tool, it
 /// creates a `oneshot::Sender<bool>` keyed by `(session_id, request_id)`.
 /// The client resolves the request via a [`WsClientMessage::ApprovalResponse`]
 /// message on the same WebSocket, which looks up and completes the channel.
@@ -193,7 +193,7 @@ impl ApprovalRegistry {
         // await point.
         {
             let mut sessions = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            // (P2-6 / STABILITY-PLAN §2.7): Reject duplicate request_id
+            //( / ): Reject duplicate request_id
             // instead of silently overwriting the existing pending sender.
             // Overwriting would cause the first receiver to get
             // ChannelClosed (deny by default), which is a silent failure.
@@ -255,7 +255,7 @@ impl ApprovalRegistry {
     /// resolved, `false` if the request had already been resolved (e.g. by a
     /// prior `resolve` call, or by the timeout task firing first) or was
     /// never registered.
-    /// /// The WS handler is the only caller — it maps the client-sent
+    /// The WS handler is the only caller — it maps the client-sent
     /// `ApprovalResponse { decision: bool }` into `DeniedByUser` /
     /// `Approved` here, keeping the enum construction server-side so the
     /// agent crate stays decoupled from the wire format.
@@ -541,7 +541,7 @@ mod approval_registry_tests {
 
     #[tokio::test]
     async fn default_timeout_constant_is_zero() {
-        // 2026-07-25: changed from 30s to ZERO (no auto-deny).
+        //changed from 30s to ZERO (no auto-deny).
         // The user explicitly requested: "审批不该有超时，如果不审批
         // 默认就等待，不再继续往下". The approval card stays open
         // indefinitely until the user explicitly resolves it.
@@ -609,11 +609,11 @@ mod approval_registry_tests {
         assert!(!reg.is_pending("never-session", "req-1"));
     }
 
-    // -- P2-6: duplicate request_id rejection ----------------------
+    //duplicate request_id rejection ----------------------
 
     #[tokio::test]
     async fn duplicate_request_id_is_rejected_not_overwritten() {
-        // (P2-6 / STABILITY-PLAN §2.7): A duplicate request_id must
+        //( / ): A duplicate request_id must
         // NOT overwrite the existing pending sender. The second call
         // returns a pre-resolved DeniedByUser receiver so the LLM
         // sees an explicit denial and can retry with a new id.
@@ -1118,12 +1118,12 @@ pub struct HttpServerState {
     /// stale task, free the lock, and let the new send take over —
     /// instead of silently dropping the retry as a "duplicate".
     pub active_handles: Arc<std::sync::Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>>,
-    /// Phase 14 / H3 — agent "consciousness stream" tracker. The
+    /// H3 — agent "consciousness stream" tracker. The
     /// desktop UI subscribes to this over WebSocket and renders the
     /// samples as a full-screen ECG visualization. Cheap to clone
     /// (single `Arc` over an inner mutex-protected ring buffer).
     pub consciousness_tracker: hermix_agent::ConsciousnessTracker,
-    /// M2: TickLoop lifecycle manager. Default ON at startup; can be
+    /// TickLoop lifecycle manager. Default ON at startup; can be
     /// toggled via `POST /api/v1/tickloop`.
     pub tickloop_manager: hermix_runtime::TickLoopManager,
     /// GroupChat manager for collaborative multi-agent chat rooms.
@@ -1135,7 +1135,7 @@ pub struct HttpServerState {
     /// MCP servers the user configured in the dashboard's "连接器" tab,
     /// registers their tools into the shared `tool_registry`, and
     /// routes `tools/call` JSON-RPC back into the right server.
-    /// /// Wrapped in `Arc` so the per-tool handlers (which live in the
+    /// Wrapped in `Arc` so the per-tool handlers (which live in the
     /// `ToolRegistry`) can hold a `Weak` back-reference without
     /// forming a cycle. Earlier versions declared `McpManager` but
     /// never constructed it — the manager is wired here, once, at
@@ -1151,26 +1151,26 @@ pub struct HttpServerState {
     /// — currently `None` and filtered on the WS side via the
     /// conversation's session id, see `handle_ws_stream`).
     pub todo_event_tx: Option<tokio::sync::broadcast::Sender<hermix_tools::tools::todo::TodoChange>>,
-    /// Phase 0 / P0-5: Orchestration event bus. Cross-crate channel
+    /// Orchestration event bus. Cross-crate channel
     /// for Task lifecycle, automation triggers, and result delivery
     /// events. Tool backends and the agent loop hold a clone to emit;
     /// the WS handler subscribes to forward events to connected clients.
     pub orchestration_bus: OrchestrationEventBus,
-    /// (P2-1 / STABILITY-PLAN §2.8) Lightweight metric collector.
+    /// ( / ) Lightweight metric collector.
     /// In-memory accumulation with batch flush to SQLite. Used by
     /// the `/v1/metrics` dashboard endpoint.
     pub metrics: crate::metrics::MetricsCollector,
-    /// Phase 1 / P1-5: Task lifecycle service. Backed by
+    /// Task lifecycle service. Backed by
     /// [`hermix_task::TaskRepository`] pointing at the same
     /// `sessions.db` (铁律 D/WAL). `None` when the DB path can't be
     /// resolved (e.g. in test fixtures).
     pub task_service: Option<std::sync::Arc<hermix_task::TaskService>>,
-    /// Phase 5 / P5-5: Automation lifecycle service. Backed by
+    /// Automation lifecycle service. Backed by
     /// [`hermix_automation::AutomationRepository`] pointing at the same
     /// `sessions.db` (铁律 D/WAL). `None` when the DB path can't be
     /// resolved (e.g. in test fixtures).
     pub automation_service: Option<std::sync::Arc<hermix_automation::AutomationService>>,
-    /// Phase 6 / P6-5: Handle to the automation engine scheduler
+    /// Handle to the automation engine scheduler
     /// (from `hermix-automation` crate). Started automatically by
     /// `build_with_hermes_home`; triggers go through the unified
     /// `agent_service.send_message()` dispatch path (铁律 DD).
@@ -1188,7 +1188,7 @@ impl HttpServerState {
         self.clarify_broadcast.subscribe()
     }
 
-    /// Phase 4 / P4-1: Register the `task_create` / `task_update` /
+    /// Register the `task_create` / `task_update` /
     /// `task_list` tools into the tool registry, backed by the
     /// `TaskService`. No-op if `task_service` is `None`.
     pub fn register_task_tracker_tools(&self) {
@@ -1213,7 +1213,7 @@ impl HttpServerState {
     /// — the constructor takes care of building a `LocalAgentService`
     /// (or honouring a test-supplied [`AgentService`] mock) before
     /// exposing the state to the router.
-    /// /// Polish/automation rewrite endpoints live in
+    /// Polish/automation rewrite endpoints live in
     /// [`crate::dashboard::polish`] and call this to dispatch a single
     /// stateless LLM turn. They build an ad-hoc session id, send one
     /// user turn, then call `reset_session` so the parent conversation
@@ -1345,7 +1345,7 @@ impl HttpServerState {
             &hermix_home,
         );
 
-        // ★ P1-② (2026-07-05): load native plugins (.dll) from
+        //★ P1-② : load native plugins (.dll) from
         // $HERMIX_HOME/plugins/tools/ and /plugins/memory/.
         // Each directory must contain a `plugin.yaml` with a
         // `binary` field. Plugins export `hermix_plugin_init()`
@@ -1426,7 +1426,7 @@ impl HttpServerState {
             }
         }
 
-        // MCP integration (Phase 14 — wiring the previously-dead
+        //MCP integration ( — wiring the previously-dead
         // McpManager). We construct the manager against the SAME
         // tool_registry that the agent service already sees, then
         // iterate the user-configured servers in
@@ -1485,7 +1485,7 @@ impl HttpServerState {
             tracing::error!(error = %e, "session db ensure_db failed at startup");
         }
 
-        // Phase 14: a single consciousness tracker shared by the
+        //a single consciousness tracker shared by the
         // agent service (writer) and the dashboard endpoints
         // (readers via REST + WebSocket broadcast).
         let consciousness_tracker = hermix_agent::ConsciousnessTracker::new();
@@ -1602,7 +1602,7 @@ impl HttpServerState {
         };
         state.register_task_tracker_tools();
 
-        // Phase 6 / P6-5: Start the automation scheduler with the unified
+        // : Start the automation scheduler with the unified
         // dispatch path. The trigger callback calls `agent_service.send_message()`,
         // which internally uses `ToolRegistry::dispatch_async()` — the same
         // path as HTTP chat requests (铁律 DD).
@@ -1842,7 +1842,7 @@ impl HttpServerState {
     /// Build a [`GroupChatManager`] with SQLite-backed persistence
     /// (falling back to in-memory when the DB can't be opened) and
     /// optionally wire an `AgentService` as its dispatcher.
-    /// /// Always returns a manager — when every persistence backend fails,
+    /// Always returns a manager — when every persistence backend fails,
     /// a blank in-memory manager is the final fallback, so the front-end
     /// never sees 503 for groupchat operations.
     fn init_groupchat_manager(
@@ -2030,7 +2030,7 @@ pub fn router(state: HttpServerState) -> Router {
             "/v1/sessions/{session_id}/archive-refs",
             get(get_session_archive_refs),
         )
-        // T2-A (2026-06-20): moved from /api/sessions/* (dashboard router).
+        //T2-A : moved from /api/sessions/* (dashboard router).
         // The frontend now uses /v1/sessions/{id}/undo and .../restore and .../search.
         .route(
             "/v1/sessions/{session_id}/undo",
@@ -2073,7 +2073,7 @@ pub fn router(state: HttpServerState) -> Router {
         .route("/v1/tools", get(list_available_tools))
         // Dashboard management API
         .merge(dashboard::router())
-        // M2: TickLoop toggle
+        //TickLoop toggle
         .route("/v1/tickloop", get(get_tickloop_status).post(toggle_tickloop))
         // L3: Voice bridge — HTTP-friendly STT/TTS endpoints.
         // Both routes are stateless: the bridge builds a default
@@ -2083,7 +2083,7 @@ pub fn router(state: HttpServerState) -> Router {
         // STT/TTS providers.
         .route("/v1/voice/transcribe", post(voice_transcribe))
         .route("/v1/voice/synthesize", post(voice_synthesize))
-        // Phase 1 / P1-5: Orchestration Engine Task CRUD endpoints.
+        // Orchestration Engine Task CRUD endpoints.
         .route("/v1/tasks", get(list_tasks).post(create_task))
         .route(
             "/v1/tasks/{task_id}",
@@ -2091,9 +2091,9 @@ pub fn router(state: HttpServerState) -> Router {
         )
         .route("/v1/tasks/{task_id}/status", patch(patch_task_status))
         .route("/v1/tasks/{task_id}/children", get(list_task_children))
-// Phase 7 / P7-1: Product delivery — register deliverable artifacts.
+// Product delivery — register deliverable artifacts.
 .route("/v1/tasks/{task_id}/results", post(deliver_results))
-        // Phase 5 / P5-5: Automation Engine CRUD endpoints.
+        // Automation Engine CRUD endpoints.
         .route("/v1/automations", get(list_automations).post(create_automation))
         .route("/v1/automations/{id}", get(get_automation).delete(delete_automation))
         .route("/v1/automations/{id}/pause", post(pause_automation))
@@ -2174,7 +2174,7 @@ pub async fn run_server_with_state(
     addr: SocketAddr,
     state: HttpServerState,
 ) -> Result<(), AgentError> {
-    // M2: clone TickLoop manager before moving state into the router.
+    //clone TickLoop manager before moving state into the router.
     let tickloop_mgr = state.tickloop_manager.clone();
     let tracker = Arc::new(state.consciousness_tracker.clone());
 
@@ -2190,7 +2190,7 @@ pub async fn run_server_with_state(
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     let app = router(state).layer(axum::Extension(shutdown_tx));
-    // Phase 18 fix: bind via TcpSocket so we can set SO_REUSEADDR
+    //fix: bind via TcpSocket so we can set SO_REUSEADDR
     // before bind. Default TcpListener::bind does NOT set it on
     // Windows, which means a crashed/exited child leaving a LISTEN
     // socket on 3000 locks the port until the OS reaps the orphan
@@ -2400,7 +2400,7 @@ hermix_telemetry::prometheus_text(),
 )
 }
 
-/// (P2-1 / STABILITY-PLAN §2.8) JSON snapshot of local metrics
+/// ( / ) JSON snapshot of local metrics
 /// for dashboard display. Returns counters, latency percentiles,
 /// and buffer status.
 async fn metrics_snapshot(
@@ -2523,7 +2523,7 @@ async fn create_session(
             // welcome-state draft workspace only ever lived in
             // `hermix.session.<id>.workspace` localStorage and
             // vanished on restart — Sidebar bucketed the row under
-            // "未分组" (bug 2026-07-12). `req.project` is the legacy
+            //"未分组" (bug ). `req.project` is the legacy
             // field name carried over from the createSession wire
             // payload — the desktop client sends the welcome
             // draftWorkspace here on first message.
@@ -2753,7 +2753,7 @@ async fn delete_todo(
 }
 
 /// Open `sessions.db` for **read-only-ish** server-side access.
-/// /// Every server route that touches `sessions.db` MUST go through this
+/// Every server route that touches `sessions.db` MUST go through this
 /// helper rather than calling `Connection::open` directly. Without it,
 /// `journal_mode = WAL` only applies to the writer side
 /// (`session_persistence::open_with_wal`), and the server opener
@@ -2762,10 +2762,10 @@ async fn delete_todo(
 /// moment the writer was killed mid-transaction and left a stale
 /// `-shm` page table — which happens on every Tauri sidecar SIGKILL
 /// shutdown.
-/// /// Best-effort on PRAGMA failures: if WAL mode is rejected (read-only
+/// Best-effort on PRAGMA failures: if WAL mode is rejected (read-only
 /// file, exclusive lock held, etc.) we log a warning and continue —
 /// Detect the canonical SQLite "database disk image is malformed"
-/// diagnostic. Phase 21 extension (2026-07-07): the original WAL fix
+/// diagnostic. extension : the original WAL fix
 /// closed the `journal_mode` mismatch, but FTS5 virtual tables can
 /// also surface this error when their shadow pages are corrupted.
 /// A rebuild of `messages_fts` + `messages_fts_trigram` resolves it,
@@ -2781,7 +2781,7 @@ fn is_malformed_error(err: &rusqlite::Error) -> bool {
 /// safe to call from a retry path. If the rebuild itself fails the
 /// caller should give up and return 500 to the user rather than
 /// silently swallow.
-/// /// Both indexes are present from migration 2 onward (the schema
+/// Both indexes are present from migration 2 onward (the schema
 /// migration creates `messages_fts` for CJK bigram search and
 /// `messages_fts_trigram` for ASCII substring). On older DBs where
 /// trigram is missing, we treat the rebuild as best-effort and
@@ -2829,7 +2829,7 @@ async fn delete_session(
         message: e.to_string(),
     })?;
 
-    // Phase 21 extension (2026-07-07): try the cascade-delete; if it
+    //extension : try the cascade-delete; if it
     // fails with "database disk image is malformed" — typically a
     // corrupted `messages_fts` shadow page — rebuild both FTS5
     // indexes and retry once. If the rebuild itself fails or the
@@ -2856,7 +2856,7 @@ async fn delete_session(
     // resurrect — but leaving these behind is an orphaned-data leak.
     // Best-effort: log + ignore on failure; never fail the delete
     // because of leftover files (the DB row is already gone).
-    // (P0-3 / STABILITY-PLAN §2.2): typed as a non-capturing `fn`
+    //( / ): typed as a non-capturing `fn`
     // pointer so it can be `Copy`-captured into `spawn_blocking`
     // closures at both call sites without being consumed.
     let cleanup_session_dir: fn(&std::path::Path, &str) = |home, session_id| {
@@ -2933,7 +2933,7 @@ async fn delete_session(
     // sync with frames/facts or future searches corrupt)
     // Best-effort: any failure is logged + ignored; the session delete
     // itself must never fail because the memory purge hiccupped.
-    // (P0-3): same `fn`-pointer pattern as `cleanup_session_dir`.
+    //: same `fn`-pointer pattern as `cleanup_session_dir`.
     let purge_session_memory: fn(&std::path::Path, &str) = |hermix_home, session_id| {
         let mem_path =
             hermix_config::paths::data_dir_in(hermix_home)
@@ -3066,7 +3066,7 @@ async fn delete_session(
                 let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
                 // same success-path logging/cleanup as the
                 // happy path below (see cleanup_session_dir + tracing::info).
-                // (P0-3): side effects run fire-and-forget on the
+                //: side effects run fire-and-forget on the
                 // blocking pool so the HTTP response returns
                 // immediately and the async worker stays free.
                 let home = state.hermix_home.clone();
@@ -3129,7 +3129,7 @@ async fn delete_session(
     // surface the deletion in backend logs. Previously the
     // happy path was completely silent, so operators/owners had no way
     // to confirm a delete actually happened.
-    // (P0-3): side effects run fire-and-forget on the blocking pool
+    //: side effects run fire-and-forget on the blocking pool
     // — the DB row is already gone; fs cleanup + memory purge are
     // best-effort and must not block the HTTP response or the async
     // runtime worker (same class of fix as Bug #3).
@@ -3149,18 +3149,18 @@ async fn delete_session(
 
 /// `GET /v1/sessions/{id}/archive-refs` — return every [`ArchiveRef`]
 /// the agent loop has written for this session.
-/// /// backing storage is a JSONL file at
+/// backing storage is a JSONL file at
 /// `<hermix_home>/sessions/<sid>/archive-index.jsonl`. We don't go
 /// through `AgentService` / `AgentLoop::last_archive_refs()` because
 /// that field only holds the **most recent** archive run — for the
 /// chat banner we want the full history of archived nodes so the
 /// user can re-open any of them.
-/// /// Returns `200 { refs: [] }` when:
+/// Returns `200 { refs: [] }` when:
 /// - the session has never triggered a compression round (common),
 /// - the index file is missing / empty,
 /// - the session id is malformed (we still don't 404 because the
 /// state of "session exists but never archived" is a valid one).
-/// /// All errors during file IO are swallowed (logged) and surfaced as
+/// All errors during file IO are swallowed (logged) and surfaced as
 /// an empty list — the chat UI must never crash just because the
 /// archive sidecar had a bad write.
 async fn get_session_archive_refs(
@@ -3535,7 +3535,7 @@ async fn send_message(
     }))
 }
 
-// T2-A (2026-06-20): moved from `dashboard/sessions.rs`. The dashboard
+//T2-A : moved from `dashboard/sessions.rs`. The dashboard
 // router was deleted and these endpoints now share the same `/v1/sessions/*`
 // namespace as the rest of the session API.
 
@@ -3589,7 +3589,7 @@ async fn restore_session(
 /// The frontend sends the approval via HTTP when `ws.send()` returns true
 /// but the server doesn't receive the message (Tauri WebView2 WebSocket
 /// can lose buffered messages on connection reset).
-/// /// Request body: `{ "request_id": "...", "decision": "approved" | "denied" }`
+/// Request body: `{ "request_id": "...", "decision": "approved" | "denied" }`
 async fn approve_via_rest(
     State(state): State<HttpServerState>,
     Path(session_id): Path<String>,
@@ -3645,7 +3645,7 @@ async fn approve_via_rest(
         .session_persistence
         .resolve_approval_message(&session_id, request_id, decision_str);
 
-    // Record side effects for session/always choices. P6 (2026-07-20):
+    //Record side effects for session/always choices. P6 :
     // resource-scope approvals (P6 direction 1, `risk: "resource"`)
     // carry path/command-prefix grants — handled by the dedicated
     // resource-side-effect path that persists to GatewayConfig. The
@@ -3689,7 +3689,7 @@ async fn approve_via_rest(
 /// `GET /v1/sessions/{session_id}/lineage` — return the parent→ancestor
 /// chain (upward) and immediate children (downward) for session lineage
 /// browsing in the frontend tree view.
-/// /// Response: `{ ancestors: [SessionNode], children: [SessionNode], current: SessionNode }`
+/// Response: `{ ancestors: [SessionNode], children: [SessionNode], current: SessionNode }`
 async fn get_session_lineage(
     Path(session_id): Path<String>,
     State(state): State<HttpServerState>,
@@ -3987,14 +3987,14 @@ const DEDUP_WINDOW_SECS: u64 = 30;
 /// insert so the map stays bounded.
 const DEDUP_GC_SECS: u64 = 60;
 /// server-side WS heartbeat cadence.
-/// /// Background: long-running spawn_blocking tools (storage_analyzer
+/// Background: long-running spawn_blocking tools (storage_analyzer
 /// walking C:\, code review, plan generation) produce zero
 /// application frames for many seconds. WebView2 / OS / NAT
 /// middleboxes silently drop idle sockets (60–600s). The forward
 /// loop only detects this on the *next* `socket.send` failure —
 /// during a long tool there is no next send, so the WS dies
 /// invisibly.
-/// /// We emit a WS-protocol Ping every WS_HEARTBEAT_INTERVAL_SECS.
+/// We emit a WS-protocol Ping every WS_HEARTBEAT_INTERVAL_SECS.
 /// Pings are auto-ACKed by the browser at the tungstenite layer
 /// (no app message), cost ~2 bytes on the wire, and force every
 /// hop to refresh its idle timer. 15s is well below the shortest
@@ -4006,7 +4006,7 @@ const WS_HEARTBEAT_INTERVAL_SECS: u64 = 15;
 /// `Some(elapsed_secs)` if a duplicate was found within the dedup
 /// window (caller should reject), or `None` if the send is fresh
 /// (caller should proceed and the entry is recorded).
-/// /// extracted from `handle_ws_stream_send` so the dedup
+/// extracted from `handle_ws_stream_send` so the dedup
 /// contract is unit-testable without a WebSocket.
 fn check_recent_send(state: &HttpServerState, session_id: &str, text: &str) -> Option<u64> {
     let key = dedup_key(session_id, text);
@@ -4082,14 +4082,14 @@ async fn handle_ws_stream_send(
 ) {
     use tokio::sync::mpsc;
 
-    // (P1-10 / STABILITY-PLAN §2.8): replaced unconditional eprintln
+    //( / ): replaced unconditional eprintln
     // with tracing::debug! behind the "ws_stream_send" target. In
     // production (default log filter) this produces zero output; enable
     // with RUST_LOG=ws_stream_send=debug to diagnose WS send issues.
     //
-    // LESSON: WS 静默丢消息 — handle_ws_stream_send 永久诊断
-    //   根因：WebView2 known issue 导致 WS 静默丢消息，需要 entry 点
-    //   诊断日志来排查。原为 eprintln 永久输出，P1-10 改为可关闭的
+    //WS 静默丢消息 — handle_ws_stream_send 永久诊断
+    //WebView2 known issue 导致 WS 静默丢消息，需要 entry 点
+    //诊断日志来排查。原为 eprintln 永久输出， 改为可关闭的
     //   tracing::debug!。
     //   测试：handle_ws_stream_send_tests（隐式 — 通过 dedup 逻辑覆盖）
     tracing::debug!(
@@ -4276,7 +4276,7 @@ async fn handle_ws_stream_send(
         let todo_rid = request.request_id.clone();
         let mut todo_rx = todo_tx.subscribe();
         tokio::spawn(async move {
-            // P0-T1 (Frontend Audit 2026-07-13): per-change
+            //per-change
             // `originating_message_id` extracted from the change itself
             // (the `todo` tool stamps it from `set_active_message_id`
             // at the top of the turn) instead of a hardcoded `None`.
@@ -4630,7 +4630,7 @@ async fn handle_ws_stream_send(
     // `StreamEvent::Thinking` (for the collapsible "思考过程" block
     // in MessageBubble). Without this capture the parsed-out
     // `_think` text was discarded per the previous "think is internal
-    // scaffolding" product decision — but 用户 (2026-07-08) asked to
+    //scaffolding" product decision — but 用户 asked to
     // surface it as a foldable block, so we forward it.
     let tx_for_think = tx.clone();
     // One parser per WS stream — its state is meaningless across turn
@@ -5029,7 +5029,7 @@ async fn handle_ws_stream_send(
                             }
                         }
                         "memory_recall" => {
-                            // (Phase 19 A): the agent recalled
+                            //the agent recalled
                             // N related facts from memory this turn. We
                             // surface a small preview (top-3 keys + count)
                             // to the chat so the user can see "the agent
@@ -5185,17 +5185,17 @@ async fn handle_ws_stream_send(
         });
     }
 
-    // P2-4: Clone hermix_home + session_persistence for crash dump
+    //Clone hermix_home + session_persistence for crash dump
     // path inside the agent task's catch_unwind recovery.
     let hermix_home_clone = state.hermix_home.clone();
     let session_persistence_clone = state.session_persistence.clone();
 
-    // P1-2: Clone trace_id for the heartbeat arm before the spawn
+    //Clone trace_id for the heartbeat arm before the spawn
     // moves trace_id_owned into the agent task closure.
     let trace_id_heartbeat = trace_id_owned.clone();
     let agent_handle = tokio::spawn(async move {
         let agent_task_started = std::time::Instant::now();
-        // (P1-1 / STABILITY-PLAN §2.3): wrap the agent call in
+        //( / ): wrap the agent call in
         // catch_unwind so a panic in a tool handler or LLM provider
         // doesn't silently kill the WS connection. The panic is
         // converted to a structured Error event that the frontend
@@ -5224,10 +5224,10 @@ async fn handle_ws_stream_send(
                     panic_msg = %msg,
                     "agent task panicked — converted to error event for WS client"
                 );
-                // (P2-4 / STABILITY-PLAN §2.8): Write a crash dump for
+                //( / ): Write a crash dump for
                 // post-mortem diagnostics. Best-effort — failure to write
                 // the dump is logged inside write_crash_dump and does NOT
-                // block the error recovery path (STABILITY-PLAN §4 F10).
+                //block the error recovery path ( F10).
                 let recent_messages = session_persistence_clone
                     .load_session(&session_id_clone)
                     .unwrap_or_default();
@@ -5333,7 +5333,7 @@ async fn handle_ws_stream_send(
                     })
                     .await
                 {
-                    // (P0-1 defense): tx.send failure means
+                    //( defense): tx.send failure means
                     // the client's WS reader side dropped (the forward
                     // loop exited). Log a warning with diagnostics so we
                     // can determine: (a) how long the agent ran before
@@ -5517,7 +5517,7 @@ async fn handle_ws_stream_send(
                     session = %session_id,
                     "ws_stream: heartbeat ping"
                 );
-                // (P1-2): send BOTH a WS-protocol Ping and
+                //: send BOTH a WS-protocol Ping and
                 // an application-level Heartbeat text frame. The Ping
                 // refreshes middlebox/NAT idle timers and lets the
                 // server detect dead connections when the send fails.
@@ -5644,7 +5644,7 @@ async fn handle_ws_stream_send(
                                         );
                                     }
                                     // Record side effects for session/always choices. P6
-                                    // (2026-07-20): resource-scope approvals go
+                                    //: resource-scope approvals go
                                     // through the dedicated path that updates
                                     // GatewayConfig.permission_profile; the
                                     // command-based path remains as fallback for
@@ -5699,7 +5699,7 @@ async fn handle_ws_stream_send(
                                     }
                                 }
                                 WsClientMessage::Ping => {
-                                    // (P1-7): respond to client application-level
+                                    //: respond to client application-level
                                     // ping with Pong so the client can detect
                                     // half-open connections.
                                     let pong = WsEnvelope {
@@ -5788,7 +5788,7 @@ async fn ws_groupchat_upgrade(
 }
 
 /// Handle a group chat session over WebSocket.
-/// /// The client sends `{"type":"send","text":"..."}` and the server
+/// The client sends `{"type":"send","text":"..."}` and the server
 /// streams each agent's reply chunk by chunk. After receiving the
 /// initial message, the socket is moved into a background sender task
 /// and the handler returns — the frontend opens a **new** WS connection
@@ -6308,7 +6308,7 @@ fn room_event_to_stream(
 /// Translate a `TodoChange` (emitted by the `todo` tool) into a
 /// wire-level [`StreamEvent`] that the desktop `useStreamChat`
 /// hook already knows how to dispatch.
-/// /// every mutation becomes a `TodoItemUpserted`
+/// every mutation becomes a `TodoItemUpserted`
 /// so the front-end can apply upsert-by-id semantics. The
 /// `session_id` field on every event is the WS session that
 /// produced the change — desktop tabs already filter their todo
@@ -6707,7 +6707,7 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
                             // resolve — duplicate responses would
                             // otherwise re-grant the same path /
                             // re-add the same allowlist regex (P6 fix
-                            // 2026-07-20).
+                            //).
                             if matched
                                 && matches!(
                                     choice,
@@ -6715,7 +6715,7 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
                                         | hermix_transport::ApprovalChoice::Always
                                 )
                             {
-                                // P6 (2026-07-20): resource-scope path
+                                //P6 : resource-scope path
                                 // first, command-path as fallback for
                                 // legacy Danger-tier terminal approvals.
                                 record_resource_approval_side_effect(
@@ -6978,7 +6978,7 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
                             continue;
                         }
                         WsClientMessage::Ping => {
-                            // (P1-7): respond to client application-level
+                            //: respond to client application-level
                             // ping with Pong even when no stream is active.
                             let pong = WsEnvelope {
                                 version: 1,
@@ -7040,13 +7040,13 @@ async fn handle_ws_stream(socket: WebSocket, state: HttpServerState, session_id:
 /// resolved / evicted, `Err` on a DB error. Used by the
 /// 4-state `session` / `always` side-effect handlers below to
 /// know which command to add to the bypass / persistent list.
-/// /// P6 (2026-07-20): for resource-scope approvals (file/terminal
+/// P6 : for resource-scope approvals (file/terminal
 /// outside the declared permission profile), also extracts the
 /// `path` argument so the `Always` choice can persist the path to
 /// `config.yaml::permission_profile.granted_paths`. Returns `None`
 /// for both fields when the row doesn't exist or isn't a resource
 /// approval.
-/// /// IMPORTANT (2026-07-20): both call sites invoke this helper
+/// IMPORTANT : both call sites invoke this helper
 /// **after** `approval_registry.resolve()`, which removes the
 /// pending row. The earlier `is_pending` guard therefore always
 /// returned `false` and silently dropped every Session/Always
@@ -7061,7 +7061,7 @@ async fn lookup_pending_command(
     // Offload the synchronous SQLite read to a blocking thread so the approval
     // handler — which runs on the async executor that also serves every
     // WebSocket heartbeat — never stalls on disk I/O or a db write lock.
-    // (STABILITY-PLAN P0-3)
+    //
     let db_path = state.session_persistence.db_path().to_path_buf();
     let session_id = session_id.to_string();
     let request_id = request_id.to_string();
@@ -7103,13 +7103,13 @@ async fn lookup_pending_command(
     .map_err(|e| format!("lookup_pending_command join error: {e}"))?
 }
 
-/// P6 (2026-07-20): lookup variant for **resource-scope** approvals
+/// P6 : lookup variant for **resource-scope** approvals
 /// (P6 direction 1, `risk: "resource"`). Returns `(path, command)`
 /// extracted from the same persisted approval row. Either field may
 /// be `None` depending on what the original tool call used. Caller
 /// (typically `record_approval_side_effect_for_resource`) decides
 /// what to persist based on which fields are populated.
-/// /// IMPORTANT (2026-07-20): like [`lookup_pending_command`], this is
+/// IMPORTANT : like [`lookup_pending_command`], this is
 /// called after `approval_registry.resolve()`, so the previous
 /// `is_pending` guard would always short-circuit to `(None, None)`
 /// and silently discard every Session/Always grant. The persisted
@@ -7120,7 +7120,7 @@ async fn lookup_pending_resource(
     session_id: &str,
     request_id: &str,
 ) -> Result<(Option<String>, Option<String>), String> {
-    // Same offloading rationale as `lookup_pending_command` (P0-3).
+    //Same offloading rationale as `lookup_pending_command` .
     let db_path = state.session_persistence.db_path().to_path_buf();
     let session_id = session_id.to_string();
     let request_id = request_id.to_string();
@@ -7265,7 +7265,7 @@ fn record_approval_side_effect(
     }
 }
 
-/// P6 (2026-07-20): resource-scope side effect. Used when the
+/// P6 : resource-scope side effect. Used when the
 /// approval request carries `risk: "resource"` (P6 direction 1),
 /// meaning the user is authorising access to a specific path or
 /// command prefix the agent requested. `Always` persists the
@@ -7396,7 +7396,7 @@ fn redact_sensitive(input: &str) -> String {
 
 /// turn a raw `AgentError` from the agent loop into a
 /// user-facing `(code, message)` pair.
-/// /// Each classified category prepends a short actionable Chinese prefix
+/// Each classified category prepends a short actionable Chinese prefix
 /// (e.g. "AI 服务过载:") followed by the **original provider error
 /// message**, so the user can see what actually happened (which model,
 /// which provider, what the API returned) instead of a generic
@@ -7622,7 +7622,7 @@ mod voice_handler_tests {
     }
 }
 
-// M2: TickLoop API
+//TickLoop API
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -7700,12 +7700,12 @@ impl IntoResponse for HttpError {
 
 /// Resolve an LLM provider name and base URL for the runtime TickLoop SelfCheck
 /// connectivity probe.
-/// /// Priority:
+/// Priority:
 /// 1. `config.model`'s `provider` segment → look up that provider in `llm_providers`
 /// and return its `base_url` (if set) + provider name.
 /// 2. The first provider in `llm_providers` that has an `api_key` set → provider name,
 /// and its `base_url` (if set).
-/// /// Returns `Some((name, base_url_or_none))` so the runtime can infer a default URL
+/// Returns `Some((name, base_url_or_none))` so the runtime can infer a default URL
 /// even when `base_url` is not explicitly configured.
 pub(crate) fn extract_llm_probe_url(config: &GatewayConfig) -> Option<(String, Option<String>)> {
     // 1) Try the active model string ("provider:model")
@@ -7832,11 +7832,11 @@ mod probe_url_tests {
     }
 }
 
-/// Phase 18: SO_REUSEADDR regression test. Simulates the exact
+/// SO_REUSEADDR regression test. Simulates the exact
 /// "crashed child left a LISTEN socket on the same port" scenario
 /// that crashed hermix-desktop sidecar on Windows with
 /// `os error 10048 (WSAEADDRINUSE)`.
-/// /// We:
+/// We:
 /// 1. Bind a TCP listener on a random port with SO_REUSEADDR=on
 /// (mirroring the production TcpSocket::bind path in
 /// `run_server_with_state`).
@@ -7896,9 +7896,9 @@ mod reuseaddr_regression_tests {
     }
 }
 
-/// Phase 21 (2026-07-07): regression coverage for the
+/// regression coverage for the
 /// "database disk image is malformed" `delete_session` bug.
-/// /// Root cause: `delete_session` opened `sessions.db` in the legacy
+/// Root cause: `delete_session` opened `sessions.db` in the legacy
 /// `journal_mode = delete` (single-writer, blocking) default while
 /// the writer side ran in `journal_mode = WAL`. When the writer
 /// was killed mid-transaction (Tauri sidecar SIGKILL on shutdown,
@@ -7908,10 +7908,10 @@ mod reuseaddr_regression_tests {
 /// pre-checkpoint and a post-commit truncate, makes both processes
 /// speak the same journal format and keeps the on-disk file
 /// fully consistent.
-/// /// This test asserts (1) the delete-side PRAGMA matches the
+/// This test asserts (1) the delete-side PRAGMA matches the
 /// writer side, (2) the WAL is truncated after commit, and
 /// (3) the 404 path rolls back the cascade DELETEs.
-/// Phase 21 extension (2026-07-07): the WAL regression tests
+/// extension : the WAL regression tests
 /// above pin the journal_mode contract. This test pins the FTS5
 /// shadow-page corruption recovery path: pre-corrupt the FTS index
 /// by deleting shadow rows, then verify delete_session rebuilds
@@ -8218,7 +8218,7 @@ mod delete_session_wal_regression_tests {
 }
 
 // ===========================================================================
-// Phase 1 / P1-5: Orchestration Engine — Task CRUD HTTP handlers
+/// Orchestration Engine — Task CRUD HTTP handlers
 // ===========================================================================
 
 /// Request body for `POST /v1/tasks`.
@@ -8462,7 +8462,7 @@ async fn delete_task(
 }
 
 /// `GET /v1/tasks/{task_id}/children` — List child tasks of a parent.
-/// (Phase 4 / P4-2: supports multi-agent subtask trees)
+///
 async fn list_task_children(
     State(state): State<HttpServerState>,
     Path(task_id): Path<String>,
@@ -8482,7 +8482,7 @@ tracing::warn!("list_task_children error: {e}");
 }
 
 // ===========================================================================
-// Phase 7 / P7-1: Product Delivery — HTTP handlers
+/// Product Delivery — HTTP handlers
 // ===========================================================================
 
 /// Request body for `POST /v1/tasks/{task_id}/results`.
@@ -8497,8 +8497,8 @@ struct DeliverResultsRequest {
 
 /// `POST /v1/tasks/{task_id}/results` — Register deliverable artifacts
 /// for a Task.
-/// /// (Phase 7 / P7-1)
-/// /// This is the `present_files` equivalent endpoint. It:
+///
+/// This is the `present_files` equivalent endpoint. It:
 /// 1. Classifies each file path/URL by artifact type (html/image/report/video/file/directory)
 /// 2. Adds each as a `TaskResultRef` to the Task's `results` field
 /// 3. Emits a `ResultDelivered` event via the orchestration bus
@@ -8565,7 +8565,7 @@ async fn deliver_results(
 
 /// Classify a file path or URL into a `TaskArtifactType` based on its
 /// extension or scheme.
-/// /// - `.html` / `.htm` → `Html`
+/// - `.html` / `.htm` → `Html`
 /// - `.png` / `.jpg` / `.jpeg` / `.gif` / `.svg` / `.webp` → `Image`
 /// - `.pdf` / `.doc` / `.docx` / `.xls` / `.xlsx` / `.md` → `Report`
 /// - `.mp4` / `.avi` / `.mov` / `.webm` → `Video`
@@ -8604,7 +8604,7 @@ fn classify_artifact_type(path: &str) -> hermix_core::TaskArtifactType {
 }
 
 // ===========================================================================
-// Phase 5 / P5-5: Automation Engine — HTTP handlers
+/// Automation Engine — HTTP handlers
 // ===========================================================================
 
 /// Request body for `POST /v1/automations`.
@@ -8795,8 +8795,8 @@ async fn list_automation_runs(
 }
 
 /// `POST /v1/automations/{id}/trigger` — Manually trigger an automation.
-/// /// (Phase 6 / P6-5)
-/// /// Dispatches through the unified `agent_service.send_message()` path,
+///
+/// Dispatches through the unified `agent_service.send_message()` path,
 /// the same path used by HTTP chat requests and the scheduler's trigger
 /// callback (铁律 DD: HTTP 与自动化同路径).
 async fn trigger_automation_endpoint(

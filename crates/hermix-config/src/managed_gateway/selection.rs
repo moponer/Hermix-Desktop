@@ -25,7 +25,7 @@ pub fn env_var_enabled(name: &str) -> bool {
 }
 
 /// Best-effort Rust mirror of Python's subscription gate.
-/// /// Priority:
+/// Priority:
 /// 1. legacy `HERMES_ENABLE_NOUS_MANAGED_TOOLS` env flag (for back-compat/tests)
 /// 2. a readable Nous access token in env / `auth.json`
 pub fn managed_nous_tools_enabled() -> bool {
@@ -36,7 +36,7 @@ pub fn managed_nous_tools_enabled() -> bool {
 }
 
 /// Return true when `<section>.use_gateway` is enabled in `config.yaml`.
-/// /// Mirrors Python's `prefers_gateway(config_section)` helper. Unknown sections
+/// Mirrors Python's `prefers_gateway(config_section)` helper. Unknown sections
 /// and config read failures are treated as `false`.
 pub fn prefers_gateway(config_section: &str) -> bool {
     let Ok(cfg) = load_config(None) else {
@@ -124,8 +124,8 @@ pub struct ModalBackendState {
 }
 
 /// Direct vs managed Modal backend selection logic.
-/// /// Faithful port of Python's `resolve_modal_backend_state`. Semantics:
-/// /// * `Direct`  → direct-only (no managed fallback)
+/// Faithful port of Python's `resolve_modal_backend_state`. Semantics:
+/// * `Direct`  → direct-only (no managed fallback)
 /// * `Managed` → managed-only (no direct fallback)
 /// * `Auto`    → prefer managed (when feature flag on AND managed_ready),
 /// else direct (when has_direct), else `None`
@@ -180,7 +180,7 @@ pub fn resolve_modal_backend_state(
 // ---------------------------------------------------------------------------
 
 /// Mirror of Python's `has_direct_modal_credentials()`. True iff:
-/// /// * `MODAL_TOKEN_ID` AND `MODAL_TOKEN_SECRET` are both set, OR
+/// * `MODAL_TOKEN_ID` AND `MODAL_TOKEN_SECRET` are both set, OR
 /// * `~/.modal.toml` exists.
 pub fn has_direct_modal_credentials() -> bool {
     let id = std::env::var("MODAL_TOKEN_ID")

@@ -42,7 +42,7 @@ fn classify_http_status_error(status: reqwest::StatusCode, body: &str) -> McpErr
 // ---------------------------------------------------------------------------
 
 /// Transport trait for MCP communication.
-/// /// Implementations handle the low-level details of sending and receiving
+/// Implementations handle the low-level details of sending and receiving
 /// JSON-RPC messages over different transport mechanisms.
 #[async_trait]
 pub trait McpTransport: Send + Sync {
@@ -64,11 +64,11 @@ pub trait McpTransport: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Transport that communicates via stdin/stdout with a child process.
-/// /// Uses the MCP message framing protocol:
+/// Uses the MCP message framing protocol:
 /// - Each message is prefixed with a `Content-Length` header
 /// - The body is a UTF-8 encoded JSON string
 /// - Messages are separated by `\r\n\r\n` between header and body
-/// /// This is the standard transport for local MCP server processes.
+/// This is the standard transport for local MCP server processes.
 pub struct StdioTransport {
     /// The command to execute.
     command: String,
@@ -416,7 +416,7 @@ impl McpTransport for ServerStdioTransport {
 // ---------------------------------------------------------------------------
 
 /// Transport that communicates via HTTP with a remote MCP server.
-/// /// Uses HTTP POST for sending JSON-RPC messages and receives responses
+/// Uses HTTP POST for sending JSON-RPC messages and receives responses
 /// directly. For servers supporting SSE (Server-Sent Events), this
 /// transport can also handle streaming responses.
 pub struct HttpTransport {
@@ -557,12 +557,12 @@ impl McpTransport for HttpTransport {
 
 /// Transport that sends JSON-RPC requests via HTTP POST and receives
 /// responses through a Server-Sent Events (SSE) stream.
-/// /// This is the standard transport for remote MCP servers that support
+/// This is the standard transport for remote MCP servers that support
 /// the SSE protocol. The flow is:
 /// 1. Connect to the SSE endpoint to start receiving events
 /// 2. Send JSON-RPC requests via HTTP POST to the message endpoint
 /// 3. Receive JSON-RPC responses as SSE `message` events
-/// /// Falls back to reading the HTTP response body directly when the server
+/// Falls back to reading the HTTP response body directly when the server
 /// does not use SSE for the response.
 pub struct HttpSseTransport {
     /// The base URL of the MCP server.

@@ -1,7 +1,7 @@
 //! Automation trigger bridge — wires the `hermix-automation` scheduler
 //! into the server's unified dispatch path.
 //!
-//! (Phase 6 — P6-5)
+//!
 //!
 //! ## 铁律 DD: HTTP 与自动化同路径
 //!
@@ -51,12 +51,12 @@ impl AutomationSchedulerHandle {
 
 /// Start the automation scheduler with a trigger callback that dispatches
 /// through the unified `agent_service.send_message()` path.
-/// /// This wires together:
+/// This wires together:
 /// - `automation_service` — for querying due automations + recording runs
 /// - `agent_service` — for executing the automation prompt (unified dispatch)
 /// - `orchestration_bus` — for emitting `AutomationTriggered` events
 /// - `task_service` (optional) — for creating a Task per automation run
-/// /// Returns a handle that can be used to shut down the scheduler.
+/// Returns a handle that can be used to shut down the scheduler.
 pub fn start_automation_scheduler(
     automation_service: Arc<AutomationService>,
     agent_service: Arc<dyn AgentService>,
@@ -80,7 +80,7 @@ pub fn start_automation_scheduler(
 }
 
 /// Build the trigger callback that fires when an automation is due.
-/// /// The callback:
+/// The callback:
 /// 1. Records a run start in the `automation_runs` table
 /// 2. Spawns a tokio task to execute the automation prompt
 /// 3. The spawned task calls `agent_service.send_message()` (unified dispatch)
@@ -105,7 +105,7 @@ fn build_trigger_callback(
 }
 
 /// Execute a single automation run end-to-end.
-/// /// This is the core of the unified dispatch path: it calls
+/// This is the core of the unified dispatch path: it calls
 /// `agent_service.send_message()`, which internally runs the full
 /// `AgentLoop` with `ToolRegistry::dispatch_async()` — the same path
 /// as HTTP chat requests.
@@ -280,7 +280,7 @@ fn create_automation_task(
 
 /// Manually trigger an automation by ID. This is the server-side
 /// implementation for `POST /v1/automations/{id}/trigger`.
-/// /// It uses the same dispatch path as the scheduler — `agent_service.send_message()`.
+/// It uses the same dispatch path as the scheduler — `agent_service.send_message()`.
 pub async fn trigger_automation_manually(
     automation_id: &str,
     svc: &AutomationService,

@@ -30,9 +30,9 @@ use crate::ToolRegistry;
 // Registration
 // ---------------------------------------------------------------------------
 
-/// Register all browser tool handlers (P1.2 migration).
+/// Register all browser tool handlers.
 pub fn register(registry: &ToolRegistry, backend: Arc<dyn BrowserBackend>) {
-    // P1.8 (2026-07-02): the toolset tag is the *group* name `"browser"`,
+    // the toolset tag is the *group* name `"browser"`,
     // not the per-tool name. `essential::ESSENTIAL_TOOLSETS` and
     // `toolset_distributions::base_weights` both reference `"browser"`
     // as a single toolset; if each tool tagged itself with its own
@@ -216,8 +216,8 @@ pub trait BrowserBackend: Send + Sync {
     /// timeout. Default implementation falls back to polling via
     /// `Runtime.evaluate`; the CDP backend overrides to use
     /// `DOM.querySelectorAll` and CDP's built-in wait primitives.
-    /// /// `state`, `url_glob`, and `js_fn` extend the wait conditions
-    /// (Phase 1 deliverable, see `BrowserWaitForHandler::execute`).
+    /// `state`, `url_glob`, and `js_fn` extend the wait conditions
+    /// .
     /// Backends that don't understand a given condition should ignore
     /// it and fall back to the selector-only check.
     async fn wait_for(
@@ -238,7 +238,7 @@ pub trait BrowserBackend: Send + Sync {
     /// The default implementation just calls [`Self::snapshot`] for backends
     /// that don't support filtering; CDP-based backends override to produce
     /// a ref-token YAML view.
-    /// /// `compact = true` drops non-interactive ancestor branches, yielding
+    /// `compact = true` drops non-interactive ancestor branches, yielding
     /// a flat "form-only" view that uses ~50% fewer tokens on dense pages.
     async fn snapshot_with_options(
         &self,
@@ -280,20 +280,20 @@ pub trait BrowserBackend: Send + Sync {
     async fn get_images(&self, selector: Option<&str>) -> Result<String, ToolError>;
     async fn vision(&self, instruction: &str) -> Result<String, ToolError>;
     async fn console(&self, action: &str) -> Result<String, ToolError>;
-    /// Phase 2: visually highlight an element on the page. Default impl
+    /// visually highlight an element on the page. Default impl
     /// is a no-op (used by cloud / CamoFox backends that don't support
     /// DOM mutation); the CDP backend overrides with a CSS-pulse.
     async fn highlight(&self, _selector: &str) -> Result<String, ToolError> {
         Ok(json!({"status": "highlight_unsupported"}).to_string())
     }
-    /// Phase 3: downcast helper. Implementations that wrap a
+    /// downcast helper. Implementations that wrap a
     /// `SessionedBrowserBackend` override this to return `Some(self)`.
     /// The default returns `None` so non-sessioned backends still
     /// compile and run.
     fn as_sessioned(&self) -> Option<&crate::backends::browser::SessionedBrowserBackend> {
         None
     }
-    /// Phase 4: register a JS snippet to run before every page load.
+    /// register a JS snippet to run before every page load.
     /// The CDP `Page.addScriptToEvaluateOnNewDocument` call hooks the
     /// script into all subsequent navigations; we keep the returned
     /// `scriptId` so callers can later clear it. Default impl is a
@@ -301,12 +301,12 @@ pub trait BrowserBackend: Send + Sync {
     async fn add_init_script(&self, _script: &str) -> Result<String, ToolError> {
         Ok(json!({"status": "init_script_unsupported"}).to_string())
     }
-    /// Phase 4: list the init-script IDs currently registered with the
+    /// list the init-script IDs currently registered with the
     /// backend. Default impl returns an empty list.
     async fn list_init_scripts(&self) -> Result<String, ToolError> {
         Ok(json!({"status": "init_scripts_listed", "scripts": []}).to_string())
     }
-    /// Phase 4: clear all init scripts. Default impl is a no-op.
+    /// clear all init scripts. Default impl is a no-op.
     async fn clear_init_scripts(&self) -> Result<String, ToolError> {
         Ok(json!({"status": "init_scripts_cleared", "cleared": 0}).to_string())
     }
@@ -376,7 +376,7 @@ impl ToolHandler for BrowserNavigateHandler {
             .get("url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'url' parameter".into()))?;
-        // Phase 3: route to the per-session backend before any side
+        //route to the per-session backend before any side
         // effects. We do this by downcasting to `SessionedBrowserBackend`
         // when possible. A non-sessioned backend (legacy / cloud) is
         // still allowed and the call falls through unchanged.
@@ -408,7 +408,7 @@ impl ToolHandler for BrowserNavigateHandler {
                 return Err(ToolError::ExecutionFailed(v.to_string()));
             }
         }
-        // Phase 3: domain allowlist check via the registry. We do this
+        //domain allowlist check via the registry. We do this
         // *after* SSRF so private IPs are still blocked even when the
         // operator forgets to populate the allowlist.
         if let Some(s) = self.backend.as_sessioned() {
@@ -443,7 +443,7 @@ impl ToolHandler for BrowserNavigateHandler {
         tool_schema(
             "browser_navigate",
             "Navigate the browser to a URL. Pass `session` to route this navigation to \
-             a per-session backend (Phase 3 deliverable).",
+             a per-session backend.",
             JsonSchema::object(props, vec!["url".into()]),
         )
     }
@@ -1092,7 +1092,7 @@ impl ToolHandler for BrowserConsoleHandler {
 // ---------------------------------------------------------------------------
 // BrowserHighlightHandler
 // ---------------------------------------------------------------------------
-// Phase 2: visually highlight a `[ref=eN]` element on the page with a
+//visually highlight a `[ref=eN]` element on the page with a
 // pulsing red border + tooltip. Useful for debugging — "I just clicked
 // [ref=e5] but the page didn't change, where is [ref=e5]?". The highlight
 // is removed by the next `browser_highlight` call or by `browser_navigate`.
@@ -1146,7 +1146,7 @@ impl ToolHandler for BrowserHighlightHandler {
 // ---------------------------------------------------------------------------
 // BrowserInitScriptHandler
 // ---------------------------------------------------------------------------
-// Phase 4: register a JS snippet that runs before every page load
+//register a JS snippet that runs before every page load
 // (`Page.addScriptToEvaluateOnNewDocument`). Use cases:
 // - pre-set `localStorage` / `sessionStorage` / cookies to bypass login
 // - stub out anti-bot fingerprinting

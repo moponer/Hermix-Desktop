@@ -1,4 +1,4 @@
-//! Self-hosted **Chrome DevTools Protocol** client (Phase 2-E).
+//! Self-hosted **Chrome DevTools Protocol** client .
 //!
 //! This module replaces the third-party `browser-use` / `cua-driver`
 //! / Playwright runtime with a minimal in-crate CDP stack:
@@ -80,7 +80,7 @@ pub struct BrowserHandle {
 impl BrowserHandle {
     /// Launch an isolated Chrome, wait for its WebSocket endpoint,
     /// and return a ready-to-use handle.
-    /// /// End-to-end timeout defaults to [`WAIT_FOR_WS_TIMEOUT`] (10s).
+    /// End-to-end timeout defaults to [`WAIT_FOR_WS_TIMEOUT`] (10s).
     pub fn launch(opts: LaunchOptions) -> CuaResult<Self> {
         Self::launch_with_timeout(opts, WAIT_FOR_WS_TIMEOUT)
     }

@@ -1,4 +1,4 @@
-//! Phase 14 / H3 — Consciousness stream & ECG vitals.
+//! / H3 — Consciousness stream & ECG vitals.
 //!
 //! Tracks the agent's runtime state and emits "consciousness samples"
 //! — a time series that the desktop UI renders as a full-screen ECG
@@ -50,7 +50,7 @@ pub enum ConsciousnessState {
     Streaming,
     /// A tool is being dispatched (single tool, sequential).
     ToolRunning,
-    /// Speculative prefetch in flight (Phase 13).
+    /// Speculative prefetch in flight .
     Prefetching,
     /// Two or more tools in parallel — tachycardia territory.
     ParallelTools,

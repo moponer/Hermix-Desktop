@@ -42,7 +42,7 @@ pub struct BridgeEvent {
 }
 
 /// In-memory event queue with cursor-based polling and blocking wait support.
-/// /// The Rust equivalent of Python's `EventBridge`.
+/// The Rust equivalent of Python's `EventBridge`.
 pub struct EventBridge {
     queue: Mutex<Vec<BridgeEvent>>,
     cursor: AtomicU64,
@@ -170,7 +170,7 @@ pub struct SessionMessage {
 }
 
 /// Trait for session persistence backends.
-/// /// Implementations can read from SQLite, JSON files, or in-memory stores.
+/// Implementations can read from SQLite, JSON files, or in-memory stores.
 pub trait SessionStore: Send + Sync {
     fn list_sessions(&self) -> Vec<SessionEntry>;
     fn get_messages(&self, session_id: &str, limit: usize) -> Vec<SessionMessage>;

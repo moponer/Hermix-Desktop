@@ -1,6 +1,6 @@
 //! Per-run turn-level timing accumulators.
 //!
-//! Phase 5 (follow-up): the 2 sibling `u64` fields
+//! (follow-up): the 2 sibling `u64` fields
 //! (`total_api_time_ms`, `total_tool_time_ms`) that used to live
 //! directly on `LoopState` were bridged back from `run()`'s
 //! loop-locals via 2 sibling arguments in `publish_from`. Folding
@@ -8,7 +8,7 @@
 //! the timing mutation next to the data (`run()` calls
 //! `record_api` / `record_tool` directly).
 //!
-//! Physically split out of `agent_loop.rs` (2026-07-04); API contract
+//! Physically split out of `agent_loop.rs` ; API contract
 //! unchanged. Fields stay `pub(crate)` so callers outside the
 //! original inline impl block (currently none) can read them without
 //! churning accessor surface.

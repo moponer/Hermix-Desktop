@@ -1,5 +1,5 @@
 //! End-to-end coverage for the "image placeholder residue" regression
-//! reported by 用户 on 2026-06-18. See MEMORY.md §"image-placeholder
+//! reported by 用户 on . See MEMORY.md §"image-placeholder
 //! residue" for the full report.
 //!
 //! Symptom:

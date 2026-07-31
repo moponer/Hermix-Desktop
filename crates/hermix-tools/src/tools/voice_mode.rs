@@ -86,7 +86,7 @@ impl Default for VadConfig {
 }
 
 /// Simple energy + zero-crossing VAD.
-/// /// This is intentionally lightweight. For production use, consider Silero VAD
+/// This is intentionally lightweight. For production use, consider Silero VAD
 /// or WebRTC VAD via ONNX. This implementation is sufficient for filtering
 /// obvious silence and noise.
 #[derive(Debug, Clone)]
@@ -523,7 +523,7 @@ impl VoicePipeline {
     }
 
     /// Run the recording→VAD→STT pipeline for a single utterance.
-    /// /// This collects audio from the source until VAD detects end-of-speech
+    /// This collects audio from the source until VAD detects end-of-speech
     /// or the max duration is reached, then transcribes the collected audio.
     pub async fn record_and_transcribe(
         &self,

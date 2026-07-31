@@ -56,7 +56,7 @@ use fs4::fs_std::FileExt;
 const RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Cross-process advisory file lock for the cron scheduler.
-/// /// Construct with [`CronFileLock::new`] or
+/// Construct with [`CronFileLock::new`] or
 /// [`CronFileLock::at`]. Call [`Self::acquire`] to get a
 /// [`LockGuard`] that releases the lock on drop.
 #[derive(Clone)]
@@ -80,7 +80,7 @@ impl CronFileLock {
 
     /// Acquire the lock, blocking for up to `timeout`. Returns
     /// a `LockGuard` that releases on drop.
-    /// /// Returns an error if:
+    /// Returns an error if:
     /// - the lock file can't be opened/created (I/O error)
     /// - the timeout elapses while waiting for the lock
     pub fn acquire(&self, timeout: Duration) -> Result<LockGuard, LockError> {

@@ -1,6 +1,6 @@
-//! Phase 18 (P0-3): facts 表 caller — 从 user turn 抽取结构化事实。
+//! : facts 表 caller — 从 user turn 抽取结构化事实。
 //!
-//! 设计参考 `docs/MEMORY_LAYER_DEEP_ANALYSIS.md` §3 P0-3：
+//! 设计参考 `docs/MEMORY_LAYER_DEEP_ANALYSIS.md` §3 ：
 //! `embedded.rs::upsert_fact` 函数 + schema 已就位，
 //! `recognize()` 已经在 `fts_facts_visible` 查询 facts 表，
 //! 但**没有任何 caller 把 turn 内容写入 facts** — 导致跨 session 召回
@@ -10,7 +10,7 @@
 //! user 的关键陈述（名字 / 偏好 / 工具 / 指令），调用
 //! `EmbeddedMemoryBackend::upsert_fact`。
 //!
-//! ## M3 (2026-07-03) 重写
+//! ## 重写
 //!
 //! 旧实现用 `str::find` 子串匹配 + 字符级 prev-char 检查。两个真 bug：
 //! 1. **否定吞噬** — "我不喜欢 Rust" → `find("我喜欢")` 在 index=1 命中，
@@ -77,11 +77,11 @@ impl ExtractedFact {
 }
 
 /// (regex, base_kind, min_chars, language) trigger definition.
-/// /// `regex` is matched against `user_lower` (English) or `user_trim`
+/// `regex` is matched against `user_lower` (English) or `user_trim`
 /// (Chinese — regex still works, just less common). When the regex
 /// matches, the substring AFTER the trigger word(s) becomes the
 /// `content`.
-/// /// `language` is `Zh` for CJK-only triggers (require clause-boundary
+/// `language` is `Zh` for CJK-only triggers (require clause-boundary
 /// semantics) or `En` for ASCII triggers (use regex `\b`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Lang {
@@ -148,8 +148,8 @@ const TRIGGERS: &[Trigger] = &[
 ];
 
 /// Pre-compiled regexes — one per trigger, cached process-wide.
-/// /// ### Why this still panics on a bad pattern (and why it's safe)
-/// /// `TRIGGER_REGEXES` is built from a static, hand-curated `TRIGGERS`
+/// ### Why this still panics on a bad pattern (and why it's safe)
+/// `TRIGGER_REGEXES` is built from a static, hand-curated `TRIGGERS`
 /// table — never from user data. Each entry's pattern is reviewed
 /// by hand; a typo in the source table is a programming bug that
 /// must fail loudly at first use rather than silently drop the
@@ -157,7 +157,7 @@ const TRIGGERS: &[Trigger] = &[
 /// a bad pattern will crash the agent on startup instead of
 /// corrupting memory — both are bugs, but the loud failure is
 /// debuggable.
-/// /// For **runtime** (user-supplied) patterns, see
+/// For **runtime** (user-supplied) patterns, see
 /// `CompiledRuleSet::try_compile` which returns a `Result`.
 static TRIGGER_REGEXES: Lazy<Vec<(Regex, &Trigger)>> = Lazy::new(|| {
     TRIGGERS
@@ -203,12 +203,12 @@ fn is_punctuation(c: char) -> bool {
 
 /// After the trigger, take the next content run until the first
 /// punctuation. **Whitespace handling rule:**
-/// /// - Pure-ASCII content: whitespace ends the window (`I like Rust`
+/// - Pure-ASCII content: whitespace ends the window (`I like Rust`
 /// → content = `Rust`).
 /// - Mixed / CJK content: if the next non-whitespace char after a
 /// space is CJK, treat the space as intra-phrase and keep going
 /// (`我喜欢 Rust 编程` → content = `Rust 编程`, not just `Rust`).
-/// /// This matches the previous behaviour the test suite expects
+/// This matches the previous behaviour the test suite expects
 /// (`preference_extraction_zh` asserts `Rust 编程`) while also
 /// cleanly bounding pure-ASCII recall so a sentence like `I like
 /// Rust and I love Tauri` doesn't produce a single giant blob.
@@ -240,7 +240,7 @@ fn find_content_window(user: &str, trigger_end: usize) -> Option<(usize, usize)>
 
 /// Check whether `position` (byte offset in `user`) is immediately
 /// preceded by a Chinese negation token (不/没/无/非/未/别).
-/// /// "Immediately" means: scan backwards from `position`, skipping
+/// "Immediately" means: scan backwards from `position`, skipping
 /// whitespace. If the next non-whitespace character is one of the
 /// negation single chars, OR a two-char combo like "我不" / "我没",
 /// return `true`. For longer phrases ("我并不"/"我从未") we still
@@ -306,7 +306,7 @@ fn preceded_by_en_negation(user_lower: &str, match_start: usize) -> bool {
 }
 
 /// 主入口：从 user message 抽取所有事实。
-/// /// 设计要点：
+/// 设计要点：
 /// - 同一 turn 内多个 trigger 都会抽取，但 `canonical_key` 去重，
 /// 第二次出现相同 key 时 `upsert_fact` 会 bump `access_count`。
 /// - 否定检测：trigger 前有"我不/我没/我从不/我不爱"等否定词 → kind 翻转
@@ -337,7 +337,7 @@ pub fn extract_facts_from_turn(
         for m in re.find_iter(haystack) {
             let trigger_end = m.end();
 
-            // M3: negation detection — must run BEFORE clause boundary check so
+            //negation detection — must run BEFORE clause boundary check so
             // we can capture "我不喜欢" (which sits mid-clause) as a
             // dislike fact.
             let negated = match trigger.lang {
@@ -345,7 +345,7 @@ pub fn extract_facts_from_turn(
                 Lang::En => preceded_by_en_negation(&user_lower, m.start()),
             };
 
-            // M3: clause-boundary check (Chinese) — the trigger must sit at the
+            //clause-boundary check (Chinese) — the trigger must sit at the
             // start of a clause. We allow it after any punctuation OR at
             // offset 0 OR after whitespace. Without this, "我喜欢你 我喜欢你"
             // would double-fire from "喜欢" too.
@@ -516,13 +516,13 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // M3 negation regression tests — the original bug
+    //negation regression tests — the original bug
     // ------------------------------------------------------------------
 
-    /// M3 (主报告 #5): "我不喜欢 Rust" must NOT be stored as a
+    /// (主报告 #5): "我不喜欢 Rust" must NOT be stored as a
     /// preference. Old code stored `user.preference:Rust` (wrong);
     /// new code either drops or flips to `user.dislike:Rust`.
-    /// /// **Content window caveat:** the CJK verb "喜欢" extends past
+    /// **Content window caveat:** the CJK verb "喜欢" extends past
     /// the "不喜欢" trigger, so the captured content may begin with
     /// the trailing 欢 (verb complement). We don't require exact
     /// content match — only the *kind* must flip and the object
@@ -545,7 +545,7 @@ mod tests {
         );
     }
 
-    /// M3: 同样地 "我不爱 X" 应该 dislike
+    /// 同样地 "我不爱 X" 应该 dislike
     #[test]
     fn m3_negation_zh_wo_ai_flips_preference() {
         let facts = extract_facts_from_turn("我不爱 Python", "s1", 1);
@@ -556,7 +556,7 @@ mod tests {
         assert!(content.contains("Python"), "got '{content}'");
     }
 
-    /// M3: 英文 "I don't like Rust" → dislike. English uses real
+    /// 英文 "I don't like Rust" → dislike. English uses real
     /// negation detection (the verb is intact, the negation word is
     /// separate), so content extraction is clean.
     #[test]
@@ -568,7 +568,7 @@ mod tests {
         assert_eq!(dislike[0].payload["content"].as_str(), Some("Rust"));
     }
 
-    /// M3: "I do not love Java" → dislike
+    /// "I do not love Java" → dislike
     #[test]
     fn m3_negation_en_do_not_flips_preference() {
         let facts = extract_facts_from_turn("I do not love Java", "s1", 1);
@@ -578,7 +578,7 @@ mod tests {
         assert!(content.contains("Java"), "got '{content}'");
     }
 
-    /// M3: "I never use Slack" → dislike (negation + i use)
+    /// "I never use Slack" → dislike (negation + i use)
     #[test]
     fn m3_negation_en_never_drops_tool() {
         // "i use" has negated_kind = None, so negated → drop entirely.
@@ -590,7 +590,7 @@ mod tests {
         );
     }
 
-    /// M3: positive cases still work after negation logic added.
+    /// positive cases still work after negation logic added.
     #[test]
     fn m3_positive_still_works_after_negation_logic() {
         let facts = extract_facts_from_turn("I like Rust and I love Tauri", "s1", 1);
@@ -602,7 +602,7 @@ mod tests {
         }
     }
 
-    /// M3: clause boundary — "我不" must not bleed across clauses.
+    /// clause boundary — "我不" must not bleed across clauses.
     /// "我不讨厌 Rust, 我喜欢 Python" — the first clause ("I don't
     /// dislike Rust") has no good fact-kind mapping (it's a weak
     /// preference, but our kinds only have like/dislike/avoid/tool/etc,
@@ -621,7 +621,7 @@ mod tests {
         assert_eq!(preferences[0].payload["content"].as_str(), Some("Python"));
     }
 
-    /// M3: English word boundary — "use" inside "because" must NOT match.
+    /// English word boundary — "use" inside "because" must NOT match.
     /// "i use" has `\b` word boundary — old code matched substring.
     #[test]
     fn m3_english_word_boundary_strict() {

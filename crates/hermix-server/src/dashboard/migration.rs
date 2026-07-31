@@ -1,4 +1,4 @@
-//! Migration dashboard endpoints (Phase 11).
+//! Migration dashboard endpoints .
 //!
 //! Three endpoints back the Tauri migration dialog:
 //!
@@ -328,7 +328,7 @@ mod tests {
 
     /// `/api/migration/probe` returns `should_show_dialog: false`
     /// when there's no legacy data.
-    /// /// `HERMIX_MIGRATION_PROBE_CANDIDATES` is pinned to an empty
+    /// `HERMIX_MIGRATION_PROBE_CANDIDATES` is pinned to an empty
     /// `nonexistent_/.hermes` path so the probe ignores the
     /// developer's real `~/.hermes` (otherwise this test would
     /// spuriously "find" the developer's data and fail).

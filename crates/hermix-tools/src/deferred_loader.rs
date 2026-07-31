@@ -1,6 +1,6 @@
 //! Deferred tool loader — coordinates the search → describe → call flow.
 //!
-//! (Phase 6 — P6-2)
+//!
 //!
 //! The orchestration core uses this module to decide which tool schemas
 //! are included directly in the system prompt and which are deferred
@@ -42,12 +42,12 @@ use crate::tools::tool_search::{
 
 /// Assemble tool schemas using a `ToolMetaRegistry` to classify tools
 /// as resident or deferred.
-/// /// P6-2: This is the metadata-driven replacement for
+/// This is the metadata-driven replacement for
 /// [`assemble_tool_schemas`]. When the metadata registry is non-empty,
 /// tools registered as `Deferred` are placed behind the bridge tools.
 /// When the registry is empty, the function falls back to the
 /// hard-coded `CORE_TOOLS` list (backwards compatibility).
-/// /// Returns an [`AssemblyResult`] with:
+/// Returns an [`AssemblyResult`] with:
 /// - `tool_schemas` — the schemas to include in the system prompt
 /// - `activated` — whether the bridge was activated
 /// - `deferred_count` — number of deferred tools
@@ -104,11 +104,11 @@ pub fn assemble_tool_schemas_with_meta(
 // ---------------------------------------------------------------------------
 
 /// Coordinates the deferred tool loading flow.
-/// /// Holds a reference to the `ToolRegistry` (for dispatch) and the
+/// Holds a reference to the `ToolRegistry` (for dispatch) and the
 /// `ToolMetaRegistry` (for classification). The orchestration core
 /// calls `assemble()` at the start of each turn to get the tool
 /// schemas to include in the system prompt.
-/// /// The LLM then discovers deferred tools via `tool_search` and invokes
+/// The LLM then discovers deferred tools via `tool_search` and invokes
 /// them via `tool_call` — the handlers for those bridge tools are
 /// already registered in `tool_search.rs`.
 #[derive(Clone)]
@@ -136,7 +136,7 @@ impl DeferredToolLoader {
     }
 
     /// Assemble tool schemas for the system prompt.
-    /// /// This is the main entry point: call it with all registered tool
+    /// This is the main entry point: call it with all registered tool
     /// schemas and get back the subset to include in the LLM's tool list.
     pub fn assemble(&self, all_schemas: Vec<ToolSchema>) -> AssemblyResult {
         assemble_tool_schemas_with_meta(all_schemas, &self.meta_registry)

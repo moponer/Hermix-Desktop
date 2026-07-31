@@ -28,7 +28,7 @@ impl<'a, D: SessionDataSource + ?Sized> SessionInsightsEngine<'a, D> {
     }
 
     /// Generate a complete report covering the last `days` days.
-    /// /// `now` is provided explicitly for deterministic testing; production
+    /// `now` is provided explicitly for deterministic testing; production
     /// callers should pass [`Utc::now`].timestamp() as a `f64`.
     pub fn generate(&self, days: u32, source: Option<&str>, now: f64) -> InsightsReport {
         let cutoff = now - (days as f64) * SECONDS_PER_DAY;

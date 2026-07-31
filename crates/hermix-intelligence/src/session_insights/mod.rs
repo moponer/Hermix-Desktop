@@ -31,7 +31,7 @@ pub use types::{
 mod tests {
     use super::*;
 
-    // 2024-01-15 12:00:00 UTC = 1705320000 (Monday).
+    //12:00:00 UTC = 1705320000 (Monday).
     const FIXED_NOW: f64 = 1_705_924_800.0; // 2024-01-22 12:00 UTC (Monday)
 
     fn ts(days_ago: f64, hours: f64) -> f64 {
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn activity_patterns_compute_busiest_day_and_hour() {
         let mut data = InMemorySessionData::new();
-        // FIXED_NOW = 2024-01-22 12:00 UTC (Monday).
+        //FIXED_NOW = 12:00 UTC (Monday).
         // Three sessions on the same Monday, two on Wednesday.
         for i in 0..3 {
             data.add_session(session(

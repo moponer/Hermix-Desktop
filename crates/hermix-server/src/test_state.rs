@@ -27,7 +27,7 @@ use crate::HttpServerState;
 /// are leaked (intentionally — `HttpServerState` owns the path,
 /// and a Drop impl would race with the test ending in a
 /// non-deterministic way).
-/// /// Why the nested layout: many dashboard endpoints compute
+/// Why the nested layout: many dashboard endpoints compute
 /// "user home" from `hermix_home.parent()`. If every test shared
 /// the same `%TEMP%` parent, parallel tests would race on the
 /// global temp dir. Nesting `hermix_home` under a per-test

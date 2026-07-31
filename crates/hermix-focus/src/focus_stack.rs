@@ -1,7 +1,7 @@
 //! FocusStack — a 5-state frame stack inspired by BaiLongma's design.
 //!
 //! Reference: `docs/PROPOSAL_BAILONGMA_INSPIRED.md` §2.2 (BaiLongma 焦点栈)
-//! + §五 Phase 8 (FocusStack 抽象).
+//! + §五 (FocusStack 抽象).
 //!
 //! ## States
 //!
@@ -162,10 +162,10 @@ impl<T: Clone> FocusFrame<T> {
     /// H5: re-derive `self.salience` from the salience algorithm
     /// (recency × freq × pin) using the frame's `updated_at` (last
     /// touch), `touch_count`, and `pin_count`.
-    /// /// `now` is the reference time — pass `Utc::now()` in production,
+    /// `now` is the reference time — pass `Utc::now()` in production,
     /// a fixed timestamp in tests. `cfg` carries the weight
     /// configuration (see [`SalienceConfig::default`]).
-    /// /// Why a separate method: the field `self.salience` is set by
+    /// Why a separate method: the field `self.salience` is set by
     /// `new()` (0.5), `with_salience()` (manual override), and `pin()`
     /// (1.0). None of those are time-aware. The agent loop / router
     /// should call `recompute_salience` whenever a fresh value is
@@ -193,7 +193,7 @@ pub struct FocusConclusion {
 
 impl FocusConclusion {
     /// Generate a natural-language summary from a frame's metadata.
-    /// /// Produces a human-readable conclusion like:
+    /// Produces a human-readable conclusion like:
     /// "讨论了用户偏好设置，涉及 3 个话题，被引用 5 次，标记为重要"
     /// instead of machine metadata like:
     /// "[conclusion id=X salience=0.50 tags=[...]]"
@@ -266,7 +266,7 @@ pub enum FocusStackError {
 /// A generic 5-state focus frame stack.
 ///
 /// The stack is **in-memory only** by default. Persist via `to_snapshot()`
-/// / `from_snapshot()` for cross-process continuity, or pipe it through
+/// `from_snapshot()` for cross-process continuity, or pipe it through
 /// the `MemoryLayer` trait for long-term storage.
 #[derive(Debug, Clone)]
 pub struct FocusStack<T: Clone> {
@@ -327,7 +327,7 @@ impl<T: Clone> FocusStack<T> {
     }
 
     /// Pop the top frame.
-    /// /// Behavior:
+    /// Behavior:
     /// - If the popped frame's state is `Cleared`, a `FocusConclusion`
     /// is auto-generated and stored in `pending_conclusions`. The
     /// new top (if any) is transitioned to `Returned` — but only
@@ -648,7 +648,7 @@ mod tests {
     /// `refresh_salience_all` walks every frame on the stack. The
     /// recency channel has to fire — frames on the stack longer
     /// should be less salient than a just-pushed one.
-    /// /// We push *both* frames first, then backdate the first one's
+    /// We push *both* frames first, then backdate the first one's
     /// `updated_at`. (If we backdated before the second push, the
     /// second push would `touch()` the first frame via `mark_pushed`,
     /// overwriting our backdate with wall-clock now.)

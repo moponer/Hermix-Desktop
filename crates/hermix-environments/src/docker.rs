@@ -1,7 +1,7 @@
 //! Docker terminal backend — executes commands inside a long-running
 //! container via the `docker` CLI.
 //!
-//! P1-5 (2026-06-27): wrapped in a `docker` Cargo feature so the
+//! : wrapped in a `docker` Cargo feature so the
 //! dependency footprint stays zero for users who never opt in.
 //!
 //! Why CLI and not the `bollard` crate? `bollard` pulls in a long
@@ -44,7 +44,7 @@ pub struct DockerBackend {
 
 impl DockerBackend {
     /// Construct a new Docker backend.
-    /// /// `container` must be the name or id of an already-running
+    /// `container` must be the name or id of an already-running
     /// container. We do *not* auto-create one — that's a
     /// lifecycle concern (`docker run -d ...`) that belongs to the
     /// user or an orchestration layer.

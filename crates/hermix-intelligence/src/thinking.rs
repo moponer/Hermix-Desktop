@@ -187,7 +187,7 @@ impl Default for ThinkingConfig {
 }
 
 /// 路由决策主函数
-/// /// 按以下优先级检查（命中即返回，短路）：
+/// 按以下优先级检查（命中即返回，短路）：
 /// 1. 用户显式 Deep 标记 → Deep (confidence 0.95)
 /// 2. Coding 任务关键词 → Deep (confidence 0.7)
 /// 3. Deep 关键词命中 → Deep (confidence 0.6)

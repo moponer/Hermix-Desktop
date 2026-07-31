@@ -1,4 +1,4 @@
-//! Cross-crate orchestration event bus (Phase 0 / P0-5).
+//! Cross-crate orchestration event bus .
 //!
 //! Implements 铁律 DD: the four-step transparent event pipeline —
 //! transport → tools → register → HttpServerState + WS listener.
@@ -63,7 +63,7 @@ pub enum OrchestrationEvent {
         task_id: String,
         result_refs: Vec<TaskResultRef>,
     },
-    /// Agent loop entered a new phase (P3-2).
+    /// Agent loop entered a new phase .
     LoopPhaseChanged {
         session_id: Option<String>,
         task_id: Option<String>,
@@ -71,7 +71,7 @@ pub enum OrchestrationEvent {
         stage: String,
         turn: u32,
     },
-    /// Plan mode: agent produced a plan, waiting for user confirmation (P2-2).
+    /// Plan mode: agent produced a plan, waiting for user confirmation .
     PlanConfirmationRequired {
         task_id: String,
         plan_text: String,
@@ -155,7 +155,7 @@ impl OrchestrationEvent {
 }
 
 /// Broadcast bus for orchestration events.
-/// /// Cheap to clone (`Arc` inner). Call [`Self::subscribe`] to get a
+/// Cheap to clone (`Arc` inner). Call [`Self::subscribe`] to get a
 /// receiver; call [`Self::emit`] to publish. Lagging receivers miss
 /// messages — the HTTP API is the source of truth for full state.
 #[derive(Clone)]

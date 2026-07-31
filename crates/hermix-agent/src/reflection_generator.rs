@@ -1,4 +1,4 @@
-//! Phase 19 (E): memory evolution — reflective session-end notes.
+//! (E): memory evolution — reflective session-end notes.
 //!
 //! The agent loop calls [`generate_reflections`] from
 //! `memory_on_session_end` (memory_prefetch.rs). The output is a
@@ -201,7 +201,7 @@ pub fn reflection_label(kind: &str) -> &'static str {
     }
 }
 
-/// P4-T1 (reflection → 行为改写闭环): render a cross-session list
+/// (reflection → 行为改写闭环): render a cross-session list
 /// of reflections into a compact markdown block that the agent loop
 /// prepends to the next session's system prompt.
 ///
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(reflection_label("unknown"), "反思");
     }
 
-    // ---------- P4-T1: cross-session reflection block ----------
+    //cross-session reflection block ----------
 
     fn rkind(kind: &'static str, content: &str) -> Reflection {
         Reflection {

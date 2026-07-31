@@ -52,9 +52,9 @@ use crate::ToolRegistry;
 // Registration
 // ---------------------------------------------------------------------------
 
-/// Register all CUA (computer-use automation) tool handlers (P1.2 migration).
+/// Register all CUA (computer-use automation) tool handlers.
 pub fn register(registry: &ToolRegistry) {
-    // P1.8 (2026-07-02): tag every CUA handler with the *group* name
+    // Tag every CUA handler with the *group* name
     // `"cua"`, not the per-tool name. `essential::ESSENTIAL_TOOLSETS`
     // references `"cua"` as a single toolset, and the
     // `set_enabled_toolsets` UI toggle keys on this tag. Tagging
@@ -91,7 +91,7 @@ pub fn register(registry: &ToolRegistry) {
     register_one("cua_ui_click", "👆", CoreRisk::Dangerous, Arc::new(CuaUiClickHandler::new()));
     register_one("cua_ui_focus", "🎯", CoreRisk::Dangerous, Arc::new(CuaUiFocusHandler::new()));
     register_one("cua_ui_invoke", "⚙️", CoreRisk::Dangerous, Arc::new(CuaUiInvokeHandler::new()));
-    // Phase 3 mouse handlers (audit fix): these three were
+    //mouse handlers (audit fix): these three were
     // previously defined in `all_handlers()` factory but never wired into
     // `register()`, so the LLM could not actually invoke them despite
     // the 17/17 "CUA tests pass" green light (tests only verified the
@@ -150,7 +150,7 @@ where
 /// `ToolError` the dispatcher expects. The `kind()` short string
 /// is preserved in the message so the desktop UI can render a
 /// stable error code.
-/// /// `ToolError` does not have a dedicated `PermissionDenied`
+/// `ToolError` does not have a dedicated `PermissionDenied`
 /// variant — denied actions map to `ExecutionFailed` with a
 /// `denied by safety:` prefix so the dispatcher-side error
 /// filter can still match on it.
@@ -190,7 +190,7 @@ fn extract_session_id(params: &Value) -> String {
 /// Capture the primary monitor and return a JSON envelope
 /// containing the PNG bytes (base64) and the captured frame's
 /// dimensions.
-/// /// The handler does **not** add a top-level wrapper around the
+/// The handler does **not** add a top-level wrapper around the
 /// `ScreenshotResult` struct — the inner `png_base64` field is
 /// already JSON-safe (standard base64, no `\n` padding noise)
 /// and the desktop UI reads the same shape for `computer_use`'s
@@ -283,7 +283,7 @@ impl ToolHandler for CuaScreenshotHandler {
 // 2) cua_screen_info
 // ---------------------------------------------------------------------------
 
-/// Return the list of connected displays (Phase 1: primary only).
+/// Return the list of connected displays .
 pub struct CuaScreenInfoHandler;
 
 impl CuaScreenInfoHandler {
@@ -605,7 +605,7 @@ impl ToolHandler for CuaPressKeyHandler {
 // ---------------------------------------------------------------------------
 
 /// Enumerate the desktop's top-level windows. Filters (all optional):
-/// /// - `title` — case-insensitive substring match against the window
+/// - `title` — case-insensitive substring match against the window
 /// title. Empty / missing → match all titles.
 /// - `visible_only` — default `true`; excludes hidden / owner-drawn
 /// tool windows. Set `false` to enumerate everything.
@@ -749,7 +749,7 @@ impl ToolHandler for CuaListWindowsHandler {
 /// Return the top-level window under screen coordinate `(x, y)`.
 /// Uses `WindowFromPoint` + a `IsWindow` validity check so a
 /// stale / closed window cannot leak through.
-/// /// Result is `null` when the point hits no window (e.g. outside
+/// Result is `null` when the point hits no window (e.g. outside
 /// the virtual desktop).
 pub struct CuaWindowAtPointHandler;
 
@@ -856,7 +856,7 @@ impl ToolHandler for CuaWindowAtPointHandler {
 /// makes the target window the foreground so the click lands
 /// somewhere meaningful instead of being routed to whatever app
 /// the user happened to be in.
-/// /// The click coordinate is **always** the centre of the window's
+/// The click coordinate is **always** the centre of the window's
 /// `GetWindowRect` — explicit `(x, y)` overrides would defeat the
 /// "click into the window" abstraction and re-introduce blind
 /// coordinate clicking. Use `cua_left_click` for coordinate-precise
@@ -995,7 +995,7 @@ impl ToolHandler for CuaClickWindowHandler {
 }
 
 // =========================================================================
-// Phase 2-C: UIAutomation element-tree handlers
+//C: UIAutomation element-tree handlers
 // =========================================================================
 
 // Helper: run blocking COM calls with per-call CoInitializeEx.
@@ -1486,7 +1486,7 @@ impl ToolHandler for CuaUiInvokeHandler {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2-D: OCR handler — REMOVED 2026-07-25
+//D: OCR handler — REMOVED
 //
 // `cua_ocr_recognize` was removed because the local Windows.Media.Ocr engine
 // had <30% character accuracy for Chinese documents/IDs/certificates. The LLM
@@ -1505,7 +1505,7 @@ pub use self::{
     CuaListWindowsHandler as ListWindows, CuaPressKeyHandler as PressKey,
     CuaScreenInfoHandler as ScreenInfo, CuaScreenshotHandler as Screenshot,
     CuaTypeTextHandler as TypeText, CuaWindowAtPointHandler as WindowAtPoint,
-    // UIA element-tree handlers (Phase 2-C)
+    //UIA element-tree handlers
     CuaUiClickHandler as UiClick, CuaUiFindHandler as UiFind,
     CuaUiFocusHandler as UiFocus, CuaUiInvokeHandler as UiInvoke,
     CuaUiTreeHandler as UiTree,
@@ -1524,13 +1524,13 @@ pub fn all_handlers() -> Vec<Arc<dyn ToolHandler>> {
         Arc::new(CuaListWindowsHandler::new()),
         Arc::new(CuaWindowAtPointHandler::new()),
         Arc::new(CuaClickWindowHandler::new()),
-        // Phase 2-C: UIA element-tree handlers
+        //C: UIA element-tree handlers
         Arc::new(CuaUiTreeHandler::new()),
         Arc::new(CuaUiFindHandler::new()),
         Arc::new(CuaUiClickHandler::new()),
         Arc::new(CuaUiFocusHandler::new()),
         Arc::new(CuaUiInvokeHandler::new()),
-        // Phase 3: scroll, double-click, move-cursor
+        //scroll, double-click, move-cursor
         Arc::new(CuaScrollHandler::new()),
         Arc::new(CuaDoubleClickHandler::new()),
         Arc::new(CuaMoveCursorHandler::new()),
@@ -1538,7 +1538,7 @@ pub fn all_handlers() -> Vec<Arc<dyn ToolHandler>> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: Mouse scroll
+//Mouse scroll
 // ---------------------------------------------------------------------------
 
 /// Scroll the mouse wheel at `(x, y)`.
@@ -1625,7 +1625,7 @@ impl ToolHandler for CuaScrollHandler {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: Double click
+//Double click
 // ---------------------------------------------------------------------------
 
 /// Double-click at `(x, y)` with the left mouse button.
@@ -1693,7 +1693,7 @@ impl ToolHandler for CuaDoubleClickHandler {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: Move cursor
+//Move cursor
 // ---------------------------------------------------------------------------
 
 /// Move the mouse cursor to `(x, y)` without clicking.
@@ -1848,7 +1848,7 @@ mod tests {
 
     #[test]
     fn schema_names_phase2b_are_stable() {
-        // Pin the Phase 2-B handler names so a typo fails the test
+        //Pin the -B handler names so a typo fails the test
         // before it reaches the dispatcher.
         assert_eq!(CuaListWindowsHandler::new().schema().name, "cua_list_windows");
         assert_eq!(CuaWindowAtPointHandler::new().schema().name, "cua_window_at_point");

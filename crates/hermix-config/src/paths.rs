@@ -71,11 +71,11 @@ use std::sync::OnceLock;
 // ---------------------------------------------------------------------------
 
 /// Return the value of `new_name` if set, else `old_name` if set, else None.
-/// /// When `old_name` is set and `new_name` is not, the function emits a
+/// When `old_name` is set and `new_name` is not, the function emits a
 /// one-shot deprecation warning to stderr (via a global `OnceLock` so
 /// the warning is shown at most once per process even if the helper
 /// is called hundreds of times).
-/// /// Use this in place of `std::env::var("HERMES_*")` everywhere in the
+/// Use this in place of `std::env::var("HERMES_*")` everywhere in the
 /// crate so the deprecation window is a single, central shim rather
 /// than a comment in every call site.
 pub fn env_compat(new_name: &str, old_name: &str) -> Option<String> {
@@ -114,8 +114,8 @@ fn warn_legacy_env_once(new_name: &str, old_name: &str) {
 // ---------------------------------------------------------------------------
 
 /// Return the hermix home directory.
-/// /// Resolution order (highest to lowest):
-/// /// 1. `$HERMIX_PORTABLE_DATA_DIR` if set and non-empty. This is the
+/// Resolution order (highest to lowest):
+/// 1. `$HERMIX_PORTABLE_DATA_DIR` if set and non-empty. This is the
 /// desktop-mode override: when the Tauri launcher starts up, it
 /// sets this to the stable user-data path
 /// (`%APPDATA%/Hermix Desktop/data`) so that all user config,
@@ -124,7 +124,7 @@ fn warn_legacy_env_once(new_name: &str, old_name: &str) {
 /// branch (see module-level docs).
 /// 2. `$HERMIX_HOME` if set and non-empty.
 /// 3. `~/.hermix` (i.e. `user_home_dir()/.hermix`).
-/// /// We **deliberately do not** fall back to `$HERMES_HOME`. The original
+/// We **deliberately do not** fall back to `$HERMES_HOME`. The original
 /// NousResearch `hermes-agent` is a different project that uses the
 /// same env var name; if a user has set `HERMES_HOME` for the
 /// original, silently picking it up would cause both projects to
@@ -132,10 +132,10 @@ fn warn_legacy_env_once(new_name: &str, old_name: &str) {
 /// using their pre-rename data dir should set `HERMIX_HOME` to the
 /// same path instead (or run with `HERMIX_MIGRATE_FROM_HERMES=1` to
 /// move the data into the new default location).
-/// /// We also intentionally do **not** use macOS `Library/Application
+/// We also intentionally do **not** use macOS `Library/Application
 /// Support/…` so CLI, gateway, dashboard, and docs all agree on one
 /// layout.
-/// /// On the first successful resolution (branches 2 or 3), this either
+/// On the first successful resolution (branches 2 or 3), this either
 /// runs the `~/.hermes` → `~/.hermix` rename (only if the user has set
 /// `HERMIX_MIGRATE_FROM_HERMES=1`; see [`migrate_legacy_hermes_dir_once`])
 /// or prints a one-time notice if a sibling `~/.hermes` directory is
@@ -170,7 +170,7 @@ pub fn hermix_home() -> PathBuf {
 }
 
 /// Return the portable data dir if set by the Tauri launcher, else None.
-/// /// This is the lower-level accessor for `HERMIX_PORTABLE_DATA_DIR`
+/// This is the lower-level accessor for `HERMIX_PORTABLE_DATA_DIR`
 /// (which [`hermix_home`] consumes at the top of its resolution chain).
 /// The Tauri launcher uses this to know where to create the initial
 /// `data/` subdirectory tree before `hermix_home()` is ever called by
@@ -183,7 +183,7 @@ pub fn portable_data_dir() -> Option<PathBuf> {
 }
 
 /// Return the portable cache dir if set by the Tauri launcher, else None.
-/// /// Mirrors [`portable_data_dir`] for the cache subdirectory. The
+/// Mirrors [`portable_data_dir`] for the cache subdirectory. The
 /// Tauri launcher sets this to `<install_root>/cache` so that large
 /// transient files (model cache, embedding index, etc.) also live
 /// next to the executable and get carried along when the user copies
@@ -205,7 +205,7 @@ fn user_home_dir() -> PathBuf {
 }
 
 /// Hermix state root directory (same rule as CLI `--config-dir` / gateway data).
-/// /// If `config_dir_override` is set, that path is used; otherwise [`hermix_home`].
+/// If `config_dir_override` is set, that path is used; otherwise [`hermix_home`].
 /// Use this for `cron/`, `webhooks.json`, and other machine-local state so CLI
 /// and gateway stay aligned.
 pub fn state_dir(config_dir_override: Option<&Path>) -> PathBuf {
@@ -216,11 +216,11 @@ pub fn state_dir(config_dir_override: Option<&Path>) -> PathBuf {
 
 /// Hermix data directory — where all runtime data (sessions, memory,
 /// trajectories) lives. Separated from config files so that:
-/// /// - Normal mode: `~/.hermix/data/`
+/// - Normal mode: `~/.hermix/data/`
 /// - Portable mode: `<install_root>/data/`  (HERMIX_PORTABLE_DATA_DIR)
-/// /// In both modes the *structure under data_dir is identical*, which
+/// In both modes the *structure under data_dir is identical*, which
 /// makes backup/migration a single `cp -r data/ ...`.
-/// /// Config files (config.yaml, .env, MEMORY.md, USER.md, skills/)
+/// Config files (config.yaml, .env, MEMORY.md, USER.md, skills/)
 /// stay under [`hermix_home`] — they are machine/install-specific and
 /// should NOT be blindly carried along during a portable migration.
 pub fn data_dir() -> PathBuf {
@@ -244,13 +244,13 @@ pub fn data_dir_in(home: impl AsRef<Path>) -> PathBuf {
 
 /// Idempotently rename a stale `~/.hermes` to `~/.hermix` (or whatever
 /// `new_home` says, if its parent is the user-home).
-/// /// **Caller is responsible for opt-in**: this function runs the rename
+/// **Caller is responsible for opt-in**: this function runs the rename
 /// unconditionally — gating is done by [`legacy_migration_opted_in`]
 /// before [`hermix_home`] dispatches here. The default behavior is to
 /// NOT migrate (see [`detect_legacy_hermes_sibling_once`]) so we
 /// don't clobber a `~/.hermes` directory that may belong to the
 /// original NousResearch hermes-agent.
-/// /// Behavior when invoked:
+/// Behavior when invoked:
 /// - If `~/.hermes` doesn't exist, do nothing.
 /// - If `new_home` already exists (e.g. `~/.hermix` from a previous
 /// run), move the legacy dir aside to `<parent>/.hermes.bak.<ts>`
@@ -260,7 +260,7 @@ pub fn data_dir_in(home: impl AsRef<Path>) -> PathBuf {
 /// best-effort and a failed rename must not stop the agent from
 /// starting (a fresh `~/.hermix` will be created on the first write
 /// anyway).
-/// /// Invoked from [`hermix_home`] on first call when the user has
+/// Invoked from [`hermix_home`] on first call when the user has
 /// opted in; a `OnceLock` ensures the rename runs at most once per
 /// process.
 fn migrate_legacy_hermes_dir_once(new_home: &Path) {
@@ -277,7 +277,7 @@ fn migrate_legacy_hermes_dir_once(new_home: &Path) {
 /// Returns true if the user has opted in to the `~/.hermes` →
 /// `~/.hermix` data-dir migration via the
 /// `HERMIX_MIGRATE_FROM_HERMES=1` env var.
-/// /// Accepts `1` / `true` / `yes` / `on` (case-insensitive) as truthy,
+/// Accepts `1` / `true` / `yes` / `on` (case-insensitive) as truthy,
 /// and `0` / `false` / `no` / `off` (and the empty string) as
 /// falsy. Anything else defaults to truthy to match the common
 /// "set it to anything non-empty" idiom. The check is intentionally
@@ -304,7 +304,7 @@ fn legacy_migration_opted_in() -> bool {
 
 /// One-shot stderr notice (per process) when a `~/.hermes` directory
 /// is sitting next to the hermix home and migration is NOT opted in.
-/// /// This is a HINT, not an action — we never touch the legacy dir
+/// This is a HINT, not an action — we never touch the legacy dir
 /// unless the user explicitly opts in via
 /// `HERMIX_MIGRATE_FROM_HERMES=1`. The notice tells the user (a)
 /// why the legacy dir is being left alone and (b) how to import it
@@ -416,18 +416,18 @@ pub fn skills_dir() -> PathBuf {
 }
 
 /// `$hermix_home/data/sessions/`
-/// /// Lives under [`data_dir`] so session logs are included in a portable
+/// Lives under [`data_dir`] so session logs are included in a portable
 /// data backup/migration.
 pub fn sessions_dir() -> PathBuf {
     data_dir().join("sessions")
 }
 
 /// `$hermix_home/data/sessions.db` — SQLite database backing session persistence.
-/// /// **Always** go through this helper (or [`sessions_db_path_in`] for tests /
+/// **Always** go through this helper (or [`sessions_db_path_in`] for tests /
 /// explicit-homed callers). Hard-coding `home.join("sessions.db")` bypasses
 /// the portable override (`HERMIX_PORTABLE_DATA_DIR`) and has caused
 /// "session lost on restart" reports in the past.
-/// /// Lives under [`data_dir`] so sessions are included in a portable
+/// Lives under [`data_dir`] so sessions are included in a portable
 /// data backup/migration.
 pub fn sessions_db_path() -> PathBuf {
     data_dir().join("sessions.db")
@@ -437,10 +437,10 @@ pub fn sessions_db_path() -> PathBuf {
 /// as session persistence (the `tasks` and `automation_*` tables are
 /// created alongside `sessions` / `messages` in the same SQLite file
 /// to avoid dual-writer journal contention — 铁律 D/WAL).
-/// /// **Always** go through this helper (or [`tasks_db_path_in`]).
+/// **Always** go through this helper (or [`tasks_db_path_in`]).
 /// In the future, if task data grows large enough to warrant a
 /// separate file, only this function needs to change.
-/// /// (Phase 0 — P0-2)
+///
 pub fn tasks_db_path() -> PathBuf {
     // Same file as sessions.db — single-writer SQLite + WAL avoids
     // cross-file journal contention (铁律 D).
@@ -448,15 +448,15 @@ pub fn tasks_db_path() -> PathBuf {
 }
 
 /// `<data>/sessions.db` for an explicitly-provided data dir.
-/// /// Tasks share this file. See [`tasks_db_path`] for rationale.
-/// /// (Phase 0 — P0-2)
+/// Tasks share this file. See [`tasks_db_path`] for rationale.
+///
 pub fn tasks_db_path_in(data_dir: impl AsRef<Path>) -> PathBuf {
     // Same as sessions_db_path_in — single SQLite file.
     data_dir.as_ref().join("sessions.db")
 }
 
 /// `<data>/sessions.db` for an explicitly-provided data dir.
-/// /// Use this whenever a component already holds the resolved data dir
+/// Use this whenever a component already holds the resolved data dir
 /// path (e.g. an `HttpServerState::data_dir: PathBuf`). Avoids the
 /// `state.data_dir.join("sessions.db")` scattered-call anti-pattern.
 pub fn sessions_db_path_in(data_dir: impl AsRef<Path>) -> PathBuf {
@@ -464,16 +464,16 @@ pub fn sessions_db_path_in(data_dir: impl AsRef<Path>) -> PathBuf {
 }
 
 /// `$hermix_home/data/sessions/` (markdown session logs) for an explicit home.
-/// /// Lives under [`data_dir`] so session logs are included in a portable
+/// Lives under [`data_dir`] so session logs are included in a portable
 /// data backup/migration.
 pub fn sessions_dir_in(data_dir: impl AsRef<Path>) -> PathBuf {
     data_dir.as_ref().join("sessions")
 }
 
 /// `$hermix_home/data/trajectories/` — RL trajectory dump dir.
-/// /// **Always** go through this helper (or [`trajectories_dir_in`]). Same
+/// **Always** go through this helper (or [`trajectories_dir_in`]). Same
 /// anti-pattern as [`sessions_db_path`].
-/// /// Lives under [`data_dir`] so trajectories are included in a portable
+/// Lives under [`data_dir`] so trajectories are included in a portable
 /// data backup/migration.
 pub fn trajectories_dir() -> PathBuf {
     data_dir().join("trajectories")
@@ -485,7 +485,7 @@ pub fn trajectories_dir_in(data_dir: impl AsRef<Path>) -> PathBuf {
 }
 
 /// `$hermix_home/data/cron/`
-/// /// Lives under [`data_dir`] so cron data is included in a portable
+/// Lives under [`data_dir`] so cron data is included in a portable
 /// data backup/migration.
 pub fn cron_dir() -> PathBuf {
     data_dir().join("cron")
@@ -497,14 +497,14 @@ pub fn env_path() -> PathBuf {
 }
 
 /// `$hermix_home/auth.json` — credential store written by `hermix auth login`.
-/// /// Mirrors Python's `tools.managed_tool_gateway.auth_json_path()`. Used by
+/// Mirrors Python's `tools.managed_tool_gateway.auth_json_path()`. Used by
 /// the managed-tool-gateway resolver to read provider OAuth tokens.
 pub fn auth_json_path() -> PathBuf {
     hermix_home().join("auth.json")
 }
 
 /// `$hermix_home/approval_allowlist.json` — user "Always Allow" command patterns.
-/// /// When the user clicks "Always Allow" on an `RequiresConfirmation` prompt,
+/// When the user clicks "Always Allow" on an `RequiresConfirmation` prompt,
 /// the matched command pattern is persisted here so the next run re-loads
 /// it and bypasses confirmation for matching commands. Format is a JSON
 /// array of `UserAllowlistEntry` (see `hermix_tools::approval`). A missing
@@ -1063,7 +1063,7 @@ mod tests {
         assert_eq!(sessions_db_path_in(&home), home.join("sessions.db"));
         assert_eq!(sessions_dir_in(&home), home.join("sessions"));
         assert_eq!(trajectories_dir_in(&home), home.join("trajectories"));
-        // P0-2: tasks_db_path_in mirrors sessions_db_path_in
+        //tasks_db_path_in mirrors sessions_db_path_in
         assert_eq!(tasks_db_path_in(&home), home.join("sessions.db"));
     }
 

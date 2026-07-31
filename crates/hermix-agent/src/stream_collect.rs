@@ -1,6 +1,6 @@
 //! Streaming-LLM-chunk assembly helpers used by `agent_loop`.
 //!
-//! Extracted from `agent_loop.rs` (P2.x, 2026-07-04) so the 10k-line
+//! Extracted from `agent_loop.rs` (P2.x, ) so the 10k-line
 //! `agent_loop.rs` can focus on the `impl AgentLoop` block. **No behavior
 //! change** — pure relocation.
 //!
@@ -47,7 +47,7 @@ pub(crate) enum StreamCollectOutcome {
 
 /// Pack the streamed content/reasoning/tool_calls into the final assistant
 /// message.
-/// /// Always sets a `content` string when `tool_calls` are present, even when
+/// Always sets a `content` string when `tool_calls` are present, even when
 /// the sanitizer has stripped the raw XML to an empty string. Some API
 /// providers (MiniMax M3) reject assistant messages whose `content` field
 /// is `null` or missing when they carry `tool_calls`.
@@ -66,7 +66,7 @@ pub fn assemble_stream_assistant_message(
         // Always set a `content` string when tool_calls are
         // present, even when the sanitizer has stripped the raw
         // XML to an empty string.  Some API providers (MiniMax
-        // M3) reject assistant messages whose `content` field is
+        //) reject assistant messages whose `content` field is
         // `null` or missing when they carry `tool_calls`.
         let content_opt = Some(if content.is_empty() {
             String::new()
@@ -82,12 +82,12 @@ pub fn assemble_stream_assistant_message(
 }
 
 /// Apply one streaming [`StreamChunk`] during `collect_stream_llm_response`.
-/// /// `think_parser` is a stateful splitter that pulls `<think>...</think>` text
+/// `think_parser` is a stateful splitter that pulls `<think>...</think>` text
 /// out of the visible content stream in real time and routes it to
 /// `reasoning_content` instead. Without this, providers that embed their
 /// reasoning in `delta.content` (MiniMax M2.7, Qwen, DeepSeek-R1) would
 /// leak the whole thinking monologue into the user-visible reply.
-/// /// `tool_call_sanitizer` is a stateful redactor that pulls raw
+/// `tool_call_sanitizer` is a stateful redactor that pulls raw
 /// `<minimax:tool_call>…</minimax:tool_call>` /
 /// `<invoke name="…">…</invoke>` blocks out of the *clean* (post-think)
 /// text. Without it, providers that emit tool calls as raw XML inside
@@ -109,7 +109,7 @@ pub fn apply_stream_collect_chunk(
     on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
 ) {
     let mut chunk = chunk;
-    // (Frontend Audit, "思考被切成两段"): track whether
+    //track whether
     // the think-block parser above already emitted thinking for
     // THIS chunk. Some providers (MiniMax M2.7 with the
     // `extra.thinking` adapter, hybrid transports that re-wrap a
@@ -130,7 +130,7 @@ pub fn apply_stream_collect_chunk(
             let (clean_text, think_text) = think_parser.feed(text);
             // Keep a copy of the pre-sanitizer text so we can
             // later parse it for tool calls hidden inside
-            // `<minimax:tool_call>` blocks (MiniMax-M2 / M2.5).
+            //`<minimax:tool_call>` blocks (MiniMax-M2 / ).
             raw_content.push_str(&clean_text);
             // Second pass: scrub raw tool-call XML out of the
             // *clean* text. We do this BEFORE both
@@ -299,7 +299,7 @@ pub fn apply_stream_collect_chunk(
 }
 
 /// Collect one streaming completion into [`LlmResponse`] (first attempt in `run_stream` D-step).
-/// /// Opens a streaming completion, iterates over chunks, and assembles the final
+/// Opens a streaming completion, iterates over chunks, and assembles the final
 /// response. Supports graceful interrupt and a silence-watchdog that emits
 /// activity-status events when the stream stalls.
 #[allow(clippy::too_many_arguments)]
@@ -330,7 +330,7 @@ pub(crate) async fn collect_stream_llm_response(
     active_model: &str,
     on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
 ) -> Result<StreamCollectOutcome, AgentError> {
-    // (Round 29 follow-up): outer hard timeout. The inner
+    //( follow-up): outer hard timeout. The inner
     // silence_watch only emits "activity" notices — it does not abort
     // the stream — so a provider that opens the SSE / chunked
     // connection and then never sends a chunk (network hang, API
@@ -939,7 +939,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    /// (Frontend Audit, "思考被切成两段"): when a single
+    /// when a single
     /// LLM chunk carries BOTH a `<think>...</think>` span in
     /// `delta.content` AND a `delta.extra.thinking` value, the
     /// chat UI used to render the same sentence as TWO "已深度思考"
@@ -1073,7 +1073,7 @@ mod tests {
 
     // -----------------------------------------------------------------------
     // hard outer timeout tests for `collect_stream_llm_response`.
-    // Symptom (Round 29): provider opens the SSE connection and then
+    //Symptom : provider opens the SSE connection and then
     // never sends a chunk (network hang, API outage, silently dropped
     // TCP). Without the outer timeout the inner `silence_watch` only
     // emits activity notices — it does not abort — so the agent loop
@@ -1194,7 +1194,7 @@ mod tests {
     /// scaffold, mutating only the LLM provider and the
     /// `stream_overall_timeout_secs` config. Returns whatever
     /// `StreamCollectOutcome` the wrapper surfaces.
-    /// /// The first-chunk deadline is set well above the overall
+    /// The first-chunk deadline is set well above the overall
     /// timeout so the existing `hard_timeout_*` tests still exercise
     /// the outer watchdog path (the tighter "no_first_chunk" arm
     /// is covered by `first_chunk_timeout_*` tests below).
@@ -1264,7 +1264,7 @@ mod tests {
     /// `StreamCollectOutcome::Complete { finish_reason: "timeout" }`
     /// with an empty assistant message. Without the watchdog this
     /// test would never return — the agent loop would stay pinned
-    /// at "正在思考" forever (the Round 29 bug).
+    /// at "正在思考" forever (the bug).
     #[tokio::test]
     async fn hard_timeout_fires_when_provider_never_chunks() {
         // Test-level wall-clock cap: 10 s is generous compared to the
@@ -1343,7 +1343,7 @@ mod tests {
     /// streaming connection but never sends the **first** chunk,
     /// the new `stream_first_chunk_timeout_secs` tripwire aborts
     /// the inner collect early with `finish_reason="no_first_chunk"`.
-    /// This turns the "approval+hang forever" symptom (Round 29)
+    /// This turns the "approval+hang forever" symptom
     /// into a 1 s recovery for test instrumentation, well inside
     /// the 180 s outer watchdog, so the agent loop reaches
     /// `decide_empty_response` quickly enough to nudge / finalise
@@ -1430,7 +1430,7 @@ mod tests {
     }
 
     // ================================================================
-    // P2-3: Fault-injection tests (STABILITY-PLAN §2.8)
+    //Fault-injection tests
     // ================================================================
     // Each test injects a specific failure mode and verifies the
     // agent loop's stream collection handles it gracefully (no hang,

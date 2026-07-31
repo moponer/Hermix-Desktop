@@ -55,7 +55,7 @@ pub struct ConfigVar {
 // ---------------------------------------------------------------------------
 
 /// Parse YAML frontmatter delimited by `---` from a SKILL.md file.
-/// /// Returns the parsed frontmatter as a map and the remaining body content.
+/// Returns the parsed frontmatter as a map and the remaining body content.
 /// If no frontmatter is found, returns an empty map and the full content.
 pub fn parse_frontmatter(content: &str) -> (HashMap<String, Value>, String) {
     let trimmed = content.trim_start();
@@ -304,7 +304,7 @@ pub fn iter_skill_index_files(dir: &Path) -> Vec<PathBuf> {
 // ---------------------------------------------------------------------------
 
 /// Extract the set of disabled skill names from a config value.
-/// /// Looks for `disabled_skills` as an array of strings.
+/// Looks for `disabled_skills` as an array of strings.
 pub fn get_disabled_skill_names(config: &Value) -> HashSet<String> {
     config
         .get("disabled_skills")
@@ -323,7 +323,7 @@ pub fn get_disabled_skill_names(config: &Value) -> HashSet<String> {
 // ---------------------------------------------------------------------------
 
 /// Check if a skill matches the given platform (e.g. "darwin", "linux", "windows").
-/// /// If the skill has no platform constraint, it matches all platforms.
+/// If the skill has no platform constraint, it matches all platforms.
 pub fn match_platform(skill: &SkillInfo, platform: &str) -> bool {
     match skill.frontmatter.get("platform") {
         None => true,

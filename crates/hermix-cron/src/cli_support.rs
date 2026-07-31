@@ -72,7 +72,7 @@ impl LlmProvider for MinimalCronLlm {
 }
 
 /// Build a scheduler that persists jobs under `data_dir` (e.g. `$HERMIX_HOME/cron`).
-/// /// The scheduler is wired with the cross-process `CronFileLock`
+/// The scheduler is wired with the cross-process `CronFileLock`
 /// at `<data_dir>/.tick.lock` so that concurrent CLI invocations
 /// and the desktop app's embedded scheduler can coexist without
 /// `SQLITE_BUSY` on the shared SQLite DB. See

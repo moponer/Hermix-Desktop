@@ -42,7 +42,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// (P1-1): Helper to compile static regex patterns without
+//: Helper to compile static regex patterns without
 // .unwrap(). Uses .expect() with a semantic message as required by
 // the code hardening plan (static init cannot use `?`).
 fn re(pattern: &'static str) -> Regex {
@@ -191,7 +191,7 @@ static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 /// `CONFIRM_PATTERNS` so a read-only PowerShell cmdlet like
 /// `Get-ChildItem` is never held up by the broad `powershell` confirm
 /// pattern.
-/// /// Rationale (2026-07-21): the user reported that simple read-only
+/// Rationale : the user reported that simple read-only
 /// operations like `Get-PSDrive` and `Get-ChildItem` were triggering
 /// approval prompts during a disk-analysis task. These commands are
 /// inherently safe — they read metadata and never modify state.
@@ -260,20 +260,20 @@ static READONLY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 
 // ---------------------------------------------------------------------------
-// TerminalApprovalContext (2026-07-17, "Caution tool needs UI prompts")
+//TerminalApprovalContext (, "Caution tool needs UI prompts")
 // ---------------------------------------------------------------------------
 
 /// Per-request hook the `terminal` tool uses to surface a
 /// `RequiresConfirmation` decision as a `request_approval` event on the
 /// same WS channel the agent streams on, instead of bouncing the
 /// "please reply `HERMIX_CONFIRM=1`" text through the LLM.
-/// /// Set by `LocalAgentService::send_message` on every turn (the closure
+/// Set by `LocalAgentService::send_message` on every turn (the closure
 /// captures the active WS `ApprovalRegistry` + `on_event`), and read by
 /// `TerminalHandler::execute` when `ApprovalManager::check_approval`
 /// returns `RequiresConfirmation`. When both fields are `None`
 /// (unit tests, headless callers, CLI runs without a UI), the tool
 /// falls back to the legacy text-based flow — backward-compatible.
-/// /// The closure captures the same `Arc`s the dangerous-tool approval
+/// The closure captures the same `Arc`s the dangerous-tool approval
 /// path uses (see `local_agent_service::decide_pre_tool_dispatch`),
 /// so the frontend can reuse the existing `InlineApprovalCard` without
 /// any client-side change.
@@ -289,7 +289,7 @@ pub struct TerminalApprovalContext {
     /// pending decision, then `.await`s the receiver for the user's
     /// verdict. `ApprovalOutcome` distinguishes `Approved` from
     /// `DeniedByUser` / `TimedOut` / `ChannelClosed` so the tool can
-    /// emit an accurate reply (A+C product fix, 2026-07-18). None →
+    /// emit an accurate reply (A+C product fix, ). None →
     /// fallback to text flow.
     pub requester: Option<
         std::sync::Arc<
@@ -350,20 +350,20 @@ pub struct ApprovalManager {
     /// session are remembered — subsequent matches skip the confirmation
     /// prompt. Cleared on session reset. Mirrors Hermes Agent's
     /// session-scoped approval memory.
-    /// /// ### optional disk persistence
-    /// /// The in-memory set is still authoritative, but callers can
+    /// ### optional disk persistence
+    /// The in-memory set is still authoritative, but callers can
     /// opt into persisting the set to `<hermix_home>/session_approvals.json`
     /// via [`Self::approve_for_session_with_persist`] (which calls
     /// [`persist_session_approvals`] under the hood). On startup,
     /// [`load_session_approvals`] restores the previous session's
     /// approved commands so a restart doesn't re-prompt for every
     /// command the user already approved.
-    /// /// We deliberately use a separate file from `approval_allowlist.json`
+    /// We deliberately use a separate file from `approval_allowlist.json`
     /// (the "always allow" persistent patterns) — the allowlist is
     /// pattern-based and survives forever; session approvals are
     /// exact-match commands and survive across restarts but can be
     /// wiped by `clear_session_approvals()` (e.g. on `/new`).
-    /// /// wrapped in `Mutex` so `approve_for_session` can
+    /// wrapped in `Mutex` so `approve_for_session` can
     /// be called from a `&self` context — the terminal tool's
     /// WS-approval path needs to persist "this exact command was
     /// approved for this session" without holding a `&mut self` on
@@ -400,13 +400,13 @@ impl ApprovalManager {
     /// `storage_analyzer --path` from `storage_analyzer --path "C:\"`)
     /// so that approving one invocation of a command also covers
     /// subsequent invocations with different arguments.
-    /// /// Rationale (2026-07-21): the previous implementation used the
+    /// Rationale : the previous implementation used the
     /// full normalized command string as the session key, which meant
     /// `storage_analyzer --path "C:\"` and `storage_analyzer --path
     /// "C:\Users"` were treated as two different commands — the user
     /// had to approve each one separately. Prefix matching (first 2
     /// tokens) groups them so a single approval covers all arguments.
-    /// /// For single-token commands (e.g. `ls`), the key is just the
+    /// For single-token commands (e.g. `ls`), the key is just the
     /// command name itself.
     fn command_prefix_key(command: &str) -> String {
         command
@@ -470,7 +470,7 @@ impl ApprovalManager {
     }
 
     /// Check whether a command requires approval.
-    /// /// Returns:
+    /// Returns:
     /// - `Denied` if the command matches a denied pattern (built-in
     /// or custom). The user allowlist is **never** allowed to
     /// downgrade a `Denied` decision — catastrophic patterns stay
@@ -572,9 +572,9 @@ impl ApprovalManager {
     /// Subsequent `check_approval` calls for the same command will
     /// return `Approved` without prompting. Does NOT override `Denied`
     /// decisions (catastrophic patterns stay catastrophic).
-    /// /// Use [`Self::approve_for_session_with_persist`] when you also
+    /// Use [`Self::approve_for_session_with_persist`] when you also
     /// want the approval to survive a process restart.
-    /// /// `&self` (was `&mut self`) so the terminal tool's
+    /// `&self` (was `&mut self`) so the terminal tool's
     /// WS-approval path can persist the per-session approval without
     /// requiring `&mut self` on the handler. Backed by `Mutex` internally.
     pub fn approve_for_session(&self, command: &str) {
@@ -586,12 +586,12 @@ impl ApprovalManager {
 
     /// Like [`Self::approve_for_session`] but also writes the in-memory
     /// set to disk at `path` so the approval survives a process restart.
-    /// /// Persistence is opt-in (callers pass the path explicitly) so
+    /// Persistence is opt-in (callers pass the path explicitly) so
     /// ephemeral test / CLI flows can avoid touching the filesystem.
     /// `path` is typically `$HERMIX_HOME/session_approvals.json`; pass
     /// `None` to skip persistence and behave like
     /// [`Self::approve_for_session`].
-    /// /// `&self` for the same reason as `approve_for_session`.
+    /// `&self` for the same reason as `approve_for_session`.
     pub fn approve_for_session_with_persist(
         &self,
         command: &str,
@@ -655,7 +655,7 @@ impl ApprovalManager {
 
     /// Restore a previously-persisted session-approval set.
     /// Replaces the current in-memory set (does not merge).
-    /// /// `&self` (was `&mut self`) for the same Mutex
+    /// `&self` (was `&mut self`) for the same Mutex
     /// reason as the other session-approval methods.
     pub fn restore_session_approvals(&self, set: std::collections::HashSet<String>) {
         if let Ok(mut current) = self.session_approved.lock() {
@@ -665,19 +665,19 @@ impl ApprovalManager {
 }
 
 // ---------------------------------------------------------------------------
-// Session-approval persistence (2026-07-05)
+//Session-approval persistence
 // ---------------------------------------------------------------------------
 
 /// Load a previously-persisted session-approval set from `path`.
-/// /// Failure matrix (mirrors `UserAllowlist::load`):
-/// /// | File state        | Result                                          |
+/// Failure matrix (mirrors `UserAllowlist::load`):
+/// | File state        | Result                                          |
 /// |-------------------|-------------------------------------------------|
 /// | Missing           | empty set (no warning)                          |
 /// | Empty             | empty set (no warning)                          |
 /// | Valid JSON array  | populated set                                   |
 /// | Corrupt JSON      | empty set + warning                             |
 /// | Permission denied | empty set + warning                             |
-/// /// Load is **never** fatal — a corrupt or unreadable file must not
+/// Load is **never** fatal — a corrupt or unreadable file must not
 /// stop the agent from starting.
 pub fn load_session_approvals(path: &Path) -> std::collections::HashSet<String> {
     let bytes = match std::fs::read(path) {
@@ -789,7 +789,7 @@ pub fn is_readonly_command(command: &str) -> bool {
 
 /// A single "Always Allow" entry: a regex pattern + the example command
 /// the user originally approved.
-/// /// Stored as a regex (not a literal) so future versions can support
+/// Stored as a regex (not a literal) so future versions can support
 /// broader patterns (e.g. `^sudo apt install \S+(\s.*)?$` to allow all
 /// `sudo apt install <pkg>` invocations with any further args). For
 /// MVP, [`UserAllowlist::add_literal`] stores a regex-escaped exact
@@ -809,13 +809,13 @@ pub struct UserAllowlistEntry {
 }
 
 /// Persistent user "Always Allow" list.
-/// /// Holds the regex patterns the user has blessed for the `always`
+/// Holds the regex patterns the user has blessed for the `always`
 /// tier of the 4-state approval (`once` / `session` / `always` /
 /// `deny`). Loaded from disk at agent startup via [`Self::load`] and
 /// re-saved on every modification. A missing or corrupt file yields
 /// an empty allowlist — load **must not** fail the agent start, by
 /// design.
-/// /// The `compiled` cache is kept in sync with `entries` at all times
+/// The `compiled` cache is kept in sync with `entries` at all times
 /// (skip-serialized so the JSON only stores the source patterns;
 /// recompiled lazily on `load`).
 #[derive(Debug, Clone, Default)]
@@ -838,7 +838,7 @@ impl UserAllowlist {
     /// Add a regex pattern. Compiles it; returns an error if invalid
     /// (the entry is **not** added in that case — the caller can
     /// decide to drop, log, or surface to the user).
-    /// /// `command_hint` is informational (e.g. the example command
+    /// `command_hint` is informational (e.g. the example command
     /// that triggered the prompt); it shows up in `--allowlist list`
     /// output and is **not** consulted at match time.
     pub fn add(
@@ -899,14 +899,14 @@ impl UserAllowlist {
     }
 
     /// Load from a JSON file. Behavior matrix:
-    /// /// | File state             | Result                              |
+    /// | File state             | Result                              |
     /// |------------------------|-------------------------------------|
     /// | Missing                | `Self::new()` (no warning)          |
     /// | Empty                  | `Self::new()` (no warning)          |
     /// | Valid JSON array       | populated, recompiled               |
     /// | Corrupt JSON           | `Self::new()` + warning to stderr   |
     /// | Permission denied      | `Self::new()` + warning to stderr   |
-    /// /// Load is **never** fatal: a corrupt or unreadable file must
+    /// Load is **never** fatal: a corrupt or unreadable file must
     /// not stop the agent from starting. The user can rebuild the
     /// allowlist by re-clicking "Always Allow" on the relevant
     /// prompts.
@@ -1183,10 +1183,10 @@ mod tests {
         // Every entry in the documented "Destructive ops"
         // category should be denied. This guards against
         // accidentally deleting a pattern from DENIED_PATTERNS.
-        // History note (2026-06-08): `format C:` was originally
+        //History note : `format C:` was originally
         // listed in `confirm_patterns_are_comprehensive` (as a
         // CONFIRM pattern), but was promoted to DENIED when the
-        // Windows-denied-pattern pass (commit 9b3fd8a follow-up)
+        //Windows-denied-pattern pass ( follow-up)
         // recognised that `format C:` is unrecoverable destruction
         // — a stray confirmation click would still wipe the OS
         // drive. It now lives here in the `destructive` list.
@@ -1558,7 +1558,7 @@ mod tests {
     /// `ApprovalManager` itself denies (`rm -rf /`, `mkfs`, `dd
     /// of=/dev/...`, etc.) stay catastrophic regardless of "always
     /// allow" preferences.
-    /// /// NOTE: pure fork bombs like `:(){ :|:& };:` are caught by
+    /// NOTE: pure fork bombs like `:(){ :|:& };:` are caught by
     /// `hermix-agent`'s `hardline::UNRECOVERABLE_BLOCKLIST`, not by
     /// `ApprovalManager::DENIED_PATTERNS` — that's a different
     /// layer of defense and out of scope for this manager-level
@@ -1810,7 +1810,7 @@ mod tests {
     /// Session approval now uses prefix matching: approving
     /// `storage_analyzer --path "C:\\"` also covers
     /// `storage_analyzer --path "C:\\Users"`.
-    /// /// Use `apt install` as the "different command" probe because it
+    /// Use `apt install` as the "different command" probe because it
     /// matches a CONFIRM_PATTERN (unlike `storage_clean` which falls
     /// through to the implicit-Approved default at check_approval:551).
     #[test]

@@ -98,7 +98,7 @@ impl ProviderCandidate {
 }
 
 /// An ordered, deduplicated chain of provider candidates.
-/// /// The chain is intentionally a value type (not a singleton) so callers can
+/// The chain is intentionally a value type (not a singleton) so callers can
 /// build per-task chains — e.g. a vision task drops candidates whose
 /// `supports_vision == false`.
 #[derive(Default, Clone, Debug)]

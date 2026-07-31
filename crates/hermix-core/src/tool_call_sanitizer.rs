@@ -803,7 +803,7 @@ mod tests {
         assert_eq!(out, input);
     }
 
-    // ---- User-reported repro: see Round 3 bug report (2026-06-11) ----
+    //User-reported repro: see bug report ----
     // The desktop client shows the LLM streaming THIS exact string back
     // to the user. The sanitizer MUST eat it whole.
     #[test]
@@ -831,7 +831,7 @@ mod tests {
         assert_eq!(out, "");
     }
 
-    // ---- MiniMax M3 native format (2026-06-12) ----
+    //MiniMax M3 native format ----
     // Model outputs: <terminal> <command>ls -la</command> </terminal>
     // Tool name = outer tag, parameters = inner tags.
 
@@ -904,7 +904,7 @@ mod tests {
         assert_eq!(out, "");
     }
 
-    // ---- Thinking-block leak (2026-06-14) -------------------------------
+    //Thinking-block leak -------------------------------
     // The LLM sometimes dumps its internal monologue
     // (`"Hmm, wait..."`, `"Actually..."`, `"Let me think..."`,
     // `"Wait, the user wants..."`) into the visible chat bubble
@@ -1051,7 +1051,7 @@ mod tests {
         assert!(out.contains("<thinkful>"), "should preserve prose: {out}");
     }
 
-    // ---- <tool_calls> wrapper leak (2026-07-28) --------------------------
+    //<tool_calls> wrapper leak --------------------------
     // Some providers/models wrap raw tool calls in `<tool_calls>`
     // `</tool_calls>`. The opening tag, the body, and a stray
     // closing tag must all be suppressed — the user was seeing
@@ -1086,7 +1086,7 @@ mod tests {
 
     #[test]
     fn strips_orphan_tool_calls_close() {
-        // Exact repro from the 2026-07-28 screenshot: the model
+        //Exact repro from the screenshot: the model
         // emitted only the closing `</tool_calls>` as visible text.
         let input = "已经执行了。\n</tool_calls>\n还有什么要问的？";
         let out = drain(&[input]);

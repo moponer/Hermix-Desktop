@@ -315,7 +315,7 @@ impl SessionManager {
     }
 
     /// Get or create a session for the given platform, chat, and user.
-    /// /// If a session exists for this (platform, chat_id, user_id) triple,
+    /// If a session exists for this (platform, chat_id, user_id) triple,
     /// return it (after checking whether it should be reset).
     /// Otherwise, create a new session.
     pub async fn get_or_create_session(
@@ -351,7 +351,7 @@ impl SessionManager {
         sessions.insert(session_key.clone(), session);
         // Release the sessions write guard BEFORE touching
         // user_sessions — never hold both locks simultaneously
-        // (P0-5 / STABILITY-PLAN §2.1: nested-lock deadlock guard).
+        //( / : nested-lock deadlock guard).
         drop(sessions);
 
         // Track user -> session mapping for cross-platform continuity
@@ -449,7 +449,7 @@ impl SessionManager {
 
     /// Remove a session entirely.
     ///
-    /// (P0-5 / STABILITY-PLAN §2.1): Previously held
+    /// ( / ): Previously held
     /// `sessions.write()` while acquiring `user_sessions.write()` —
     /// a nested-lock pattern that deadlocks if any other path takes
     /// the two locks in the opposite order. Now we remove from
@@ -511,11 +511,11 @@ impl SessionManager {
     }
 
     /// Flush all in-memory sessions (e.g., before shutdown or persistence).
-    /// /// Returns all sessions that were flushed.
+    /// Returns all sessions that were flushed.
     pub async fn flush_memories(&self) -> Vec<Session> {
         // Collect + clear sessions, then drop the guard before
         // touching user_sessions — never hold both locks
-        // simultaneously (P0-5 / STABILITY-PLAN §2.1).
+        //simultaneously ( / ).
         let all: Vec<Session> = {
             let mut sessions = self.sessions.write().await;
             let all: Vec<Session> = sessions.values().cloned().collect();
@@ -530,7 +530,7 @@ impl SessionManager {
     }
 
     /// Expire idle sessions according to their reset policy.
-    /// /// Returns the number of removed sessions.
+    /// Returns the number of removed sessions.
     pub async fn expire_idle_sessions(&self) -> usize {
         let mut sessions = self.sessions.write().await;
         let before = sessions.len();

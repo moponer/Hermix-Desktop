@@ -106,7 +106,7 @@ impl PatchResult {
 // ---------------------------------------------------------------------------
 
 /// Parse a V4A format patch string into a list of operations.
-/// /// Returns `(operations, error)`. On success, error is `None`.
+/// Returns `(operations, error)`. On success, error is `None`.
 pub fn parse_v4a_patch(patch_content: &str) -> (Vec<PatchOperation>, Option<String>) {
     let lines: Vec<&str> = patch_content.split('\n').collect();
 
@@ -257,7 +257,7 @@ fn finalize_op(
 }
 
 /// Extract the "old" (search) and "new" (replace) text from a hunk.
-/// /// Context lines (' ') appear in both old and new.
+/// Context lines (' ') appear in both old and new.
 /// Removed lines ('-') appear only in old.
 /// Added lines ('+') appear only in new.
 pub fn hunk_to_search_replace(hunk: &Hunk) -> (String, String) {

@@ -1,4 +1,4 @@
-//! Phase 4.2 — Two-split acceptance gate.
+//! — Two-split acceptance gate.
 //!
 //! When the agent loop produces output (visible text + tool results), this
 //! module provides a **two-split acceptance gate** that must pass before
@@ -189,7 +189,7 @@ impl AcceptanceGate {
     // -----------------------------------------------------------------------
 
     /// Evaluate an LLM output through both splits.
-    /// /// - `visible_text`: The visible (non-thinking) text produced by the LLM.
+    /// - `visible_text`: The visible (non-thinking) text produced by the LLM.
     /// - `tool_calls_json`: Raw JSON strings of any tool calls made.
     /// - `thinking_blocks`: The content of thinking blocks (for structural check).
     /// - `has_user_query`: Whether there was a user query in this turn.

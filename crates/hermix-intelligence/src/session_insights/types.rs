@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// One row from the `sessions` SQL table.
-/// /// Field names follow the Python schema (`agent/insights.py::_SESSION_COLS`)
+/// Field names follow the Python schema (`agent/insights.py::_SESSION_COLS`)
 /// so that future SQLite-backed [`super::SessionDataSource`]
 /// implementations can map directly.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

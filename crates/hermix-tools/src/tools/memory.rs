@@ -169,14 +169,14 @@ impl ToolHandler for MemoryHandler {
 // ---------------------------------------------------------------------------
 
 /// Register the `memory` tool with the registry.
-/// /// The default backend is `FileMemoryBackend` — it persists to
+/// The default backend is `FileMemoryBackend` — it persists to
 /// `MEMORY.md` / `USER.md` under `hermix_home()`. Operators that need
 /// an alternate backend can construct their own `MemoryHandler` and
 /// re-register under the same `memory` key before this `register` is
 /// called.
-/// /// P1.3 migration: previously inline in
+/// P1.3 migration: previously inline in
 /// `register_builtins.rs::register_builtin_tools`.
-/// /// The companion `tracing::info!` that announces the frozen-snapshot
+/// The companion `tracing::info!` that announces the frozen-snapshot
 /// mode (`MemoryBackend::current_snapshot` memoizes MEMORY.md/USER.md
 /// at session start so the LLM prefix cache stays stable across
 /// write-after-read cycles) lives next to the registration site so the

@@ -1259,7 +1259,7 @@ impl PlatformAdapter for WeChatAdapter {
         self.inner.base.mark_stopped();
         self.inner.stop.notify_waiters();
         self.stop_signal.notify_one();
-        // (P0-7 / STABILITY-PLAN §2.5): abort the poll task AND await
+        //( / ): abort the poll task AND await
         // its cancellation (bounded by a timeout) so we never leak a
         // zombie task. Previously `abort()` was fire-and-forget — the
         // task could linger across reconnects, accumulating one
@@ -1276,7 +1276,7 @@ impl PlatformAdapter for WeChatAdapter {
         // returns None once all in-flight clones (held briefly by the
         // poll_loop's spawned send tasks) are dropped. Without this,
         // the channel stays half-open and the downstream consumer
-        // task hangs forever across reconnects. (P0-7)
+        //task hangs forever across reconnects.
         *self.inner.inbound_tx.write().await = None;
         Ok(())
     }

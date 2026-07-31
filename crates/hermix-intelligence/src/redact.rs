@@ -171,7 +171,7 @@ impl Redactor {
     }
 
     /// Redact sensitive data from a message, returning a new message.
-    /// /// Only redacts the content field; preserves role, tool_calls, etc.
+    /// Only redacts the content field; preserves role, tool_calls, etc.
     pub fn redact_message(&self, message: &Message) -> Message {
         Message {
             role: message.role,

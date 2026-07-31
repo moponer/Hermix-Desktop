@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
 // Prompt constants for memory + skill review (moved from agent_loop.rs
-// 2026-07-06, God Object refactor Phase 1)
+//, God Object refactor )
 // ---------------------------------------------------------------------------
 
-/// Python `AIAgent._MEMORY_REVIEW_PROMPT` / `_SKILL_REVIEW_PROMPT` / `_COMBINED_REVIEW_PROMPT` (v2026.4.16)
+/// Python `AIAgent._MEMORY_REVIEW_PROMPT` / `_SKILL_REVIEW_PROMPT` / `_COMBINED_REVIEW_PROMPT`
 pub(crate) const MEMORY_REVIEW_PROMPT: &str = "Review the conversation above and consider saving to memory if appropriate.\n\n\
 Focus on:\n\
 1. Has the user revealed things about themselves — their persona, desires, preferences, or personal details worth remembering?\n\

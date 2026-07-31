@@ -22,7 +22,7 @@ use crate::tools::file::to_absolute_path;
 use crate::ToolRegistry;
 
 /// Register this tool with the registry (P1.2 migration).
-/// /// P1.8 (2026-07-02): tag the handler with the dedicated `"pdf"`
+/// P1.8 : tag the handler with the dedicated `"pdf"`
 /// toolset instead of the broader `"file"`. `essential::ESSENTIAL_TOOLSETS`
 /// lists `"pdf"` as a distinct floor entry; lumping it into
 /// `"file"` would have made the floor's `set_toolset_enabled("pdf", true)`
@@ -62,7 +62,7 @@ const DEFAULT_MAX_CHARS: usize = 50_000;
 const STATUS_INVALID_IMAGE_NOT_FORMAT: i32 = -1_073_741_701;
 
 /// Resolve the on-disk path to the `pdftotext` binary.
-/// /// In production, `hermes.exe` and `pdftotext.exe` are installed side-by-side
+/// In production, `hermes.exe` and `pdftotext.exe` are installed side-by-side
 /// (e.g. `C:\Program Files\Hermix Desktop\`). In dev, we fall back to PATH
 /// lookup so contributors don't have to copy the binary into `target/debug`.
 pub fn resolve_pdftotext_path() -> Result<PathBuf, String> {

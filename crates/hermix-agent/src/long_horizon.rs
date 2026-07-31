@@ -1,4 +1,4 @@
-//! Long-horizon task briefing (Phase 1.1).
+//! Long-horizon task briefing .
 //!
 //! When an agent task is expected to take more than ~10 turns or the
 //! user explicitly requests long-running execution, we generate a

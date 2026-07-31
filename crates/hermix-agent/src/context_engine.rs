@@ -1,19 +1,19 @@
 // P8 - Context management & compression algorithm primitives.
 // Seven cooperating sub-primitives for the context-engine:
-// P8-T1 ContextHealth       - degradation diagnosis
-// P8-T2 IncrementalSummary  - append-style summary deltas
-// P8-T3 MaskingStrategy     - redact PII / secrets
-// P8-T4 FrozenSnapshot      - immutable KV-cache snapshot
-// P8-T5 ContextFence        - protected section markers
-// P8-T6 HeaderProtection    - lock the first N messages
-// P8-T7 FlushIntegration    - bind the flush sentinel + diagnostics
+//ContextHealth - degradation diagnosis
+//IncrementalSummary - append-style summary deltas
+//MaskingStrategy - redact PII / secrets
+//FrozenSnapshot - immutable KV-cache snapshot
+//ContextFence - protected section markers
+//HeaderProtection - lock the first N messages
+//FlushIntegration - bind the flush sentinel + diagnostics
 // Each is a small data type + a small policy function. The actual
 // loader / unloader lives in compression.rs.
 
 use std::collections::VecDeque;
 
 // ===========================================================================
-// P8-T1 - ContextHealth
+//ContextHealth
 // ===========================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +69,7 @@ impl ContextHealth {
 }
 
 // ===========================================================================
-// P8-T2 - IncrementalSummary
+//IncrementalSummary
 // ===========================================================================
 
 /// Incremental summarisation: instead of re-summarising the entire
@@ -157,7 +157,7 @@ impl IncrementalSummary {
 }
 
 // ===========================================================================
-// P8-T3 - MaskingStrategy
+//MaskingStrategy
 // ===========================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -355,7 +355,7 @@ fn placeholder_for(kind: MaskKind) -> String {
 }
 
 // ===========================================================================
-// P8-T4 - FrozenSnapshot
+//FrozenSnapshot
 // ===========================================================================
 
 /// Immutable snapshot of the messages vec at a known instant.
@@ -401,7 +401,7 @@ pub fn default_redaction_strategy() -> MaskingStrategy {
     ])
 }
 
-/// P8-T3 wire convenience: redact secret-shaped strings out of an
+/// wire convenience: redact secret-shaped strings out of an
 /// arbitrary tool result body. Returns the rewritten text + the spans
 /// that were masked (for audit / trace panel rendering).
 pub fn redact_tool_result(body: &str) -> (String, Vec<MaskedSpan>) {
@@ -446,7 +446,7 @@ impl SnapshotStore {
 }
 
 // ===========================================================================
-// P8-T5 - ContextFence
+//ContextFence
 // ===========================================================================
 
 /// Range [start, end) of message indices that MUST survive any
@@ -528,7 +528,7 @@ impl ContextFence {
 }
 
 // ===========================================================================
-// P8-T6 - HeaderProtection
+//HeaderProtection
 // ===========================================================================
 
 /// Always keep the first N messages untouched. Use this for the
@@ -551,11 +551,11 @@ impl HeaderProtection {
 }
 
 // ===========================================================================
-// P8-T7 - FlushIntegration
+//FlushIntegration
 // ===========================================================================
 
-/// Cohesive view that binds the flush sentinel context (P3-T4) and
-/// the context-health diagnostic (P8-T1). The agent loop can call
+/// Cohesive view that binds the flush sentinel context and
+/// the context-health diagnostic . The agent loop can call
 /// `should_flush_before_compress(health)` and decide on one knob.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlushIntegration {
@@ -612,7 +612,7 @@ impl FlushIntegration {
 mod tests {
     use super::*;
 
-    // P8-T1
+    //
     #[test]
     fn context_health_levels() {
         assert_eq!(
@@ -641,7 +641,7 @@ mod tests {
         assert!(h.reasons.len() >= 2);
     }
 
-    // P8-T2
+    //
     #[test]
     fn incremental_summary_accumulates() {
         let mut s = IncrementalSummary::empty();
@@ -694,7 +694,7 @@ mod tests {
         assert_eq!(s.delta_count(), DELTA_HISTORY_CAP);
     }
 
-    // P8-T3
+    //
     #[test]
     fn masking_disabled_passthrough() {
         let m = MaskingStrategy::default();
@@ -746,7 +746,7 @@ mod tests {
         assert!(out.contains("[REDACTED:hex]"));
     }
 
-    // P8-T4
+    //
     #[test]
     fn fingerprint_messages_changes_on_role_change() {
         let a = fingerprint_messages(&["user", "assistant", "user"]);
@@ -772,7 +772,7 @@ mod tests {
         assert_eq!(f.first_meaningful_index, Some(2));
     }
 
-    // P8-T5
+    //
     #[test]
     fn fence_protects_in_range() {
         let mut fs = ContextFence::new();
@@ -801,7 +801,7 @@ mod tests {
         assert!(fs.fences().is_empty());
     }
 
-    // P8-T6
+    //
     #[test]
     fn header_protection_is_inclusive_of_first_n() {
         let h = HeaderProtection::new(3);
@@ -810,7 +810,7 @@ mod tests {
         assert!(!h.is_protected(3));
     }
 
-    // P8-T7
+    //
     #[test]
     fn flush_integration_default_skips_under_threshold() {
         let fi = FlushIntegration::default();

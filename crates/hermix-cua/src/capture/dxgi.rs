@@ -1,11 +1,10 @@
-//! DXGI Output Duplication backend — **Phase 2-A** (replaces
-//! BitBlt as the primary capture path).
+//! DXGI Output Duplication backend (the primary capture path).
 //!
 //! ## What this does
 //!
 //! On Windows 8+, `IDXGIOutputDuplication` exposes the GPU's
 //! swap-chain surface as a `ID3D11Texture2D` we can read back.
-//! Compared to the Phase-1 BitBlt path:
+//! Compared to the BitBlt path:
 //!
 //! - **Speed**: 5–10× faster on most hardware (BitBlt stalls on
 //!   the GPU/CPU boundary; DXGI is a direct DMA path into a
@@ -28,7 +27,7 @@
 //! prompt, monitor hot-plug, RDP session attach, etc., and we'd
 //! rather pay a 50–100 ms init cost per `cua_screenshot` than
 //! re-implement the full "re-acquire on DXGI_ERROR_ACCESS_LOST"
-//! dance (Phase 2-B will amortise this via a thread-local cache).
+//! dance .
 //!
 //! ## Fallback contract
 //!
@@ -264,7 +263,7 @@ unsafe fn dxgi_capture_inner(config: CaptureConfig) -> CuaResult<ScreenshotResul
 
     // 9. Encode RGBA8 → PNG. The encoder is the same one
     // `bitblt_capture` uses, so the wire format is identical
-    // to Phase 1 and downstream consumers don't notice the
+    // to the BitBlt path and downstream consumers don't notice the
     // backend swap.
     let mut png_buf: Vec<u8> = Vec::with_capacity(width_us * height_us);
     {

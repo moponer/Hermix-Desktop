@@ -4,17 +4,17 @@
 // Each one is a small data type + a couple of policy functions;
 // the actual workload drivers live in `tests/` directories.
 //
-// P6-T1 AdversarialHarness - harness-level attack replay
-// P6-T2 SkillHealthScoreboard - skill health trend over time
-// P6-T3 RouterAccuracyBenchmark - routing Top-1 / Top-3 accuracy
-// P6-T4 EffectivenessBenchmark - end-to-end task completion
+//AdversarialHarness - harness-level attack replay
+//SkillHealthScoreboard - skill health trend over time
+//RouterAccuracyBenchmark - routing Top-1 / Top-3 accuracy
+//EffectivenessBenchmark - end-to-end task completion
 //
 // Pure data + pure functions. No I/O unless explicitly required.
 
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
-// P6-T1 - AdversarialHarness
+//AdversarialHarness
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,7 +56,7 @@ impl AdversarialReport {
 }
 
 // ---------------------------------------------------------------------------
-// P6-T2 - SkillHealthScoreboard
+//SkillHealthScoreboard
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
@@ -109,7 +109,7 @@ impl SkillHealthReport {
 }
 
 // ---------------------------------------------------------------------------
-// P6-T3 - RouterAccuracyBenchmark
+//RouterAccuracyBenchmark
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
@@ -175,7 +175,7 @@ impl RouterAccuracyReport {
 }
 
 // ---------------------------------------------------------------------------
-// P6-T4 - EffectivenessBenchmark
+//EffectivenessBenchmark
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,7 +265,7 @@ pub fn flatten_pass_rates(reports: HashMap<String, AdversarialReport>) -> HashMa
 mod tests {
     use super::*;
 
-    // P6-T1
+    //
     #[test]
     fn adversarial_report_empty_passes() {
         let r = AdversarialReport::aggregate(&[]);
@@ -301,7 +301,7 @@ mod tests {
         assert!(r.is_passing(0.5));
     }
 
-    // P6-T2
+    //
     #[test]
     fn skill_health_scoreboard_thresholds() {
         let snaps = vec![
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(r.avg, 1.0);
     }
 
-    // P6-T3
+    //
     #[test]
     fn router_accuracy_top1_vs_top3() {
         let guesses = vec![
@@ -361,7 +361,7 @@ mod tests {
         assert_eq!(r.top3_rate(), 0.0);
     }
 
-    // P6-T4
+    //
     #[test]
     fn effectiveness_report_aggregates() {
         let samples = vec![

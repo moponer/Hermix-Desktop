@@ -1,6 +1,6 @@
 //! Auto-compression pipeline used by `agent_loop`.
 //!
-//! Extracted from `agent_loop.rs` (P2.x, 2026-07-04) so the 10k-line
+//! Extracted from `agent_loop.rs` (P2.x, ) so the 10k-line
 //! `agent_loop.rs` can focus on the `impl AgentLoop` block. **No
 //! behavior change** — pure relocation.
 //!
@@ -13,7 +13,7 @@
 //!   so `local_agent_service` can persist them in the same DB
 //!   transaction that updates `sessions.compressed_summary`.
 //!
-//! ## Background-spawned streaming compression (P1, 2026-07-18)
+//! ## Background-spawned streaming compression (P1, )
 //!
 //! To avoid blocking the agent loop on the LLM summary call when
 //! context pressure first crosses the trigger threshold (50%), the
@@ -50,7 +50,7 @@ use crate::compression::CompressionMetrics;
 use crate::context::ContextManager;
 use crate::message_helpers::{emit_compaction_status, emit_status};
 
-/// P1 (2026-07-18): hard wall timeout for the high-pressure fallback.
+/// P1 : hard wall timeout for the high-pressure fallback.
 /// When the agent loop's `try_collect_in_flight` is asked to wait for
 /// an in-flight background spawn (because pressure is at or above the
 /// 85% red-line), we wait at most this long before giving up and
@@ -59,7 +59,7 @@ use crate::message_helpers::{emit_compaction_status, emit_status};
 /// the agent loop never visibly stalls on a stuck spawn.
 const HIGH_PRESSURE_COLLECT_TIMEOUT: Duration = Duration::from_millis(30_000);
 
-/// P1 (2026-07-18): high-pressure red-line. When current pressure is
+/// P1 : high-pressure red-line. When current pressure is
 /// at or above this ratio we cancel any in-flight spawn and run the
 /// synchronous fast-compress path immediately — the LLM summary
 /// would not have time to finish before the window overflows. The
@@ -74,7 +74,7 @@ const HIGH_PRESSURE_RED_LINE: f64 = 0.85;
 /// triplet can share one name.
 pub(crate) type SpawnedOutcome = crate::agent_loop::CompressionOutcome;
 
-/// P1 (2026-07-18): background-spawned compression bookkeeping.
+/// P1 : background-spawned compression bookkeeping.
 /// Re-exported from `agent_loop::types::CompressionInFlight` so call
 /// sites in `agent_loop/mod.rs` don't need to reach into the types
 /// module directly.
@@ -115,11 +115,11 @@ pub(crate) fn translate_engine_metrics(
 /// pipeline in the background. Returns the `JoinHandle` plus the
 /// snapshot metadata the agent loop stashes in
 /// `AgentLoop::compression_in_flight`.
-/// /// **The agent loop does not block on this call.** The spawn task
+/// **The agent loop does not block on this call.** The spawn task
 /// runs the full `compress()` (LLM summary included); the agent loop
 /// continues processing turns and rolls the result in via
 /// [`try_collect_in_flight`] on the next `do_pre_turn_setup` entry.
-/// /// **Why the spawn task doesn't touch `self.latest_*` slots**: those
+/// **Why the spawn task doesn't touch `self.latest_*` slots**: those
 /// slots are plain `std::sync::Mutex`, not `Arc<Mutex>`, so the
 /// spawn task (which needs `'static` data) cannot borrow them. The
 /// spawn task computes a fully self-contained
@@ -127,11 +127,11 @@ pub(crate) fn translate_engine_metrics(
 /// already filled in), and the apply path on the main loop body
 /// updates the slots. This keeps the spawn task a pure-function-of-
 /// snapshot without mutating the agent loop's bookkeeping.
-/// /// The caller is responsible for injecting the memory pre-compress
+/// The caller is responsible for injecting the memory pre-compress
 /// note into `snapshot_messages` *before* calling this function —
 /// we can't borrow `self` from inside the spawn task and we want to
 /// keep the snapshot immutable from the task's perspective.
-/// /// Pre-conditions:
+/// Pre-conditions:
 /// - `compressor` is `Some` (otherwise we have nothing to spawn — the
 /// caller should have already tried the no-op fallback).
 /// - `in_flight.is_none()` — call sites must check before invoking.
@@ -214,15 +214,15 @@ pub(crate) fn trigger_spawn_compression(
 }
 
 /// Roll a finished background-spawn outcome into the live `ctx`.
-/// /// Merge semantics: the spawn was triggered with a snapshot of the
+/// Merge semantics: the spawn was triggered with a snapshot of the
 /// first `snapshot_len` messages. While the spawn was running, the
 /// agent loop may have appended more messages (new user turns, new
 /// assistant responses, new tool results). We preserve those by
 /// splicing them in at the end of the compressed base:
-/// /// ```text
+/// ```text
 /// ctx.messages = compressed_base (from spawn) + new_messages_since_snapshot
 /// ```
-/// /// `compressed_base` is whatever the compressor returned from
+/// `compressed_base` is whatever the compressor returned from
 /// `compress(snapshot)` — typically `[kept_head, summary_msg]` —
 /// so the merge is straightforward: drop everything from
 /// `snapshot_len` onwards in the live `ctx`, replace with the
@@ -282,19 +282,19 @@ pub(crate) fn apply_compression_outcome(
     let _ = snapshot_tokens;
 }
 
-/// P1 (2026-07-18): poll the agent loop's in-flight background
+/// P1 : poll the agent loop's in-flight background
 /// compression. If the spawn has finished, roll the outcome into
 /// `ctx` and clear the slot. Otherwise return without touching the
 /// ctx.
-/// /// Returns `true` when an outcome was applied, `false` when no
+/// Returns `true` when an outcome was applied, `false` when no
 /// spawn was in flight or the spawn is still running.
-/// /// The `wait_for_finish` argument controls whether we await the
+/// The `wait_for_finish` argument controls whether we await the
 /// `JoinHandle` with a timeout. The high-pressure red-line path
 /// (>=85%) sets `wait_for_finish = true` so we can roll an
 /// almost-done spawn in without falling back to the synchronous fast
 /// path. The normal pre-turn path sets `wait_for_finish = false` so
 /// the agent loop never blocks on the spawn.
-/// /// **Concurrency note**: we `Option::take()` the slot so the spawn
+/// **Concurrency note**: we `Option::take()` the slot so the spawn
 /// task's `JoinHandle` is owned by this function for the duration of
 /// the await. Other concurrent polls (none in practice — the agent
 /// loop is single-threaded) would see `None` and skip; the spawn
@@ -406,15 +406,15 @@ pub(crate) async fn try_collect_in_flight(
 /// Auto-compress when context pressure crosses the configured
 /// threshold. **Synchronous** — blocks the calling turn on the LLM
 /// summary call. Used in two paths:
-/// /// 1. The `preflight_context_compress` flag, where the caller is
+/// 1. The `preflight_context_compress` flag, where the caller is
 /// happy to wait because no LLM call has happened yet.
 /// 2. The high-pressure red-line fallback in
 /// `AgentLoop::do_pre_turn_setup`: when pressure is at or above
 /// [`HIGH_PRESSURE_RED_LINE`], the agent loop cancels any
 /// in-flight background spawn and runs this synchronously to
 /// guarantee the pressure drops before the next LLM call.
-/// /// The pipeline:
-/// /// 1. Compute pressure and emit a `lifecycle` status callback.
+/// The pipeline:
+/// 1. Compute pressure and emit a `lifecycle` status callback.
 /// 2. Pre-attempt breaker snapshot for the `CompactionStatusBanner`.
 /// 3. Archive the middle of the conversation to disk (best-effort).
 /// 4. Inject the archive summary into the context so the LLM knows
@@ -423,7 +423,7 @@ pub(crate) async fn try_collect_in_flight(
 /// 6. Run the LLM compressor (if wired) and update the live
 /// compression-state slots; otherwise fall back to the simple
 /// character-based `ContextManager::compress`.
-/// /// The compression-state slots (`latest_compressed_summary` / etc)
+/// The compression-state slots (`latest_compressed_summary` / etc)
 /// are read by `finalize_agent_result` and shipped as the
 /// `compressed_summary` / `compression_archived_turns` /
 /// `compression_metrics` fields on `AgentResult`. `local_agent_service`
@@ -742,7 +742,7 @@ pub(crate) const HIGH_PRESSURE_RED_LINE_RATIO: f64 = HIGH_PRESSURE_RED_LINE;
 
 #[cfg(test)]
 mod spawn_streaming_tests {
-    //! P1 (2026-07-18): unit tests for the background-spawned
+    //! P1 : unit tests for the background-spawned
     //! streaming compression pipeline. These live alongside the
     //! implementation (rather than in
     //! `tests/compression_ops_integration.rs`) because they need

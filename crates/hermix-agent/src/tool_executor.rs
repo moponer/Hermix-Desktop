@@ -134,7 +134,7 @@ impl AgentLoop {
                     ));
                     continue;
                 }
-                // M1.6.2: push a focus-stack frame BEFORE delegating.
+                //push a focus-stack frame BEFORE delegating.
                 // We pass an empty sub_agent_id — `note_delegation_end`
                 // matches the topmost Delegation frame when the id is
                 // empty (see its docstring). This decouples push from
@@ -157,7 +157,7 @@ impl AgentLoop {
                     ));
                     continue;
                 }
-                // Phase 18+: if the caller passed an explicit
+                //+: if the caller passed an explicit
                 // `toolset` whitelist in the delegate_task
                 // params, refuse any name that's in the
                 // sub-agent blocklist. This is a *belt-and-
@@ -232,7 +232,7 @@ impl AgentLoop {
                         .get("max_iterations")
                         .and_then(|v| v.as_u64())
                         .map(|v| v as u32),
-                    // P6-4: Parse role from args; default to General.
+                    //Parse role from args; default to General.
                     role: parsed
                         .get("role")
                         .and_then(|v| v.as_str())
@@ -249,7 +249,7 @@ impl AgentLoop {
                             _ => None,
                         })
                         .unwrap_or_default(),
-                    // P6-4: Parse parent_task_id from args if present.
+                    //Parse parent_task_id from args if present.
                     parent_task_id: parsed
                         .get("parent_task_id")
                         .and_then(|v| v.as_str())
@@ -284,7 +284,7 @@ impl AgentLoop {
             }
         }
 
-        // P2.4 (2026-06-30): run remaining interactive tools (currently
+        //P2.4 : run remaining interactive tools (currently
         // just `clarify`) sequentially in the caller's task BEFORE
         // launching the JoinSet. This blocks the parallel work until the
         // user has answered the clarifying question — otherwise we'd
@@ -352,7 +352,7 @@ impl AgentLoop {
             if orchestrator.is_some() && tc.function.name == "delegate_task" {
                 continue;
             }
-            // P2.4 (2026-06-30): interactive tools run sequentially in
+            //P2.4 : interactive tools run sequentially in
             // the orchestrator pass above (delegate_task) or — for clarify
             // — never enter this JoinSet at all. We extract and handle
             // them right after the orchestrator loop. Skipping them here
@@ -362,7 +362,7 @@ impl AgentLoop {
             {
                 continue;
             }
-            // M1.6.2: push a focus-stack frame for non-orchestrated
+            //push a focus-stack frame for non-orchestrated
             // delegate_task BEFORE spawning the JoinSet future.
             // The pop side (`notify_delegations` → `note_delegation_end`)
             // reads the real sub_agent_id from the tool result content
@@ -653,9 +653,9 @@ impl AgentLoop {
                     )
                 })
             })
-            // P8-T3 wire: redact secret-shaped strings (API keys, IPs,
+            //wire: redact secret-shaped strings (API keys, IPs,
             // emails) from every tool result *before* the LLM sees it.
-            // Same strategy as the legacy P8-T3 helper; does not fail
+            //Same strategy as the legacy helper; does not fail
             // the call — just rewrites the content. The `_redactions`
             // vec is dropped on the floor (an HTTP callback would let
             // the trace panel display "redacted 3 spans").
@@ -675,13 +675,13 @@ impl AgentLoop {
 
 /// Detect whether a tool call mutates a memory store whose change must be
 /// reflected in the next system-prompt rebuild.
-/// /// The `memory` tool rewrites `memories/MEMORY.md` / `memories/USER.md` on
+/// The `memory` tool rewrites `memories/MEMORY.md` / `memories/USER.md` on
 /// disk for `action in {add, replace, remove}` (the frozen context snapshot
 /// in the system prompt is sourced from those files). Bumping the context
 /// epoch after such a call makes `build_context_layer` (`PromptCache`-keyed
 /// by epoch) re-read those files on the next user message, so in-session
 /// memory edits take effect immediately instead of only after a session
-/// restart. `read` (and any non-`memory` tool) is non-mutating. (2026-07-23)
+/// restart. `read` (and any non-`memory` tool) is non-mutating.
 fn is_memory_store_mutation(tc: &ToolCall) -> bool {
     if tc.function.name != "memory" {
         return false;

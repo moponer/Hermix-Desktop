@@ -111,7 +111,7 @@ impl MattermostAdapter {
     }
 
     /// Parse a Mattermost WebSocket event into an incoming message.
-    /// /// Only `posted` events that contain a valid post JSON are returned.
+    /// Only `posted` events that contain a valid post JSON are returned.
     pub fn parse_ws_event(event: &MattermostWsEvent) -> Option<IncomingMattermostMessage> {
         if event.event != "posted" {
             return None;

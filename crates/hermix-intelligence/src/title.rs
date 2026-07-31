@@ -47,7 +47,7 @@ pub struct TitleGenerator {
 
 impl TitleGenerator {
     /// Create a new title generator.
-    /// /// Uses the given LLM provider with the specified model (preferably
+    /// Uses the given LLM provider with the specified model (preferably
     /// a small, fast model like `gpt-4o-mini` or `claude-haiku`).
     pub fn new(llm_provider: Arc<dyn LlmProvider>, model: impl Into<String>) -> Self {
         Self {
@@ -72,7 +72,7 @@ impl TitleGenerator {
     }
 
     /// Generate a concise title for the given conversation messages.
-    /// /// Takes the first few messages, truncates long ones, and asks the LLM
+    /// Takes the first few messages, truncates long ones, and asks the LLM
     /// to produce a short descriptive title.
     pub async fn generate_title(&self, messages: &[Message]) -> Result<String, TitleError> {
         if messages.is_empty() {

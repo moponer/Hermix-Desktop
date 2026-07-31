@@ -66,7 +66,7 @@ pub enum ReasoningFormat {
 }
 
 /// Reasoning content parsed from the LLM response.
-/// /// Supports multiple formats used by different providers:
+/// Supports multiple formats used by different providers:
 /// - `reasoning_content` (simple string)
 /// - `reasoning` (simple string)
 /// - `reasoning_details` (structured array)
@@ -78,7 +78,7 @@ pub struct ReasoningContent {
 
 impl ReasoningContent {
     /// Parse reasoning content from a raw JSON value.
-    /// /// Accepts:
+    /// Accepts:
     /// - A plain string (from `reasoning_content` or `reasoning`)
     /// - An object with a `text` field
     /// - An array of objects with `text` fields (from `reasoning_details`)
@@ -121,7 +121,7 @@ impl ReasoningContent {
 // ---------------------------------------------------------------------------
 
 /// A single content part in a multimodal message.
-/// /// Serializes to the OpenAI / Claude / MiniMax vision format:
+/// Serializes to the OpenAI / Claude / MiniMax vision format:
 /// `{"type":"text","text":"..."}` or
 /// `{"type":"image_url","image_url":{"url":"data:image/..."}}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -167,7 +167,7 @@ pub struct Message {
     /// reload rebuilds the same inline tool cards the user saw
     /// mid-stream, including correct "已完成" / "失败" status,
     /// arguments, and stdout output.
-    /// /// added — previously the timeline was only
+    /// added — previously the timeline was only
     /// streamed over WS, so on reload the frontend had no way to
     /// know whether a tool call was running, succeeded or failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -185,7 +185,7 @@ pub struct Message {
 }
 
 /// One entry in an assistant message's execution timeline.
-/// /// Mirrors the frontend `ExecutionTimelineEvent` interface 1:1 so
+/// Mirrors the frontend `ExecutionTimelineEvent` interface 1:1 so
 /// the chat layer can feed them straight into
 /// `expandTimelineToMessages` / `groupTimeline` without
 /// per-field translation.
@@ -341,7 +341,7 @@ impl Message {
         }
     }
 
-    /// Create a user message with text + multiple inline images (2026-06-25).
+    /// Create a user message with text + multiple inline images .
     /// Each tuple is `(mime_type, base64_data)`. The LLM receives a
     /// multimodal content array: one Text part followed by N ImageUrl parts.
     pub fn user_with_images(text: &str, images: &[(&str, &str)]) -> Self {
@@ -370,7 +370,7 @@ impl Message {
 // ---------------------------------------------------------------------------
 
 /// Result from executing a tool call.
-/// /// `#[must_use]` because silently discarding a tool result loses the
+/// `#[must_use]` because silently discarding a tool result loses the
 /// entire response — the dispatch loop is required to surface it to
 /// the LLM via `tool` role messages or the conversation breaks.
 #[must_use = "ToolResult is the LLM-facing response and must be returned to the agent loop, not silently dropped"]
@@ -383,7 +383,7 @@ pub struct ToolResult {
     /// (A+C product fix): when a tool call was *denied*
     /// rather than failed-on-execution, this carries the structured
     /// `DenialKind` **snake_case wire value** (`user_denied` / `timed_out`
-    /// / `channel_closed` / `policy`). `None` for normal successes and
+    /// `channel_closed` / `policy`). `None` for normal successes and
     /// genuine execution errors. (The `DenialKind` enum variants are
     /// PascalCase, but `as_str()` serializes them to snake_case for the
     /// wire.) `skip_serializing_if` keeps the field invisible to the
@@ -559,7 +559,7 @@ fn is_false(v: &bool) -> bool {
 }
 
 /// Final result of an agent run.
-/// /// `#[must_use]` because dropping the return value of a run means
+/// `#[must_use]` because dropping the return value of a run means
 /// losing the entire conversation arc, usage stats, compression
 /// handoff, and any tool error records — callers always want to
 /// persist or surface at least some of these fields.
@@ -605,7 +605,7 @@ pub struct AgentResult {
     /// `compression_summary_history` so the full compaction arc is
     /// queryable (the `sessions.compressed_summary` column only holds
     /// the latest).
-    /// /// Field-for-field mirror of
+    /// Field-for-field mirror of
     /// `hermix_agent::compression::CompressionMetrics`. We can't
     /// reference the upstream type directly because `hermix-core`
     /// must not depend on `hermix-agent` (the dep arrow is the other
@@ -620,7 +620,7 @@ pub struct AgentResult {
 /// `hermix-core` so `AgentResult` can carry compression metrics
 /// without creating a circular `hermix-core` → `hermix-agent`
 /// dependency.
-/// /// `#[must_use]` because the snapshot is what the persistence path
+/// `#[must_use]` because the snapshot is what the persistence path
 /// writes to `compression_summary_history`; dropping it silently
 /// loses the compaction trail that the dashboard / next-session
 /// recall rely on.
@@ -653,7 +653,7 @@ pub struct BudgetConfig {
 }
 
 /// Hard upper bound for any single budget value (per-result or aggregate).
-/// /// `100 MiB` of UTF-8 characters ≈ ~25M GPT tokens — that's the practical
+/// `100 MiB` of UTF-8 characters ≈ ~25M GPT tokens — that's the practical
 /// maximum anyone should ever need. A budget above this is almost certainly
 /// a configuration typo (off-by-thousand, off-by-million) and would push
 /// the loop into a memory-inefficient zone even when not actively used.
@@ -811,7 +811,7 @@ pub struct StreamChunk {
 /// returned in `SessionMessagesResponse` so the frontend can show the
 /// context-usage bar immediately after restoring an old session, without
 /// waiting for a fresh live stream to emit a `context_usage` event.
-/// /// Mirrors the wire shape of the live `context_usage` WS event
+/// Mirrors the wire shape of the live `context_usage` WS event
 /// (`used_tokens` / `max_tokens` / `threshold_tokens` / `percent`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ContextUsagePayload {
@@ -823,13 +823,13 @@ pub struct ContextUsagePayload {
 }
 
 // ---------------------------------------------------------------------------
-// Orchestration Engine types (Phase 0 — P0-1)
+//Orchestration Engine types
 // ---------------------------------------------------------------------------
 
 /// Working mode for a Task. Determines whether the engine blocks for user
 /// confirmation before executing (Plan), runs straight through (Craft), or
 /// only answers questions without writing (Ask).
-/// /// Maps to the WorkBuddy mode state machine: the mode is set at Task
+/// Maps to the WorkBuddy mode state machine: the mode is set at Task
 /// creation time and governs the lifecycle transitions available.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -850,12 +850,12 @@ pub enum TaskMode {
 }
 
 /// Lifecycle status for a Task. The transitions are:
-/// /// ```text
+/// ```text
 /// pending → planning → in_progress → completed
 /// ↘ failed
 /// any → archived
 /// ```
-/// /// `Planning` is only entered when `mode == Plan`. `Craft` goes straight
+/// `Planning` is only entered when `mode == Plan`. `Craft` goes straight
 /// from `pending` to `in_progress`. `Ask` never enters `in_progress`
 /// (the task is answered, not executed).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -918,8 +918,8 @@ impl TaskStatus {
 /// Context attached to a Task — references to files, screenshots,
 /// uploaded documents, and free-form notes that the agent should
 /// consider when working on this Task.
-/// /// Serialized as `context_json` in the `tasks` table. The `@`-reference
-/// parser (P1-3) populates `references` from the user's natural-language
+/// Serialized as `context_json` in the `tasks` table. The `@`-reference
+/// parser populates `references` from the user's natural-language
 /// input.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TaskContext {
@@ -958,7 +958,7 @@ pub enum TaskContextRefKind {
 }
 
 /// A reference to a deliverable artifact produced by the agent for a Task.
-/// /// Collected by the `present_files` equivalent (P7-1) and stored as
+/// Collected by the `present_files` equivalent and stored as
 /// `result_refs_json` in the `tasks` table. The frontend renders these
 /// in the "产物" tab of the results panel.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1145,7 +1145,7 @@ mod tests {
         BudgetConfig::default().validate_or_warn();
     }
 
-    // ── Orchestration Engine types (P0-1) ──────────────────
+    //── Orchestration Engine types ──────────────────
 
     #[test]
     fn test_task_mode_serde() {

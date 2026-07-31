@@ -8,7 +8,7 @@
 //! full system prompt assembly (corresponding to Python `run_agent.py`'s
 //! `_build_system_prompt`).
 //!
-//! # Context Layer Model (AL-9, 2026-07-09)
+//! # Context Layer Model (AL-9, )
 //!
 //! The agent's context is composed of 5 distinct layers, each with
 //! different invalidation semantics and cache strategies:
@@ -71,10 +71,10 @@ const MEMORY_CHAR_LIMIT: usize = 2200;
 const USER_CHAR_LIMIT: usize = 1375;
 
 /// Pressure ratio at which auto-compression / context-pressure warnings fire.
-/// /// 0.80 = trigger at 80% of context window, leaving 20% headroom for tool
+/// 0.80 = trigger at 80% of context window, leaving 20% headroom for tool
 /// outputs and assistant generation. The old 0.50 default wasted half the
 /// context window on large models (128k+).
-/// /// This constant is the **fallback default** used when no
+/// This constant is the **fallback default** used when no
 /// [`crate::compression::CompressorConfig`] is supplied (e.g. tests and
 /// the smoke `resolve_context` example). Production callers read the
 /// ratio off `CompressorConfig.pressure_threshold_percent`, which is
@@ -82,24 +82,24 @@ const USER_CHAR_LIMIT: usize = 1375;
 pub const CONTEXT_PRESSURE_TRIGGER_RATIO: f64 = 0.90;
 
 /// Default output reservation in tokens.
-/// /// Subtracts from the *effective* context window before applying the
+/// Subtracts from the *effective* context window before applying the
 /// pressure ratio, so the LLM has room to emit its response without us
 /// triggering compression mid-stream. 4096 tokens ≈ 16 KB of text — enough
 /// for a normal assistant turn including tool calls.
 pub const DEFAULT_OUTPUT_RESERVE_TOKENS: usize = 4096;
 
 /// Rough heuristic for converting a UTF-8 string into a token count.
-/// /// Uses the standard 4-chars-per-token rule that the original Python
+/// Uses the standard 4-chars-per-token rule that the original Python
 /// `run_agent.py` budgeted against. CJK / emoji-heavy text will be
 /// under-counted (one ideograph is often its own token), but the
 /// estimator is intentionally a *lower bound* — if anything it
 /// over-protects, never under-protects, the context window.
-/// /// Replace with provider-native tokenizers (tiktoken for OpenAI,
+/// Replace with provider-native tokenizers (tiktoken for OpenAI,
 /// the Anthropic SDK's tokenizer) once a per-model wiring layer
 /// exists; the call sites (`total_tokens`, `truncate_to_budget`) do
 /// not need to change.
-/// /// ### Why two estimators coexist (2026-07-05)
-/// /// `ContextManager::estimate_tokens` (here) and
+/// ### Why two estimators coexist
+/// `ContextManager::estimate_tokens` (here) and
 /// `compression::count_tokens` (`tiktoken_rs::cl100k_base`) are
 /// deliberately **not** the same:
 /// - `estimate_tokens` drives the **pressure threshold** the agent
@@ -111,7 +111,7 @@ pub const DEFAULT_OUTPUT_RESERVE_TOKENS: usize = 4096;
 /// Under-counting there would mean we ask the LLM for "2000 tokens
 /// of summary" and get 4000 tokens back, blowing the output window.
 /// So the summary budget gets the accurate (tiktoken) count.
-/// /// The pressure-vs-summary mismatch is documented and intentional.
+/// The pressure-vs-summary mismatch is documented and intentional.
 #[inline]
 pub fn estimate_tokens(s: &str) -> usize {
     // Improved heuristic that handles CJK text better:
@@ -141,12 +141,12 @@ pub fn estimate_tokens(s: &str) -> usize {
 pub struct ContextManager {
     messages: Vec<Message>,
     /// Maximum total tokens for the conversation (excluding system messages).
-    /// /// As of Day 3 the unit is **tokens**, not chars. The underlying
+    /// As of Day 3 the unit is **tokens**, not chars. The underlying
     /// estimator is [`estimate_tokens`] (4-chars-per-token heuristic),
     /// not a provider-native tokenizer.
     max_context_tokens: usize,
     /// Tokens reserved for the LLM's response at the end of the turn.
-    /// /// `pressure_threshold_tokens` returns `(max - reserve) * ratio` so
+    /// `pressure_threshold_tokens` returns `(max - reserve) * ratio` so
     /// we don't fire the pressure warning while the model still has
     /// legitimate headroom to emit its output.
     output_reserve_tokens: usize,
@@ -167,7 +167,7 @@ pub struct ContextManager {
 
 impl ContextManager {
     /// Create a new context manager with a token budget.
-    /// /// Defaults the output reserve to [`DEFAULT_OUTPUT_RESERVE_TOKENS`].
+    /// Defaults the output reserve to [`DEFAULT_OUTPUT_RESERVE_TOKENS`].
     /// Use [`Self::with_output_reserve`] to override per-instance.
     pub fn new(max_context_tokens: usize) -> Self {
         Self {
@@ -182,7 +182,7 @@ impl ContextManager {
     /// Construct a `ContextManager` with no model info — defaults to the
     /// catalog fallback (`model_metadata::DEFAULT_FALLBACK_CONTEXT`, 128k)
     /// rather than a hard-coded magic value.
-    /// /// **Prefer [`Self::for_model`] or [`Self::for_model_with_providers`] when
+    /// **Prefer [`Self::for_model`] or [`Self::for_model_with_providers`] when
     /// the model name is known.** This helper exists only for code paths that
     /// genuinely have no model context (e.g. early bootstrap, tests). It
     /// deliberately routes through `DEFAULT_FALLBACK_CONTEXT` so the pressure
@@ -203,16 +203,16 @@ impl ContextManager {
     }
 
     /// Build a `ContextManager` sized for a specific model.
-    /// /// Resolution order (via `hermix_intelligence::model_metadata::get_model_context_length`):
+    /// Resolution order (via `hermix_intelligence::model_metadata::get_model_context_length`):
     /// 1. `known_models()` static catalog (covers Claude / OpenAI / Gemini / DeepSeek / etc.)
     /// 2. `DEFAULT_CONTEXT_LENGTHS` fuzzy fallback table
     /// 3. `DEFAULT_FALLBACK_CONTEXT` (128_000) for unknown / custom provider models
-    /// /// The returned token budget mirrors what `get_model_context_length`
+    /// The returned token budget mirrors what `get_model_context_length`
     /// returns. As of Day 3 the field is named `max_context_tokens`
     /// even though the underlying estimator is still the 4-chars-per-token
     /// heuristic — the rename was the honest move because all downstream
     /// thresholds now speak "tokens" too.
-    /// /// `tracing::info!` logs the resolved value once so per-model wiring can
+    /// `tracing::info!` logs the resolved value once so per-model wiring can
     /// be observed in production logs without changing the API.
     pub fn for_model(model_name: &str) -> Self {
         let window = get_model_context_length(model_name) as usize;
@@ -256,7 +256,7 @@ impl ContextManager {
 
     /// Threshold (in tokens) at which the caller should consider auto-compression
     /// or surface a context-pressure warning.
-    /// /// Equivalent to `(max - output_reserve) * CONTEXT_PRESSURE_TRIGGER_RATIO`,
+    /// Equivalent to `(max - output_reserve) * CONTEXT_PRESSURE_TRIGGER_RATIO`,
     /// floored to `1` to avoid divide-by-zero in callers. The reserve is
     /// subtracted before applying the ratio so the model always has the
     /// reserved headroom for its own response even after the warning fires.
@@ -274,7 +274,7 @@ impl ContextManager {
     }
 
     /// Override the per-instance pressure ratio (0.0–1.0).
-    /// /// Controls when auto-compression and context-pressure warnings fire:
+    /// Controls when auto-compression and context-pressure warnings fire:
     /// `threshold = (max_context - output_reserve) * ratio`.
     /// Defaults to [`CONTEXT_PRESSURE_TRIGGER_RATIO`] (0.50). The runtime
     /// value is forwarded from `compaction.pressure_threshold_percent` in
@@ -285,7 +285,7 @@ impl ContextManager {
     }
 
     /// Construct a `ContextManager` with a custom token budget.
-    /// /// **Deprecated**: the `_compressor: ()` parameter was always a
+    /// **Deprecated**: the `_compressor: ()` parameter was always a
     /// placeholder — actual compression wiring lives in
     /// `crate::compression::ContextCompressor` and is plumbed via
     /// `auto_compress_if_over_threshold` in `compression_ops.rs`, not
@@ -309,7 +309,7 @@ impl ContextManager {
     }
 
     /// Add a message to the conversation history.
-    /// /// Maintains `cached_total_tokens` incrementally — the agent loop
+    /// Maintains `cached_total_tokens` incrementally — the agent loop
     /// calls `total_tokens()` on every turn, so re-summing from scratch
     /// per call would be O(N) per turn for no good reason.
     pub fn add_message(&mut self, message: Message) {
@@ -343,13 +343,13 @@ impl ContextManager {
     }
 
     /// Truncate the conversation history to fit within the budget.
-    /// /// Always preserves:
+    /// Always preserves:
     /// - The system prompt (first message if it has role System)
     /// - The last user message
     /// - The most recent assistant messages
-    /// /// Older messages are removed from the middle until the total fits.
-    /// /// ### Performance (2026-07-05)
-    /// /// The previous implementation called `Vec::remove(idx)` in a loop,
+    /// Older messages are removed from the middle until the total fits.
+    /// ### Performance
+    /// The previous implementation called `Vec::remove(idx)` in a loop,
     /// which is O(n) per call (shifts every later element down). For a
     /// conversation with 200 messages that needed 50 removals to fit
     /// the budget, that was ~50 × 100 = 5 000 element shifts — not
@@ -357,7 +357,7 @@ impl ContextManager {
     /// history once, computes the prefix length to drop, then drains
     /// that prefix with a single O(n) memcpy. Same observable behaviour,
     /// ~50× fewer shifts in the worst case.
-    /// /// `cached_total_tokens` is updated incrementally (we subtract each
+    /// `cached_total_tokens` is updated incrementally (we subtract each
     /// evicted message's token estimate) so [`Self::total_tokens`] stays
     /// O(1) after the truncation completes.
     pub fn truncate_to_budget(&mut self, budget: &BudgetConfig) {
@@ -430,10 +430,10 @@ impl ContextManager {
     }
 
     /// Compress the conversation history — now a no-op.
-    /// /// All compression is handled by `compression::ContextCompressor` in
+    /// All compression is handled by `compression::ContextCompressor` in
     /// the agent loop's `auto_compress_if_over_threshold`. This method
     /// is retained only for call-site compatibility.
-    /// /// **Deprecated**: do not call. Production code should rely on
+    /// **Deprecated**: do not call. Production code should rely on
     /// `auto_compress_if_over_threshold` (the LLM-compressor path) or
     /// `truncate_to_budget` (the cheap budget-enforcement path).
     /// Tests that previously called `compress()` should use
@@ -455,10 +455,10 @@ impl ContextManager {
     }
 
     /// Calculate the total token count of all message content.
-    /// /// Uses the 4-chars-per-token heuristic in [`estimate_tokens`] — for
+    /// Uses the 4-chars-per-token heuristic in [`estimate_tokens`] — for
     /// CJK / emoji-heavy corpora this under-counts, which is the safe
     /// direction (we never trigger compression too early).
-    /// /// **Performance**: O(1) since 2026-07-05. The agent loop calls
+    /// **Performance**: O(1) since . The agent loop calls
     /// this on every turn (pressure check), so the previous O(N)
     /// re-summation was a hot-path tax. The cache is maintained by
     /// `add_message` / `reset` / `truncate_to_budget`; tests that
@@ -470,7 +470,7 @@ impl ContextManager {
     }
 
     /// Recompute `cached_total_tokens` from the current message list.
-    /// /// Call this after directly mutating `messages` via
+    /// Call this after directly mutating `messages` via
     /// `get_messages_mut()` (e.g. in tests, or in the agent loop's
     /// post-compression path). Production code paths that go through
     /// `add_message` / `reset` / `truncate_to_budget` keep the cache
@@ -502,7 +502,7 @@ impl ContextManager {
 // ---------------------------------------------------------------------------
 
 /// Default agent identity used when no SOUL.md is found.
-/// /// Identity statement is the first thing the model reads — it has to be
+/// Identity statement is the first thing the model reads — it has to be
 /// unambiguous about *who* the assistant is, in a language the user
 /// speaks. The behavioural rules below the identity statement are the
 /// "how I work" — short and direct, no fluff, no vague exhortations.
@@ -558,7 +558,7 @@ pub const BUILTIN_PERSONALITY_ANALYST: &str = "\
 /// block so the model sees the same operational rules in every
 /// session — independent of which personality / SOUL.md the user
 /// has selected.
-/// /// Pre-requisite: the `skill_manage` tool must be present in the
+/// Pre-requisite: the `skill_manage` tool must be present in the
 /// toolset. Otherwise this block degrades to a no-op (the builder
 /// skips empty parts). See `agent_loop::build_system_prompt` for
 /// the conditional wire-up.
@@ -598,7 +598,7 @@ or anything outside `$hermix_home/`.\n\
 - **DO NOT** persist one-off tasks or things that change session-to-session.";
 
 /// Load the SOUL.md personality file from `<HERMIX_HOME>/SOUL.md`.
-/// /// Returns `None` if the file doesn't exist or can't be read.
+/// Returns `None` if the file doesn't exist or can't be read.
 /// Delegates to `hermix_config::paths::hermix_home()` so
 /// `HERMIX_HOME` and portable mode both work.
 pub fn load_soul_md() -> Option<String> {
@@ -627,7 +627,7 @@ fn builtin_personality(name: &str) -> Option<&'static str> {
 }
 
 /// Resolve a named personality by checking user files first, then built-ins.
-/// /// Resolution order:
+/// Resolution order:
 /// 1) `<hermix_home>/personalities/<name>.md` (or `$HERMIX_HOME`, then `~/.hermix`)
 /// 2) built-in personas: `coder`, `writer`, `analyst`
 pub fn resolve_personality(name: &str, hermes_home_override: Option<&str>) -> Option<String> {
@@ -663,7 +663,7 @@ pub fn switch_personality(name: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Load context files from `~/.hermix/context/` directory.
-/// /// Returns concatenated content of all `.md` and `.txt` files found.
+/// Returns concatenated content of all `.md` and `.txt` files found.
 pub fn load_context_files(hermix_home: &Path) -> String {
     let context_dir = hermix_home.join("context");
     if !context_dir.exists() {
@@ -794,11 +794,11 @@ pub fn load_builtin_memory_snapshot(
 
 /// A single conditional system-prompt *direction* — a text block injected
 /// only when the active route matches its trigger.
-/// /// Replaces the giant `if user_message.is_empty() { ... } else { ... }`
+/// Replaces the giant `if user_message.is_empty() { ... } else { ... }`
 /// cascade that used to live inline in `build_system_prompt`. Each direction
 /// is small (~50–200 chars), individually tagged, and trivially auditable
 /// in debug output / frontend panels.
-/// /// Inspired by BaiLongma's `directions[]` array (src/index.js:860), but
+/// Inspired by BaiLongma's `directions[]` array (src/index.js:860), but
 /// typed and routed by an enum instead of free-form string keys.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirRoute {
@@ -820,7 +820,7 @@ pub enum DirRoute {
     /// Active tool list contains `todo` — task-orchestration guidance.
     HasTodo,
     /// Active tool list contains `task_create` — orchestration-engine
-    /// task tracker guidance (Phase 4 / P4-2).
+    /// task tracker guidance .
     HasTaskTracker,
     /// Active tool list contains `compact_tool_chain` AND user message
     /// mentions batch-related keyword.
@@ -1005,7 +1005,7 @@ impl DirRoute {
 }
 
 /// Builder for assembling the full system prompt from multiple layers.
-/// /// Layers (in order):
+/// Layers (in order):
 /// 1. SOUL.md personality (or default identity)
 /// 2. User/gateway system prompt (if provided)
 /// 3. Memory context block (from MemoryManager)
@@ -1014,7 +1014,7 @@ impl DirRoute {
 /// 6. Context files from `.hermes/context/`
 /// 7. Current date/time
 /// 8. Working directory info
-/// /// In addition to the static `parts` vector, the builder carries a
+/// In addition to the static `parts` vector, the builder carries a
 /// separate `directions` vector that holds typed `(tag, route, body)`
 /// records. Each direction is evaluated against the current `RouteContext`
 /// at `assemble()` time and survives as an audit record so the frontend
@@ -1053,7 +1053,7 @@ impl SystemPromptBuilder {
     }
 
     /// Queue a typed, route-gated direction.
-    /// /// The direction is *not* appended to the prompt here — that happens
+    /// The direction is *not* appended to the prompt here — that happens
     /// in [`Self::assemble_directions`] so the builder can also produce an
     /// audit record of which directions matched the active route and
     /// which were skipped (and why).
@@ -1087,7 +1087,7 @@ impl SystemPromptBuilder {
     /// Mark every queued direction as fired / skipped based on `route_ctx`,
     /// append the fired bodies to `parts` in queued order, and return the
     /// audit log.
-    /// /// The route context is the *exact* same context `build_system_prompt`
+    /// The route context is the *exact* same context `build_system_prompt`
     /// would have looked at inline — so each direction's "fired?" check
     /// is the single source of truth.
     pub fn assemble_directions(&mut self, route_ctx: &RouteContext) -> &[DirAuditEntry] {
@@ -1195,7 +1195,7 @@ impl SystemPromptBuilder {
 
     /// Add the **Runtime Environment** block generated by
     /// [`crate::environment::build_environment_block`].
-    /// /// This is a thin adapter so the builder does not have to know
+    /// This is a thin adapter so the builder does not have to know
     /// the env module's API. Pass the result of
     /// `environment::build_environment_block(&environment::scan())`.
     pub fn with_environment(mut self, env_block: &str) -> Self {
@@ -1217,8 +1217,8 @@ impl SystemPromptBuilder {
 
     /// Render the active toolset as a `<tools>` text block and append
     /// it to the system prompt.
-    /// /// ## Why this exists
-    /// /// Tools are normally delivered to the model via the OpenAI
+    /// ## Why this exists
+    /// Tools are normally delivered to the model via the OpenAI
     /// `tools` / Anthropic `tools` API field, which is invisible to a
     /// model that fails to wire up the native protocol. For
     /// MiniMax / Hermes-style fine-tunes and any text-only fallback,
@@ -1226,21 +1226,21 @@ impl SystemPromptBuilder {
     /// the system prompt text. Without this block the model answers
     /// "I don't have terminal / execute_code / list_files tools",
     /// even though they are wired up.
-    /// /// ## Format
-    /// /// ```text
+    /// ## Format
+    /// ```text
     /// # Tool availability reminder (must read)
     /// You have the following tools **right now**, registered and
     /// ready to call. If a task calls for one of them, USE IT
     /// directly — do not refuse on the grounds that you "don't
     /// have" it. ...
-    /// /// # Available tools
+    /// # Available tools
     /// - **terminal** — Run a shell command. (required: command)
     /// - **read_file** — Read the contents of a file...
     /// - **list_files** — Alias for search_files with target=files...
     /// - ... (continues to the cap; remainder referred to `list_tools`)
     /// ```
-    /// /// ## Implementation notes
-    /// /// - The block is sorted: tools that are commonly *missed* by
+    /// ## Implementation notes
+    /// - The block is sorted: tools that are commonly *missed* by
     /// MiniMax / Hermes-style fine-tunes (`terminal`,
     /// `code_execution` / `execute_code`, `list_files`,
     /// `edit_file`, `read_file`, `write_file`, `patch`,
@@ -1293,10 +1293,10 @@ impl SystemPromptBuilder {
 }
 
 // ---------------------------------------------------------------------------
-// SectionGate — M2: protocol-completeness single choke point
+//SectionGate — : protocol-completeness single choke point
 // ---------------------------------------------------------------------------
 // Every system prompt that goes to the model is *expected* to contain
-// a small, named set of top-level sections. Before M2 these expectations
+//a small, named set of top-level sections. Before these expectations
 // were scattered across `build_system_prompt` (six if/else cascades, four
 // model-family extras, and a hand-rolled `format!("### {}\n{}", ...)`
 // string join). When any one of those branches silently no-op'd — a model
@@ -1504,7 +1504,7 @@ impl Default for SystemPromptBuilder {
 mod tests {
     use super::*;
 
-    /// M1: route-gated directions fire only when the corresponding
+    /// route-gated directions fire only when the corresponding
     /// `DirRoute` matches the active `RouteContext`, and the audit log
     /// carries both the fired and skipped entries. This is the single
     /// source of truth for "why did this prompt block get injected?"
@@ -1541,7 +1541,7 @@ let ctx = RouteContext {
         assert!(prompt.contains("BROWSER"));
     }
 
-    /// M1: an Autonomous direction that does not match still appears
+    /// an Autonomous direction that does not match still appears
     /// in the audit log with `fired = false` and a human-readable
     /// `skip_reason` — the whole point of measure-only mode.
     #[test]
@@ -1569,8 +1569,8 @@ let ctx = RouteContext {
         assert!(google.fired);
     }
 
-    /// M1: take_direction_audit drains the log so the caller (gateway
-    /// / emit_hook_event) can forward it without taking a long-lived
+    /// take_direction_audit drains the log so the caller (gateway
+    /// emit_hook_event) can forward it without taking a long-lived
     /// borrow. After drain, the next direction push must still work.
     #[test]
     fn directions_take_audit_drains_log() {
@@ -1596,10 +1596,10 @@ let ctx = RouteContext {
     }
 
     // ---------------------------------------------------------------
-    // M2: SectionGate — protocol-completeness single choke point
+    //SectionGate — protocol-completeness single choke point
     // ---------------------------------------------------------------
 
-    /// M2: a healthy prompt with all five section markers present must
+    /// a healthy prompt with all five section markers present must
     /// produce a report with zero patches. The gate is silent on
     /// healthy input — its sole job is to catch *missing* sections.
     #[test]
@@ -1631,7 +1631,7 @@ let ctx = RouteContext {
             "healthy prompt with all markers present must yield 0 missing sections, got: {:?}", report);
     }
 
-    /// M2: a prompt with the identity marker missing must trigger
+    /// a prompt with the identity marker missing must trigger
     /// a patch for `Section::Identity` (and any other required markers
     /// also missing). The patched prompt must contain the marker and
     /// must preserve the original prose verbatim.
@@ -1667,7 +1667,7 @@ let ctx = RouteContext {
             "patched prompt must keep the original prose, got: {patched:?}");
     }
 
-    /// M2: when `tool_names` is empty, `ToolList` and `ToolEnforce` are
+    /// when `tool_names` is empty, `ToolList` and `ToolEnforce` are
     /// *optional* under the current `RouteContext` — a missing marker
     /// must be recorded as `pending`, not `patched`. The audit log is
     /// the only signal; we do not splice default text for optional
@@ -1702,9 +1702,9 @@ let ctx = RouteContext {
         assert!(pending_sections.contains(&Section::ToolEnforce));
     }
 
-    /// M2: with active tools, missing tool sections are *required* and
+    /// with active tools, missing tool sections are *required* and
     /// must be auto-patched. This is the path that was silently
-    /// broken before M2: when a `cfg` flag or a tool-routing early
+    /// broken before : when a `cfg` flag or a tool-routing early
     /// return dropped the `<tools>` block, the model lost awareness of
     /// its own capability. The gate catches that case and patches the
     /// default text in.
@@ -1735,7 +1735,7 @@ let ctx = RouteContext {
         assert!(patched.contains(Section::ToolEnforce.marker()));
     }
 
-    /// M3 (Round 22 — 2026-07-07): `DirRoute::HadAnyToolUse` only fires
+    /// ( — ): `DirRoute::HadAnyToolUse` only fires
     /// when the turn actually invoked 1+ tool calls. Trivial conversational
     /// turns (count == 0) must NOT receive this guidance, otherwise the
     /// model invents filler summaries and the "(等待中) ×N" pattern
@@ -1770,7 +1770,7 @@ let ctx = RouteContext {
         assert_eq!(DirRoute::HadAnyToolUse.matches(&many_tools), (true, None));
     }
 
-    /// C3 marker protocol (2026-06-29): each `Section` has a stable
+    /// C3 marker protocol : each `Section` has a stable
     /// human-readable `label()` distinct from its detection
     /// `marker()`. Locked in here so a refactor that conflates the
     /// two (e.g. renders `marker()` in the trace panel) is caught by
@@ -1794,7 +1794,7 @@ let ctx = RouteContext {
         }
     }
 
-    /// C3 wire format (2026-06-29): the front-end trace panel
+    /// C3 wire format : the front-end trace panel
     /// deserialises `SectionGap.section` to a `Section` enum and
     /// uses `Section::label()` to render. This test pins the JSON
     /// shape so any rename on either side breaks loudly rather than

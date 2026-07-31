@@ -99,7 +99,7 @@ const ARCHIVE_INDEX_PREFIX: &str = "<!-- archived:";
 
 /// Real memory backend that stores entries in
 /// `<hermix_home>/memories/MEMORY.md` and `<hermix_home>/memories/USER.md`.
-/// /// Concurrency:
+/// Concurrency:
 /// - **`write_lock`** (process-level): prevents two in-process
 /// `add`/`replace`/`remove` calls from racing through their
 /// read-modify-write sections. Cheap (no syscall). Always
@@ -129,7 +129,7 @@ pub struct FileMemoryBackend {
     /// re-pays the cache-miss cost. Mirrors the upstream
     /// `nousresearch/hermes-agent` "frozen snapshot"
     /// semantics.
-    /// /// Contract:
+    /// Contract:
     /// - `read_file()` does **not** consult the snapshot; it
     /// reads from disk (so the LLM's *next* turn sees fresh
     /// data). The snapshot is the protected input to the
@@ -197,7 +197,7 @@ impl FileMemoryBackend {
     /// calls write to disk but do not change this snapshot;
     /// this is the property that protects the LLM's prefix
     /// cache.
-    /// /// Returns `(memory_md, user_md)`. Either may be empty
+    /// Returns `(memory_md, user_md)`. Either may be empty
     /// string if the file doesn't exist yet.
     pub fn current_snapshot(&self) -> (String, String) {
         self.snapshot
@@ -302,7 +302,7 @@ impl FileMemoryBackend {
 
     /// Atomically write `content` to `path` with the following
     /// guarantees:
-    /// /// 1. **Process-level mutex** held for the whole
+    /// 1. **Process-level mutex** held for the whole
     /// read-modify-write section (caller's responsibility).
     /// 2. **OS-level `lock_exclusive` on `<path>.lock`** held
     /// while we write — covers the cross-process case.
@@ -475,12 +475,12 @@ impl FileMemoryBackend {
     /// entry with its `[idx]` and an 80-char preview. The LLM can
     /// then either pick a more precise substring, or — once we wire
     /// a `memory_list` tool — fetch the list again before retrying.
-    /// /// Without this, the LLM was flying blind on every `replace` /
+    /// Without this, the LLM was flying blind on every `replace` /
     /// `remove` miss: it had to guess what the right `old_text` was
     /// based on its own (often stale) snapshot of the file, and
     /// usually re-guessed wrong. Surfacing the index list turns
     /// the failure into a self-service retry path.
-    /// /// `target` is "memory" or "user" (used in the message body for
+    /// `target` is "memory" or "user" (used in the message body for
     /// clarity — the LLM shouldn't have to know which file a given
     /// target maps to).
     fn format_no_match_error(
@@ -552,7 +552,7 @@ impl FileMemoryBackend {
     /// (success / not-found / ambiguous) share this shape so the chat
     /// UI can render one consistent card: an action verb, the memory
     /// file path (clickable → preview), and an explicit `status`.
-    /// /// `success:false` outcomes (no-match, ambiguous) are returned as
+    /// `success:false` outcomes (no-match, ambiguous) are returned as
     /// `Ok(...)` — they are NOT execution errors, so they must not
     /// show a red "失败" badge.
     fn success_response(
@@ -629,7 +629,7 @@ impl FileMemoryBackend {
     /// [`MemoryBackend::add`] *before* refusing a new write —
     /// if the archive trims enough room, the new entry goes
     /// through instead of being rejected.
-    /// /// `target_kept_size` is the maximum chars (after the
+    /// `target_kept_size` is the maximum chars (after the
     /// archive runs) the kept entries may occupy in the
     /// memory file. The caller (`add`) computes it as
     /// `limit - new_entry_chars - delimiter_cost`, which
@@ -637,13 +637,13 @@ impl FileMemoryBackend {
     /// entries. External callers (tests, future ops) can pass
     /// any value ≤ `char_limit_for(target)` to control how
     /// aggressively to trim.
-    /// /// Returns `Some((archive_path, archived_count))` if any entries
+    /// Returns `Some((archive_path, archived_count))` if any entries
     /// were moved, where `archived_count` is how many entries were
     /// rotated out of the live memory file, and `None` if the kept
     /// entries already fit within `target_kept_size` (the common
     /// no-op path).
-    /// /// # Mechanics
-    /// /// - Keeps the **newest** entries (the ones the LLM most
+    /// # Mechanics
+    /// - Keeps the **newest** entries (the ones the LLM most
     /// likely needs to recall), trims the oldest.
     /// - The frozen snapshot (which feeds the LLM's prefix
     /// cache) stays ≤ `char_limit_for(target)` — this is
@@ -657,8 +657,8 @@ impl FileMemoryBackend {
     /// the LLM blasts the file system in a single session).
     /// - `archive/YYYY-MM.md` is append-only by month, so a
     /// user can grep across months for a forgotten fact.
-    /// /// # Concurrency
-    /// /// Must be called **inside** `add`'s `write_lock` guard.
+    /// # Concurrency
+    /// Must be called **inside** `add`'s `write_lock` guard.
     /// This function does not take the lock itself — it
     /// composes with `atomic_write`'s per-file OS lock, which
     /// is enough because the process Mutex already serializes
@@ -1201,7 +1201,7 @@ impl FileMemoryBackend {
 // --- helpers ----------------------------------------------------------------
 
 /// Whitespace / markdown / quote-normalize a string for fuzzy matching.
-/// /// Lets `old_text` match even when the LLM's copy of an entry differs
+/// Lets `old_text` match even when the LLM's copy of an entry differs
 /// in spacing, `*emphasis*` markers, or curly-vs-straight quotes — the
 /// most common cause of "no match" on `replace` / `remove`. We keep
 /// `contains` semantics (so a unique phrase still locates the entry)

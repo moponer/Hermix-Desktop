@@ -31,7 +31,7 @@ const MIN_KB: u64 = 51_200;
 /// Max children reported per group (matches the Python skill).
 const PER_GROUP_LIMIT: usize = 40;
 /// hard upper bound for a single scan invocation.
-/// /// Background: spawning walkdir on `C:\` (or even just `C:\Users`)
+/// Background: spawning walkdir on `C:\` (or even just `C:\Users`)
 /// can run for **minutes** on real machines because the entry count
 /// is unbounded. spawn_blocking can't be cleanly cancelled, so an
 /// oversized scan pins a worker thread + blocks the agent loop
@@ -161,7 +161,7 @@ fn fmt_size(bytes: u64) -> String {
 
 /// Recursive size in bytes via walkdir. Skips symlinks and unreadable
 /// entries (mirrors `dir_size_bytes` in the Python skill).
-/// /// optional `deadline` adds a `take_while` to the iterator
+/// optional `deadline` adds a `take_while` to the iterator
 /// so a deep tree (e.g. `C:\Windows\WinSxS` with millions of files)
 /// bails out instead of holding the spawn_blocking worker past
 /// SCAN_DEADLINE_SECS. Returning early **underestimates** the size
@@ -184,7 +184,7 @@ fn dir_size_bytes(path: &Path, deadline: Option<std::time::Instant>) -> u64 {
 }
 
 /// Size the immediate children of `path`, sorted desc, filtered to `MIN_KB`.
-/// /// optional `deadline` short-circuits both the inner walkdir
+/// optional `deadline` short-circuits both the inner walkdir
 /// (per-entry check via `take_while`) and the outer children loop, so a
 /// single huge subdirectory can't burn the whole SCAN_DEADLINE_SECS
 /// budget while the rest of the targets get skipped.

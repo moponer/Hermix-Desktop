@@ -1,4 +1,4 @@
-//! P4-T5 — per-turn harness feedback loop.
+//! — per-turn harness feedback loop.
 //!
 //! Every agent turn leaves a one-line trace of:
 //! - what action was attempted,
@@ -7,7 +7,7 @@
 //!
 //! The log is the **harness-level feedback layer**: independent of
 //! the in-prompt reflection (which is the *agent-level* feedback).
-//! Downstream consumers (P4-T6 self-improvement, P7 reflection
+//! Downstream consumers ( self-improvement, P7 reflection
 //! generators) read from this file.
 //!
 //! ## Storage

@@ -6,7 +6,7 @@
 
 /// Split markdown text into chunks that fit within `max_len`, preserving
 /// formatting integrity.
-/// /// Rules:
+/// Rules:
 /// - Never split inside a code block (``` ... ```)
 /// - Never split inside a link `[text](url)`
 /// - Close unclosed formatting marks (**, *, `, etc.) at split point

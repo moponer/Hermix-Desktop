@@ -1,7 +1,7 @@
 //! Standalone helper types and functions used by `agent_loop`.
 //!
 //! This module was extracted from `agent_loop.rs` (REFACTOR_PLAN §4, P2.2.5
-//! continuation, 2026-06-30) so the 10k-line `agent_loop.rs` can focus on the
+//! continuation, ) so the 10k-line `agent_loop.rs` can focus on the
 //! `impl AgentLoop` block. **No behavior change** — pure relocation.
 //!
 //! Items living here:
@@ -10,10 +10,10 @@
 //! - `ToolDispatchDecision`, `AgentCallbacks` (was agent_loop.rs:584-693)
 //! - `ErrorClass`, `classify_error`, `jittered_backoff`, `rand_u64_range` (was agent_loop.rs:695-755)
 //! - `compute_prompt_cache_key`, `default_max_autonomous_nudges` (was agent_loop.rs:493-550)
-//! - `is_interactive_tool` (P2.4, 2026-06-30) — names of tools that must run
+//! - `is_interactive_tool` (P2.4, ) — names of tools that must run
 //!   sequentially in the caller's task rather than the parallel `JoinSet`.
 //! - `ToolErrorClass`, `classify_tool_error`, `ToolRecovery` (P2.5,
-//!   2026-06-30) — classify a tool-call failure so the agent loop can pick
+//! ) — classify a tool-call failure so the agent loop can pick
 //!   the right recovery policy (re-prompt / swap tool / retry / backoff)
 //!   without bespoke string matching at every error site.
 //!
@@ -23,7 +23,7 @@
 
 // ---------------------------------------------------------------------------
 // Backwards-compat re-exports (AgentConfig was moved to agent_config.rs on
-// 2026-06-30, REFACTOR_PLAN §4 / P2.2.4). Keeping a thin alias here so
+//, REFACTOR_PLAN §4 / P2.2.4). Keeping a thin alias here so
 // `hermix_agent::agent_helpers::AgentConfig` resolves to the same source.
 // ---------------------------------------------------------------------------
 
@@ -62,7 +62,7 @@ impl std::fmt::Debug for ToolEntry {
 }
 
 /// A simple registry mapping tool names to their schemas and handlers.
-/// /// The full-featured implementation lives in `hermes-tools`; this minimal
+/// The full-featured implementation lives in `hermes-tools`; this minimal
 /// version exists so the agent loop can be tested and used independently.
 #[derive(Debug, Clone)]
 pub struct ToolRegistry {
@@ -123,7 +123,7 @@ impl ToolRegistry {
     /// Return a clone of this registry with only the named tools
     /// retained. Used by [`crate::sub_agent_orchestrator`] to give
     /// role-restricted sub-agents a registry that only contains
-    /// the tools allowed for their role (P6-4).
+    /// the tools allowed for their role .
     pub fn retain_only<F>(&self, predicate: F) -> Self
     where
         F: Fn(&str) -> bool,
@@ -178,13 +178,13 @@ pub fn compute_prompt_cache_key(
 }
 
 /// Compute a context-layer cache key.
-/// /// The context layer covers memory / skills / context-files blocks — it
+/// The context layer covers memory / skills / context-files blocks — it
 /// changes when the underlying memory store mutates (new facts, pruned
 /// entries), when skills get added/removed, or when a workspace context
 /// file is rewritten. None of those are per-turn data, so they are still
 /// safe to cache, but they invalidate independently of the stable layer
 /// (model / personality / system_prompt / workspace config).
-/// /// Keyed only by a coarse `epoch` tick the caller passes in — callers
+/// Keyed only by a coarse `epoch` tick the caller passes in — callers
 /// bump the epoch whenever they mutate the underlying stores; this keeps
 /// the key short and avoids dragging large text into the hasher.
 pub fn compute_context_cache_key(epoch: u64) -> u64 {
@@ -194,12 +194,12 @@ pub fn compute_context_cache_key(epoch: u64) -> u64 {
 }
 
 /// Three-tier prompt cache slot.
-/// /// Layered to keep the largest piece of the system prompt (the stable
+/// Layered to keep the largest piece of the system prompt (the stable
 /// identity / directions / tool block) reusable across turns even when
 /// the smaller context block mutates, and vice versa. The volatile
 /// block (timestamp + session_id) is rebuilt every turn and is not
 /// cached.
-/// /// Per-process cache slot for the two long-lived layers of the
+/// Per-process cache slot for the two long-lived layers of the
 /// system prompt. Each layer carries its own `cached_*_prompt_key`
 /// so that:
 /// - the cache invalidates immediately when the upstream key
@@ -207,7 +207,7 @@ pub fn compute_context_cache_key(epoch: u64) -> u64 {
 /// - external observers (telemetry, the dashboard cache-warming
 /// panel, CI smoke tests) can read the key back out via the
 /// `last_*_key()` getters without taking a lock.
-/// /// `None` for the text slot means "miss — re-render the layer".
+/// `None` for the text slot means "miss — re-render the layer".
 /// `None` for the key is treated as a miss for the same reason,
 /// so the upstream key never diverges from what was actually
 /// stored.
@@ -299,7 +299,7 @@ impl PromptCache {
 /// How many times the autonomous loop may nudge the LLM back into action
 /// (inject a "keep working" system message) before giving up and letting the
 /// model's plain-text response through as a final answer.
-/// /// Default is 8 — slightly higher than the old 5 because real-world browser
+/// Default is 8 — slightly higher than the old 5 because real-world browser
 /// workflows (page navigation + captcha + form fill) commonly take 6–10
 /// nudges before the LLM stops "talking about" the task and actually does it.
 pub fn default_max_autonomous_nudges() -> u32 {
@@ -338,7 +338,7 @@ pub struct EvolutionCounters {
 // ---------------------------------------------------------------------------
 
 /// Outcome of a pre-tool-dispatch hook.
-/// /// Returned by `AgentCallbacks::on_pre_tool_dispatch` (when set) to control
+/// Returned by `AgentCallbacks::on_pre_tool_dispatch` (when set) to control
 /// whether (and how) a single tool call is executed. The hook fires once per
 /// tool call, before arguments are parsed and the handler is invoked.
 #[derive(Debug)]
@@ -349,7 +349,7 @@ pub enum ToolDispatchDecision {
     Deny { reason: String },
     /// Block until the user (or upstream layer) resolves approval through the
     /// supplied `oneshot` receiver.
-    /// /// The receiver yields an [`ApprovalOutcome`]: `Approved` allows
+    /// The receiver yields an [`ApprovalOutcome`]: `Approved` allows
     /// execution, while `DeniedByUser` / `TimedOut { .. }` /
     /// `ChannelClosed` deny it. The richer enum (vs. the old `bool`)
     /// lets `tool_dispatch::resolve_pre_dispatch` build an accurate
@@ -364,17 +364,17 @@ pub struct AgentCallbacks {
     /// Called when the LLM is "thinking" (reasoning tokens).
     pub on_thinking: Option<Box<dyn Fn(&str) + Send + Sync>>,
     /// Called when a tool call begins.
-    /// /// Arguments: `tool_call_id` (a per-invocation uuid the agent loop
+    /// Arguments: `tool_call_id` (a per-invocation uuid the agent loop
     /// generates and threads through `on_tool_complete` so callers can
     /// pair start/complete events), `tool` (function name), and
     /// `args` (the parsed arguments object).
-    /// /// The `tool_call_id` is stable across one tool invocation —
+    /// The `tool_call_id` is stable across one tool invocation —
     /// callers can stash it in a `HashMap` to correlate
     /// `on_tool_start` (before execution), any number of mid-flight
     /// progress events (future), and the matching `on_tool_complete`.
     pub on_tool_start: Option<Box<dyn Fn(&str, &str, &Value) + Send + Sync>>,
     /// Called when a tool call finishes.
-    /// /// Same `tool_call_id` as the matching `on_tool_start`. `output`
+    /// Same `tool_call_id` as the matching `on_tool_start`. `output`
     /// is the full result string returned by the tool handler.
     /// `denial_kind` is the `ToolResult::denial_kind` for this call —
     /// `""` for a normal success, `"policy"` for a hardline gate, and
@@ -386,25 +386,25 @@ pub struct AgentCallbacks {
     /// Called after each completed LLM step (full response assembled).
     pub on_step_complete: Option<Box<dyn Fn(u32) + Send + Sync>>,
     /// Called when background memory/skill review completes or fails.
-    /// /// Payload is a user-friendly summary string suitable for direct UI output.
+    /// Payload is a user-friendly summary string suitable for direct UI output.
     pub background_review_callback: Option<Arc<dyn Fn(&str) + Send + Sync>>,
     /// Called for lifecycle/status notices (context pressure, retries, etc.).
-    /// /// The first argument is a category string (e.g. `"lifecycle"`, `"activity"`).
+    /// The first argument is a category string (e.g. `"lifecycle"`, `"activity"`).
     pub status_callback: Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
     /// Called before each tool dispatch to optionally gate execution.
-    /// /// Returning `Allow` proceeds normally, `Deny` aborts the tool call with
+    /// Returning `Allow` proceeds normally, `Deny` aborts the tool call with
     /// the given reason, and `AwaitApproval` blocks on a oneshot until the
     /// upstream layer (e.g. `LocalAgentService`) resolves the request.
     pub on_pre_tool_dispatch:
         Option<Box<dyn Fn(&ToolCall) -> ToolDispatchDecision + Send + Sync>>,
-    /// P6 direction 3 (2026-07-20): called **after** the user approves
+    /// P6 direction 3 : called **after** the user approves
     /// a tool call (i.e. once the `AwaitApproval` oneshot resolves to
     /// `Approved`). Lets the caller update its in-memory permission
     /// profile so the same resource doesn't re-prompt next turn. See
     /// `tool_dispatch::resolve_pre_dispatch` for the call site.
     pub on_pre_tool_approved: Option<Arc<dyn Fn(&ToolCall) + Send + Sync>>,
     /// H3: Called when the prefetcher resolves with an intent prediction.
-    /// /// Payload is a JSON string containing `{ intent, confidence, results }`
+    /// Payload is a JSON string containing `{ intent, confidence, results }`
     /// in the same shape as `StreamEvent::PrefetchIntent`.
     pub on_prefetch_intent: Option<Arc<dyn Fn(&str) + Send + Sync>>,
     /// (type-B root-cause): forwarded from
@@ -416,10 +416,10 @@ pub struct AgentCallbacks {
     /// context. See `traits::AgentOverrides::shutdown` for the
     /// cross-crate contract.
     pub shutdown: Option<Arc<Notify>>,
-    /// M5: Called when the agent emits an ACUI (Agent-Controlled UI)
+    /// Called when the agent emits an ACUI (Agent-Controlled UI)
     /// directive. The payload is a JSON-serialized `AcuiDirective`
     /// (tag = `"op"`, snake_case).
-    /// /// Upstream layer (e.g. `LocalAgentService`) is expected to bridge
+    /// Upstream layer (e.g. `LocalAgentService`) is expected to bridge
     /// this into a `StreamEvent::Acui` over the WebSocket so the
     /// frontend's `AcuiRenderer` can pick it up.
     pub on_acui_directive: Option<Arc<dyn Fn(&str) + Send + Sync>>,
@@ -439,7 +439,7 @@ pub struct AgentCallbacks {
     /// UI hook in `apps/desktop-tauri/src/hooks/useStreamChat.ts`
     /// subscribes to that event and updates its own
     /// `compactionStatus` state.
-    /// /// No-op if no `on_compaction_status` callback was wired (e.g.
+    /// No-op if no `on_compaction_status` callback was wired (e.g.
     /// unit tests, batched runs that don't care about the UI side).
     /// The callback is invoked from the agent-loop task; the upstream
     /// is responsible for moving the data to whatever IO context
@@ -453,26 +453,26 @@ pub struct AgentCallbacks {
     /// [`crate::context::SectionGateReport`] — borrowed, not owned,
     /// so the callback MUST serialise it immediately rather than
     /// stash it on a long-lived queue.
-    /// /// Upstream layer (e.g. `LocalAgentService`) bridges it into a
+    /// Upstream layer (e.g. `LocalAgentService`) bridges it into a
     /// `section_gate` WS event with shape
     /// `{ "event": "section_gate", "report": { patched: [...], pending: [...] } }`.
     /// Front-end `useStreamChat.ts` hook subscribes and forwards to
     /// the trace panel.
-    /// /// No-op if no callback is wired (unit tests, batched runs).
+    /// No-op if no callback is wired (unit tests, batched runs).
     pub on_section_gate:
         Option<Arc<dyn Fn(&crate::context::SectionGateReport) + Send + Sync>>,
-    /// P3-2: Called when the agent loop enters a new phase.
-    /// /// Payload is a JSON string: `{"phase":"llm_call","stage":"reasoning","turn":3}`.
+    /// Called when the agent loop enters a new phase.
+    /// Payload is a JSON string: `{"phase":"llm_call","stage":"reasoning","turn":3}`.
     /// The upstream layer (e.g. `LocalAgentService`) bridges this into a
     /// `LoopPhaseChanged` WS event via the orchestration bus.
-    /// /// No-op if no callback is wired (unit tests, batched runs).
+    /// No-op if no callback is wired (unit tests, batched runs).
     pub on_loop_phase_changed: Option<Arc<dyn Fn(&str, &str, u32) + Send + Sync>>,
-    /// P3-5: Called when the agent loop finalizes, indicating the task
+    /// Called when the agent loop finalizes, indicating the task
     /// should be marked as completed or failed.
-    /// /// Arguments: `(success: bool, task_id: Option<&str>)`.
+    /// Arguments: `(success: bool, task_id: Option<&str>)`.
     /// The upstream layer uses this to transition the Task status and
-    /// trigger result delivery (Phase 7).
-    /// /// No-op if no callback is wired.
+    /// trigger result delivery .
+    /// No-op if no callback is wired.
     pub on_task_complete:
         Option<Arc<dyn Fn(bool, Option<&str>) + Send + Sync>>,
 }
@@ -576,18 +576,18 @@ pub fn rand_u64_range(min: u64, max: u64) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Interactive tools (P2.4, 2026-06-30)
+//Interactive tools (P2.4, )
 // ---------------------------------------------------------------------------
 
 /// Tools that must run **sequentially in the caller's task** rather than
 /// in the parallel `JoinSet`.
-/// /// Why interactive tools exist: a batch like
+/// Why interactive tools exist: a batch like
 /// `[clarify, write_file, terminal_run]` would, under parallel dispatch,
 /// kick off `write_file` and `terminal_run` *before* the user has answered
 /// `clarify`. When the answer comes back, those results are now stale
 /// context the LLM has to wade through. Running `clarify` first lets the
 /// model pick better tool calls based on the user's reply.
-/// /// `delegate_task` is already sequential by virtue of the
+/// `delegate_task` is already sequential by virtue of the
 /// `SubAgentOrchestrator` path in `execute_tool_calls`; it is included
 /// here so callers that ask "is this interactive?" get the full answer
 /// without duplicating the orchestrator's logic.
@@ -596,11 +596,11 @@ pub fn is_interactive_tool(name: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// ToolErrorClass (P2.5, 2026-06-30)
+//ToolErrorClass (P2.5, )
 // ---------------------------------------------------------------------------
 
 /// Classification of a tool-call failure for recovery-policy routing.
-/// /// Each variant maps to a default recovery strategy the agent loop can
+/// Each variant maps to a default recovery strategy the agent loop can
 /// take without bespoke string-matching in `agent_loop.rs`:
 /// - `ArgumentsCorrupted`     → re-prompt the LLM with the JSON parse
 /// error, do NOT count toward tool retry
@@ -650,7 +650,7 @@ pub enum ToolRecovery {
 }
 
 /// Classify a tool-call error message into a [`ToolErrorClass`].
-/// /// The classification is heuristic — it inspects the human-readable
+/// The classification is heuristic — it inspects the human-readable
 /// error string the agent loop currently writes into `ToolResult::err`
 /// and into the `tool_errors` log. Patterns are chosen to match the
 /// actual error messages produced by:

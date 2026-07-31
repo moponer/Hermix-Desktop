@@ -105,12 +105,12 @@ pub mod harness_self_edit;
 pub mod acceptance_gate;
 pub mod experience_archive;
 
-// Phase 1: New capabilities
+//New capabilities
 pub mod bdi;
 pub mod latent_briefing;
 pub mod long_horizon;
 
-// Phase 2: Researcher OS
+//Researcher OS
 pub mod researcher_loop;
 pub mod researcher_queue;
 
@@ -131,7 +131,7 @@ pub use context::{
     SystemPromptBuilder, SELF_EVOLUTION_GUIDANCE,
 };
 
-// Re-export v2 short-term context unload (2026-06-21). `read_session_index`
+//Re-export v2 short-term context unload . `read_session_index`
 // powers the server endpoint `GET /v1/sessions/{id}/archive-refs` so the
 // front-end can list the refs without re-scanning every archive file.
 pub use archive::{
@@ -162,7 +162,7 @@ pub use reasoning::parse_reasoning;
 // Re-export interrupt controller
 pub use interrupt::InterruptController;
 
-// T1-B (completion 2026-06-26): removed `memory_manager.rs` entirely
+//T1-B (completion ): removed `memory_manager.rs` entirely
 // (the `MemoryProviderPlugin` trait was its sole remaining occupant).
 // All write-path hooks now route through `MemoryRouter`, which fans
 // out to every registered `MemoryLayer` backend — single trait, single
@@ -178,7 +178,7 @@ pub use plugins::{install_plugin_tools_into_registry, Plugin, PluginManager, Plu
 // Re-export skill orchestrator
 pub use skill_orchestrator::SkillOrchestrator;
 
-// Re-export skill loader (P6-3)
+//Re-export skill loader
 pub use skill_loader::{SkillLoader, SkillMatch};
 
 // Re-export session persistence
@@ -208,7 +208,7 @@ pub use sub_agent_orchestrator::{
 // Re-export local agent service
 pub use local_agent_service::LocalAgentService;
 
-// Re-export consciousness stream (Phase 14 / H3 — agent ECG vitals)
+//Re-export consciousness stream
 pub use consciousness::{
     default_amplitude, ConsciousnessSample, ConsciousnessState, ConsciousnessTracker, VitalBucket,
     Vitals,

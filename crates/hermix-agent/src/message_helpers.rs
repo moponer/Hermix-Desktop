@@ -1,6 +1,6 @@
 //! Message-and-callback helpers used by `agent_loop`.
 //!
-//! Extracted from `agent_loop.rs` (P2.x, 2026-07-04) so the 10k-line
+//! Extracted from `agent_loop.rs` (P2.x, ) so the 10k-line
 //! `agent_loop.rs` can focus on the `impl AgentLoop` block. **No behavior
 //! change** — pure relocation.
 //!
@@ -40,7 +40,7 @@ pub fn emit_status(
 /// needs (state, pressure, failure reason, change timestamp)
 /// so the upstream layer just JSON-serialises it and emits the
 /// `compaction_status` WS event.
-/// /// `quiet_mode` does NOT short-circuit this path: the banner is
+/// `quiet_mode` does NOT short-circuit this path: the banner is
 /// a UI affordance, and suppressing it would hide legitimate
 /// "context is overflowing" / "compression has been disabled"
 /// signals from the user.
@@ -112,7 +112,7 @@ pub fn normalize_tool_call_arguments(tc: &mut ToolCall) -> Result<(), String> {
 }
 
 /// Derive the `extra_body` map for the active API mode.
-/// /// - `CodexResponses` mode passes the user-supplied body through unchanged.
+/// - `CodexResponses` mode passes the user-supplied body through unchanged.
 /// - For every other mode, inject `strict_api=true` unless the user
 /// already set `strict_tool_calls`, `strict_api`, or `provider_strict`.
 /// - Returns `None` when the user supplied a non-object `extra_body`

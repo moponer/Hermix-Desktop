@@ -2,7 +2,7 @@
 //!
 //! ## Why this module exists
 //!
-//! Before Phase 1 (session isolation), per-session state (workspace,
+//! Before (session isolation), per-session state (workspace,
 //! approval context, permission profile, session id, stdout callback)
 //! lived on process-global `Arc<Mutex<…>>` fields on
 //! [`crate::registry::ToolRegistryInner`]. `LocalAgentService` wrote

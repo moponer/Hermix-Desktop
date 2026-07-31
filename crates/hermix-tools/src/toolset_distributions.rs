@@ -12,7 +12,7 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 
 /// A named distribution of toolset weights.
-/// /// Each entry in `toolset_weights` maps a toolset name to a probability weight
+/// Each entry in `toolset_weights` maps a toolset name to a probability weight
 /// (0.0 = never included, 1.0 = always included). Weights are not required to
 /// sum to 1.0 — they are interpreted as independent inclusion probabilities.
 #[derive(Debug, Clone)]
@@ -365,7 +365,7 @@ pub fn select_toolsets_deterministic(dist: &ToolsetDistribution) -> Vec<String> 
 }
 
 /// Validate a distribution.
-/// /// Checks that all weights are in [0.0, 1.0] and the distribution has a name.
+/// Checks that all weights are in [0.0, 1.0] and the distribution has a name.
 pub fn validate_distribution(dist: &ToolsetDistribution) -> Result<(), String> {
     if dist.name.is_empty() {
         return Err("Distribution name cannot be empty".into());

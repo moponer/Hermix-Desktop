@@ -1,6 +1,6 @@
 //! Runtime LLM provider construction + credential resolution.
 //!
-//! Phase 5 (2026-07-04): extracted from `agent_loop.rs` so the
+//! : extracted from `agent_loop.rs` so the
 //! per-provider construction logic (`build_runtime_provider` + 5
 //! dependency helpers) lives next to the provider types it instantiates.
 //!

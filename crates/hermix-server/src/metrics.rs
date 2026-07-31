@@ -1,6 +1,6 @@
 //! Local metric system for observability.
 //!
-//! (P2-1 / STABILITY-PLAN §2.8) Lightweight metric collection that
+//! ( / ) Lightweight metric collection that
 //! writes to SQLite in batches (10s flush). No external dependencies
 //! (Prometheus server not required).
 //!
@@ -11,7 +11,7 @@
 //! - Memory usage (process RSS)
 //! - SQLite pool stats
 //!
-//! Design constraints (STABILITY-PLAN §4 F6):
+//! Design constraints ( F6):
 //! - Metric writes are async batch — never block the main flow.
 //! - Metric system failure is logged but does not crash the server.
 //! - Query API is read-only and cheap.

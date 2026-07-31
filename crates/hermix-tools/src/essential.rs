@@ -74,7 +74,7 @@
 /// The essential toolset floor. The constant is `pub` so other
 /// crates (`hermix-server`, `hermix-agent`) can reference the
 /// canonical list without copy-pasting the strings.
-/// /// P1.8 (2026-07-02) — alignment pass with the runtime registry:
+/// P1.8 — alignment pass with the runtime registry:
 /// - `"computer_use"` removed. There is no tool tagged
 /// `"computer_use"`. The previous `register_one(name, name, ...)`
 /// pattern in `tools::cua::register` put every CUA handler under
@@ -109,7 +109,7 @@ pub const ESSENTIAL_TOOLSETS: &[&str] = &[
 /// Re-enable the essential toolsets on a [`ToolRegistry`]. Idempotent;
 /// safe to call multiple times. Returns the number of
 /// (toolset, count) flips actually performed, useful for tracing.
-/// /// The function does **not** disable anything the user explicitly
+/// The function does **not** disable anything the user explicitly
 /// enabled in the whitelist — it only re-asserts the floor. If
 /// the user toggled `terminal` off and the next reconciliation
 /// pass turned it off, calling this re-enables it; if `terminal`

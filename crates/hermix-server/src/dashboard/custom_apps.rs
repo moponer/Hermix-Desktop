@@ -249,7 +249,7 @@ pub async fn run_app(
 }
 
 /// GET /api/custom-apps/{id}/icon — serve the app's custom icon as PNG.
-/// /// Returns 404 if the app has no custom icon.
+/// Returns 404 if the app has no custom icon.
 pub async fn get_app_icon(
     State(state): State<HttpServerState>,
     Path(id): Path<String>,
@@ -294,7 +294,7 @@ pub async fn get_app_icon(
 mod wiring_tests {
     use super::*;
 
-    /// Wiring sanity check (2026-07-21): after `HttpServerState::build`,
+    /// Wiring sanity check : after `HttpServerState::build`,
     /// `custom_app_manager` must be `Some(...)`, otherwise the
     /// `get_manager` helper here would return 503 for every
     /// `/api/custom-apps` request. We exercise the same code path that

@@ -43,7 +43,7 @@ pub struct CdpBrowserBackend {
     /// Last snapshot ref → CSS selector mapping. Lets the LLM pass
     /// `[ref=eN]` from the snapshot YAML instead of writing raw selectors.
     last_snapshot_refs: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
-    /// Phase 4: init scripts registered via `Page.addScriptToEvaluateOnNewDocument`.
+    /// init scripts registered via `Page.addScriptToEvaluateOnNewDocument`.
     /// Each entry is the script's `scriptId` (from CDP) so we can remove
     /// it later via `Page.removeScriptToEvaluateOnNewDocument`. The
     /// scripts themselves are re-injected on every `navigate` (CDP does
@@ -167,7 +167,7 @@ impl CdpBrowserBackend {
     }
 
     /// Create from environment variable `CHROME_CDP_URL` or default localhost.
-    /// /// Does NOT auto-launch Chrome at construction time. The
+    /// Does NOT auto-launch Chrome at construction time. The
     /// `BrowserNavigateHandler::with_cdp_bootstrap()` handles lazy
     /// browser startup only when a navigate tool call is actually made.
     pub fn from_env() -> Self {
@@ -313,11 +313,11 @@ impl CdpBrowserBackend {
 
     /// Send a CDP command and optionally wait for a follow-up event on the
     /// same WebSocket. Returns `(immediate_response, optional_event_payload)`.
-    /// /// `event_method` is the CDP method name to wait for (e.g.
+    /// `event_method` is the CDP method name to wait for (e.g.
     /// `"Page.loadEventFired"`). If `None`, behaves like [`Self::cdp_command`].
     /// `event_timeout` caps how long to wait for the event before returning
     /// `(result, None)` — the navigate call has likely already succeeded.
-    /// /// This is the right primitive for `Page.navigate` + `Page.loadEventFired`:
+    /// This is the right primitive for `Page.navigate` + `Page.loadEventFired`:
     /// the immediate response comes back immediately (the navigation has been
     /// *initiated*) but the page hasn't actually loaded yet. Without waiting
     /// for the event, a follow-up `Accessibility.getFullAXTree` returns the
@@ -1190,10 +1190,10 @@ impl BrowserBackend for CdpBrowserBackend {
         old_snapshot: &str,
         new_snapshot: &str,
     ) -> Result<String, ToolError> {
-        // Phase 1: a textual line-set diff on the YAML output. This is a
+        //a textual line-set diff on the YAML output. This is a
         // 90% solution that catches 90% of agent-browser interaction deltas
         // (new toast message, validation text, navigation landing page).
-        // Full structural diff is Phase 2 work (post-message, post-fragment).
+        //Full structural diff is work (post-message, post-fragment).
         let body = diff_a11y_yaml(old_snapshot, new_snapshot);
         Ok(json!({
             "status": "diff",
@@ -1225,12 +1225,12 @@ impl BrowserBackend for CdpBrowserBackend {
         } else {
             yaml
         };
-        // Phase 2: wrap the YAML in <page_content>...</page_content> so the
+        //wrap the YAML in <page_content>...</page_content> so the
         // downstream parser can distinguish interactive tree from any
         // prompt-injection content the LLM might be served by a hostile
         // page (e.g. a textarea containing "<system>...</system>").
         let wrapped = format!("<page_content>\n{yaml}\n</page_content>");
-        // Phase 2: hard-cap the output length. Defaults to 50K characters;
+        //hard-cap the output length. Defaults to 50K characters;
         // any longer and the LLM context budget explodes. We surface a
         // truncation hint so the LLM can narrow with `target` / `depth`.
         const MAX_OUTPUT: usize = 50_000;
@@ -1272,7 +1272,7 @@ impl BrowserBackend for CdpBrowserBackend {
     async fn click(&self, selector: &str) -> Result<String, ToolError> {
         let resolved = self.resolve_selector(selector);
         // Pre-flight: detect missing / covered / disabled elements BEFORE
-        // dispatching a click. This is the Phase-1 deliverable that the
+        // dispatching a click. This is the pre-flight element check that the
         // screenshot showed was missing — the LLM was firing
         // a click into the void, getting `clicked` back, and then
         // wondering why nothing happened.
@@ -1446,7 +1446,7 @@ impl BrowserBackend for CdpBrowserBackend {
     }
 
     async fn press(&self, key: &str) -> Result<String, ToolError> {
-        // Phase 1 structured error: keyDown without a keyUp leaves the page
+        //structured error: keyDown without a keyUp leaves the page
         // thinking a modifier is held. We always emit a paired keyUp and
         // surface a typed result so the LLM can chain `press("Enter")` after
         // `type(...)` confidently.
@@ -1609,7 +1609,7 @@ impl BrowserBackend for CdpBrowserBackend {
     }
 
     async fn vision(&self, instruction: &str) -> Result<String, ToolError> {
-        // Phase 2: capture screenshot, optionally annotate it with [ref=]
+        //capture screenshot, optionally annotate it with [ref=]
         // badges overlaid on each interactive element. Annotation helps the
         // LLM correlate visual regions to the ref tokens it has already
         // received from browser_snapshot, which is critical for captcha /
@@ -1694,7 +1694,7 @@ impl BrowserBackend for CdpBrowserBackend {
     }
 
     async fn console(&self, action: &str) -> Result<String, ToolError> {
-        // Phase 2: real console collection. The CDP `Runtime.consoleAPICalled`
+        //real console collection. The CDP `Runtime.consoleAPICalled`
         // event fires for every console.* call. We accumulate them into a
         // bounded in-memory buffer per CdpBrowserBackend instance, and
         // expose them via the `read` action with category filtering.
@@ -2206,7 +2206,7 @@ mod tests {
     fn ax_tree_yaml_assigns_refs_for_interactive_nodes() {
         // CDP emit order: parent first, then children. Root has
         // `childIds` referencing its direct descendants. The walker
-        // (post Phase 1 fix) uses the node's own childIds to build
+        //(post fix) uses the node's own childIds to build
         // the parent → children map, so node 1's childIds = [2, 3]
         // gives us two walked children.
         let tree = json!([
@@ -2301,7 +2301,7 @@ fn ax_role_is_interactive(role: &str) -> bool {
 
 /// Convert CDP `Accessibility.getFullAXTree` `nodes` array into a compact
 /// YAML tree plus a `ref → CSS selector` map for interactive nodes.
-/// /// `depth` limits how many nesting levels are emitted (root = 0).
+/// `depth` limits how many nesting levels are emitted (root = 0).
 /// `target` optionally filters by a CSS selector substring (matched against
 /// the node's own selector or any descendant's); pass `None` to keep everything.
 fn ax_tree_to_a11y_yaml(
@@ -2447,14 +2447,14 @@ fn ax_tree_to_a11y_yaml(
 }
 
 // ---------------------------------------------------------------------------
-// Phase 1 helpers: compact mode + wait_for with state/url_glob/js_fn
+//helpers: compact mode + wait_for with state/url_glob/js_fn
 // ---------------------------------------------------------------------------
 
 /// Strip non-interactive ancestor branches from an a11y YAML tree, keeping
 /// only subtrees that contain at least one `[ref=...]` line. This is the
 /// "compact" mode the LLM opts into for dense pages (form-heavy admin UIs,
 /// dashboards, settings pages). Typical savings: ~50% token reduction.
-/// /// Implementation: collect kept lines plus their children, then rewrite
+/// Implementation: collect kept lines plus their children, then rewrite
 /// indentation so the tree is still structurally valid YAML.
 fn compact_a11y_yaml(yaml: &str) -> String {
     // Strategy: mark every line that contains `[ref=` and walk the
@@ -2592,7 +2592,7 @@ fn diff_a11y_yaml(old: &str, new: &str) -> String {
 mod phase1_tests {
     use super::*;
 
-    /// Phase 1: `compact_a11y_yaml` should drop non-interactive ancestors
+    /// `compact_a11y_yaml` should drop non-interactive ancestors
     /// while preserving the path to every `[ref=...]` node.
     #[test]
     fn compact_a11y_yaml_drops_non_interactive_ancestors() {
@@ -2625,7 +2625,7 @@ mod phase1_tests {
         );
     }
 
-    /// Phase 1: `diff_a11y_yaml` should surface added/removed lines and a
+    /// `diff_a11y_yaml` should surface added/removed lines and a
     /// preview, all in stable JSON.
     #[test]
     fn diff_a11y_yaml_reports_added_removed() {
@@ -2653,7 +2653,7 @@ mod phase1_tests {
         assert!(preview.contains("Welcome"));
     }
 
-    /// Phase 1: `build_wait_for_js` should AND-combine selector + state +
+    /// `build_wait_for_js` should AND-combine selector + state +
     /// url_glob + js_fn into a single evaluated expression.
     #[test]
     fn build_wait_for_js_and_combines_all_conditions() {
@@ -2674,7 +2674,7 @@ mod phase1_tests {
         assert!(js.contains("JSON.stringify"));
     }
 
-    /// Phase 1: with no state/url_glob/js_fn, the wait-for JS must still
+    /// with no state/url_glob/js_fn, the wait-for JS must still
     /// produce a syntactically valid expression that defaults to true
     /// for the optional conditions.
     #[test]
@@ -2685,7 +2685,7 @@ mod phase1_tests {
         assert!(js.contains("fn_ok = true"));
     }
 
-    /// Phase 1: unknown state names should not silently degrade to
+    /// unknown state names should not silently degrade to
     /// always-true — they must log a warning and return false.
     #[test]
     fn build_wait_for_js_unknown_state_fails_loud() {
@@ -2700,7 +2700,7 @@ mod phase1_tests {
 
 #[cfg(test)]
 mod phase2_tests {
-    /// Phase 2: snapshot YAML must be wrapped in <page_content>...</page_content>
+    /// snapshot YAML must be wrapped in <page_content>...</page_content>
     /// so prompt-injection content (e.g. a hostile textarea containing
     /// "<system>...</system>") can be distinguished from interactive tree.
     #[test]
@@ -2714,7 +2714,7 @@ mod phase2_tests {
         assert!(wrapped.ends_with("</page_content>"));
     }
 
-    /// Phase 2: when the YAML exceeds 50K chars, the snapshot result must
+    /// when the YAML exceeds 50K chars, the snapshot result must
     /// surface `truncated: true` and a hint to narrow. We test the
     /// truncation logic by exercising `ax_tree_to_a11y_yaml` with a very
     /// large depth (we don't actually build a 50K-char string in tests).
@@ -2728,7 +2728,7 @@ mod phase2_tests {
         assert!(50_000 < huge.len());
     }
 
-    /// Phase 2: highlight JS must remove any previous highlight before
+    /// highlight JS must remove any previous highlight before
     /// pulsing the new one. This test guards against a regression where
     /// two consecutive `browser_highlight` calls leave both elements
     /// pulsing.
@@ -2753,7 +2753,7 @@ mod phase2_tests {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: BrowserRegistry — per-session backend isolation
+//BrowserRegistry — per-session backend isolation
 // ---------------------------------------------------------------------------
 // `AutoBrowserBackend` is a single shared instance, which means every
 // `browser_click` / `browser_snapshot` call goes through the same CDP
@@ -2767,7 +2767,7 @@ mod phase2_tests {
 // in two different sessions never share state.
 // Sessions are cleaned up when the entry's `Arc` count drops to zero
 // (e.g. on shutdown). We don't expose an explicit close API yet — the
-// Phase 3 deliverable is *isolation*, not lifecycle.
+//deliverable is *isolation*, not lifecycle.
 
 pub struct BrowserRegistry {
     /// session_id → backend. Lazily populated.
@@ -2872,7 +2872,7 @@ impl BrowserRegistry {
     /// Look up (or create) the backend for `session_id`. The returned
     /// `Arc` is cheap to clone and is what the handlers should hold
     /// across calls.
-    /// /// **Side effect**: Chrome auto-bootstrap now happens at every
+    /// **Side effect**: Chrome auto-bootstrap now happens at every
     /// browser tool call (not just `browser_navigate`), via
     /// [`Self::ensure_browser_bootstrap_async`]. Callers should invoke
     /// that first when running inside an async context.
@@ -2895,7 +2895,7 @@ impl BrowserRegistry {
     /// calls short-circuit on the cached success flag). Safe to call
     /// from concurrent handlers — the probe + spawn happen inside the
     /// mutex-guarded `bootstrap_ensured` check.
-    /// /// The status is **logged but not returned**: the tool layer is
+    /// The status is **logged but not returned**: the tool layer is
     /// responsible for surfacing a clean error to the LLM (so the
     /// user sees "browser unavailable" instead of a CDP stack trace).
     pub async fn ensure_browser_bootstrap_async(&self) {
@@ -2986,7 +2986,7 @@ impl BrowserRegistry {
 mod phase3_tests {
     use super::*;
 
-    /// Phase 3: a fresh registry starts empty and lazily populates on
+    /// a fresh registry starts empty and lazily populates on
     /// first request. Two requests for the same session return the same
     /// backend (Arc::ptr_eq); different sessions get different backends.
     #[test]
@@ -3002,7 +3002,7 @@ mod phase3_tests {
         );
     }
 
-    /// Phase 3: `close_session` removes the entry so the next call gets
+    /// `close_session` removes the entry so the next call gets
     /// a fresh backend.
     #[test]
     fn registry_close_session_drops_backend() {
@@ -3015,7 +3015,7 @@ mod phase3_tests {
         assert!(Arc::ptr_eq(&a, &b));
     }
 
-    /// Phase 3: with no allowlist, every URL passes.
+    /// with no allowlist, every URL passes.
     #[test]
     fn registry_no_allowlist_allows_everything() {
         let reg = BrowserRegistry::new();
@@ -3023,7 +3023,7 @@ mod phase3_tests {
         assert!(reg.check_domain("http://10.0.0.1/admin").is_ok());
     }
 
-    /// Phase 3: an exact match grants access; a different host is denied.
+    /// an exact match grants access; a different host is denied.
     /// The wildcard syntax `*.example.com` matches `example.com` itself
     /// and any subdomain (e.g. `api.example.com`).
     #[test]
@@ -3038,7 +3038,7 @@ mod phase3_tests {
         assert!(reg.check_domain("https://evil.com/y").is_err());
     }
 
-    /// Phase 3: an empty allowlist means "deny everything" — this is the
+    /// an empty allowlist means "deny everything" — this is the
     /// safest default if the operator forgets to populate it.
     #[test]
     fn registry_empty_allowlist_denies_all() {
@@ -3046,7 +3046,7 @@ mod phase3_tests {
         assert!(reg.check_domain("https://example.com/").is_err());
     }
 
-    /// Phase 3: malformed URLs are rejected with a clear reason.
+    /// malformed URLs are rejected with a clear reason.
     #[test]
     fn registry_rejects_unparseable_urls() {
         let reg = BrowserRegistry::new().with_allowed_domains(Some(vec!["x.com".into()]));
@@ -3057,13 +3057,13 @@ mod phase3_tests {
 
 /// `SessionedBrowserBackend` is a `BrowserBackend` impl that delegates
 /// every call to a per-session backend looked up in a [`BrowserRegistry`].
-/// /// This wrapper is the *only* thing tool handlers need to hold: they
+/// This wrapper is the *only* thing tool handlers need to hold: they
 /// stay typed as `Arc<dyn BrowserBackend>`, and the registry handles
 /// the per-session routing based on the `session` field of the params
 /// JSON. The wrapper therefore implements `BrowserBackend` by *ignoring*
 /// its `&self` and instead pulling a fresh backend for the active
 /// session out of the registry on every call.
-/// /// We track the "active session" via a small mutex: each handler sets
+/// We track the "active session" via a small mutex: each handler sets
 /// the session id right before dispatching. The wrapper is `Clone` and
 /// cheap to share.
 pub struct SessionedBrowserBackend {
@@ -3251,7 +3251,7 @@ impl BrowserBackend for SessionedBrowserBackend {
 mod phase4_tests {
     use super::*;
 
-    /// Phase 4: the `Page.addScriptToEvaluateOnNewDocument` CDP call
+    /// the `Page.addScriptToEvaluateOnNewDocument` CDP call
     /// takes a `source` field and returns an `identifier` we must
     /// remember. We assert the request shape via a small serde
     /// round-trip so a future refactor doesn't drop the field name.
@@ -3266,7 +3266,7 @@ mod phase4_tests {
         assert_eq!(v["runImmediately"], true);
     }
 
-    /// Phase 4: clear must drain the local `init_script_ids` list and
+    /// clear must drain the local `init_script_ids` list and
     /// call `Page.removeScriptToEvaluateOnNewDocument` for each. We
     /// assert the local-list state is empty after clear.
     #[test]
@@ -3281,7 +3281,7 @@ mod phase4_tests {
         assert!(ids.lock().unwrap().is_empty());
     }
 
-    /// Phase 4: list returns a stable JSON shape so the LLM can rely
+    /// list returns a stable JSON shape so the LLM can rely
     /// on `scripts` always being an array (possibly empty).
     #[test]
     fn init_script_list_returns_array_always() {

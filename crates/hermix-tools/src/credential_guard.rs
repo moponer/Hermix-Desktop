@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use hermix_core::ToolError;
 use regex::Regex;
 
-// (P1-1): Helper to compile static regex patterns without
+//: Helper to compile static regex patterns without
 // .unwrap(). Uses .expect() with a semantic message as required by
 // the code hardening plan (static init cannot use `?`).
 fn re(pattern: &'static str) -> Regex {
@@ -155,7 +155,7 @@ impl CredentialGuard {
     }
 
     /// Check whether reading a file is allowed.
-    /// /// Returns `Err(ToolError)` if the file is a protected credential file.
+    /// Returns `Err(ToolError)` if the file is a protected credential file.
     pub fn check_read_access(&self, path: &Path) -> Result<(), ToolError> {
         check_path_prefix(path)?;
         if self.is_protected_file(path) {
@@ -168,7 +168,7 @@ impl CredentialGuard {
     }
 
     /// Check whether writing to a file is allowed.
-    /// /// Returns `Err(ToolError)` if the target is a protected file or if the
+    /// Returns `Err(ToolError)` if the target is a protected file or if the
     /// content contains detectable secrets (when content scanning is enabled).
     pub fn check_write_access(&self, path: &Path, content: &str) -> Result<(), ToolError> {
         // Check path first
@@ -201,12 +201,12 @@ impl Default for CredentialGuard {
 }
 
 // ---------------------------------------------------------------------------
-// Path traversal advisory (P1-8 / STABILITY-PLAN §2.7)
+//Path traversal advisory ( / )
 // ---------------------------------------------------------------------------
 
 /// Advisory check for path traversal patterns (`..` sequences).
 ///
-/// (P1-8): This is advisory, NOT blocking. Hermix Desktop intentionally
+/// This is advisory, NOT blocking. Hermix Desktop intentionally
 /// allows full filesystem access (including `C:\` and other drives) —
 /// the terminal tool's description explicitly says so. The primary
 /// defenses are:
@@ -235,7 +235,7 @@ pub fn check_path_traversal_advisory(path: &str) {
 /// terminal tool already rejects them pre-flight). Hermix Desktop
 /// intentionally allows broad filesystem access, so this is defense-in-depth
 /// against only the pathological prefixes, not a workspace boundary.
-/// (STABILITY-PLAN P1-8)
+///
 fn check_path_prefix(path: &Path) -> Result<(), ToolError> {
     let s = path.to_string_lossy().replace('/', "\\");
     if s.starts_with("\\\\?\\") || s.starts_with("\\\\.\\") {

@@ -285,7 +285,7 @@ pub struct AnalyticsDailyEntry {
     pub reasoning_tokens: u64,
     pub estimated_cost: f64,
     pub actual_cost: f64,
-    /// (Phase 5): when the provider reports 0 cache reads
+    /// when the provider reports 0 cache reads
     /// but is *known* to support caching, this holds the estimated hit
     /// rate (from provider config `cache_hit_rate_estimate`). `None`
     /// means "use the real `cache_read_tokens` value" (which may be 0).
@@ -306,7 +306,7 @@ pub struct AnalyticsModelEntry {
     pub reasoning_tokens: u64,
     pub estimated_cost: f64,
     pub sessions: u32,
-    /// (Phase 5): estimated cache hit rate when the
+    /// estimated cache hit rate when the
     /// provider under-reports cache usage. `None` ⇒ use real data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cache_hit_rate: Option<f64>,
@@ -325,11 +325,11 @@ pub struct AnalyticsTotals {
     pub total_estimated_cost: f64,
     pub total_actual_cost: f64,
     pub total_sessions: u32,
-    /// (Phase 5): estimated overall cache hit rate when
+    /// estimated overall cache hit rate when
     /// the active providers under-report cache usage. `None` ⇒ real.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cache_hit_rate: Option<f64>,
-    /// (Phase 3 / E4): compression telemetry.
+    /// compression telemetry.
     /// `total_compactions` = number of compression child sessions
     /// spawned in the window; `total_archived_turns` = the preserved
     /// (not lost) history folded into those summaries.
@@ -355,7 +355,7 @@ pub struct AnalyticsSkillsSummary {
     pub distinct_skills_used: u32,
 }
 
-/// P1-3: per-tool call counts derived from `messages.tool_calls` JSON
+/// per-tool call counts derived from `messages.tool_calls` JSON
 /// inside the date window. The frontend renders this as a horizontal
 /// bar list next to the daily curve.
 #[derive(Debug, Serialize)]
@@ -373,7 +373,7 @@ pub struct AnalyticsResponse {
     pub by_model: Vec<AnalyticsModelEntry>,
     pub totals: AnalyticsTotals,
     pub skills: AnalyticsSkillsResponse,
-    /// P1-3: real tool-call aggregation parsed from
+    /// real tool-call aggregation parsed from
     /// `messages.tool_calls` JSON. Sorted by `call_count` desc.
     pub by_tool: Vec<AnalyticsToolEntry>,
 }
@@ -384,7 +384,7 @@ pub struct AnalyticsSkillsResponse {
     pub top_skills: Vec<AnalyticsSkillEntry>,
 }
 
-/// (Phase 1): structured error body returned by
+/// structured error body returned by
 /// `GET /api/analytics/usage` when the underlying aggregation fails
 /// (DB unavailable, query error, …). Replaces the old behaviour of
 /// swallowing the error into an all-zero `200 OK` response, so the
@@ -397,7 +397,7 @@ pub struct AnalyticsErrorResponse {
     pub cause: String,
 }
 
-/// (Phase 2): diagnostic payload for `GET /api/analytics/debug`.
+/// diagnostic payload for `GET /api/analytics/debug`.
 /// Surfaces the DB path, per-table existence/row-count/sample, and the
 /// applied migration list so a user can pinpoint where the stats
 /// pipeline is broken without poking at SQLite manually.

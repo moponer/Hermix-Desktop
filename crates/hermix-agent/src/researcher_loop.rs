@@ -1,4 +1,4 @@
-//! Researcher OS continuous loop (Phase 2.1).
+//! Researcher OS continuous loop .
 //!
 //! Implements the discover → retrieve → evaluate → propose → validate
 //! pipeline that was defined as data structures in `researcher_os.rs`
@@ -26,7 +26,7 @@ use super::experience_archive::{ExperienceArchive, ExperienceSummary, daily_expe
 // ---------------------------------------------------------------------------
 
 /// The mutable state of the researcher loop. Persisted between calls.
-/// /// Note: The internal registries (`sources`, `mechanisms`, `provenance`,
+/// Note: The internal registries (`sources`, `mechanisms`, `provenance`,
 /// `corpus`) are not serializable — they use in-memory HashMaps without
 /// Serialize/Deserialize. For persistence, use the JSONL store layer
 /// in `researcher_os.rs`. This struct is meant to be held in memory
@@ -214,7 +214,7 @@ pub struct StatusReport {
 // ---------------------------------------------------------------------------
 
 /// Discover new content from registered sources.
-/// /// Reads the source registry, fetches content from each source URL
+/// Reads the source registry, fetches content from each source URL
 /// (HTTP only, 1.5MB cap, 30s timeout), deduplicates by content hash,
 /// and writes new items to the inbox queue.
 pub async fn loop_discover(state: &mut ResearcherState) -> Result<DiscoverResult, String> {
@@ -275,7 +275,7 @@ pub async fn loop_discover(state: &mut ResearcherState) -> Result<DiscoverResult
 }
 
 /// Process a single item from the inbox queue.
-/// /// Takes the first item from inbox, evaluates it, and moves it to
+/// Takes the first item from inbox, evaluates it, and moves it to
 /// the appropriate queue (parked, done, or quarantine).
 pub async fn loop_step(state: &mut ResearcherState) -> Result<StepOutcome, String> {
     state.ensure_dirs().map_err(|e| format!("Failed to create dirs: {}", e))?;
@@ -341,7 +341,7 @@ pub async fn loop_step(state: &mut ResearcherState) -> Result<StepOutcome, Strin
 }
 
 /// Run daily maintenance tasks.
-/// /// - Validates the repository structure
+/// - Validates the repository structure
 /// - Runs skill health checks
 /// - Reports queue sizes
 pub async fn loop_daily(state: &mut ResearcherState) -> Result<DailyReport, String> {

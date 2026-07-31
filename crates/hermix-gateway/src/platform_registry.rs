@@ -3,7 +3,7 @@
 //! This module provides a centralized way to register all platform adapters
 //! based on the configuration.
 //!
-//! # Platform Status (2026-06-20)
+//! # Platform Status
 //! All four "gateway platforms" (telegram, wecom-callback, webhook, api-server)
 //! are feature-gated behind `#[cfg(feature = "...")]` and are **not enabled by
 //! default**. Their registration code below is present but only compiles when
@@ -81,7 +81,7 @@ pub struct RegistrationSummary {
 }
 
 /// Register all platform adapters based on configuration.
-/// /// This function registers all enabled platform adapters from the configuration
+/// This function registers all enabled platform adapters from the configuration
 /// into the gateway. It supports all 17 platform adapters + ApiServer + Webhook.
 pub async fn register_platforms(
     gateway: &Arc<Gateway>,

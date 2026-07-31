@@ -572,13 +572,13 @@ impl PluginManager {
     }
 
     /// Discover plugins in the given hermes directory by scanning for `plugin.yaml` files.
-    /// /// # Directory structure (2026-07-05)
-    /// /// **Root-level** (backward-compat):
+    /// # Directory structure
+    /// **Root-level** (backward-compat):
     /// `$HERMIX_HOME/plugins/<name>/plugin.yaml`
-    /// /// **Native plugins** (recommended, P1-①):
+    /// **Native plugins** (recommended, P1-①):
     /// `$HERMIX_HOME/plugins/tools/<name>/plugin.yaml` + `<name>.dll`
     /// `$HERMIX_HOME/plugins/memory/<name>/plugin.yaml` + `<name>.dll`
-    /// /// Scans both locations, merging results.
+    /// Scans both locations, merging results.
     pub fn discover_plugins(hermes_dir: &Path) -> Vec<(PluginManifest, std::path::PathBuf)> {
         let plugins_dir = hermes_dir.join("plugins");
         let mut discovered = Vec::new();
@@ -637,7 +637,7 @@ impl PluginManager {
             }
         }
 
-        // ★ P1-① (2026-07-05): also scan `plugins/tools/` and
+        //★ P1-① : also scan `plugins/tools/` and
         // `plugins/memory/` for native/compat plugins.
         for subdir_name in &["tools", "memory"] {
             let sub = plugins_dir.join(subdir_name);

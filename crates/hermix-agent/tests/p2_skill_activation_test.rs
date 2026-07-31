@@ -1,4 +1,4 @@
-//! P2-T4: skill router activation regression test.
+//! : skill router activation regression test.
 //!
 //! Goal: pin a handful of deterministic routing decisions so a
 //! future change to `SkillLoader::match_message` or the fuzzy
@@ -16,7 +16,7 @@
 //! genuinely warrants a different routing.
 //!
 //! The P2 plan calls for "≥ 80% Top-3 accuracy". This file is a
-//! subset — full coverage lives in the future `P6-T3` 50-prompt
+//! subset — full coverage lives in the future `` 50-prompt
 //! benchmark (plan §P6).
 
 use std::fs;
@@ -105,7 +105,7 @@ fn p2_router_keeps_deterministic_routing_decisions() {
 
     // Soft check — log the misses but don't hard-fail the
     // whole test, matching the plan's "≥ 80%" guidance and
-    // letting plan P6-T3 do the heavier 50-prompt benchmark.
+    //letting plan do the heavier 50-prompt benchmark.
     if accuracy < 0.80 {
         for (p, e, g) in &warned {
             eprintln!(

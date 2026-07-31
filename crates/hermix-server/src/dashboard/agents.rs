@@ -28,7 +28,7 @@ use crate::{HttpError, HttpServerState};
 // ---------------------------------------------------------------------------
 
 /// The on-disk / over-the-wire representation of a custom agent.
-/// /// Fields mirror the TypeScript `AgentPersona` interface in
+/// Fields mirror the TypeScript `AgentPersona` interface in
 /// `apps/desktop-tauri/src/components/AgentsView.tsx`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPersonaJson {
@@ -85,7 +85,7 @@ fn default_color_theme() -> String {
 }
 
 /// Request body for `POST /api/agents/custom`.
-/// /// If `id` is present and an agent file with that id exists, the
+/// If `id` is present and an agent file with that id exists, the
 /// agent is updated. Otherwise a new agent is created.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaveAgentRequest {

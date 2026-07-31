@@ -2,7 +2,7 @@
 //!
 //! Port of Python `agent.context_compressor.ContextCompressor` (738 LoC).
 //! See the Python source for a detailed algorithm description; the Rust
-//! version mirrors it phase-for-phase:
+//! version mirrors the Python compressor step for step:
 //!
 //! 1. **Prune** old `tool` results (cheap pre-pass, no LLM call)
 //! 2. **Protect** head messages (system prompt + first exchange)
@@ -159,7 +159,7 @@ pub fn redact_prompt_injection(text: &str) -> String {
 
 /// Truncate the summary to the hard ceiling, preferring to cut at a
 /// paragraph or sentence boundary so the tail stays coherent.
-/// /// Uses character-based counting to avoid panicking on multi-byte
+/// Uses character-based counting to avoid panicking on multi-byte
 /// UTF-8 characters (e.g. CJK). The old byte-based slicing would
 /// panic if `max_chars` fell in the middle of a multi-byte character.
 pub fn truncate_summary_at_boundary(text: &str, max_chars: usize) -> String {
@@ -205,16 +205,16 @@ pub fn truncate_summary_at_boundary(text: &str, max_chars: usize) -> String {
     format!("{keep}{suffix}")
 }
 
-/// Round 5 (safety net): apply all three layers of defence to a freshly
+/// (safety net): apply all three layers of defence to a freshly
 /// generated summary, in order:
-/// /// 1. **Sensitive data** — strip API keys, JWTs, passwords, bearer
+/// 1. **Sensitive data** — strip API keys, JWTs, passwords, bearer
 /// tokens via [`redact_sensitive_text`].
 /// 2. **Prompt injection** — collapse obvious injection phrases via
 /// [`redact_prompt_injection`].
 /// 3. **Length cap** — truncate to [`MAX_SUMMARY_SAFETY_NET_CHARS`]
 /// via [`truncate_summary_at_boundary`], preferring paragraph /
 /// sentence / line / word boundaries so the tail is readable.
-/// /// Runs only on the LLM-derived summary path; the static fallback
+/// Runs only on the LLM-derived summary path; the static fallback
 /// marker is hard-coded and assumed safe.
 pub fn apply_summary_safety_net(text: String) -> String {
     let redacted = redact_sensitive_text(&text);
@@ -223,7 +223,7 @@ pub fn apply_summary_safety_net(text: String) -> String {
 }
 
 /// Strip image / file / clipboard placeholders from tool output content.
-/// /// The browser tools (`browser_get_images`, `browser_vision`, the
+/// The browser tools (`browser_get_images`, `browser_vision`, the
 /// supervisor variant, etc.) and the vision pipeline emit
 /// `image#1`, `image#2`, `@file#3`, `@clipboard#1`, … placeholders
 /// in their textual summaries. These strings reference in-flight
@@ -233,7 +233,7 @@ pub fn apply_summary_safety_net(text: String) -> String {
 /// content, and the frontend keeps the corresponding `ToolEventCard`
 /// in a permanent "running" state because the placeholder never
 /// resolves to a completed attachment id.
-/// /// We strip both the leading form (`@image#1`, `image#1: ...`) and
+/// We strip both the leading form (`@image#1`, `image#1: ...`) and
 /// the trailing markdown attachment form (`![image](image:1)`,
 /// `<attachment id="image:1">`). Counts are reported so the summary
 /// keeps the size signal.
@@ -273,11 +273,11 @@ pub fn strip_image_placeholders(content: &str) -> (String, usize) {
 }
 
 /// Create an informative 1-line summary of a tool call + result.
-/// /// Returns strings like:
+/// Returns strings like:
 /// - `[terminal] ran \`npm test\` -> exit 0, 47 lines output`
 /// - `[read_file] read config.py from line 1 (1,200 chars)`
 /// - `[search_files] content search for 'compress' in agent/ -> 12 matches`
-/// /// As of this also strips inline image / file / clipboard
+/// As of this also strips inline image / file / clipboard
 /// placeholders before summarizing (see [`strip_image_placeholders`]).
 /// Without that step, compressed messages kept the raw `@image#1`
 /// references which made the frontend `ToolEventCard` permanently
@@ -486,7 +486,7 @@ static MEDIA_DIRECTIVE_RE: once_cell::sync::Lazy<regex::Regex> =
 // ---------------------------------------------------------------------------
 
 /// Statistics for a single compression operation.
-/// /// `#[must_use]` because `last_metrics` is what the persistence path
+/// `#[must_use]` because `last_metrics` is what the persistence path
 /// reads to populate `compression_summary_history`. Dropping it loses
 /// the compaction trail that the dashboard / next-session recall
 /// rely on.
@@ -511,16 +511,16 @@ pub struct CompressionMetrics {
     pub tool_results_pruned: usize,
     /// Number of duplicate tool results deduplicated.
     pub deduplication_count: usize,
-    /// Phase A2 (2026-07-17): number of user-text adjacent dedups
+    /// number of user-text adjacent dedups
     /// (Pass 0 in `prune_old_tool_results`). 0 means none.
     pub user_dedup_count: usize,
-    /// Phase A2 (2026-07-17): number of messages preserved by pin
+    /// number of messages preserved by pin
     /// filter (skipped every compression stage).
     pub pin_count: usize,
-    /// Phase B6 (2026-07-17): number of messages dropped by
+    /// number of messages dropped by
     /// `TokenScorer` (score below `drop_score_threshold`).
     pub dropped_count: usize,
-    /// Phase A4 (2026-07-17): what triggered this compression —
+    /// what triggered this compression —
     /// `"threshold"`, `"explicit"`, etc. Empty means unknown.
     pub trigger_reason: String,
     /// Number of summary API calls made.
@@ -606,7 +606,7 @@ pub enum CompressionError {
 // ---------------------------------------------------------------------------
 
 /// Build a compact summary text from older messages via an LLM provider.
-/// /// Lightweight one-shot helper retained for callers that don't want the full
+/// Lightweight one-shot helper retained for callers that don't want the full
 /// [`ContextCompressor`] state machine.
 pub async fn summarize_messages_with_llm(
     provider: &dyn LlmProvider,
@@ -648,11 +648,11 @@ pub struct CompressorConfig {
     pub threshold_percent: f64,
     /// Pressure-warning ratio: emit `Context pressure N%` warnings when
     /// prompt tokens cross this fraction of `context_length`.
-    /// /// Distinct from `threshold_percent`: that one drives the *compressor*
+    /// Distinct from `threshold_percent`: that one drives the *compressor*
     /// itself (LLM-powered summary); this one drives the user-visible
     /// `Context pressure` warning ladder (`>= 0.95` high, `>= 0.85` medium).
     /// Defaults to `0.50`, aligned with Hermes Agent Python reference.
-    /// /// Day 3 lift: `ContextManager::for_model_with` accepts an
+    /// Day 3 lift: `ContextManager::for_model_with` accepts an
     /// `output_reserve_tokens` argument, and `ContextManager::pressure_threshold_tokens`
     /// returns `(max - reserve) * pressure_threshold_percent`. The agent loop
     /// passes this value through, so changing it here changes the runtime
@@ -662,7 +662,7 @@ pub struct CompressorConfig {
     /// window *before* `pressure_threshold_percent` is applied, so we don't
     /// fire the pressure warning while the model still has legitimate
     /// headroom to emit its response.
-    /// /// Mirrors `context::DEFAULT_OUTPUT_RESERVE_TOKENS` (4096). Kept as a
+    /// Mirrors `context::DEFAULT_OUTPUT_RESERVE_TOKENS` (4096). Kept as a
     /// config field so power users with small models can shrink it
     /// (e.g. 8B local models that don't need 4k of headroom).
     pub output_reserve_tokens: usize,
@@ -678,7 +678,7 @@ pub struct CompressorConfig {
     pub summary_model_override: Option<String>,
     /// Suppress `tracing::info!` chatter — useful for batch / test runs.
     pub quiet_mode: bool,
-    /// P8-T7 wire: minimum message count before a flush sentinel may be
+    /// wire: minimum message count before a flush sentinel may be
     /// injected. Defaults to 6 so short sessions skip the pre-compression
     // rescue entirely (the rescue costs a turn of context).
     pub flush_sentinel_min_turns: usize,
@@ -688,16 +688,16 @@ pub struct CompressorConfig {
     pub summary_tokens_ceiling: u64,
     /// Characters per token approximation ratio.
     pub chars_per_token: usize,
-    /// Phase A2 (2026-07-17): roles that should be excluded from all
+    /// roles that should be excluded from all
     /// compression stages. Matched case-sensitively against
     /// `role_label(role)` (`"system"` / `"user"` / `"assistant"` /
     /// `"tool"`). Empty by default — opt-in.
     pub pin_roles: Vec<String>,
-    /// Phase A2 (2026-07-17): case-insensitive substrings. A message
+    /// case-insensitive substrings. A message
     /// is pinned if its content (or any of its tool-call args)
     /// contains any of these substrings. Empty by default — opt-in.
     pub pin_keywords: Vec<String>,
-    /// Phase B6 (2026-07-17): score threshold for the pre-summary
+    /// score threshold for the pre-summary
     /// drop pass. Messages scoring strictly below this value are
     /// removed from context (unless pinned). Set to 0.0 to disable.
     pub drop_score_threshold: f64,
@@ -729,19 +729,19 @@ impl Default for CompressorConfig {
 impl CompressorConfig {
     /// Validate that the LLM-powered summariser has a chance of
     /// succeeding at runtime.
-    /// /// Returns `Ok(())` when **either**:
+    /// Returns `Ok(())` when **either**:
     /// - `summary_model_override` is set to a non-empty model name
     /// (the compressor will use it directly, no chain needed), or
     /// - the auxiliary client has at least one registered provider
     /// (`chain_len() > 0`).
-    /// /// Returns `Err(msg)` when neither is true. In that case the
+    /// Returns `Err(msg)` when neither is true. In that case the
     /// caller should fall back to the simple character-based
     /// compressor and emit a clear warn-level message — otherwise
     /// every compression attempt will silently fail at runtime (the
     /// LLM call in `summarize_messages_with_llm` returns an error,
     /// `compress()` propagates it, and `auto_compress_if_over_threshold`
     /// only logs `summary_errors = N` without aborting the loop).
-    /// /// Added so wiring a compressor without an LLM source
+    /// Added so wiring a compressor without an LLM source
     /// is detected once at startup instead of once per compression
     /// attempt.
     pub fn validate(&self, auxiliary: &AuxiliaryClient) -> Result<(), String> {
@@ -790,19 +790,19 @@ pub struct ContextCompressor {
     ineffective_compression_count: u32,
     /// Metrics from the most recent compression operation.
     last_metrics: CompressionMetrics,
-    /// Phase A1 (2026-07-17): number of adjacent user-text dedups
+    /// number of adjacent user-text dedups
     /// in the most recent compress() call (Pass 0).
     last_user_dedup_count: usize,
-    /// Phase A2 (2026-07-17): number of messages preserved by pin
+    /// number of messages preserved by pin
     /// filter in the most recent compress() call.
     last_pin_count: usize,
-    /// Phase A4 (2026-07-17): trigger reason for the most recent
+    /// trigger reason for the most recent
     /// compress() call (`"threshold"`, `"explicit"`, …).
     last_trigger_reason: String,
-    /// Phase A4 (2026-07-17): structured CompressionReport from the
+    /// structured CompressionReport from the
     /// most recent compress() call.
     last_compression_report: Option<crate::compression_pipeline::CompressionReport>,
-    /// (A): the raw `turns_to_summarize` slice from the
+    /// the raw `turns_to_summarize` slice from the
     /// most recent compression. The compressor folds this into a
     /// handoff summary and the in-memory conversation then drops it
     /// — without this stash, the original wording would be gone
@@ -811,13 +811,13 @@ pub struct ContextCompressor {
     /// `SessionPersistence::archive_compressed_turns` so a future
     /// cross-session recall path can recover it.
     last_archived_turns: Vec<Message>,
-    /// Messages dropped by Phase 1.5 (`drop_low_score`). Stashed
-    /// here so Phase 4 can extend `last_archived_turns` with them —
+    /// Messages dropped by (`drop_low_score`). Stashed
+    /// here so can extend `last_archived_turns` with them —
     /// making the previously-lossy drop path lossless. Reset every
-    /// `compress()` call (either refilled in Phase 1.5 or cleared
+    /// `compress` call (either refilled in or cleared
     /// when `drop_score_threshold <= 0.0`).
     last_dropped_turns: Vec<Message>,
-    /// (P1): when true, `compress()` skips the LLM
+    /// when true, `compress()` skips the LLM
     /// summary call and falls back to the static marker. Set by
     /// [`Self::compress_fast`] for the moderate-pressure path
     /// (50–85%) so the agent loop doesn't block a full turn on an
@@ -862,14 +862,14 @@ pub struct ContextCompressor {
 // ---------------------------------------------------------------------------
 
 /// State of the LLM-compression circuit breaker.
-/// /// State machine (see [`ContextCompressor::record_compression_outcome`]):
+/// State machine (see [`ContextCompressor::record_compression_outcome`]):
 /// ```text
 /// Closed ──(llm_failure × breaker_threshold)──▶ Open
 /// Open   ──(cooldown elapses)────────────────▶ HalfOpen
 /// HalfOpen ──(success)───────────────────────▶ Closed
 /// HalfOpen ──(failure)────────────────────────▶ Open (reset cooldown)
 /// ```
-/// /// `Fallback` is **not** an automatic state — the agent loop transitions
+/// `Fallback` is **not** an automatic state — the agent loop transitions
 /// to it when it decides to invoke `prune_old_tool_results` instead of
 /// `generate_summary` because the breaker is Open. The compressor itself
 /// never sets `Fallback`; it just reports `Open` and the caller chooses.
@@ -905,7 +905,7 @@ pub const DEFAULT_BREAKER_COOLDOWN_SECS: u64 = 600;
 /// Snapshot of the breaker's current state — serialisable so the agent
 /// loop can forward it to the front-end as a `compaction_status` WS event
 /// without having to reach into private fields.
-/// /// extended with the pressure / context-window fields the
+/// extended with the pressure / context-window fields the
 /// `CompactionStatusBanner` needs to render its "145k / 160k tokens (90%)"
 /// footer, plus `last_failure_reason` so the banner can show *why* the
 /// last compression attempt was rejected. All new fields are additive —
@@ -955,14 +955,14 @@ pub struct BreakerSnapshot {
     /// so it can show "正在准备压缩" → "正在压缩中" → "压缩完成" /
     /// "压缩失败" instead of jumping straight from the pressure
     /// warning to the post-attempt result.
-    /// /// Recognised values (front-end mirrors them in
+    /// Recognised values (front-end mirrors them in
     /// `CompactionStatusBanner.tsx`):
     /// - `"idle"`         — no compression in flight (default)
     /// - `"starting"`     — pressure detected, about to begin work
     /// - `"in_progress"`  — archive / score-drop / LLM summary running
     /// - `"complete"`     — last attempt finished successfully
     /// - `"failed"`       — last attempt finished with errors
-    /// /// `#[serde(default)]` keeps older snapshots that don't carry
+    /// `#[serde(default)]` keeps older snapshots that don't carry
     /// the field deserialising as `"idle"`.
     #[serde(default = "default_phase")]
     pub phase: String,
@@ -998,7 +998,7 @@ impl Default for BreakerSnapshot {
 
 impl ContextCompressor {
     /// Create a compressor for `model` with the given configuration.
-    /// /// Token budgets are derived eagerly so they don't change as the
+    /// Token budgets are derived eagerly so they don't change as the
     /// compressor is used. To re-target a different model, build a new
     /// instance.
     pub fn new(config: CompressorConfig, auxiliary: Arc<AuxiliaryClient>) -> Self {
@@ -1034,7 +1034,7 @@ impl ContextCompressor {
             failure_cooldown_until: None,
             ineffective_compression_count: 0,
             last_metrics: CompressionMetrics::default(),
-            // Phase A (2026-07-17):
+            // Per-compression counters:
             last_user_dedup_count: 0,
             last_pin_count: 0,
             last_trigger_reason: String::new(),
@@ -1091,7 +1091,7 @@ impl ContextCompressor {
         &self.last_archived_turns
     }
 
-    /// Messages dropped by Phase 1.5's `drop_low_score`. These are
+    /// Messages dropped by 's `drop_low_score`. These are
     /// already folded into [`Self::last_archived_turns`] by the
     /// end of `compress()` (so the agent loop's single archive
     /// path picks them up). Exposed separately for diagnostics /
@@ -1127,7 +1127,7 @@ impl ContextCompressor {
 
     /// Override the breaker threshold and cooldown. Wired by the agent
     /// loop from `hermix_config::CompactionConfig` after `new()`.
-    /// /// Backward-compatible: callers that don't care about the breaker
+    /// Backward-compatible: callers that don't care about the breaker
     /// use the defaults ([`DEFAULT_BREAKER_THRESHOLD`] = 3,
     /// [`DEFAULT_BREAKER_COOLDOWN_SECS`] = 600).
     pub fn with_breaker_config(mut self, threshold: u32, cooldown_secs: u64) -> Self {
@@ -1191,19 +1191,19 @@ impl ContextCompressor {
     }
 
     /// Record the outcome of a single compression attempt.
-    /// /// * `success` — the LLM returned a usable summary. Resets
+    /// * `success` — the LLM returned a usable summary. Resets
     /// `consecutive_llm_failures` to 0 and transitions the breaker
     /// to `Closed` regardless of prior state.
     /// * `failure` — increment `consecutive_llm_failures`; if it reaches
     /// `breaker_threshold`, transition to `Open` and arm the cooldown.
-    /// /// also stamps `last_state_change_unix_ms` whenever
+    /// also stamps `last_state_change_unix_ms` whenever
     /// the state actually changes, so the `CompactionStatusBanner` can
     /// show a "since X" hint. `Closed` is the default — we only stamp
     /// when transitioning *into* Open (failure) or back *out* of
     /// Open/HalfOpen (success); the "not yet at threshold" branch
     /// intentionally does not stamp because the public state didn't
     /// change.
-    /// /// Returns the post-call breaker state so callers can log/forward
+    /// Returns the post-call breaker state so callers can log/forward
     /// it without re-locking the compressor.
     pub fn record_compression_outcome(&mut self, success: bool) -> BreakerState {
         let now_unix_ms = chrono::Utc::now().timestamp_millis();
@@ -1242,7 +1242,7 @@ impl ContextCompressor {
 
     /// Snapshot of the current breaker state — serialise and forward
     /// to the front-end as a `compaction_status` WS event.
-    /// /// takes the live pressure (`used_tokens`,
+    /// takes the live pressure (`used_tokens`,
     /// `threshold_tokens`) and the last failure reason as parameters
     /// so a single snapshot carries everything `CompactionStatusBanner`
     /// needs to render. Pass `0` / `None` for the optional fields if
@@ -1268,7 +1268,7 @@ impl ContextCompressor {
     /// Same as [`Self::breaker_snapshot`] but lets the caller set the
     /// compression `phase` explicitly. introduced so the
     /// `CompactionStatusBanner` can render the "starting / in_progress
-    /// / complete / failed" transitions instead of jumping straight
+    /// complete / failed" transitions instead of jumping straight
     /// from the pressure warning to the post-attempt result.
     pub fn breaker_snapshot_with_phase(
         &mut self,
@@ -1323,7 +1323,7 @@ impl ContextCompressor {
     }
 
     /// Compression trigger predicate.
-    /// /// Includes anti-thrashing protection: if the last two compressions
+    /// Includes anti-thrashing protection: if the last two compressions
     /// each saved less than 10%, skip compression to avoid infinite loops.
     pub fn should_compress(&self, current_prompt_tokens: Option<u64>) -> bool {
         let tokens = current_prompt_tokens.unwrap_or(self.last_prompt_tokens);
@@ -1344,13 +1344,13 @@ impl ContextCompressor {
     }
 
     // ------------------------------------------------------------------
-    // Phase 0: Snip — remove ancient messages (cheapest, no API cost).
+    //Snip — remove ancient messages (cheapest, no API cost).
     // ------------------------------------------------------------------
 
     /// Remove very old messages from the conversation history.
     /// This is the cheapest compression step — zero API cost, just drops
     /// messages that are too old to be relevant.
-    /// /// Returns `(messages, snipped_count)` where snipped_count is the
+    /// Returns `(messages, snipped_count)` where snipped_count is the
     /// number of messages removed.
     pub fn snip_ancient_messages(
         &self,
@@ -1400,17 +1400,17 @@ impl ContextCompressor {
     }
 
     // ------------------------------------------------------------------
-    // Phase 3.5: Context Collapse (read-time projection).
+    //Context Collapse (read-time projection).
     // ------------------------------------------------------------------
 
     /// Compute a "compressed view" of messages at read time without
     /// modifying the original. This is the Context Collapse step from
     /// Claude Code's 5-step compression pipeline.
-    /// /// The key insight: instead of permanently modifying messages,
+    /// The key insight: instead of permanently modifying messages,
     /// compute a compressed view only when sending to the API.
     /// This preserves the full history for debugging while reducing
     /// the context sent to the model.
-    /// /// Strategy: keep recent N messages intact, compress older messages
+    /// Strategy: keep recent N messages intact, compress older messages
     /// by replacing tool results with summaries.
     pub fn context_collapse(
         messages: &[Message],
@@ -1462,14 +1462,14 @@ impl ContextCompressor {
     }
 
     // ------------------------------------------------------------------
-    // Phase 1: tool-output pruning (cheap, no LLM call).
+    //tool-output pruning (cheap, no LLM call).
     // ------------------------------------------------------------------
 
     /// Replace the contents of old, oversized `tool` messages with
     /// informative 1-line summaries (not blank placeholders). Also
     /// deduplicates identical tool results and truncates large tool_call
     /// arguments while preserving JSON validity.
-    /// /// Returns `(messages, dedup_count, pruned_count)` where:
+    /// Returns `(messages, dedup_count, pruned_count)` where:
     /// - `dedup_count` — number of messages replaced with the
     /// `[Duplicate tool output]` marker (Pass 1, MD5 content-hash
     /// dedup). Previously hard-coded to 0 in `CompressionMetrics`,
@@ -1478,9 +1478,9 @@ impl ContextCompressor {
     /// summary replacement + screenshot stripping + argument
     /// truncation). This is the historical "pruned" counter the
     /// breaker and logs already consumed.
-    /// /// (Phase A2): if `pin` is `Some`, messages that
+    /// if `pin` is `Some`, messages that
     /// match the pin filter are preserved verbatim — every pass
-    /// below short-circuits on pinned indices. Phase A1 user-text
+    /// below short-circuits on pinned indices. user-text
     /// dedup runs *before* this method (see
     /// `compression_pipeline::dedup_adjacent_user`) and is also
     /// pin-aware.
@@ -1500,7 +1500,7 @@ impl ContextCompressor {
         let mut pruned = 0;
         let mut deduped = 0;
 
-        // Phase A2 (2026-07-17): pin filter. Build a `bool` slice
+        // pin filter. Build a `bool` slice
         // once so per-iteration checks stay O(1). When `pin` is
         // `None`, every index is "not pinned" and the existing
         // behavior is preserved bit-for-bit.
@@ -1693,7 +1693,7 @@ impl ContextCompressor {
             }
         }
 
-        // Pass 4.5 (2026-07-22, Bug #4): strip base64 image data from
+        //Pass 4.5 (, Bug #4): strip base64 image data from
         // *user* messages' `content_parts`. The legacy Pass 4 above
         // only catches Tool-role content — it skips anything where
         // `msg.role != MessageRole::Tool`. The `read_image` tool
@@ -1750,7 +1750,7 @@ impl ContextCompressor {
     }
 
     // ------------------------------------------------------------------
-    // Phase 4: summary budget + serialisation.
+    //summary budget + serialisation.
     // ------------------------------------------------------------------
 
     fn compute_summary_budget(&self, turns: &[Message]) -> u64 {
@@ -1834,7 +1834,7 @@ Write only the summary body. Do not include any preamble or prefix."
 
     /// Generate a structured summary of the supplied turns using the
     /// auxiliary client.
-    /// /// Returns `Ok(Some(summary))` on success, `Ok(None)` when the cooldown
+    /// Returns `Ok(Some(summary))` on success, `Ok(None)` when the cooldown
     /// is active, and `Err(...)` for hard auxiliary failures (which also
     /// arm the cooldown for `SUMMARY_FAILURE_COOLDOWN`).
     pub async fn generate_summary(
@@ -1889,7 +1889,7 @@ Write only the summary body. Do not include any preamble or prefix."
     }
 
     /// Arm the summary-failure cooldown.
-    /// /// Returns the duration actually armed. The cooldown is shortened to
+    /// Returns the duration actually armed. The cooldown is shortened to
     /// [`SUMMARY_FAILURE_COOLDOWN_SHORT`] when the auxiliary chain only has
     /// a single registered candidate — a one-candidate chain is almost
     /// always the result of a missing/invalid env var (`OPENAI_API_KEY`,
@@ -1920,7 +1920,7 @@ Write only the summary body. Do not include any preamble or prefix."
     }
 
     // ------------------------------------------------------------------
-    // Phase 5: tool-pair sanitiser.
+    //tool-pair sanitiser.
     // ------------------------------------------------------------------
 
     /// Fix orphaned tool_call / tool_result pairs after compression.
@@ -2096,15 +2096,15 @@ Write only the summary body. Do not include any preamble or prefix."
     // ------------------------------------------------------------------
 
     /// Run a full compression pass on `messages`.
-    /// /// `current_tokens` is used purely for logging — pass `None` to fall
+    /// `current_tokens` is used purely for logging — pass `None` to fall
     /// back to the last tracked `prompt_tokens` value.
-    /// (P1): fast-mode compression — runs every pass
+    /// fast-mode compression — runs every pass
     /// (archive / dedup / score-drop / boundary) but skips the
     /// LLM summary call, replacing it with the static fallback
     /// marker. Used by `auto_compress_if_over_threshold` when
     /// pressure is moderate (50–85%) so the agent loop doesn't
     /// block a turn on an LLM round-trip.
-    /// /// `fast_mode` is set to `true` for the duration of the inner
+    /// `fast_mode` is set to `true` for the duration of the inner
     /// [`Self::compress`] call and reset to `false` afterwards —
     /// including early-return paths inside `compress`, because
     /// this wrapper awaits `compress` and runs the reset
@@ -2125,7 +2125,7 @@ Write only the summary body. Do not include any preamble or prefix."
         messages: Vec<Message>,
         current_tokens: Option<u64>,
     ) -> Vec<Message> {
-        // P8-T1 + P8-T7 wire (read-only): diagnose current context
+        //+ wire (read-only): diagnose current context
         // health and consult the flush-integration helper to decide
         // whether the agent should be given a sentinel to memory-
         // flush before we touch messages. We never *block* compression
@@ -2148,7 +2148,7 @@ Write only the summary body. Do not include any preamble or prefix."
             );
         }
 
-        // P3-T4 wire: if the session is long enough and the health
+        //wire: if the session is long enough and the health
         // threshold (Red / Clamped) is met, inject a memory-flush
         // sentinel so the next turn can write to the memory tool.
         // Idempotent: if a sentinel is already in `messages`, the
@@ -2165,7 +2165,7 @@ Write only the summary body. Do not include any preamble or prefix."
             messages
         };
 
-        // Phase -1: Flush sentinel strip (P3-T4). If a caller left
+        // Flush sentinel strip. If a caller left
         // flush-memories sentinels in `messages`, drop them now — must
         // happen *before* `n_messages` is captured so all downstream
         // bookkeeping sees the post-strip length. Idempotent: a clean
@@ -2173,7 +2173,7 @@ Write only the summary body. Do not include any preamble or prefix."
         let messages = crate::flush_memories::strip_flush_sentinels(messages);
 
         // `n_messages` and the min_for_compress gate
-        // are now re-bound AFTER the pre-summary passes (Phase 0,
+        //are now re-bound AFTER the pre-summary passes (,
         // 3.5, A1, 1, 1.5) below — those passes shrink the slice,
         // so the original length-capture point was off by
         // however many messages were reduced.
@@ -2183,15 +2183,15 @@ Write only the summary body. Do not include any preamble or prefix."
             .filter(|t| *t > 0)
             .unwrap_or_else(|| estimate_messages_tokens(&messages));
 
-        // Phase 0: Snip ancient messages (cheapest, no API cost).
+        //Snip ancient messages (cheapest, no API cost).
         // Remove messages older than 50 turns to free context space.
         let (messages, snipped) = self.snip_ancient_messages(&messages, 50);
         if snipped > 0 && !self.config.quiet_mode {
             tracing::info!("Phase 0 (Snip): removed {} ancient messages", snipped);
         }
 
-        // Phase 3.5: Context Collapse (read-time projection).
-        // This is applied to the messages before Phase 1 to provide
+        //Context Collapse (read-time projection).
+        //This is applied to the messages before to provide
         // an additional layer of compression without API cost.
         let messages = Self::context_collapse(
             &messages,
@@ -2200,12 +2200,12 @@ Write only the summary body. Do not include any preamble or prefix."
             Some(self.config.context_length),
         );
 
-        // Phase A2 (2026-07-17): build pin config once per compress()
+        // build pin config once per compress
         // call so every pass below sees a consistent view.
         let pin_cfg = crate::compression_pipeline::PinConfig::from_compressor_config(&self.config);
 
-        // Phase A1 (2026-07-17): Pass 0 — adjacent user-text dedup.
-        // Runs before Phase 1 so the tool dedup pass operates on
+        // Pass 0 — adjacent user-text dedup.
+        //Runs before so the tool dedup pass operates on
         // the post-user-dedup slice. Pinned messages are exempt.
         let user_messages_for_dedup = messages.clone();
         let (messages, user_dedup_count) =
@@ -2220,7 +2220,7 @@ Write only the summary body. Do not include any preamble or prefix."
         // Quiet the unused-variable lint when min_tail forces a no-op above.
         let _ = user_messages_for_dedup;
 
-        // Phase 1: prune old tool results.
+        //prune old tool results.
         let (mut messages, dedup_count, pruned_count) = self.prune_old_tool_results(
             &messages,
             self.config.protect_last_n,
@@ -2238,13 +2238,13 @@ Write only the summary body. Do not include any preamble or prefix."
         // Compute pin count once for the report. Pinned messages
         // survive every pass above (Pass 0 user dedup, Pass 1
         // tool dedup, Pass 2 tool summary, Pass 3 args, Pass 4
-        // screenshots) and Phase 1.5 below.
+        //screenshots) and below.
         self.last_pin_count = pin_cfg
             .as_ref()
             .map(|p| messages.iter().filter(|m| p.is_pinned(m)).count())
             .unwrap_or(0);
 
-        // Phase 1.5 (2026-07-17, Phase B6): score-based drop.
+        // score-based drop.
         // Messages whose TokenScorer score is strictly below
         // `drop_score_threshold` are removed from context — but
         // **returned** (not destroyed) so they can be archived
@@ -2279,9 +2279,9 @@ Write only the summary body. Do not include any preamble or prefix."
             );
             dropped_count = dropped.len();
             messages = kept;
-            // Lossless: stash dropped messages so Phase 4's archive
+            //Lossless: stash dropped messages so 's archive
             // path picks them up alongside `turns_to_summarize`.
-            // Previously these were dropped in Phase 1.5 (before the
+            //Previously these were dropped in (before the
             // boundary cut) and were therefore in neither
             // `turns_to_summarize` nor the compressed tail — i.e.
             // permanently lost.
@@ -2298,8 +2298,8 @@ Write only the summary body. Do not include any preamble or prefix."
         }
 
         // re-bind `n_messages` after every reduction
-        // pass (Phase 0 snip, Phase 3.5 collapse, Phase A1 user
-        // dedup, Phase 1 tool prune, Phase 1.5 score drop). The
+        //pass ( snip, collapse, user
+        //dedup, tool prune, score drop). The
         // old value was captured before these passes, so using it
         // as the tail-loop upper bound would index past the end of
         // the now-shorter `messages` slice.
@@ -2323,7 +2323,7 @@ Write only the summary body. Do not include any preamble or prefix."
         // goes through `auto_compress_if_over_threshold`.
         self.last_trigger_reason = "threshold".to_string();
 
-        // Phase 2: determine boundaries.
+        //determine boundaries.
         let compress_start = self.align_boundary_forward(&messages, self.config.protect_first_n);
         let compress_end = self.find_tail_cut_by_tokens(&messages, compress_start, None);
         if compress_start >= compress_end {
@@ -2348,10 +2348,10 @@ Write only the summary body. Do not include any preamble or prefix."
             );
         }
 
-        // Phase 3: generate structured summary.
-        // (P1): fast_mode skips the LLM call entirely
+        //generate structured summary.
+        // fast_mode skips the LLM call entirely
         // and uses the static fallback. The original turns are
-        // already archived (Phase 0 / `last_archived_turns` +
+        //already archived ( / `last_archived_turns` +
         // `last_dropped_turns`), so nothing is lost — the LLM
         // just doesn't get a semantic handoff for the removed slice.
         let (summary_opt, summary_generated): (Option<String>, bool) = if self.fast_mode {
@@ -2374,7 +2374,7 @@ Write only the summary body. Do not include any preamble or prefix."
             }
         };
 
-        // Phase 4: assemble the compressed message list.
+        //assemble the compressed message list.
         let mut compressed: Vec<Message> = Vec::with_capacity(messages.len());
         for i in 0..compress_start {
             let mut msg = messages[i].clone();
@@ -2403,7 +2403,7 @@ Write only the summary body. Do not include any preamble or prefix."
             )
         });
 
-        // Phase 3.5 (round 5 safety net): the summary produced by the
+        //(round 5 safety net): the summary produced by the
         // LLM is now sanitised before it is spliced into the prompt.
         // The LLM is instructed to behave but is not trusted to obey:
         // a hallucinated file path or a quoted "ignore previous
@@ -2530,7 +2530,7 @@ Write only the summary body. Do not include any preamble or prefix."
             // messages that were replaced with the
             // `[Duplicate tool output]` marker (MD5 dedup pass).
             deduplication_count: dedup_count,
-            // Phase A+B (2026-07-17):
+            // Compression-report counters:
             user_dedup_count: self.last_user_dedup_count,
             pin_count: self.last_pin_count,
             dropped_count,
@@ -2551,7 +2551,7 @@ Write only the summary body. Do not include any preamble or prefix."
             tracing::info!("Compression #{} complete: {}", self.compression_count, self.last_metrics);
         }
 
-        // Phase A4 (2026-07-17): emit the structured
+        // emit the structured
         // CompressionReport so dashboards and trace logs see the
         // full pipeline breakdown (pin / dedup / prune / drop /
         // per-role counts). also derive
@@ -2599,7 +2599,7 @@ Write only the summary body. Do not include any preamble or prefix."
         // handoff summary is all that's left, and it's lossy by
         // design.
         self.last_archived_turns = turns_to_summarize.clone();
-        // Fold in the Phase 1.5 dropped messages so the agent loop's
+        //Fold in the dropped messages so the agent loop's
         // single archive path persists them too. Previously these
         // were lost (dropped before the boundary cut, so in neither
         // the summarised slice nor the compressed tail).
@@ -2620,11 +2620,11 @@ Write only the summary body. Do not include any preamble or prefix."
     // ------------------------------------------------------------------
 
     /// Restore important context after compression.
-    /// /// After Auto-Compact, the model may lose track of recently accessed
+    /// After Auto-Compact, the model may lose track of recently accessed
     /// files, active skills, or current task state. This method injects
     /// restoration guidance into the compressed messages to help the
     /// model recover.
-    /// /// Inspired by Claude Code's Post-Compact Restoration which re-injects
+    /// Inspired by Claude Code's Post-Compact Restoration which re-injects
     /// recently accessed files (up to 5, 50K tokens) and active skills.
     pub fn post_compression_restore(
         compressed: &mut Vec<Message>,
@@ -2689,7 +2689,7 @@ impl CoreContextEngine for ContextCompressor {
         self.compress(messages, None).await
     }
 
-    // (P1): override the fast path so the
+    // override the fast path so the
     // moderate-pressure route skips the LLM summary round-trip.
     async fn compress_fast(&mut self, messages: Vec<Message>) -> Vec<Message> {
         self.compress_fast(messages, None).await
@@ -2726,7 +2726,7 @@ impl CompressionEngine for ContextCompressor {
             tokens_saved: self.last_metrics.tokens_saved,
             summary_errors: self.last_metrics.summary_errors as u64,
             compression_count: self.compression_count,
-            // Phase A+B (2026-07-17): propagate the per-pass
+            // propagate the per-pass
             // counters through the engine-agnostic trait surface
             // so `compression_ops::auto_compress_if_over_threshold`
             // can persist them instead of hard-coding zero. The
@@ -3425,7 +3425,7 @@ mod tests {
             .any(|m| m.tool_call_id.as_deref() == Some("orphan")));
     }
 
-    // ---------- Bug #4 (2026-07-22): strip base64 ImageUrl from User content_parts ----------
+    //Bug #4 : strip base64 ImageUrl from User content_parts ----------
 
     fn user_with_image_msg(hint: &str, b64: &str) -> Message {
         Message::user_with_image(hint, b64, "image/png")
@@ -3756,7 +3756,7 @@ mod tests {
         assert!(banner.contains(SUMMARY_PREFIX));
     }
 
-    // ---------- Phase A+B integration (2026-07-17) ----------
+    // compression pipeline integration ----------
 
     #[tokio::test]
     async fn compress_pipeline_runs_user_dedup_pin_and_score_drop() {
@@ -3833,7 +3833,7 @@ mod tests {
         assert!(report.pin_count >= 1, "report.pin_count={}", report.pin_count);
     }
 
-    /// (Phase A+B limitation close-out): the engine-agnostic
+    /// the engine-agnostic
     /// `CompressionEngine::last_metrics()` must propagate the new
     /// per-pass counters (`user_dedup_count` / `pin_count` /
     /// `dropped_count` / `trigger_reason`) so the persistence path
@@ -3887,7 +3887,7 @@ mod tests {
 
         let _out = compressor.compress(messages, Some(80_000)).await;
 
-        // Post-flight: every Phase A+B field must now be populated
+        // Post-flight: every compression-report field must now be populated
         // (the underlying `last_metrics` was already populated by
         // `compress()`; this asserts the **trait projection** carries
         // it across the boundary).
@@ -3944,7 +3944,7 @@ mod tests {
         assert_eq!(post.compression_count, compressor.compression_count);
     }
 
-    // ---------- P1: fast-mode compression (2026-07-18) ----------
+    // fast-mode compression ----------
 
     #[tokio::test]
     async fn compress_fast_skips_llm_summary_call() {
@@ -3992,14 +3992,14 @@ mod tests {
             original_len,
             out.len()
         );
-        // Static fallback marker is present (Phase 3 used the
+        //Static fallback marker is present ( used the
         // fallback path, not a real summary).
         assert!(
             out.iter()
                 .any(|m| m.content.as_deref().unwrap_or("").contains(SUMMARY_PREFIX)),
             "fast mode must insert the static fallback marker"
         );
-        // Archive was populated (Phase 0 stashed turns_to_summarize
+        //Archive was populated ( stashed turns_to_summarize
         // + dropped turns into last_archived_turns).
         assert!(
             !compressor.last_archived_turns().is_empty(),
@@ -4059,7 +4059,7 @@ mod tests {
         let cfg = CompressorConfig::default();
         assert!(cfg.pin_roles.is_empty());
         assert!(cfg.pin_keywords.is_empty());
-        // drop_score_threshold defaults to 0.30 (Phase B6).
+        //drop_score_threshold defaults to 0.30 .
         assert!((cfg.drop_score_threshold - 0.30).abs() < f64::EPSILON);
     }
 
@@ -4528,7 +4528,7 @@ mod tests {
         assert_eq!(c.breaker_threshold(), 3);
     }
 
-    // ---------- P3-T4 flush-memories integration ----------
+    //flush-memories integration ----------
     // Verifies that a `flush_memories` sentinel left in the messages
     // vec is stripped by `compress()` before it can leak into the
     // compressed output or downstream persistence.

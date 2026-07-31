@@ -2,15 +2,14 @@
 //!
 //! Two backends are wired behind a single `CaptureBackend`:
 //!
-//! - **BitBlt** (Phase 1, current). Uses `GetDC(NULL)` +
+//! - **BitBlt** . Uses `GetDC(NULL)` +
 //!   `CreateCompatibleBitmap` + `BitBlt(SRCCOPY)` to dump the
 //!   primary screen, then re-encodes to PNG via `image`. Always
 //!   works on any Windows 10/11 install with no extra runtime —
 //!   the price is a full-screen `BitBlt` and a single GDI snapshot
 //!   per call (no delta tracking).
-//! - **DXGI Output Duplication** (Phase 2, stub). Will land once
-//!   the DXGI swap chain path is validated. See
-//!   [`dxgi::dxgi_capture`] for the planned surface.
+//! - **DXGI Output Duplication** . Available as a faster path; see
+//!   [`dxgi::dxgi_capture`] for the surface.
 
 pub mod dxgi;
 pub mod screen_info;
@@ -25,8 +24,8 @@ use crate::CuaResult;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MonitorInfo {
     /// 0-based index in the enumeration order. `0` is always the
-    /// primary monitor in Phase 1; multi-monitor ordering will
-    /// land with the DXGI backend.
+    /// primary monitor in single-display setups; multi-monitor
+    /// ordering is not yet implemented.
     pub index: usize,
     /// Human-readable device name (`"\\.\DISPLAY1"` on Windows).
     pub name: String,
@@ -52,11 +51,11 @@ pub struct ScreenshotResult {
     /// Width / height of the captured frame, in pixels.
     pub width: u32,
     pub height: u32,
-    /// Monitor index the frame was captured from (Phase 1:
-    /// always `0`).
+    /// Monitor index the frame was captured from (currently always
+    /// `0` — only the primary monitor is captured).
     pub monitor: usize,
-    /// Human-readable monitor name (Phase 1: from
-    /// `GetSystemMetrics`/primary resolution).
+    /// Human-readable monitor name (from `GetSystemMetrics`/primary
+    /// resolution).
     pub monitor_name: String,
     /// Raw size of the encoded PNG in bytes. Exposed so the UI
     /// can render a "(2.4 MB)" badge next to a screenshot result.
@@ -68,9 +67,10 @@ pub struct ScreenshotResult {
 /// Configuration for a single screenshot call.
 #[derive(Debug, Clone, Copy)]
 pub struct CaptureConfig {
-    /// Which monitor to capture. Phase 1 ignores this and always
-    /// captures the primary monitor — the field is preserved so
-    /// the call signature is stable across the DXGI swap.
+    /// Which monitor to capture. Currently ignored — the primary
+    /// monitor is always captured — but the field is preserved so
+    /// the call signature stays stable if multi-monitor capture is
+    /// added.
     pub monitor: usize,
 }
 
@@ -83,9 +83,9 @@ impl Default for CaptureConfig {
 /// Capture the primary monitor.
 ///
 /// This is the entry point used by the `screenshot` tool handler.
-/// The implementation dispatches to the DXGI backend in Phase 2
-/// and falls back to BitBlt when DXGI is unavailable — public
-/// signature is stable so the tool schema does not change.
+/// The implementation dispatches to the DXGI backend and falls back
+/// to BitBlt when DXGI is unavailable — the public signature is
+/// stable so the tool schema does not change.
 ///
 /// ## DXGI-first, BitBlt-fallback rationale
 ///
@@ -102,7 +102,7 @@ impl Default for CaptureConfig {
 /// a different GPU than the adapter DXGI hands us.
 ///
 /// A black-box agent tool that returns `Err` for any of these
-/// would be a regression vs. Phase 1's BitBlt (which always
+/// would be a regression vs. the BitBlt path (which always
 /// works on any Windows 10/11 install). So: try DXGI, on any
 /// `CuaError::Dxgi(_)` fall back to BitBlt, and only return
 /// `Err` if BitBlt also fails. The wire shape is identical to
@@ -130,7 +130,7 @@ pub fn screenshot(config: CaptureConfig) -> CuaResult<ScreenshotResult> {
     }
 }
 
-/// Phase 1 BitBlt capture backend. Allocates a GDI bitmap of the
+/// BitBlt capture backend. Allocates a GDI bitmap of the
 /// primary monitor's resolution, blits the desktop into it, then
 /// re-encodes to PNG via `image::codecs::png::PngEncoder`.
 #[cfg(windows)]

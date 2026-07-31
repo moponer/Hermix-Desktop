@@ -69,7 +69,7 @@ pub struct PythonSearchEntry {
 
 /// Resolve a usable Python interpreter at `python_override` if provided,
 /// else probe the sibling slot + PATH.
-/// /// Returns `Some(PathBuf)` if any candidate exists, else `None`. The
+/// Returns `Some(PathBuf)` if any candidate exists, else `None`. The
 /// same path is reported by [`python_search_paths`] — use that for a
 /// diagnostic listing.
 pub fn find_python_bin(python_override: Option<&Path>) -> Option<PathBuf> {
@@ -80,7 +80,7 @@ pub fn find_python_bin(python_override: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// Return every Python interpreter candidate tried, in priority order.
-/// /// Does **not** fall back to `None` on errors — every tier is reported
+/// Does **not** fall back to `None` on errors — every tier is reported
 /// even if missing, so the Settings UI can show "tried these paths".
 /// The first entry whose `exists == true` is the one that would be used.
 pub fn python_search_paths(python_override: Option<&Path>) -> Vec<PythonSearchEntry> {
@@ -187,7 +187,7 @@ fn leak_str(s: &str) -> &'static str {
 
 /// Format the "no Python interpreter found" error message listing the
 /// real search paths we tried.
-/// /// The output is intended for two audiences:
+/// The output is intended for two audiences:
 /// - The LLM (sees it via tool error): emits a tighter message
 /// telling it to switch to the `bash` tool with `python3 -c ...`
 /// or to ask the user to configure the override.
@@ -219,7 +219,7 @@ pub fn format_missing_python_error(entries: &[PythonSearchEntry]) -> String {
 impl CodeExecutionBackend for LocalCodeExecutionBackend {
     /// Which languages can we run *right now* (i.e. on this machine, with
     /// the current PATH)?
-    /// /// Used by [`crate::tools::code_execution::ExecuteCodeHandler::schema`]
+    /// Used by [`crate::tools::code_execution::ExecuteCodeHandler::schema`]
     /// to expose `language: enum: [actual, runtime, list]` to the LLM,
     /// so it doesn't keep calling `language="typescript"` on a host
     /// without `npx` and getting an error every turn.
@@ -334,7 +334,7 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
         // got X".
         let interpreter_label = interpreter.display().to_string();
 
-        // (P2-5 / STABILITY-PLAN §2.7) Plant a canary file in the
+        //( / ) Plant a canary file in the
         // temp directory before execution. After execution, we verify
         // it's intact — if the executed code modified or deleted it,
         // that's a potential sandbox escape.
@@ -356,7 +356,7 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
         })
         .await;
 
-        // (P2-5) Verify canary integrity after execution.
+        //Verify canary integrity after execution.
         if let Some(ref canary_path) = canary {
             if let Err(msg) = canary::verify(canary_path) {
                 tracing::warn!(
@@ -393,9 +393,9 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
     }
 }
 
-// -- P2-5: sandbox canary detection ----------------------------------------
+//sandbox canary detection ----------------------------------------
 
-/// (P2-5 / STABILITY-PLAN §2.7) Canary file for sandbox leak
+/// ( / ) Canary file for sandbox leak
 /// detection. We write a unique canary file to a temp directory
 /// before code execution. After execution, we check:
 /// 1. The canary file still exists (not deleted).
@@ -507,7 +507,7 @@ mod tests {
         assert!(langs.contains(&"python".to_string()), "python must always be advertised; got: {:?}", langs);
     }
 
-    // -- P2-5: sandbox canary tests -------------------------------------------
+    //sandbox canary tests -------------------------------------------
 
     #[test]
     fn canary_plant_and_verify_intact() {

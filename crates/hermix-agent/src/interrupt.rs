@@ -29,15 +29,15 @@ use std::sync::{Arc, Mutex};
 use hermix_core::AgentError;
 
 /// Thread-safe interrupt controller for the agent loop.
-/// /// Clone-friendly: all clones share the same underlying state via `Arc`.
-/// /// # Usage
-/// /// ```rust,ignore
+/// Clone-friendly: all clones share the same underlying state via `Arc`.
+/// # Usage
+/// ```rust,ignore
 /// let ctrl = InterruptController::new();
-/// /// From another thread (e.g. Ctrl+C handler):
+/// From another thread (e.g. Ctrl+C handler):
 /// ctrl.interrupt(Some("New user message".into()));
-/// /// In the agent loop, before each LLM call / tool execution:
+/// In the agent loop, before each LLM call / tool execution:
 /// ctrl.check_interrupt()?;
-/// /// During a long-running async op:
+/// During a long-running async op:
 /// tokio::select! {
 /// res = llm_call(…) => res,
 /// _ = ctrl.wait_for_interrupt() => Err(AgentError::Interrupted { message: None }),
@@ -66,9 +66,9 @@ impl InterruptController {
     }
 
     /// Request the agent to interrupt its current loop.
-    /// /// Optionally provide a redirect message (e.g. new user input that
+    /// Optionally provide a redirect message (e.g. new user input that
     /// should be processed instead of continuing the current tool chain).
-    /// /// Fires the async notification so any `tokio::select!` racing on
+    /// Fires the async notification so any `tokio::select!` racing on
     /// [`wait_for_interrupt`](Self::wait_for_interrupt) unblocks immediately.
     pub fn interrupt(&self, message: Option<String>) {
         if let Ok(mut guard) = self.redirect_message.lock() {
@@ -95,7 +95,7 @@ impl InterruptController {
     }
 
     /// If an interrupt is pending, consume it (clear flag + redirect) and return `Some(redirect)`.
-    /// /// Used by the agent loop for **graceful** shutdown with
+    /// Used by the agent loop for **graceful** shutdown with
     /// [`hermix_core::AgentResult::interrupted`] instead of
     /// [`AgentError::Interrupted`]. Call sites that still need the legacy error
     /// should use [`Self::check_interrupt`].
@@ -130,12 +130,12 @@ impl InterruptController {
     }
 
     /// Async-friendly cancellation future (O1.2).
-    /// /// Returns a future that resolves when `interrupt()` is called.
+    /// Returns a future that resolves when `interrupt()` is called.
     /// If an interrupt was already requested, the future resolves
     /// immediately on the next poll. Callers use this in a
     /// `tokio::select!` to cancel long-running async work (LLM API
     /// calls, tool execution) without waiting for a polling window.
-    /// /// ```rust,ignore
+    /// ```rust,ignore
     /// tokio::select! {
     /// res = llm_call(...) => res,
     /// _ = interrupt.wait_for_interrupt() => {

@@ -50,7 +50,7 @@ use crate::hardline;
 use crate::session_persistence::SessionPersistence;
 
 /// Collapse a run of consecutive assistant messages into one.
-/// /// Background: the agent loop's `run_stream` may push multiple
+/// Background: the agent loop's `run_stream` may push multiple
 /// assistant entries per user turn — one per LLM call within the
 /// turn.  If the first LLM response is judged "reasoning-only"
 /// (e.g. MiniMax M2.7 emits a body of pure `<think>...</think>` with
@@ -59,13 +59,13 @@ use crate::session_persistence::SessionPersistence;
 /// reply lands in a *second* assistant entry.  Persisting both rows
 /// makes the desktop client render N stacked bubbles for a single
 /// user message.
-/// /// This helper:
-/// /// * drops runs of empty placeholders (no content, no tool_calls);
+/// This helper:
+/// * drops runs of empty placeholders (no content, no tool_calls);
 /// * concatenates content / tool_calls / reasoning_content across
 /// non-empty runs;
 /// * preserves the last message's id, timestamp, stop_reason, model,
 /// cache_control so the merged row carries the terminal metadata.
-/// /// It's the backend counterpart of the desktop's
+/// It's the backend counterpart of the desktop's
 /// `mergeConsecutiveAssistantMessages` — both layers apply the same
 /// rule so a stale server view still renders cleanly on reload.
 fn merge_consecutive_assistant_messages(messages: Vec<Message>) -> Vec<Message> {
@@ -160,7 +160,7 @@ fn merge_consecutive_assistant_messages(messages: Vec<Message>) -> Vec<Message> 
 }
 
 /// Local in-process agent service.
-/// /// This service runs the agent loop directly in the current process,
+/// This service runs the agent loop directly in the current process,
 /// using SQLite for session persistence.
 pub struct LocalAgentService {
     /// Gateway configuration. Wrapped in a `Mutex` so the
@@ -176,7 +176,7 @@ pub struct LocalAgentService {
     /// Optional provider factory override, mainly for tests.
     provider_factory: Option<ProviderFactory>,
     /// Tirith tool-call policy engine.
-    /// /// Pre-evaluates each tool call before it reaches
+    /// Pre-evaluates each tool call before it reaches
     /// `on_pre_tool_dispatch` and can short-circuit with a
     /// hard block (no user prompt, no fallback path — the LLM
     /// is told the call is structurally invalid and gets a
@@ -185,7 +185,7 @@ pub struct LocalAgentService {
     /// `hermix_tools::TirithSecurity::from_default_or_bundled`
     /// for the rule resolution order.
     tirith: Option<Arc<TirithSecurity>>,
-    /// Phase 14 — optional consciousness stream tracker. When set,
+    /// — optional consciousness stream tracker. When set,
     /// the agent's tool/thinking/streaming callbacks emit ECG
     /// samples so the desktop UI can render a full-screen vitals
     /// display. `None` means no tracker (the default — production
@@ -551,13 +551,13 @@ impl LocalAgentService {
 
     /// Resolve the per-turn `effective_model` from request overrides and
     /// the persisted default.
-    /// /// extracted from `send_message` so the
+    /// extracted from `send_message` so the
     /// "user-selected model in UI actually takes effect" guarantee is
     /// unit-testable end-to-end — the previous bug had `overrides.model`
     /// being read but the logic was inline inside `send_message` and
     /// only reachable via a full WebSocket roundtrip, so the broken
     /// "always default" behaviour was invisible to tests.
-    /// /// Precedence (matches the original inline logic):
+    /// Precedence (matches the original inline logic):
     /// 1. `overrides.model` if non-empty (the user's per-session choice)
     /// 2. `cfg_snapshot.model` (config.yaml default)
     /// 3. `fallback_model()` (any registered provider)
@@ -602,7 +602,7 @@ impl LocalAgentService {
     /// Probe the default LLM provider configuration. Returns the
     /// resolution error (typically `AgentError::Config` for a missing
     /// API key) if the configured model cannot be built.
-    /// /// Called by the desktop server at startup so we can log a single
+    /// Called by the desktop server at startup so we can log a single
     /// loud `ERROR` and broadcast a `config_error` status to the
     /// client before the first user turn — instead of letting every
     /// message fall through the silent-stub hole.
@@ -628,12 +628,12 @@ impl LocalAgentService {
     /// (model load + connection pool warmup + auth handshake —
     /// typically 30–60s on a fresh process, which the previous
     /// 30s first-chunk timeout mis-classified as a "timeout").
-    /// /// Fire-and-forget: a failed warmup logs at WARN and never
+    /// Fire-and-forget: a failed warmup logs at WARN and never
     /// blocks service construction or the user's first real
     /// chat. The point isn't the response — it's the round-trip
     /// that primes the provider's HTTP keep-alive pool and
     /// in-process caches.
-    /// /// Safe to call from a non-async context (constructors,
+    /// Safe to call from a non-async context (constructors,
     /// restart handlers) because `tokio::spawn` resolves the
     /// current runtime handle lazily.
     pub fn warm_up_default_provider(&self) {
@@ -754,7 +754,7 @@ impl LocalAgentService {
         let compressor_model = agent_config.model.clone();
         let mut agent = AgentLoop::new(agent_config, agent_tool_registry, provider);
 
-        // Wire Phase 7 H1: tool schema router (KeywordRouter + AlwaysInclude).
+        //Wire H1: tool schema router (KeywordRouter + AlwaysInclude).
         // `with_tool_router` consumes `agent`, so the call order is:
         // build the router first (borrows `&agent`), then move `agent`
         // into `with_tool_router`. Pre-the router was a
@@ -762,7 +762,7 @@ impl LocalAgentService {
         let router = agent.default_tool_router();
         agent = agent.with_tool_router(router);
 
-        // Wire Phase 15: time-aware recall via MemoryRouter.
+        //Wire : time-aware recall via MemoryRouter.
         // `all_plugins_as_router` synchronously constructs and
         // `initialize()`s every bundled memory plugin, including
         // OpenViking which spins up a `reqwest::blocking::Client`.
@@ -775,7 +775,7 @@ impl LocalAgentService {
         // its own runtime.  `block_in_place` returns the closure's
         // `Output` directly (it panics on current-thread, but the
         // production Tauri/HTTP server is multi-thread).
-        // M1.6.5: previously this whole block was gated on
+        //previously this whole block was gated on
         // `if let Some(ref hh) = hermix_home`, which meant any
         // caller that didn't set `AgentConfig::hermix_home` (e.g.
         // a fresh dev server with config loaded from cwd) got a
@@ -795,7 +795,7 @@ impl LocalAgentService {
         let router = tokio::task::block_in_place(|| {
             crate::memory_layer_adapter::all_plugins_as_router(session_id, &hh_owned)
         });
-        // Phase 17 safety net: bind every backend to the session
+        //safety net: bind every backend to the session
         // even if the adapter forgot to. Idempotent.
         router.initialize_all(session_id, &hh_owned);
         let backend_count = router.backend_count();
@@ -812,7 +812,7 @@ impl LocalAgentService {
         // already contains the embedded SQLite backend. No separate
         // PluginManager memory_providers registration needed.
 
-        // Phase 15 H2: intent-aware prefetcher.  Wrap the full
+        //H2: intent-aware prefetcher. Wrap the full
         // ToolRegistry so the executor can dispatch Safe tools
         // in parallel before the LLM call.
         use hermix_intelligence::prefetch::{LearnedPrefetcher, Prefetcher, SafeToolExecutor};
@@ -827,7 +827,7 @@ impl LocalAgentService {
             prefetcher,
             hermix_intelligence::prefetch::IntentStats::default(),
         );
-        // M1.6.3: forward focus-stack depth transitions to the
+        //forward focus-stack depth transitions to the
         // consciousness tracker so the desktop ECG reflects nested
         // delegation depth in real time.
         if let Some(ref tracker) = self.consciousness_tracker {
@@ -858,7 +858,7 @@ impl LocalAgentService {
                 // (`DEFAULT_BREAKER_THRESHOLD = 3`,
                 // `DEFAULT_BREAKER_COOLDOWN_SECS = 600`) when the user
                 // hasn't customised the field — backward compatible.
-                // P0-1 (Frontend Audit 2026-07-13): also pull
+                //also pull
                 // `min_summary_tokens` / `summary_tokens_ceiling` from
                 // `compaction:` so the desktop Settings → Advanced tab
                 // can tune the LLM-compressor's token budget live. Each
@@ -1088,10 +1088,10 @@ impl LocalAgentService {
         PermissionLevel::Default
     }
 
-    /// P6 (2026-07-20, direction 1): returns `Some(<resource description>)`
+    /// P6 (, direction 1): returns `Some(<resource description>)`
     /// when `tc` is a resource-bearing tool whose target is outside
     /// `profile`'s granted scope, else `None`.
-    /// /// Only **mutating** `file`-family tools (by `path` argument) and
+    /// Only **mutating** `file`-family tools (by `path` argument) and
     /// `terminal` / `code_execution` (by `command` argument) are gated —
     /// read-only tools (`read_file`, `read_image`, `search_files`,
     /// `list_directory`) are **exempt** because they never modify state.
@@ -1156,11 +1156,11 @@ impl LocalAgentService {
     }
 
     /// Internal: pre-dispatch decision for a tool call.
-    /// /// Extracted from the `on_pre_tool_dispatch` closure in
+    /// Extracted from the `on_pre_tool_dispatch` closure in
     /// [`Self::send_message`] for testability — the closure was a
     /// 140-line inline lambda that couldn't be exercised by unit
     /// tests. The five-layer decision matrix is:
-    /// /// 0. **Hardline blocklist** (L0, the floor) — catastrophic
+    /// 0. **Hardline blocklist** (L0, the floor) — catastrophic
     /// patterns (`rm -rf /`, fork bomb, `mkfs.*` on block
     /// device, `dd` to block device, `curl|sh`) are denied
     /// **regardless of `PermissionLevel`**. This is the agent's
@@ -1478,7 +1478,7 @@ impl AgentService for LocalAgentService {
         // (writes to an empty-string session row, polluting DB).
         agent_config.session_id = Some(session_id.to_string());
 
-        // Phase 2 (session isolation): the per-session workspace,
+        //(session isolation): the per-session workspace,
         // approval context, session id, and message id are now carried
         // by `ToolCallContext` (built below) and read directly by
         // `execute_with_context` — no process-global Arc writes needed.
@@ -1486,7 +1486,7 @@ impl AgentService for LocalAgentService {
         // backward-compat fallback for the non-context dispatch path
         // (tests, headless callers) but are no longer written here.
 
-        // P0-T1: compute the wire-format id of the upcoming assistant
+        //compute the wire-format id of the upcoming assistant
         // message so `ToolCallContext.message_id` can carry it.
         let upcoming_assistant_idx = messages.len();
         let upcoming_assistant_id =
@@ -1495,7 +1495,7 @@ impl AgentService for LocalAgentService {
         // Build provider
         let provider = self.resolve_provider(&effective_model)?;
 
-        // Phase 1 (session isolation): build per-session ToolCallContext.
+        //(session isolation): build per-session ToolCallContext.
         // This carries workspace, approval hooks, permission profile,
         // session id, and message id through the dispatch chain WITHOUT
         // process-global mutable state. The global Arc writes below
@@ -1696,7 +1696,7 @@ impl AgentService for LocalAgentService {
         // Return the LLM's raw content as-is. If content is empty but
         // reasoning_content exists (MiniMax puts its response in reasoning),
         // use reasoning_content so the user sees the LLM's actual response.
-        // LAST-RESORT GUARD (2026-07-30): never return an empty body. A blank
+        //LAST-RESORT GUARD : never return an empty body. A blank
         // assistant bubble is a dead-end for the user with no summary of what
         // happened. If BOTH content and reasoning are empty, synthesize a
         // short summary from the tool results already in the conversation so
@@ -1728,7 +1728,7 @@ impl AgentService for LocalAgentService {
                 "✅ 已执行完毕（本轮未生成可见文本总结）。".to_string()
             });
 
-        // Phase 3 (session isolation): terminal approval context is
+        //(session isolation): terminal approval context is
         // carried by ToolCallContext; code_execution stdout_cb and
         // active_call_id are now on ToolCallContext too (Arc<Mutex>
         // handles, cleared here). terminal_permission_profile was dead
@@ -1870,7 +1870,7 @@ impl AgentService for LocalAgentService {
         // (writes to an empty-string session row, polluting DB).
         agent_config.session_id = Some(session_id.to_string());
 
-        // Phase 2 (session isolation): the per-session workspace,
+        //(session isolation): the per-session workspace,
         // approval context, session id, and message id are now carried
         // by `ToolCallContext` (built below) and read directly by
         // `execute_with_context` — no process-global Arc writes needed.
@@ -1878,7 +1878,7 @@ impl AgentService for LocalAgentService {
         // backward-compat fallback for the non-context dispatch path
         // (tests, headless callers) but are no longer written here.
 
-        // P0-T1: compute the wire-format id of the upcoming assistant
+        //compute the wire-format id of the upcoming assistant
         // message so `ToolCallContext.message_id` can carry it.
         let upcoming_assistant_idx = messages.len();
         let upcoming_assistant_id =
@@ -1887,7 +1887,7 @@ impl AgentService for LocalAgentService {
         // Build provider
         let provider = self.resolve_provider(&effective_model)?;
 
-        // Phase 1 (session isolation): build per-session ToolCallContext.
+        //(session isolation): build per-session ToolCallContext.
         let tool_ctx = Arc::new(hermix_tools::ToolCallContext {
             session_id: session_id.to_string(),
             workspace: agent_config.workspace.clone().map(std::path::PathBuf::from),
@@ -2002,7 +2002,7 @@ impl AgentService for LocalAgentService {
         );
         // sync the initial profile to the registry's
         // shared handle so `TerminalHandler` can consult it to skip
-        // Phase 3: terminal_permission_profile was dead code (written
+        //terminal_permission_profile was dead code (written
         // but never read by any tool handler) — removed entirely.
         // The profile is carried by ToolCallContext.permission_profile.
         // Still grant the workspace root on the local profile_arc so
@@ -2041,7 +2041,7 @@ impl AgentService for LocalAgentService {
         // reads from the child process, so the WS stream receives
         // `tool_stdout` events in real-time instead of buffering
         // everything until the process exits.
-        // Phase 3: the callback and active_call_id are now on
+        //the callback and active_call_id are now on
         // ToolCallContext (Arc<Mutex> handles), not global registry
         // fields — eliminates cross-session stdout race.
         let code_exec_active_call_id = tool_ctx.active_call_id.clone();
@@ -2097,7 +2097,7 @@ impl AgentService for LocalAgentService {
         // clone `active_call_id` handle for the on_tool_start /
         // on_tool_complete callbacks so they can set/clear the
         // active `code_execution` tool_call_id without going through
-        // the global registry (Phase 3: per-session isolation).
+        //the global registry .
         let active_call_id_for_start = tool_ctx.active_call_id.clone();
         let active_call_id_for_complete = tool_ctx.active_call_id.clone();
         let callbacks = AgentCallbacks {
@@ -2644,7 +2644,7 @@ impl AgentService for LocalAgentService {
                     let grant = PendingGrant::from_tool_call(&tc.function.name, &raw_params);
                     let mut profile = profile_arc.lock().expect("profile_arc poisoned");
                     grant.apply_to(&mut profile);
-                    // Phase 3: terminal_permission_profile was dead code
+                    //terminal_permission_profile was dead code
                     // (no tool handler ever read it from the registry).
                     // The profile is still maintained on `profile_arc`
                     // for `resource_guard` — that's the authoritative
@@ -2748,7 +2748,7 @@ impl AgentService for LocalAgentService {
         // Return the LLM's raw content as-is. If content is empty but
         // reasoning_content exists (MiniMax puts its response in reasoning),
         // use reasoning_content so the user sees the LLM's actual response.
-        // LAST-RESORT GUARD (2026-07-30): never return an empty body. A blank
+        //LAST-RESORT GUARD : never return an empty body. A blank
         // assistant bubble is a dead-end for the user with no summary of what
         // happened. If BOTH content and reasoning are empty, synthesize a
         // short summary from the tool results already in the conversation so
@@ -2869,7 +2869,7 @@ impl AgentService for LocalAgentService {
             }
         }
 
-        // Phase 3 (session isolation): terminal approval context is
+        //(session isolation): terminal approval context is
         // carried by ToolCallContext; code_execution stdout_cb and
         // active_call_id are now on ToolCallContext too (Arc<Mutex>
         // handles, cleared here). terminal_permission_profile was dead
@@ -3017,7 +3017,7 @@ impl AgentService for LocalAgentService {
     /// data this turn (most turns), in which case the caller passes
     /// `None` to `persist_session_with_compression` and the legacy
     /// "no compression" path runs unchanged.
-    /// /// The snapshot carries (a) the handoff summary, (b) the raw
+    /// The snapshot carries (a) the handoff summary, (b) the raw
     /// archived turns, and (c) the compression metrics — all three
     /// are written to their respective tables inside one DB
     /// transaction by `save_session_atomic`.
@@ -3033,7 +3033,7 @@ impl AgentService for LocalAgentService {
 /// (the SQLite-backed `memory.db`) — see
 /// `crate::memory_layer_adapter::all_plugins_as_router` for the
 /// wiring.
-/// /// `None` is returned when the router build fails (e.g. the
+/// `None` is returned when the router build fails (e.g. the
 /// embedded SQLite backend can't open its file). In that case the
 /// cross-session recall path is silently disabled; we never want
 /// a missing `memory.db` to break session loading.
@@ -3069,7 +3069,7 @@ fn build_shared_memory_router(session_label: &'static str) -> Option<Arc<hermix_
 /// this turn (most turns) — the caller then passes `None` to
 /// `persist_session_with_compression` and the legacy "no
 /// compression" path runs unchanged.
-/// /// Pure function (no `&self`), so it lives at module scope rather
+/// Pure function (no `&self`), so it lives at module scope rather
 /// than inside the `LocalAgentService` impl block — both the
 /// blocking `send_message` and the streaming `send_message_stream`
 /// call sites share the same shape.

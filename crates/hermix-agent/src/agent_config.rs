@@ -274,7 +274,7 @@ pub struct AgentConfig {
     #[serde(default)]
     pub skip_memory: bool,
 
-    /// M2: hard char cap on the `## Memory` block injected into the
+    /// hard char cap on the `## Memory` block injected into the
     /// system prompt per turn. Hits below `memory_min_salience` are
     /// dropped first; the remaining list is appended top-down until
     /// the budget is exhausted. Default `4000` chars ≈ 1.5-2K tokens
@@ -284,7 +284,7 @@ pub struct AgentConfig {
     #[serde(default = "default_memory_char_budget")]
     pub memory_char_budget: usize,
 
-    /// M2: noise floor for memory recall. Hits with `salience < this`
+    /// noise floor for memory recall. Hits with `salience < this`
     /// are dropped before the char budget is applied. Default `0.30`
     /// filters out low-signal fragments (e.g. session boilerplate,
     /// generated text), letting the budget spend tokens on facts the
@@ -292,39 +292,39 @@ pub struct AgentConfig {
     #[serde(default = "default_memory_min_salience")]
     pub memory_min_salience: f32,
 
-    /// M2: cap on subsequent-turn recall size (after the first full
+    /// cap on subsequent-turn recall size (after the first full
     /// recall has seeded the context). Default `5` — keeps the
     /// `## Memory` block small for ongoing turns since the LLM
     /// already has prior memory in the active context window.
     #[serde(default = "default_memory_recall_limit_subsequent")]
     pub memory_recall_limit_subsequent: usize,
 
-    /// M2: cap on first-turn recall size (before any context seeding).
+    /// cap on first-turn recall size (before any context seeding).
     /// Default `50` — wide net to surface everything relevant at
     /// session start.
     #[serde(default = "default_memory_recall_limit_first")]
     pub memory_recall_limit_first: usize,
 
-    /// P4-T1 (reflection → 行为改写闭环): number of recent
+    /// (reflection → 行为改写闭环): number of recent
     /// cross-session reflections to surface into the `## Prior
     /// Reflections` block of `memory_prefetch`. Set to 0 to disable.
     /// Default `2`.
     #[serde(default = "default_prior_reflection_max_items")]
     pub prior_reflection_max_items: usize,
 
-    /// P4-T1: per-item character budget in the prior reflection block.
+    /// per-item character budget in the prior reflection block.
     /// Caps each reflection body so a noisy session can't blow out
     /// the system prompt. Default `200`.
     #[serde(default = "default_prior_reflection_per_item_chars")]
     pub prior_reflection_per_item_chars: usize,
 
-    /// P4-T2 (tool error demotion): failure threshold above which a
+    /// (tool error demotion): failure threshold above which a
     /// tool is surfaced as a soft-hint in the system prompt. Set
     /// to `0` to disable the feature entirely. Default `2`.
     #[serde(default = "default_tool_error_demotion_threshold")]
     pub tool_error_demotion_threshold: usize,
 
-    /// P4-T2: cap on rows in the tool-error demotion block. Default
+    /// cap on rows in the tool-error demotion block. Default
     /// `5` — keeps the block short even when many tools have failed.
     #[serde(default = "default_tool_error_demotion_max_items")]
     pub tool_error_demotion_max_items: usize,
@@ -382,7 +382,7 @@ pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
 
-    /// P6 (2026-07-20): declarative permission profile. Before dispatching a
+    /// P6 : declarative permission profile. Before dispatching a
     /// `file`/`terminal` tool, `decide_pre_tool_dispatch` checks the target
     /// resource against `granted_paths` / `granted_commands`; anything
     /// outside scope triggers an approval prompt so the user can grant
@@ -452,7 +452,7 @@ pub struct AgentConfig {
     pub skill_creation_nudge_interval: u32,
 
     /// Maximum characters per turn for the auto-activated skills
-    /// injection block (P2-T1). The loader caps each individual
+    /// injection block . The loader caps each individual
     /// SKILL.md body at 500 lines, and this field caps the joined
     /// block so even many-matched-skills can't blow past the soft
     /// context budget. Excess is truncated; not an error.
@@ -475,7 +475,7 @@ pub struct AgentConfig {
     /// `skill_manage(action='auto_extract_from_conversation')`. Set
     /// to `false` in `~/.hermix/config.yaml` to opt out without
     /// having to also disable `background_review_enabled`.
-    /// /// Off by default in child sessions (`spawn_background_review`
+    /// Off by default in child sessions (`spawn_background_review`
     /// forces it false there) so sub-agent chatter doesn't pollute
     /// the user's primary skill library.
     #[serde(default = "default_auto_skill_extraction")]
@@ -544,14 +544,14 @@ pub struct AgentConfig {
     pub stream_activity_stall_secs: u64,
 
     /// Hard outer timeout (seconds) for a single streaming LLM completion.
-    /// /// `collect_stream_llm_response` would otherwise block indefinitely
+    /// `collect_stream_llm_response` would otherwise block indefinitely
     /// on `stream.next().await` if the upstream provider opens the
     /// SSE / chunked connection but never sends any chunk (network
     /// hang, API outage, silently dropped TCP). The inner
     /// `silence_watch` only emits activity notices — it does not
     /// abort the stream — so without this outer timeout the agent
     /// loop and the UI both hang forever on a dead provider.
-    /// /// When the deadline elapses, the collector assembles whatever
+    /// When the deadline elapses, the collector assembles whatever
     /// content / reasoning / tool_calls were accumulated so far,
     /// stamps `finish_reason = "timeout"`, and returns
     /// [`StreamCollectOutcome::Complete`]. The agent loop then routes
@@ -559,7 +559,7 @@ pub struct AgentConfig {
     /// thinking-only reply, so a stuck provider degrades into a
     /// visible post-tool nudge (or finalizes if all nudges are
     /// exhausted) instead of pinning the UI at "正在思考".
-    /// /// `0` disables the hard timeout (legacy behaviour). The default
+    /// `0` disables the hard timeout (legacy behaviour). The default
     /// 180 s mirrors the frontend `STALE_STREAM_TIMEOUT_MS` budget
     /// while leaving room for genuinely long tool-heavy turns.
     #[serde(default = "default_stream_overall_timeout_secs")]
@@ -567,21 +567,21 @@ pub struct AgentConfig {
 
     /// hard deadline (seconds) for the **first chunk** of a
     /// streaming completion to arrive.
-    /// /// Background: providers like minimax/MiniMax-M3 and similar
+    /// Background: providers like minimax/MiniMax-M3 and similar
     /// occasionally open the SSE / chunked connection successfully but
     /// never push the first chunk (TCP keepalive on but no payload).
     /// The previous `silence_watch` only emitted "still waiting"
     /// notices — it didn't *abort* — so the agent loop and the
     /// "正在思考…" indicator both stayed pinned until the outer
     /// `stream_overall_timeout_secs` (default 180s) fired.
-    /// /// This setting adds a tighter, **first-chunk-only** deadline: if
+    /// This setting adds a tighter, **first-chunk-only** deadline: if
     /// no chunk has arrived within `stream_first_chunk_timeout_secs`,
     /// `collect_stream_inner` returns early with
     /// `finish_reason = "no_first_chunk"`. Subsequent chunks are not
     /// gated by this — once the stream is producing data, normal
     /// `silence_watch` + `stream_activity_stall_secs` notice logic
     /// takes over.
-    /// /// Default 30 s is enough for slow providers (network hitches,
+    /// Default 30 s is enough for slow providers (network hitches,
     /// cold caches) but bounded enough that an Open SSE / no-data
     /// hang gets surfaced to `decide_empty_response` within 30 s
     /// instead of the full 180 s outer watchdog. `0` opts out (legacy
@@ -597,7 +597,7 @@ pub struct AgentConfig {
     /// window, it logs a `turn_transition_stall` warning and emits a
     /// terminal `Done` event so the WS client recovers (rather than
     /// the user being stuck on the "正在思考…" indicator).
-    /// /// Root cause that motivated this setting: the `b35998b` SSE
+    /// Root cause that motivated this setting: the `b35998b` SSE
     /// first-chunk watchdog (above) only fixes "no chunk after the
     /// TCP open". It does **not** cover the second class of stall
     /// observed in production on — turn 1 finishes with
@@ -605,7 +605,7 @@ pub struct AgentConfig {
     /// executes and `do_post_tool_iteration` returns, but turn 2
     /// never starts. The watchdog covers the *gap* between
     /// `do_post_tool_iteration` and the next `do_pre_turn_setup`.
-    /// /// 90 s is wide enough to absorb a benign stall (e.g. an SQLite
+    /// 90 s is wide enough to absorb a benign stall (e.g. an SQLite
     /// write under contention, a slow `auto_compress_if_over_threshold`
     /// spawn), but short enough that the user sees recovery before
     /// the outer `stream_overall_timeout_secs` (180 s) would have
@@ -614,7 +614,7 @@ pub struct AgentConfig {
     #[serde(default = "default_turn_transition_deadline_secs")]
     pub turn_transition_deadline_secs: u64,
 
-    /// Max tools to surface to the LLM after tool-routing (Phase 7 H1).
+    /// Max tools to surface to the LLM after tool-routing .
     /// `0` or unset means "no routing, send full registry" (legacy default).
     #[serde(default = "default_max_routed_tools")]
     pub max_routed_tools: usize,
@@ -697,50 +697,50 @@ fn default_memory_nudge_interval() -> u32 {
     10
 }
 
-/// M2: hard char cap on `## Memory` block per turn. Was 12000 (~6K tokens)
+/// hard char cap on `## Memory` block per turn. Was 12000 (~6K tokens)
 /// which dominated context windows. 4000 chars ≈ 1.5-2K tokens is enough
 /// for the 5-8 highest-salience hits the LLM actually uses.
 fn default_memory_char_budget() -> usize {
     4000
 }
 
-/// M2: noise floor — drops hits with salience below this before budgeting.
+/// noise floor — drops hits with salience below this before budgeting.
 /// 0.30 keeps only meaningful facts; legacy behaviour was to inject everything.
 fn default_memory_min_salience() -> f32 {
     0.30
 }
 
-/// M2: cap on subsequent-turn recall. Down from 10 — the LLM already has
+/// cap on subsequent-turn recall. Down from 10 — the LLM already has
 /// the prior turn's memory in active context.
 fn default_memory_recall_limit_subsequent() -> usize {
     5
 }
 
-/// M2: first-turn recall size. Stays at 50 — wide net to surface everything.
+/// first-turn recall size. Stays at 50 — wide net to surface everything.
 fn default_memory_recall_limit_first() -> usize {
     50
 }
 
-/// P4-T1: max cross-session reflections injected into the system
+/// max cross-session reflections injected into the system
 /// prompt per turn. `2` covers "improvement + preference" most turns.
 fn default_prior_reflection_max_items() -> usize {
     2
 }
 
-/// P4-T1: per-item char budget on the prior reflection block.
+/// per-item char budget on the prior reflection block.
 /// `200` keeps one reflection line short while still surfacing the
 /// actionable sentence.
 fn default_prior_reflection_per_item_chars() -> usize {
     200
 }
 
-/// P4-T2: tool error demotion threshold. `2` means a tool gets
+/// tool error demotion threshold. `2` means a tool gets
 /// the soft-hint treatment after the second failed call.
 fn default_tool_error_demotion_threshold() -> usize {
     2
 }
 
-/// P4-T2: max rows in the demotion block.
+/// max rows in the demotion block.
 fn default_tool_error_demotion_max_items() -> usize {
     5
 }
@@ -749,7 +749,7 @@ fn default_skill_creation_nudge_interval() -> u32 {
     10
 }
 
-/// P2-T1 (2026-07-15): default auto-skill-injection budget.
+/// default auto-skill-injection budget.
 /// 16,000 chars ≈ 4,000 tokens — enough for 3 skills at the 500-line
 /// soft cap, well under any modern context window. Operators can
 /// raise / lower this via `cli-config.yaml`.
@@ -980,7 +980,7 @@ impl AgentConfig {
 mod tests {
     use super::*;
 
-    /// M2 (memory injection budget): the four new AgentConfig fields
+    /// (memory injection budget): the four new AgentConfig fields
     /// must default to conservative values so production sessions
     /// don't accidentally re-introduce the 6K-token memory block.
     #[test]
@@ -1005,7 +1005,7 @@ mod tests {
         );
     }
 
-    /// M2: the new fields must round-trip through serde without
+    /// the new fields must round-trip through serde without
     /// losing precision or being silently dropped.
     #[test]
     fn m2_memory_fields_serde_roundtrip() {
@@ -1023,7 +1023,7 @@ mod tests {
         assert_eq!(back.memory_recall_limit_subsequent, 12);
     }
 
-    /// M2: 0 means "disable the cap" — used by tests and by power
+    /// 0 means "disable the cap" — used by tests and by power
     /// users who want the legacy behaviour. Must round-trip as 0.
     #[test]
     fn m2_zero_budget_roundtrips_as_zero() {
@@ -1036,7 +1036,7 @@ mod tests {
         assert_eq!(back.memory_min_salience, 0.0);
     }
 
-    /// M2: backwards-compat — existing configs without the new fields
+    /// backwards-compat — existing configs without the new fields
     /// (or with them missing) must deserialise with the new defaults.
     #[test]
     fn m2_old_config_without_new_fields_uses_defaults() {

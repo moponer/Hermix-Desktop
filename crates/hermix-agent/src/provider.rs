@@ -22,12 +22,12 @@ use crate::credential_pool::CredentialPool;
 use crate::rate_limit::RateLimitTracker;
 
 // ---------------------------------------------------------------------------
-// HTTP client builder with mandatory timeouts (P1-5 / STABILITY-PLAN §2.4)
+//HTTP client builder with mandatory timeouts ( / )
 // ---------------------------------------------------------------------------
 
 /// Build a `reqwest::Client` with mandatory connect + request timeouts.
 ///
-/// (P1-5): Previously all LLM providers used `Client::new()` which has
+/// Previously all LLM providers used `Client::new` which has
 /// NO connect timeout — a half-open TCP connection (server accept() but
 /// never responds) could hang up to 75s (Linux default) or indefinitely
 /// (Windows). The `stream_first_chunk` 30s watchdog eventually fires,
@@ -48,7 +48,7 @@ fn build_llm_http_client() -> Client {
 // ---------------------------------------------------------------------------
 
 /// A generic LLM provider that can be configured for any OpenAI-compatible API.
-/// /// This is the primary provider used by the agent loop. It supports
+/// This is the primary provider used by the agent loop. It supports
 /// OpenAI-compatible APIs via configuration.
 #[derive(Debug, Clone)]
 pub struct GenericProvider {
@@ -774,7 +774,7 @@ impl LlmProvider for OpenAiProvider {
 // ---------------------------------------------------------------------------
 
 /// Anthropic API provider with native Messages API support.
-/// /// Uses Anthropic's own message format rather than OpenAI-compatible format:
+/// Uses Anthropic's own message format rather than OpenAI-compatible format:
 /// - System message goes in `system` parameter, not in messages array
 /// - Uses `x-api-key` header instead of `Authorization: Bearer`
 /// - Content blocks use array format with typed blocks
@@ -942,7 +942,7 @@ impl AnthropicProvider {
     }
 
     /// Convert internal messages to Anthropic format, extracting system message.
-    /// /// The returned `(system_value, anthropic_messages)` tuple's `system_value`
+    /// The returned `(system_value, anthropic_messages)` tuple's `system_value`
     /// is a `serde_json::Value` rather than `String` — when the aggregated
     /// system content carries `cache_control`, we emit it as an array of text
     /// blocks (Anthropic API requirement) with the marker on the first block;
@@ -1441,7 +1441,7 @@ impl LlmProvider for AnthropicProvider {
 // ---------------------------------------------------------------------------
 
 /// OpenRouter API provider with support for OpenRouter-specific parameters.
-/// /// Adds:
+/// Adds:
 /// - `HTTP-Referer` and `X-Title` headers (required by OpenRouter)
 /// - Support for `transforms`, `provider` preferences, `route` in extra_body
 /// - Parsing of `reasoning_details` array from responses
@@ -1833,7 +1833,7 @@ pub fn is_char_stream_enabled() -> bool {
 
 /// Split a single `StreamChunk` into multiple chunks, one per content char,
 /// so that downstream consumers see true character-level deltas.
-/// /// Only the visible `content` field is split. `tool_calls` deltas must remain
+/// Only the visible `content` field is split. `tool_calls` deltas must remain
 /// intact (they are partial JSON argument fragments that depend on
 /// accumulation). `extra.thinking` deltas are also kept whole.
 pub fn split_chunk_for_char_stream(chunk: StreamChunk) -> Vec<StreamChunk> {
