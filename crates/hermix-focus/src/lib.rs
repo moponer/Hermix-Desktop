@@ -67,6 +67,7 @@ pub mod time_aware_recall;
 pub mod time_recall;
 
 pub use embedded::EmbeddedMemoryBackend;
+pub use embedded::fact_ttl_for_key;
 pub use focus_stack::{FocusConclusion, FocusFrame, FocusFrameId, FocusStack, FrameState};
 pub use session_frame::{SessionFrame, SessionFrameKind, SessionFrameStatus};
 pub use memory_layer::{

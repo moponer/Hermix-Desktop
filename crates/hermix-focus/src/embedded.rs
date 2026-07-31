@@ -150,6 +150,51 @@ impl EmbeddedMemoryBackend {
         Ok(count)
     }
 
+    /// Soft-hide expired facts (expires_at < now). Unlike frames, facts
+    /// are soft-hidden first (visibility = 0, hidden_at = now) so the
+    /// audit trail is preserved. Hard-deleted after 30 days by the
+    /// same janitor that handles hidden frames.
+    pub fn cleanup_expired_facts(&self) -> Result<usize> {
+        let conn = self.conn.lock();
+        self.cleanup_expired_facts_inner(&conn)
+    }
+
+    /// Inner implementation that accepts an already-locked connection
+    /// (used during `migrate()` where the conn is already held).
+    fn cleanup_expired_facts_inner(&self, conn: &Connection) -> Result<usize> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let count = conn.execute(
+            "UPDATE facts SET visibility = 0, hidden_at = ?1
+             WHERE visibility = 1
+               AND expires_at IS NOT NULL
+               AND expires_at < ?1",
+            params![now],
+        )?;
+        if count > 0 {
+            tracing::info!(
+                target: "hermix.focus",
+                count,
+                "cleanup_expired_facts: soft-hid expired fact rows"
+            );
+        }
+        // Also hard-delete facts that were soft-hidden > 30 days ago
+        // (same policy as frames janitor).
+        let purged = conn.execute(
+            "DELETE FROM facts WHERE visibility = 0
+             AND hidden_at IS NOT NULL
+             AND hidden_at < datetime('now', '-30 days')",
+            [],
+        )?;
+        if purged > 0 {
+            tracing::info!(
+                target: "hermix.focus",
+                purged,
+                "cleanup_expired_facts: purged ancient hidden fact rows"
+            );
+        }
+        Ok(count)
+    }
+
     /// Open an in-memory DB (for tests).
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
@@ -351,6 +396,8 @@ impl EmbeddedMemoryBackend {
             "embedding",
             "embedding_dim",
             "embedding_model",
+            "expires_at",
+            "hidden_at",
         ] {
             let already: bool = conn
                 .prepare("SELECT 1 FROM pragma_table_info('facts') WHERE name = ?1")?
@@ -363,6 +410,8 @@ impl EmbeddedMemoryBackend {
                     "embedding" => "BLOB",
                     "embedding_dim" => "INTEGER",
                     "embedding_model" => "TEXT",
+                    "expires_at" => "TEXT",
+                    "hidden_at" => "TEXT",
                     _ => unreachable!(),
                 };
                 conn.execute_batch(&format!("ALTER TABLE facts ADD COLUMN {col} {decl}"))?;
@@ -371,8 +420,51 @@ impl EmbeddedMemoryBackend {
                         "CREATE INDEX IF NOT EXISTS facts_embedding_dim_idx ON facts(embedding_dim)",
                     )?;
                 }
+                if col == "expires_at" {
+                    conn.execute_batch(
+                        "CREATE INDEX IF NOT EXISTS facts_expires_at_idx ON facts(expires_at)",
+                    )?;
+                }
             }
         }
+        // Backfill: assign expires_at to existing facts that lack one.
+        // Uses the same TTL policy as `fact_ttl_for_key` so permanent
+        // facts (user.name, user.identity) stay NULL and ephemeral
+        // facts (user.avoid, user.dislike, etc.) get a 7–30 day TTL
+        // counted from their `created_at`.
+        let backfilled: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM facts WHERE expires_at IS NULL AND visibility = 1",
+            [], |r| r.get(0),
+        )?;
+        if backfilled > 0 {
+            // Permanent kinds: keep expires_at = NULL
+            // Ephemeral kinds: set expires_at = created_at + TTL
+            let _ = conn.execute(
+                "UPDATE facts SET expires_at = datetime(created_at, '+14 days')
+                 WHERE expires_at IS NULL AND visibility = 1
+                   AND canonical_key NOT GLOB 'user.name:*'
+                   AND canonical_key NOT GLOB 'user.identity:*'",
+                [],
+            );
+            // More specific overrides for shorter TTL kinds
+            let _ = conn.execute(
+                "UPDATE facts SET expires_at = datetime(created_at, '+7 days')
+                 WHERE visibility = 1
+                   AND (canonical_key GLOB 'user.avoid:*'
+                     OR canonical_key GLOB 'user.dislike:*'
+                     OR canonical_key GLOB 'compression:*')",
+                [],
+            );
+            let _ = conn.execute(
+                "UPDATE facts SET expires_at = datetime(created_at, '+30 days')
+                 WHERE visibility = 1
+                   AND (canonical_key GLOB 'user.style:*'
+                     OR canonical_key GLOB 'user.note:*')",
+                [],
+            );
+        }
+        // Periodic janitor: soft-hide expired facts on open()
+        let _ = self.cleanup_expired_facts_inner(&conn);
         // FTS5 is optional; create it if the feature is compiled in.
         // rusqlite's `bundled` feature includes SQLite with FTS5.
         let fts_result = conn.execute_batch(
@@ -758,10 +850,12 @@ impl EmbeddedMemoryBackend {
     /// Hermes-Agent-inspired curation hook (every N turns, or after
     /// a complex task) and by external callers that already
     /// extracted a structured fact.
-    /// /// `canonical_key` is the stable identity used for dedup.
+    ///
+    /// `canonical_key` is the stable identity used for dedup.
     /// If a fact with the same key already exists (and is visible),
     /// its `access_count` is bumped and `payload`/`salience` are
-    /// updated; otherwise a new row is inserted.
+    /// updated and `expires_at` is recomputed (re-asserting a fact
+    /// resets its TTL); otherwise a new row is inserted.
     pub fn upsert_fact(
         &self,
         canonical_key: &str,
@@ -779,19 +873,46 @@ impl EmbeddedMemoryBackend {
             return Ok(None);
         }
         let tags_json = serde_json::to_string(tags)?;
-        let now = Utc::now().to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        // Compute expires_at from the canonical_key prefix.
+        // Permanent kinds (user.name, user.identity) → NULL;
+        // ephemeral kinds → now + TTL.
+        let expires_at: Option<String> = fact_ttl_for_key(key_trim)
+            .map(|ttl_secs| (now + chrono::Duration::seconds(ttl_secs as i64)).to_rfc3339());
         let conn = self.conn.lock();
         // Try to bump the existing row first.
-        let updated = conn.execute(
-            "UPDATE facts SET access_count = access_count + 1,
-                              updated_at = ?1,
-                              payload = ?2,
-                              salience = MAX(salience, ?3),
-                              tags = ?4,
-                              source = ?5
-             WHERE canonical_key = ?6 AND visibility = 1",
-            params![now, payload.to_string(), salience, tags_json, source, key_trim],
-        )?;
+        // On re-assert: reset expires_at (renew TTL), update
+        // salience (MAX so it never drops on re-assert), and
+        // bump access_count.
+        let updated = if expires_at.is_some() {
+            conn.execute(
+                "UPDATE facts SET access_count = access_count + 1,
+                                  updated_at = ?1,
+                                  payload = ?2,
+                                  salience = MAX(salience, ?3),
+                                  tags = ?4,
+                                  source = ?5,
+                                  expires_at = ?6
+                 WHERE canonical_key = ?7 AND visibility = 1",
+                params![now_rfc, payload.to_string(), salience, tags_json, source, expires_at, key_trim],
+            )?
+        } else {
+            // Permanent fact: set expires_at = NULL to ensure
+            // a previous ephemeral assignment is cleared when
+            // the same key is re-asserted as permanent.
+            conn.execute(
+                "UPDATE facts SET access_count = access_count + 1,
+                                  updated_at = ?1,
+                                  payload = ?2,
+                                  salience = MAX(salience, ?3),
+                                  tags = ?4,
+                                  source = ?5,
+                                  expires_at = NULL
+                 WHERE canonical_key = ?6 AND visibility = 1",
+                params![now_rfc, payload.to_string(), salience, tags_json, source, key_trim],
+            )?
+        };
         let id = if updated > 0 {
             // Read back the existing id so callers can pin it.
             let id: String = conn.query_row(
@@ -805,16 +926,17 @@ impl EmbeddedMemoryBackend {
             conn.execute(
                 "INSERT INTO facts
                  (id, canonical_key, payload, salience, created_at, updated_at,
-                  tags, source, access_count, visibility)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0, 1)",
+                  tags, source, access_count, visibility, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, 0, 1, ?8)",
                 params![
                     new_id.to_string(),
                     key_trim,
                     payload.to_string(),
                     salience,
-                    now,
+                    now_rfc,
                     tags_json,
                     source,
+                    expires_at,
                 ],
             )?;
             let _ = conn.execute(
@@ -1037,13 +1159,15 @@ impl EmbeddedMemoryBackend {
             return Ok(Vec::new());
         }
         let conn = self.conn.lock();
+        let now = chrono::Utc::now().to_rfc3339();
         let mut stmt = conn.prepare(
             "SELECT canonical_key, payload, salience FROM facts
              WHERE visibility = 1
+               AND (expires_at IS NULL OR expires_at >= ?1)
              ORDER BY salience DESC, updated_at DESC
-             LIMIT ?1",
+             LIMIT ?2",
         )?;
-        let rows = stmt.query_map(params![limit as i64], |row| {
+        let rows = stmt.query_map(params![now, limit as i64], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1602,12 +1726,14 @@ impl EmbeddedMemoryBackend {
     /// against `facts_fts`.
     fn fts_facts_visible(&self, text: &str, limit: usize, session_id: Option<&str>) -> Result<Vec<String>> {
         let conn = self.conn.lock();
+        let now = chrono::Utc::now().to_rfc3339();
         let (sql, session_param) = if session_id.is_some() {
             (
                 "SELECT fa.id FROM facts_fts fa
                  JOIN facts f ON f.id = fa.id
                  WHERE facts_fts MATCH ?1 AND f.visibility = 1 AND f.source = ?2
-                 LIMIT ?3",
+                   AND (f.expires_at IS NULL OR f.expires_at >= ?3)
+                 LIMIT ?4",
                 true,
             )
         } else {
@@ -1615,7 +1741,8 @@ impl EmbeddedMemoryBackend {
                 "SELECT fa.id FROM facts_fts fa
                  JOIN facts f ON f.id = fa.id
                  WHERE facts_fts MATCH ?1 AND f.visibility = 1
-                 LIMIT ?2",
+                   AND (f.expires_at IS NULL OR f.expires_at >= ?2)
+                 LIMIT ?3",
                 false,
             )
         };
@@ -1642,12 +1769,12 @@ impl EmbeddedMemoryBackend {
         let q = tokens.join(" OR ");
         let mut rows = if session_param {
             let sid = session_id.unwrap_or("");
-            match stmt.query(params![q, sid, limit as i64]) {
+            match stmt.query(params![q, sid, &now, limit as i64]) {
                 Ok(r) => r,
                 Err(_) => return Ok(Vec::new()),
             }
         } else {
-            match stmt.query(params![q, limit as i64]) {
+            match stmt.query(params![q, &now, limit as i64]) {
                 Ok(r) => r,
                 Err(_) => return Ok(Vec::new()),
             }
@@ -1724,9 +1851,9 @@ impl EmbeddedMemoryBackend {
             }));
         }
         // Try facts next.
-        let fact_row: Option<(String, String, f64, String, String, String, i64)> = conn
+        let fact_row: Option<(String, String, f64, String, String, String, i64, Option<String>)> = conn
             .query_row(
-                "SELECT id, payload, salience, created_at, updated_at, tags, access_count
+                "SELECT id, payload, salience, created_at, updated_at, tags, access_count, expires_at
                  FROM facts WHERE id = ?1 AND visibility = 1",
                 params![id_s],
                 |r| {
@@ -1738,25 +1865,54 @@ impl EmbeddedMemoryBackend {
                         r.get(4)?,
                         r.get(5)?,
                         r.get(6)?,
+                        r.get(7)?,
                     ))
                 },
             )
             .ok();
-        if let Some((id, payload, salience_field, created_at, _updated_at, tags, access_count)) = fact_row {
+        if let Some((id, payload, salience_field, created_at, updated_at, tags, access_count, expires_at)) = fact_row {
             let created_at = parse_dt(&created_at);
             if let Some(tw) = &query.time_window {
                 if !tw.contains(created_at) {
                     return Ok(None);
                 }
             }
+            // Skip expired facts (expires_at < now). This is a
+            // defensive check — the janitor should have already
+            // soft-hidden them, but a race is possible.
+            if let Some(ref exp) = expires_at {
+                let exp_dt = parse_dt(exp);
+                if exp_dt <= now {
+                    return Ok(None);
+                }
+            }
             let payload_json: serde_json::Value = serde_json::from_str(&payload).unwrap_or(serde_json::Value::String(payload));
-            // Facts get a small access-count boost so frequently
-            // cited facts naturally float up.
+            // Apply salience time decay using the same formula as
+            // frames: `stored * 0.6 + computed * 0.4` where
+            // `computed` uses recency × freq × pin. For facts,
+            // `freq` is derived from `access_count` (every recall
+            // bumps it) and `pin` defaults to 0 (facts are not
+            // pinned today). This means old, rarely-recalled facts
+            // naturally sink below the salience floor and get
+            // filtered out at recall time.
+            let updated_at_dt = parse_dt(&updated_at);
+            let computed = salience(
+                updated_at_dt,
+                access_count.clamp(0, i64::MAX) as u32,
+                0, // facts have no pin_count
+                now,
+                &self.salience_cfg,
+            );
+            // Access-count boost: log-saturating so extreme
+            // counts don't dominate. Applied after decay so
+            // a frequently-cited fact still floats up even
+            // when its recency has partially decayed.
             let access_boost = (access_count as f32).log10().max(0.0) * 0.05;
+            let final_salience = (salience_field as f32 * 0.6 + computed.total * 0.4 + access_boost).min(1.0);
             return Ok(Some(MemoryHit {
                 id,
                 content: extract_text(&payload_json),
-                salience: (salience_field as f32 + access_boost).min(1.0),
+                salience: final_salience,
                 created_at,
                 metadata: serde_json::json!({
                     "tags": serde_json::from_str::<Vec<String>>(&tags).unwrap_or_default(),
@@ -1798,6 +1954,57 @@ impl EmbeddedMemoryBackend {
             )
             .unwrap_or(0);
         n
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fact TTL policy
+// ---------------------------------------------------------------------------
+
+/// Return the TTL in seconds for a fact based on its `canonical_key` prefix.
+///
+/// Permanent facts (identity, name) return `None` — they never expire.
+/// Ephemeral facts return `Some(ttl_secs)` based on their kind:
+///
+/// | Key prefix          | TTL    | Rationale                              |
+/// |---------------------|--------|----------------------------------------|
+/// | `user.name:*`       | NULL   | Permanent identity                     |
+/// | `user.identity:*`   | NULL   | Permanent identity                     |
+/// | `user.style:*`      | 30 days| Style shifts slowly but isn't permanent|
+/// | `user.note:*`       | 30 days| User explicitly asked to remember      |
+/// | `user.preference:*` | 14 days| Medium-lived; may change with tasks    |
+/// | `user.tool:*`       | 14 days| Medium-lived; tool preferences shift   |
+/// | `user.avoid:*`      | 7 days | Task-scoped negation; very short-lived |
+/// | `user.dislike:*`    | 7 days | Task-scoped negation; very short-lived |
+/// | `compression:*`     | 7 days | Backfill metadata; short-lived         |
+/// | (default)           | 14 days| Conservative default                   |
+///
+/// **Design rationale (first-principles)**:
+/// A fact's "physical lifetime" should match the stability of the
+/// underlying assertion. `user.name` is a law-like invariant (never
+/// changes within a context window). `user.avoid` is a task-scoped
+/// directive — it applies to *this conversation* and becomes noise
+/// (or outright wrong) in the next one. Without TTL, task-scoped
+/// directives accumulate permanently, inflating every turn's context
+/// with stale constraints the LLM must obey.
+///
+/// **Re-asserting resets the TTL**: when `upsert_fact` is called on
+/// an existing key, `expires_at` is recomputed from `now + TTL`,
+/// so a preference that the user repeats across sessions stays alive.
+pub fn fact_ttl_for_key(canonical_key: &str) -> Option<u32> {
+    const DAY: u32 = 24 * 3600;
+    if canonical_key.starts_with("user.name:") || canonical_key.starts_with("user.identity:") {
+        None // permanent
+    } else if canonical_key.starts_with("user.style:") || canonical_key.starts_with("user.note:") {
+        Some(30 * DAY)
+    } else if canonical_key.starts_with("user.avoid:") || canonical_key.starts_with("user.dislike:") {
+        Some(7 * DAY)
+    } else if canonical_key.starts_with("compression:") {
+        Some(7 * DAY)
+    } else if canonical_key.starts_with("user.preference:") || canonical_key.starts_with("user.tool:") {
+        Some(14 * DAY)
+    } else {
+        Some(14 * DAY) // conservative default
     }
 }
 
