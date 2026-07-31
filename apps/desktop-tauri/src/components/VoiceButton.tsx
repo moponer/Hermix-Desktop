@@ -8,7 +8,7 @@ interface VoiceButtonProps {
 }
 
 /**
- * P0-4: Convert a webm audio Blob to 16kHz mono s16 PCM base64.
+ * Convert a webm audio Blob to 16kHz mono s16 PCM base64.
  *
  * Uses the Web Audio API to decode the browser's native recording
  * format (audio/webm; Opus codec) into raw PCM samples, then
@@ -93,7 +93,6 @@ export function VoiceButton({ onTranscribe, disabled }: VoiceButtonProps) {
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         stream.getTracks().forEach(t => t.stop());
         try {
-          // P0-4: Convert webm → 16kHz mono s16 PCM before sending.
           const pcmBase64 = await webmBlobToPcmBase64(blob);
           const res = await fetch(apiUrl("/v1/voice/transcribe"), {
             method: "POST",

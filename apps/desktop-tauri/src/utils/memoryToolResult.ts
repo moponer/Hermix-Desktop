@@ -1,24 +1,16 @@
 // Shared parser for the Hermix `memory` tool's structured JSON result.
-//
-// The memory backend (crates/hermix-tools/src/backends/memory.rs)
-// returns a JSON envelope on EVERY outcome:
-//
-// { success, status, action, target, path, message, entries, entry_count, ... }
+// The backend (`crates/hermix-tools/src/backends/memory.rs`) returns an
+// envelope on every outcome:
+//   { success, status, action, target, path, message, entries, entry_count, … }
 //
 // `status` is one of:
-// - "success"   — entry written / replaced / removed / read OK
-// - "not_found" — remove/replace couldn't locate old_text (NOT a failure)
-// - "ambiguous" — remove/replace matched multiple entries (be more specific)
-// - "error"     — genuine execution error (disk write failed, lock, etc.)
+//   - "success"   — entry written / replaced / removed / read OK
+//   - "not_found" — remove/replace couldn't locate `old_text` (NOT a failure)
+//   - "ambiguous" — remove/replace matched multiple entries (be more specific)
+//   - "error"     — genuine execution error (disk write failed, lock, …)
 //
-// The chat UI renders these as a single row: <动作> <记忆文件路径> <状态>,
-// and the path is clickable to open a preview. no-match / ambiguous are
-// soft outcomes (returned as Ok, never as a tool error) so they must NOT
-// show a red "失败" badge — they render "未查到对应内容" / "匹配到多条".
-//
-// Both the inline `ToolMessageCard` (MessageBubble.tsx) and the ACUI
-// timeline `ToolEventCard` (ToolEventCard.tsx) import from here so the
-// two renderers stay in sync.
+// `not_found` and `ambiguous` are soft outcomes (returned as Ok, never
+// as a tool error) so they must NOT show a red "失败" badge.
 
 export type MemoryAction = "add" | "replace" | "remove" | "read";
 export type MemoryStatus = "success" | "not_found" | "ambiguous" | "error";
@@ -33,13 +25,10 @@ export interface MemoryToolResult {
   entry_count: number;
 }
 
-/**
- * Parse a memory tool result from a raw tool-output string.
- * Returns null when the output isn't a memory envelope (so callers
- * can fall back to generic tool rendering). Tolerates the case where
- * a threat-scan JSON is appended on a second line (success path) by
- * parsing only the first line.
- */
+// Parses a memory tool result from raw tool-output text. Returns null
+// when the output isn't a memory envelope (callers fall back to generic
+// tool rendering). Tolerates a threat-scan JSON appended on a second
+// line (success path) by parsing only the first line.
 export function parseMemoryResult(output?: string | null): MemoryToolResult | null {
   if (!output) return null;
   const trimmed = output.trim();
@@ -66,7 +55,7 @@ export function parseMemoryResult(output?: string | null): MemoryToolResult | nu
         };
       }
     } catch {
-      /* not JSON — fall through */
+      // not JSON — fall through
     }
     return null;
   };
@@ -74,7 +63,7 @@ export function parseMemoryResult(output?: string | null): MemoryToolResult | nu
   return tryParse(trimmed) ?? tryParse(trimmed.split(/\r?\n/)[0] ?? "");
 }
 
-/** Chinese action label shown as the verb slot of the card row. */
+// Chinese verb label for the card row.
 export function memoryActionLabel(action?: string): string {
   switch (action) {
     case "add":
@@ -90,7 +79,7 @@ export function memoryActionLabel(action?: string): string {
   }
 }
 
-/** One-line status label for the card's right-side badge. */
+// One-line status label for the card's right-side badge.
 export function memoryStatusLabel(status?: string): string {
   switch (status) {
     case "success":
@@ -106,8 +95,8 @@ export function memoryStatusLabel(status?: string): string {
   }
 }
 
-/** Tailwind text-color class for the status badge (no blue/purple —
- *  per the project's gray/zinc + amber/red palette). */
+// Tailwind text-color class for the status badge (gray/zinc + amber/red
+// — no blue/purple, per the project palette).
 export function memoryStatusColor(status?: string): string {
   switch (status) {
     case "success":

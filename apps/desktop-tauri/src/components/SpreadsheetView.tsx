@@ -3,16 +3,11 @@
  * with frozen header, in-table search, row virtualization for big
  * files, sheet switcher, and CSV export.
  *
- * Why this exists (2026-06-22): the previous "office preview" was a
- * raw HTML blob from the sidecar `officecli` binary, which produced
- * a degenerate "Plain text" view for any xlsx on the user's machine
- * (officecli not installed, fallback path dumps the binary as text).
- * This view is rendered entirely from in-memory rows parsed by the
- * frontend (see `lib/fileParser.ts`), so:
- *   - no backend dependency (no LibreOffice)
- *   - real <table> cells, not a pre-baked HTML blob
- *   - features we can layer on: header freeze, in-table search,
- *     column resize, row virtualization, sheet switcher, CSV export
+ * Renders entirely from in-memory rows parsed by the frontend
+ * (see `lib/fileParser.ts`) instead of a backend office binary, so it
+ * needs no LibreOffice and produces real <table> cells — which also lets
+ * us layer on header freeze, in-table search, column resize, row
+ * virtualization, sheet switching, and CSV export.
  *
  * Performance: for files > 1 000 rows we render only the visible
  * window (row windowing) using `transform: translateY` on a single
@@ -54,7 +49,6 @@ export function SpreadsheetView({ model, fileName }: SpreadsheetViewProps) {
   const [activeSheet, setActiveSheet] = useState(0);
   const [query, setQuery] = useState("");
 
-  // Reset to first sheet when the file changes
   useEffect(() => {
     setActiveSheet(0);
     setQuery("");

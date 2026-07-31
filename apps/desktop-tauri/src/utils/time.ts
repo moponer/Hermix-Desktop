@@ -1,4 +1,4 @@
-/// Format an ISO timestamp as "刚刚 / N 分钟前 / N 小时前 / N 天前 / 日期".
+// "刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前" — within 7 days; falls back to locale date.
 export function formatRelativeTime(iso: string | undefined | null, now: Date = new Date()): string {
   if (!iso) return "";
   const ts = new Date(iso);
@@ -16,7 +16,7 @@ export function formatRelativeTime(iso: string | undefined | null, now: Date = n
   return ts.toLocaleDateString();
 }
 
-/// Format a duration in milliseconds as "Xms / X.Ys / Xm Ys".
+// "Xms / X.Ys / Xm Ys".
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return "";
   if (ms < 1000) return `${Math.round(ms)}ms`;

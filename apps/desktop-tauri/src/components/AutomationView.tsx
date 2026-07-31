@@ -560,7 +560,6 @@ function Field({
   label: string;
   hint?: string;
   children: React.ReactNode;
-  /** PLAN_UI_ENHANCEMENT §7.1: 标签右侧的动作按钮（如 "AI 生成"）。 */
   rightAction?: React.ReactNode;
 }) {
   return (

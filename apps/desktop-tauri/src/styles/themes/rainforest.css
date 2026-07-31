@@ -4,9 +4,9 @@
  * 基底 = SVG 内部 radialGradient（墨绿场）+ 烘焙暗角（单条 data URI，无 CSS 线性渐变）。
  * token 在暗色基础上整体染绿，accent 用低饱和鼠尾草绿，无任何蓝紫。
  *
- * NOTE: 非 @layer — 非层级化样式优先级高于 @theme 层级，
- * 确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值。
- * 之前用 @layer themes 导致被先加载时层序反转，变量被 @theme 覆盖。
+ * NOTE: 不能用 @layer — 非层级化样式优先级高于 @theme 层级,
+ * 才能确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值;
+ * 一旦放进 @layer themes, 被先加载时层序反转, 变量会被 @theme 覆盖。
  */
 :root[data-theme="rainforest"] {
   --color-bg-app:         #0a1d12;

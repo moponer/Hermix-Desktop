@@ -41,6 +41,80 @@ toastError("打开外部链接失败");
   }
 }
 
+/**
+ * Open a local path (typically a workspace folder) in the system file explorer.
+ *
+ * Implementation: encode the path as a `file://` URL and route through
+ * `open_external_url` (the `open` crate). On Windows this opens
+ * Explorer at the folder; on macOS it opens Finder; on Linux it opens
+ * the configured file manager.
+ *
+ * Note: in Tauri 2 the `tauri-plugin-opener` would be the more "native"
+ * choice (and supports a `reveal` verb on Windows that selects the file
+ * inside Explorer), but the existing app already uses the
+ * `open_external_url` Tauri command everywhere, so we stay consistent
+ * to keep the IPC surface small. If a future bug surfaces around
+ * "show file in folder" (vs "open containing folder"), promote to
+ * `tauri-plugin-opener::revealItemInDir`.
+ */
+export async function openInExplorer(absolutePath: string): Promise<void> {
+  if (!absolutePath) return;
+  // `file:///` works for both Windows and POSIX paths. We URL-encode each
+  // path segment (but not the slashes) so spaces and CJK stay readable
+  // when the OS shell hands them off to Explorer.
+  const normalized = absolutePath.replace(/\\/g, "/");
+  const encoded = normalized.split("/").map(encodeURIComponent).join("/");
+  const url = `file:///${encoded.replace(/^\/+/, "")}`;
+  try {
+    await invoke("open_external_url", { url });
+  } catch (e) {
+    console.error("[desktopBridge] openInExplorer failed:", absolutePath, e);
+    toastError("无法打开文件资源管理器");
+  }
+}
+
+/**
+ * Copy a plain-text string to the system clipboard.
+ *
+ * Prefers the async Clipboard API (requires a secure context — `https`,
+ * `localhost`, or a Tauri `tauri://` origin); falls back to the legacy
+ * `document.execCommand("copy")` for environments where the async API
+ * is blocked (e.g. some embedded webviews or older Tauri builds).
+ *
+ * Returns `true` on success so callers can show a toast without an
+ * extra try/catch.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  if (!text) return false;
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {
+    console.warn("[desktopBridge] navigator.clipboard.writeText failed, falling back:", e);
+  }
+  // Legacy fallback: hidden textarea + execCommand. Only triggers in
+  // a real user-gesture handler (which is true here — copy menu item
+  // click), so the browser allows it.
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    ta.style.pointerEvents = "none";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) {
+    console.error("[desktopBridge] legacy copy failed:", e);
+    return false;
+  }
+}
+
 export async function restartDesktopApp(): Promise<void> {
   await invoke("restart_app");
 }

@@ -1,5 +1,5 @@
 /**
- * M5: ACUI module entry point.
+ * ACUI module entry point.
  *
  * Re-exports the public surface so callers can do:
  *   import { AcuiPanel, useAcuiState, AcuiRegistry } from "../acui";

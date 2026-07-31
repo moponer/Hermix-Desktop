@@ -1,7 +1,7 @@
 /* ════════════════════════════════════════════════════════════════════
-   code-view.css — v7 彻底重写
+   code-view.css — 代码视图样式
    ──────────────────────────────────────────────────────────────────
-   v6 → v7 的关键变化（用户："渲染的方式肯定要重写，给我删除重写"）：
+   结构要点：
      · 抛弃 <table><tr><td> 结构
      · 抛弃每行一个 <SyntaxHighlighter> 的 N×调用
      · 新结构：1 个滚动容器 + 1 个 flex 行容器
@@ -47,7 +47,7 @@
 .file-icon-tile svg { color: #fff !important; }
 
 /* ════════════════════════════════════════════════════════════════════
-   头部 — 保留 v4 两行结构
+   头部 — 保留两行结构
    ════════════════════════════════════════════════════════════════════ */
 
 .preview-pane .preview-head {
@@ -104,7 +104,7 @@
 .preview-pane .preview-head-spacer { flex: 1 1 auto !important; min-width: 8px; }
 
 /* 文件名 — 升级到 14px / 600，对齐 VS Code 标签栏字号
-   保留字重对比但不再"小字"——用户要"显示的标题信息都美化" */
+   保留字重对比但不再"小字"——标题信息需做美化处理 */
 .preview-pane .preview-filename {
   font-size: 14px !important;
   font-weight: 600 !important;
@@ -249,7 +249,7 @@
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   代码视图 — v7 全新结构
+   代码视图 — 全新结构
    ════════════════════════════════════════════════════════════════════ */
 
 /* ── 滚动容器 ──────────────────────────────────────────────────── */
@@ -324,10 +324,10 @@
   display: block;
   padding: 0 10px 0 12px;
   /* Inherit font-size + line-height from .code-viewport so each row's
-   * rendered height matches .code-pre exactly. Earlier (v8 first cut)
-   * pinned font-size:10px while the body used 11px — that produced a
-   * 1.5px-per-row height mismatch which compounded into ~7.5kpx drift
-   * across a 5000-line file, misaligning the gutter on long scrolls.
+   * rendered height matches .code-pre exactly. If the gutter pins a
+   * different font-size/line-height than the body (e.g. 10px vs 11px),
+   * each row drifts ~1.5px and compounds into ~7.5kpx across a 5000-line
+   * file, misaligning the gutter on long scrolls.
    * The visible number is still tabular-nums and visually muted enough
    * to read as "metadata" rather than code. */
   font-size: inherit;

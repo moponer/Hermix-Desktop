@@ -11,7 +11,7 @@ import {
 // + cache-served `cache_read`), what fraction came from the cache.
 // `effectiveHitRate` below prefers this real ratio, but falls back to
 // a backend-provided estimate when the provider under-reports cache
-// reads (Phase 5), and returns `null` when there is no token data at
+// reads, and returns `null` when there is no token data at
 // all so the UI can show "—" instead of a misleading 0%.
 function cacheHitRate(cacheRead: number, input: number): number {
   const denom = cacheRead + input;
@@ -48,11 +48,11 @@ export function AnalyticsView() {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [days, setDays] = useState(30);
   const [loading, setLoading] = useState(true);
-  // Phase 1: surface the real backend error instead of a generic
+  // Surface the real backend error instead of a generic
   // "无法加载统计数据". `null` means "loaded fine (or no data)".
   const [lastError, setLastError] = useState<string | null>(null);
 
-  // Phase 2: diagnostic panel state.
+  // diagnostic panel state.
   const [debugOpen, setDebugOpen] = useState(false);
   const [debug, setDebug] = useState<AnalyticsDebugResponse | null>(null);
   const [debugLoading, setDebugLoading] = useState(false);
@@ -87,7 +87,7 @@ export function AnalyticsView() {
     );
   }
 
-  // Phase 1: a real backend error — show it loudly so the user can act.
+  // a real backend error — show it loudly so the user can act.
   if (lastError) {
     return (
       <div className="h-full overflow-auto p-4 space-y-4">
@@ -155,7 +155,6 @@ export function AnalyticsView() {
   const formatCost = (n: number) => `$${n.toFixed(4)}`;
 
   // True when the analytics backend has been upgraded to write real
-  // token usage (P1-3, 2026-06-27). Before that date the totals came
   // back as zeros and the user got a useless "you used 0 tokens" panel.
   // Detect by inspecting the totals vs session count — if there are
   // sessions but no tokens, it's a legacy install (now back-filled by
@@ -247,7 +246,7 @@ export function AnalyticsView() {
         />
       </div>
 
-      {/* P1-3: Daily time curve — pure SVG, zero deps. Renders input +
+      {/* Daily time curve — pure SVG, zero deps. Renders input +
           output tokens stacked; sessions overlay as a line so the user
           can spot "high activity but low tokens" days (short chats). */}
       {daily.length > 0 && (
@@ -286,7 +285,6 @@ export function AnalyticsView() {
         </div>
       )}
 
-      {/* P1-3: Tool usage breakdown — sorted desc by call count, top 10. */}
       {by_tool.length > 0 && (
         <div className="bg-bg-secondary rounded-xl p-4 border border-border-primary">
           <div className="flex items-center gap-2 mb-3">
@@ -329,7 +327,7 @@ export function AnalyticsView() {
         </div>
       )}
 
-      {/* E5 (Phase 3): compression telemetry. These numbers answer the
+      {/* E5: compression telemetry. These numbers answer the
           user's "does compression lose my memory?" worry concretely:
           how many compressions ran, and how many history turns were
           preserved (folded into summaries), not discarded. The
@@ -362,7 +360,7 @@ export function AnalyticsView() {
         </div>
       )}
 
-      {/* Phase 2: diagnostic panel (toggled from the header bug button
+      {/* diagnostic panel (toggled from the header bug button
           or the error banner). */}
       {debugOpen && (
         <DebugPanel
@@ -394,7 +392,7 @@ function extractErrorCause(e: unknown): string {
   return String(e);
 }
 
-/** Phase 2: one-shot diagnostic of the stats DB. */
+/** one-shot diagnostic of the stats DB. */
 function DebugPanel({
   debug,
   loading,
@@ -479,7 +477,7 @@ function DebugPanel({
 }
 
 /**
- * P1-3: stacked bar + session line chart in pure SVG. We don't pull
+ * Stacked bar + session line chart in pure SVG. We don't pull
  * in a chart library (d3, visx, recharts) — the data shape is small
  * and the user only needs "is today bigger than yesterday". Layout:
  *

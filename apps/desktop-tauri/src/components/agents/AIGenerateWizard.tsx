@@ -120,8 +120,6 @@ export function AIGenerateWizard({ onComplete, onCancel, initialDescription = ""
     setGenerating(true);
     setError(null);
     try {
-      // P0-6: Auto-detect the LLM provider and API key from the backend
-      // instead of calling the non-existent /v1/chat/completions on the
       // local server. Falls back to the user-configured agentsServerUrl.
       // (provider map extracted to providerConfig.ts — used by both this
       // wizard and TestDialog; was duplicated ~50 lines before.)

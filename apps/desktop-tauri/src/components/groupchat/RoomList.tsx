@@ -1,14 +1,14 @@
 /**
  * Room list — the left sidebar showing all chat rooms.
  *
- * Redesigned 2026-07-28 per GROUPCHAT_UI_REDESIGN.md:
+ * Redesigned  per GROUPCHAT_UI_REDESIGN.md:
  * - Title: "协作空间" (unified naming)
  * - Room items: 56px height, 4px brand-blue selected bar + light-blue bg
  * - Subtitle replaces avatar stack (last message / member status)
  * - No rank chips, no task pulse, no announcement pin in the list
  * - Simple ＋ button instead of icon block
  *
- * Extracted from GroupChatView.tsx during the 2026-07 refactor.
+ * Extracted from GroupChatView.tsx.
  */
 
 import { memo } from "react";

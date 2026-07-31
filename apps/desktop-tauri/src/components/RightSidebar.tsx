@@ -48,7 +48,7 @@ interface RightSidebarProps {
   onAddFileToChat?: (path: string) => void;
   /** Callback when a file should be previewed from the file explorer. */
   onPreviewFile?: (path: string, name: string) => void;
-  /** (user): 允许外部控制当前标签（如点目录 chip 直接切到「电脑」） */
+  /** 允许外部控制当前标签（如点目录 chip 直接切到「电脑」） */
   activeTab?: RightTab;
   onTabChange?: (tab: RightTab) => void;
 }
@@ -315,7 +315,6 @@ export function PreviewPanel({
     };
   }, [previewState]);
 
-  // Fetch file content when artifact changes.
   // This MUST live in an effect, not in the render body — calling
   // setState during render triggers:
   // "Cannot update a component (`App`) while rendering a
@@ -480,8 +479,8 @@ export function PreviewPanel({
 
   const codeLang = artifact ? detectLanguage(artifact.name) : null;
 
-  // 主题检测 — 传给 CodeView 控制高亮配色 (ONE_DARK / ONE_LIGHT)。
-  // 之前 CodeView 只有暗色配色，在亮色主题下代码 token 对比度差。
+  // 主题检测 — 传给 CodeView 选高亮配色 (ONE_DARK / ONE_LIGHT)。
+  // 亮色主题下代码 token 对比度差，必须按当前主题切配色。
   const isDark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
 
 
@@ -508,11 +507,10 @@ export function PreviewPanel({
   const lang = artifact ? detectLanguage(artifact.name) : null;
   // For recognised code/document languages we show the full label
   // (e.g. "TypeScript", "Python 3", "Markdown").  For everything
-  // else (PDF, xlsx, png, docx…) `detectLanguage` returns null and
-  // the old code fell through to the misleading "Plain text".
-  // Instead we extract the extension and present it as a preview
-  // label — the FileTypeIcon brand block already conveys the type
-  // visually, but a text chip helps users who scan by reading.
+  // else (PDF, xlsx, png, docx…) `detectLanguage` returns null, so
+  // instead of a misleading "Plain text" we show the extension as a
+  // label — FileTypeIcon conveys the type visually, and the text chip
+  // helps users who scan by reading.
   const langLabel = lang
     ? (LANG_LABELS[lang] ?? lang)
     : (() => {
@@ -536,7 +534,6 @@ export function PreviewPanel({
   const cleanPath = displayPath.replace(/^\\\\\?\\/, "");
   const textContent = previewState.status === "text" ? previewState.content : "";
 
-  // Reset active line + cursor when switching files
   useEffect(() => {
     setActiveLine(0);
     setCursor({ line: 1, col: 1 });
@@ -545,11 +542,9 @@ export function PreviewPanel({
   /* ── Shared header JSX — used by both the panel and the fullscreen
         portal overlay so they stay visually identical.
 
-        v4 layout: just two visual rows.
+        Just two visual rows:
         ── Row 1 (top):   icon · filename + lang chip · close button
-        ── Row 2 (meta):  full path (one line, truncates) · action group
-        No more 3-row jammed header, no redundant breadcrumb / line-count
-        / size chips fighting for the same horizontal slot. ── */
+        ── Row 2 (meta):  full path (one line, truncates) · action group ── */
   const renderHeader = (isFs: boolean) => {
     if (!artifact) return null;
     return (
@@ -560,8 +555,7 @@ export function PreviewPanel({
               etc.) keyed off the *filename* extension.  Falls back
               to the legacy colored tile if no extension match. */}
           {(() => {
-            // Modal header icon — sized to dominate the row
-            // (用户 "head 上面的可以大一点").
+            // Modal header icon — sized to dominate the row.
             // 40 / 34 px reads as a real file tab header, not a
             // little badge tucked next to a filename.  At 40px
             // the dog-ear, label and brand color all stay crisp.
@@ -846,7 +840,7 @@ export function PreviewPanel({
         )}
       </div>
 
-      {/* Fullscreen overlay via Portal — v4: simplified shell, no
+      {/* Fullscreen overlay via Portal — simplified shell, no
             nested preview-pane wrappers (they were forcing flex-column
             padding:0 on the header inside the portal and breaking layout). */}
       {fullscreen && artifact && createPortal(
@@ -937,7 +931,7 @@ export function PreviewPanel({
 }
 
 export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArtifact, workspaceRoot, rawCount, onAddFileToChat, onPreviewFile, activeTab: activeTabProp, onTabChange }: RightSidebarProps) {
-  // (user): activeTab 可被外部控制（点目录 chip → 切到「电脑」）。
+  // activeTab 可被外部控制（点目录 chip → 切到「电脑」）。
   // 传了 activeTab/onTabChange 走受控；否则用内部 state。
   const [internalTab, setInternalTab] = useState<RightTab>("products");
   const activeTab = activeTabProp ?? internalTab;
@@ -959,13 +953,10 @@ export function RightSidebar({ open, onClose, artifacts, selectedId, onSelectArt
     });
   }, [artifacts, filter, query]);
 
-  // Deselect when filtered selection disappears.
-  // Was previously done inline in the render body which triggered
-  // "Cannot update a component (`App`) while rendering a
-  // different component (`RightSidebar`)"
-  // because onSelectArtifact ultimately calls setState on App. The
-  // setState-during-render phase must run as an effect so it fires
-  // after the current render commits.
+  // Deselect when the filtered selection disappears. This must run in
+  // an effect, not during render — calling onSelectArtifact (which
+  // setStates App) mid-render triggers React's "Cannot update a
+  // component while rendering a different component" error.
   useEffect(() => {
     const selectionStillValid = selectedId && filtered.some((a) => a.id === selectedId);
     if (selectedId && !selectionStillValid) {
@@ -1206,9 +1197,8 @@ function ComputerTab({
     homeDir().then(setRootPath).catch(() => setRootPath(""));
   }, [workspaceRoot]);
 
-  // Load directory contents using the backend `list_directory` command.
-  // This replaces `@tauri-apps/plugin-fs` `readDir` which was limited to
-  // `$HOME` by the Tauri capability scope and failed for workspace
+  // Load directory contents via the backend `list_directory` command —
+  // the Tauri FS plugin is scoped to `$HOME` and fails for workspace
   // directories on other drives (e.g. `F:\`).
   const loadDirectory = useCallback(async (path: string) => {
     if (!path) return;
@@ -1225,7 +1215,6 @@ function ComputerTab({
     }
   }, [workspaceRoot]);
 
-  // Load root directory when rootPath changes.
   useEffect(() => {
     if (!rootPath) return;
     loadDirectory(rootPath);
@@ -1301,7 +1290,6 @@ function ComputerTab({
     }
   }, [currentPath, navigateTo]);
 
-  // Handle file/directory click.
   const handleEntryClick = useCallback((entry: DirEntry) => {
     if (entry.isDir) {
       navigateTo(entry.path);
@@ -1317,7 +1305,6 @@ function ComputerTab({
     }
   }, [navigateTo]);
 
-  // Handle right-click context menu.
   // The menu self-clamps to the viewport once it knows its own measured
   // height (useLayoutEffect in FileExplorerContextMenu), so the parent
   // only has to record the click coords — no hardcoded width/height
@@ -1329,7 +1316,6 @@ function ComputerTab({
     setContextMenu({ x: e.clientX, y: e.clientY, entry });
   }, []);
 
-  // Handle context menu action.
   const handleMenuAction = useCallback((action: string) => {
     if (!contextMenu) return;
     const entry = contextMenu.entry;
@@ -1632,13 +1618,11 @@ function FileExplorerContextMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
 
-  // previously the parent hardcoded menuH=200 to clamp the
-  // menu inside the viewport — but the menu actually grows with item
-  // count (file menu has 6 items, dir menu has 3; dividers add more
-  // visual height). In short windows a 6-item menu could overflow the
-  // bottom edge. Self-measure and self-clamp on first paint instead.
-  // useLayoutEffect avoids a visible jump: the menu paints once at the
-  // clamped position, not at (x, y) then again at the clamped spot.
+  // Hardcoding the clamp height was fragile — the menu grows with item
+  // count (file menu 6 items, dir menu 3; dividers add more height),
+  // so in short windows a 6-item menu overflowed the bottom edge.
+  // Self-measure and self-clamp on first paint instead; useLayoutEffect
+  // paints once at the clamped position, avoiding a visible jump.
   useLayoutEffect(() => {
     const el = menuRef.current;
     if (!el) return;

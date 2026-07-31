@@ -1,11 +1,5 @@
-/**
- * fetchWithRetry — retry a fetch operation with linear backoff.
- *
- * @param fn The async operation to attempt. Return the result on success,
- *           or throw on failure to trigger a retry.
- * @param maxRetries Maximum number of retries (default 2).
- * @param baseDelayMs Base delay in ms; each retry waits `baseDelayMs * (attempt + 1)`.
- */
+// Retries `fn` up to `maxRetries` times on throw, waiting
+// `baseDelayMs * (attempt + 1)` ms before each retry (linear backoff).
 export async function fetchWithRetry<T>(
   fn: () => Promise<T>,
   maxRetries = 2,

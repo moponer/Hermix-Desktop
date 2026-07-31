@@ -1,7 +1,7 @@
 ﻿/*
  * Light theme
- * 这里只显式声明 data-theme="light" 选择器, 让切换器就算之前选了
- * 其他主题, 切回 light 时也能命中清空 override.
+ * 这里只显式声明 data-theme="light" 选择器, 让切换器从其它主题切回
+ * light 时也能命中并清空 override.
  *
  * NOTE: 非 @layer — 非层级化样式优先级高于 @theme 层级，
  * 确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值。

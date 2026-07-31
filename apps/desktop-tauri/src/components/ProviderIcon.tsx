@@ -1,15 +1,8 @@
-// ProviderIcon — 厂商 logo 渲染组件
-//
 // 数据源：@lobehub/icons
 // - 1000+ AI / LLM 厂商的官方 SVG logo (OpenAI/Anthropic/Minimax/Qwen/Kimi/...)
 // - LobeHub 维护，与官方站点配色一致
 // - 纯 SVG forwardRef React 组件，无网络依赖，离线可用
 // - Mono 用 currentColor → 容器 color 决定前景色，dark mode 自动反色
-//
-// ⚠️ v22 修复：
-// - minimax: null as any（硬编码齿轮） → 改用 lobehub Minimax Mono
-// - var(--pi-bg, rgba(0,0,0,0.04)) 软底（0 处 set 过） → inline 12% alpha 软底
-//
 // 解析规则：
 // minimax/openai/anthropic/deepseek/... → 对应 lobehub 组件
 // custom-*  / 未识别                   → 内置 Gear 图标
@@ -123,7 +116,7 @@ const REGISTRY: Record<string, React.ComponentType<{ size?: string | number }>> 
   spark: Spark,
   tencent: Tencent,
   yi: Yi,
-  // 内部 minimax（v22 修复：不再走齿轮，用 lobehub 真 logo）
+  // minimax uses the official lobehub logo
   minimax: Minimax,
 };
 

@@ -90,7 +90,6 @@ export function RoomMemberDialog({
   // Local display-name map keyed by agent_id. `undefined` = use agent's
   // global name. Optimistic — flips locally on save, reverts on failure.
   const [displayNames, setDisplayNames] = useState<Record<string, string | undefined>>(memberDisplayNames ?? {});
-  // P3 — per-agent rank snapshot keyed by agent_id. Loaded once when
   // the dialog opens; not auto-refreshed (rank updates are rare).
   const [ranks, setRanks] = useState<Record<string, api.GroupChatRank>>({});
   // Enabled models from localStorage. Loaded once on mount.
@@ -100,7 +99,6 @@ export function RoomMemberDialog({
   useEffect(() => { setLocalMemberIds(memberIds); }, [memberIds]);
   useEffect(() => { setOverrides(memberModels ?? {}); }, [memberModels]);
   useEffect(() => { setDisplayNames(memberDisplayNames ?? {}); }, [memberDisplayNames]);
-  // P3 — fetch rank snapshots when the room opens. Failures are
   // swallowed (rank is decorative — empty state still works).
   useEffect(() => {
     let cancelled = false;
@@ -571,7 +569,7 @@ interface MemberListProps {
   /** Fire-and-forget display-name update — optimistic in the parent.
    *  Empty string clears the alias (revert to agent's global name). */
   onSetDisplayName: (agentId: string, displayName: string | null) => void;
-  /** P3 — per-agent rank snapshot for badge rendering. Members without
+  /** Per-agent rank snapshot for badge rendering. Members without
    *  a row in this map render without a badge (e.g. freshly-migrated
    *  rooms before the next rank fetch). */
   ranks: Record<string, api.GroupChatRank>;

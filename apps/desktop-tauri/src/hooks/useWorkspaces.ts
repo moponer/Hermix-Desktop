@@ -1,11 +1,10 @@
 // 全局工作区管理 hook。
-// 工作区 = 一组可复用的目录别名（带 name + path），让用户能：
-// 1. 在侧边栏 / ChatView chip 里快速选择"限制当前对话到哪个目录"
-// 2. 后端 LocalBackend.workspace_root 用这个 path 强制路径边界
-// 3. localStorage 持久化，跨会话复用
-// 与群聊（groupchat）的区别：
-// - 群聊：多成员（user+agent）对话的容器
-// - 工作区：限制单次对话的读写范围（沙箱边界），是 prompt + 后端双重约束
+// 工作区 = 一组可复用的目录别名（带 name + path），让用户能在侧边栏 /
+// ChatView chip 里快速选择"限制当前对话到哪个目录"，并跨会话复用。
+// 后端的 LocalBackend.workspace_root 用这个 path 强制路径边界；本地选择
+// 持久化到 localStorage。
+// 与群聊（groupchat）的区别：群聊是多成员（user+agent）对话的容器，而
+// 工作区限制单次对话的读写范围（沙箱边界），由 prompt + 后端双重约束。
 // 存储 key: `hermix.desktop.workspaces`（JSON 数组 [{id, name, path, createdAt}]）
 
 import { useCallback, useEffect, useState } from "react";

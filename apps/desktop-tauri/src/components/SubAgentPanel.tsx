@@ -11,7 +11,7 @@ import type { SubAgentState, SubAgentPhase } from "../types";
  * Uses the project's established info/success/error status tokens
  * (no blue/purple per design rules) and gray/zinc surfaces.
  *
- * Light-theme fix (2026-07-26): removed `opacity` inline styles that
+ * Light-theme fix: removed `opacity` inline styles that
  * killed contrast on white backgrounds (0.55 opacity on #fafafa =
  * nearly invisible). Now uses explicit CSS variables for muted text
  * (--color-text-muted / --color-text-faint) instead of opacity tricks.

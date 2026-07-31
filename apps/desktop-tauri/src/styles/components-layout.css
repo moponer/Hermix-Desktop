@@ -27,24 +27,20 @@
 
 .app-body {
   display: grid;
-  /* v8 → v18: 三列布局，关闭任一列时彻底归零.
-     - 主列 minmax(var(--pane-main-min), 1fr) → 主列最小宽度跟随 App.tsx
-       里的 MAIN_MIN_WIDTH（默认 580）。之前硬编码 720 把右列"挤
-       变形"：右列想撑到 RIGHT_DEFAULT=640，grid 不够空间，被迫压
-       回 480，看起来就是"右列装不下中文长文件名"。
+  /* 三列布局，关闭任一列时彻底归零 track。
+     - 主列 minmax(var(--pane-main-min), 1fr) → min 跟随 App.tsx 的
+       MAIN_MIN_WIDTH（默认 580），不能硬编码成 720：否则右列想撑到
+       640 时 grid 空间不足，被压回 480，"右列装不下中文长文件名"。
      - 右列 minmax(0, var(--ab-right-w)) → 上限跟随 App.tsx 的
-       right.width（用户拖动的当前值，默认 640）。之前硬编码
-       `minmax(0px, 480px)` 把 max 锁死在 480，App.tsx 把 right.width
-       设到 640 也没用，grid 仍然把 track 夹到 480。修复后右列真
-       正能"撑到 640+"，跟 left.width 一样是动态 CSS 变量驱动。
-     - 左列 minmax(200, var(--ab-left-w, 200px)) → 默认 200, 可拖到 360.
-     视口 ≥ 1280 (LEFT_MIN + MAIN_FLOOR + RIGHT_OPENED_MIN = 1280) 时三列共存.
-     视口 < 1140 时右列自动关闭 (见 [data-right-open="false"]).
-     v25: 左侧栏折叠也要归零 (见 [data-left-open="false"]). 之前
-     折叠左侧栏时只把外层 div translate-x-full 移走, 但 grid 第一列
-     还占 200px 宽, main 不扩张 → 视觉上留下一条空白, 看起来像
-     "sidebar 没真正折叠"。现在用 data-left-open 跟 data-right-open
-     一样的模式把第一列归零. */
+       right.width（用户拖动的当前值，默认 640）。硬编码 minmax(0px, 480px)
+       会把 max 锁死在 480，right.width 设到 640 也没用，track 仍被夹到 480。
+     - 左列 minmax(200, var(--ab-left-w, 200px)) → 默认 200, 可拖到 360。
+     视口 ≥ 1280 (LEFT_MIN + MAIN_FLOOR + RIGHT_OPENED_MIN = 1280) 时三列共存。
+     视口 < 1140 时右列自动关闭 (见 [data-right-open="false"])。
+     左侧栏折叠时也要把第一列归零 (见 [data-left-open="false"])：否则只把
+     外层 div translate-x-full 移走，grid 仍占 200px，main 不扩张，视觉上
+     留下一条空白，像"sidebar 没真正折叠"。用与右列相同的 data-left-open
+     模式把第一列归零。 */
   --col-left:  minmax(var(--left-min, 200px), var(--ab-left-w, 200px));
   --col-right: minmax(0px, var(--ab-right-w, 640px));
   grid-template-columns:
@@ -83,12 +79,12 @@
      no overlapping/overlay flash. */
 }
 
-/* v25: 左列关闭 → track 归零, 主列吃满左半边空间. */
+/* 左列关闭 → track 归零, 主列吃满左半边空间. */
 .app-body[data-left-open="false"] {
   --col-left: 0px;
 }
 
-/* v8: 右列关闭 → track 归零, 主列吃满右半边空间. */
+/* 右列关闭 → track 归零, 主列吃满右半边空间. */
 .app-body[data-right-open="false"] {
   --col-right: 0px;
 }
@@ -107,12 +103,10 @@
 }
 .pane-left   { background: var(--theme-bg-sidebar, var(--color-bg-secondary)); }
 /* .pane-main 的 min-width 故意不再写 — 由 .app-body 的 grid-template-columns
-   里 minmax(720px, 1fr) 声明性保证, 避免与 grid track 的 min 双重约束造成
-   奇怪的溢出行为 (历史教训: 同时给 track 和 item 设 min-width 在窄视口
-   下会导致 inflexible 列被压扁到只剩图标竖排)。 */
+   里 minmax(var(--pane-main-min), 1fr) 声明性保证, 避免与 grid track 的 min
+   双重约束造成溢出 (同时给 track 和 item 设 min-width 会让列在窄视口被压扁)。 */
 /* 主区背景 = 淡灰 (--color-bg-app = #f5f5f7) — 跟左栏/右栏/卡片(白)拉出 1 档色差,
-   卡片 .bg-bg-card 白底就自然浮起来。
-   修: 之前用 --color-bg-primary (白) 导致卡片跟主区贴墙。 */
+   卡片白底就自然浮起来 (若用 --color-bg-primary 白底则卡片跟主区贴墙)。 */
 .pane-main   { background: var(--theme-bg-app, var(--color-bg-app)); background-size: cover; background-position: center top; background-attachment: fixed; flex: 1; border-top-left-radius: 12px; border-top-right-radius: 12px; }
 .pane-right  { background: var(--theme-bg-sidebar, var(--color-bg-secondary)); }
 
@@ -370,9 +364,8 @@
 }
 /* Time — right-aligned, faint
  *
- * v3 用户反馈：会话列表去掉 "几小时前 / 几天前" 时间戳。SessionItem
- * 已不再渲染这个 span，规则保留原始样式只作为占位（其它位置如有
- * 需要可恢复使用）。 */
+ * 会话列表不再显示相对时间戳 ("几小时前 / 几天前")：SessionItem 已不再
+ * 渲染这个 span，规则保留原始样式只作为占位（其它位置如有需要可恢复使用）。 */
 .list-item-time {
   font-size: 11px;
   color: var(--color-text-faint);
@@ -400,7 +393,7 @@
 }
 
 /* Active dot — static indicator that "this is the active session".
- * PLAN_UI_ENHANCEMENT §3.3: 激活项用小圆点区分，非激活项显示相对时间。 */
+ * 激活项用小圆点区分，非激活项显示相对时间。 */
 .list-item-active-dot {
   width: 6px;
   height: 6px;
@@ -412,10 +405,10 @@
 
 /* Message count meta (below title)
  *
- * v3 用户反馈：会话列表项去掉 "N 条" / "X 小时前" 的冗余 metadata，
- * SessionItem.tsx 已不再渲染这个 span，所以这条规则在会话列表上
- * 不再生效。但聊天室（ChatRoom）列表仍用它显示 "N 个成员"，所以
- * 保留原始样式，只是不再被会话列表触发。
+ * 会话列表项不再显示 "N 条" / "X 小时前" 的冗余 metadata，SessionItem.tsx
+ * 已不再渲染这个 span，所以这条规则在会话列表上不再生效。但聊天室
+ * (ChatRoom) 列表仍用它显示 "N 个成员"，所以保留原始样式，只是不再被
+ * 会话列表触发。
  */
 .list-item-meta   {
   font-size: 13px;
@@ -448,7 +441,7 @@
  *
  * Hierarchy level 3 — children indented under their parent row.
  * 16px left margin + 2px faint accent-left border = clear depth cue.
- * v3 用户反馈：工作区下的会话列表不应该有左侧的粗分隔线。
+ * 工作区下的会话列表不使用左侧粗分隔线, 只用细 accent 左边框表达层级。
  */
 .list-group {
   margin-left: 18px;
@@ -849,7 +842,29 @@
   transition: opacity var(--duration-fast) ease;
 }
 .sidebar-section-header:hover .sidebar-section-actions,
+.sidebar-section-header:focus-within .sidebar-section-actions,
 .sidebar-section-actions:focus-within { opacity: 1; }
+
+/* section header 右侧的 +号：直接触发新建动作（对话/项目/群聊），
+   不再弹层。hover 才显，避免常驻按钮破坏极简感。 */
+.sidebar-section-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-section-add:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
 
 .sidebar-action-btn {
   display: inline-flex;
@@ -870,6 +885,66 @@
   color: var(--color-text-primary);
 }
 
+/* ── Sidebar Popover (三点 / +号 弹出的菜单) ──
+ * 极简卡片：白底圆角 + 细分割 + 阴影。每项带左侧图标，danger 项用 error 红。
+ * 主题：默认/深色/雨林/日落 全部通过 var(--color-*) 自适应。 */
+.sidebar-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 180px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-primary);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.08);
+  z-index: 1000;
+  /* tiny enter animation — fade + slide up 4px */
+  animation: sidebar-popover-in 100ms ease-out;
+}
+@keyframes sidebar-popover-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.sidebar-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+.sidebar-popover-item:hover {
+  background: var(--color-bg-hover);
+}
+.sidebar-popover-item.is-danger {
+  color: var(--color-error);
+}
+.sidebar-popover-item.is-danger:hover {
+  background: var(--color-error-soft);
+}
+.sidebar-popover-item .sidebar-popover-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: inherit;
+  opacity: 0.85;
+}
+.sidebar-popover-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--color-border-subtle);
+}
+
 .sidebar-section-body {
   flex: 0 0 auto;
   overflow: visible;
@@ -880,6 +955,31 @@
   padding: 8px 10px;
   font-size: 12px;
   color: var(--color-text-muted);
+}
+
+/* ── 展开显示（会话/项目过多时的提示行） ──
+   仿参考图：贴在列表底部的小号 muted 文字按钮 */
+.sidebar-show-more {
+  display: block;
+  width: 100%;
+  padding: 4px 10px 6px;
+  margin-top: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.sidebar-show-more:hover {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-hover);
+}
+.sidebar-show-more-inset {
+  /* 项目内嵌列表需要再缩进一点，对齐子项文本 */
+  padding-left: 24px;
 }
 
 /* ── Sidebar row (session / room / leaf item) ── */
@@ -948,6 +1048,21 @@
   font-size: 11.5px;
   color: var(--color-text-muted);
   flex-shrink: 0;
+}
+
+/* 置顶小图标 — 紧贴标题右侧，淡淡的 accent 色 */
+.sidebar-row-pin {
+  color: var(--color-text-faint);
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+/* 归档态：标题颜色变淡，附加斜体，hover 时还原 */
+.sidebar-row.is-archived .sidebar-row-main,
+.sidebar-row.is-archived .truncate-1,
+.sidebar-row.is-archived .sidebar-row-meta {
+  color: var(--color-text-faint);
+  font-style: italic;
 }
 
 /* Delete animation: user confirmed → collapse height + fade out,

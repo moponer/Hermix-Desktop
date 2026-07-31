@@ -89,15 +89,15 @@ export function useSessionExpert(sessionId: string | null | undefined): {
   setExpert: (id: string | null) => void;
   clear: () => void;
 } {
-  // 统一使用 draft key 作为唯一数据源，session key 仅用于向后兼容。
-  // 修复：设置了 session key 但读的是 draft key，导致选择不生效（用户 23:26 反馈）
+  // Draft key is the single source of truth while no session is active;
+  // the per-session key is kept only for backward compatibility with older
+  // stored state.
   const [expertId, setExpertId] = useState<string | null>(() => {
-    // 优先读取 draft key（主数据源）
     try {
       const draft = storage.getItem(DRAFT_EXPERT_KEY);
       if (draft) return draft;
     } catch {}
-    // 回退：从 session key 迁移（仅一次）
+    // Fallback: legacy per-session key.
     if (sessionId) {
       try {
         return storage.getItem(SESSION_EXPERT_KEY(sessionId));
@@ -107,8 +107,7 @@ export function useSessionExpert(sessionId: string | null | undefined): {
   });
 
   useEffect(() => {
-    // sessionId 变化时，无需重新读取——draft key 不变
-    // 但迁移逻辑：首次进入新 session 时，用 session key 补 draft
+    // No re-read needed when sessionId changes: the draft key is untouched.
     if (sessionId) {
       try {
         const draft = storage.getItem(DRAFT_EXPERT_KEY);
@@ -125,12 +124,11 @@ export function useSessionExpert(sessionId: string | null | undefined): {
 
   const setExpert = useCallback(
     (id: string | null) => {
-      // 始终同时写入 draft key（主）和 session key（兼容）
+      // Write both slots so older readers that only know the session key still work.
       try {
         if (id) {
           storage.setItem(DRAFT_EXPERT_KEY, id);
           if (sessionId) storage.setItem(SESSION_EXPERT_KEY(sessionId), id);
-          // 同步更新最近使用列表
           const raw = storage.getItem(RECENT_EXPERTS_KEY);
           let ids: string[] = [];
           try { const p = JSON.parse(raw || '[]'); if (Array.isArray(p)) ids = p; } catch {}
@@ -333,7 +331,6 @@ export function useSessionWorkspace(sessionId: string | null | undefined): {
   const setWorkspace = useCallback(
     (path: string | null) => {
       if (sessionId) {
-        // Session-bound: write to the per-session key.
         try {
           if (path) {
             storage.setItem(SESSION_WORKSPACE_KEY(sessionId), path);

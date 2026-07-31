@@ -1,26 +1,11 @@
-/**
- * Frontend file parser for the artifact reading surface.
- *
- * Why this exists (2026-06-22): the previous office preview
- * (`render_office_preview` → `officecli` → raw HTML) was a black box
- * that produced the broken "Plain text" view in the screenshot —
- * officecli either wasn't installed or returned text-mode output
- * rather than a real table. We don't want every desktop release to
- * depend on a sidecar `officecli` binary.
- *
- * Instead we now parse Excel/CSV/docx *in the browser* using
- * SheetJS + PapaParse + mammoth. The advantages:
- *
- * 1. No backend install step (no LibreOffice, no officecli)
- * 2. Lower-latency preview (no subprocess spawn)
- * 3. The parsed rows/columns let us build a real <table> with
- *    sortable headers, in-table search, sheet switcher, CSV export
- *    — features we couldn't easily layer on a pre-rendered HTML blob
- *
- * The downstream surface is a single `PreviewModel` discriminated
- * union so the panel in RightSidebar doesn't need to know whether
- * the file was a `.xlsx` or a `.csv`.
- */
+// Frontend parser for the artifact reading surface. Replaces the
+// `officecli`-based preview path (which returned raw text-mode HTML
+// for spreadsheets) by parsing Excel/CSV/docx in the browser via
+// SheetJS + PapaParse. The downstream surface is a single
+// `PreviewModel` discriminated union so `RightSidebar` doesn't need
+// to know whether the file was `.xlsx` or `.csv` — the parsed
+// rows/columns back a real <table> with sort/search/export, which a
+// pre-rendered HTML blob couldn't offer.
 
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
@@ -38,9 +23,9 @@ export type PreviewModel =
   | { kind: "binary"; size: number }
   | { kind: "error"; message: string };
 
-/** Detect the parse path from the file extension. The caller must
- * hand us bytes it already read off disk (via the existing
- * `tryReadArtifact` helper), so we don't deal with paths here. */
+// Dispatches to the right parser by file extension. The caller must
+// hand us bytes it already read off disk (via `tryReadArtifact`) —
+// we don't deal with paths here.
 export function parseByExtension(
   fileName: string,
   bytes: Uint8Array,
@@ -79,36 +64,28 @@ export function parseByExtension(
     ) {
       return parseText(bytes);
     }
-    // Unknown — treat as binary so the panel can show a download prompt
     return { kind: "binary", size: bytes.byteLength };
   } catch (e) {
     return { kind: "error", message: String(e) };
   }
 }
 
-/* ────────────────────────────────────────────────────────────────────
-   Spreadsheet (xlsx / xls)
-   ──────────────────────────────────────────────────────────────────── */
-
 function parseWorkbook(bytes: Uint8Array): PreviewModel {
-  // SheetJS accepts ArrayBuffer / Uint8Array; `bookType: undefined`
-  // lets it sniff between xls and xlsx on its own.
   const wb = XLSX.read(bytes, { type: "array", cellDates: true });
 
   const sheets = wb.SheetNames.map((name) => {
     const ws = wb.Sheets[name];
-    // header: 1 → AOA (array of arrays), raw: false → formatted
-    // strings (good enough for human display). We *don't* apply
-    // raw: true because date cells and number cells would dump
-    // ugly serial numbers at the user.
+    // `raw: false` returns formatted strings instead of raw serial
+    // numbers, so date / numeric cells render as humans expect rather
+    // than as Excel epoch integers.
     const aoa = XLSX.utils.sheet_to_json<string[]>(ws, {
       header: 1,
       raw: false,
       defval: "",
     });
-    // Pad ragged rows: SheetJS returns rows of different lengths
-    // when the underlying sheet has missing trailing cells. We
-    // normalise by widening to the max colCount across the sheet.
+    // SheetJS returns rows of varying length when the sheet has
+    // missing trailing cells — pad to the sheet-wide max so every
+    // row aligns in the rendered <table>.
     const colCount = aoa.reduce((m, r) => Math.max(m, r.length), 0);
     const rows = aoa.map((r) => {
       if (r.length === colCount) return r;
@@ -125,14 +102,10 @@ function parseWorkbook(bytes: Uint8Array): PreviewModel {
   return { kind: "spreadsheet", sheets, activeSheet: 0 };
 }
 
-/* ────────────────────────────────────────────────────────────────────
-   CSV / TSV
-   ──────────────────────────────────────────────────────────────────── */
-
 function parseCsv(bytes: Uint8Array, isTsv: boolean): PreviewModel {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  // Strip BOM — PapaParse can't always see past it and would produce
-  // a leading null-char in the first header.
+  // Strip BOM — PapaParse can produce a leading null-char in the
+  // first header when the BOM is left in place.
   const clean = text.replace(/^\uFEFF/, "");
   const result = Papa.parse<string[]>(clean, {
     delimiter: isTsv ? "\t" : "",
@@ -146,17 +119,10 @@ function parseCsv(bytes: Uint8Array, isTsv: boolean): PreviewModel {
   return { kind: "csv", rows, rowCount: rows.length, colCount };
 }
 
-/* ────────────────────────────────────────────────────────────────────
-   docx — keep this as a *plain-text* fallback for now
-   ──────────────────────────────────────────────────────────────────── */
-
 function parseDocx(_bytes: Uint8Array): PreviewModel {
-  // We deliberately do NOT bundle mammoth (~50KB gzipped) for a
-  // minimal first cut. docx is rare in this product (the .xlsx and
-  // .docm flows dominate the use case), and our backend already
-  // ships a `render_office_preview` fallback for it. So if a user
-  // really opens a .docx we hand them a clear error directing them
-  // back to LibreOffice until a future commit adds mammoth.
+  // mammoth (≈50 KB gzipped) isn't bundled — .docx opens via the
+  // backend's `render_office_preview` fallback, so the in-browser
+  // path here returns a clear error directing users there.
   return {
     kind: "error",
     message:
@@ -164,25 +130,17 @@ function parseDocx(_bytes: Uint8Array): PreviewModel {
   };
 }
 
-/* ────────────────────────────────────────────────────────────────────
-   Text
-   ──────────────────────────────────────────────────────────────────── */
-
 function parseText(bytes: Uint8Array): PreviewModel {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  // Mirror the line-count helper from RightSidebar so the bottom
-  // status bar stays consistent.
+  // Drop a single trailing newline so the count matches RightSidebar's
+  // status bar (which doesn't count a trailing empty line).
   const lines = text.split("\n");
   if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
   return { kind: "text", content: text, lineCount: lines.length, byteSize: bytes.byteLength };
 }
 
-/* ────────────────────────────────────────────────────────────────────
-   Helpers
-   ──────────────────────────────────────────────────────────────────── */
-
-/** Re-format a parsed spreadsheet as CSV text — used by the
- * "导出 CSV" button. Always uses the *active* sheet. */
+// Re-formats a parsed sheet as CSV text (used by the "导出 CSV"
+// button — always operates on the active sheet).
 export function sheetToCsv(sheet: { rows: string[][]; name: string }): string {
   return Papa.unparse(
     sheet.rows.map((r) => r.map((cell) => cell ?? "")),

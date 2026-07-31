@@ -21,14 +21,15 @@
  *   timeout    → muted yellow "超时"
  *   partial    → muted gray "未完成"
  *
- * 用户反馈 "已完成几个字的设计难看"：
- *   终结态不再显示任何 chip / 时间戳 (因为 MessageBubble 会接管并显示真实时间).
- *   进行态依然有 "正在生成…" 文字 + 段间隙动画, 不变.
+ * Terminal states render no chip / timestamp (MessageBubble takes over
+ * and shows the real time). In-progress states keep the "正在生成…" text
+ * and segment-gap animation unchanged.
  *
- * 段间隙动画（用户需求）：
- *   "正在生成…"的动画从 header 移到段间隙位置——每段输出结束后、下一段
- *   还没开始时，在 markdown 内容末尾的下一行行首显示心跳 + 扫描线。
- *   检测 markdown 文本是否以换行符结尾：`/\n\s*$/`。
+ * Segment-gap animation:
+ *   The "正在生成…" animation moved from the header to the segment gap —
+ *   after each output segment ends and before the next begins, a heartbeat
+ *   + scanline shows at the start of the next line. Detected via the
+ *   markdown ending in a newline: `/\n\s*$/`。
  *   · 文本以换行结尾 → 刚结束一段、下一段还没来 → 显示 dot
  *   · 文本不以换行结尾 → 当前段还在写 → 不显示 dot（避免段内重叠）
  *   · 流结束（phase !== streaming/connecting/slow） → 自动消失
@@ -99,11 +100,15 @@ interface StreamingBubbleProps {
 }
 
 /**
- * STATUS_MAP 视觉规则 (用户反馈 "已完成几个字的设计难看"):
- *  - 静默 / 终结态 (completed / idle) → render 空 (不显示, 已完成是废话)
- *  - 失败态 (error / timeout / partial) → 极简图标 + 文字, 不用任何 chip 背景
- *  - 进行态 (streaming / connecting / slow) → 文字, 不带 chip 视觉重量
- *  - 所有状态共用 `h-tiny` 字号, 颜色由 className 控制, 不再有 pill-* 绿底
+ * STATUS_MAP visual rules:
+ *  - silent / terminal states (completed / idle) → render nothing
+ *    (a "completed" label would be redundant noise)
+ *  - failure states (error / timeout / partial) → minimal icon + text,
+ *    no chip background
+ *  - in-progress states (streaming / connecting / slow) → text only,
+ *    no chip visual weight
+ *  - all states share `h-tiny` sizing; colour comes from className,
+ *    no pill-* green fill
  */
 const STATUS_MAP: Record<StreamPhase, { icon: React.ReactNode; label: string; className: string }> = {
   streaming:    { icon: null,                                                                       label: "正在思考…", className: "text-text-faint italic" },
@@ -140,8 +145,6 @@ function isRetryStatus(statusText: string): boolean {
   return /retry|retrying|重试|invalid.*tool|truncated|empty.*response/i.test(statusText);
 }
 
-const NOOP = () => {};
-
 /**
  * Streaming reasoning row — always-expanded process prose.
  * replaced the per-row "已深度思考中… ▼" fold. The whole
@@ -151,7 +154,13 @@ const NOOP = () => {};
  * currently delegates to MessageBubble's <ProcessTimeline> directly.
  */
 export function StreamingReasoningBlock({ content }: { content: string; isStreaming: boolean }) {
-  const clean = content.replace(/<\/?think>/gi, "").trim();
+  // Strip both <think> and <reasoning> wrappers for the same reason as
+  // MessageBubble's ReasoningBlock: the surrounding ProcessTimeline is the
+  // visual marker, not the raw XML tag.
+  const clean = content
+    .replace(/<\/?think>/gi, "")
+    .replace(/<\/?reasoning>/gi, "")
+    .trim();
   if (!clean) return null;
   return (
     <div className="tl-reasoning-row">
@@ -268,29 +277,27 @@ function StreamingBubbleImpl({
             仅在流式态显示，流结束后由 MessageBubble 接管。 */}
         <StreamingArtifactCard text={deferred} isStreaming={isStreamingPhase} />
 
-        {/* Process timeline (single foldable block) + final text prose.
-            mirrors MessageBubble's new layout — every
-            reasoning/tool step goes inside one ProcessTimeline fold,
-            and text steps render as continuous prose below the fold.
-            This matches the WorkBuddy reference UI: one "处理中… /
-            已完成" header per turn, with the conclusion visible without
-            a click. */}
+        {/* Process timeline — one chronological stream where reasoning
+            + tools collapse behind a single header and text stays
+            inline at its true position (matches MessageBubble). During
+            live streaming the fold is always expanded so the narrative
+            reads in arrival order. */}
         {(() => {
-          const processSteps = effectiveSteps.filter(
-            (s) => s.kind === "reasoning" || s.kind === "tools",
-          );
-          const textSteps = effectiveSteps.filter((s) => s.kind === "text");
           // Live: there's always at least one tool in-flight or about
           // to fire, otherwise the stream would be settled already.
-          const hasRunningTool = isStreamingPhase && processSteps.some(
+          const hasRunningTool = isStreamingPhase && effectiveSteps.some(
             (s) => s.kind === "tools" && s.events.some(
               (e) => e.type === "tool_start" || e.type === "tool_stdout",
             ),
           );
           return (
             <div className="tl-iterations">
+              {/* One chronological stream (live = always expanded):
+                  reasoning + tools + text render inline in arrival
+                  order, so a lead-in sentence sits above the tool card
+                  it preceded. */}
               <ProcessTimeline
-                processSteps={processSteps}
+                steps={effectiveSteps}
                 isStreaming={isStreamingPhase}
                 hasRunningTool={hasRunningTool}
                 /* durationMs is only displayed when the turn settles
@@ -300,22 +307,6 @@ function StreamingBubbleImpl({
                    settled MessageBubble picks it up on re-render. */
                 onPathClick={onPathClick}
               />
-              {textSteps.map((step, i) => {
-                if (step.kind !== "text") return null;
-                const parsed = parseContent(step.content);
-                return (
-                  <div key={`text-${i}`} className="tl-iteration tl-text-step">
-                    {parsed.body && (
-                      <div className="tl-text-inner">
-                        <MarkdownBody
-                          content={parsed.body}
-                          onPathClick={onPathClick ?? NOOP}
-                        />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
             </div>
           );
         })()}

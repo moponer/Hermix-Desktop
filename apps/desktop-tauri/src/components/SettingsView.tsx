@@ -109,10 +109,6 @@ function ModelTab() {
   // because it reads config.yaml directly, unlike GET /api/env which
   // may read the wrong path before the backend is recompiled.
   const [customIdsWithKey, setCustomIdsWithKey] = useState<Set<string>>(new Set());
-  // 用户反馈：原 providersList state 用于中间栏"自定义"分组下的 light 卡片列表
-  // （与右栏 CustomProviderSection 的"已配置的提供商"重复），已删除该 list 的渲染。
-  // 同步删 state 声明 + 两处 setProvidersList 调用（mount + refresh 时），不留 dead code。
-
   // Load custom providers from backend on mount, sync to config
   useEffect(() => {
     api.getCustomProviders().then((providers) => {
@@ -136,7 +132,6 @@ function ModelTab() {
       if (Object.keys(cm).length > 0 || newEnabled.length > config.enabled.length) {
         setCustomModels(cm);
         setConfig((prev) => {
-          // 2026-06-25：和 fetchModels 一样，setConfig 后必须 writeModelConfigAndNotify，
           // 否则 mount 时把 custom provider 的模型加进 enabled → React state 改了但
           // localStorage 永远空 → 重启后 ChatView 弹窗看不到这些模型。
           const next = { ...prev, enabled: newEnabled };
@@ -173,9 +168,8 @@ function ModelTab() {
       }
       setActiveKeys(keys);
 
-      // 修复：mount 时先从 localStorage 缓存恢复模型列表。
-      // 之前完全不读缓存 → 如果 API fetch 静默失败（网络/TLS/DNS），
-      // fetchedModels 永远为空 → UI 不显示任何模型 → 用户看到"暂无可用模型"。
+      // mount 时先从 localStorage 缓存恢复模型列表：若 API fetch 静默失败
+      // （网络/TLS/DNS），不读缓存会让 fetchedModels 永远为空，UI 不显示任何模型。
       const cached = loadModelCache();
       if (Object.keys(cached).length > 0) {
         setFetchedModels(cached);
@@ -321,9 +315,7 @@ function ModelTab() {
         const newEnabled = [...prev.enabled];
         models.forEach((modelId) => { if (!existing.has(`${selectedProvider.id}:${modelId}`)) newEnabled.push({ providerId: selectedProvider.id, modelId }); });
         const next = { ...prev, enabled: newEnabled };
-        // 用户反馈："进历史对话，模型不见了"+SettingsView 顶部"尚未设置默认模型"。
-        // 根因：setConfig 只更新 React state，从不写 localStorage；modelConfig 永远空 → ChatView 弹窗也空。
-        // 修法：和 toggleModel / setDefault 一样，setConfig 之后立即 writeModelConfigAndNotify。
+        // 与 toggleModel / setDefault 一致，setConfig 之后立即 writeModelConfigAndNotify 同步出去。
         writeModelConfigAndNotify(next);
         return next;
       });
@@ -399,7 +391,6 @@ function ModelTab() {
         if (!existing.has(key)) newEnabled.push({ providerId, modelId });
       });
       const next = { ...prev, enabled: newEnabled, defaultModel: prev.defaultModel || (models.length > 0 ? `${providerId}:${models[0]}` : prev.defaultModel) };
-      // 2026-06-25：同 fetchModels，修"模型不写盘"bug。
       writeModelConfigAndNotify(next);
       return next;
     });
@@ -425,7 +416,6 @@ function ModelTab() {
             if (!existing.has(key)) newEnabled.push({ providerId: pid, modelId: mid });
           });
         });
-        // 2026-06-25：同 fetchModels 修法，写盘。
         const next = { ...prev, enabled: newEnabled };
         writeModelConfigAndNotify(next);
         return next;
@@ -538,11 +528,11 @@ function ModelTab() {
               </div>
               <ChevronRight size={12} className="text-text-muted shrink-0" />
             </button>
-            {/* 用户反馈：中间栏 "自定义" 分组下面曾渲染每个 custom provider 的 light 卡片
-                （cp.display_name + 模型数 + 绿点），与右栏 CustomProviderSection 的"已配置的提供商"
-                完全重复——同一份 custom-agnes 在两处都出现。删除此 block：custom provider 管理
-                只走右栏 CustomProviderSection 的"已配置的提供商"section（line 880-907）。
-                关联的 providersList state 也同步删除（line 104-106 注释），不留 dead code。 */}
+            {/* Intentionally omitted: the "自定义" group used to render a
+                light card per custom provider here, duplicating the right
+                column's CustomProviderSection ("已配置的提供商"). Custom
+                provider management lives only there now, so no dead state
+                is left behind. */}
           </div>
         </div>
       </div>
@@ -715,10 +705,9 @@ function CustomProviderSection({
       setProviderModels((prev) => ({ ...prev, [id]: models }));
       onModelsFetched(id, models);
       onRefresh();
-      // 用户反馈：获取 N 个模型后，下方应该有 N 行可勾选/设默认的模型列表。
-      // 根因：之前 handleFetchModelsForSavedProvider 只更新 providerModels / fetchedModels state，
       // 不会把 modelId 加进 config.enabled，也不会持久化 → ChatView 弹窗看不到。
-      // 修法：和内置 provider 的 fetchModels 一样，把新模型 merge 进 config.enabled 并写盘。
+      // 与内置 provider 的 fetchModels 一致，把新模型 merge 进 config.enabled 并写盘，
+      // 否则 ChatView 弹窗看不到这些模型。
       setConfig((prev) => {
         const existing = new Set(prev.enabled.map((m) => `${m.providerId}:${m.modelId}`));
         const newEnabled = [...prev.enabled];
@@ -815,7 +804,6 @@ function CustomProviderSection({
       onModelsFetched(safeId, models);
       onRefresh();
       setSuccess(`成功获取 ${models.length} 个模型`);
-      // Reset form
       setEditingId(null); setName(""); setApiUrl(""); setApiKey(""); setModelInput("");
     } catch (e: unknown) {
       if (e instanceof Error) {
@@ -867,7 +855,6 @@ function CustomProviderSection({
           const models = modelInput.split(",").map((m) => m.trim()).filter(Boolean);
           if (models.length > 0) {
             const next = { ...prev, defaultModel: `${targetId}:${models[0]}` };
-            // 2026-06-25：同 fetchModels 修法，写盘。
             writeModelConfigAndNotify(next);
             return next;
           }
@@ -920,10 +907,10 @@ function CustomProviderSection({
       )}
 
       {/* ── Custom provider models (enable/disable + set-default) ──
-          用户反馈：5 个 model 一行一个 + "设为默认" 按钮 占了 200+px，
-          看不到下面"新建提供商"表单。改为 2 列 grid + 紧行高 + 紧 max-h，
-          5 个 model 排 3 行只占 ~96px（约原 1/2）。"设为默认"按钮仍在每行右侧
-          （仅 enabled 时显示），保持原交互语义不变。 */}
+          Models render in a 2-column grid with tight rows, so 5 models
+          take ~96px instead of 200+px and the "新建提供商" form below
+          stays visible. The "设为默认" button stays at the right of each
+          row (only when enabled), preserving the original interaction. */}
       {Object.keys(customModels).length > 0 && (
         <div>
           <div className="text-[11px] text-text-muted uppercase tracking-wider mb-2">自定义模型 ({Object.keys(customModels).length})</div>
@@ -1195,7 +1182,6 @@ function AdvancedTab() {
   };
 
   const handleSave = async () => {
-    // P0-1 fix (Frontend Audit 2026-07-13): the previous
     // implementation only wrote to localStorage, which the running
     // agent never read from. Now we PUT the values to the backend
     // via `api.updateConfig`, which writes config.yaml and pushes
@@ -1319,7 +1305,6 @@ function AdvancedTab() {
   );
 }
 
-// ── Python Runtime Panel (Phase L1.4, 2026-06-29) ──────────────────────
 // Probe only — does NOT auto-bundle Python. The sister slot reserved by
 // `python_detect` (`<hermix-dir>/python/`) is left empty by default; the
 // installer can opt into bundling later via `build-tauri.bat BUNDLED=1`
@@ -1345,7 +1330,6 @@ function PythonRuntimePanel() {
   const [overrideSaving, setOverrideSaving] = useState(false);
   const [overrideStatus, setOverrideStatus] = useState("");
 
-  // Load persisted override from localStorage on mount + refresh.
   useEffect(() => {
     try {
       const stored = storage.getItem(STORAGE_KEYS.pythonOverride) ?? "";

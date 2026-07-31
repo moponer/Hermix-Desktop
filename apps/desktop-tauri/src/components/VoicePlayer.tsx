@@ -3,18 +3,15 @@ import { Volume2, Square } from "lucide-react";
 import { apiUrl } from "../api";
 
 /**
- * L3: VoicePlayer — plays back TTS audio received from
+ * VoicePlayer — plays back TTS audio received from
  * `hermix-server /v1/voice/synthesize` (or, in the streaming case,
  * chunks pushed over WebSocket).
  *
  * The component is intentionally simple: a single HTML5 `<audio>`
- * element driven by a `src` URL. The front-end flow is:
- *
- * 1. Assistant replies with text.
- * 2. Front-end calls `POST /v1/voice/synthesize` with the reply text.
- * 3. Server returns `{ audio_base64, format, ... }`.
- * 4. We build a `data:audio/<format>;base64,...` URL and hand it to
- *    the `<audio>` element.
+ * element driven by a `src` URL. The front-end calls
+ * `POST /v1/voice/synthesize` with the reply text, builds a
+ * `data:audio/<format>;base64,...` URL from the server's response, and
+ * hands it to the element.
  *
  * For streaming TTS (sentence-by-sentence) we'd accumulate chunks
  * into a `MediaSource` buffer; that path is left for a follow-up

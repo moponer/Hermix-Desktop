@@ -1,5 +1,5 @@
 /**
- * M5: ACUI (Agent-Controlled UI) directive types.
+ * ACUI (Agent-Controlled UI) directive types.
  *
  * 镜像后端 `hermix_core::AcuiDirective`，通过 WS `StreamEvent::Acui`
  * 推送。协议层与渲染层解耦：这里只定义数据，前端的 AcuiRenderer

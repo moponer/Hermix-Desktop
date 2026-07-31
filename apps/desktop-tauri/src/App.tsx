@@ -144,44 +144,36 @@ const ACTIVE_SESSION_KEY = STORAGE_KEYS.activeSession;
 
 const LEFT_MIN = 200;
 const LEFT_MAX = 360;
-// v7: 左列默认从 232 减到 200，把 32px 让给主列，让默认三列共存时主列更宽。
-// vw=1440 时主列 = 1440 - 200 - 640 = 800 (v11: 右列默认 640 替代 480).
-// PLAN_UI_ENHANCEMENT §2.1 (2026-06-22): 菜单栏加宽 200→280，让工作区/群聊名称更舒展。
-// 已存在会话的 localStorage width 不会自动升级（用户拖动过的尊重保留），仅默认提高。
+// 左列默认 280，给主列留出空间，使三列共存时主列更宽、工作区名称更舒展。
+// 已存在会话的 localStorage 宽度不自动升级（用户拖动过的尊重保留），仅默认提高。
 const LEFT_DEFAULT = 280;
-// v11: 右列默认 640, 拖动范围 360-840.
-// 用户反馈 480 装不下"节假日危险品重大危险源..."这样的中文长标题分类,
-// 标题被截断成"节假日危险品重大危险源是级管控专题培训会...".
-// 640 = 480 + 160, 足以显示完整中文文件名 + 扩展 chip, 不挤压主列.
+// 右列默认 640，拖动范围 360-840；vw=1440 时主列 = 1440 - 200 - 640 = 800。
+// 640 足以完整显示中文长标题分类（如"节假日危险品重大危险源..."），
+// 480 会让这类标题被截断；640 也不挤压主列。
 const RIGHT_MIN = 360;
 const RIGHT_MAX = 840;
 const RIGHT_DEFAULT = 640;
 
 // 对话主列的"舒适最小宽度"。当主列宽度 ≥ MAIN_MIN_WIDTH 时，chat 气泡的
 // 内容（消息头像 + 文本 + 内边距）有充裕的呼吸感，气泡不显拥挤。
-// v11: 用户反馈右列 480 装不下中文长文件名分类, 改 RIGHT_DEFAULT 480→640.
-// 为避免 1440 视口三列总宽溢出 (200+720+640=1560>1440), 同步把
-// MAIN_MIN_WIDTH 720→580. 主列 580 仍能装 50+ 中文字符, 平衡两端.
-// 三列共存临界视口 (v11): LEFT_MIN(200) + MAIN_MIN_WIDTH(580) + RIGHT_MIN(360) = 1140.
+// 为避免 1440 视口三列总宽溢出 (200+720+640=1560>1440)，MAIN_MIN_WIDTH 取 580；
+// 主列 580 仍能装 50+ 中文字符，两端平衡。
+// 三列共存临界视口: LEFT_MIN(200) + MAIN_MIN_WIDTH(580) + RIGHT_MIN(360) = 1140。
 // 默认视口 1440 时: 左 200 + 主 580 + 右 640 = 1420 (剩 20 给 splitter, OK).
 // 默认视口 1680 时: 左 200 + 主 840 + 右 640 = 1680.
-// v23: "想看右栏就自动给空间" — 视口 < 1140 + 用户点 TitleBar 产物按钮想开右栏
-// 时, 把 Tauri 窗口 outer 宽扩到 DEFAULT_WINDOW_WIDTH (1280 = tauri.conf.json
-// 默认), 高度保留当前 outer. 装下三列后 setRightOpen(true). 跟 v22 的
-// "装不下就少一列" 不冲突: resize 拖小窗口仍然自动关, 用户**主动**想看才扩.
-// appWindow setSize 失败时降级 (仍 setRightOpen(true), 让 layout 走 v22 退化路径).
+// 用户主动想看右栏时（点 TitleBar 产物按钮且视口 < 1140），把 Tauri 窗口
+// outer 宽扩到 DEFAULT_WINDOW_WIDTH (1280 = tauri.conf.json 默认)，高度保留当前 outer；
+// 装下三列后 setRightOpen(true)。这与 resize 拖小窗口时"装不下就关右栏"不冲突：
+// 后者是被动收缩，这里是用户主动请求更多空间。
+// setSize 失败时仍 setRightOpen(true)，让 layout 走退化路径（窗口不够宽则右栏内容窄显示）。
 // 默认视口 1920 时: 左 200 + 主 1080 + 右 640 = 1920.
-/* v27: 自适应 MAIN_MIN_WIDTH — 不再硬编码 580px。
-   在小视口下允许缩小到 360px（还能装约 30 个中文字符 + 气泡容差），
-   大视口保持 580px 的舒适阅读宽度。
-   阈值规则：
+/* 自适应 MAIN_MIN_WIDTH — 按视口动态缩小主列最小宽，避免窄窗口下左列 + 主列
+   合计最小宽度超过视口：
    - 视口 ≥ 1400px: MAIN_MIN_WIDTH = 580（舒适宽）
    - 视口 1000~1399px: MAIN_MIN_WIDTH = 480（中等）
    - 视口 800~999px: MAIN_MIN_WIDTH = 400（紧凑）
    - 视口 < 800px: MAIN_MIN_WIDTH = 360（最小可读）
-   同时 LEFT_MIN 也从 200 适当降低, 避免在窄窗口下左列 + 主列
-   合计最小宽度 > 视口。
-   对应的三列共存阈值从 1140 降到 920. */
+   同时 LEFT_MIN 也随视口降低。对应的三列共存阈值随之降到 920。 */
 function computeMainMinWidth(vw: number): number {
   if (vw >= 1400) return 580;
   if (vw >= 1000) return 480;
@@ -194,8 +186,8 @@ function computeLeftMin(vw: number): number {
   return 120;
 }
 
-// v27: 分辨率自适应 — 不再用 const，改为 state + resize listener
-// 在 App 组件内初始化，这样 setup 时窗口已经确定，准确拿到实际视口宽度。
+// 分辨率自适应 — 用 state + resize listener 而非常量；在 App 组件内初始化，
+// 这样 setup 时窗口已确定，能拿到实际视口宽度。
 // eslint-disable-next-line prefer-const
 // (上面保留 computeMainMinWidth / computeLeftMin 供 typing 引用)
 
@@ -302,19 +294,18 @@ function updateToolStepStdout(
 
 export default function App() {
   const [page, setPageRaw] = useState<NavPage>("chat");
-  // v27: 视口自适应面板最小宽度 — 窗口缩小时缩小主列/左列最小宽
+  // 视口自适应面板最小宽度 — 窗口缩小时缩小主列/左列最小宽
   const [mainMinWidth, setMainMinWidth] = useState(() => computeMainMinWidth(window.innerWidth));
   const [leftMin, setLeftMin] = useState(() => computeLeftMin(window.innerWidth));
-  // 包装 setPage: 切到非 chat 页时主动关闭产物栏 (右栏是 chat 专属 UI)
-  // 用户要求: 在右栏展开时切到 agents/experts/settings/plugins/
-  // automation/search/groupchat 任何非对话页 → 自动 setRightOpen(false)
+  // 包装 setPage: 右栏是 chat 专属 UI，切到任意非对话页时主动关闭产物栏
+  // （agents/experts/settings/plugins/automation/search/groupchat）。
   const setPage = useCallback((p: NavPage) => {
     setPageRaw(p);
     if (p !== "chat") setRightOpen(false);
   }, []);
 const [sessions, setSessions] = useState<Session[]>([]);
 const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
-// P0-9: External file attachment from right-sidebar “加入对话” context menu.
+// 右栏"加入对话"右键菜单触发外部文件附件。
 const [pendingFileAttachment, setPendingFileAttachment] = useState<string | null>(null);
 const handleAddFileToChat = useCallback((path: string) => {
 setPendingFileAttachment(path);
@@ -327,11 +318,8 @@ setPage("chat");
 // image preview, spreadsheet rendering, etc.) can display it.
 const [computerPreviewArtifact, setComputerPreviewArtifact] = useState<Artifact | null>(null);
 const handlePreviewFileFromExplorer = useCallback((path: string, name: string) => {
-  // this used to define its own (long) extension sets inline,
-  // which drifted from InlinePathPreview.tsx's classify() — same file
-  // could pick a different icon / preview branch depending on which side
-  // of the app opened it. Now uses the shared canonical classifier in
-  // utils/artifacts so all three surfaces agree.
+  // 用 utils/artifacts 里统一的 classify()，保证文件浏览器与 InlinePathPreview
+  // 等各处对同一文件选同一图标/预览分支（避免各写各的分类导致不一致）。
   const kind = classifyArtifactKind(name);
   setComputerPreviewArtifact({
     id: `computer-preview-${Date.now()}`,
@@ -343,14 +331,8 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
     isAbsolute: true,
   });
 }, []);
-  // Queue mutation handlers — kept memoized so ChatComposer doesn't
-  // re-render on every keystroke in the main textarea.
-  // added per-item remove / edit / send-now callbacks
-  // alongside the pre-existing bulk `onClearQueue`, so the queue
-  // panel can show its contents and let the user act on each row.
-  // NOTE: `sendFromQueue` closes over `streaming` and
-  // `handleSendMessage`, both defined further down, so it's
-  // declared after them (see below).
+  // 队列变更 handlers 保持 memoized，避免 ChatComposer 在主输入框每次按键时重渲染。
+  // sendFromQueue 闭包依赖下方定义的 streaming / handleSendMessage，故在其后声明。
   const removeFromQueue = useCallback((idx: number) => {
     setMessageQueue((prev) => prev.filter((_, i) => i !== idx));
   }, []);
@@ -359,7 +341,7 @@ const handlePreviewFileFromExplorer = useCallback((path: string, name: string) =
   }, []);
 const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
 
-  // v27: 视口自适应 — 窗口尺寸变化时重算面板最小宽度
+  // 视口自适应 — 窗口尺寸变化时重算面板最小宽度
   // 对应 computeMainMinWidth / computeLeftMin 的分档逻辑。
   // 放在这里（useEffect 最前面），确保每次 resize 都更新。
   useEffect(() => {
@@ -372,12 +354,11 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // v28: 窗口高度自适应屏幕 — Tauri 默认 860px 高，在 768p 屏幕（1366×768 笔记本）
-  // 上窗口底部 92px 落到屏幕外。启动时检测窗口高度是否超出屏幕可用高度，
-  // 超出则缩到刚好适配。注意：outerSize 返回的是物理像素，需要除以 scaleFactor
-  // 换算成逻辑像素再跟 screen.availHeight 比较。
-  // 同时处理 Windows 任务栏/系统栏占用的情况（availHeight < screen.height）。
-  // 不阻塞启动流程 — 失败了也不影响 app 正常运行。
+  // 窗口高度自适应屏幕 — Tauri 默认 860px 高，在 768p 屏幕（1366×768 笔记本）
+  // 上窗口底部 92px 落到屏幕外。启动时若窗口高度超出屏幕可用高度则缩到刚好适配。
+  // 注意：outerSize 返回物理像素，需除以 scaleFactor 换算逻辑像素再跟 screen.availHeight 比较。
+  // 同时避开 Windows 任务栏/系统栏占用（availHeight < screen.height）。
+  // 不阻塞启动流程 — 失败也不影响 app 正常运行。
   useEffect(() => {
     const fit = async () => {
       try {
@@ -401,22 +382,18 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   // Idempotent: gated by `hermix.compat.migrated` flag inside the helper.
   useEffect(() => {
     // Iterate the canonical registry so newly added STORAGE_KEYS are
-    // auto-migrated (P2-2). Draft keys are intentionally cleared below,
+    // auto-migrated. Draft keys are intentionally cleared below,
     // not migrated, to avoid cross-restart residue in the welcome UI.
     storage.migrateLegacyKeys(KNOWN_KEYS);
 
-    // 用户反馈：重启后欢迎界面的「目录/专家」选择状态不应保留。
-    // draft 槽位（hermix.desktop.draft.*）用于无 session 时的欢迎界面，
-    // 持久化会导致上次的选择跨重启残留。每次启动时清除，让用户
-    // 在新会话中从头选择。
+    // 欢迎界面（无 session）用的 draft 槽位（hermix.desktop.draft.*）不持久化，
+    // 否则上次的选择会跨重启残留。每次启动清除，让用户在新会话从头选择。
     try { storage.removeItem(STORAGE_KEYS.draftExpertId); } catch {}
     try { storage.removeItem(STORAGE_KEYS.draftWorkspace); } catch {}
 
-    // 用户反馈"进历史对话，目录/模型/默认模型都消失"诊断。
-    // 临时挂一个启动诊断：把所有 hermix.* key 打到 console，方便用户在
-    // devtools 直接看 localStorage 实际状态 — 区分是"数据没写"还是
-    // "数据写了没读"。**仅在 dev build 跑**（import.meta.env.DEV）：
-    // 生产构建时 Vite 直接 dead-code-eliminate，不影响产物。
+    // 启动诊断：把所有 hermix.* key 打到 console，便于在 devtools 直接看 localStorage
+    // 实际状态 — 区分"数据没写"还是"数据写了没读"。**仅在 dev build 跑**
+    // （import.meta.env.DEV）：生产构建时 Vite 直接 dead-code-eliminate，不影响产物。
     // 可读 localStorage 失败时静默，避免控制台噪音。
     if (import.meta.env.DEV) {
       try {
@@ -469,13 +446,10 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const activeSessionIdRef = useRef(activeSessionId);
   useEffect(() => { activeSessionIdRef.current = activeSessionId; }, [activeSessionId]);
 
-  // 切换会话时（新建对话 / 选择左侧会话）立即把上下文用量
-  // 显示重置为 null，避免上一个会话的后台 stream 事件或残留值污染当前
-  // 会话的 context-usage 进度条。用户报告「新对话进入后/发首句就显示 53k」
-  // 的根因之一就是 contextUsage / usageSnapshot 这两个 state 从不在会话
-  // 切换时被清空——`setContextUsage` 全仓只有 WS 事件与 restoredCtx 两处写入，
-  // 没有任何切换重置。reset 后进度条在新会话首句事件到达前不渲染，到达后
-  // 才显示该会话的真实用量。
+  // 切换会话时立即把上下文用量重置为 null，避免上一个会话的后台 stream 事件或
+  // 残留值污染当前会话的 context-usage 进度条。contextUsage / usageSnapshot 这两个
+  // state 只在 WS 事件与 restoredCtx 处写入，没有任何切换重置；reset 后进度条在新
+  // 会话首句事件到达前不渲染，到达后才显示该会话真实用量。
   useEffect(() => {
     setContextUsage(null);
     setUsageSnapshot(null);
@@ -490,26 +464,22 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     try { storage.setItem(RIGHT_OPEN_KEY, String(rightOpen)); } catch {}
   }, [rightOpen]);
 
-  // (user): 右栏当前标签，可被外部控制（点目录 chip 直接切到「电脑」）。
+  // 右栏当前标签，可被外部控制（点目录 chip 直接切到「电脑」）。
   const [rightTab, setRightTab] = useState<RightTab>("products");
 
-  // v23: 三列临界视口 + 默认窗口宽. 见上方注释块.
+  // 三列临界视口 + 默认窗口宽（见上方注释块）。
   const THREE_COL_MIN_VIEWPORT = 1140;
   const DEFAULT_WINDOW_WIDTH = 1280;
   const appWindow = getCurrentWindow();
 
-  // v24: 切换右栏时, 视口 < 1140 + 用户在"开"动作上 → 先 await 扩窗到能装三列,
-  // 扩窗完成后再 setRightOpen(true). resize 路径仍然走 v22 (装不下关右栏).
-  // v23 死循环修复: 之前是 await setSize + 同步 setRightOpen((v)=>!v), 但 setSize
-  // 异步完成期间 window.innerWidth 仍是 < 1140, line 415 的 viewport-aware effect
-  // 看到 rightOpen=true + vw<1140 立刻 setRightOpen(false), 用户视觉上"点一下抖
-  // 一下". 现在 await setSize 完成后再开, 那时 vw 已经是 ≥1140, effect 不会再掐.
-  // setSize 失败处理: 不再降级到 v22 退化路径 (v22 退化 = setRightOpen(true) 后
-  // 立刻被 effect 掐 = 还是抖). setSize 失败就保持 rightOpen 不变 + console.warn.
-  // 用户能再点一次, 或先手动拉宽窗口.
+  // 切换右栏：视口 < 三列临界时，先 await 把窗口扩到能装下三列，再 setRightOpen(true)；
+  // resize 路径仍由 viewport-aware effect 处理（装不下就关右栏）。
+  // 必须在 setSize 完成后再开右栏：setSize 异步期间 window.innerWidth 仍 < 临界，
+  // viewport-aware effect 看到 rightOpen=true + vw<临界会立刻掐掉，造成"点一下抖一下"。
+  // setSize 失败时保持 rightOpen 不变并 console.warn，让用户手动拉宽窗口再点或重试点。
   const handleToggleRight = useCallback(async () => {
     if (rightOpen) {
-      // 关闭动作 — 任何视口下都直接关, 跟 v22 一致.
+      // 关闭动作 — 任何视口下都直接关。
       setRightOpen(false);
       return;
     }
@@ -522,7 +492,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
         const logicalH = Math.max(1, Math.round(outer.height / factor));
         await appWindow.setSize(new LogicalSize(DEFAULT_WINDOW_WIDTH, logicalH));
       } catch (e) {
-        // setSize 失败 — 保持 rightOpen 不动, 不开右栏. 避免 v23 那种"开了又
+        // setSize 失败 — 保持 rightOpen 不动, 不开右栏, 避免"开了又
         // 立刻被掐"的抖动. 用户可以手动拉宽窗口再点.
         console.warn("[right] auto-expand window failed, right sidebar not opened:", e);
         return;
@@ -531,12 +501,9 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     setRightOpen(true);
   }, [rightOpen]);
 
-  // 用户反馈："欢迎页默认是关闭产物栏的"。
-  // 当 ChatView 从有消息 / 有 session 切到 empty state（欢迎页）时，
-  // 由 ChatView 通过 onEnterWelcome 回调通知此 handler — 此处只做
-  // 幂等的关闭动作。ChatView 内部用 lastIsWelcomeRef 保证只在
-  // false→true 切换时触发，所以这里即使 setRightOpen(false) 也是
-  // 一次性的，不会把用户在欢迎页手动开的右栏反复掐掉。
+  // 欢迎页（empty state）默认关闭产物栏。ChatView 切到 welcome 时通过 onEnterWelcome
+  // 通知此 handler 做幂等关闭；ChatView 内部用 lastIsWelcomeRef 保证只在 false→true
+  // 切换时触发，因此不会把用户在欢迎页手动开的右栏反复掐掉。
   const handleEnterWelcome = useCallback(() => {
     setRightOpen(false);
   }, []);
@@ -619,7 +586,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const [streamPhase, setStreamPhase] = useState<StreamPhase | null>(null);
   const prevPhase = useRef<StreamPhase | null>(null);
 
-  // M5 ACUI: the `acui` hook + `acuiBus` useMemo are declared further
+  // ACUI: the `acui` hook + `acuiBus` useMemo are declared further
   // down (after handleApproveApproval / handleDenyApproval /
   // handleAnswerClarify) to keep the temporal dead zone happy. We
   // reference them inside `handleSendMessage` via closure.
@@ -711,22 +678,15 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   // backend already auto-denied at 30s and the agent moved on.
   const approvalTimeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   /**
-   * 用户反馈"请求的按钮不够突出啊，差点没看见,而且
-   * 我认为需要一个提醒机制,比如右下角的气泡提醒等待你确认"。
-   * 这里把 Map.size 镜像成 state,触发 `<PendingApprovalToast>` 重
-   * 渲染。**不在 ref 上直接 render** 是因为 useRef 变化不引起
-   * 重渲染——所以 mutate 完后必须 `setPendingApprovalCount(size)`。
-   * 这是 React 18 useRef + useState 同步的标准做法,开销 = 一次
-   * number 比较 + 一次 setState。
+   * 把待审批 Map.size 镜像成 state，触发 `<PendingApprovalToast>` 重渲染。
+   * 不能在 ref 上直接渲染——useRef 变化不会引起重渲染，所以 mutate 完成后
+   * 必须调用 `setPendingApprovalCount(size)`。
    */
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   /**
-   * (A+C product fix): short-lived top banner shown when a
-   * tool call is *denied* (user拒绝 / 超时 / 连接中断). Mirrors the
-   * agent's injected "tell the user" system note with a visible cue
-   * so the user isn't left guessing why a call didn't run. Auto-
-   * dismisses after 30s; a new denial replaces the current one.
-   * `"policy"` denials are silent gates and never reach here.
+   * 工具调用被拒绝（用户拒绝 / 超时 / 连接中断）时显示的短时顶部横幅。对应
+   * agent 注入的"告诉用户"系统提示给出可见反馈，让用户知道调用为何没执行。
+   * 30s 后自动消失；新的拒绝会替换当前横幅。`"policy"` 类拒绝是静默拦截，不进这里。
    */
   const [denialBanner, setDenialBanner] = useState<{ kind: string; tool: string } | null>(null);
   const denialBannerTimerRef = useRef<number | null>(null);
@@ -792,7 +752,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
    * it when the patch settles (including on error — see
    * TodoListCard.tsx catch block).  The onTodoChange handler below
    * skips WS echo upserts for ids that are currently in this set,
-   * preventing rapid-toggle races (Bug #1 fix, 2026-07-08).
+   * preventing rapid-toggle races.
    */
   const justPatchedTodoRef = useRef<Set<string>>(new Set());
 // needsNewAssistantRef removed. All text chunks in an
@@ -817,14 +777,12 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   >(new Map());
   const { workspaceRoot, setWorkspaceRoot } = useWorkspaceRoot();
 
-  // 用户反馈："选了工作区 Computer 面板不显示文件夹 / 对话没归到对应工作区分组"。
-  // 根因：Composer chip 走 useSessionWorkspace（per-session localStorage + 后端 PATCH），
-  // 但 ComputerTab 读的是 useWorkspaceRoot（global），Sidebar 的 useMemo 只依赖
-  // sessions/workspaces state —— 两边都不感知 chip 的修改。本回调把变更广播到两个
-  // 出口：(1) setWorkspaceRoot 推 global，(2) setSessions 改 session.workspace
-  // 让 Sidebar useMemo 重算。
-  // 当 path=null（用户点"不绑定目录"）时也清掉 global workspaceRoot，避免下次开
-  // 新 session 时还残留上次的根目录。
+  // 工作区变更需同时广播到两个出口：(1) setWorkspaceRoot 推 global；(2) setSessions
+  // 改 session.workspace 让 Sidebar useMemo 重算。否则 ComputerTab 读 useWorkspaceRoot
+  // （global）而 Sidebar 只依赖 sessions/workspaces state，两边都不感知 Composer chip
+  // 的修改，导致文件面板与对话分组不同步。
+  // path=null（用户点"不绑定目录"）时也清掉 global workspaceRoot，避免下次开新
+  // session 时残留上次根目录。
   const onWorkspaceChange = useCallback((sessionId: string | null | undefined, path: string | null) => {
     if (path) {
       setWorkspaceRoot(path);
@@ -836,7 +794,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     }
   }, [setWorkspaceRoot]);
 
-  // (user): 点目录 chip（已选工作区时）→ 打开右栏并切到「电脑」标签，
+  // 点目录 chip（已选工作区时）→ 打开右栏并切到「电脑」标签，
   // 直接把文件浏览器切到所选工作区目录，不再弹 chooser 列表。
   const openComputer = useCallback(() => {
     setRightTab("computer");
@@ -852,12 +810,9 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  // P1-T4 (Frontend Audit 2026-07-13): clear `todoGroups` when the
-  // user switches sessions. Without this, todos from the previous
-  // session leak into the new session's chat (the WS listener
-  // already filters per-session, but stale state from a same-tab
-  // session switch would persist). The new session is re-hydrated
-  // by the next `todo_snapshot` WS event (P0-T2).
+  // 切换会话时清空 todoGroups：否则上一个会话的 todo 会泄漏进新会话的聊天。
+  // WS 监听器已按会话过滤，但同标签页内切换会话残留的旧 state 仍会保留。
+  // 新会话由下一条 `todo_snapshot` WS 事件重新填充。
   // Note: this only triggers when `activeSessionId` actually
   // changes, not on every render. The `todoGroupsByIdRef` mirror is
   // cleared in the same pass so the dedup set never sees ghosts.
@@ -873,14 +828,11 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     setSubAgents({});
   }, [activeSessionId]);
 
-  // Viewport-aware layout: 三列共存阈值从 state 读取, 不再硬编码 1140.
-  // 用户反馈 v20: "拖动边框缩小时右栏换行/弹遮罩". 改用最简方案 —
-  // 视口装不下三列就关掉右栏, 不挤不变形, 也不弹 modal 遮罩 (跟 workbuddy
-  // "三列就三列, 装不下就少一列" 的行为一致). 拉宽后不会自动重开 —
-  // 用户需要手动点 TitleBar 上的右栏按钮.
-  // v27: 阈值从 state (leftMin + mainMinWidth + RIGHT_MIN) 实时计算,
-  // 不再硬编码 1140. 窗口缩小时主列和左列最小宽度都会缩, 临界阈值随之降低,
-  // 右栏可以在更小的窗口下保持打开.
+  // Viewport-aware layout: 三列共存阈值从 state 读取，不再硬编码 1140。
+  // 视口装不下三列就关掉右栏，不挤不变形，也不弹 modal 遮罩。拉宽后不会自动重开，
+  // 需用户手动点 TitleBar 上的右栏按钮。
+  // 阈值从 state (leftMin + mainMinWidth + RIGHT_MIN) 实时计算，窗口缩小时主列和
+  // 左列最小宽度都会缩，临界阈值随之降低，右栏可在更小窗口下保持打开。
   // recompute 触发条件: window.resize / rightOpen 切换 / 用户拖动 resizer.
   // 三列共存时再 clamp 各自列到静态边界 (LEFT_MAX / RIGHT_MIN..RIGHT_MAX).
   const leftWidthRef = useRef(left.width);
@@ -892,7 +844,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     const recompute = () => {
       const vw = window.innerWidth;
       // 三列共存下限 = state 中的 leftMin + mainMinWidth + RIGHT_MIN(360).
-      // v27 改为动态计算: 视口缩小时 leftMin 和 mainMinWidth 都缩,
+      // 动态计算：视口缩小时 leftMin 和 mainMinWidth 都缩,
       // 临界阈值随之降低, 右栏可以在更小的窗口下保持打开.
       const minThreeCol = leftMin + mainMinWidth + RIGHT_MIN;
       if (vw < minThreeCol && rightOpen) {
@@ -1067,9 +1019,8 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     // duplicate the fetch here — the effect is the single source of
     // truth for loading session messages, which avoids race conditions
     // between two concurrent fetches overwriting each other's results.
-    // v29 preserved: if the session already has in-memory messages
-    // (e.g. from a just-ended streaming conversation), the effect
-    // skips the fetch and uses the in-memory state directly.
+    // 若会话已有内存中的消息（如刚结束的流式对话），effect 跳过 fetch
+    // 直接复用内存 state。
   }, [clearStreamError, setActiveSessionId, setPage]);
 
   const handleDeleteSession = useCallback(async (id: string) => {
@@ -1414,7 +1365,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     );
   }, []);
 
-  // ── M5: ACUI directive state + decision bus ─────────────────────
+  // ── ACUI directive state + decision bus ─────────────────────
   // The agent emits ACUI (Agent-Controlled UI) directives over the
   // streaming WebSocket (`{ type: "acui", directive: {...} }`). We
   // collect them into `acui.state`, then `ChatView` renders the active
@@ -1891,10 +1842,8 @@ streamPhaseRef.current = null;
             }));
           },
           onToolComplete: ({ toolCallId, tool, content, denialKind }) => {
-            // (A+C product fix): a user-facing denial
-            // (user拒绝 / 超时 / 连接中断) surfaces a top banner that
-            // mirrors the agent's injected "tell the user" note.
-            // `"policy"` is a silent hardline gate — skip it.
+            // 工具调用被拒绝时（用户拒绝 / 超时 / 连接中断）弹顶部横幅，
+            // 对应 agent 注入的"告诉用户"提示。`"policy"` 是静默硬拦截，跳过。
             if (denialKind && denialKind !== "policy") {
               showDenialBanner(denialKind, tool);
             }
@@ -2025,10 +1974,8 @@ return {
               };
             }));
           },
-          // Phase 19 (A): memory recall — surface the "💭 想到
-          // N 条" chip inline so the user can see when the agent
-          // re-pulled related facts. De-dupe by (trigger,
-          // turn_number) since drift recalls can fire close in time.
+          // 记忆召回 — 用"💭 想到 N 条"内联 chip 提示 agent 重新拉取了相关事实。
+          // 按 (trigger, turn_number) 去重，因为漂移召回可能在相近时刻触发。
           onMemoryRecall: ({ trigger, count, totalChars, previewKeys, turnNumber }) => {
             if (count === 0) return;
             setSessions((prev) => prev.map((s) => {
@@ -2071,9 +2018,8 @@ return {
               };
             }));
           },
-          // (C3 marker protocol): append a
-          // `section_gate` event to the active assistant
-          // message's `execution_timeline` so the trace panel
+          // 追加一条 `section_gate` event 到当前 assistant 消息的
+          // `execution_timeline`，使 trace 面板
           // can render the `SectionGateRow` inline with the
           // tool cards. Mirrors `onFileChange`'s shape: locate
           // the current assistant message via the ref, mutate
@@ -2217,18 +2163,9 @@ return {
           // start / upsert / remove) so ChatView re-renders
           // exactly the affected card.
           onTodoChange: (change) => {
-            // Commit E (Frontend Audit 2026-07-13): client-side
-            // session guard. The WS server already filters by
-            // session_id per connection
-            // (`hermix-server/src/lib.rs::handle_ws_stream`,
-            // ~line 3733), but the TodoPanel still gets every
-            // `todo_group_started` / `todo_item_upserted` /
-            // `todo_snapshot` that arrives on the wire — if a
-            // sibling tab ever shares a WS multiplex, or if a
-            // future code path bypasses the per-connection
-            // filter, the wrong session's groups would land in
-            // `todoGroups` and the inline plan card would render
-            // on the wrong assistant message.
+          // 客户端会话守卫：WS 已按连接过滤 session_id，但 TodoPanel 仍收到线路上
+          // 所有事件；若将来某路径绕过过滤，错误会话的 plan 卡片会渲染到错误的
+          // assistant 消息上，故此处再按 change.sessionId 二次校验。
             // `change.sessionId` is empty for legacy / non-todo
             // events — accept those (matches the server's
             // "None = legacy fan-out, always accept" policy).
@@ -2245,11 +2182,8 @@ return {
                 next[i] = updated;
                 todoGroupsByIdRef.current.set(updated.groupId, updated);
               };
-              // P0-T2 (Frontend Audit 2026-07-13): server-sent
-              // `TodoSnapshot` rebuilds groups from authoritative
-              // items, preserving first-seen order within each group.
-              // Items with no `group_id` (legacy / pre-v2) collapse
-              // into a `_legacy` bucket so they still render.
+              // server-sent `TodoSnapshot` 用权威 items 重建 groups，保留每组首次出现顺序。
+              // 无 `group_id` 的旧事件归入 `_legacy` 桶仍能渲染。
               if (change.kind === "snapshot") {
                 todoGroupsByIdRef.current.clear();
                 next.length = 0;
@@ -2302,10 +2236,8 @@ return {
                 return next;
               }
               if (change.kind === "upsert") {
-                // Bug #1 fix (2026-07-08): skip WS echoes for items
-                // that are currently in-flight from a user toggle.
-                // Without this, rapid double-toggles are silently
-                // reverted by a stale echo from the first click.
+                // 跳过正处于用户 toggle 进行中的 item 的 WS echo，
+                // 否则快速双点会被首次点击的陈旧 echo 静默回退。
                 if (justPatchedTodoRef.current.has(change.item.id)) {
                   return prev;
                 }
@@ -2532,9 +2464,7 @@ return {
               resolvers.forEach((resolve) => resolve(""))
             );
             clarifyResolversRef.current.clear();
-            // M5: clear the ACUI card stack — any cards still in
-            // flight belong to the now-finished turn and shouldn't
-            // bleed into the next send.
+            // 清空 ACUI 卡片栈 — 仍在途的卡片属于刚结束的轮次，不应泄漏到下一次发送。
             acui.reset();
             // Clear live sub-agent panel after a short delay so the
             // user can see the final "已完成/失败" state briefly.
@@ -2632,17 +2562,11 @@ return {
   // would otherwise flag "used before declaration" — the React
   // runtime order is fine (useCallback runs before the effect's first
   // execution) but tsc only sees the source-order TDZ.
-  // v2 fix: was originally placed above `handleSendMessage`
-  // without `handleSendMessage` in the deps array, relying on the
-  // `[streaming, messageQueue]` triggers to re-bind the closure. That
-  // happens to work for `messageQueue` (a React state read by index)
-  // but is a footgun: if `handleSendMessage` ever closes over a
-  // dep that changes without `streaming`/`messageQueue` changing
-  // (e.g. `activeSessionId` flip mid-stream), the effect would call
-  // a stale closure and drop the queued message.
-  // v3 fix: .catch() re-enqueue on failure (previously
-  // silently dropped the message). Max 3 retries via ref-based
-  // fallback tracker to prevent infinite drain loop.
+  // 原先放在 handleSendMessage 上方，且 deps 不含 handleSendMessage，靠
+  // [streaming, messageQueue] 触发来重绑闭包。对 messageQueue（按索引读的 React state）
+  // 碰巧可行，但是个隐患：若 handleSendMessage 将来闭包捕获了 streaming/messageQueue 之外的
+  // 变化依赖（如流中 activeSessionId 翻转），effect 会调用陈旧闭包而丢弃队列消息。
+  // 失败时 .catch() 重新入队（原先静默丢弃）。最多 3 次重试，用 ref 计数器防无限循环。
   const queueRetriesRef = useRef<Record<string, number>>({});
   useEffect(() => {
     if (!streaming && messageQueue.length > 0) {

@@ -1,5 +1,5 @@
 /**
- * M5: useAcuiState — React state hook wrapping `AcuiState` evolution.
+ * useAcuiState — React state hook wrapping `AcuiState` evolution.
  *
  * The caller wires this into a streaming source (e.g. `useStreamChat`'s
  * `onAcuiDirective` callback) and the hook takes care of folding
@@ -47,16 +47,15 @@ import type { AcuiDecisionBus } from "./AcuiRegistry";
 export interface UseAcuiState {
   /** Current state. Pass to <AcuiPanel state={state} />. */
   state: AcuiState;
-  /** Apply a single directive. Stable identity across renders. */
+  /** Stable identity across renders (safe to use in dependency arrays). */
   apply: (directive: AcuiDirective) => void;
-  /** Apply a batch of directives in order. */
+  /** Applies directives in order. */
   applyBatch: (directives: AcuiDirective[]) => void;
-  /** Record a user decision into the local decision log. */
+  /** Records a user decision into the local decision log (drives instant footer rendering). */
   applyDecision: (decision: AcuiDecision) => void;
   /** Reset to empty (e.g. when switching sessions). */
   reset: () => void;
-  /** Build a decision bus from caller-provided transport callbacks.
-   *  Each call returns a NEW bus object (cheap; pure closure). */
+  /** Build a decision bus from caller-provided transport callbacks. */
   bind: (transport: {
     approve?: (cardId: string) => void;
     deny?: (cardId: string) => void;
@@ -156,7 +155,7 @@ export function useAcuiState(): UseAcuiState {
     [applyDecisionInternal],
   );
 
-  // Recompute stats every state change. Cheap: O(cards + decisions).
+  // O(cards + decisions) — cheap enough to recompute on every state change.
   const stats = useMemo<AcuiStats>(() => {
     const decisionIds = new Set(state.decisions.map((d) => d.cardId));
     return {

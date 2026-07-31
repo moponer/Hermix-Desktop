@@ -14,10 +14,14 @@ export interface ParsedContent {
 // The system prompt instructs the model to emit reasoning inside
 // `<think>...</think>`. We drop these blocks entirely from the
 // rendered body — they're internal scaffolding, not user output.
+// Some models emit `<reasoning>...</reasoning>` instead; treat it
+// the same way so the user never sees raw reasoning tags.
 // Only tool calls, file edits, approval requests and task lists get
 // special visual treatment.
 const THINKING_RE = /<think>[\s\S]*?<\/think>/gi;
 const ORPHAN_OPEN_RE = /<think>[\s\S]*$/i;
+const REASONING_RE = /<reasoning>[\s\S]*?<\/reasoning>/gi;
+const ORPHAN_REASONING_RE = /<reasoning>[\s\S]*$/i;
 
 // Server lifecycle / status logs that occasionally leak into the
 // assistant body.  These are framework-level diagnostics, not user
@@ -31,20 +35,15 @@ const LIFECYCLE_RE = /\[lifecycle:[^\]]*\]/gi;
 // injects a sibling "[CONTEXT COMPACTION — REFERENCE ONLY]" system
 // message when a session is reloaded. Both are infrastructure that
 // the *LLM* needs to see — they're not user-facing content.
-// Two failure modes leak the banner into the chat:
-// 1. The LLM echoes the banner verbatim as the opening of its
-// reply. This is the symptom the user reported: they sent
-// "你好", and the AI's "reply" was the [CONTEXT COMPACTION]
-// block. (The banner's own prompt explicitly says "Do NOT echo,
-// quote or re-issue" — but that instruction is best-effort.)
-// 2. A persisted assistant message from a pre-fix turn was loaded
-// on session reload and rendered as-is.
+// Two failure modes leak the banner into the chat: the LLM echoes it
+// back as its "reply" (the banner's own prompt says "Do NOT echo,
+// quote or re-issue", but that is best-effort), or it is injected as
+// a sibling system message on session reload and rendered as-is.
 // Without this strip the user sees a 1-2 KB wall of system-level
 // scaffolding where their reply should be. Match covers the two
 // banner variants:
 // - `[CONTEXT COMPACTION]`            — current `SUMMARY_PREFIX`
 // - `[CONTEXT COMPACTION — REFERENCE ONLY]` — session-reload variant
-// - `[CONTEXT SUMMARY]:`              — legacy v1 prefix
 // (`compression.rs:55`
 // `LEGACY_SUMMARY_PREFIX`)
 // Pattern requires the closing `--- END OF … ---` marker on its own
@@ -68,10 +67,6 @@ const CONTEXT_COMPACTION_RE =
 // pre-fix turn, or a non-streaming path we haven't audited), the user
 // still never sees leaked XML — `parseContent` removes it here.
 // Patterns we strip:
-// 1. Full MiniMax wrapper:    <minimax:tool_call>…</minimax:tool_call>
-// 2. Bare prefix + invoke:    minimax:tool_call <invoke …>…</invoke>
-// 3. Standalone <invoke…>…</invoke>  (Hermes standard, no wrapper)
-// 4. Orphan close tags       </minimax:tool_call>  </invoke>
 const TOOL_CALL_FULL_RE =
   /<minimax:tool_call\s*>[\s\S]*?<\/minimax:tool_call>/gi;
 // Bare "minimax:tool_call" (no leading `<`) immediately followed by
@@ -93,6 +88,16 @@ export function parseContent(content: string): ParsedContent {
   // Drop orphan (unclosed) <think> tags the same way.
   if (working.match(ORPHAN_OPEN_RE)) {
     working = working.replace(ORPHAN_OPEN_RE, "");
+  }
+
+  // Drop closed <reasoning> blocks (some providers use this tag instead of
+  // <think>). Must happen before orphan handling so a closed block doesn't
+  // get swallowed by the orphan regex.
+  working = working.replace(REASONING_RE, "");
+
+  // Drop orphan (unclosed) <reasoning> tags.
+  if (working.match(ORPHAN_REASONING_RE)) {
+    working = working.replace(ORPHAN_REASONING_RE, "");
   }
 
   // Drop [lifecycle: ...] status noise.
@@ -272,7 +277,6 @@ export function groupTimeline(
   // state so the renderer keeps showing the spinner / "运行中"
   // badge — the close event is simply on its way. Forcing these
   // to "error" mid-stream is what produced the "上来就提示执行中断,
-  // 实际后面又成功了" symptom the user reported on 2026-07-22.
   // On settled reload (the default `true`), we still promote every
   // stranded group to `"error"` + "执行已中断（无完成事件）" —
   // that is the correct read for history recovered after the live
@@ -322,12 +326,10 @@ export function detectToolError(content?: string): string | null {
   if (!trimmed.startsWith("{")) return null;
   try {
     const parsed = JSON.parse(trimmed);
-    // 1. {"error":"..."}  (top-level)
     if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
       const e = parsed.error;
       return e.length > 120 ? e.slice(0, 117) + "…" : e;
     }
-    // 2. {"stderr":"...","exit_code":1}  (Bash / execute_command)
     if (
       typeof parsed.exit_code === "number" &&
       parsed.exit_code !== 0 &&
@@ -337,7 +339,6 @@ export function detectToolError(content?: string): string | null {
       const e = parsed.stderr;
       return e.length > 120 ? e.slice(0, 117) + "…" : e;
     }
-    // 3. {"exit_code":1}  alone — surface the non-zero exit.
     if (typeof parsed.exit_code === "number" && parsed.exit_code !== 0) {
       return `exit code ${parsed.exit_code}`;
     }
@@ -422,7 +423,7 @@ export function extractMemoryUpdates(events?: ExecutionTimelineEvent[]): MemoryU
 }
 
 /**
- * Phase 19 (A): a memory-recall event fired when the agent
+ * Memory-recall event fired when the agent
  * re-pulled related facts this turn. Distinct from
  * `MemoryUpdateEntry` (which fires on writes). Used to render the
  * inline "💭 想到 N 条" chip.
@@ -493,7 +494,7 @@ export function expandTimelineToMessages(messages: ChatMessage[]): ChatMessage[]
   // expanded out of an assistant's execution_timeline. A standalone
   // role:"tool" row that the server persisted *in addition to* the
   // timeline carries the identical (tool, args) and would otherwise
-  // render as a SECOND card — the "工具结果出现两次" the user saw. We
+  // render as a SECOND card — the duplicate "工具结果出现两次" symptom. We
   // skip any standalone tool whose signature collides with an already
   // expanded inline tool.
   const expandedToolSigs = new Set<string>();
@@ -537,9 +538,9 @@ export function expandTimelineToMessages(messages: ChatMessage[]): ChatMessage[]
     // outgoing assistant message: the tool groups are now expanded
     // into inline `role: "tool"` messages below, so leaving the
     // original timeline attached would cause `AssistantMessage` to
-    // render `ToolTimelineBlock` *in addition to* the inline cards —
-    // i.e. two cards per tool call, which is what the user
-    // complained about ("一件事三行").
+  // render `ToolTimelineBlock` *in addition to* the inline cards —
+  // i.e. two cards per tool call, producing "一件事三行" (one tool
+  // shown as three rows).
     out.push({ ...msg, execution_timeline: undefined });
 
     for (const g of groups) {
@@ -641,22 +642,13 @@ export function buildFallbackSteps(message: ChatMessage): TimelineStep[] {
 
   // When content has body text, show reasoning as a reasoning
   // block (folded) + body as text (normal case).
-  //
   // When content is empty but reasoning has text, this typically
   // means one of two things:
-  // 1. The LLM didn't close its <think> tag → ThinkBlockParser
   //    routed ALL text to reasoning_content.
-  // 2. The backend's `looks_like_untagged_reasoning` check
   //    swapped content → reasoning_content at flush time.
   // In both cases, the text IS reasoning — it was in
   // `reasoning_content` on the backend. Show it as a reasoning
   // step (folded inside ProcessTimeline), NOT as body text.
-  // The previous behavior showed it as body text to "match what
-  // the user saw during streaming", but with the streaming fix
-  // (stream_collect.rs untagged reasoning detection + App.tsx
-  // retroactive text→reasoning conversion), the user now sees it
-  // as a folded reasoning block during streaming too. Showing it
-  // as body text on reload would be inconsistent.
   if (hasBody) {
     if (reasoning) {
       steps.push({ kind: "reasoning", content: reasoning });
@@ -666,12 +658,33 @@ export function buildFallbackSteps(message: ChatMessage): TimelineStep[] {
     }
     steps.push({ kind: "text", content: parsed.body });
   } else if (reasoning) {
-    // Content is empty, reasoning has text → show as reasoning
-    // step (folded), matching the streaming behavior.
-    if (toolEvents.length > 0) {
-      steps.push({ kind: "tools", events: toolEvents });
+    // Content is empty, reasoning has text. This can mean:
+    //    routed ALL text to reasoning_content.
+    //    swapped content → reasoning_content at flush time.
+    //    split reasoning into thinking + visible reply, but the
+    //    persisted message still has empty content (edge case).
+    // Try to split the reasoning into thinking + visible body.
+    // This handles the MiniMax M3 case where an unclosed <arg_key>tag
+    // causes both thinking and the visible reply to end up in
+    // reasoning_content, and the backend split may not have been
+    // applied (e.g. persisted messages from before the fix).
+    const splitResult = splitUnclosedThinkReasoning(reasoning);
+    if (splitResult) {
+      if (splitResult.reasoning) {
+        steps.push({ kind: "reasoning", content: splitResult.reasoning });
+      }
+      if (toolEvents.length > 0) {
+        steps.push({ kind: "tools", events: toolEvents });
+      }
+      steps.push({ kind: "text", content: splitResult.body });
+    } else {
+      // No split point found — entire reasoning is actual thinking.
+      // Show as reasoning step (folded inside ProcessTimeline).
+      if (toolEvents.length > 0) {
+        steps.push({ kind: "tools", events: toolEvents });
+      }
+      steps.push({ kind: "reasoning", content: reasoning });
     }
-    steps.push({ kind: "reasoning", content: reasoning });
   } else {
     if (toolEvents.length > 0) {
       steps.push({ kind: "tools", events: toolEvents });
@@ -744,11 +757,92 @@ export function mergeAdjacentReasoning(steps: TimelineStep[]): TimelineStep[] {
 }
 
 /**
+ * Attempt to split a reasoning_content blob that actually contains both
+ * the model's thinking and its visible reply. This happens when MiniMax M3
+ * opens a ‌​ tag but never emits the closing ‌​,
+ * causing ThinkBlockParser to route the entire remainder (thinking +
+ * visible reply) into reasoning_content.
+ *
+ * MiniMax M3's actual output pattern:
+ *   ‌​\n思考过程...\n\n正文回复
+ * The thinking and visible reply are separated by a double newline.
+ * We detect this boundary and split the blob.
+ *
+ * Returns `{reasoning, body}` if a split point was found, or `null` if
+ * the entire blob appears to be reasoning.
+ */
+function splitUnclosedThinkReasoning(reasoningContent: string): { reasoning: string; body: string } | null {
+  const trimmed = reasoningContent.trim();
+  if (!trimmed) return null;
+
+  // Look for the first significant paragraph break (double newline)
+  // that could mark the boundary between thinking and the visible reply.
+  // Skip boundaries that are very early (first 20 chars) — those are
+  // likely just formatting within the thinking block.
+  const minReasoningLen = 20;
+  let searchStart = 0;
+
+  while (searchStart < trimmed.length) {
+    const remaining = trimmed.slice(searchStart);
+    const pos = remaining.indexOf("\n\n");
+    if (pos === -1) break;
+
+    const absPos = searchStart + pos;
+    if (absPos < minReasoningLen) {
+      searchStart = absPos + 2;
+      continue;
+    }
+
+    const candidateReasoning = trimmed.slice(0, absPos);
+    const candidateContent = trimmed.slice(absPos).trim();
+
+    // If the content after the boundary is empty, skip
+    if (!candidateContent) {
+      searchStart = absPos + 2;
+      continue;
+    }
+
+    // Check if the content after the boundary looks like a user-facing
+    // reply rather than more reasoning.
+    if (!looksLikeUntaggedReasoningLocal(candidateContent)) {
+      return { reasoning: candidateReasoning, body: candidateContent };
+    }
+
+    // Content after this boundary still looks like reasoning —
+    // continue searching for a later boundary
+    searchStart = absPos + 2;
+  }
+
+  return null;
+}
+
+/**
+ * Local version of the untagged reasoning detection for use in
+ * splitUnclosedThinkReasoning. Uses tight signals to avoid false positives.
+ */
+function looksLikeUntaggedReasoningLocal(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 40) return false;
+  const head = trimmed.slice(0, 360).toLowerCase();
+  const signals = [
+    "trying to", "i think", "i see", "probably", "could mean",
+    "might be", "reconstruct", "let me trace", "let me check",
+    "actually,", "seems like", "looking at", "the diff shows",
+    "the issue is", "i believe", "i suspect", "i'm trying", "i am trying",
+    "让我来", "我需要先", "我先看看",
+    "我先分析", "我直接看", "我想想",
+    "我认为应该", "我觉得可能",
+    "看起来像是", "实际上可能",
+  ];
+  return signals.some((s) => head.includes(s));
+}
+
+/**
  * Detect the "LLM-emitted headings between adjacent think blocks"
  * pattern. Examples that should return true:
  *   - `**Clarifying directory paths**`
  *   - `### Identifying file structure`
- *   - `<think>` or `</think>` (stray tags, in case any leak through)
+ *   - stray ‌​ tags (in case any leak through)
  *   - whitespace only
  * Examples that should return false (real user-visible text):
  *   - `这里是回答正文`

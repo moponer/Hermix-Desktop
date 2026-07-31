@@ -39,9 +39,9 @@ export interface TodoSnapshotItem {
 /**
  * Lifecycle phase of a single chat send. Returned by `useStreamChat`
  * so the caller can drive the UI through every stage without
- * collapsing them all into a boolean "isStreaming" — the old
- * boolean was the root cause of the "已中断" + full reply text
- * appearing simultaneously bug.
+ * collapsing them all into a single boolean "isStreaming" flag — that
+ * flag let "已中断" and full reply text appear at the same time, so the
+ * phase machine keeps each stage distinct.
  *
  * Transitions:
  *   idle → connecting → streaming → (slow | completed | error | timeout | partial)
@@ -177,7 +177,7 @@ interface StreamCallbacks {
     count?: number;
   }) => void;
   /**
-   * Phase 19 (A): fired by the server when the agent recalls N
+   * Recall event: fired by the server when the agent recalls N
    * related facts from memory this turn. The full content is
    * injected into the system prompt by `prompt_assembly`; this
    * callback only carries a small preview for the UI chip.
@@ -495,19 +495,14 @@ export function useStreamChat(activeSessionId: string | null) {
         sendStartedAtRef.current = Date.now();
 
         // ── Client-side message dedup (runs BEFORE setStreamingSessionId) ──
-        // (HH) root-cause fix: the previous code did `return;`
-        // from inside this Promise executor on a duplicate. That left the
-        // Promise un-resolved, so `await sendStream(...)` hung forever and
-        // the caller's `setSending(false)` (in `finally`) never ran. While
-        // `streaming` stayed true, the next Enter was routed to the message
-        // queue, whose auto-drain effect (`!streaming` guard) could never
-        // fire — looping identical content into the backend.
-        // Direct fix: resolve cleanly (no error, no UI glitch) instead of
-        // `return;`, and run this check BEFORE `setStreamingSessionId` so a
-        // duplicate never flips `streaming` on. No mutex / reject needed —
-        // identical-content duplicates are simply coalesced. Different
-        // content sent while a stream is in flight is a legitimate separate
-        // message and is allowed through.
+        // A duplicate must resolve("") cleanly instead of `return`-ing from
+        // inside this Promise executor: an un-resolved promise would hang
+        // `await sendStream(...)` forever and leave `streaming` stuck true,
+        // so the next Enter is routed into the message queue instead of
+        // sending — looping identical content to the backend. Coalesce only
+        // same-content re-sends WHILE this session is actively streaming;
+        // after the stream settles, a re-send is a deliberate retry and must
+        // pass through to the backend.
         const DEDUP_WINDOW_MS = 15_000;
         const contentHash = `${sessionId}:${content}`;
         const now = Date.now();
@@ -610,37 +605,26 @@ export function useStreamChat(activeSessionId: string | null) {
         // terminated, flipping `phase` back to "slow" right after the user
         // already saw "completed".
         let slowHintTimer: ReturnType<typeof setTimeout> | null = null;
-        // Changed from a 120s TOTAL timeout to a 300s IDLE
-        // timeout. The old total timeout killed long-running tasks (code
-        // review, plan generation) that legitimately take >120s of wall
-        // clock time even while actively streaming. The idle timeout
-        // resets on every received WS event (text, thinking, tool_start,
-        // tool_complete, status, etc.), so as long as the agent is
-        // making progress the stream stays alive.
-        // (P0-2 stale-stream hang fix): added a 90s STALE
-        // idle timeout independent from the 300s IDLE. When the backend
-        // agent loop exits silently (Finalize without sending Done, e.g.
-        // MiniMax empty-tool-call dead-end), the 90s guard settles the
-        // stream as "partial" so the user sees the interrupted result
-        // instead of staring at a frozen "thinking..." UI. The 300s
-        // timeout remains as the ultimate safety net.
-        // (storage_analyzer 81s regression): bumped STALE to
-        // 300s so spawn_blocking tools (storage_analyzer walks C:\
-        // which can take 60-90s) get the same 5-min buffer as IDLE.
-        // Combined with `toolRunningRef` suspending the timer between
-        // tool_start/tool_complete (so the watchdog doesn't fire mid-execution),
-        // the only way STALE triggers now is: agent silently dies, NO
-        // tool in flight, NO text for 5 minutes — which is a real hang.
+        // The idle timeout (300s) resets on every received WS event (text,
+        // thinking, tool_start, tool_complete, status, …), so long-running
+        // tasks that are actively streaming stay alive; it only fires when
+        // the agent goes silent.
+        // A separate STALE timeout (also 300s) catches the backend agent
+        // loop exiting silently — e.g. Finalize without sending Done (a
+        // MiniMax empty-tool-call dead-end) — so the stream settles as
+        // "partial" instead of freezing on "thinking…". Both timers are
+        // suspended while a tool is in flight (toolRunningRef) so the
+        // watchdog can't fire mid-execution; the only way STALE triggers is
+        // a real hang: no tool in flight and no text for 5 minutes.
         const IDLE_TIMEOUT_MS = 300_000;
         const STALE_STREAM_TIMEOUT_MS = 300_000;
         let staleStreamTimer: ReturnType<typeof setTimeout> | null = null;
-        // 2026-07-25: when an approval card is pending, the agent
-        // loop is blocked waiting for the user's click. No WS events
-        // will arrive during this time, so the idle/stale timers would
-        // fire and settle the stream as "timeout" / "partial" — killing
-        // the approval wait prematurely. This flag suspends both timers
-        // while an approval is in flight. It's set to true when
-        // `request_approval` arrives and cleared when the user clicks.
+        // When an approval card is pending, the agent loop is blocked waiting
+        // for the user's click and no WS events arrive, so the idle/stale
+        // timers would fire and settle the stream as "timeout" / "partial" —
+        // aborting the approval wait. This flag suspends both timers while an
+        // approval is in flight; it's set when `request_approval` arrives and
+        // cleared when the user clicks.
         let approvalPending = false;
 
         const armTimeouts = () => {
@@ -788,15 +772,11 @@ export function useStreamChat(activeSessionId: string | null) {
           wsSessionIdRef.current = sessionId;
 
           // Approval responses are routed back to the original
-          // `callbacks.onApprovalRequest(...)` Promise through a
-          // closure (the request id flows in the WS frame and the
-          // corresponding resolver lives in `App.tsx` via
-          // `approvalResolversRef`). The previous implementation
-          // kept a local `pendingApprovals` Map here that was
-          // populated by nothing and only read on `onclose` —
-          // dead code that hid the real lifecycle (cleanup of
-          // stale resolvers happens in App.tsx when a stream
-          // settles or the session changes).
+          // `callbacks.onApprovalRequest(...)` Promise through a closure:
+          // the request id flows in the WS frame and the corresponding
+          // resolver lives in `App.tsx` via `approvalResolversRef`. Stale
+          // resolver cleanup therefore happens in App.tsx when a stream
+          // settles or the session changes — not here.
 
           ws.onmessage = (evt) => {
             // Stale WS guard — if a new send has started,
@@ -807,10 +787,9 @@ export function useStreamChat(activeSessionId: string | null) {
             // (text, thinking, tool events, status), the stream stays
             // alive. Only when no event arrives for IDLE_TIMEOUT_MS
             // does the timeout fire.
-            // 2026-07-25: skip timer reset when an approval is pending —
-            // the agent is blocked waiting for the user's click, so no
-            // WS events will arrive. Without this guard, the idle timer
-            // would fire after 300s and kill the approval wait.
+            // Skip the idle reset while an approval is pending — the agent is
+            // blocked waiting for the user's click, so no WS events arrive and
+            // the timer would otherwise fire after 300s and kill the wait.
             if (approvalPending) {
               // Still clear any existing timer so it doesn't fire
               // from before the approval was pending.
@@ -827,11 +806,9 @@ export function useStreamChat(activeSessionId: string | null) {
                 }
               }, IDLE_TIMEOUT_MS);
             }
-            // also arm the stale timer on every WS event.
-            // This gives the stream 90s of "no text" before auto-settle.
-            // Tool execution pauses don't extend it (text events do).
-            // 2026-07-25: skip when an approval is pending — same
-            // reasoning as the idle timeout guard above.
+            // Arm the stale timer on every WS event (90s of "no text" before
+            // auto-settle; tool-execution pauses don't extend it). Skip while
+            // an approval is pending — same reasoning as the idle guard above.
             if (!approvalPending) resetStaleTimer();
             try {
               const data = JSON.parse(String(evt.data));
@@ -848,10 +825,9 @@ export function useStreamChat(activeSessionId: string | null) {
                 if (overrides.tools && overrides.tools.length > 0) {
                   payload.tools = overrides.tools;
                 }
-                // 把 selectedModel（形如 "minimax:MiniMax-M2.7"）
-                // 透传到 backend，让 effective_model 真的能切到用户选的 provider。
-                // 没设 = backend 用 config.yaml 默认 model。bug 历史：UI 显示切了
-                // 但 backend 永远在跑默认模型。
+                // selectedModel (e.g. "minimax:MiniMax-M2.7") must reach the
+                // backend so `effective_model` switches to the user's chosen
+                // provider; if unset, the backend uses config.yaml's default.
                 if (overrides.model) payload.model = overrides.model;
                 if (overrides.personality) payload.personality = overrides.personality;
                 if (overrides.permissionLevel) payload.permission = overrides.permissionLevel;
@@ -1044,7 +1020,7 @@ export function useStreamChat(activeSessionId: string | null) {
                 return;
               }
 
-              // Phase 19 (A): recall event. Fires when the agent
+              // recall event: fires when the agent
               // re-pulls related facts from memory this turn. We
               // forward to onMemoryRecall so App.tsx can render a
               // small "💭 想到 N 条" chip in the conversation.
@@ -1076,10 +1052,9 @@ export function useStreamChat(activeSessionId: string | null) {
               // { type: "todo_item_removed",   event: { session_id, id: "..." } }
               // Routing is straight to onTodoChange; no message-bubble
               // side effects (the TodoListCard subscribes directly).
-              // P0-T2 (Frontend Audit 2026-07-13): the `todo_snapshot`
-              // branch was missing — reload / reconnect / multi-client
-              // hydration silently dropped. Now handled: caller rebuilds
-              // `todoGroups` from the authoritative server state.
+              // `todo_snapshot` rebuilds `todoGroups` from the authoritative
+              // server state, so reload / reconnect / multi-client hydration
+              // stays consistent instead of silently dropping the task list.
               if (evtType === "todo_snapshot") {
                 const ev = data?.event ?? data ?? {};
                 const items = ev?.items ?? [];
@@ -1147,13 +1122,11 @@ export function useStreamChat(activeSessionId: string | null) {
               // high-risk tool. Forward to caller; when they answer, send the
               // response back via the same socket.
               if (evtType === "request_approval" || evtType === "RequestApproval") {
-                // 2026-07-25: Suspend idle/stale timers while the
-                // approval card is shown. The agent loop is blocked
-                // waiting for the user's click — no WS events will
-                // arrive, so without suspending the timers the stream
-                // would settle as "timeout" after 300s and kill the
-                // approval wait. Timers are re-armed in the .then()
-                // and .catch() callbacks below.
+                // Suspend idle/stale timers while the approval card is shown:
+                // the agent loop is blocked waiting for the user's click, so
+                // no WS events arrive and the stream would otherwise settle as
+                // "timeout" after 300s and kill the approval wait. Timers are
+                // re-armed in the .then() / .catch() callbacks below.
                 approvalPending = true;
                 if (idleTimeout !== null) { clearTimeout(idleTimeout); idleTimeout = null; }
                 if (staleStreamTimer !== null) { clearTimeout(staleStreamTimer); staleStreamTimer = null; }
@@ -1176,9 +1149,8 @@ export function useStreamChat(activeSessionId: string | null) {
                   callbacks
                     .onApprovalRequest({ requestId, tool, args, riskLevel, expiresAt, sessionId })
                     .then((resp) => {
-                      // 2026-07-25: Re-arm idle/stale timers — the
-                      // agent loop is about to resume, so the stream
-                      // watchdog needs to be active again.
+                      // Re-arm idle/stale timers — the agent loop is about
+                      // to resume, so the stream watchdog must be active again.
                       approvalPending = false;
                       armTimeouts();
                       // The `expired` decision means the user
@@ -1197,18 +1169,14 @@ export function useStreamChat(activeSessionId: string | null) {
                       console.error(`[APPROVAL-THEN] firing decision=${resp.decision} id=${requestId} t=${Date.now()} wsState=${wsRef.current?.readyState}`);
                       wsSendRaw(JSON.stringify({ type: "__diag", tag: "THEN", id: String(requestId), decision: String(resp.decision), ws: wsRef.current?.readyState ?? -1 }));
                       if (resp.decision === "expired") return;
-                      // stale-click bug fix.
-                      // The closure-captured `ws` was the WS that
-                      // delivered `request_approval`, which may have
-                      // been replaced by a reconnect by the time the
-                      // user clicks (especially after the 30-second
-                      // approval window). Always use `wsRef.current`
-                      // (the live WS) and refuse to send if it's not
-                      // OPEN — otherwise the click is silently
-                      // discarded, the server times out at 30s, and
-                      // the user sees "已允许" + "approval timed out"
-                      // simultaneously. Log loudly so we can grep
-                      // it if the bug recurs.
+                      // The closure-captured `ws` was the WS that delivered
+                      // `request_approval`, which may have been replaced by a
+                      // reconnect by the time the user clicks (especially
+                      // after the 30-second approval window). Always use
+                      // `wsRef.current` (the live WS) and refuse to send if
+                      // it's not OPEN — otherwise the click is silently
+                      // discarded, the server times out at 30s, and the user
+                      // sees "已允许" + "approval timed out" simultaneously.
                       const liveWs = wsRef.current;
                       if (!liveWs || liveWs.readyState !== WebSocket.OPEN) {
                         console.error(`[APPROVAL-DROP] wsRef not OPEN state=${liveWs?.readyState} id=${requestId} — dropped`);
@@ -1239,7 +1207,7 @@ export function useStreamChat(activeSessionId: string | null) {
                       }
                     })
                     .catch(() => {
-                      // 2026-07-25: Re-arm idle/stale timers.
+                      // Re-arm idle/stale timers.
                       approvalPending = false;
                       armTimeouts();
                       // Same hardening on the deny path.
@@ -1319,9 +1287,9 @@ export function useStreamChat(activeSessionId: string | null) {
 // Context usage snapshot — fired after every agent-loop turn.
 // Used to render a persistent context-usage bar in the chat footer.
               if (evtType === "context_usage" || evtType === "ContextUsage") {
-                // drop events whose WS session != active session
-                // (a background session's context_usage must not pollute the
-                // bar of the session the user switched to). See commit d28f76e.
+                // Drop events whose WS session != the active session, so a
+                // background session's context_usage can't pollute the bar of
+                // the session the user switched to.
                 if (activeSessionIdRef.current && wsSessionIdRef.current
                     && activeSessionIdRef.current !== wsSessionIdRef.current) {
                   return;
@@ -1614,13 +1582,11 @@ export function useStreamChat(activeSessionId: string | null) {
             // Stale WS guard.
             if (activeSendIdRef.current !== mySendId) return;
             if (!doneRef.current) {
-              // (rev): if we've ever received any content
-              // (text or status), we MUST NOT retry — the agent
-              // loop is already running server-side and a fresh WS
-              // would trigger a second `send_message_stream` call
-              // for the same content. We settle "partial" so the
-              // user keeps the text we've already received instead
-              // of discarding it via an error settle.
+              // Once we've received any content (text or status), we MUST NOT
+              // retry — the agent loop is already running server-side and a
+              // fresh WS would trigger a second `send_message_stream` call for
+              // the same content. Settle "partial" so the user keeps the text
+              // already received instead of discarding it via an error settle.
               if (hasContent) {
                 settle(fullText, undefined, undefined, "partial");
                 return;
@@ -1662,9 +1628,9 @@ export function useStreamChat(activeSessionId: string | null) {
               if (hasContent && fullText.length > 0) {
                 settle(fullText, undefined, undefined, "partial");
               } else {
-                // (rev): same hardening as onerror above.
-                // If anything arrived (status, thinking, anything),
-                // never retry — the agent loop is already running.
+                // Same hardening as onerror above: if anything arrived
+                // (status, thinking, anything), never retry — the agent loop
+                // is already running.
                 if (hasContent) {
                   settle(fullText, undefined, undefined, "partial");
                   return;

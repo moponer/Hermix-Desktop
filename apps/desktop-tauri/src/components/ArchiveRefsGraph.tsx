@@ -1,5 +1,5 @@
 /**
- * Hand-rolled SVG timeline for the v2 archive refs (TencentDB Agent
+ * Hand-rolled SVG timeline for the archive refs (TencentDB Agent
  * Memory 借鉴 Mermaid Canvas 的本地化复刻 — see
  * `docs/MEMORY_ARCHITECTURE_COMPARISON.md` §3).
  *

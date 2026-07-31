@@ -238,9 +238,10 @@ function CodeBlockImpl({ language, code, isDark = false }: { language: string; c
         </button>
       </div>
       {/* 代码主体 — refractor 同步高亮。
-          之前用 react-syntax-highlighter (Prism async build)，在 Tauri
-          webview 里动态 import prismjs 语言 chunk 可能静默失败，
-          导致很多语言没有高亮。换成 refractor 后全部同步注册，可靠。 */}
+          Highlighting must be synchronous: in the Tauri webview,
+          dynamically importing prismjs language chunks can silently
+          fail and leave code unhighlighted, so every language is
+          registered up front via refractor. */}
       <div style={{ position: "relative" }}>
         <pre
           style={{
@@ -378,9 +379,7 @@ export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
             }
             return <code {...props}>{children}</code>;
           },
-          // v3: LLM 输出里的 `- [ ]` / `- [x]` 任务标记
           // 完全不渲染任何 marker。普通无序列表本来就有 disc 圆点，
-          // 在文本里再画方框/勾选字符是冗余噪音（用户反馈）。直接
           // 返回 null，让 <li> 的默认 disc marker 承担列表语义即可。
           input({ type, ...props }) {
             if (type === "checkbox") return null;

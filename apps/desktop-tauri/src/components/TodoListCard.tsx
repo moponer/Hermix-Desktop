@@ -6,7 +6,6 @@
 // in the same session; each card is anchored to the assistant message
 // that declared it (or to the end of the stream when the server did
 // not stamp a message_id).
-// Replaces the v1 global TodoPanel which collapsed every todo in the
 // session into a single flat list. The flat view was wrong for the
 // multi-turn use case: a user starting a new conversation mid-session
 // about a different topic would see the old plan in the same panel

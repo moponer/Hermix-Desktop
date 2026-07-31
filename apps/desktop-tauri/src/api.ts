@@ -75,7 +75,7 @@ async function fetchVoid(path: string, init?: RequestInit): Promise<void> {
   return fetchApi<void>(path, init, { parseJson: false });
 }
 
-// ── Orchestration Engine: Task CRUD (Phase 1 / P1-5) ────────
+// ── Orchestration Engine: Task CRUD ────────
 // Task is the top-level work unit in the orchestration engine.
 // POST /v1/tasks creates a task, GET /v1/tasks lists them,
 // GET /v1/tasks/:id fetches one, PATCH /v1/tasks/:id/status
@@ -172,7 +172,7 @@ export async function listChildTasks(
   );
 }
 
-// ── Product Delivery (Phase 7 / P7-1) ───────────────────────
+// ── Product Delivery ───────────────────────
 // POST /v1/tasks/:id/results registers deliverable artifacts
 // for a Task, classifies them by type, and emits ResultDelivered
 // event via the orchestration bus.
@@ -192,7 +192,7 @@ export async function deliverResults(
   );
 }
 
-// ── Automation Engine (Phase 5/6 — P5-5, P6-5) ───────────────
+// ── Automation Engine ───────────────
 // The new three-table automation engine: /v1/automations endpoints
 // backed by hermix-automation crate. Triggers go through the unified
 // agent_service.send_message() dispatch path (铁律 DD).
@@ -333,7 +333,7 @@ export interface TodoItem {
  * was replaced by per-message TodoListCard components fed by WS.
  * Front-end callers vanished with the panel. The HTTP endpoint is
  * kept server-side for legacy CLI / script users; the UI no longer
- * polls it. Tracked by Frontend Audit (P0-T3).
+ * polls it.
  */
 export async function listTodos(): Promise<{ todos: TodoItem[]; total: number }> {
   return fetchJSON(`/v1/todos`);
@@ -505,7 +505,7 @@ export const restoreSession = async (
   }
 };
 
-// ── Archive refs (v2 short-term context unload, 2026-06-21) ─────
+// ── Archive refs (short-term context unload) ─────
 // Mirrors `hermix_agent::ArchiveRef` (rust) — see
 // `crates/hermix-agent/src/archive.rs`. The server writes one
 // JSON-Lines row per archived message under
@@ -952,7 +952,7 @@ const OFFICIAL_MCP_SEEDS: McpServerEntry[] = [
 
 // ── MCP server CRUD (backend-first, localStorage fallback) ─────────
 // As of `feat(server): seed 18 official plugin manifests + /api/mcp/servers
-// CRUD` (commit 47cd006), the Rust server is the source of truth for MCP
+// CRUD`, the Rust server is the source of truth for MCP
 // server config — persisted at `$HERMES_HOME/mcp_servers.json` and seeded
 // with 5 official entries on first list. We talk to it via the HTTP routes
 // exposed by `crates/hermix-server/src/dashboard/mcp.rs`.
@@ -1307,7 +1307,7 @@ export interface AnalyticsDailyEntry {
   estimated_cost: number;
   actual_cost: number;
   sessions: number;
-  /** Phase 5: estimated cache hit rate (0..100) when the provider
+  /** estimated cache hit rate (0..100) when the provider
    *  under-reports cache reads; `undefined` means use real data. */
   estimated_cache_hit_rate?: number;
 }
@@ -1321,7 +1321,7 @@ export interface AnalyticsModelEntry {
   reasoning_tokens: number;
   estimated_cost: number;
   sessions: number;
-  /** Phase 5: estimated cache hit rate (0..100) when real cache reads are 0. */
+  /** estimated cache hit rate (0..100) when real cache reads are 0. */
   estimated_cache_hit_rate?: number;
 }
 
@@ -1336,7 +1336,7 @@ export interface AnalyticsTotals {
   total_sessions: number;
   total_compactions: number;
   total_archived_turns: number;
-  /** Phase 5: estimated overall cache hit rate (0..100) when real cache
+  /** estimated overall cache hit rate (0..100) when real cache
    *  reads are 0; `undefined` means use the real `total_cache_read`. */
   estimated_cache_hit_rate?: number;
 }
@@ -1357,7 +1357,7 @@ export interface AnalyticsSkillsSummary {
   distinct_skills_used: number;
 }
 
-// P1-3: per-tool call counts derived from messages.tool_calls JSON.
+// per-tool call counts derived from messages.tool_calls JSON.
 export interface AnalyticsToolEntry {
   tool: string;
   call_count: number;
@@ -1379,7 +1379,7 @@ export interface AnalyticsResponse {
 export const getAnalytics = async (days = 30): Promise<AnalyticsResponse> =>
   fetchJSON(`/api/analytics/usage?days=${days}`);
 
-// ── Analytics debug (Phase 2) ───────────────────────────────
+// ── Analytics debug ───────────────────────────────
 // Diagnostic view of the stats DB: existence / row counts / sample
 // rows / applied migrations. Lets the user pinpoint a broken pipeline
 // without opening SQLite by hand.
@@ -1567,8 +1567,7 @@ export const deletePersonality = async (name: string): Promise<boolean> => {
 // default system message. `preferences` is open-ended JSON the agent
 // can read into the prompt. The agent loop currently reads
 // `system_prompt` from `HermesConfig`; this file is the new editable
-// source of truth. Wiring it into `build_system_prompt` is the next
-// focused commit.
+// source of truth,等待接入 `build_system_prompt`。
 
 export interface PersonaOverrides {
   system_prompt: string;
@@ -1787,7 +1786,7 @@ export interface SendMessageResponse {
   agent_messages: GroupChatMessage[];
 }
 
-// ── GroupChat Tasks (P2) ──────────────────────────────────────
+// ── GroupChat Tasks ──────────────────────────────────────
 
 export type GroupChatTaskStatus =
   | "pending"
@@ -2126,7 +2125,7 @@ export const approveGroupChatTask = async (
   );
 };
 
-// ── GroupChat Announcement (P2) ──────────────────────────────
+// ── GroupChat Announcement ──────────────────────────────
 
 /** Publish (or replace) the room's pinned announcement. Pass an empty
  *  string to clear — both verbs (POST with empty body, DELETE) clear
@@ -2151,7 +2150,7 @@ export const clearAnnouncement = async (roomId: string): Promise<void> => {
   );
 };
 
-// ── GroupChat Description (P4) ──────────────────────────────────
+// ── GroupChat Description ──────────────────────────────────
 
 /** Publish (or replace) the room's free-form description. Pass an
  *  empty string to clear — both verbs (PATCH with empty body, DELETE)
@@ -2193,7 +2192,7 @@ export const updateGroupChatChatMode = async (
     },
   );
 
-// ── GroupChat Tasks API (P2) ────────────────────────────────
+// ── GroupChat Tasks API ────────────────────────────────
 
 /** Get the active task (with subtasks) for a room. Returns
  *  `{ task: null }` when no in-flight task exists — the panel

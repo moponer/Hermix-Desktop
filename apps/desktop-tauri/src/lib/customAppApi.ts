@@ -1,10 +1,8 @@
 // Custom Apps API client — communicates with the backend HTTP API
-// at /api/custom-apps/*
+// at /api/custom-apps/*.
 
 import { invoke } from "@tauri-apps/api/core";
 import { apiUrl } from "../api";
-
-// ── Types ──
 
 export interface CustomAppManifest {
   id: string;
@@ -14,7 +12,7 @@ export interface CustomAppManifest {
   long_description?: string;
   author: string;
   icon: string;
-  /** Custom icon file name (e.g. "icon.png") */
+  /** Custom icon file name (e.g. "icon.png"). */
   icon_file?: string;
   category: string;
   tags: string[];
@@ -33,18 +31,18 @@ export interface CustomAppSummary {
   version: string;
   description: string;
   icon: string;
-  /** Custom icon file name (e.g. "icon.png") — null if no custom icon */
+  /** Null if no custom icon. */
   icon_file: string | null;
   category: string;
   author: string;
   is_packaged: boolean;
-  /** Path to the dist directory (if packaged) */
+  /** Null when not yet packaged. */
   dist_path: string | null;
 }
 
 export interface CustomAppResponse {
   manifest: CustomAppManifest;
-  /** Self-contained index.html source */
+  /** Self-contained index.html source. */
   index_html: string | null;
   is_packaged: boolean;
   dist_path: string | null;
@@ -52,14 +50,12 @@ export interface CustomAppResponse {
 
 export interface CreateAppRequest {
   manifest: CustomAppManifest;
-  /** Self-contained index.html source */
   index_html?: string;
 }
 
 export interface UpdateAppRequest {
-  /** Self-contained index.html source */
   index_html?: string;
-  /** Updated manifest (optional, e.g. to add permissions) */
+  /** Partial manifest — fields left undefined are preserved. */
   manifest?: Partial<CustomAppManifest>;
 }
 
@@ -71,8 +67,6 @@ export interface PackageResponse {
   error?: string;
 }
 
-// ── API Functions ──
-
 export async function listCustomApps(): Promise<CustomAppSummary[]> {
   const res = await fetch(apiUrl("/api/custom-apps"));
   if (!res.ok) throw new Error(`列表失败: ${res.status}`);
@@ -80,7 +74,7 @@ export async function listCustomApps(): Promise<CustomAppSummary[]> {
   return data.apps ?? [];
 }
 
-/** Open the packaged app's dist directory in the system file explorer. */
+// Opens the packaged app's dist directory in the system file explorer.
 export async function openCustomAppDist(path: string): Promise<void> {
   await invoke("open_external_url", { url: path });
 }
@@ -151,57 +145,47 @@ export async function runCustomApp(id: string): Promise<void> {
   }
 }
 
-// ── 开发期自验证 (shift-left): 由 agent 在生成/修改应用代码后调用 ──
-
 export interface ValidationIssue {
-  /** "error" 阻断打包; "warning" 仅提示 */
+  /** "error" blocks packaging; "warning" is informational only. */
   level: string;
-  /** manifest / html / rpc / permissions / js */
+  /** One of: manifest / html / rpc / permissions / js. */
   code: string;
   message: string;
 }
 
 export interface ValidationReport {
-  /** 是否通过 (无 error 级问题) */
+  /** True when no `error`-level issues were found. */
   ok: boolean;
   issues: ValidationIssue[];
 }
-
-// ── 运行时冒烟测试 (L2) ──
 
 export interface SmokeError {
   message: string;
 }
 
 export interface SmokeReport {
-  /** 是否通过 (已挂载且无运行时错误) */
+  /** True when the app mounted AND emitted no runtime errors. */
   ok: boolean;
-  /** 应用是否成功挂载 (DOMContentLoaded 已触发) */
+  /** App mounted (DOMContentLoaded fired). */
   ready: boolean;
-  /** 是否已打包 (dist 存在) */
+  /** dist directory exists. */
   packaged: boolean;
-  /** 运行时错误列表 */
   errors: SmokeError[];
-  /** 详细日志 (每行一条事件) */
+  /** Newline-separated event log. */
   detail: string;
 }
 
-/**
- * 开发期自验证: 在打包/运行前校验应用源码, 把打包期错误提前到开发期暴露。
- * 校验 manifest 完整性、HTML 结构、RPC 调用模式、权限一致性、JS 括号匹配。
- *
- * 通过 Tauri 命令 `custom_app_validate` 暴露 (与 HTTP 路由并列)。
- * agent 开发循环应在生成/修改代码后调用, `ok === false` 时继续修复直至通过。
- */
+// Runs static checks (manifest integrity, HTML structure, RPC call
+// patterns, permission consistency, JS bracket balance) before
+// packaging. Agent development loops should call this after editing
+// app code and retry until `ok === true`.
 export async function validateCustomApp(id: string): Promise<ValidationReport> {
   return invoke<ValidationReport>("custom_app_validate", { id });
 }
 
-/**
- * L2 运行时冒烟测试: 先刷新打包产物, 再无头启动壳加载应用并捕获运行时错误
- * (白屏 / 运行时异常 / 挂载失败)。通过 Tauri 命令 `custom_app_smoke_test` 暴露。
- * 返回结构化报告, `ok === false` 时 `errors` 含具体运行时问题。
- */
+// Headless shell run after re-packaging: catches white-screen,
+// runtime exceptions, and mount failures. Returns structured errors
+// when `ok === false`.
 export async function smokeTestCustomApp(id: string): Promise<SmokeReport> {
   return invoke<SmokeReport>("custom_app_smoke_test", { id });
 }

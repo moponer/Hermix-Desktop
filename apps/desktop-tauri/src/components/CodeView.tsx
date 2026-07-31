@@ -1,14 +1,11 @@
 /**
- * CodeView — v8：虚拟行号 + refractor 高亮。
- * ──────────────────────────────────────────────────────────────────
- * v7 → v8 的关键变化：
- *   · 行号 gutter 虚拟化：只渲染可视区域 ± buffer 的行号，
- *     大文件（5000+ 行）的 gutter DOM 从 N 个 <span> 降至 ~60 个。
- *   · 代码主体仍然一次性高亮全文（refractor 是同步 API，~8ms/1000行）
- *   · 高亮逻辑已抽取到 `src/lib/codeHighlight.ts` 共享模块，
- *     聊天 (MarkdownBody) 和预览 (CodeView) 共用同一套高亮引擎。
- *   · 新增 `isDark` prop 支持亮色/暗色主题切换（之前只有暗色配色）。
- *   · 新增复制按钮 overlay。
+ * CodeView — virtualized line numbers + refractor highlighting.
+ *
+ * The line-number gutter is virtualized: only the visible rows ± a
+ * buffer are rendered, so a 5000-line file mounts ~60 spans instead of
+ * N. Highlighting is delegated to the shared `src/lib/codeHighlight.ts`
+ * engine used by both MarkdownBody (chat) and CodeView (preview), so the
+ * two renderers never drift apart.
  */
 import { useMemo, useRef, useState, useEffect, useLayoutEffect, useCallback } from "react";
 import { clsx } from "clsx";

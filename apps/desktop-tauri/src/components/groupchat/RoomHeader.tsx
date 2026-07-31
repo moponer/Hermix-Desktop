@@ -1,7 +1,7 @@
 /**
  * Room header — compressed two-line header with ··· dropdown menu.
  *
- * Redesigned 2026-07-28 per GROUPCHAT_UI_REDESIGN.md:
+ * Redesigned  per GROUPCHAT_UI_REDESIGN.md:
  * - Two lines only: room name (H1) + subtitle (member count · status)
  * - 4px brand-blue left bar (echoes sidebar selected state)
  * - All secondary actions collapsed into a ··· dropdown:
@@ -9,7 +9,7 @@
  * - No avatar wall, no rank summary, no "群聊" badge, no crown
  * - Description: inline "+ 添加描述" text button when empty
  *
- * Extracted from GroupChatView.tsx during the 2026-07 refactor.
+ * Extracted from GroupChatView.tsx.
  */
 
 import { memo, useState, useEffect, useRef, useCallback } from "react";

@@ -676,8 +676,8 @@ function ToolRow({ group }: { group: ToolGroup }) {
             </span>
           ) : isError ? (
             <span className="tw-msg-badge tw-msg-err-badge">
-              {/* 用户反馈: 红色字符太刺眼, 改 warning 琥珀 +
-                  三角警告图标, 中性"工具执行中断"语义, 不再用 error 红。 */}
+              {/* Error uses a neutral amber warning triangle + "工具执行中断"
+                   wording, not a red error colour. */}
               <AlertTriangle size={10} className="shrink-0" />
               {group.statusNote?.startsWith("执行已中断") ? "已中断" : "失败"}
             </span>
@@ -696,9 +696,9 @@ function ToolRow({ group }: { group: ToolGroup }) {
             </span>
           ) : (
             <span className="tw-msg-badge tw-msg-done-badge">
-              {/* 用户反馈: 蓝色字符难看, 改 success 绿 +
-                  Check 对勾图标, 仍是中性"工具执行完毕"语义, 不再
-                  断言 success (success/failure 由结果内容决定). */}
+              {/* Done uses a neutral success-green check + "工具执行完毕"
+                   wording; it does not assert success — success/failure is
+                   decided by the result content. */}
               <Check size={10} className="shrink-0" />
               已完成
             </span>

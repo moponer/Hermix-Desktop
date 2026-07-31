@@ -1,20 +1,10 @@
-/**
- * Shared read-with-root-retry helpers used by every preview surface
- * (InlinePathPreview, PreviewPanel, RightSidebar).
- *
- * Why this exists: the backend's `read_artifact_file` enforces an
- * allowlist of "allowed artifact roots". When the LLM writes to a
- * location outside the user's configured workspace (e.g. an
- * agent-temp dir on `D:\data\...` while the workspace is on `C:\`),
- * the first read attempt with `workspaceRoot` returns the dreaded
- * "outside the allowed artifact roots" error. Walking up the path's
- * parent directories and retrying with each ancestor as the root
- * almost always lands on a directory the backend will accept.
- *
- * The frontend fix avoids a backend rebuild — the allowlist data
- * stays where it is; we just hand the backend more candidate roots
- * to try.
- */
+// Read-with-root-retry helpers shared by every preview surface
+// (InlinePathPreview, PreviewPanel, RightSidebar). The backend's
+// `read_artifact_file` enforces an allowlist of "allowed artifact
+// roots", and rejects reads when the LLM writes outside the user's
+// workspace (e.g. agent-temp on `D:\data\…` with workspace on `C:\`).
+// We walk ancestors and retry — usually one of them lands inside
+// an accepted root, with no backend rebuild required.
 
 import {
   artifactPathExists,
@@ -23,9 +13,8 @@ import {
   renderOfficePreview,
 } from "../desktopBridge";
 
-/** Extract the drive root (`D:\`) from a Windows absolute path, or
- * `/` for POSIX absolute paths. Returns null for relative paths so
- * we never fabricate a root out of thin air. */
+// Returns `D:\` for Windows absolute paths, `/` for POSIX absolute
+// paths, or null for relative paths (so we never fabricate a root).
 export function extractDriveRoot(p: string): string | null {
   if (!p) return null;
   const m = /^([A-Za-z]:[\\/])/.exec(p);
@@ -34,9 +23,9 @@ export function extractDriveRoot(p: string): string | null {
   return null;
 }
 
-/** Walk parents and return drive root + each ancestor up to (but
- * not including) the drive root. Used as a fallback chain when the
- * caller's workspaceRoot isn't accepted by the backend. */
+// Drive root + each ancestor (up to but not including the root).
+// Used as a fallback chain when the caller's workspaceRoot isn't
+// accepted by the backend.
 export function candidateRoots(p: string): string[] {
   const out: string[] = [];
   const drive = extractDriveRoot(p);
@@ -62,12 +51,10 @@ export type ArtifactBytesResult =
   | { kind: "bytes"; bytes: Uint8Array; size: number; resolvedPath: string }
   | { kind: "error"; message: string };
 
-/** Try to read the artifact's raw bytes using the same fallback
- * chain as `tryReadArtifact`. Used for binary formats the
- * front-end wants to parse in-browser (xlsx, xls, csv via SheetJS,
- * etc.). The base64 string is decoded with `atob` + manual
- * `Uint8Array` fill, which works in any modern browser without
- * needing a polyfill. */
+// Same fallback chain as `tryReadArtifact` but returns raw bytes —
+// used for binary formats the front-end parses in-browser (xlsx,
+// xls, csv via SheetJS, etc.). The base64 payload is decoded with
+// `atob` + manual `Uint8Array` fill (cross-browser, no polyfill).
 export async function tryReadArtifactBytes(
   path: string,
   workspaceRoot?: string | null,
@@ -85,9 +72,6 @@ export async function tryReadArtifactBytes(
     try {
       const res = await readArtifactFileBytes(path, root);
       const b64 = res.contentBase64 ?? "";
-      // atob returns a "binary string" — one char per byte — which
-      // we then turn into a real Uint8Array. charCodeAt(i) is the
-      // fastest cross-browser way to read a single byte.
       const bin = atob(b64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) {
@@ -109,9 +93,9 @@ export async function tryReadArtifactBytes(
   return { kind: "error", message: lastRaw };
 }
 
-/** Try reading via workspaceRoot, then walk up the path's ancestors
- * until one is accepted. Returns the first successful read or an
- * error carrying the last failed attempt's message. */
+// Reads via workspaceRoot, then walks up the path's ancestors until
+// one is accepted. Returns the first successful read or an error
+// carrying the last failed attempt's message.
 export async function tryReadArtifact(
   path: string,
   workspaceRoot?: string | null,
@@ -138,9 +122,6 @@ export async function tryReadArtifact(
       return { kind: "empty", resolvedPath: resolved };
     } catch (e) {
       lastRaw = String(e);
-      // Only keep retrying on the "outside the allowed artifact roots"
-      // error — anything else (404, IO error, …) is a hard fail and
-      // would just delay surfacing the real message.
       if (!/outside the allowed artifact roots/i.test(lastRaw)) {
         return { kind: "error", message: lastRaw };
       }
@@ -149,11 +130,9 @@ export async function tryReadArtifact(
   return { kind: "error", message: lastRaw };
 }
 
-/** Same retry chain as tryReadArtifact but for the cheap "does the
- * file exist?" probe used by the artifact panel. Without this the
- * panel can stay empty even though the user can still click into a
- * preview that does retry — because the panel uses one-shot
- * `artifact_path_exists` and the preview uses `tryReadArtifact`. */
+// Same retry chain as `tryReadArtifact` but for the cheap existence
+// probe used by the artifact panel — without it the panel can stay
+// empty while a preview that uses the text-reader chain still opens.
 export async function tryArtifactPathExists(
   path: string,
   workspaceRoot?: string | null,
@@ -169,9 +148,8 @@ export async function tryArtifactPathExists(
     try {
       if (await artifactPathExists(path, root)) return true;
     } catch {
-      // Backend rejects with "outside the allowed artifact roots" only
-      // on actual reads; the existence probe tends to silently return
-      // false. Either way, just keep walking the chain.
+      // Existence probe tends to silently return false rather than
+      // throw the allowlist error — keep walking the chain either way.
     }
   }
   return false;
@@ -184,11 +162,10 @@ export type OfficePreviewResult = {
   resolvedPath: string;
 };
 
-/** Office variants don't go through the text-reader retry — they
- * invoke a separate `render_office_preview` Tauri command that
- * internally shells out to `officecli`. Apply the same fallback
- * chain so a path on `D:\` doesn't fail just because workspaceRoot
- * is on `C:\`. */
+// Office variants don't go through the text-reader chain — they
+// invoke a separate `render_office_preview` Tauri command (which
+// shells out to `officecli`). Same ancestor-retry logic applies so
+// `D:\` paths still work when workspaceRoot is on `C:\`.
 export async function tryRenderOfficePreview(
   path: string,
   workspaceRoot?: string | null,

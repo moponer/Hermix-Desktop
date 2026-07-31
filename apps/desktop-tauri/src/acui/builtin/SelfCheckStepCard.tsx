@@ -1,8 +1,8 @@
 /**
- * M5: SelfCheckStepCard — renders one self-check step (tick) with
+ * SelfCheckStepCard — renders one self-check step (tick) with
  * optional detail expansion.
  *
- * Driven by TickLoop's awakening phase (M3). The agent emits
+ * Driven by TickLoop's awakening phase. The agent emits
  *   { op: "show",   id, type: "self_check_step", props: { step, total, label, status, metrics?, error?, durationMs? } }
  *   { op: "update", id, patch: { status, metrics, error, durationMs } }
  *

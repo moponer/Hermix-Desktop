@@ -221,7 +221,7 @@
    separator line above so the user can tell where scratch work ends
    and the final reply begins. There is no chevron/collapse UI. */
 .reasoning-inline {
-  /* v5: 思考与正文视觉无差别 — 无 margin / 无 padding / 无分隔线。
+  /* 思考与正文视觉无差别 — 无 margin / 无 padding / 无分隔线。
      完全继承 body 的 font-size / line-height / color，
      让 think 内容像普通段落一样自然流入正文流。 */
   margin: 0;
@@ -232,7 +232,7 @@
   white-space: pre-wrap;
 }
 
-/* v5: 不渲染分隔线 — 视觉与正文完全无差别 */
+/* 不渲染分隔线 — 视觉与正文完全无差别 */
 
 /* refined reasoning block — left accent rail +
    soft tint background, feels like a "margin note" rather than a
@@ -284,7 +284,7 @@
   opacity: 0.9;
 }
 
-/* v6: reasoning body — left accent rail + soft tint, like a margin note */
+/* reasoning body — left accent rail + soft tint, like a margin note */
 .reasoning-body {
   background: var(--color-bg-secondary);
   border-left: 2px solid var(--color-border-secondary);
@@ -334,24 +334,17 @@
   font-style: normal;
 }
 
-/* ── 5a-0. Timeline Iterations — 轮次分组系统 (2026-07-16) ──────────
-   取代旧版的 msg-card/chat-tool-call 纯文本步骤卡片包装。
-   设计原则:
-     • 正文 (text step) 无背景无边框，纯文本流，呼吸感
-     • 每轮迭代 [think → tools → text] 内间距紧凑 (8px)
-     • 轮次之间留 24px 的节奏间距
-     • reasoning / tools 折叠后是"呼吸点"，展开是"深潜"
-     • 不用分隔线，只用间距和微妙的层级来表达结构 */
+/* ── 5a-0. Timeline Iterations — 轮次分组系统 ────────── */
 .tl-iterations {
   display: flex;
   flex-direction: column;
-  gap: 14px;                     /* 轮次间距 — 唯一的视觉分隔 (从 24 砍到 14, 长对话不再被切碎) */
+  gap: 14px;                     /* 轮次间距 — 唯一的视觉分隔; 取 14px 而非更大, 避免长对话被间距切碎 */
 }
 
 .tl-iteration {
   display: flex;
   flex-direction: column;
-  gap: 6px;                      /* 轮内元素间距 — reasoning/tools/text (从 8 降到 6, 更紧凑) */
+  gap: 6px;                      /* 轮内元素间距 — reasoning/tools/text 三块紧凑成一组 */
 }
 
 /* 单轮消息不需要底部间距 */
@@ -382,8 +375,7 @@
   border-top: 1px solid var(--color-border-subtle);
 }
 
-/* ── 5a-0b. Process Timeline (2026-07-16) — the ONE foldable block ──
-   取代旧版每个 thinking/tools 各自折叠的"碎片感"。
+/* ── 5a-0b. Process Timeline — the ONE foldable block ──
    一个 message 整个过程（所有 reasoning + 所有 tool 调用）共用一个
    折叠头"处理中… / 已完成 N 个工具 ▼"。展开时按时间顺序流式显示
    每个 reasoning 段和每个 tool 行；折叠时压缩到一行小 chip。
@@ -451,7 +443,7 @@
   /* gap 由父 .tl-iteration 管理，这里无需额外 margin */
 }
 
-/* ── 5a-0b1. Reasoning Row (v3) — normal message prose ──
+/* ── 5a-0b1. Reasoning Row — normal message prose ──
    流式时 reasoning 段和正文混在一起流出，视觉上就是一段普通
    消息文本。过程与结论的区别由外层 ProcessTimeline 的折叠头
    表达，行内不再额外使用斜体、左轨或 chip。 */
@@ -531,7 +523,7 @@
   background: var(--color-bg-tertiary);
 }
 
-/* ── 5a-0c. Tools Block — v2: 流式时视觉接近正文 ──
+/* ── 5a-0c. Tools Block — 流式时视觉接近正文 ──
    流式时 tool 行（"查看文件: lib.rs"）应该像 prose 一样自然
    流出来,而不是被一个明显 chip 框起来。每个 tool 仍是 ToolGroupCard
    但去掉 --flat 时的额外 margin-top,跟 reasoning 段紧密相连。 */
@@ -583,9 +575,9 @@
 /* ════════════════════════════════════════════════════════════════════
    § 6.  DARK THEME OVERRIDES — 对话流组件
    ════════════════════════════════════════════════════════════════════
-   用户反馈 "深色主题下完全看不到内容" (2026-07-06).
-   tokens.css 已定义 `.dark` CSS 变量覆盖层, 但部分组件用硬编码
-   background/color 需要显式 `.dark` 选择器. */
+   tokens.css 定义了 `.dark` CSS 变量覆盖层, 但部分组件用了硬编码的
+   background/color, 必须显式加 `.dark` 选择器才能覆盖 (否则深色主题
+   下这些组件仍显示浅色硬编码值, 内容不可见)。 */
 
 /* 消息气泡 - 硬编码白底需换成深色 app 底色 */
 .dark .msg-card,
@@ -641,7 +633,7 @@
   color: var(--color-text-muted);
 }
 .dark .tw-msg-output {
-  background: transparent;  /* v6: 与父容器 (chat-assistant #1c1c20) 同底 */
+  background: transparent;  /* 与父容器 (chat-assistant #1c1c20) 同底 */
   color: var(--color-text-primary);
 }
 .dark .tw-msg-output-text {
@@ -715,17 +707,15 @@
 /* 已由 CSS 变量覆盖 */
 
 /* ════════════════════════════════════════════════════════════════════
-   § 7.  DARK THEME — 对话流兜底 (Round 13, 14:25)
+   § 7.  DARK THEME — 对话流兜底
    ════════════════════════════════════════════════════════════════════
-   用户反馈 "深色主题下完全看不到内容"。
-   § 6 已覆盖 tw-msg / agent-activity 等
-   这里补齐容易漏掉的:
+   § 6 已覆盖 tw-msg / agent-activity 等, 这里补齐容易漏掉的兜底:
      · prose 容器与子元素 (blockquote border / inline code / pre)
      · msg-bubble-body 默认色 (传递 var 让 markdown 文字自然深浅)
      · approval-card light/dark 双模
      · prefetch-chip / prefetch-label
      · cmd-meta / h-tiny / 等小元素
-   全部用 token vars — 不写 hardcoded 色, 保证一致性. */
+   全部用 token vars — 不写 hardcoded 色, 保证一致性。 */
 
 /* ── Markdown prose container ── */
 .dark .prose {
@@ -786,7 +776,7 @@
 /* ── Approval card ── */
 /* light/dark 都是 var(--color-bg-card) 切换, 但 hover/border 需要单独保 */
 .dark .approval-card {
-  background: var(--color-bg-card);
+  background: var(--color-bg-secondary);
 }
 .dark .approval-card:hover {
   background: var(--color-bg-card-hover);
@@ -801,7 +791,7 @@
   color: var(--color-text-primary);
 }
 
-/* ── H-* helper utilities (Round 12 状态条和打包) ── */
+/* ── H-* helper utilities (状态条和打包) ── */
 .dark .h-tiny {
   color: var(--color-text-muted);
 }
@@ -814,7 +804,7 @@
   background: var(--color-text-faint);
 }
 
-/* ── chat-tool-call 兜底 (Round 13)
+/* ── chat-tool-call 兜底
    tokens.css 已切 light/dark 变量, 但有些 cascade 顺序问题, 显式覆盖 */
 .dark .chat-tool-call--assistant {
   background: var(--color-chat-assistant-bg);

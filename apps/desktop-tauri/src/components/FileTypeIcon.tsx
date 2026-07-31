@@ -24,10 +24,6 @@
      • Ear   : triangle 16..23.5 × 0.5..7.5  (folded corner)
      • Label : centered text, 9-11px font, 700 weight, white
 
-   v3 fix (用户 2026-06-22): "直接就是一个图标，背景色占满"
-     — v2 用了 "page body 浅色 + 底部色带" 的 GitHub Octicons 风格，
-     但用户要的是 Google Drive 风格——背景色占满整个图标，只有
-     右上角一个 dog-ear 折角。新版直接是单色背景 + 中央字符。
    ─────────────────────────────────────────────────────────────── */
 
 import { useMemo } from "react";
@@ -181,9 +177,8 @@ function lookFor(name: string): { bg: string; label: string } | null {
  *  `size` defaults to 18 (used in list rows).  Modal header
  *  uses 30.  Both are crisp because everything is vector.
  *
- *  Note on display: block — see the same note in the previous
- *  version.  inline SVG inherits the parent's text baseline
- *  and leaves a gap above the icon. */
+   *  Note: display:block — an inline SVG inherits the parent's text
+   *  baseline and leaves a gap above the icon. */
 export function FileTypeIcon({
   name,
   size = 18,
@@ -231,8 +226,8 @@ export function FileTypeIcon({
         </linearGradient>
       </defs>
 
-      {/* Body — rounded square filling the entire viewBox.  This
-          is the "background color占满" the user asked for. */}
+      {/* Body — rounded square filling the entire viewBox so the icon
+          reads as a single solid color block. */}
       <path
         d="M3 1.5 A1.5 1.5 0 0 1 4.5 0 H15 L23 8 V21 A1.5 1.5 0 0 1 21.5 22.5 H4.5 A1.5 1.5 0 0 1 3 21 Z"
         fill={`url(#${gid}-body)`}

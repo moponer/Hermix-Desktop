@@ -7,7 +7,7 @@
  * - "classic": IRC-style monospace linear log, no bubbles (1.0 era chat room)
  * - "compact": denser bubble layout, smaller text and spacing (Slack compact)
  *
- * Extracted from GroupChatView.tsx during the 2026-07 refactor.
+ * Extracted from GroupChatView.tsx.
  */
 
 import { useRef, useEffect, memo } from "react";

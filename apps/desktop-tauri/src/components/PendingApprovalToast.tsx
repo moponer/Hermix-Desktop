@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 /**
  * PendingApprovalToast
  * ─────────────────────────────────────────────────────────────────
- * 右下角气泡 — 用户 反馈"差点没看见"后加的提醒机制。
+ * 右下角气泡 — 提醒机制：approval 卡片嵌在聊天流中间，容易被忽略
+ * （用户在看别处、切 session、或 alt-tab 走开时都会漏看）。
  *
  * 为什么需要:
  *   · `InlineApprovalCard` 嵌在聊天流中间位置。用户如果:
@@ -31,15 +32,10 @@ import { useEffect, useState } from "react";
  *   - onActivate: 单击气泡 → 滚动到最早未决定卡 + 2s 黄色高亮闪烁
  *   - onDismiss: 点 X → 隐藏直到下一张新卡到来(用户主动静默)
  *
- * 设计原则:
- *   · 永远不调用 onApprove/onDeny — 这是**提醒组件**,不是决策组件。
- *     用户必须回主聊天区看上下文、审 args、再点。这避免误触。
- *   · 体积小,圆角胶囊,跟 macOS / Windows 11 通知中心同一象限:
- *     bottom-right 24px,主角色 warning,urgent 时红。
- *   · 不依赖 portal — 已挂在 app-shell root,fixed 即可定位。
- *   · pre-existing 风格:不引入任何蓝/紫/靛;toast = 警告语义,用
- *     --color-warning / --color-error(琥珀 + 红),与已有 token 系统
- *     一致。
+ * Design constraint: this is a *reminder* surface only — it never calls
+ * onApprove/onDeny. The user must return to the chat to read context and
+ * decide, which prevents misclicks on a stray toast. It is fixed-positioned
+ * at bottom-right (no portal needed) and uses the warning/error tokens.
  */
 export interface PendingApprovalToastProps {
   count: number;

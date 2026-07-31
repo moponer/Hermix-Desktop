@@ -3,9 +3,9 @@
  * type-specific styling (user / leader / member / system).
  *
  * Also includes DispatchErrorCard and HandoffSeparator for the
- * new 2026-07 refactor events (DispatchFailed, Handoff).
+ * new refactor events (DispatchFailed, Handoff).
  *
- * Extracted from GroupChatView.tsx during the 2026-07 refactor.
+ * Extracted from GroupChatView.tsx.
  */
 
 import { useState, memo } from "react";
@@ -17,7 +17,7 @@ import { AgentAvatar } from "./AgentAvatar";
 import { agentTone, LEADER_SENDER_ID, SYSTEM_SENDER_ID, withAlpha, type ChatMsg } from "./types";
 import type * as api from "@/api";
 
-/* ── Dispatch error card (2026-07 refactor) ──
+/* ── Dispatch error card ──
  * Inline error card shown when a dispatch fails. The user sees
  * *why* nobody replied instead of an empty response.
  */
@@ -71,7 +71,7 @@ export const DispatchErrorCard = memo(function DispatchErrorCard({
   );
 });
 
-/* ── Handoff separator (2026-07 refactor) ──
+/* ── Handoff separator ──
  * Centered divider shown when the leader hands off control to a
  * specialist agent. Renders "已转交 XX 接管" so the user
  * understands the conversation changed hands.
@@ -108,7 +108,7 @@ export const HandoffSeparator = memo(function HandoffSeparator({
   );
 });
 
-/* ── Task completed ribbon (P6) ──
+/* ── Task completed ribbon ──
  * Centered chip rendered when the room_completed event arrives.
  * High-signal marker that the in-flight task finished — the user
  * doesn't have to open the TaskPanel to see the outcome.
@@ -134,7 +134,7 @@ export const TaskCompletedCard = memo(function TaskCompletedCard() {
   );
 });
 
-/* ── Agent expelled card (P6) ──
+/* ── Agent expelled card ──
  * Inline warning when a member is removed by the auditor. Mirrors
  * DispatchErrorCard visual style but communicates a peer-level
  * status change (not a one-off dispatch failure).
@@ -179,7 +179,7 @@ export const AgentExpelledCard = memo(function AgentExpelledCard({
   );
 });
 
-/* ── Audit verdict chip (P6) ──
+/* ── Audit verdict chip ──
  * Inline notice when an agent triggers a `violation`-level audit
  * verdict. Lower-severity verdicts (info/warning) skip the chip
  * to avoid flooding the stream.
@@ -279,12 +279,11 @@ function MessageMeta({ msg }: { msg: ChatMsg }) {
  */
 
 /* ── Sub-bubbles ──
- * P9 split: MessageBubble used to be one ~200-line component with
- * three if-branches (system / leader / user-or-member). Each branch
- * has its own prop surface and only shares the dispatch logic, so we
- * lifted them into memoised children. The parent now does sender
- * resolution + prop computation, then hands a flat prop bag to one
- * of the three subcomponents. Re-renders of a streamed leader chunk
+ * MessageBubble is split into memoised sub-bubbles (system / leader /
+ * user-or-member). Each branch has its own prop surface but shares only
+ * the dispatch logic, so the parent does sender resolution + prop
+ * computation, then hands a flat prop bag to one of the three
+ * subcomponents. Re-renders of a streamed leader chunk
  * no longer recompute the (more common) member bubble.
  */
 

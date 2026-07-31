@@ -1,5 +1,4 @@
 // src/components/PolishButton.tsx
-// PLAN_UI_ENHANCEMENT §1.3 — 对话润色按钮。
 // 位置：语音按钮右侧。
 // 行为：点击后调 polishChat() API，**覆盖**当前 inputValue。
 // 上下文策略：润色前的原文只活在 React state 里，发送时被 state 覆写，

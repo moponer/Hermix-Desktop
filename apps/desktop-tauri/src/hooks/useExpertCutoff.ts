@@ -1,12 +1,7 @@
-// src/hooks/useExpertCutoff.ts
-// PLAN_UI_ENHANCEMENT §1.1 — 专家切换分界 hook。
-// 工作机制：
-// - 每次 setExpert() 时记录当前时间戳为 expertCutoff-{sessionId}
-// - 渲染时 MessageBubble 拿到 `cutoffAt: number | null`
-// - 历史消息（timestamp < cutoffAt）继续按旧逻辑；新消息按新专家
-// 用途：
-// - 防止切了专家后历史消息的 avatar/时间/名称突然被覆盖
-// - 切换的瞬间成为新旧消息的"分水岭"
+// Expert-switch cutoff.
+// Switching experts must not retroactively restyle earlier messages:
+// we stamp a cutoff timestamp at every switch, and MessageBubble renders
+// messages before the cutoff with their original expert.
 
 import { useEffect, useState, useCallback } from "react";
 import { storage, sessionKey } from "../utils/storageCompat";
@@ -46,7 +41,7 @@ export function useExpertCutoff(sessionId: string | null | undefined): {
   const recordCutoff = useCallback(
     (_expertId: string | null) => {
       if (!sessionId) return;
-      // 切换时：null → 有 id，或 id → null，或 idA → idB，**都算切换**
+      // Any transition (set / clear / swap) counts as a switch.
       const now = Date.now();
       try {
         storage.setItem(EXPERT_CUTOFF_KEY(sessionId), String(now));

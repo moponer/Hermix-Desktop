@@ -2,16 +2,13 @@
  * StreamingArtifactCard — 实时展示 LLM「正在写哪些文件 / 写到哪了」的
  * 产物级进度组件。
  *
- * 背景：用户反馈 LLM 写代码 / 写文档时，前端只有一段「正在生成…」的
- * 文字，看不到具体在写什么、写到哪一步，容易误以为卡死。现有
- * `StreamingBubble` 会把整段流式文本（含代码块）直接 Markdown 渲染，
- * 但那是「最终产物」视角；本组件补上「写的过程」视角：
- *   解析流式文本里的 fenced code block（` ```lang `），把每个块当成
- *   一个正在生成的「文件」，实时显示：
- *     - 文件名（从首行注释 `// backend.ts` / `# ui.tsx` 提取，否则按语言推断）
- *     - 语言标签
- *     - 生成中（转圈）/ 完成（✓）状态
- *     - 已写入字符数 + 进度条（按字符数估算，开写时脉冲动画）
+ * Purpose: while the LLM writes code/docs the chat only shows a generic
+ * "generating…" line, so users can't see which file is being written or
+ * whether it's stuck. This card adds a per-file progress view alongside
+ * `StreamingBubble`'s final-output view: it parses fenced code blocks from
+ * the stream and shows each as a file being written (name inferred from the
+ * first-line comment, language, spinner / done state, and a character-count
+ * progress bar).
  *
  * 只在流式态（isStreaming=true）渲染；流结束后由 `MessageBubble` 接管，
  * 不会出现重复卡片。与下方 MarkdownBody 流式渲染并存（卡片=进度概览，

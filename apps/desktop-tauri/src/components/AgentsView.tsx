@@ -55,7 +55,6 @@ export function AgentsView({
   // NOTE: no auto-persist useEffect here. The backend (`/api/agents/custom`)
   // is the source of truth; individual handlers call saveAgentAsync /
   // deleteAgentAsync which upsert the localStorage fallback cache
-  // explicitly. Auto-saving `agents` on every state change (P1-1) would
   // persist half-typed drafts if the app crashed mid-edit.
 
   /** 切 tab 时如果向导/表单开着,自动重置 — 否则用户切到"内置专家"再切回"我的专家"还会被向导锁住 */

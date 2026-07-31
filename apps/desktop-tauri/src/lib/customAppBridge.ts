@@ -1,16 +1,15 @@
-// Custom App Bridge — Tauri IPC bridge for custom app operations
-// This provides a fallback path that goes directly through Tauri IPC
-// instead of the HTTP API, useful when the HTTP server is not running
-// or for operations that need direct filesystem access.
+// Tauri IPC bridge for custom-app operations. Fallback path used when
+// the HTTP server isn't running or when callers need direct filesystem
+// access (avoiding the /api/custom-apps round-trip).
 
 import { invoke } from "@tauri-apps/api/core";
 
 export interface CustomAppInitResult {
-  /** Path to the wry app loader (hermix-app-loader.exe) */
+  /** Path to the wry app loader (hermix-app-loader.exe). */
   loader_path: string;
-  /** Whether the loader binary exists at the resolved path */
+  /** Whether the loader binary exists at the resolved path. */
   loader_exists: boolean;
-  /** Path to the custom-apps directory */
+  /** Path to the custom-apps directory. */
   apps_dir: string;
 }
 

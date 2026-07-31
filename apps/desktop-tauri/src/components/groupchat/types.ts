@@ -2,7 +2,7 @@
  * Shared types and constants for the groupchat module.
  *
  * Extracted from the original monolithic GroupChatView.tsx during the
- * 2026-07 refactor (see docs/GROUPCHAT_REFACTOR_PLAN.md §3.2.1).
+ * refactor (see docs/GROUPCHAT_REFACTOR_PLAN.md §3.2.1).
  */
 
 import type * as api from "@/api";
@@ -91,13 +91,13 @@ export interface AgentTone {
   hero: string;
 }
 
-// Allowed accent hues only — NO blue/indigo/violet/purple (project iron law).
-// amber / gold / emerald / teal / rose / magenta / red (195 cyan dropped → 168 teal).
+// Allowed accent hues only — NO blue/indigo/violet/purple (they clash with
+// the message-bubble palette). amber / gold / emerald / teal / rose / magenta
+// / red (195 cyan dropped → 168 teal).
 const AGENT_HUE_PALETTE = [28, 43, 150, 175, 168, 340, 320, 0];
 
-/** Derive a stable accent hue from an agent id, drawn from a fixed allowed
- *  palette so no agent ever renders in a banned blue/violet hue (project
- *  iron law: no slate/blue/indigo/violet/purple). */
+/** Derive a stable accent hue from an agent id, drawn from a fixed palette so
+ *  no agent ever renders in a banned blue/violet hue. */
 export function agentHue(id: string): number {
   let h = 0;
   for (let i = 0; i < id.length; i++) {

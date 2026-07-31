@@ -1,6 +1,5 @@
 // ToolOutputPreviews — self-contained inline previews for cua_* tool
 // results (screenshot / window list / UI tree / OCR / etc). Extracted
-// from MessageBubble.tsx to shrink the God Object (P1-7). These are pure
 // prop-driven leaf components: they parse a JSON `output` string and
 // render; they depend only on React hooks + DOM, no MessageBubble internals.
 import { useMemo } from "react";
@@ -501,13 +500,6 @@ function UiSingleNamePreview({ output, verb }: { output?: string; verb: string }
     </div>
   );
 }
-
-/**
- * REMOVED 2026-07-25: OcrPreview was the inline preview for
- * `cua_ocr_recognize` tool results. The tool itself was removed because
- * the local Windows OCR engine had <30% accuracy for Chinese documents.
- * All image analysis now goes through `delegate_task` → sub-agent `read_image`.
- */
 
 /**
  * Heuristic: does the tool's primary arg point to a real file on

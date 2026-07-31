@@ -46,7 +46,7 @@
   --color-text-faint: #a1a1aa;
   --color-text-on-code: #3a3a3c;
 
-  /* ── Accent (v3 Cool Slate 偏蓝灰) ── */
+  /* ── Accent (Cool Slate 偏蓝灰) ── */
   --color-accent: #475569;
   --color-accent-hover: #334155;
   --color-accent-soft: rgba(71, 85, 105, 0.14);
@@ -69,13 +69,13 @@
   --color-warning: #d97706;
   --color-warning-soft: rgba(217, 119, 6, 0.16);
   --color-text-warning: #d97706;       /* warning text — used by StreamingBubble/InliningThinkingDot */
-  /* v5: 主操作色 = info。设计铁律禁用饱和蓝/紫（no blue/indigo/violet/
+  /* 主操作色 = info。设计铁律禁用饱和蓝/紫（no blue/indigo/violet/
      purple），用与 --color-accent 同族的 slate 中性色，避免"蓝"观感
      同时和全局 accent 保持一致。 */
   --color-info: #475569;
   --color-info-soft: rgba(71, 85, 105, 0.14);
 
-  /* ── Buttons (v3 Cool Slate 工具感,无饱和填充) ── */
+  /* ── Buttons (Cool Slate 工具感,无饱和填充) ── */
   --color-btn-primary-bg: #475569;
   --color-btn-primary-text: #ffffff;
   --color-btn-primary-hover: #334155;

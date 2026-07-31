@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ShieldAlert, Check, X, Terminal, Globe, Wrench, Clock, Timer } from "lucide-react";
 import type { ApprovalDecision } from "../types";
 import type { ApprovalMessageMeta } from "../types";
+import { describeShellCommand } from "../lib/commandDescribe";
 
 export type ApprovalRequestShape = ApprovalMessageMeta;
 
@@ -50,13 +51,10 @@ function describeToolAction(tool: string, args: unknown): string {
     return `${modeText} ${paths.length} 个文件/文件夹`;
   }
 
-  // terminal: 执行命令
+  // terminal: 执行命令（Base64 编码命令会自动解码为中文语义）
   if (t === "terminal" || t.includes("exec")) {
     const cmd = typeof a.command === "string" ? a.command : "";
-    if (cmd) {
-      const display = cmd.length > 60 ? cmd.slice(0, 57) + "…" : cmd;
-      return `执行命令: ${display}`;
-    }
+    if (cmd) return describeShellCommand(cmd).text;
     return "执行终端命令";
   }
 

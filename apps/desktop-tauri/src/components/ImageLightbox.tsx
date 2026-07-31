@@ -1,5 +1,4 @@
 // 全屏大图查看器。由 imageViewer.ts 的 openImageViewer() 唤起。
-//
 // 功能：
 //  · 顶部悬浮工具栏（灰阶，符合项目无蓝紫配色）：放大 / 缩小 / 适应屏幕 /
 //    向左旋转 / 向右旋转 / 下载原图 / 关闭
@@ -7,7 +6,6 @@
 //  · 滚轮缩放（native 非 passive 监听，避免 passive 警告）
 //  · 放大后可拖拽平移，双击在 适应/1:1 间切换
 //  · 键盘：Esc 关闭，+/- 缩放，[ ] 旋转，r 复位，← → 切换
-//
 // 配色严格使用灰阶（rgba(28,28,32,...) = token #1c1c20），不引入蓝/紫。
 
 import { useCallback, useEffect, useRef, useState } from "react";

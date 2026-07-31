@@ -18,12 +18,10 @@ import { useLayoutEffect, useState, type ReactNode } from "react";
  *   - z-index (`z-50`)
  *   - consistent 1px border on light theme for definition
  *
- * v22 update: switched from `position: absolute` (anchored to the
- * nearest positioned ancestor — which inside ChatView's `overflow:
- * hidden` chain meant the popover could be clipped by a scroll
- * container on the message list) to `position: fixed` anchored to
- * the trigger's bounding rect. The popover now lives in the viewport
- * and is no longer subject to ancestor overflow.
+ * Uses `position: fixed` anchored to the trigger's bounding rect rather
+ * than `position: absolute`: inside ChatView's `overflow: hidden` chain an
+ * absolutely-positioned popover would be clipped by an ancestor scroll
+ * container, so a viewport-anchored popover escapes that clipping.
  *
  * Body content is laid out by the consumer; sections inside the body
  * should use the `<PopoverHeader>` / `<PopoverFooter>` helpers so the
@@ -138,7 +136,7 @@ export function PopoverShell({
 
 /**
  * Caption row used at the top of every popover. Lowercase, 11px / 600 /
- * ink-soft — matches the v2 popover detail spec (12.5px font-size
+ * ink-soft — matches the popover detail spec (12.5px font-size
  * items, 6/12/4px header padding) and is consistent across the four
  * ChatView popovers (expert / workspace / model / permission).
  */

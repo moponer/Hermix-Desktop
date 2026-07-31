@@ -1,7 +1,7 @@
 /**
  * useGroupChatWebSocket — WebSocket hook for group chat streaming.
  *
- * Extracted from GroupChatView.tsx during the 2026-07 refactor.
+ * Extracted from GroupChatView.tsx.
  *
  * Manages the one-shot WS connection lifecycle: opens a connection,
  * sends the user message, processes incoming stream events (chunks,
@@ -67,14 +67,12 @@ export function useGroupChatWebSocket(
     setInlineEvents([]);
   }, []);
 
-  // Load messages when room changes
   useEffect(() => {
     if (activeRoomId) {
       loadMessages(activeRoomId);
     } else {
       clearRoom();
     }
-    // Clear streaming state on room switch
     setStreamingAgents(new Map());
     setInlineEvents([]);
   }, [activeRoomId, loadMessages, clearRoom]);
@@ -199,7 +197,7 @@ export function useGroupChatWebSocket(
                 return;
               }
 
-              // ── Dispatch failed (2026-07 refactor) ──
+              // ── Dispatch failed ──
               if (evt.group_chat_dispatch_failed) {
                 const { agent_name, reason, is_leader } = evt.group_chat_dispatch_failed;
                 const id = `dispatch-failed-${inlineEventCounter.current++}`;
@@ -216,7 +214,7 @@ export function useGroupChatWebSocket(
                 return;
               }
 
-              // ── Handoff (2026-07 refactor) ──
+              // ── Handoff ──
               if (evt.group_chat_handoff) {
                 const { to_agent_name, reason, kind } = evt.group_chat_handoff;
                 const id = `handoff-${inlineEventCounter.current++}`;
@@ -329,7 +327,7 @@ export function useGroupChatWebSocket(
                 return;
               }
 
-              // ── Discussion events (P3.1) ──
+              // ── Discussion events ──
               if (evt.discussion_started) {
                 const { discussion_id, topic, participants, max_rounds } = evt.discussion_started;
                 onEngineEvent(activeRoomId, {
@@ -429,7 +427,6 @@ export function useGroupChatWebSocket(
           };
         });
 
-        // Close WS
         ws.close();
 
         // Reload messages from REST to get persisted versions

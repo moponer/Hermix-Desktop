@@ -7,9 +7,8 @@ declare module "refractor" {
   export function register(lang: any): void;
 }
 
-// 通配符声明：覆盖所有 refractor/lang/* 语言模块。
-// 之前为每种语言单独声明，但随着语言覆盖扩展到 60+ 种，
-// 维护一长串 declare module 太冗余。通配符一次性覆盖所有。
+// Wildcard declaration covering every `refractor/lang/*` language module in
+// one shot (avoids a long list of individual `declare module` entries).
 declare module "refractor/lang/*" {
   const value: unknown;
   export default value;

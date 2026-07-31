@@ -1,9 +1,9 @@
 /**
  * GroupChatView — container component for the group chat module.
  *
- * Refactored 2026-07: split from ~1648 lines into modular components
- * under components/groupchat/. This file now handles only state
- * management + layout composition (~300 lines).
+ * Split from the original ~1648-line GroupChatView into modular
+ * components under components/groupchat/. This file now handles only
+ * state management + layout composition (~300 lines).
  *
  * See docs/GROUPCHAT_REFACTOR_PLAN.md §3.2 for the split plan.
  */
@@ -90,7 +90,6 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
   const agents: AgentPersona[] = loadAgents();
   const [activeRoomId, setActiveRoomId] = useState<string | null>(initialRoomId ?? null);
 
-  // Create-room form state
   const [showNewRoom, setShowNewRoom] = useState(false);
   const [newRoomName, setNewRoomName] = useState("");
   const [newRoomStyle, setNewRoomStyle] = useState<string>("modern");
@@ -290,7 +289,6 @@ toastError("删除聊天室失败");
     }
   }, []);
 
-  // P4 — Update the room's free-form description. Mirrors the pattern
   // used by the announcement setter in TaskPanel's onAnnouncementChanged:
   // optimistically update local state, then let the server reconcile
   // via the next list_rooms poll / WebSocket event. Errors surface as

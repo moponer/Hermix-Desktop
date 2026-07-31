@@ -1,5 +1,5 @@
 /**
- * M5: AwakeningCard — top-of-stack summary for the M3 awakening phase.
+ * AwakeningCard — top-of-stack summary for the awakening phase.
  *
  * Driven by TickLoop: when awakening starts, the agent emits
  *   { op: "show",   id, type: "awakening",
@@ -111,7 +111,7 @@ export const AwakeningCard: AcuiComponent = ({ show }) => {
         )}
       </div>
 
-      {/* Progress dots — wrap if totalTicks > 20 */}
+      {/* Progress dots — capped at 30, overflow shown as "+N" */}
       <div
         className="flex items-center gap-1 mb-1.5 flex-wrap"
         data-pulse={pulse}

@@ -7,7 +7,7 @@
  * expected substring, (c) the optional "used / threshold" footer line
  * appears when both `usedText` and `thresholdText` are populated.
  *
- * Why this matters: Phase 5 reconnects the `compaction_status` WS event
+ * Why this matters: it reconnects the `compaction_status` WS event
  * that has been a Day-1 placeholder since 2026-06-29. Once it actually
  * fires, the banner transitions through closed → pressure → fallback
  * → open during long conversations, and a silent state-drop would leave

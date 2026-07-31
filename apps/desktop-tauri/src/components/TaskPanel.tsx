@@ -5,8 +5,7 @@ import * as api from "../api";
 import type { AgentPersona } from "./agents/types";
 
 // ── Task engine event types (mirror RoomEvent in Rust) ────────
-// These arrive over the WS stream once S5 wiring is live. Each event
-// is appended to a transient timeline so the user can see exactly
+// Appended to a transient timeline so the user can see exactly
 // what the engine did.
 
 export type TaskEngineEvent =
@@ -100,11 +99,10 @@ export function TaskPanel({
     [onTaskChanged],
   );
 
-  // P7 — Approve / Reject the active task when it's parked at
-  // AwaitingApproval. Wired to /api/groupchat/rooms/{id}/{approve,reject}
-  // which on the server side actually transitions TaskStatus (was a no-op
-  // chat bubble before this refactor). One button at a time — both
-  // race-safe because the server gates on AwaitingApproval.
+  // Approve / Reject the active task when it's parked at AwaitingApproval.
+  // Wired to /api/groupchat/rooms/{id}/{approve,reject}, which transitions
+  // TaskStatus on the server. Both buttons are race-safe because the
+  // server gates on AwaitingApproval.
   const [busyApprove, setBusyApprove] = useState<"approve" | "reject" | null>(null);
   const decideTask = useCallback(
     async (decision: "approve" | "reject") => {
@@ -198,7 +196,7 @@ export function TaskPanel({
             <EmptyState />
           )}
 
-          {/* Live engine timeline (S5/S6) */}
+          {/* Live engine timeline */}
           {timeline.length > 0 && (
             <section className="rounded-md border border-border-subtle bg-bg-primary/40">
               <button
@@ -285,7 +283,7 @@ function TaskDetail({
   onToggleSub: (id: string) => void;
   busySubtaskId: string | null;
   onSetSubtaskStatus: (id: string, status: api.GroupChatSubtaskStatus) => void;
-  /** P7 — Approve/Reject the task when parked at AwaitingApproval. */
+  /** Approve/Reject the task when parked at AwaitingApproval. */
   onDecideTask: (decision: "approve" | "reject") => void;
   busyApprove: "approve" | "reject" | null;
 }) {
@@ -664,11 +662,10 @@ function OverrideButton({
 
 /** Compute a stable hue from an agent id. Mirrors the logic in
  *  GroupChatView so the panel avatars match the chat avatars.
- *  Iron law: NO blue/indigo/violet/purple. `h % 360` could yield 220
- *  (blue) / 268 (violet), so map to a fixed safe palette (orange / amber
- *  / green / teal / cyan / rose / magenta / red) — same set as the
- *  groupchat agentHue. Guarantees no agent ever renders in a banned
- *  blue/violet hue. */
+ *  Banned hues: no blue/indigo/violet/purple — `h % 360` could yield
+ *  220 (blue) / 268 (violet), so map to a fixed safe palette (orange /
+ *  amber / green / teal / cyan / rose / magenta / red) shared with the
+ *  groupchat agentHue. */
 function agentHsl(agentId: string): number {
   let h = 0;
   for (let i = 0; i < agentId.length; i++) {
@@ -806,7 +803,7 @@ function AuditRow({
         <div className="text-[10.5px] text-text-muted truncate">
           {event.reason}
         </div>
-        {/* P4 — dispute button (only for non-redline violations) */}
+        {/* Dispute button — only for non-redline violations */}
         {!isRedLine && (
           <button
             type="button"
@@ -827,7 +824,7 @@ function AuditRow({
   );
 }
 
-// ── Announcement Section (P2 — moved from GroupChatView) ────
+// ── Announcement Section ─────────────────────────────────
 // Inlined here (rather than imported) because the section is tiny
 // and it lets us share the agentHsl/relative-time helpers without
 // a separate module boundary.

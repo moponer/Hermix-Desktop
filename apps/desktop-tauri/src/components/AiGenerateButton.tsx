@@ -1,5 +1,4 @@
 // src/components/AiGenerateButton.tsx
-// PLAN_UI_ENHANCEMENT §7.1 — 自动化 PROMPT AI 生成按钮。
 // 位置：新建自动化页的 PROMPT 输入区。
 // 行为：用户描述大概情况 → AI 润色改写 → 回填到 PROMPT 输入框。
 // 与 1.3 的 PolishButton 走 **不同的 prompt 模板**（polish.automation.ts），

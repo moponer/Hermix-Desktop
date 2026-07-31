@@ -37,15 +37,15 @@ export async function polishChat(input: ChatPolishInput): Promise<string> {
   const trimmed = input.draft.trim();
   if (!trimmed) return "";
 
-  // 1) Try the backend first.
+  // Try the backend first.
   const fromBackend = await callPolishEndpoint("/api/polish/chat", {
     draft: input.draft,
     ctx: input.ctx,
   });
   if (fromBackend) return fromBackend;
 
-  // 2) Fallback: collapse whitespace only (the prompt template cannot be run
-  // locally, but the caller still expects a non-empty string).
+  // Fallback: collapse whitespace only — the prompt template can't run
+  // locally, but the caller still expects a non-empty string.
   return input.draft.replace(/\s+/g, " ").trim();
 }
 

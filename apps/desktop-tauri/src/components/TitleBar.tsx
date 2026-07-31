@@ -7,12 +7,6 @@ interface TitleBarProps {
   onToggleSidebar: () => void;
 }
 
-/* v25 fix: 之前 `const appWindow = getCurrentWindow()` 在模块顶层调用.
-   如果某个 import 链路导致 Tauri IPC 还没 ready（比如 HMR 时序、热
-   重载组件上下文重建、vite dev 模式下 webview 还没 attach），getCurrentWindow
-   会抛或返回未初始化 proxy，导致点击 → IPC 失败 → 三个按钮静默失灵。
-   现在改为：组件 mount 时 lazy 获取 + 在 handler 里直接 invoke,避开
-   任何初始化时序问题. */
 export function TitleBar({ onToggleSidebar }: TitleBarProps) {
   // Lazily resolve the window on each interaction so we never hold a
   // stale proxy (and so the call never happens before Tauri IPC is up).
@@ -71,15 +65,12 @@ export function TitleBar({ onToggleSidebar }: TitleBarProps) {
         <ThemeToggle compact />
       </div>
 
-      {/* 窗口控制按钮: 最小化 / 最大化 / 关闭.
-         关键修复 (v25):
-         1. 每个 button 自身加 `no-drag` class + `data-tauri-no-drag` 属性.
-            Chromium 的 `-webkit-app-region: no-drag` **不继承**, 只作用
-            在声明它的元素本身. 父 div 有 no-drag 是不够的, 子 button
-            收不到 click 事件 — 点击被 drag 区域吞掉, 按钮看起来"没反应".
-         2. 改用 data-tauri-no-drag 属性, 而不是只靠 className.
-            data-tauri-no-drag 是 Tauri 官方推荐的写法, 优先级最高,
-            不受 CSS specificity / import 顺序影响. */}
+      {/* Window controls: minimize / maximize / close.
+          Each button carries both `no-drag` and `data-tauri-no-drag`:
+          `-webkit-app-region: no-drag` does not inherit, so a parent
+          drag region alone would swallow the child button's clicks.
+          `data-tauri-no-drag` is Tauri's recommended marker and wins
+          regardless of CSS specificity / import order. */}
       <div className="flex">
         <button
           type="button"

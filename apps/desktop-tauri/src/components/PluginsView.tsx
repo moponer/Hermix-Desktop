@@ -67,7 +67,6 @@ export function PluginsView() {
         </div>
 
         <div className="text-center mb-6">
-          {/* PLAN_UI_ENHANCEMENT §5.1 (2026-06-22): 标题按 tab 区分 */}
           <h1 className="text-3xl font-semibold text-text-primary">
             {tab === "plugins" && "插件"}
             {tab === "skills" && "技能"}
@@ -476,7 +475,6 @@ function SkillCard({ skill, catLabel, onToggle }: {
 
   return (
     <>
-      {/* PLAN_UI_ENHANCEMENT §5.3: 技能列表项去边框 + 右侧加 ArrowUpRight 装饰。 */}
       <div className="rounded-xl overflow-hidden">
         <div className="flex items-center gap-3 px-3 py-2.5">
           <button onClick={openContent}
@@ -843,7 +841,6 @@ function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string)
   );
 }
 
-// PLAN_UI_ENHANCEMENT §5.4: 每个连接器/工具集图标各不相同。
 // 用一个稳定的字符串 hash 选择图标，保证同一名字总是同图标。
 const CONNECTOR_ICONS: LucideIcon[] = [Network, Globe, Database, Cpu, Boxes, FileCode, Layers, Plug];
 function pickIconByName(name: string): LucideIcon {
@@ -1261,7 +1258,6 @@ function PluginCard({
   saving,
   disabled,
   highlight = false,
-  /** PLAN_UI_ENHANCEMENT §5.2 (2026-06-22): 关闭边框。默认 false。 */
   noBorder = false,
   /** 右侧装饰图标（开关按钮之前）。默认无。 */
   rightIcon,

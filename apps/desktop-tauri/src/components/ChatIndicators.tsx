@@ -1,6 +1,6 @@
 /**
  * ChatIndicators.tsx — leaf components extracted from ChatView.tsx
- * during the P1-7 God Object split.
+ * to break up its God Object.
  *
  * These three components are fully self-contained (react + lucide icons
  * only) and render below the message list / inside the queue panel.

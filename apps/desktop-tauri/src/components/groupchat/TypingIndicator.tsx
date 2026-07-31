@@ -1,7 +1,7 @@
 /**
  * Streaming / typing indicator components.
  *
- * Extracted from GroupChatView.tsx during the 2026-07 refactor.
+ * Extracted from GroupChatView.tsx.
  */
 
 import type { AgentPersona } from "../agents/types";

@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════════
-   InlineExpertPanel — replaces the old "召唤专家" popover+jump
-   with an inline panel above the textarea.
+   InlineExpertPanel — an inline panel above the textarea for picking
+   an expert.
 
    Shows: search bar, category tabs, expert card grid.
    Selecting an expert calls setExpert + closes the panel.

@@ -1,37 +1,19 @@
-/**
- * chatScroll helpers — pure functions driving ChatView's sticky-bottom +
- * force-scroll behaviour.
- *
- * Background (2026-07-22, owner-reported bug): the previous implementation
- * used `messagesEndRef.scrollIntoView({ block: "end" })` for both streaming
- * and post-submit scrolls. Two failure modes:
- *
- *   1. `scrollIntoView` is a no-op when the target is already inside the
- *      scrollable viewport. Streaming output that *grows* the container
- *      above the visible area (e.g. an inline tool timeline row expanding
- *      while `messagesEndRef` stays at the bottom of the existing viewport)
- *      therefore leaves `scrollTop` unmoved — the user has to scroll down
- *      manually to see the new chunk. Bug reproduction: long tool timeline
- *      expansion mid-stream.
- *
- *   2. Submitting a new message while the user has scrolled up to browse
- *      history respects the `hasUserScrolledUp` sticky-bottom guard, so the
- *      viewport stays where it was. The user expects to see the message
- *      they just sent.
- *
- * The fix replaces `scrollIntoView` with an explicit `scrollTop = scrollHeight
- * - clientHeight` write, and adds a `forceScrollSeq` signal so user-initiated
- * events (handleSubmit) bypass the sticky guard.
- */
+// Pure functions driving ChatView's sticky-bottom + force-scroll
+// behaviour. We deliberately don't use `Element.scrollIntoView` — it
+// is a no-op when the target is already inside the viewport, so it
+// can't pin the bottom during streaming when the container is
+// growing, and it can't help during session restore when rich
+// content (markdown, images, web fonts) keeps `scrollHeight` moving
+// for many frames after the initial commit. An explicit
+// `scrollTop = scrollHeight - clientHeight` write, re-applied until
+// the height is stable, handles both cases.
 
 /**
  * Whether a scroll request should actually move the viewport to the bottom.
- *
- * `forceScroll` overrides everything — caller passed a user-initiated event
- * (handleSubmit / session restore) that must always land the user at the
- * latest message. `hasUserScrolledUp` is the sticky guard: when the user
- * has scrolled away from the bottom to browse history, streaming chunks
- * must NOT yank them back.
+ * `forceScroll` overrides everything (user-initiated submit / session
+ * restore must always land at the latest message). `hasUserScrolledUp`
+ * is the sticky guard: when the user has scrolled away to browse
+ * history, streaming chunks must NOT yank them back.
  */
 export function shouldFollowOnStreamChunk(
   hasUserScrolledUp: boolean,
@@ -43,15 +25,8 @@ export function shouldFollowOnStreamChunk(
 }
 
 /**
- * Compute the `scrollTop` value that lands the viewport at the bottom of
- * the container's content.
- *
- * Replaces `messagesEndRef.scrollIntoView({ block: "end" })` because the
- * latter is a no-op when the target node is already inside the viewport —
- * which is the common case during streaming once the container has grown
- * past the initial viewport size.
- *
- * Negative values are clamped to 0 — some browsers report a transient
+ * `scrollTop` that lands the viewport at the bottom of the container's
+ * content. Clamped to 0 because some browsers report a transient
  * `scrollHeight < clientHeight` during reflow.
  */
 export function computeBottomScrollTop(
@@ -64,10 +39,8 @@ export function computeBottomScrollTop(
 
 /**
  * Distance from the bottom in pixels. Positive when the viewport is
- * above the bottom (i.e. the user has scrolled up); zero or negative
- * when the bottom is at or below the viewport edge.
- *
- * Mirrors the inline expression used by `isNearBottom` in ChatView.
+ * above the bottom (user has scrolled up); zero or negative when the
+ * bottom is at or below the viewport edge.
  */
 export function distanceFromBottomPx(
   scrollTop: number,
@@ -78,40 +51,25 @@ export function distanceFromBottomPx(
 }
 
 /**
- * Scroll `el` to its bottom and keep re-applying until `scrollHeight`
- * stops growing (or we hit `maxFrames`).
- *
- * Why this exists: when restoring a long conversation, the chat container
- * mounts with `messagesEndRef` already inside the viewport, so a single
- * `scrollIntoView({ block: "end" })` is a no-op. Round 31 (commit
- * b02923e) replaced it with `scrollTop = scrollHeight - clientHeight` and
- * wrapped that in a double-rAF to wait for React commit + browser layout.
- *
- * In practice double-rAF is not enough: rich content (markdown, images,
- * web fonts, syntax-highlighted code blocks) keeps the container's
- * `scrollHeight` growing for many frames after the initial commit. Setting
- * `scrollTop` too early lands it on what was the bottom at +2 frames,
- * not what is the bottom after all the layout settles - owner reported
- * "some restored conversations don't auto-scroll, have to scroll down
- * manually". The fix is to keep re-applying the scroll until the
- * measured `scrollHeight` matches the previous frame's reading (i.e.
- * the container has stopped growing).
+ * Scrolls `el` to its bottom and re-applies the scroll each animation
+ * frame until `scrollHeight` is stable across two consecutive reads
+ * (or `maxFrames` is reached). Rich content (markdown, images, web
+ * fonts, syntax-highlighted code blocks) keeps `scrollHeight` growing
+ * for many frames after the initial commit; a single rAF settles too
+ * early and lands on what *was* the bottom, not what is the bottom
+ * after layout stabilises.
  *
  * Behaviour:
- *   - First call: schedules the scroll via `requestAnimationFrame` so the
- *     caller doesn't have to. Re-applies on every subsequent rAF until
- *     `scrollHeight` is stable across two consecutive frames.
- *   - Returns a cancel function. Calling it aborts the retry loop (used
- *     when the user scrolls away mid-restore - we shouldn't keep
- *     yanking them back).
- *   - For the "force once" path (handleSubmit) pass `maxFrames: 0` to
- *     skip the retry entirely.
+ *   - First call schedules the scroll via `requestAnimationFrame`.
+ *   - Returns a cancel handle. Calling it aborts the retry loop (use
+ *     when the user scrolls away mid-restore — don't yank them back).
+ *   - Pass `maxFrames: 0` for a one-shot scroll (the "force once"
+ *     handleSubmit path).
  *
- * @param el           Scrollable container element
- * @param maxFrames    Cap on retry frames (default 15 ~ 250ms @ 60fps).
- *                     Set to 0 for a one-shot scroll.
- * @param isCancelled  Optional callback returning true if the caller has
- *                     aborted (e.g. user scrolled up). Retry stops here.
+ * @param el           Scrollable container element.
+ * @param maxFrames    Retry cap (default 15 ≈ 250ms @ 60fps). 0 = one-shot.
+ * @param isCancelled  Optional callback returning true if the caller
+ *                     has aborted (e.g. user scrolled up). Retry stops.
  * @returns            `() => void` cancel handle.
  */
 export function scrollToBottomWithSettle(
@@ -134,11 +92,10 @@ export function scrollToBottomWithSettle(
     el.scrollTop = computeBottomScrollTop(el.scrollHeight, el.clientHeight);
     const height = el.scrollHeight;
     attempts++;
-    // Stop on stable scrollHeight (matches last frame) or cap reached.
-    // The exact-equality check tolerates sub-pixel layout jitter via the
-    // `height === lastHeight` check - a 1px shift still counts as
-    // "growing" and triggers one more retry. With typical content the
-    // loop terminates within 3-6 frames; 15 is a safety cap.
+    // Stable across two consecutive reads = layout has settled.
+    // Exact-equality tolerates sub-pixel jitter (a 1px shift still
+    // counts as growing and triggers one more retry). Typical
+    // content settles in 3-6 frames; the cap is a safety belt.
     if (height === lastHeight || attempts >= maxFrames) return;
     lastHeight = height;
     rafId = requestAnimationFrame(tick);

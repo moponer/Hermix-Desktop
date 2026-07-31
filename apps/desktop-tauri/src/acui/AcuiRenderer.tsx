@@ -1,5 +1,5 @@
 /**
- * M5: AcuiRenderer — renders a list of currently-active ACUI cards.
+ * AcuiRenderer — renders a list of currently-active ACUI cards.
  *
  * Inputs:
  *   - `state` — AcuiState (the result of `applyAcuiDirectives` over the

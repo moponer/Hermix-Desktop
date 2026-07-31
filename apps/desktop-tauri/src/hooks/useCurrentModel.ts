@@ -2,7 +2,7 @@
  * `useCurrentModel` — single source of truth for "what model is the user
  * currently using" in the desktop-tauri UI.
  *
- * ## Why this hook exists
+ * ## Motivation
  *
  * Before this hook, the same "current model" value was being read from two
  * completely different places in the app:
@@ -145,11 +145,10 @@ export function useCurrentModel(): CurrentModel {
  * without a hard reload.
  *
  * also mirror the config to the backend (`PUT /api/model/list`)
- * so the chat model switcher is stable across restarts even if
- * `localStorage` is wiped (the volatility was the root cause of the
- * "switcher forgets configured models / only shows the default" bug).
- * The backend call is fire-and-forget — a failure here must never break
- * the local write or the in-tab event broadcast.
+ * so the chat model switcher stays stable across restarts even if
+ * `localStorage` is wiped. The backend call is fire-and-forget — a
+ * failure here must never break the local write or the in-tab event
+ * broadcast.
  */
 export function writeModelConfigAndNotify(cfg: ModelConfigData): void {
   storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(cfg));

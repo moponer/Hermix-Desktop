@@ -38,7 +38,6 @@ export function TestDialog({ agent, onClose }: TestDialogProps) {
     setStreaming(true);
     abortRef.current = new AbortController();
     try {
-      // P0-6: Same auto-detect logic as runGeneration (provider map
       // extracted to providerConfig.ts to dedupe).
       const { apiUrl, apiKey } = await resolveProviderConfig();
       const res = await fetch(`${apiUrl}/v1/chat/completions`, {

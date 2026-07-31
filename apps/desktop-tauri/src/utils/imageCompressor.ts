@@ -1,23 +1,23 @@
-// apps/desktop-tauri/src/utils/imageCompressor.ts
-// 客户端图片压缩。
-// 用户哲学：rust 项目核心是快 + 稳定，前端不能拖后腿。
-// 设计原则：
-// 1. **缩尺寸 100% 无损**（只减像素数，不改像素值）
-// 2. **lossless WebP** 优先（比 PNG 小 25-30%，像素级完全相同）
-// 3. **JPEG quality ≥ 0.80** 才作为兜底（保 LLM 识别率 ≥95%）
-// 4. **原图兜底**——压缩失败/质量不达标时不发不出去
-// 5. **零依赖**——纯浏览器 API（OffscreenCanvas + convertToBlob）
+// Client-side image compression for outbound LLM attachments. Order of
+// attempts: (1) skip when the file is already small; (2) resize +
+// PNG output (pixel-identical); (3) lossless WebP; (4) JPEG with
+// quality stepping down to the configured floor (LLM OCR needs ≥80%
+// to recognise text reliably); (5) return the original file as
+// fallback so a compression failure never blocks the user's send.
+// Zero dependencies — pure browser APIs (OffscreenCanvas +
+// convertToBlob).
 
 export interface CompressConfig {
-  /** 最长边像素上限。LLM 后端本就做这件事，我们提前做省传输。 */
+  /** Longest-edge pixel cap. The LLM backend resizes anyway — we
+   *  do it client-side to skip the upload. */
   maxDimension: number;
-  /** 单文件目标上限（字节）。 */
+  /** Per-file target byte size. */
   targetSizeBytes: number;
-  /** 截图类起点 quality。 */
+  /** Starting quality for screenshot-like sources (sharp edges, text). */
   screenshotQuality: number;
-  /** 照片类起点 quality。 */
+  /** Starting quality for photo-like sources (smooth gradients). */
   photoQuality: number;
-  /** 永不跌破 quality（保 LLM 识别率）。 */
+  /** Floor the JPEG quality never crosses (LLM OCR needs ≥80%). */
   qualityFloor: number;
 }
 
@@ -30,11 +30,11 @@ export const DEFAULT_COMPRESS_CONFIG: CompressConfig = {
 };
 
 export type CompressMethod =
-  | "skipped" // 已经够小或不压缩
-  | "resized" // 缩尺寸后 PNG 输出（像素级完全相同）
-  | "lossless-webp" // lossless WebP（无损压缩）
-  | "reencoded" // JPEG 重编码（少量有损）
-  | "fallback"; // 压缩失败兜底
+  | "skipped"
+  | "resized"
+  | "lossless-webp"
+  | "reencoded"
+  | "fallback";
 
 export interface CompressResult {
   file: File;
@@ -53,13 +53,10 @@ function isLikelyScreenshot(mimeType: string): boolean {
   return mimeType === "image/png";
 }
 
-/**
- * 客户端图片压缩。
- *  - 非图片跳过
- *  - 已经够小跳过（字节级完全相同）
- *  - 缩尺寸 + lossless 优先，quality 有损兜底
- *  - 任何环节失败返回原图（不让用户失败）
- */
+// See module header for the full attempt order. On any failure path
+// (decode error, missing OffscreenCanvas, every quality tier
+// overshooting) the original file is returned so the user's send
+// is never blocked by compression.
 export async function compressImage(
   file: File,
   overrides: Partial<CompressConfig> = {},
@@ -67,7 +64,6 @@ export async function compressImage(
   const cfg: CompressConfig = { ...DEFAULT_COMPRESS_CONFIG, ...overrides };
   const originalSize = file.size;
 
-  // 1. 非图片直接跳过
   if (!isImage(file)) {
     return {
       file,
@@ -78,7 +74,6 @@ export async function compressImage(
     };
   }
 
-  // 2. 已经够小直接跳过（保字节级完全相同）
   if (file.size <= cfg.targetSizeBytes) {
     return {
       file,
@@ -89,7 +84,6 @@ export async function compressImage(
     };
   }
 
-  // 3. 浏览器能力检查
   if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") {
     return {
       file,
@@ -100,7 +94,6 @@ export async function compressImage(
     };
   }
 
-  // 4. 解码图片
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(file);
@@ -114,7 +107,7 @@ export async function compressImage(
     };
   }
 
-  // 5. 缩尺寸（这一步本身无损）
+  // Resizing only reduces pixel count, never changes pixel values.
   let { width, height } = bitmap;
   if (width > cfg.maxDimension || height > cfg.maxDimension) {
     const ratio = Math.min(cfg.maxDimension / width, cfg.maxDimension / height);
@@ -135,9 +128,7 @@ export async function compressImage(
   }
   ctx.drawImage(bitmap, 0, 0, width, height);
 
-  // 6. 策略：先试无损，兜底有损
   if (isLikelyScreenshot(file.type)) {
-    // 6a. PNG 原样输出（resize 后）— 像素级完全相同
     try {
       const pngBlob = await canvas.convertToBlob({ type: "image/png" });
       if (pngBlob.size <= cfg.targetSizeBytes) {
@@ -152,9 +143,9 @@ export async function compressImage(
         };
       }
 
-      // 6b. PNG 太大 → lossless WebP
-      // 注：标准 ImageEncodeOptions 没有 lossless 字段，
-      // chromium 扩展支持但 TS 类型没声明。用 quality=1 + 类型断言。
+      // Standard ImageEncodeOptions has no `lossless` field — Chromium
+      // supports it as an extension but TS doesn't declare it. Use
+      // quality=1 + cast to keep the webp encode lossless in practice.
       const webpBlob = await canvas.convertToBlob({
         type: "image/webp",
         quality: 1.0,
@@ -171,11 +162,10 @@ export async function compressImage(
         };
       }
     } catch {
-      // 不支持 lossless WebP，回退有损
+      // lossless webp unsupported — fall through to the JPEG path.
     }
   }
 
-  // 6c. 有损路径：高 quality JPEG 迭代（永不跌破 qualityFloor）
   const startQ = isLikelyScreenshot(file.type)
     ? cfg.screenshotQuality
     : cfg.photoQuality;
@@ -183,7 +173,6 @@ export async function compressImage(
   for (let q = startQ; q >= cfg.qualityFloor - 0.001; q -= 0.05) {
     qualities.push(Math.max(cfg.qualityFloor, Math.round(q * 100) / 100));
   }
-  // 去重保序
   const uniqueQualities = Array.from(new Set(qualities));
 
   for (const quality of uniqueQualities) {
@@ -204,11 +193,10 @@ export async function compressImage(
         };
       }
     } catch {
-      // 单次失败继续下一个 quality
+      // try the next quality tier
     }
   }
 
-  // 7. 兜底：压缩失败，原图返回
   return {
     file,
     originalSize,
@@ -218,9 +206,7 @@ export async function compressImage(
   };
 }
 
-/**
- * 跳过压缩 — 给"保持原画质"开关用。
- */
+// Skips compression. Used by the "preserve original quality" toggle.
 export function skipCompression(file: File): CompressResult {
   return {
     file,
@@ -231,9 +217,7 @@ export function skipCompression(file: File): CompressResult {
   };
 }
 
-/**
- * 并行处理多个文件。
- */
+// Compresses a batch of files in parallel.
 export async function compressImages(
   files: File[],
   overrides: Partial<CompressConfig> = {},
@@ -245,9 +229,7 @@ function replaceExt(filename: string, newExt: string): string {
   return filename.replace(/\.\w+$/, newExt);
 }
 
-/**
- * 格式化字节数为可读字符串。
- */
+// Formats a byte count as "X B / X.Y KB / X.YY MB".
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

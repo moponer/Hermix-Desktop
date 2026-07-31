@@ -1,5 +1,4 @@
 // src/components/ChatComposerInput.tsx
-// Redesigned 2026-07-28 per GROUPCHAT_UI_REDESIGN.md:
 // · No independent border/shadow/rounded — flush with parent container
 // · Container provides the visual boundary; this component is transparent
 // · Proper disabled state: overall opacity 0.5 when disabled

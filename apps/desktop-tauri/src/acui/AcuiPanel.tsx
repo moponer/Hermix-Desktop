@@ -1,5 +1,5 @@
 /**
- * M5: AcuiPanel — renders the active ACUI card stack above the composer.
+ * AcuiPanel — renders the active ACUI card stack above the composer.
  *
  * Layout strategy:
  *   1. **Header section**: awakening cards (if any) — these are
@@ -38,9 +38,7 @@ export interface AcuiPanelProps {
   registry?: AcuiRegistry;
   /** Decision bus (from `useAcuiState.bind({ ... })`). */
   decide?: AcuiDecisionBus;
-  /** Optional wrapper class. */
   className?: string;
-  /** Initial collapsed state for the detail section. Default: false. */
   defaultCollapsed?: boolean;
 }
 

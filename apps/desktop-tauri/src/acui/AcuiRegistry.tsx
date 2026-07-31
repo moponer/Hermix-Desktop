@@ -1,5 +1,5 @@
 /**
- * M5: ACUI registry — maps card `kind` to a React component.
+ * ACUI registry — maps card `kind` to a React component.
  *
  * 协议层只关心数据；AcuiRegistry 把数据路由到具体的 React 渲染。
  * 默认注册 6 个 kind，复用现有 Inline* 组件 + ToolEventCard + builtin
@@ -37,9 +37,7 @@ export interface AcuiDecisionBus {
    *  for the approval adapter they happen to be the same string, but
    *  `useAcuiState.bind` is responsible for that translation if needed). */
   approve?: (cardId: string) => void;
-  /** Deny an approval card. */
   deny?: (cardId: string) => void;
-  /** Answer a clarify card. */
   answer?: (cardId: string, answer: string) => void;
 }
 
@@ -72,23 +70,22 @@ export type AcuiComponent = ComponentType<AcuiComponentProps>;
 export class AcuiRegistry {
   private components = new Map<string, AcuiComponent>();
 
-  /** Register a component for a kind. Overwrites any previous registration. */
+  /** Overwrites any previous registration for the same kind. */
   register(kind: string, component: AcuiComponent): this {
     this.components.set(kind, component);
     return this;
   }
 
-  /** Unregister a kind. Returns true if the kind was registered. */
+  /** Returns true if the kind was registered. */
   unregister(kind: string): boolean {
     return this.components.delete(kind);
   }
 
-  /** Look up a component. Returns undefined if the kind is not registered. */
+  /** Returns undefined if the kind is not registered. */
   resolve(kind: string): AcuiComponent | undefined {
     return this.components.get(kind);
   }
 
-  /** List all registered kinds. */
   list(): string[] {
     return Array.from(this.components.keys());
   }
@@ -100,7 +97,7 @@ export class AcuiRegistry {
     r.register("clarify", ClarifyAcui);
     r.register("tool_event", ToolEventAcui);
     r.register("path_preview", PathPreviewAcui);
-    // M3/M5: TickLoop awakening-phase widgets.
+    // TickLoop awakening-phase widgets.
     r.register("self_check_step", SelfCheckStepCard);
     r.register("awakening", AwakeningCard);
     return r;

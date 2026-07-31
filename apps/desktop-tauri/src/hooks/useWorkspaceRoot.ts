@@ -6,7 +6,8 @@ const STORAGE_KEY = STORAGE_KEYS.workspaceRoot;
 /**
  * Tracks the user's current workspace root across sessions. This is the base
  * directory the Tauri `read_artifact_file` command anchors relative paths
- * against — fixing the "LLM said `tmp/xx/方案.md` but I can't open it" bug.
+ * against — so the relative paths the LLM emits (e.g. `tmp/xx/方案.md`)
+ * can actually be resolved and opened.
  *
  * Defaults to `null`; the Tauri command will then fall back to:
  *   1. `HERMIX_DESKTOP_WORKSPACE_ROOT` env var

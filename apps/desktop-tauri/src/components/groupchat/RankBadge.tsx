@@ -1,16 +1,17 @@
 /**
- * Rank chip and summary components (P4).
+ * Rank chip and summary components.
  *
  * Renders a one-room rank summary as a compact chip. Extracted from
- * GroupChatView.tsx during the 2026-07 refactor.
+ * GroupChatView.tsx.
  */
 
 import { Trophy } from "lucide-react";
 import type * as api from "@/api";
 
-// Allowed accent hues only — NO blue/indigo/violet/purple (project iron law).
+// Allowed accent hues only — NO blue/indigo/violet/purple (they read as
+// channel/interactive colors and clash with the message-bubble palette).
 // silver remapped from 220 (blue) → 150 (emerald); star from 268 (violet) → 340 (rose);
-// diamond remapped from 195 (cyan) → 168 (teal) — 195 read as blue per iron law.
+// diamond remapped from 195 (cyan) → 168 (teal) — 195 read as blue.
 const TIER_HUE: Record<string, number> = {
   bronze: 28,
   silver: 150,

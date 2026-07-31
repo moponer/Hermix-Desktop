@@ -1,64 +1,36 @@
-/**
- * codeHighlight — 统一代码高亮模块 (2026-07-26)
- * ──────────────────────────────────────────────────────────────────
- *
- * 设计动机（第一性原理）：
- *
- *  之前聊天 (MarkdownBody) 和预览面板 (CodeView) 用了两套不同的高亮引擎：
- *    · 聊天 CodeBlock → react-syntax-highlighter (Prism async build)
- *    · 预览 CodeView  → refractor (同步)
- *
- *  问题：
- *    1. react-syntax-highlighter 的 Prism 是 **异步** 构建——它在运行时
- *       动态 import prismjs 语言组件。在 Tauri 打包的 webview 里，这些
- *       动态 chunk 可能不可用（asset protocol 不 serve .js chunk），
- *       导致 LLM 输出的很多语言代码块 **静默回退为纯文本**，没有高亮。
- *       这就是用户反馈 "代码高亮支持不够，很多类型没有高亮显示" 的根因。
- *    2. 两套引擎 = 两套语言注册 = 不一致。聊天支持的语言和预览不同步。
- *    3. react-syntax-highlighter + prismjs 占 ~500KB 包体积，而 refractor
- *       已经因为 CodeView 被打包进来了，复用它 = 零额外体积。
- *
- *  解决方案：
- *    统一用 refractor（同步、可靠、已在打包中）作为唯一的高亮引擎。
- *    本模块集中管理：
- *      · 语言注册（60+ 种）
- *      · 语言别名映射（LLM 输出 → refractor 名）
- *      · 亮色/暗色 token 配色（Atom One Light / One Dark）
- *      · highlightToReact() — 一次性 tokenize → React 节点树
- *
- *  对抗性审查：
- *    · refractor 同步 tokenize 1000 行 Python ≈ 8ms → 大文件不卡 ✓
- *    · 语言未注册 → try/catch 回退为纯文本，不 crash ✓
- *    · 亮色/暗色切换 → 运行时读取 .dark class，每次 render 重算 ✓
- *    · 包体积 → refractor 已在打包中，零增量 ✓
- */
+// Unified code-highlight module. Both the chat `MarkdownBody` and the
+// preview `CodeView` route through here; refractor (synchronous,
+// already bundled for `CodeView`) is the single highlighter so the
+// two surfaces can't drift out of sync. `react-syntax-highlighter`'s
+// Prism was tried first — it dynamically imports language chunks at
+// runtime, but Tauri's asset protocol doesn't serve those chunks
+// inside the packaged webview, so most languages silently fall back
+// to plain text. `highlightToReact()` is the only public entry.
 
 import refractor from "refractor";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 
-// ── 语言注册 ──────────────────────────────────────────────────
-// refractor 3.x 是 CJS — module.exports = refract，属性运行时挂载。
-// Vite/esbuild 的静态分析检测不到运行时挂载的 named exports，
-// 所以 `import { highlight, register } from "refractor"` 会拿到 undefined。
-// 用 default import 拿到完整对象后再解构。
+// refractor 3.x ships as CJS (`module.exports = refract`) with named
+// exports attached at runtime — Vite/esbuild's static analysis can't
+// see them, so `import { highlight, register } from "refractor"` yields
+// `undefined`. Use the default import + destructure.
 const { highlight, register } = refractor;
 
-// ── 注册安全封装 ──────────────────────────────────────────────
-// 根因（2026-07-27 修复）：refractor 的 `register()` 在
-// `grammar.displayName` 已存在时直接跳过（去重守卫）。而 core.js 在
-// 加载时已经 `register(js)` —— 其 displayName 恰好就是 "javascript"，
-// 于是把一份 *lite* 版 javascript grammar 挂到了
-// `refract.languages.javascript`。我们随后 `register(javascript)`
-// （full 版）被当成 no-op，full 版从未安装。lite 版的
-// `template-string` 是个裸 RegExp（无 `.pattern` 属性），而
-// `js-templates` / `js-extras` 假设它是 `{pattern: regex}` 对象 →
-// 读 `.pattern.source` 抛 "Cannot read properties of undefined"，并
-// 使整个模块 import 失败 → 全部代码高亮失效。
+// Safe wrapper around `register`. refractor's `register()` skips when
+// `grammar.displayName` already exists (a dedup guard). `core.js` calls
+// `register(js)` on load — its `displayName` is "javascript" — and
+// pins a *lite* javascript grammar at `refract.languages.javascript`
+// whose `template-string` is a bare RegExp without `.pattern`. Our
+// later `register(javascript)` for the full grammar is then a no-op,
+// and `js-templates` / `js-extras` crash when they read `.pattern.source`
+// on the bare RegExp, taking the entire highlight module with it.
 //
-// 防御：1) 注册前先 evict lite 版 javascript，让 full 版真正装进；
-// 2) 每个 register 包 try/catch，单个坏 grammar 只告警、绝不拖垮全局。
-// 这也符合"任一语言定义可崩都不应让全局高亮挂掉"的对抗式审查要求。
+// Two guards:
+//   1. `evictLiteJavascript` runs BEFORE the first `register(javascript)`
+//      so the full grammar actually installs.
+//   2. Each `register` call is wrapped in try/catch — one broken
+//      grammar only logs a warning, never breaks global highlighting.
 function safeRegister(grammar: Parameters<typeof register>[0]): void {
   try {
     register(grammar);
@@ -73,11 +45,10 @@ function safeRegister(grammar: Parameters<typeof register>[0]): void {
   }
 }
 
-// evict refractor 自带的 lite 版 javascript（core.js 注册的 js，
-// displayName="javascript"，template-string 是裸 RegExp 无 .pattern）。
-// 必须在本文件任何 `register(javascript)` 之前执行，否则 full 版
-// 因去重守卫被跳过。
-// 注：`languages` 是 refractor 运行时属性，类型未声明，需 cast。
+// Evict the lite javascript registered by `core.js` so the full
+// grammar below isn't dropped by the dedup guard. `languages` is a
+// runtime-only property, not declared in the types — cast through
+// `unknown`.
 const refractorWithLanguages = refractor as unknown as {
   languages?: Record<string, unknown>;
 };
@@ -88,7 +59,8 @@ if (
   delete refractorWithLanguages.languages.javascript;
 }
 
-// 核心语言
+// Core languages — registered eagerly at module load so `highlight`
+// works without further setup.
 import python from "refractor/lang/python";
 import typescript from "refractor/lang/typescript";
 import javascript from "refractor/lang/javascript";
@@ -114,7 +86,7 @@ import yaml from "refractor/lang/yaml";
 import toml from "refractor/lang/toml";
 import xml from "refractor/lang/markup";
 import sql from "refractor/lang/sql";
-// 扩展语言
+// Extended / niche languages
 import diff from "refractor/lang/diff";
 import docker from "refractor/lang/docker";
 import markdown from "refractor/lang/markdown";
@@ -155,9 +127,9 @@ import handlebars from "refractor/lang/handlebars";
 import asciidoc from "refractor/lang/asciidoc";
 import csv from "refractor/lang/csv";
 
-// 一次性注册所有语言 — 模块加载时执行，全局生效
-// 用 safeRegister 包裹：单个语言定义若内部抛错（依赖缺失等），
-// 只告警不影响其余语言与模块整体加载。
+// `safeRegister` swallows individual failures (missing internal
+// dependency, broken grammar) so one bad language never blocks the
+// rest from installing or breaks the module load.
 safeRegister(python); safeRegister(typescript); safeRegister(javascript);
 safeRegister(jsxLang); safeRegister(tsxLang); safeRegister(rust); safeRegister(go);
 safeRegister(java); safeRegister(kotlin); safeRegister(c); safeRegister(cpp);
@@ -176,11 +148,12 @@ safeRegister(protobuf); safeRegister(mermaid); safeRegister(jsonp); safeRegister
 safeRegister(jsTemplates); safeRegister(wiki); safeRegister(rest); safeRegister(pug);
 safeRegister(handlebars); safeRegister(asciidoc); safeRegister(csv);
 
-// ── 语言别名映射 ──────────────────────────────────────────────
-// LLM 输出的语言标签（如 `html`、`vue`、`sh`）→ refractor 已注册的语言名
+// Language alias map: LLM-produced tags (e.g. `html`, `vue`, `sh`)
+// → the refractor-registered name. Keep in sync with the imports
+// above.
 export function toRefractorLang(lang: string): string | null {
   const map: Record<string, string> = {
-    // 编程语言
+    // Programming languages
     ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx",
     mjs: "javascript", cjs: "javascript",
     rs: "rust", py: "python", pyw: "python", go: "go", java: "java",
@@ -195,36 +168,36 @@ export function toRefractorLang(lang: string): string | null {
     nim: "nim", zig: "zig", jl: "julia", julia: "julia",
     r: "r", sol: "solidity", solidity: "solidity",
     proto: "protobuf", protobuf: "protobuf",
-    // Shell / 脚本
+    // Shell / scripting
     sh: "bash", bash: "bash", zsh: "bash", fish: "bash",
     ps1: "powershell", powershell: "powershell", psm1: "powershell",
     bat: "batch", cmd: "batch", batch: "batch",
-    // 标记 / 模板
+    // Markup / templating
     css: "css", scss: "scss", less: "less",
     html: "markup", htm: "markup", xml: "markup", svg: "markup",
     vue: "markup", svelte: "markup", razor: "markup",
     pug: "pug", jade: "pug", hbs: "handlebars", handlebars: "handlebars",
     mustache: "handlebars",
-    // 数据 / 配置
+    // Data / config
     json: "json", json5: "json5", jsonp: "jsonp",
     yaml: "yaml", yml: "yaml", toml: "toml",
     ini: "ini", conf: "ini", cfg: "ini", env: "properties",
     properties: "properties", props: "properties",
     graphql: "graphql", gql: "graphql", sql: "sql",
     mysql: "sql", psql: "sql",
-    // 文档
+    // Documentation
     md: "markdown", mdx: "markdown", markdown: "markdown",
     adoc: "asciidoc", asciidoc: "asciidoc", asc: "asciidoc",
     rst: "rest", rest: "rest", wiki: "wiki",
     tex: "latex", latex: "latex",
-    // 构建 / 工具
+    // Build / tooling
     dockerfile: "docker", docker: "docker",
     makefile: "makefile", make: "makefile", cmake: "cmake",
     "cmake.in": "cmake",
     gitignore: "ignore", ignore: "ignore",
     nginx: "nginx", nginxconf: "nginx",
     vim: "vim", viml: "vim", vimrc: "vim",
-    // 其他
+    // Misc
     diff: "diff", patch: "diff",
     http: "http", regex: "regex",
     csv: "csv", tsv: "csv",
@@ -234,8 +207,10 @@ export function toRefractorLang(lang: string): string | null {
   return map[lang] ?? null;
 }
 
-// ── Token 配色：Atom One Dark ──────────────────────────────────
-// 暗色主题配色，与 react-syntax-highlighter 的 oneDark 一致。
+// Token palettes. Atom One Dark / Light, matching what
+// `react-syntax-highlighter`'s `oneDark` / `oneLight` produced so the
+// unified refractor path stays visually consistent with the old
+// Prism output.
 const ONE_DARK: Record<string, React.CSSProperties> = {
   comment: { color: "#5c6370", fontStyle: "italic" },
   prolog: { color: "#5c6370", fontStyle: "italic" },
@@ -270,10 +245,9 @@ const ONE_DARK: Record<string, React.CSSProperties> = {
   italic: { color: "#abb2bf", fontStyle: "italic" },
 };
 
-// ── Token 配色：Atom One Light ─────────────────────────────────
-// 亮色主题配色，与 react-syntax-highlighter 的 oneLight 一致。
-// 之前 CodeView 只有一套 ONE_DARK，在亮色主题下代码区背景是浅色
-// 但 token 颜色是暗色配色，导致对比度差、阅读困难。
+// Light-mode counterpart to ONE_DARK. Without this, light-theme code
+// blocks used dark tokens on a light background — readable but with
+// noticeably worse contrast than dark-mode.
 const ONE_LIGHT: Record<string, React.CSSProperties> = {
   comment: { color: "#a0a1a7", fontStyle: "italic" },
   prolog: { color: "#a0a1a7", fontStyle: "italic" },
@@ -308,10 +282,12 @@ const ONE_LIGHT: Record<string, React.CSSProperties> = {
   italic: { color: "#383a42", fontStyle: "italic" },
 };
 
-/** 根据 token className 查找配色样式 */
+// Looks up the palette entry for a refractor token className. refractor
+// emits multi-class strings like "token comment"; we accept any one
+// of the listed classes as a match (last one wins, so the more
+// specific token kind outranks the generic "token").
 function styleForToken(className: string, isDark: boolean): React.CSSProperties | undefined {
   const palette = isDark ? ONE_DARK : ONE_LIGHT;
-  // refractor 的 className 是 "token comment" 形式，取最后一个 class
   const classes = className.split(/\s+/);
   for (const c of classes) {
     const style = palette[c];
@@ -320,15 +296,10 @@ function styleForToken(className: string, isDark: boolean): React.CSSProperties 
   return palette[className];
 }
 
-/**
- * 一次性 tokenize 全文，返回 React 节点树。
- * 大文件实测：1000 行 Python ≈ 8ms。
- *
- * @param source  源代码文本
- * @param language 语言标识（如 "python"、"html"、"ts"）
- * @param isDark  是否暗色主题（决定使用 ONE_DARK 还是 ONE_LIGHT 配色）
- * @returns React 节点树；语言不支持时返回原始字符串
- */
+// Tokenizes `source` once and returns a React node tree. Measured
+// at ~8 ms for 1000 lines of Python. Returns the raw string when
+// the language is missing or tokenize fails (so a highlight failure
+// degrades to plain text instead of an empty bubble).
 export function highlightToReact(
   source: string,
   language: string | null,
@@ -342,10 +313,9 @@ export function highlightToReact(
 
   try {
     const result = highlight(source, refractorLang);
-    // refractor 3.x returns an Array<Element | Text> (indexed by 0,1,2…),
-    // NOT a HAST Root node. hast-util-to-jsx-runtime requires a Root
-    // ({ type: "root", children: […] }) — without the wrapper it silently
-    // returns null/empty.
+    // refractor 3.x returns an Array<Element | Text>, NOT a HAST
+    // Root. `hast-util-to-jsx-runtime` requires `{type:"root", children:…}`
+    // — without the wrapper it silently emits null/empty.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tree = {
       type: "root" as const,
@@ -356,8 +326,7 @@ export function highlightToReact(
       jsx,
       jsxs,
       components: {
-        // refractor 的 span 自带 class="token ..."
-        // 用 jsx() 而非 JSX 语法，这样文件可以保持 .ts 扩展名。
+        // Use `jsx()` rather than JSX so this file can stay `.ts`.
         span: (props: React.HTMLAttributes<HTMLSpanElement>) => {
           const { className, style, ...rest } = props;
           const tokenStyle = className ? styleForToken(className, isDark) : undefined;
@@ -377,11 +346,9 @@ export function highlightToReact(
   }
 }
 
-/**
- * 读取当前是否暗色主题。
- * useTheme() 会在 <html> 上加 .dark class。
- * 每次 render 调用是幂等的，父组件在主题变化时会重新 render。
- */
+// Reads the active theme. `useTheme()` toggles a `.dark` class on
+// `<html>`, so the call is idempotent and re-runs whenever the
+// parent re-renders on theme change.
 export function readIsDark(): boolean {
   return typeof document !== "undefined" &&
     document.documentElement.classList.contains("dark");

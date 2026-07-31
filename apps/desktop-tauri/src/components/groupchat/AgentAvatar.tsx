@@ -1,7 +1,7 @@
 /**
  * Avatar components for the groupchat module.
  *
- * Extracted from GroupChatView.tsx during the 2026-07 refactor.
+ * Extracted from GroupChatView.tsx.
  */
 
 import { memo } from "react";
@@ -50,7 +50,7 @@ export function AgentAvatar({
 }
 
 /* ── Leader Avatar ──
- * Visual identity for the built-in 项目总管 (P1). Distinct from
+ * Visual identity for the built-in 项目总管. Distinct from
  * member avatars: Crown glyph, amber (gold) tinted palette, fixed
  * z-index boost so it always sits at the front of the pile.
  */

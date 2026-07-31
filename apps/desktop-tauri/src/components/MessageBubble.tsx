@@ -1,5 +1,6 @@
 import React from "react";
 import { openImageViewer } from "./imageViewer";
+import { describeShellCommand } from "../lib/commandDescribe";
 import {
   ChevronDown, ChevronRight, Terminal, Globe, Wrench,
   AlertCircle, AlertTriangle, CheckCircle2, Loader2, Copy, Check,
@@ -32,10 +33,6 @@ import {
   memoryActionLabel,
   memoryStatusColor,
 } from "../utils/memoryToolResult";
-// InlinePathPreview was retired — every path click now
-// routes through ChatView's `onPathClick` → RightSidebar preview.
-// See the comment near the markdown-body render below for the bug
-// story ("产物栏展开跑到对话界面下面去了").
 import { ThoughtStreamCard } from "./ThoughtStreamCard";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
 
@@ -85,11 +82,9 @@ interface MessageBubbleProps {
    */
   showHeader?: boolean;
   /**
-   * PLAN_UI_ENHANCEMENT §1.1 — 专家切换分界时间戳（毫秒）。
-   * 当用户切换专家后，本字段作为分水岭：
-   *   - 历史消息 (timestamp < cutoffAt) 沿用旧规则（Hermix 内置头像/原始时间）
-   *   - 新消息 (timestamp >= cutoffAt) 按新专家的规则渲染
-   * 缺省表示本会话从未切换过专家，所有消息走默认路径。
+   * Watershed timestamp (ms) for an expert switch this session: messages
+   * before it render with the old expert's avatar/time, messages at/after
+   * it with the new expert's. `null` means no switch happened.
    */
   expertCutoffAt?: number | null;
 }
@@ -143,10 +138,9 @@ export function MessageBubble({
 }
 
 // ── Stop-reason chip ─────────────────────────────────────────────
-// 用户反馈 "已完成几个字的设计难看":
-// stop 态不渲染任何 chip (已完成是废话, 时间戳已经在左侧). 其他 stop
-// 原因保留, 但全部去掉 pill-* 彩色文本 → 改为纯 muted 文字 + 极小图标,
-// 视觉重量与左侧时间戳持平.
+// `stop` needs no chip — the timestamp on the left already signals
+// completion. Other reasons keep a muted label + tiny icon (no
+// colored pill) so their visual weight matches the timestamp.
 function StopReasonChip({ reason, meta }: { reason: string; meta?: string }) {
   // stop → render nothing (the message has clearly settled; no label needed)
   if (reason === "stop") return null;
@@ -264,13 +258,10 @@ function UserMessage({ message }: { message: ChatMessage }) {
   );
 }
 
-// ── Tool Timeline Section (2026-07-10) ───────────────────────
+// ── Tool Timeline Section ───────────────────────────────────────
 // Renders tool calls from the assistant's `execution_timeline` as a
 // collapsible block inside the assistant bubble — same visual position
 // as the reasoning block, but for tools.
-// This replaces the old approach of expanding timeline events into
-// separate `role: "tool"` messages (which caused tools to appear
-// above the avatar when the first assistant was empty).
 
 /**
  * Render a single ToolGroup as a compact row, reusing the same
@@ -287,10 +278,9 @@ function ToolGroupCard({
   const isError = group.status === "error";
   const [open, setOpen] = useState(false);
 
-  // P4-1: Memoize event-derived data so large stdout outputs
-  // aren't re-joined on every render (e.g. a tool with 500
-  // stdout chunks would previously concatenate 500 strings on
-  // every parent re-render even though the result is identical).
+  // Memoize so large stdout outputs aren't re-joined every render —
+  // a tool with 500 chunks would otherwise concatenate 500 strings on
+  // each parent re-render for an identical result.
   const { startEv, output, hasOutput } = useMemo(() => {
     const startEv = group.events.find((e) => e.type === "tool_start");
     const completeEv = group.events.find((e) => e.type === "tool_complete");
@@ -407,20 +397,6 @@ function ToolGroupCard({
 }
 
 // ── Process Timeline (the ONE foldable block) ───────────────────
-// v2: 流式阶段不渲染折叠头，让 reasoning / tool 和正文
-// 看起来一样 — 用户看到的是"LLM 实时在写"（不区分 thinking 还是
-// reply），只有关键转换发生（最终正文出现 / stream 结束）时，前
-// 面所有过程才整体折叠成一个"已完成 N 个工具"chip。
-// 流式时（isStreaming=true）：
-// · 无折叠头
-// · 过程内容（reasoning + tools）直接平铺在文本流里，
-// 视觉上和正文一样（thinking 是浅灰斜体、tool 是普通一行）
-// 结束后（isStreaming=false）：
-// ┌─  ✓ 已完成 N 个工具 ▼  ← 在 body 之上插入折叠 chip
-// └─  body 默认折叠，点击展开看完整过程
-// 关键不变量：折叠只在"过程"和"结论"之间发生，不在"流式中"发生。
-// 这跟 WorkBuddy 参考 UI 一致——流式时是一段连续叙事，结束后才
-// 把"过程"压缩成可展开的历史。
 
 /**
  * Single foldable block that wraps every reasoning + tool step from
@@ -429,13 +405,13 @@ function ToolGroupCard({
  * ends, prepends a "已完成 ▼" chip and collapses the body.
  */
 function ProcessTimeline({
-  processSteps,
+  steps,
   isStreaming,
   hasRunningTool: _hasRunningTool,
   durationMs,
   onPathClick,
 }: {
-  processSteps: TimelineStep[];
+  steps: TimelineStep[];
   isStreaming?: boolean;
   hasRunningTool: boolean;
   /** Wall-clock time the LLM took for this turn (ms). `undefined` =
@@ -456,50 +432,48 @@ function ProcessTimeline({
   }, [isStreaming]);
 
   // Pre-compute tool groups per step so the "已完成 N 个工具" count
-  // reflects actual tool *invocations*, not raw timeline events. A
-  // single tool call can emit hundreds of `tool_stdout` chunks, which
-  // previously inflated the count to 700+ for just a handful of tools.
-  // Using the same `groupTimeline` call that drives rendering guarantees
-  // the header count always matches what the user sees when expanded.
-  // useMemo: during streaming the parent re-renders 30-50×/s (rAF chunk
-  // batches). Without memo, `groupTimeline` re-runs on every render even
-  // when `processSteps` hasn't changed between batches. The dependency
-  // array limits recomputation to when the steps array or streaming flag
-  // actually changes.
-  // FIX (streamComplete): while the live WS is still feeding
-  // events for this message (`isStreaming === true`), ask `groupTimeline`
-  // to *not* flip stranded groups to `"error"` — that was the source of
-  // "读取文件上来就提示执行中断，实际后面又成功了". The ToolRow renderer
-  // paints `"running"` as a "运行中" badge + spinner, which is the correct
-  // mid-stream cue; only when the turn settles do we promote stranded
-  // groups to "error" / "执行已中断（无完成事件）" so reloads still surface
-  // the genuine interruption case.
+  // reflects actual tool *invocations*, not raw timeline events — a
+  // single tool call can emit hundreds of `tool_stdout` chunks that would
+  // otherwise inflate the count to 700+ for just a handful of tools.
+  // Reusing the same `groupTimeline` call that drives rendering keeps the
+  // header count in sync with what the user sees when expanded.
+  // During streaming the parent re-renders 30-50×/s (rAF batches), so the
+  // memo avoids re-running `groupTimeline` when `steps`/streaming are unchanged.
+  // While the live WS is still feeding events (`isStreaming`), ask
+  // `groupTimeline` to NOT flip stranded groups to `"error"` — a tool that
+  // later succeeds would otherwise flash "执行中断". Only when the turn
+  // settles do we promote stranded groups to "error" so reloads still
+  // surface genuine interruptions.
   const stepGroups = useMemo(
     () =>
-      processSteps.map((s) =>
+      steps.map((s) =>
         s.kind === "tools"
           ? groupTimeline(s.events, { streamComplete: !isStreaming })
           : null,
       ),
-    // `processSteps` is a new array on every render during streaming
+    // `steps` is a new array on every render during streaming
     // (the parent rebuilds it from the live message's unified_steps),
     // so the memo will recompute when steps actually change. When the
     // stream settles (`isStreaming` flips false), the groups must also
     // recompute because `streamComplete` changes stranded→error.
-    [processSteps, isStreaming],
+    [steps, isStreaming],
   );
 
-  if (processSteps.length === 0) return null;
+  if (steps.length === 0) return null;
+
+  // Whether this turn has any reasoning/tool scaffolding. Pure-text
+  // turns render with no fold header (text flows as plain prose).
+  const hasProcessContent = steps.some(
+    (s) => s.kind === "reasoning" || s.kind === "tools",
+  );
 
   const totalTools = stepGroups.reduce(
     (acc, groups) => acc + (groups ? groups.length : 0),
     0,
   );
 
-  // P4-3: Count error tools so the header chip can surface
-  // failure count at a glance, e.g. "已完成 5 个工具 (2 失败)".
-  // This lets the user know something went wrong even when the
-  // process body is collapsed.
+  // Count error tools so the collapsed chip can surface failures at a
+  // glance ("已完成 5 个工具 (2 失败)"), even when the body is collapsed.
   const errorTools = stepGroups.reduce(
     (acc, groups) =>
       acc +
@@ -515,7 +489,6 @@ function ProcessTimeline({
   // "已完成 7s"                 ← < 1 minute
   // "已完成 1m 23s"             ← ≥ 1 minute (s always shown, never 0-padded)
   // "已完成 5 个工具 7s"        ← when tools ran (count + duration)
-  // "已完成 5 个工具 (2 失败) 7s" ← when some tools failed (P4-3)
   const durationPart = formatDuration(durationMs);
   const errorPart = errorTools > 0 ? ` (${errorTools} 失败)` : "";
   const settledLabel = totalTools > 0
@@ -528,7 +501,7 @@ function ProcessTimeline({
           During streaming the content flows inline so the user
           perceives a single continuous narrative, not a stack
           of chips. */}
-      {!isStreaming && (
+      {!isStreaming && hasProcessContent && (
         <button
           onClick={() => setUserOverride((v) => v ?? true ? false : true)}
           className="reasoning-header tl-process-header"
@@ -547,14 +520,35 @@ function ProcessTimeline({
           <span className="reasoning-label">{settledLabel}</span>
         </button>
       )}
-      {expanded && (
-        <div className="tl-process-body">
-          {stepGroups.map((groups, i) => {
-            const step = processSteps[i];
-            if (step.kind === "reasoning") {
-              return <ReasoningBlock key={`ps-${i}`} content={step.content} />;
-            }
-            if (step.kind !== "tools" || !groups) return null;
+      {/* Chronological render: text steps stay visible at their true
+          position; reasoning + tool steps collapse by default (settled)
+          and expand live / on user toggle. This keeps the narrative
+          order — a lead-in sentence sits above the tool card it
+          preceded, a follow-up sits below it. */}
+      <div className="tl-process-body">
+        {steps.map((step, i) => {
+          if (step.kind === "text") {
+            const parsed = parseContent(step.content);
+            return (
+              <div key={`text-${i}`} className="tl-iteration tl-text-step">
+                {parsed.body && (
+                  <div className="tl-text-inner">
+                    <MarkdownBody
+                      content={parsed.body}
+                      onPathClick={onPathClick ?? (() => {})}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          }
+          // reasoning + tools are hidden unless expanded (settled+open or live)
+          if (!expanded) return null;
+          if (step.kind === "reasoning") {
+            return <ReasoningBlock key={`ps-${i}`} content={step.content} />;
+          }
+          if (step.kind === "tools" && stepGroups[i]) {
+            const groups = stepGroups[i]!;
             if (groups.length === 0) return null;
             return (
               <ToolTimelineSection
@@ -563,9 +557,10 @@ function ProcessTimeline({
                 onPathClick={onPathClick}
               />
             );
-          })}
-        </div>
-      )}
+          }
+          return null;
+        })}
+      </div>
     </div>
   );
 }
@@ -596,11 +591,7 @@ function formatDuration(ms: number | undefined): string {
  * Flat tool list (no outer fold — the parent ProcessTimeline owns
  * the fold). Renders each tool call as a single row, preserving the
  * per-tool inline expansion for full stdout / structured output.
- *
- * replaced the old "工具调用 [已完成 X] ▼" outer fold
- * with a flat list, so the timeline reads as a narrative instead of
- * a stack of chips. Each ToolGroupCard still has its own inline
- * "click to expand" affordance for full output.
+ * Each ToolGroupCard keeps its own inline "click to expand" affordance.
  */
 function ToolTimelineSection({
   groups,
@@ -624,23 +615,12 @@ function ToolTimelineSection({
 }
 
 // ── Unified Timeline Renderer ─────────────────────────────────────
-// Renders the assistant's response as TWO regions:
-// ┌────────────────────────────────────────────────────────────┐
-// │ ProcessTimeline (one foldable block)                       │
-// │   process steps  = reasoning + tools (in chronological     │
-// │                     order, all the agent-loop scaffolding) │
-// │   header         = "处理中…" (live) / "已完成 N 个工具"   │
-// │                     (settled, collapsed by default)       │
-// ├────────────────────────────────────────────────────────────┤
-// │ Final text (one or more text steps, rendered as continuous │
-// │   prose — no fold, no card wrapper)                        │
-// └────────────────────────────────────────────────────────────┘
-// replaces the previous iteration-based grouping. The
-// fold is now at the OUTER level, not per-step. Multiple text steps
-// (LLM can interleave paragraphs) are merged into a single prose
-// flow at the bottom of the bubble — same as before.
-// File changes / memory updates / memory recalls / tool-calls
-// fallback / thinking dots remain as trailing meta blocks.
+// Renders the assistant's response as ONE chronological stream: text
+// steps stay at their true position while reasoning + tool steps
+// collapse behind a single fold header (settled) and expand live /
+// on user toggle, so a lead-in sentence stays above the tool card it
+// preceded and a follow-up below it. File changes / memory updates /
+// memory recalls remain as trailing meta blocks after the stream.
 
 function UnifiedTimelineRenderer({
   steps,
@@ -669,17 +649,10 @@ function UnifiedTimelineRenderer({
   const hasAnyTextStep = steps.some((s) => s.kind === "text");
   const hasAnyReasoningStep = steps.some((s) => s.kind === "reasoning");
 
-  // Split steps into "process" (reasoning + tools) and "text" (final
-  // reply). Process goes inside the single foldable ProcessTimeline;
-  // text renders as continuous prose below the fold.
-  const processSteps = useMemo(
-    () => steps.filter((s) => s.kind === "reasoning" || s.kind === "tools"),
-    [steps],
-  );
-  const textSteps = useMemo(
-    () => steps.filter((s) => s.kind === "text"),
-    [steps],
-  );
+  // Steps render chronologically inside ProcessTimeline — text stays
+  // at its true position, reasoning + tools collapse by default. No
+  // separate "process" vs "text" split (that detached tool cards from
+  // the sentences that preceded/followed them).
 
   // If all steps are empty (no reasoning, no tools, no text), render
   // the streaming placeholder (ThinkingDots) or nothing.
@@ -698,53 +671,35 @@ function UnifiedTimelineRenderer({
 
   return (
     <div className="tl-iterations">
-      {/* The single foldable process block — wraps every reasoning
-          step and every tool call from the agent loop. */}
+      {/* One chronological stream: reasoning + tools collapse behind a
+          single header; text stays inline at its true position. */}
       <ProcessTimeline
-        processSteps={processSteps}
+        steps={steps}
         isStreaming={isStreaming}
         hasRunningTool={hasRunningTool}
         durationMs={durationMs}
         onPathClick={onPathClick}
       />
 
-      {/* Final text reply — renders outside the fold so the
-          conclusion is always visible without a click. */}
-      {textSteps.map((step, i) => {
-        if (step.kind !== "text") return null;
-        const parsed = parseContent(step.content);
-        const isLastText = i === textSteps.length - 1;
-        return (
-          <div key={`text-${i}`} className="tl-iteration tl-text-step">
-            {parsed.body && (
-              <div className="tl-text-inner">
-                <MarkdownBody
-                  content={parsed.body}
-                  onPathClick={onPathClick ?? (() => {})}
-                />
-              </div>
-            )}
-            {/* File changes (only on the very last text step) */}
-            {isLastText && fileChanges.length > 0 && (
-              <div className="tl-text-inner tl-text-inner--meta">
-                <FileChangeBlock changes={fileChanges} onPathClick={onPathClick} />
-              </div>
-            )}
-            {/* Memory updates (only on the last text step) */}
-            {isLastText && memoryUpdates.length > 0 && (
-              <div className="tl-text-inner tl-text-inner--meta">
-                <MemoryUpdateBlock updates={memoryUpdates} />
-              </div>
-            )}
-            {/* Memory recalls */}
-            {isLastText && memoryRecalls.length > 0 && (
-              <div className="tl-text-inner tl-text-inner--meta">
-                <MemoryRecallBlock recalls={memoryRecalls} />
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {/* Trailing meta blocks — file changes / memory updates /
+          recalls. Rendered once after the stream, attached to the
+          final reply (the last text step is the terminal node in the
+          common flow). Only when the turn produced text. */}
+      {hasAnyTextStep && fileChanges.length > 0 && (
+        <div className="tl-text-inner tl-text-inner--meta">
+          <FileChangeBlock changes={fileChanges} onPathClick={onPathClick} />
+        </div>
+      )}
+      {hasAnyTextStep && memoryUpdates.length > 0 && (
+        <div className="tl-text-inner tl-text-inner--meta">
+          <MemoryUpdateBlock updates={memoryUpdates} />
+        </div>
+      )}
+      {hasAnyTextStep && memoryRecalls.length > 0 && (
+        <div className="tl-text-inner tl-text-inner--meta">
+          <MemoryRecallBlock recalls={memoryRecalls} />
+        </div>
+      )}
 
       {/* Legacy fallback: running tool calls without timeline events.
           Only shown when there are tool_calls but no tool steps
@@ -798,10 +753,9 @@ function AssistantMessage({
    */
   isStreaming?: boolean;
   /**
-   * PLAN_UI_ENHANCEMENT §1.1 — 专家切换分界时间戳（毫秒）。
-   * 当本消息的 timestamp < cutoffAt 时，认为是切换前历史消息。
-   * 渲染层可以用它来决定用 Hermix 内置头像 vs 专家头像，
-   * 以及保留原始时间 vs 按专家时间轴显示。
+   * Watershed timestamp (ms) for an expert switch: messages whose
+   * timestamp is below it are pre-switch history (Hermix avatar / original
+   * time); at/above it use the new expert's avatar / timeline.
    */
   expertCutoffAt?: number | null;
 }) {
@@ -825,14 +779,9 @@ function AssistantMessage({
     [toolCalls],
   );
 
-  // Inline path preview was retired in favour of routing
-  // every path click through ChatView's `onPathClick` → RightSidebar.
-  // The dialog form (and the `transform: ...; h-enter` ancestor it
-  // spawned under) used to "fall below" the chat column, breaking
-  // the "产物栏/阅读界面在同一栏" mental model the user expects.
-  // Now path clicks always open / switch the right sidebar's preview.
-
-  // Now path clicks always open / switch the right sidebar's preview.
+  // Path clicks route through ChatView's `onPathClick` → RightSidebar
+  // (never an inline popover) so the preview stays in the same column as
+  // the chat instead of falling below it.
 
   return (
     // Outer wrapper: with header we use the avatar+column flex; without
@@ -901,10 +850,6 @@ function AssistantMessage({
         />
       </div>
 
-      {/* Inline path popover retired — see comment above
-          `openPath` in this component. All path clicks now flow
-          through `onPathClick` (passed by ChatView → App.tsx) into
-          the right sidebar's preview mode. */}
     </div>
   );
 }
@@ -932,10 +877,9 @@ function SystemMessage({ message }: { message: ChatMessage }) {
 // ── Thinking block ───────────────────────────────────────────────
 
 // ── File change block ─────────────────────────────────────────────
-// Flat list of file links. No pills, no icons, no per-file colour
-// coding — the user said "文件名是蓝色" and "字号与'文件变更'一致".
-// The block just renders the title row + a comma-separated list of
-// clickable filenames, each opening the inline path preview.
+// Flat list of file links — no pills / icons / colour coding, just a
+// title row + a comma-separated list of clickable filenames that open
+// the inline path preview.
 
 function FileChangeBlock({
   changes,
@@ -997,10 +941,9 @@ function FileChangeBlock({
 }
 
 // ── Memory updates ───────────────────────────────────────────────
-// Inline "记忆" row surfacing what the agent remembered this turn
-// (write / update / delete / summarize / cleanup). Per the design
-// iron-law, no blue/indigo/violet — action tints use zinc / amber /
-// green / red only.
+// Inline row surfacing what the agent remembered this turn
+// (write / update / delete / summarize / cleanup). Action tints use
+// only zinc / amber / green / red — never blue / purple.
 function MemoryUpdateBlock({ updates }: { updates: MemoryUpdateEntry[] }) {
   const iconFor = (action: MemoryUpdateEntry["action"]) => {
     switch (action) {
@@ -1061,7 +1004,7 @@ function MemoryUpdateBlock({ updates }: { updates: MemoryUpdateEntry[] }) {
   );
 }
 
-// ── Memory recall (Phase 19 A) ──────────────────────────────────
+// ── Memory recall ──────────────────────────────────
 // Surfaces the agent's per-turn memory recall so the user can see
 // when the agent re-pulled related facts. Distinct from
 // `MemoryUpdateBlock` (writes); this fires on reads. Kept visually
@@ -1123,28 +1066,14 @@ function MemoryRecallBlock({ recalls }: { recalls: MemoryRecallEntry[] }) {
 // - Minimal chrome: just the tool icon + name + status pill + time
 // - Terminal output lives inside the expanded body, muted background
 
-/* ════════════════════════════════════════════════════════════════════
-   工具分类体系 v4 — 全面覆盖，零"未知操作"
-   ════════════════════════════════════════════════════════════════════
-   Each category has:
-     • A list of keyword patterns matched against the lower-cased tool name
-     • A Chinese verb displayed as the action label
-     • A lucide-react icon component
-     • A solid background / "tile" colour for the icon tile
-     • A `kind` string for CSS data-* attributes
-
-   Resolution order:
-     1. The first category whose keywords include a substring of the tool
-        name wins — we always select the most-specific match first.
-     2. Empty / placeholder ("tool") → infer from args shape.
-     3. No match at all → "other" category (NEVER "unknown").
-
-   The "other" category catches EVERY tool name that wasn't explicitly
-   mapped. It renders the literal tool name as the verb so the user
-   always sees what actually ran — no generic placeholder.
-
-   Last updated: (v4 comprehensive rewrite)
-   ─────────────────────────────────────────────────────────────── */
+/* Tool classification:
+   • Each category matches keyword patterns against the lower-cased tool name.
+   • The first category whose keywords appear as a substring of the tool name
+     wins — the most-specific match is always selected first.
+   • Empty / placeholder ("tool") → infer from args shape.
+   • Anything unmapped falls through to the "other" category (NEVER "unknown"),
+     which renders the literal tool name as the verb so the user always sees
+     what actually ran. */
 
 interface ToolCategory {
   keywords: string[];
@@ -1154,168 +1083,144 @@ interface ToolCategory {
 }
 
 const TOOL_CATEGORIES: ToolCategory[] = [
-  // 1. 终端/命令执行 (绿色)
   {
     keywords: ["terminal", "bash", "shell", "exec", "execute_command", "run_command", "run_script", "cmd", "powershell", "pwsh"],
     verb: "执行命令",
     bg: "#22c55e",
     kind: "shell",
   },
-  // 2. 文件读取 (teal, 设计铁律禁蓝)
   {
     keywords: ["read_file", "read_pdf", "read_xls", "read_xlsx", "read_docx", "read_doc", "read_pptx", "read_image", "view_file", "cat", "open_file", "preview", "inspect"],
     verb: "读取文件",
     bg: "#14b8a6",
     kind: "read",
   },
-  // 3. 文件写入/创建 (teal, 设计铁律禁蓝)
   {
     keywords: ["write_file", "create_file", "save_file", "add_file", "new_file", "output_file", "append_file"],
     verb: "写入文件",
     bg: "#14b8a6",
     kind: "write",
   },
-  // 4. 文件编辑/修改 (teal, 设计铁律禁蓝)
   {
     keywords: ["edit_file", "edit", "patch", "update_file", "modify_file", "rewrite", "replace", "change_file"],
     verb: "编辑文件",
     bg: "#14b8a6",
     kind: "edit",
   },
-  // 5. 删除文件 (红色)
   {
     keywords: ["delete_file", "remove_file", "unlink", "rm_file"],
     verb: "删除文件",
     bg: "#ef4444",
     kind: "delete",
   },
-  // 6. 操作文件(通用) (teal, 设计铁律禁蓝)
   {
     keywords: ["file_operation", "file_op", "move_file", "rename_file", "copy_file"],
     verb: "操作文件",
     bg: "#14b8a6",
     kind: "edit",
   },
-  // 7. 网络搜索 (teal-600, 设计铁律禁紫)
   {
     keywords: ["search_web", "web_search", "google", "bing", "duckduckgo", "search_internet", "search_query"],
     verb: "搜索网络",
     bg: "#0d9488",
     kind: "search-web",
   },
-  // 8. 文件搜索 (teal-600, 设计铁律禁紫)
   {
     keywords: ["search_files", "file_search", "file_query", "grep", "find_file", "locate", "search", "search_directory"],
     verb: "搜索文件",
     bg: "#0d9488",
     kind: "search-file",
   },
-  // 9. 列表目录 (teal, 设计铁律禁蓝)
   {
     keywords: ["list_files", "list_dir", "list_directory", "ls", "dir", "tree", "walk", "readdir", "glob"],
     verb: "查看目录",
     bg: "#14b8a6",
     kind: "list",
   },
-  // 10. 网页访问 (青色)
   {
     keywords: ["browser", "web_fetch", "fetch_url", "fetch_page", "http_get", "http_request", "curl", "wget", "download", "webpage"],
     verb: "获取网页",
     bg: "#06b6d4",
     kind: "fetch",
   },
-  // 11. 网络工具 (青色)
   {
     keywords: ["network", "ping", "dns", "socket", "traceroute", "nslookup"],
     verb: "网络诊断",
     bg: "#06b6d4",
     kind: "network",
   },
-  // 12. PDF 解析 (teal, 设计铁律禁蓝)
   {
     keywords: ["parse_pdf", "extract_pdf", "pdf_to_text", "pdf_parse", "read_pdf"],
     verb: "解析 PDF",
     bg: "#14b8a6",
     kind: "parse",
   },
-  // 13. 图片处理 (绿色)
   {
     keywords: ["image_edit", "edit_image", "resize_image", "convert_image", "process_image", "image_process"],
     verb: "处理图片",
     bg: "#22c55e",
     kind: "image",
   },
-  // 14. 代码生成 (橙色)
   {
     keywords: ["code", "generate_code", "create_code", "write_code", "implement"],
     verb: "生成代码",
     bg: "#f97316",
     kind: "code",
   },
-  // 15. 运行脚本/代码 (绿色)
   {
     keywords: ["python", "py_run", "run_python", "node_run", "run_node", "run_js", "run_script", "script"],
     verb: "运行代码",
     bg: "#22c55e",
     kind: "shell",
   },
-  // 16. Git 操作 (橙色)
   {
     keywords: ["git", "commit", "push", "pull", "branch", "merge", "clone", "checkout", "diff", "log", "status", "stash", "rebase", "fetch"],
     verb: "Git 操作",
     bg: "#f97316",
     kind: "git",
   },
-  // 17. 构建/编译 (橙色)
   {
     keywords: ["build", "compile", "cargo", "npm_run", "pnpm_run", "yarn_run", "make", "cmake", "gradle", "mvn", "webpack", "vite", "tsc"],
     verb: "构建项目",
     bg: "#f97316",
     kind: "build",
   },
-  // 18. 测试运行 (绿色)
   {
     keywords: ["test", "pytest", "jest", "vitest", "mocha", "spec", "run_test", "unit_test"],
     verb: "运行测试",
     bg: "#22c55e",
     kind: "test",
   },
-  // 19. 安装依赖 (绿色)
   {
     keywords: ["install", "add_package", "add_dep", "npm_install", "pnpm_add", "pip_install", "cargo_add"],
     verb: "安装依赖",
     bg: "#22c55e",
     kind: "install",
   },
-  // 20. 部署发布 (橙色)
   {
     keywords: ["deploy", "publish", "release", "upload", "ship", "rollout"],
     verb: "部署发布",
     bg: "#f97316",
     kind: "deploy",
   },
-  // 21. 数据库操作 (青色)
   {
     keywords: ["sql", "database", "db", "sqlite", "postgres", "mongo", "select", "insert_query", "update_db", "query_db", "db_query"],
     verb: "操作数据库",
     bg: "#06b6d4",
     kind: "db",
   },
-  // 22. 操作桌面 (灰色)
   {
     keywords: ["computer_use", "desktop", "screenshot", "mouse", "keyboard", "gui"],
     verb: "操作桌面",
     bg: "#6b7280",
     kind: "desktop",
   },
-  // 23. 思考/推理 (slate-400 中性, 设计铁律禁紫)
   {
     keywords: ["think", "reason", "reflect", "analyze", "plan_task", "plan"],
     verb: "正在思考",
     bg: "#94a3b8",
     kind: "reason",
   },
-  // 24. 委派子agent (粉色)
   //    MUST come before "询问用户" — "delegate_task" contains
   //    the substring "ask" (t-a-s-k), so it would wrongly
   //    match the "ask" keyword in the ask-user category.
@@ -1325,7 +1230,6 @@ const TOOL_CATEGORIES: ToolCategory[] = [
     bg: "#ec4899",
     kind: "delegate",
   },
-  // 25. 询问用户 (黄色)
   //    NOTE: "ask" keyword is broad — it matches any tool name
   //    containing "ask" as a substring. The "delegate" category
   //    above must stay BEFORE this one to prevent
@@ -1336,21 +1240,18 @@ const TOOL_CATEGORIES: ToolCategory[] = [
     bg: "#eab308",
     kind: "ask",
   },
-  // 26. 剪贴板 (灰色)
   {
     keywords: ["clipboard", "paste", "copy_to_clipboard", "read_clipboard"],
     verb: "读取剪贴板",
     bg: "#6b7280",
     kind: "clipboard",
   },
-  // 27. 格式化/检查 (灰色)
   {
     keywords: ["lint", "format", "prettier", "eslint", "check", "validate", "audit"],
     verb: "代码检查",
     bg: "#6b7280",
     kind: "other",
   },
-  // 28. 工具/通用 (灰色 — 最后兜底)
   {
     keywords: [],  // empty array = catch-all, never matches by keyword
     verb: "调用工具",
@@ -1769,25 +1670,14 @@ function ToolMessageCard({
   // can lift from the tool's args (path / url / command / query).
   // If `argsHint` is empty (e.g. a no-arg tool), we just show
   // the verb alone so the row doesn't read "读取文件 (空)".
-  // 用户原话 (2026-06-22): "执行的内容不要写死啊, 应该是根据实际
-  // 情况显示的" — verb 不再硬塞 "调用工具" 占位符。当 LLM 输出
-  // `tool="tool"` 这种空占位时，根据 args 形状 (command/path/url/
-  // query/code) 推断 verb; args 也空就显示 "未知操作"。
   const verb = memResult
     ? memoryActionLabel(memResult.action)
     : toolVerb(meta.tool, meta.args);
-  // The row has two visually distinct slots:
-  // 1. Verb slot (left):  always shows `verb` alone — e.g. "读取 PDF",
-  // "执行命令", "调用工具". No args, no object, nothing else.
-  // 2. Primary slot (middle, optional): shows the most meaningful
-  // string we can lift from args / stdout — file path, URL,
-  // command, query, or — on error — a one-line error summary
-  // instead of the raw JSON payload.
-  // Earlier this code concatenated them into a single label string
-  // and rendered that in the verb slot, then rendered `primary`
-  // again in its own span — which produced visible duplicates like
-  // "调用工具 D:\data\发票汇总.xls D:\data\发票汇总.xls" once `primary`
-  // already had the path. Keep them as two slots and never merge.
+  // The row keeps two distinct slots — verb (left) and primary (middle,
+  // optional) — so they never merge into a duplicated string like
+  // "调用工具 D:\path D:\path". The primary slot shows the most meaningful
+  // arg / stdout (path, URL, command, query) or, on error, a one-line
+  // summary instead of raw JSON.
   const primary = memResult
     ? memResult.path
     : isError
@@ -1896,10 +1786,8 @@ function ToolMessageCard({
           </span>
         )}
 
-        {/* Right side: line stats + status indicator.
-            Round 6, 加 .chat-status-inline — inline-flex +
-            vertical-align: middle + margin-left: 8px, 贴消息末尾不再
-            两端撑开 (用户反馈原状态被 justify-between 拉散). */}
+        {/* Right side: line stats + status indicator, kept inline at the
+            message tail (not space-between) so it isn't pulled apart. */}
         <span className="tw-msg-right chat-status-inline">
           {(stats.added != null || stats.removed != null) && (
             <span className="tw-msg-stats">
@@ -1911,10 +1799,9 @@ function ToolMessageCard({
               )}
             </span>
           )}
-          {/* 用户反馈: "已完成" / "失败" 用蓝/红色字符太刺眼,
-              全部改成小图标 + 文字形式, 颜色统一调到 muted/success/warning
-              (蓝/红色字符完全不渲染). 已完成 → ✓; 失败 → ⚠; 运行中 → ⏵;
-              已中断 → ⚠. */}
+          {/* Status uses small icons + text in muted / success / warning
+              tones — never raw blue/red characters: 已完成 → ✓; 失败 → ⚠;
+              运行中 → ⏵; 已中断 → ⚠. */}
           {(() => {
             // Memory tool: render the structured status as the badge
             // — "未查到对应内容" / "匹配到多条" / "成功" / "失败".
@@ -2416,10 +2303,7 @@ function describeToolArgs(tool: string, args: unknown): string {
   }
   if (tool === "terminal" || tool === "bash") {
     const cmd = a.command;
-    if (typeof cmd === "string") {
-      const display = cmd.length > 60 ? cmd.slice(0, 57) + "…" : cmd;
-      return `运行命令: ${display}`;
-    }
+    if (typeof cmd === "string") return describeShellCommand(cmd).text;
   }
   if (tool === "write_file" || tool === "patch") {
     const p = a.path;
@@ -2742,7 +2626,13 @@ function ClarifyComposer({
  * Empty content returns null (no header to mount).
  */
 function ReasoningBlock({ content }: { content: string }) {
-  const clean = content.replace(/<\/?think>/gi, "").trim();
+  // Strip both <think> and <reasoning> wrappers — providers use both tags
+  // for internal monologue, and the surrounding ProcessTimeline already
+  // signals that this is process content.
+  const clean = content
+    .replace(/<\/?think>/gi, "")
+    .replace(/<\/?reasoning>/gi, "")
+    .trim();
   if (!clean) return null;
 
   return (

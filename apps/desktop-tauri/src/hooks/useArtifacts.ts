@@ -1,5 +1,4 @@
 // useArtifacts — artifact extraction and path verification
-// Extracted from App.tsx (2026-07-13, P1-7 God Object split).
 // Inputs: activeSession (messages) + workspaceRoot
 // Outputs: verified artifact list + selected artifact + path-click handler
 
@@ -48,13 +47,13 @@ export function useArtifacts({
   workspaceRoot,
   onOpenRightSidebar,
 }: UseArtifactsInput): UseArtifactsOutput {
-  // Phase 1: synchronous extraction from message text
+  // synchronous extraction from message text
   const rawArtifacts = useMemo(() => {
     if (!activeSession) return [];
     return extractArtifacts(activeSession.messages, workspaceRoot);
   }, [activeSession, workspaceRoot]);
 
-  // Phase 2: async existence check via Tauri IPC
+  // async existence check via Tauri IPC
   const [verifiedArtifacts, setVerifiedArtifacts] = useState<Artifact[]>([]);
   useEffect(() => {
     const raw = rawArtifacts;
