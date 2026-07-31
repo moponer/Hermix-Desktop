@@ -38,7 +38,7 @@ use super::handoff::{resolve_handoff, HandoffKind};
 use super::leader::LeaderOrchestrator;
 use super::manager::GroupChatManager;
 use super::meta::parse_meta;
-use super::persistence::MessageType;
+use super::persistence::{AgentRole, AgentRoomProfile, MessageType};
 use super::scheduler::{
     RoomSchedulerState, SchedulerAction, SchedulerEvent, SubtaskSpec, TaskScheduler,
 };
@@ -413,6 +413,24 @@ impl TaskEngineRuntime {
                         "member"
                     };
 
+                    // Resolve the agent's real session_id from their room
+                    // profile. Previously this used `room_id` as the
+                    // session_id, which meant every agent in a room shared
+                    // one conversation history — defeating the per-agent
+                    // memory isolation design.
+                    let session_id_owned: String = self
+                        .manager
+                        .get_room_agents(&room_id_owned)
+                        .await
+                        .ok()
+                        .and_then(|agents| {
+                            agents
+                                .iter()
+                                .find(|a| a.agent_id == agent_id_owned)
+                                .map(|a| a.session_id.clone())
+                        })
+                        .unwrap_or_else(|| room_id_owned.clone());
+
                     // H4: use the structured JSON decision prompt on the
                     // leader path so announcement / handoff /
                     // needs_user_confirmation actually populate (the legacy
@@ -462,7 +480,7 @@ impl TaskEngineRuntime {
                         .dispatch_subtask_stream(
                             &room_id_owned,
                             &agent_id_owned,
-                            &room_id_owned, // session_id
+                            &session_id_owned,
                             &system_prompt,
                             &description_owned,
                             role_owned,
@@ -762,6 +780,25 @@ impl TaskEngineRuntime {
                                     is_leader: agent_id_owned == "__leader__",
                                 },
                             );
+                            // Feed the failure back to the scheduler so
+                            // the task node transitions out of Executing
+                            // and the room doesn't get stuck. Without this,
+                            // RoomCompleted is never emitted and the WS
+                            // handler hangs indefinitely waiting for it.
+                            let fail_events = rt_self
+                                .clone()
+                                .apply(
+                                    &room_id_owned,
+                                    SchedulerEvent::AgentOutputSubmitted {
+                                        room_id: room_id_owned.clone(),
+                                        node_id: node_id_owned.clone(),
+                                        agent_id: agent_id_owned.clone(),
+                                        success: false,
+                                        output_excerpt: String::new(),
+                                    },
+                                )
+                                .await;
+                            rt_self.publish_all(&room_id_owned, &fail_events);
                         }
                     }
                 } else {
@@ -1022,7 +1059,15 @@ impl TaskEngineRuntime {
         emitted
     }
 
-    /// User typed a message. Saves + broadcasts + dispatches to leader.
+    /// User typed a message. Saves + broadcasts + dispatches.
+    ///
+    /// In `task_collab` mode (default): dispatches to the leader, who
+    /// decides whether to answer directly, delegate subtasks, or initiate
+    /// a discussion.
+    ///
+    /// In `free_chat` mode: dispatches to ALL members in parallel — each
+    /// member sees the user's message + room context and responds
+    /// independently. No leader coordination, no subtask delegation.
     pub async fn on_user_message(
         self: Arc<Self>,
         room_id: &str,
@@ -1033,6 +1078,23 @@ impl TaskEngineRuntime {
         // P2.1: Cancel any active discussion when a new user message arrives.
         let _ = self.cancel_active_discussion(room_id).await;
 
+        // Check chat_mode to determine dispatch strategy.
+        let chat_mode = self
+            .manager
+            .get_room(room_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.chat_mode)
+            .unwrap_or_else(|| "task_collab".to_string());
+
+        if chat_mode == "free_chat" {
+            return self
+                .on_user_message_free_chat(room_id, user_id, user_name, content)
+                .await;
+        }
+
+        // ── task_collab mode (default) ──
         let mut emitted = Vec::new();
         let msg = match self
             .manager
@@ -1045,6 +1107,18 @@ impl TaskEngineRuntime {
                     room_id: room_id.to_string(),
                     code: "persist_user_message".into(),
                     message: e,
+                });
+                // Publish the error + RoomCompleted so the WS handler
+                // doesn't hang waiting for a response that never comes.
+                self.publish_all(room_id, &emitted);
+                self.publish(
+                    room_id,
+                    RoomEvent::RoomCompleted {
+                        room_id: room_id.to_string(),
+                    },
+                );
+                emitted.push(RoomEvent::RoomCompleted {
+                    room_id: room_id.to_string(),
                 });
                 return emitted;
             }
@@ -1072,6 +1146,246 @@ impl TaskEngineRuntime {
         emitted.extend(downstream);
         self.publish_all(room_id, &emitted);
         emitted
+    }
+
+    /// Free-chat mode: all members respond independently in parallel.
+    ///
+    /// No leader coordination, no subtask delegation, no audit. Each
+    /// member sees the user's message + recent room context and replies
+    /// freely. This is the "闲聊" mode where the chat room behaves like
+    /// a real group chat — everyone can talk at once.
+    async fn on_user_message_free_chat(
+        self: Arc<Self>,
+        room_id: &str,
+        user_id: &str,
+        user_name: &str,
+        content: &str,
+    ) -> Vec<RoomEvent> {
+        let mut emitted = Vec::new();
+
+        // Save user message.
+        let msg = match self
+            .manager
+            .send_message(room_id, user_id, user_name, content)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                emitted.push(RoomEvent::SoftError {
+                    room_id: room_id.to_string(),
+                    code: "persist_user_message".into(),
+                    message: e,
+                });
+                self.publish_all(room_id, &emitted);
+                self.publish(
+                    room_id,
+                    RoomEvent::RoomCompleted {
+                        room_id: room_id.to_string(),
+                    },
+                );
+                emitted.push(RoomEvent::RoomCompleted {
+                    room_id: room_id.to_string(),
+                });
+                return emitted;
+            }
+        };
+        emitted.push(RoomEvent::MessageSaved {
+            room_id: msg.room_id.clone(),
+            message_id: msg.id.clone(),
+            sender_id: msg.sender_id.clone(),
+            sender_name: msg.sender_name.clone(),
+            content: msg.content.clone(),
+            is_agent: false,
+        });
+
+        // Publish the user message immediately so the frontend sees it.
+        self.publish_all(room_id, &emitted);
+
+        // Get all members (excluding the built-in leader).
+        let agents = self
+            .manager
+            .get_room_agents(room_id)
+            .await
+            .unwrap_or_default();
+        let members: Vec<AgentRoomProfile> = agents
+            .into_iter()
+            .filter(|a| a.agent_id != super::persistence::LEADER_AGENT_ID && a.role == AgentRole::Member)
+            .collect();
+
+        if members.is_empty() {
+            // No members in the room — emit RoomCompleted so the frontend
+            // doesn't hang waiting for a response.
+            self.publish(
+                room_id,
+                RoomEvent::RoomCompleted {
+                    room_id: room_id.to_string(),
+                },
+            );
+            emitted.push(RoomEvent::RoomCompleted {
+                room_id: room_id.to_string(),
+            });
+            return emitted;
+        }
+
+        // Dispatch to all members in parallel.
+        let mut handles = Vec::new();
+        for member in members {
+            let rt = self.clone();
+            let room_id_owned = room_id.to_string();
+            let content_owned = content.to_string();
+            handles.push(tokio::spawn(async move {
+                rt.dispatch_free_chat_member(&room_id_owned, &member, &content_owned)
+                    .await;
+            }));
+        }
+
+        // Wait for all members to finish.
+        for handle in handles {
+            let _ = handle.await;
+        }
+
+        // Signal completion so the WS handler can close gracefully.
+        self.publish(
+            room_id,
+            RoomEvent::RoomCompleted {
+                room_id: room_id.to_string(),
+            },
+        );
+        emitted.push(RoomEvent::RoomCompleted {
+            room_id: room_id.to_string(),
+        });
+        emitted
+    }
+
+    /// Dispatch a single member's response in free-chat mode.
+    ///
+    /// Streams the member's LLM response via `AgentThinkingChunk` events,
+    /// saves the final response, and emits `AgentThinkingCompleted` +
+    /// `MessageSaved`. Errors are surfaced as `DispatchFailed`.
+    async fn dispatch_free_chat_member(
+        self: Arc<Self>,
+        room_id: &str,
+        member: &AgentRoomProfile,
+        content: &str,
+    ) {
+        let dispatcher = match self.manager.dispatcher() {
+            Some(d) => d,
+            None => {
+                self.publish(
+                    room_id,
+                    RoomEvent::SoftError {
+                        room_id: room_id.to_string(),
+                        code: "no_dispatcher".into(),
+                        message: "没有可用的 agent dispatcher".into(),
+                    },
+                );
+                return;
+            }
+        };
+
+        let agent_name = member
+            .display_name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| member.agent_id.clone());
+        let session_id = member.session_id.clone();
+
+        // Build room context from recent messages.
+        let messages = self
+            .manager
+            .get_messages(room_id, 20)
+            .await
+            .unwrap_or_default();
+        let room_context = GroupChatManager::build_room_context(&messages, 10);
+
+        let system_prompt = format!(
+            "你是{}，在群聊室中参与自由聊天。\
+             你有自己的个性和专长，请自然地回复用户的消息。\
+             保持简洁、有个性、有观点。不要复述别人的话。\n\
+             房间上下文：\n{}",
+            agent_name, room_context
+        );
+
+        // Streaming chunk callback.
+        let rt_for_chunks = self.clone();
+        let room_id_owned = room_id.to_string();
+        let agent_id_owned = member.agent_id.clone();
+        let agent_name_owned = agent_name.clone();
+        let first_emitted = Arc::new(AtomicBool::new(false));
+        let first_emitted_ref = first_emitted.clone();
+
+        let on_chunk: Box<dyn Fn(StreamDelta) + Send + Sync> =
+            Box::new(move |delta: StreamDelta| {
+                let is_first = !first_emitted_ref.swap(true, Ordering::SeqCst);
+                let (name, role) = if is_first {
+                    (agent_name_owned.clone(), "member".to_string())
+                } else {
+                    (String::new(), String::new())
+                };
+                rt_for_chunks.publish(
+                    &room_id_owned,
+                    RoomEvent::AgentThinkingChunk {
+                        room_id: room_id_owned.clone(),
+                        agent_id: agent_id_owned.clone(),
+                        agent_name: name,
+                        role,
+                        delta: delta.content,
+                    },
+                );
+            });
+
+        let result = dispatcher
+            .dispatch_subtask_stream(
+                room_id,
+                &member.agent_id,
+                &session_id,
+                &system_prompt,
+                content,
+                "member",
+                on_chunk,
+            )
+            .await;
+
+        // Always emit AgentThinkingCompleted so the frontend clears
+        // the typing indicator, even on errors.
+        self.publish(
+            room_id,
+            RoomEvent::AgentThinkingCompleted {
+                room_id: room_id.to_string(),
+                agent_id: member.agent_id.clone(),
+            },
+        );
+
+        match result {
+            Ok(text) => {
+                let clean = text.trim();
+                if !clean.is_empty() {
+                    // Persist agent message.
+                    let _ = self
+                        .manager
+                        .save_agent_message(
+                            room_id,
+                            &member.agent_id,
+                            &agent_name,
+                            clean,
+                            MessageType::Chat,
+                        )
+                        .await;
+                }
+            }
+            Err(e) => {
+                self.publish(
+                    room_id,
+                    RoomEvent::DispatchFailed {
+                        room_id: room_id.to_string(),
+                        agent_id: member.agent_id.clone(),
+                        agent_name: agent_name.clone(),
+                        reason: e,
+                        is_leader: false,
+                    },
+                );
+            }
+        }
     }
 
     /// Inbound review verdict from leader / human reviewer.

@@ -67,7 +67,7 @@ use hermix_transport::{
 // to `hermix-transport` if the SPA ever needs them on /v1/.
 use crate::dashboard::types::{SessionSearchResponse, SessionSearchResult};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tower::service_fn;
@@ -1281,12 +1281,22 @@ impl HttpServerState {
         // broadcasts each new pending `clarify` to every connected
         // WebSocket. The desktop UI filters by session id before showing
         // a question card.
+        //
+        // Guard against re-broadcasting already-forwarded requests:
+        // `next_snapshot()` returns ALL pending clarifies whenever a new
+        // one arrives, so without a seen-set the same question would be
+        // sent to the UI multiple times (causing a cascade of duplicate
+        // cards).
         let pump_dispatcher = clarify_dispatcher.clone();
         let pump_broadcast = clarify_broadcast.clone();
         tokio::spawn(async move {
+            let mut seen: HashSet<String> = HashSet::new();
             loop {
                 let snapshots = pump_dispatcher.next_snapshot().await;
                 for snap in snapshots {
+                    if !seen.insert(snap.request_id.clone()) {
+                        continue;
+                    }
                     let env = ClarifyBroadcast {
                         session_id: snap.session_id.clone(),
                         request_id: snap.request_id.clone(),
@@ -1635,9 +1645,13 @@ impl HttpServerState {
         let pump_dispatcher = clarify_dispatcher.clone();
         let pump_broadcast = clarify_broadcast.clone();
         tokio::spawn(async move {
+            let mut seen: HashSet<String> = HashSet::new();
             loop {
                 let snapshots = pump_dispatcher.next_snapshot().await;
                 for snap in snapshots {
+                    if !seen.insert(snap.request_id.clone()) {
+                        continue;
+                    }
                     let env = ClarifyBroadcast {
                         session_id: snap.session_id.clone(),
                         request_id: snap.request_id.clone(),
@@ -1852,7 +1866,7 @@ impl HttpServerState {
         // `SqliteRoomPersistence::new`).
         if let Some(svc) = agent_service {
             let dispatcher = Arc::new(
-                crate::dashboard::groupchat_dispatcher::ServerAgentDispatcher::new(svc),
+                crate::dashboard::groupchat_dispatcher::ServerAgentDispatcher::new(svc, mgr.clone()),
             );
             mgr.set_dispatcher(dispatcher);
         }
@@ -5808,15 +5822,33 @@ async fn handle_ws_groupchat(
 
     let manager = state.groupchat_manager();
 
-    // Save user message
-    let _ = manager.send_message(&room_id, "user", "你", &text).await;
+    // ── Unified dispatch path ────────────────────────────────
+    // When the TaskEngine is available, delegate ALL dispatch to it
+    // via `on_user_message`. This enables leader decision parsing,
+    // subtask delegation, discussion mode, handoff, audit, free_chat,
+    // and all other TaskEngine features through the WS path.
+    //
+    // When no TaskEngine is configured, fall back to the legacy
+    // direct-dispatch loop.
+    let has_engine = state.task_engine.is_some();
+
+    // Only save the user message in the fallback path — the TaskEngine's
+    // `on_user_message` does it itself, so saving here too would create
+    // a duplicate.
+    if !has_engine {
+        let _ = manager.send_message(&room_id, "user", "你", &text).await;
+    }
 
     // Move socket into a background sender task. We read one message,
     // then all subsequent activity is writes (streaming agent chunks).
     // S5.1: the same sender also forwards outbound task-engine events
     // from the runtime's per-room broadcast channel until the room
     // completes or the client disconnects.
+    //
+    // Modified: when RoomCompleted is received, we send GroupChatDone
+    // before breaking so the frontend knows to close the WS.
     let (tx, mut rx) = mpsc::channel::<WsEnvelope>(128);
+    let room_id_for_done = room_id.clone();
     let broadcast_rx: tokio::sync::broadcast::Receiver<
         hermix_gateway::groupchat::runtime::RoomEvent,
     > = if let Some(te) = state.task_engine.as_ref() {
@@ -5872,6 +5904,23 @@ async fn handle_ws_groupchat(
                                 }
                             }
                             if is_terminal {
+                                // Send GroupChatDone so the frontend
+                                // closes the WS and reloads messages.
+                                let done_env = WsEnvelope {
+                                    version: 1,
+                                    request_id: None,
+                                    trace_id: trace_id_for_engine.clone(),
+                                    event: StreamEvent::GroupChatDone {
+                                        room_id: room_id_for_done.clone(),
+                                    },
+                                };
+                                let _ = socket
+                                    .send(WsMessage::Text(
+                                        serde_json::to_string(&done_env)
+                                            .unwrap_or_default()
+                                            .into(),
+                                    ))
+                                    .await;
                                 break;
                             }
                         }
@@ -5886,7 +5935,21 @@ async fn handle_ws_groupchat(
         }
     });
 
-    // Prepare room context
+    if has_engine {
+        // ── TaskEngine path ──────────────────────────────────
+        // Delegate to the TaskEngine runtime. `on_user_message` saves
+        // the user message, checks chat_mode (task_collab vs free_chat),
+        // and dispatches accordingly. All streaming events come back
+        // through the broadcast channel which the socket_task forwards.
+        let te = state.task_engine.as_ref().unwrap().clone();
+        let room_id_owned = room_id.clone();
+        let text_owned = text.clone();
+        tokio::spawn(async move {
+            te.on_user_message(&room_id_owned, "user", "你", &text_owned).await;
+        });
+    } else {
+        // ── Fallback: legacy direct dispatch (no TaskEngine) ──
+        // Prepare room context
     let agents = manager.get_room_agents(&room_id).await.unwrap_or_default();
     let messages = manager.get_messages(&room_id, 20).await.unwrap_or_default();
     let context: Vec<String> = messages.iter().rev().take(10).rev()
@@ -6040,6 +6103,7 @@ async fn handle_ws_groupchat(
             room_id: room_id.clone(),
         },
     });
+    } // end fallback else block
 
     // S5.1: the sender task spawned above now owns the socket and
     // forwards both (a) `mpsc::Receiver<WsEnvelope>` for streaming

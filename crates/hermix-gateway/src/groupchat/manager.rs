@@ -145,6 +145,14 @@ impl GroupChatManager {
         self.db.get_agents(room_id)
     }
 
+    /// Synchronous variant of `get_room_agents` for use in non-async
+    /// contexts (e.g. `ServerAgentDispatcher::build_overrides`). The
+    /// underlying `db.get_agents` is already synchronous, so this just
+    /// avoids the `.await` ceremony.
+    pub fn get_room_agents_sync(&self, room_id: &str) -> Result<Vec<AgentRoomProfile>, String> {
+        self.db.get_agents(room_id)
+    }
+
     pub async fn set_leader(&self, room_id: &str, agent_id: &str) -> Result<(), String> {
         self.db.set_leader(room_id, agent_id)
     }
@@ -541,9 +549,20 @@ impl GroupChatManager {
                 agents
                     .iter()
                     .find(|a| a.agent_id == agent_id)
-                    .map(|a| a.agent_id.clone())
+                    .map(|a| {
+                        a.display_name
+                            .clone()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| a.agent_id.clone())
+                    })
             })
-            .unwrap_or_else(|| agent_id.to_string())
+            .unwrap_or_else(|| {
+                if agent_id == super::persistence::LEADER_AGENT_ID {
+                    "项目总管".to_string()
+                } else {
+                    agent_id.to_string()
+                }
+            })
     }
 
     /// Build the leader system prompt for a specific room. The prompt

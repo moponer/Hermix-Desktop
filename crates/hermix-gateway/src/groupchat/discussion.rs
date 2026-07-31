@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::dispatcher::{AgentDispatcher, StreamDelta};
+use super::dispatcher::StreamDelta;
 use super::discussion_prompt::{
     build_conclusion_message, build_discussion_message, build_moderation_message,
     has_substantive_content, is_pass, moderation_action_label,
@@ -659,13 +659,11 @@ pub fn check_discussion_quality(
         return None;
     }
 
-    // 1. Too short (excluding PASS, which is already handled above).
     let chars = text.chars().count();
-    if chars < 20 {
-        return Some(DiscussionQualityIssue::TooShort);
-    }
 
-    // 2. Pure echo — check against common agreement phrases.
+    // 1. Pure echo — check against common agreement phrases.
+    //    MUST come before TooShort: echo phrases like "同意" are inherently
+    //    short, and "pure echo" is a more specific diagnosis than "too short".
     let echo_phrases = [
         "同意", "说的对", "没错", "确实", "有道理", "赞同", "对", "好的",
         "我同意", "说得对", "是的", "嗯", "没错", "我也觉得",
@@ -677,7 +675,29 @@ pub fn check_discussion_quality(
         }
     }
 
-    // 3. Near-duplicate — check if >80% similar to any message in the same round.
+    // 2. Off-topic — check if any topic keyword appears in the message.
+    //    MUST come before TooShort: "今天天气不错啊" is short but the real
+    //    problem is it's off-topic, not that it's too short.
+    //    Only check if the topic has meaningful keywords (>2 chars).
+    let topic_keywords: Vec<&str> = topic
+        .split_whitespace()
+        .filter(|w| w.chars().count() > 2)
+        .collect();
+    if !topic_keywords.is_empty() {
+        let has_keyword = topic_keywords.iter().any(|kw| text.contains(kw));
+        if !has_keyword && chars < 200 {
+            return Some(DiscussionQualityIssue::OffTopic);
+        }
+    }
+
+    // 3. Too short — catch-all for short messages that aren't echoes or
+    //    off-topic. At this point we know the message is short AND on-topic
+    //    AND not a pure echo, so the only remaining issue is lack of substance.
+    if chars < 20 {
+        return Some(DiscussionQualityIssue::TooShort);
+    }
+
+    // 4. Near-duplicate — check if >80% similar to any message in the same round.
     for prev in round_messages {
         if prev.content.trim() == text {
             return Some(DiscussionQualityIssue::NearDuplicate);
@@ -693,19 +713,6 @@ pub fn check_discussion_quality(
             if min_len > 3 && overlap as f64 / min_len as f64 > 0.8 {
                 return Some(DiscussionQualityIssue::NearDuplicate);
             }
-        }
-    }
-
-    // 4. Off-topic — check if any topic keyword appears in the message.
-    // Only check if the topic has meaningful keywords (>2 chars).
-    let topic_keywords: Vec<&str> = topic
-        .split_whitespace()
-        .filter(|w| w.chars().count() > 2)
-        .collect();
-    if !topic_keywords.is_empty() {
-        let has_keyword = topic_keywords.iter().any(|kw| text.contains(kw));
-        if !has_keyword && chars < 200 {
-            return Some(DiscussionQualityIssue::OffTopic);
         }
     }
 
