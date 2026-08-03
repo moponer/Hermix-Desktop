@@ -80,18 +80,9 @@ export interface PackageResponse {
 }
 
 /** Build environment status for neu-build mode. */
-export interface EnvStatus {
-  /** Node.js version string, or null if not installed. */
-  node: string | null;
-  /** Whether @neutralinojs/neu CLI is available. */
-  neu_available: boolean;
-  /** Whether neu build mode is ready (Node.js + neu CLI). */
-  neu_build_ready: boolean;
-  /** Short status code: "ready" | "missing_node" | "missing_neu". */
-  status: string;
-  /** Human-readable status message (Chinese). */
-  message: string;
-}
+// EnvStatus was removed when neu-build support was dropped (hx-shell
+// uses single-file Sidecar packaging exclusively). All callers
+// (CustomAppsView) have been updated to not reference it.
 
 export async function listCustomApps(): Promise<CustomAppSummary[]> {
   // Goes through fetchJSON → fetchApi → withRetry, which provides
@@ -203,14 +194,4 @@ export async function validateCustomApp(id: string): Promise<ValidationReport> {
 // Returns structured errors when `ok === false`.
 export async function smokeTestCustomApp(id: string): Promise<SmokeReport> {
   return invoke<SmokeReport>("custom_app_smoke_test", { id });
-}
-
-/** Check the neu build environment (Node.js + neu CLI availability). */
-export async function checkBuildEnvironment(): Promise<EnvStatus> {
-  return invoke<EnvStatus>("custom_app_check_env");
-}
-
-/** Install the @neutralinojs/neu CLI globally via npm. */
-export async function installNeuCli(): Promise<{ success: boolean; message?: string; error?: string }> {
-  return invoke("custom_app_install_neu");
 }

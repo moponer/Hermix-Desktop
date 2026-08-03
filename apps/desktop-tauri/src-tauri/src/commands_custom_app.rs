@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use hermix_config::paths::hermix_home;
 use hermix_plugin::{
-    node_setup, resolve_hx_shell_path, resolve_webview2_loader_path,
+    resolve_hx_shell_path, resolve_webview2_loader_path,
     run_smoke_test_async, validate_custom_app,
     PackageMode, PluginManager,
 };
@@ -39,16 +39,11 @@ pub async fn custom_app_init() -> Result<CustomAppInitResult, String> {
     // hx-shell 架构: 不需要 Node/neu CLI，只检查模板壳 + WebView2Loader 是否就位
     let hx_shell_ready = loader_path.exists();
     let webview2_ready = webview2_dll.exists();
-    let env_status = node_setup::get_environment_status();
-    let neu_build_ready = env_status["neu_build_ready"].as_bool().unwrap_or(false);
 
     Ok(CustomAppInitResult {
         loader_path: loader_path.to_string_lossy().to_string(),
         loader_exists: hx_shell_ready,
         apps_dir: apps_dir.to_string_lossy().to_string(),
-        neu_build_ready,
-        node_version: env_status["node"].as_str().map(|s| s.to_string()),
-        neu_available: env_status["neu_available"].as_bool().unwrap_or(false),
         env_message: if !hx_shell_ready {
             format!("hx-shell 模板未就位: {} (请将 hx-shell.exe 部署到 hermix loader 目录)", loader_path.display())
         } else if !webview2_ready {
@@ -64,9 +59,6 @@ pub struct CustomAppInitResult {
     pub loader_path: String,
     pub loader_exists: bool,
     pub apps_dir: String,
-    pub neu_build_ready: bool,
-    pub node_version: Option<String>,
-    pub neu_available: bool,
     pub env_message: String,
 }
 
@@ -245,24 +237,6 @@ pub async fn custom_app_smoke_test(id: String) -> Result<serde_json::Value, Stri
     serde_json::to_value(&report).map_err(|e| format!("序列化冒烟报告失败: {e}"))
 }
 
-/// Check the neu build environment (Node.js + neu CLI availability).
-/// Returns a JSON object with environment status info.
-#[tauri::command]
-pub async fn custom_app_check_env() -> Result<serde_json::Value, String> {
-    Ok(node_setup::get_environment_status())
-}
-
-/// Install the @neutralinojs/neu CLI globally via npm.
-#[tauri::command]
-pub async fn custom_app_install_neu() -> Result<serde_json::Value, String> {
-    match node_setup::install_neu_cli() {
-        Ok(msg) => Ok(serde_json::json!({
-            "success": true,
-            "message": msg,
-        })),
-        Err(e) => Ok(serde_json::json!({
-            "success": false,
-            "error": e,
-        })),
-    }
-}
+// neu-build 路径已删除（hx-shell 架构只用 esbuild 编译 + 单文件尾部注入）。
+// custom_app_check_env / custom_app_install_neu 命令同时移除。
+// 如果未来恢复 neu-build 支持，参考 git 历史恢复这两个命令。

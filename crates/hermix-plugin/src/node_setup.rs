@@ -4,7 +4,13 @@
 //! the optional `neu build` (professional packaging) mode is available.
 //! If Node.js is present but neu CLI is missing, it can be auto-installed.
 
+use std::os::windows::process::CommandExt;
 use std::process::Command;
+
+/// CREATE_NO_WINDOW — 隐藏子进程的 cmd 控制台窗口
+///（Windows 默认会为 spawned 进程弹出黑色 cmd 窗口，几秒后消失 → 用户体验差）
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// State of the neu build environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,10 +25,11 @@ pub enum NeuEnvironment {
 
 /// Check if Node.js is available and return its version string.
 pub fn check_node_available() -> Option<String> {
-    let out = Command::new("node")
-        .arg("--version")
-        .output()
-        .ok()?;
+    let mut cmd = Command::new("node");
+    cmd.arg("--version");
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -37,13 +44,15 @@ pub fn check_node_available() -> Option<String> {
 /// Check if the @neutralinojs/neu CLI is installed globally.
 pub fn check_neu_available() -> bool {
     let out = if cfg!(windows) {
-        Command::new("cmd")
-            .args(["/c", "neu", "--version"])
-            .output()
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/c", "neu", "--version"]);
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.output()
     } else {
-        Command::new("neu")
-            .arg("--version")
-            .output()
+        let mut cmd = Command::new("neu");
+        cmd.arg("--version");
+        cmd.output()
     };
 
     match out {
@@ -71,8 +80,11 @@ pub fn install_neu_cli() -> Result<String, String> {
         return Err("Node.js is not installed. Please install Node.js first.".into());
     }
 
-    let out = Command::new("npm")
-        .args(["install", "-g", "@neutralinojs/neu"])
+    let mut cmd = Command::new("npm");
+    cmd.args(["install", "-g", "@neutralinojs/neu"]);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let out = cmd
         .output()
         .map_err(|e| format!("Failed to run npm: {e}"))?;
 

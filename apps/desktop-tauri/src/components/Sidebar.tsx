@@ -1048,6 +1048,16 @@ function DeleteConfirmDialog({
         <div className="flex items-center gap-2.5 px-5 py-4">
           <button
             type="button"
+            onClick={onCancel}
+            className={clsx(
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-semibold",
+              "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors",
+            )}
+          >
+            取消
+          </button>
+          <button
+            type="button"
             onClick={onConfirm}
             className={clsx(
               "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-bold",
@@ -1056,16 +1066,6 @@ function DeleteConfirmDialog({
             style={{ background: "hsl(0, 70%, 50%)" }}
           >
             删除
-          </button>
-          <button
-            type="button"
-            onClick={onCancel}
-            className={clsx(
-              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-semibold",
-              "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors",
-            )}
-          >
-            取消
           </button>
           <span className="ml-auto text-[10.5px] text-text-faint">此操作不可恢复</span>
         </div>

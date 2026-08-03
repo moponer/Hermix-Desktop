@@ -55,7 +55,10 @@
       "resources/ocr/pp-ocrv5_mobile_rec.onnx",
       "resources/ocr/ppocrv5_dict.txt",
       "resources/loader/hx-shell.exe",
-      "resources/loader/WebView2Loader.dll"
+      "resources/loader/WebView2Loader.dll",
+      "resources/loader/esbuild.exe",
+      "resources/loader/react/react.production.min.js",
+      "resources/loader/react/react-dom.production.min.js"
     ]
   },
   "plugins": {
