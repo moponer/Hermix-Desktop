@@ -946,14 +946,24 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
    * chunk, which reads as "Hermix is stuck"). Memoized off the
    * session reference so we don't re-walk messages on every render.
    */
-  const pendingToolsCount = useMemo(() => {
-    if (!activeSession) return 0;
-    let n = 0;
-    for (const m of activeSession.messages) {
-      if (m.role === "tool" && m.tool?.status === "running") n++;
-    }
-    return n;
-  }, [activeSession]);
+  /**
+   * Number of tool invocations currently in flight, tracked live by
+   * `onToolStart` / `onToolComplete` (mirrors `runningToolRef.size`).
+   *
+   * fix: previously derived from `activeSession.messages` via
+   * `m.role === "tool" && m.tool?.status === "running"` — but tool
+   * events are now appended to the assistant's `execution_timeline`
+   * instead of creating separate `role: "tool"` messages, so that
+   * path was always empty and the "正在执行 N 个工具…" indicator
+   * never showed. Now driven by the live stream callbacks.
+   */
+  const [runningToolCount, setRunningToolCount] = useState(0);
+  // Reset the live counter when the active session changes (a fresh
+  // stream may have left stale increments in the previous session).
+  useEffect(() => {
+    setRunningToolCount(runningToolRef.current.size);
+  }, [activeSession?.id]);
+  const pendingToolsCount = runningToolCount;
 
   /**
    * Auto-generate a session title from the FIRST user message of the
@@ -1459,6 +1469,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
 
 // Reset per-turn state.
 runningToolRef.current.clear();
+setRunningToolCount(0);
 streamPhaseRef.current = null;
 
     // Surface any attached images in the user bubble. We reuse the
@@ -1769,6 +1780,7 @@ streamPhaseRef.current = null;
               return;
             }
             runningToolRef.current.set(toolCallId, toolCallId);
+            setRunningToolCount(runningToolRef.current.size);
 
             const target = currentAssistantIdRef.current;
             if (!target) return;
@@ -1852,6 +1864,7 @@ streamPhaseRef.current = null;
             // no needsNewAssistantRef — all text stays in the same
             // assistant bubble.
             runningToolRef.current.delete(toolCallId);
+            setRunningToolCount(runningToolRef.current.size);
 
             const target = currentAssistantIdRef.current;
             if (!target) return;
@@ -2432,6 +2445,7 @@ return {
                 };
               }));
               runningToolRef.current.clear();
+              setRunningToolCount(0);
             }
 
             // Stream is done — drop the assistant id ref so a stale
