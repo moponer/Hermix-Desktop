@@ -54,9 +54,48 @@ impl HxShellPackager {
         Self { shell_path, loader_dll_path }
     }
 
+    /// 若模板壳/加载器缺失，尝试从程序资源目录懒部署到目标位置。
+    ///
+    /// Hermix 是 portable 应用：新机器 / 更新后 `HERMIX_HOME/loader/`
+    /// 可能没有 hx-shell.exe。此时从 `current_exe` 旁边的
+    /// `resources/loader/`（Tauri bundle 内置）复制一份过去，保证打包可用。
+    /// 复制失败不 panic —— 后续 `package()` 会给出明确的 ShellNotFound。
+    fn ensure_shell_deployed(&self) {
+        let missing: Vec<(&PathBuf, &str)> = vec![
+            (&self.shell_path, "hx-shell.exe"),
+            (&self.loader_dll_path, "WebView2Loader.dll"),
+        ]
+        .into_iter()
+        .filter(|(p, _)| !p.exists())
+        .collect();
+        if missing.is_empty() {
+            return;
+        }
+
+        // 找资源源目录：current_exe 旁 resources/loader/
+        let Some(exe_dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) else {
+            return;
+        };
+        for (target, file_name) in &missing {
+            // 直接位于 exe 旁
+            let mut src = exe_dir.join("resources").join("loader").join(file_name);
+            if !src.exists() {
+                // 或 exe 旁平级（无 resources/ 嵌套）
+                src = exe_dir.join(file_name);
+            }
+            if src.exists() {
+                if let Some(parent) = target.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::copy(&src, target);
+            }
+        }
+    }
+
     /// 打包 app 目录 → dist/<id>.exe（单文件）+ WebView2Loader.dll
     /// `mode` 参数保留接口兼容（Sidecar/NeuBuild 结果相同）。
     pub fn package(&self, app_dir: &Path, id: &str, _mode: PackageMode) -> Result<PathBuf, HxPackError> {
+        self.ensure_shell_deployed();
         let shell = std::fs::read(&self.shell_path).map_err(|_| {
             HxPackError::ShellNotFound(self.shell_path.display().to_string())
         })?;
