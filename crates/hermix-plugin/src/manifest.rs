@@ -131,3 +131,122 @@ impl PluginManifest {
         Ok(())
     }
 }
+
+/// Map Hermix permission names to Neutralinojs nativeAllowList patterns.
+///
+/// Hermix uses semantic permission names (fs-read, fs-write, exec, etc.),
+/// while Neutralinojs uses glob patterns matching API namespaces.
+pub fn permissions_to_neutralino_allowlist(permissions: &[String]) -> Vec<String> {
+    let mut allow: Vec<String> = Vec::new();
+    for p in permissions {
+        match p.as_str() {
+            "fs-read" => {
+                allow.push("filesystem.readFile".into());
+                allow.push("filesystem.readdir".into());
+                allow.push("filesystem.stats".into());
+            }
+            "fs-write" => {
+                allow.push("filesystem.writeFile".into());
+                allow.push("filesystem.createDirectory".into());
+                allow.push("filesystem.removeFile".into());
+                allow.push("filesystem.removeDirectory".into());
+                allow.push("filesystem.writeFileBinary".into());
+            }
+            "exec" => {
+                allow.push("os.execCommand".into());
+                allow.push("os.spawnProcess".into());
+                allow.push("os.getSpawnedProcesses".into());
+                allow.push("os.killProcess".into());
+                allow.push("os.updateStoredValue".into());
+            }
+            "dialog" => {
+                allow.push("dialog.openDialog".into());
+                allow.push("dialog.saveDialog".into());
+                allow.push("dialog.showMessageBox".into());
+                allow.push("os.showMessageBox".into());
+            }
+            "env" => {
+                allow.push("os.getEnv".into());
+                allow.push("os.getEnvs".into());
+            }
+            "temp" => {
+                allow.push("os.getPath".into());
+            }
+            "clipboard" => {
+                allow.push("clipboard.get".into());
+                allow.push("clipboard.set".into());
+            }
+            "network" => {
+                // Neutralino doesn't gate fetch() — JS native fetch works
+                // without permission. No nativeAllowList entry needed.
+            }
+            _ => {}
+        }
+    }
+    // Always allow app.* (exit, etc.) and events.*
+    allow.push("app.*".into());
+    allow.push("events.*".into());
+    allow.push("window.*".into());
+    allow
+}
+
+/// Generate a Neutralinojs config (`neutralino.config.json`) from a
+/// Hermix plugin manifest.
+///
+/// This maps our manifest fields to the Neutralinojs config format,
+/// including window settings, permissions (nativeAllowList), and
+/// application metadata.
+pub fn generate_neutralino_config(manifest: &PluginManifest) -> serde_json::Value {
+    let window_title = manifest
+        .window_config
+        .title
+        .clone()
+        .unwrap_or_else(|| manifest.name.clone());
+
+    let icon_path = if manifest.icon_file.is_some() {
+        "/resources/icon.png"
+    } else {
+        ""
+    };
+
+    let allow_list = permissions_to_neutralino_allowlist(&manifest.permissions);
+
+    serde_json::json!({
+        "applicationId": manifest.id,
+        "version": manifest.version,
+        "defaultMode": "window",
+        "port": 0,
+        "documentRoot": "/resources/",
+        "url": "/",
+        "enableServer": true,
+        "enableNativeAPI": true,
+        "tokenSecurity": "none",
+        "logging": {
+            "enabled": true,
+            "writeToLogFile": false
+        },
+        "nativeAllowList": allow_list,
+        "globalVariables": {
+            "APP_NAME": manifest.name,
+            "APP_VERSION": manifest.version,
+            "APP_DESCRIPTION": manifest.description
+        },
+        "modes": {
+            "window": {
+                "title": window_title,
+                "width": manifest.window_config.width,
+                "height": manifest.window_config.height,
+                "center": true,
+                "fullScreen": false,
+                "alwaysOnTop": false,
+                "icon": icon_path,
+                "enableInspector": true,
+                "borderless": false,
+                "maximize": false,
+                "hidden": false,
+                "resizable": manifest.window_config.resizable,
+                "exitProcessOnClose": true
+            }
+        }
+    })
+}

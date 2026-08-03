@@ -2,7 +2,7 @@
 // at /api/custom-apps/*.
 
 import { invoke } from "@tauri-apps/api/core";
-import { apiUrl } from "../api";
+import { fetchJSON } from "../api";
 
 export interface CustomAppManifest {
   id: string;
@@ -42,19 +42,30 @@ export interface CustomAppSummary {
 
 export interface CustomAppResponse {
   manifest: CustomAppManifest;
-  /** Self-contained index.html source. */
+  /** Self-contained index.html source (or auto-generated HTML shell). */
   index_html: string | null;
+  /** TypeScript/React source code (if app uses TypeScript mode). */
+  app_source: string | null;
   is_packaged: boolean;
   dist_path: string | null;
 }
 
 export interface CreateAppRequest {
   manifest: CustomAppManifest;
+  /** Plain HTML mode: self-contained index.html. */
   index_html?: string;
+  /** TypeScript/React mode (★recommended): TSX entry source. */
+  app_source?: string;
+  /** Additional TypeScript source files (relative path → content). */
+  source_files?: Record<string, string>;
 }
 
 export interface UpdateAppRequest {
   index_html?: string;
+  /** TypeScript/React source code to update. */
+  app_source?: string;
+  /** Additional TypeScript source files to update. */
+  source_files?: Record<string, string>;
   /** Partial manifest — fields left undefined are preserved. */
   manifest?: Partial<CustomAppManifest>;
 }
@@ -64,13 +75,28 @@ export interface PackageResponse {
   message: string;
   exe_path: string;
   output_dir?: string;
+  build_mode?: string;
   error?: string;
 }
 
+/** Build environment status for neu-build mode. */
+export interface EnvStatus {
+  /** Node.js version string, or null if not installed. */
+  node: string | null;
+  /** Whether @neutralinojs/neu CLI is available. */
+  neu_available: boolean;
+  /** Whether neu build mode is ready (Node.js + neu CLI). */
+  neu_build_ready: boolean;
+  /** Short status code: "ready" | "missing_node" | "missing_neu". */
+  status: string;
+  /** Human-readable status message (Chinese). */
+  message: string;
+}
+
 export async function listCustomApps(): Promise<CustomAppSummary[]> {
-  const res = await fetch(apiUrl("/api/custom-apps"));
-  if (!res.ok) throw new Error(`列表失败: ${res.status}`);
-  const data = await res.json();
+  // Goes through fetchJSON → fetchApi → withRetry, which provides
+  // circuit breaker, 10s timeout, and 3 retries with backoff.
+  const data = await fetchJSON<{ apps: CustomAppSummary[] }>("/api/custom-apps");
   return data.apps ?? [];
 }
 
@@ -80,69 +106,59 @@ export async function openCustomAppDist(path: string): Promise<void> {
 }
 
 export async function getCustomApp(id: string): Promise<CustomAppResponse> {
-  const res = await fetch(apiUrl(`/api/custom-apps/${encodeURIComponent(id)}`));
-  if (!res.ok) throw new Error(`获取失败: ${res.status}`);
-  const data = await res.json();
+  const data = await fetchJSON<{ app: CustomAppResponse }>(
+    `/api/custom-apps/${encodeURIComponent(id)}`,
+  );
   return data.app;
 }
 
 export async function createCustomApp(req: CreateAppRequest): Promise<CustomAppResponse> {
-  const res = await fetch(apiUrl("/api/custom-apps"), {
+  const data = await fetchJSON<{ app: CustomAppResponse }>("/api/custom-apps", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `创建失败: ${res.status}`);
-  }
-  const data = await res.json();
   return data.app;
 }
 
 export async function updateCustomApp(id: string, req: UpdateAppRequest): Promise<CustomAppResponse> {
-  const res = await fetch(apiUrl(`/api/custom-apps/${encodeURIComponent(id)}`), {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `更新失败: ${res.status}`);
-  }
-  const data = await res.json();
+  const data = await fetchJSON<{ app: CustomAppResponse }>(
+    `/api/custom-apps/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    },
+  );
   return data.app;
 }
 
 export async function deleteCustomApp(id: string): Promise<void> {
-  const res = await fetch(apiUrl(`/api/custom-apps/${encodeURIComponent(id)}`), {
+  await fetchJSON(`/api/custom-apps/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `删除失败: ${res.status}`);
-  }
 }
 
-export async function packageCustomApp(id: string): Promise<PackageResponse> {
-  const res = await fetch(apiUrl(`/api/custom-apps/${encodeURIComponent(id)}/package`), {
-    method: "POST",
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `打包失败: ${res.status}`);
-  }
-  return res.json();
+/**
+ * Package a custom app as a standalone EXE.
+ * @param id App ID
+ * @param buildMode "sidecar" (default, zero-dependency) or "neu-build" (requires Node.js)
+ */
+export async function packageCustomApp(
+  id: string,
+  buildMode?: "sidecar" | "neu-build",
+): Promise<PackageResponse> {
+  const mode = buildMode ?? "sidecar";
+  return fetchJSON<PackageResponse>(
+    `/api/custom-apps/${encodeURIComponent(id)}/package?mode=${mode}`,
+    { method: "POST" },
+  );
 }
 
 export async function runCustomApp(id: string): Promise<void> {
-  const res = await fetch(apiUrl(`/api/custom-apps/${encodeURIComponent(id)}/run`), {
+  await fetchJSON(`/api/custom-apps/${encodeURIComponent(id)}/run`, {
     method: "POST",
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `启动失败: ${res.status}`);
-  }
 }
 
 export interface ValidationIssue {
@@ -175,7 +191,7 @@ export interface SmokeReport {
   detail: string;
 }
 
-// Runs static checks (manifest integrity, HTML structure, RPC call
+// Runs static checks (manifest integrity, HTML structure, Neutralino API
 // patterns, permission consistency, JS bracket balance) before
 // packaging. Agent development loops should call this after editing
 // app code and retry until `ok === true`.
@@ -183,9 +199,18 @@ export async function validateCustomApp(id: string): Promise<ValidationReport> {
   return invoke<ValidationReport>("custom_app_validate", { id });
 }
 
-// Headless shell run after re-packaging: catches white-screen,
-// runtime exceptions, and mount failures. Returns structured errors
-// when `ok === false`.
+// Launches the packaged neutralino exe and checks if it stays alive.
+// Returns structured errors when `ok === false`.
 export async function smokeTestCustomApp(id: string): Promise<SmokeReport> {
   return invoke<SmokeReport>("custom_app_smoke_test", { id });
+}
+
+/** Check the neu build environment (Node.js + neu CLI availability). */
+export async function checkBuildEnvironment(): Promise<EnvStatus> {
+  return invoke<EnvStatus>("custom_app_check_env");
+}
+
+/** Install the @neutralinojs/neu CLI globally via npm. */
+export async function installNeuCli(): Promise<{ success: boolean; message?: string; error?: string }> {
+  return invoke("custom_app_install_neu");
 }

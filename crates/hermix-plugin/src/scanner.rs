@@ -80,11 +80,28 @@ impl PluginScanner {
             None
         };
 
-        if index_html.is_none() {
+        // Check for TypeScript/React source (src/main.tsx)
+        let src_dir = dir_path.join("src");
+        let main_tsx = src_dir.join("main.tsx");
+        let app_source = if main_tsx.exists() {
+            Some(main_tsx)
+        } else {
+            None
+        };
+        let source_dir = if app_source.is_some() {
+            Some(src_dir)
+        } else {
+            None
+        };
+
+        if index_html.is_none() && app_source.is_none() {
             return Err(PluginError::InvalidManifest(
-                "index.html 不存在 (自定义应用需要自包含 index.html)".into(),
+                "index.html 和 src/main.tsx 均不存在 (自定义应用需要至少一个)".into(),
             ));
         }
+
+        // If app_source exists but index.html doesn't, that's OK -
+        // the packager will generate the HTML shell during build.
 
         // Resolve icon_path from manifest.icon_file
         let icon_path = manifest.icon_file.as_ref().and_then(|name| {
@@ -98,6 +115,8 @@ impl PluginScanner {
         Ok(PluginEntry {
             manifest,
             index_html,
+            app_source,
+            source_dir,
             icon_path,
             readme_path,
             dir: dir_path.to_path_buf(),

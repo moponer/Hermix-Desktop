@@ -83,6 +83,8 @@ pub async fn create_app(
         .install_plugin(
             &req.manifest,
             req.index_html.as_deref(),
+            req.app_source.as_deref(),
+            req.source_files.as_ref(),
             icon_data,
         )
         .map_err(|e| {
@@ -136,6 +138,8 @@ pub async fn update_app(
         .update_plugin(
             &id,
             req.index_html.as_deref(),
+            req.app_source.as_deref(),
+            req.source_files.as_ref(),
             req.manifest.as_ref(),
         )
         .map_err(|e| {
@@ -178,14 +182,22 @@ pub async fn delete_app(
 }
 
 /// POST /api/custom-apps/{id}/package — package app as standalone EXE.
+///
+/// Optional query parameter `?mode=sidecar|neu-build` (default: sidecar).
 pub async fn package_app(
     State(state): State<HttpServerState>,
     Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<PackageQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let manager = get_manager(&state)?;
 
+    let mode = match query.mode.as_deref().unwrap_or("sidecar") {
+        "neu-build" | "neubuild" | "neu" => hermix_plugin::PackageMode::NeuBuild,
+        _ => hermix_plugin::PackageMode::Sidecar,
+    };
+
     let exe_path = manager
-        .package_plugin(&id)
+        .package_plugin_with_mode(&id, mode)
         .await
         .map_err(|e| {
             let status = match &e {
@@ -203,13 +215,21 @@ pub async fn package_app(
         "message": format!("应用 '{id}' 打包成功"),
         "exe_path": exe_path.to_string_lossy(),
         "output_dir": exe_path.parent().map(|p| p.to_string_lossy().to_string()),
+        "build_mode": format!("{:?}", mode).to_lowercase(),
     })))
+}
+
+/// Query parameters for package endpoint.
+#[derive(Debug, serde::Deserialize)]
+pub struct PackageQuery {
+    /// Packaging mode: "sidecar" (default) or "neu-build".
+    pub mode: Option<String>,
 }
 
 /// POST /api/custom-apps/{id}/run — (re)package latest source and launch the app.
 ///
-/// Always re-runs `package_plugin` (new-loader model: injects index.html into
-/// the standalone wry loader) before launching, so the running build reflects
+/// Always re-runs `package_plugin` (sidecar mode: copies neutralino binary +
+/// resources + config) before launching, so the running build reflects
 /// the latest code — this is the "test locally" path.
 pub async fn run_app(
     State(state): State<HttpServerState>,

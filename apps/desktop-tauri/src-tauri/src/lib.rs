@@ -241,7 +241,7 @@ fn ensure_ocr_models(resource_dir: &std::path::Path, ocr_dir: &std::path::Path) 
     }
 }
 
-/// Extract the custom-app runtime pieces (wry loader + inject_app) from
+/// Extract the custom-app runtime pieces (neutralino binary + client library) from
 /// the bundled Tauri resources into `HERMIX_HOME` so they are reachable
 /// at a stable path regardless of whether the app is installed (portable)
 /// or run from source.
@@ -256,7 +256,7 @@ fn ensure_loader(
     resource_dir: &std::path::Path,
     hermix_home: &std::path::Path,
 ) {
-    // New custom-app loader: hermix-app-loader.exe + inject_app.exe, unpacked
+    // Neutralino runtime: neutralino-win-x64.exe + neutralino.js, unpacked
     // to HERMIX_HOME/loader on first launch.
     let pairs = [
         ("resources/loader", "loader"),
@@ -582,6 +582,8 @@ pub fn run() {
             commands_custom_app::custom_app_open_dir,
             commands_custom_app::custom_app_validate,
             commands_custom_app::custom_app_smoke_test,
+            commands_custom_app::custom_app_check_env,
+            commands_custom_app::custom_app_install_neu,
         ])
         .run(tauri::generate_context!())
         .expect("error while running hermix-desktop");

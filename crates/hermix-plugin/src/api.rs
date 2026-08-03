@@ -4,6 +4,8 @@
 //! the Tauri IPC layer (desktop-tauri), and the LLM tool
 //! (custom_app_manager).
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::PluginManifest;
@@ -13,17 +15,42 @@ use crate::manifest::PluginManifest;
 pub struct CreateAppRequest {
     /// App manifest (id, name, version, description, etc.)
     pub manifest: PluginManifest,
-    /// Self-contained index.html source code
+    /// Self-contained index.html source code (plain HTML mode).
+    ///
+    /// In TypeScript/React mode, this is optional — if not provided, an
+    /// HTML shell is auto-generated. If provided alongside `app_source`,
+    /// it's used as the custom HTML shell.
     #[serde(default)]
     pub index_html: Option<String>,
+    /// TypeScript/React source code (the app entry point, typically `main.tsx`).
+    ///
+    /// When provided, the system writes it to `src/main.tsx` and the packager
+    /// runs esbuild to transpile it into `resources/js/app.js`.
+    ///
+    /// React and ReactDOM must be used as global variables (loaded via CDN in
+    /// index.html), not via `import React from 'react'`.
+    #[serde(default)]
+    pub app_source: Option<String>,
+    /// Additional TypeScript source files (relative path → content).
+    ///
+    /// Keys are paths relative to `src/`, e.g. `"components/Header.tsx"`,
+    /// `"utils/helpers.ts"`. Values are the file contents.
+    #[serde(default)]
+    pub source_files: Option<HashMap<String, String>>,
 }
 
 /// Request to update an existing custom app's code.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateAppRequest {
-    /// New self-contained index.html source code (optional)
+    /// New self-contained index.html source code (optional, plain HTML mode)
     #[serde(default)]
     pub index_html: Option<String>,
+    /// New TypeScript/React source code (optional, TypeScript mode)
+    #[serde(default)]
+    pub app_source: Option<String>,
+    /// Additional TypeScript source files (optional)
+    #[serde(default)]
+    pub source_files: Option<HashMap<String, String>>,
     /// Updated manifest (optional, e.g. to add missing permissions)
     #[serde(default)]
     pub manifest: Option<PluginManifest>,
@@ -33,9 +60,12 @@ pub struct UpdateAppRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppResponse {
     pub manifest: PluginManifest,
-    /// Self-contained index.html source
+    /// Self-contained index.html source (either LLM-provided or auto-generated shell)
     #[serde(default)]
     pub index_html: Option<String>,
+    /// TypeScript/React source code (if app uses TypeScript mode)
+    #[serde(default)]
+    pub app_source: Option<String>,
     /// Whether the app has been packaged (dist/ exists)
     pub is_packaged: bool,
     /// Path to the dist directory (if packaged)
@@ -114,12 +144,17 @@ impl From<&crate::PluginEntry> for AppResponse {
             .index_html
             .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok());
+        let app_source = entry
+            .app_source
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok());
         let dist_dir = entry.dir.join("dist");
         let is_packaged = dist_dir.exists();
 
         Self {
             manifest: entry.manifest.clone(),
             index_html,
+            app_source,
             is_packaged,
             dist_path: if is_packaged {
                 Some(dist_dir.to_string_lossy().to_string())

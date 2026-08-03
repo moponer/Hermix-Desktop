@@ -1,9 +1,9 @@
-//! 运行时冒烟测试 (L2) — 启动打包后的 loader exe, 捕获运行时错误.
+//! 运行时冒烟测试 — 启动打包后的 hx-shell exe, 捕获启动错误.
 //!
-//! 打包产物 (loader exe) 在 `HERMIX_SMOKE=1` 时进入冒烟模式: 隐藏窗口,
-//! 并通过 `HERMIX_SMOKE_LOG` 日志文件写入 `{"level":"ready"|"error",...}` 行.
-//! 本模块负责启动该 exe、轮询日志、解析结果, 供 agent 工具 (`custom_app_manager`
-//! 的 `smoke` action) 与桌面 Tauri 命令 (`custom_app_smoke_test`) 共用.
+//! hx-shell 打包产物在 `dist/<id>.exe`。冒烟测试启动该 exe，
+//! 检查进程是否能存活（不立即崩溃），并捕获 stdout/stderr 中的错误信息。
+//! 供 agent 工具 (`custom_app_manager` 的 `smoke` action) 与桌面 Tauri 命令
+//! (`custom_app_smoke_test`) 共用.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -20,19 +20,19 @@ pub struct SmokeError {
 /// 运行时冒烟测试结果.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SmokeReport {
-    /// 是否通过 (已挂载且无运行时错误)
+    /// 是否通过 (进程存活且无 stderr 错误)
     pub ok: bool,
-    /// 应用是否成功挂载 (React 渲染出内容)
+    /// 进程是否成功启动并存活
     pub ready: bool,
     /// 是否已打包 (dist 存在)
     pub packaged: bool,
     /// 运行时错误列表
     pub errors: Vec<SmokeError>,
-    /// 详细日志 (每行一条事件)
+    /// 详细日志 (stdout + stderr)
     pub detail: String,
 }
 
-/// 壳 exe 在不同平台下的文件名.
+/// exe 在不同平台下的文件名.
 fn dist_exe_name(id: &str) -> String {
     if cfg!(windows) {
         format!("{id}.exe")
@@ -41,46 +41,9 @@ fn dist_exe_name(id: &str) -> String {
     }
 }
 
-/// 解析冒烟日志内容 → (ready, errors, detail_lines).
+/// 启动打包产物 (`dist/<id>.exe`) 并冒烟测试. 同步阻塞, 最多约 10s.
 ///
-/// 日志每行是一条 JSON: `{"level":"ready"|"error"|..., "message":"..."}`.
-pub fn parse_smoke_log(content: &str) -> (bool, Vec<SmokeError>, Vec<String>) {
-    let mut ready = false;
-    let mut errors: Vec<SmokeError> = Vec::new();
-    let mut detail: Vec<String> = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        let level = v.get("level").and_then(|x| x.as_str()).unwrap_or("");
-        let message = v
-            .get("message")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string();
-        match level {
-            "ready" => {
-                ready = true;
-                detail.push(format!("[ready] {message}"));
-            }
-            "error" => {
-                detail.push(format!("[error] {message}"));
-                errors.push(SmokeError { message });
-            }
-            other => detail.push(format!("[{other}] {message}")),
-        }
-    }
-    (ready, errors, detail)
-}
-
-/// 启动打包产物 (`dist/<id>.exe`) 并冒烟测试指定应用. 同步阻塞, 最多约 20s.
-///
-/// 调用方应先确保已打包 (`manager.package_plugin`). `app_dir` 为插件目录
-/// (`<plugins_dir>/<id>`), 其下 `dist/` 必须存在并有 `<id>.exe`.
+/// 调用方应先确保已打包. `app_dir` 为插件目录, 其下 `dist/` 必须有 `<id>.exe`.
 pub fn run_smoke_test(app_dir: &Path) -> SmokeReport {
     let id = app_dir
         .file_name()
@@ -101,21 +64,11 @@ pub fn run_smoke_test(app_dir: &Path) -> SmokeReport {
         };
     }
 
-    let log_path = std::env::temp_dir().join(format!(
-        "hermix_smoke_{}_{}.log",
-        id,
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&log_path);
-    let log_str = log_path.to_string_lossy().to_string();
-
     let mut child = match Command::new(&exe_path)
         .current_dir(&dist_dir)
-        .env("HERMIX_SMOKE", "1")
-        .env("HERMIX_SMOKE_LOG", &log_str)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
     {
         Ok(c) => c,
@@ -125,49 +78,84 @@ pub fn run_smoke_test(app_dir: &Path) -> SmokeReport {
                 ready: false,
                 packaged: true,
                 errors: vec![SmokeError {
-                    message: format!("启动壳失败: {e}"),
+                    message: format!("启动应用失败: {e}"),
                 }],
                 detail: String::new(),
             };
         }
     };
 
+    // 等待最多 8 秒, 检查进程是否存活
     let start = Instant::now();
-    let timeout = Duration::from_secs(20);
+    let timeout = Duration::from_secs(8);
     let mut ready = false;
-    let mut errors: Vec<SmokeError> = Vec::new();
-    let mut detail: Vec<String> = Vec::new();
 
     while start.elapsed() < timeout {
-        if let Ok(content) = std::fs::read_to_string(&log_path) {
-            let (r, errs, det) = parse_smoke_log(&content);
-            ready = r;
-            errors = errs;
-            detail = det;
+        // 检查进程是否已退出 (立即退出 = 崩溃)
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // 进程已退出
+                let stdout = child.stdout.take();
+                let stderr = child.stderr.take();
+                let (out_str, err_str) = capture_output(stdout, stderr);
+                let detail = format!("stdout: {}\nstderr: {}", out_str, err_str);
+                return SmokeReport {
+                    ok: false,
+                    ready: false,
+                    packaged: true,
+                    errors: vec![SmokeError {
+                        message: format!("应用启动后立即退出 (exit={status})"),
+                    }],
+                    detail,
+                };
+            }
+            Ok(None) => {
+                // 进程仍在运行 = 启动成功
+                if !ready {
+                    ready = true;
+                }
+            }
+            Err(_) => break,
         }
-        if ready {
-            // 再多等一会儿, 收集挂载后 (如 effect 内) 可能抛出的错误
-            std::thread::sleep(Duration::from_millis(500));
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(500));
     }
 
-    // 读取最终日志 (break 前可能还有写入), 再杀进程
-    if let Ok(content) = std::fs::read_to_string(&log_path) {
-        let (r, errs, det) = parse_smoke_log(&content);
-        ready = r || ready;
-        if !errs.is_empty() {
-            errors = errs;
-        }
-        if !det.is_empty() {
-            detail = det;
-        }
-    }
+    // 读取 stdout/stderr
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let (out_str, err_str) = capture_output(stdout, stderr);
 
+    // 杀掉进程
     let _ = child.kill();
     let _ = child.wait();
-    let _ = std::fs::remove_file(&log_path);
+
+    let mut errors: Vec<SmokeError> = Vec::new();
+    let mut detail = String::new();
+
+    if !err_str.is_empty() {
+        for line in err_str.lines().take(20) {
+            let line = line.trim();
+            if !line.is_empty() {
+                errors.push(SmokeError {
+                    message: line.to_string(),
+                });
+                detail.push_str("[stderr] ");
+                detail.push_str(line);
+                detail.push('\n');
+            }
+        }
+    }
+
+    if !out_str.is_empty() {
+        for line in out_str.lines().take(10) {
+            let line = line.trim();
+            if !line.is_empty() {
+                detail.push_str("[stdout] ");
+                detail.push_str(line);
+                detail.push('\n');
+            }
+        }
+    }
 
     let ok = ready && errors.is_empty();
     SmokeReport {
@@ -175,8 +163,31 @@ pub fn run_smoke_test(app_dir: &Path) -> SmokeReport {
         ready,
         packaged: true,
         errors,
-        detail: detail.join("\n"),
+        detail,
     }
+}
+
+/// 从 stdout/stderr 管道中读取所有内容 (非阻塞).
+fn capture_output(
+    stdout: Option<std::process::ChildStdout>,
+    stderr: Option<std::process::ChildStderr>,
+) -> (String, String) {
+    use std::io::Read;
+    let out = stdout
+        .map(|mut s| {
+            let mut buf = String::new();
+            let _ = s.read_to_string(&mut buf);
+            buf
+        })
+        .unwrap_or_default();
+    let err = stderr
+        .map(|mut s| {
+            let mut buf = String::new();
+            let _ = s.read_to_string(&mut buf);
+            buf
+        })
+        .unwrap_or_default();
+    (out, err)
 }
 
 /// 异步包装: 在 blocking 线程上跑 [`run_smoke_test`], 避免阻塞 async runtime.
@@ -200,17 +211,6 @@ pub async fn run_smoke_test_async(app_dir: PathBuf) -> SmokeReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_smoke_log_ready_and_error() {
-        let content =
-            "{\"level\":\"error\",\"message\":\"boom\"}\n{\"level\":\"ready\",\"message\":\"mounted\"}\n";
-        let (ready, errors, detail) = parse_smoke_log(content);
-        assert!(ready);
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].message, "boom");
-        assert!(detail.iter().any(|l| l.contains("mounted")));
-    }
 
     #[test]
     fn run_smoke_missing_dist_errors() {

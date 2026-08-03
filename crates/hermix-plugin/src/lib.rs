@@ -1,35 +1,64 @@
 //! # hermix-plugin
 //!
-//! 自定义应用系统 — 面向终端用户的桌面窗口应用。
+//! Custom app system — user-facing desktop window applications.
 //!
-//! 与 LLM 驱动的插件 (hermix-tools) 不同，自定义应用是用户自己使用的
-//! 独立桌面窗口应用。用户通过对话让 LLM 生成应用代码，系统自动打包
-//! 为独立可执行文件。
+//! Uses **hx-shell** (Rust + wry/WebView2) as the runtime: a lightweight
+//! (~2-3MB) single-file exe that provides a WebView2 window + built-in
+//! `window.hx.*` bindings (writeFile/readFile/getInfo) via WebView2's
+//! native postMessage bridge. Apps are self-contained HTML/CSS/JS.
 //!
-//! ## 架构 (standalone wry loader 方案)
+//! ## Architecture (hx-shell)
 //!
-//! - **PluginManager**: 扫描应用目录、管理生命周期
-//! - **PluginManifest**: 定义应用元数据、窗口配置、权限
-//! - **NewLoaderPackager**: 用 `inject_app` 把自包含 `index.html` + `manifest.json`
-//!   注入 `hermix-app-loader.exe` 尾部，产出零 Tauri 运行时的独立 `.exe`
-//! - **无 esbuild / Deno / QuickJS**: 应用即静态 HTML，桥接走 `app://localhost/rpc`
+//! - **PluginManager**: scans app directories, manages lifecycle
+//! - **PluginManifest**: defines app metadata, window config, permissions
+//! - **HxShellPackager**: packs app index.html + hx-shell.exe → single
+//!   distributable exe (HTML tail-injected). User machine needs zero
+//!   toolchain — packaging is a pure file concatenation.
 
 pub mod manifest;
 pub mod scanner;
-pub mod loader_packager;
+pub mod loader_packager; // legacy (unused, kept for compile stability)
 pub mod icon_library;
 pub mod validate;
 pub use validate::validate_custom_app;
 pub mod smoke;
 pub use smoke::{run_smoke_test, run_smoke_test_async, SmokeError, SmokeReport};
 pub mod api;
+pub mod hx_packager;
+pub use hx_packager::{HxShellPackager, PackageMode, HxPackError};
+pub mod node_setup; // 保留：loader_packager.rs 依赖（neu build 路径的 env 检查）
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+/// Generate an HTML shell for TypeScript/React apps.
+///
+/// hx-shell 架构：React + ReactDOM 由 esbuild 打包进 `app.js`（无 CDN、无网络依赖），
+/// 系统能力通过 `window.hx.*`（WebView2 原生桥）调用，无需外部客户端库。
+fn generate_html_shell(manifest: &PluginManifest) -> String {
+    let title = manifest.window_config
+        .title
+        .as_deref()
+        .unwrap_or(&manifest.name);
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="/js/app.js"></script>
+  </body>
+</html>"#
+    )
+}
+
 pub use manifest::{PluginDependencies, PluginManifest, WindowConfig};
-pub use loader_packager::{NewLoaderPackager, PackageResult};
+
 pub use scanner::PluginScanner;
 
 /// A loaded plugin entry with its manifest and file paths.
@@ -37,8 +66,13 @@ pub use scanner::PluginScanner;
 pub struct PluginEntry {
     /// Plugin manifest parsed from manifest.json.
     pub manifest: PluginManifest,
-    /// Path to self-contained index.html
+    /// Path to self-contained index.html (either LLM-provided or auto-generated shell)
     pub index_html: Option<PathBuf>,
+    /// Path to TypeScript/React source (src/main.tsx), if app uses TypeScript mode.
+    /// When this is set, the packager runs esbuild to transpile → resources/js/app.js.
+    pub app_source: Option<PathBuf>,
+    /// Path to the `src/` directory containing additional TypeScript files.
+    pub source_dir: Option<PathBuf>,
     /// Path to custom icon file, e.g. icon.png (optional)
     pub icon_path: Option<PathBuf>,
     /// Path to README.md (optional)
@@ -72,66 +106,77 @@ pub enum PluginError {
     ExecutionFailed(String),
 }
 
-/// Resolve the path to the standalone app loader (`hermix-app-loader.exe`).
-///
-/// Candidate priority (mirrors the shell/esbuild resolvers):
-///   1. `HERMIX_HOME/loader/hermix-app-loader.exe` — extracted on first launch
-///      by the desktop app's resource unpacking.
-///   2. `current_exe/resources/loader/hermix-app-loader.exe` — installed build.
-///   3. `apps/custom-app-loader/target/release/hermix-app-loader.exe` —
-///      repo-dev fallback (so the host works straight from the source tree
-///      without a separate copy step).
-///   4. default `HERMIX_HOME/loader/hermix-app-loader.exe`.
-pub fn resolve_loader_path() -> PathBuf {
-    let home = hermix_config::paths::hermix_home();
-    let candidates = [
-        Some(home.join("loader").join("hermix-app-loader.exe")),
-        std::env::current_exe().ok().and_then(|e| {
-            e.parent()
-                .map(|d| d.join("resources").join("loader").join("hermix-app-loader.exe"))
-        }),
-        Some(
-            std::env::current_dir()
-                .ok()
-                .map(|d| d.join("apps").join("custom-app-loader").join("target").join("release").join("hermix-app-loader.exe"))
-                .unwrap_or_default(),
-        ),
-    ]
-    .into_iter()
-    .flatten();
-    for c in candidates {
-        if c.exists() {
-            return c;
+/// Heuristic: does `s` look like a file path rather than HTML content?
+fn looks_like_file_path(s: &str) -> bool {
+    if s.contains('<') {
+        return false;
+    }
+    let s = s.trim();
+    if s.len() >= 3 {
+        let bytes = s.as_bytes();
+        if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/') {
+            return true;
         }
     }
-    home.join("loader").join("hermix-app-loader.exe")
+    if s.starts_with('/') || s.starts_with("~/") {
+        return true;
+    }
+    false
 }
 
-/// Resolve the path to the `inject_app.exe` packer (companion to the loader).
-/// Same candidate priority as [`resolve_loader_path`].
-pub fn resolve_inject_path() -> PathBuf {
-    let home = hermix_config::paths::hermix_home();
-    let candidates = [
-        Some(home.join("loader").join("inject_app.exe")),
-        std::env::current_exe().ok().and_then(|e| {
-            e.parent()
-                .map(|d| d.join("resources").join("loader").join("inject_app.exe"))
-        }),
-        Some(
-            std::env::current_dir()
-                .ok()
-                .map(|d| d.join("apps").join("custom-app-loader").join("target").join("release").join("inject_app.exe"))
-                .unwrap_or_default(),
-        ),
-    ]
-    .into_iter()
-    .flatten();
-    for c in candidates {
-        if c.exists() {
-            return c;
+/// Walk up from `start` looking for `relative` to exist.
+fn walk_up_for(start: &Path, relative: &str) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
+    for _ in 0..15 {
+        let candidate = current.join(relative);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if !current.pop() {
+            break;
         }
     }
-    home.join("loader").join("inject_app.exe")
+    None
+}
+
+/// Resolve the path to the hx-shell template binary ().
+///
+/// Candidate priority:
+///   1. `HERMIX_HOME/loader/hx-shell.exe`
+///   2. `current_exe/resources/loader/hx-shell.exe`
+///   3. Walk up from `current_exe()` for `resources/loader/hx-shell.exe`
+///   4. default `HERMIX_HOME/loader/hx-shell.exe`
+pub fn resolve_hx_shell_path() -> PathBuf {
+    let home = hermix_config::paths::hermix_home();
+    let candidates = [
+        Some(home.join("loader").join("hx-shell.exe")),
+        std::env::current_exe().ok().and_then(|e| {
+            e.parent().map(|d| d.join("resources").join("loader").join("hx-shell.exe"))
+        }),
+        std::env::current_exe().ok().and_then(|e| {
+            e.parent().and_then(|d| walk_up_for(d, "resources/loader/hx-shell.exe"))
+        }),
+    ]
+    .into_iter().flatten();
+    for c in candidates { if c.exists() { return c; } }
+    home.join("loader").join("hx-shell.exe")
+}
+
+/// Resolve the path to the `WebView2Loader.dll` (wry runtime dependency).
+pub fn resolve_webview2_loader_path() -> PathBuf {
+    let home = hermix_config::paths::hermix_home();
+    let candidates = [
+        Some(home.join("loader").join("WebView2Loader.dll")),
+        std::env::current_exe().ok().and_then(|e| {
+            e.parent().map(|d| d.join("resources").join("loader").join("WebView2Loader.dll"))
+        }),
+        std::env::current_exe().ok().and_then(|e| {
+            e.parent().and_then(|d| walk_up_for(d, "resources/loader/WebView2Loader.dll"))
+        }),
+    ]
+    .into_iter().flatten();
+    for c in candidates { if c.exists() { return c; } }
+    home.join("loader").join("WebView2Loader.dll")
 }
 
 /// The main plugin manager that coordinates all plugin operations.
@@ -140,24 +185,20 @@ pub struct PluginManager {
     plugins_dir: PathBuf,
     /// Loaded plugins indexed by ID.
     plugins: RwLock<HashMap<String, PluginEntry>>,
-    /// New packager (standalone wry loader + inject_app) for new-model apps.
-    loader_packager: Arc<NewLoaderPackager>,
+    /// hx-shell packager.
+    packager: Arc<HxShellPackager>,
 }
 
 impl PluginManager {
     /// Create a new plugin manager.
-    ///
-    /// The loader paths (`hermix-app-loader.exe` + `inject_app.exe`) are
-    /// resolved internally via [`resolve_loader_path`]/[`resolve_inject_path`]
-    /// so callers (server, desktop) don't need to change their construction.
     pub fn new(plugins_dir: PathBuf) -> Self {
-        let loader_path = resolve_loader_path();
-        let inject_path = resolve_inject_path();
-        let loader_packager = Arc::new(NewLoaderPackager::new(loader_path, inject_path));
+        let shell_path = resolve_hx_shell_path();
+        let loader_dll_path = resolve_webview2_loader_path();
+        let packager = Arc::new(HxShellPackager::new(shell_path, loader_dll_path));
         Self {
             plugins_dir,
             plugins: RwLock::new(HashMap::new()),
-            loader_packager,
+            packager,
         }
     }
 
@@ -194,48 +235,111 @@ impl PluginManager {
 
     /// Install a new plugin from LLM-generated code.
     ///
-    /// `icon_data` is an optional base64-encoded PNG image that will be
-    /// saved as `icon.png` in the plugin directory and referenced from
-    /// the manifest's `icon_file` field.
+    /// Two modes:
+    /// - **TypeScript/React mode**: provide `app_source` (TSX code). The system
+    ///   generates an HTML shell and the packager runs esbuild to transpile.
+    /// - **Plain HTML mode** (backward compatible): provide `index_html` directly.
+    ///
+    /// If both `app_source` and `index_html` are provided, `app_source` takes
+    /// precedence — the LLM's `index_html` is used as the custom shell, and
+    /// `app_source` is transpiled via esbuild into `app.js`.
     pub fn install_plugin(
         &self,
         manifest: &PluginManifest,
         index_html: Option<&str>,
+        app_source: Option<&str>,
+        source_files: Option<&HashMap<String, String>>,
         icon_data: Option<&str>,
     ) -> Result<PluginEntry, PluginError> {
         manifest
             .validate()
             .map_err(PluginError::InvalidManifest)?;
 
+        // Validate that at least one source is provided
+        let has_html = index_html.map(|s| !s.trim().is_empty()).unwrap_or(false);
+        let has_source = app_source.map(|s| !s.trim().is_empty()).unwrap_or(false);
+
+        if !has_html && !has_source {
+            return Err(PluginError::InvalidManifest(
+                "either app_source (TypeScript/React) or index_html (plain HTML) is required".into(),
+            ));
+        }
+
         let plugin_dir = self.plugins_dir.join(&manifest.id);
 
-        // Remove existing if present
         if plugin_dir.exists() {
             std::fs::remove_dir_all(&plugin_dir)?;
         }
 
-        // Create plugin directory
         std::fs::create_dir_all(&plugin_dir)?;
 
-        // Write manifest.json
         let manifest_json = serde_json::to_string_pretty(manifest)?;
         std::fs::write(plugin_dir.join("manifest.json"), manifest_json)?;
 
-        // Write self-contained index.html if provided
-        let index_html_path = if let Some(code) = index_html {
-            if !code.trim().is_empty() {
-                let path = plugin_dir.join("index.html");
-                std::fs::write(&path, code)?;
-                Some(path)
-            } else {
-                None
+        // ── TypeScript/React mode ──
+        let (app_source_path, source_dir) = if has_source {
+            let src_dir = plugin_dir.join("src");
+            std::fs::create_dir_all(&src_dir)?;
+
+            // Write main entry file
+            let main_path = src_dir.join("main.tsx");
+            std::fs::write(&main_path, app_source.unwrap())?;
+
+            // Write additional source files
+            if let Some(files) = source_files {
+                for (rel_path, content) in files {
+                    let target = src_dir.join(rel_path);
+                    if let Some(parent) = target.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&target, content)?;
+                }
             }
+
+            (Some(main_path), Some(src_dir))
         } else {
-            None
+            (None, None)
         };
 
-        // Write icon.png from base64 data if provided; otherwise auto-generate
-        // a per-app icon from the built-in library (deterministic by id/category).
+        // ── index.html ──
+        let index_html_path = {
+            let path = plugin_dir.join("index.html");
+            let html_content = if has_html {
+                // LLM provided HTML (either plain HTML mode or custom shell for TS mode)
+                let raw = index_html.unwrap().trim();
+                if looks_like_file_path(raw) {
+                    std::fs::read_to_string(raw).map_err(|e| {
+                        PluginError::InvalidManifest(format!(
+                            "index_html looks like a file path but read failed: {raw} -- {e}"
+                        ))
+                    })?
+                } else {
+                    raw.to_string()
+                }
+            } else {
+                // Auto-generate HTML shell for TypeScript mode
+                generate_html_shell(manifest)
+            };
+            std::fs::write(&path, &html_content)?;
+            Some(path)
+        };
+
+        // ── Validate HTML content looks valid (only for plain HTML mode) ──
+        if has_html && !has_source {
+            let html_code = std::fs::read_to_string(index_html_path.as_ref().unwrap())?;
+            let html_lower = html_code.to_lowercase();
+            if !html_lower.contains("<html")
+                && !html_lower.contains("<!doctype")
+                && !html_lower.contains("<div")
+                && !html_lower.contains("<script")
+            {
+                return Err(PluginError::InvalidManifest(format!(
+                    "index_html content does not look like valid HTML -- \
+                     no <html>, <!DOCTYPE>, <div> or <script> tag found."
+                )));
+            }
+        }
+
         let icon_path = if let Some(data) = icon_data {
             let bytes = base64_decode_icon(data)?;
             let path = plugin_dir.join("icon.png");
@@ -256,13 +360,12 @@ impl PluginManager {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("自动生成应用图标失败 (使用默认壳图标): {e}");
+                    tracing::warn!("auto-generate app icon failed: {e}");
                     None
                 }
             }
         };
 
-        // If icon was saved but manifest doesn't reference it, update the manifest
         let final_manifest = if icon_path.is_some() && manifest.icon_file.is_none() {
             let updated = PluginManifest {
                 icon_file: Some("icon.png".to_string()),
@@ -278,40 +381,94 @@ impl PluginManager {
         let entry = PluginEntry {
             manifest: final_manifest,
             index_html: index_html_path,
+            app_source: app_source_path,
+            source_dir,
             icon_path,
             readme_path: None,
             dir: plugin_dir.clone(),
         };
 
-        // Register in memory
         let mut plugins = self.plugins.write().expect("plugin lock poisoned");
         plugins.insert(manifest.id.clone(), entry.clone());
 
-        tracing::info!("installed custom app: {}", manifest.id);
+        tracing::info!("installed custom app: {} (mode: {})",
+            manifest.id,
+            if has_source { "TypeScript/React" } else { "plain HTML" }
+        );
         Ok(entry)
     }
 
     /// Update an existing plugin's code and/or manifest.
+    ///
+    /// Can update `index_html` (plain HTML), `app_source` (TypeScript/React),
+    /// or `manifest` independently.
     pub fn update_plugin(
         &self,
         id: &str,
         index_html: Option<&str>,
+        app_source: Option<&str>,
+        source_files: Option<&HashMap<String, String>>,
         manifest: Option<&PluginManifest>,
     ) -> Result<PluginEntry, PluginError> {
         let mut entry = self
             .get_plugin(id)
             .ok_or_else(|| PluginError::NotFound(id.to_string()))?;
 
-        if let Some(code) = index_html {
-            if !code.trim().is_empty() {
+        // Update TypeScript source
+        if let Some(source) = app_source {
+            let raw = source.trim();
+            if !raw.is_empty() {
+                let src_dir = entry.dir.join("src");
+                std::fs::create_dir_all(&src_dir)?;
+                let main_path = src_dir.join("main.tsx");
+                std::fs::write(&main_path, raw)?;
+                entry.app_source = Some(main_path);
+                entry.source_dir = Some(src_dir.clone());
+
+                // Write additional source files
+                if let Some(files) = source_files {
+                    for (rel_path, content) in files {
+                        let target = src_dir.join(rel_path);
+                        if let Some(parent) = target.parent() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+                        std::fs::write(&target, content)?;
+                    }
+                }
+
+                // Auto-generate HTML shell if index.html doesn't exist or is missing
                 let idx_path = entry.dir.join("index.html");
-                std::fs::write(&idx_path, code)?;
+                if !idx_path.exists() {
+                    let shell = if let Some(m) = manifest {
+                        generate_html_shell(m)
+                    } else {
+                        generate_html_shell(&entry.manifest)
+                    };
+                    std::fs::write(&idx_path, &shell)?;
+                    entry.index_html = Some(idx_path);
+                }
+            }
+        }
+
+        // Update plain HTML (only if app_source is not being updated)
+        if let Some(code) = index_html {
+            let raw = code.trim();
+            if !raw.is_empty() {
+                let resolved = if looks_like_file_path(raw) {
+                    std::fs::read_to_string(raw).map_err(|e| {
+                        PluginError::InvalidManifest(format!(
+                            "index_html looks like a file path but read failed: {raw} -- {e}"
+                        ))
+                    })?
+                } else {
+                    raw.to_string()
+                };
+                let idx_path = entry.dir.join("index.html");
+                std::fs::write(&idx_path, &resolved)?;
                 entry.index_html = Some(idx_path);
             }
         }
 
-        // Update manifest if provided (e.g. to add missing permissions).
-        // Writes manifest.json and updates the in-memory entry.
         if let Some(m) = manifest {
             m.validate()
                 .map_err(PluginError::InvalidManifest)?;
@@ -320,8 +477,6 @@ impl PluginManager {
             entry.manifest = m.clone();
         }
 
-        // Re-register the updated entry in memory so get_plugin reflects it
-        // until the next scan_plugins.
         let mut plugins = self.plugins.write().expect("plugin lock poisoned");
         plugins.insert(id.to_string(), entry.clone());
 
@@ -337,10 +492,8 @@ impl PluginManager {
             return Err(PluginError::NotFound(id.to_string()));
         }
 
-        // Remove directory
         std::fs::remove_dir_all(&plugin_dir)?;
 
-        // Remove from memory
         let mut plugins = self.plugins.write().expect("plugin lock poisoned");
         plugins.remove(id);
 
@@ -348,24 +501,30 @@ impl PluginManager {
         Ok(())
     }
 
-    /// Package a plugin as a standalone EXE.
-    ///
-    /// Apps (self-contained `index.html` + `manifest.json`) are
-    /// packed via the standalone wry loader (`inject_app`). Emits
-    /// `dist/<id>.exe`.
+    /// Package a plugin with the given mode (default: sidecar).
     pub async fn package_plugin(&self, id: &str) -> Result<PathBuf, PluginError> {
+        self.package_plugin_with_mode(id, PackageMode::default()).await
+    }
+
+    /// Package a plugin with an explicit mode.
+    pub async fn package_plugin_with_mode(
+        &self,
+        id: &str,
+        mode: PackageMode,
+    ) -> Result<PathBuf, PluginError> {
         let entry = self
             .get_plugin(id)
             .ok_or_else(|| PluginError::NotFound(id.to_string()))?;
 
         if entry.index_html.is_none() {
             return Err(PluginError::PackagingFailed(
-                "应用缺少 index.html，无法打包".into(),
+                "app missing index.html, cannot package".into(),
             ));
         }
 
-        let result = self.loader_packager.package(&entry).await?;
-        Ok(result.exe_path)
+        let result = self.packager.package(&entry.dir, &entry.manifest.id, mode)
+            .map_err(|e| PluginError::PackagingFailed(e.to_string()))?;
+        Ok(result)
     }
 
     /// Launch a packaged app (spawns `dist/<id>.exe`).
@@ -381,13 +540,13 @@ impl PluginManager {
         let exe_path = entry.dir.join("dist").join(&exe_name);
         if !exe_path.exists() {
             return Err(PluginError::ExecutionFailed(format!(
-                "应用尚未打包, 找不到可执行文件: {}",
+                "app not packaged, exe not found: {}",
                 exe_path.display()
             )));
         }
         std::process::Command::new(&exe_path)
             .spawn()
-            .map_err(|e| PluginError::ExecutionFailed(format!("启动应用失败: {e}")))?;
+            .map_err(|e| PluginError::ExecutionFailed(format!("launch app failed: {e}")))?;
         Ok(())
     }
 
@@ -396,19 +555,15 @@ impl PluginManager {
         &self.plugins_dir
     }
 
-    /// Get a reference to the new-loader packager.
-    pub fn loader_packager(&self) -> &Arc<NewLoaderPackager> {
-        &self.loader_packager
+    /// Get a reference to the packager.
+    pub fn packager(&self) -> &Arc<HxShellPackager> {
+        &self.packager
     }
 }
 
-/// Decode a base64-encoded icon image (PNG/ICO).
-///
-/// Accepts both raw base64 and data-URI format
-/// (`data:image/png;base64,...`). Returns the raw bytes.
+/// Decode a base64-encoded icon Image (PNG/ICO).
 fn base64_decode_icon(data: &str) -> Result<Vec<u8>, PluginError> {
     let b64 = if data.starts_with("data:") {
-        // data:image/png;base64,iVBOR...
         data.split(',')
             .next_back()
             .unwrap_or("")
@@ -419,5 +574,5 @@ fn base64_decode_icon(data: &str) -> Result<Vec<u8>, PluginError> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD
         .decode(b64)
-        .map_err(|e| PluginError::InvalidManifest(format!("icon_data base64 解码失败: {e}")))
+        .map_err(|e| PluginError::InvalidManifest(format!("icon_data base64 decode failed: {e}")))
 }

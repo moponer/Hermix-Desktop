@@ -1,17 +1,16 @@
 //! 自定义应用「开发期自验证」(shift-left validation).
 //!
-//! 目标: 让 LLM 在 *开发* 自定义应用时就能拦截打包/运行期错误,
-//! 而不是等用户点击打包或启动 loader 时才发现。新架构 (standalone wry
-//! loader) 下应用即静态 `index.html`, 校验聚焦:
+//! 目标: 让 LLM 在 *开发* 自定义应用时就能拦截打包/运行期错误。
+//! hx-shell 架构下应用为静态 `index.html` + `window.hx.*` 绑定（WebView2 原生桥）。
+//! 校验聚焦:
 //!
 //! - **L0 静态契约**: manifest 完整性 + permissions 声明
-//! - **L1 HTML/JS 预检**: 结构完整性、RPC 调用模式、括号匹配
-//! - **L2 权限一致性**: HTML 中的 RPC 方法是否在 permissions 中声明
+//! - **L1 HTML/JS 预检**: 结构完整性、hx API 调用模式、括号匹配
+//! - **L2 权限一致性**: HTML 中的 hx API 调用是否在 permissions 中声明
 //!
 //! 调用方 (agent 开发循环) 应在生成/修改应用代码后调用
 //! [`validate_custom_app`], 看到 `ok == false` 就继续修复, 直到通过
-//! 才视为「开发完成」。运行时冒烟测试 (L3, loader 无头模式捕获 console 错误)
-//! 作为后续阶段, 不在本模块。
+//! 才视为「开发完成」。
 //!
 //! 设计: 纯同步、零 panic、无外部依赖。
 
@@ -45,27 +44,31 @@ fn issue(level: &str, code: &str, message: impl Into<String>) -> ValidationIssue
     }
 }
 
-/// 已知 RPC 方法 → 所需权限的映射。
-const RPC_METHOD_PERMISSIONS: &[(&str, &str)] = &[
-    ("fs_read", "fs-read"),
-    ("fs_read_bytes", "fs-read"),
-    ("fs_list", "fs-read"),
-    ("fs_exists", "fs-read"),
-    ("fs_write", "fs-write"),
-    ("fs_write_bytes", "fs-write"),
-    ("fs_mkdir", "fs-write"),
-    ("fs_move", "fs-write"),
-    ("fs_copy", "fs-write"),
-    ("fs_delete", "fs-write"),
-    ("exec", "exec"),
-    ("shell", "exec"),
-    ("fetch", "network"),
-    ("dialog_open", "dialog"),
-    ("dialog_save", "dialog"),
-    ("env_get", "env"),
-    ("env_list", "env"),
-    ("temp_dir", "temp"),
-    ("temp_file", "temp"),
+/// hx-shell 绑定 API → 所需权限的映射。
+///
+/// hx-shell 架构下，应用通过 `window.hx.*`（WebView2 原生桥 chrome.webview.postMessage）
+/// 调用系统能力。当 HTML 中出现 `hx.writeFile(` 等调用时，需要对应权限。
+/// 这里按 API 前缀匹配。
+const HX_API_PERMISSIONS: &[(&str, &str)] = &[
+    // 文件系统
+    ("hx.readFile", "fs-read"),
+    ("hx.readDir", "fs-read"),
+    ("hx.stat", "fs-read"),
+    ("hx.writeFile", "fs-write"),
+    ("hx.appendFile", "fs-write"),
+    ("hx.removeFile", "fs-write"),
+    ("hx.createDir", "fs-write"),
+    ("hx.removeDir", "fs-write"),
+    // 进程/系统
+    ("hx.exec", "exec"),
+    ("hx.getInfo", "app"),
+    // 对话框
+    ("hx.openDialog", "dialog"),
+    ("hx.saveDialog", "dialog"),
+    ("hx.showMessage", "dialog"),
+    // 剪贴板
+    ("hx.clipboardGet", "clipboard"),
+    ("hx.clipboardSet", "clipboard"),
 ];
 
 /// 对单个自定义应用做开发期自验证 (L0 + L1 + L2)。
@@ -133,96 +136,146 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
         })
         .unwrap_or_default();
 
-    // 应用模型: 只支持新架构 (self-contained index.html). 旧 esbuild 壳模型已退役.
+    // 应用模型: 支持两种模式
+    // 1. TypeScript/React: src/main.tsx (可选 + index.html 壳)
+    // 2. Plain HTML: index.html (自包含)
     let index_html = app_dir.join("index.html");
+    let src_main_tsx = app_dir.join("src").join("main.tsx");
+    let has_tsx = src_main_tsx.exists();
 
-    if !index_html.exists() {
+    if !index_html.exists() && !has_tsx {
         return ValidationReport {
             ok: false,
             issues: vec![issue(
                 "error",
                 "manifest",
-                "缺少 index.html (新架构应用需要自包含 index.html + manifest.json)",
+                "缺少 index.html 和 src/main.tsx (应用需要至少一个)",
             )],
         };
     }
 
-    // ── L1: HTML 结构预检 ──
-    let html = std::fs::read_to_string(&index_html).unwrap_or_default();
+    // ── L1: HTML 结构预检 (仅当 index.html 存在时) ──
+    let html = if index_html.exists() {
+        std::fs::read_to_string(&index_html).unwrap_or_default()
+    } else {
+        String::new()
+    };
 
-    // 检查基本 HTML 结构
-    let has_html_tag = html.contains("<html") || html.contains("<!DOCTYPE");
-    let has_body = html.contains("<body") || html.contains("<body>");
-    let has_script = html.contains("<script");
+    // 如果是 TypeScript 模式，也读取 TSX 源码用于校验
+    let tsx_code = if has_tsx {
+        std::fs::read_to_string(&src_main_tsx).unwrap_or_default()
+    } else {
+        String::new()
+    };
 
-    if !has_html_tag && !html.trim().starts_with('<') {
-        issues.push(issue(
-            "error",
-            "html",
-            "index.html 不是有效的 HTML 文档: 缺少 <html> 或 <!DOCTYPE> 标签",
-        ));
+    // 合并 HTML + TSX 代码用于 API 检查
+    let combined_code = format!("{html}\n{tsx_code}");
+
+    // 检查基本 HTML 结构 (仅在纯 HTML 模式下严格检查)
+    if !has_tsx && !html.is_empty() {
+        let has_html_tag = html.contains("<html") || html.contains("<!DOCTYPE");
+        let has_body = html.contains("<body") || html.contains("<body>");
+        let has_script = html.contains("<script");
+
+        if !has_html_tag && !html.trim().starts_with('<') {
+            issues.push(issue(
+                "error",
+                "html",
+                "index.html 不是有效的 HTML 文档: 缺少 <html> 或 <!DOCTYPE> 标签",
+            ));
+        }
+        if !has_body {
+            issues.push(issue(
+                "warning",
+                "html",
+                "index.html 缺少 <body> 标签, 页面可能无法正确渲染",
+            ));
+        }
+        if !has_script {
+            issues.push(issue(
+                "warning",
+                "html",
+                "index.html 缺少 <script> 标签, 应用可能没有交互逻辑",
+            ));
+        }
+
+        // 检查 <script> 标签闭合
+        let script_opens = html.matches("<script").count();
+        let script_closes = html.matches("</script>").count();
+        if script_opens > script_closes {
+            issues.push(issue(
+                "error",
+                "html",
+                format!(
+                    "<script> 标签未闭合: 发现 {script_opens} 个 <script> 但只有 {script_closes} 个 </script>"
+                ),
+            ));
+        }
     }
-    if !has_body {
-        issues.push(issue(
-            "warning",
-            "html",
-            "index.html 缺少 <body> 标签, 页面可能无法正确渲染",
-        ));
-    }
-    if !has_script {
-        issues.push(issue(
-            "warning",
-            "html",
-            "index.html 缺少 <script> 标签, 应用可能没有交互逻辑",
-        ));
-    }
 
-    // 检查 <script> 标签闭合
-    let script_opens = html.matches("<script").count();
-    let script_closes = html.matches("</script>").count();
-    if script_opens > script_closes {
-        issues.push(issue(
-            "error",
-            "html",
-            format!(
-                "<script> 标签未闭合: 发现 {script_opens} 个 <script> 但只有 {script_closes} 个 </script>"
-            ),
-        ));
-    }
+    // 检查 hx API 调用 (在 HTML 或 TSX 中) — hx-shell 桥通过 WebView2 原生桥注入，无需外部库
+    let has_hx_api = combined_code.contains("hx.")
+        || combined_code.contains("window.hx")
+        || combined_code.contains("chrome.webview.postMessage");
 
-    // 检查 RPC 调用
-    let has_rpc = html.contains("app://localhost/rpc") || html.contains("rpc(");
-
-    if !has_rpc {
+    if !has_hx_api {
         issues.push(issue(
             "warning",
             "rpc",
-            "index.html 未发现对 `app://localhost/rpc` 的调用, 应用可能无法与桥接通信。\
-             提示: 使用 rpc('方法名', {参数}) 调用桥接, 例如: rpc('fs_read', {path: '/tmp/a.txt'})",
+            "未检测到 hx API 调用。\
+             提示: 使用 window.hx.writeFile(path, content) 等调用系统能力，\
+             或 window.chrome.webview.postMessage 与壳通信。",
         ));
     }
 
-    // ── L1.5: JS 括号匹配预检 ──
-    // 提取 <script> 标签内的内容进行基本检查
-    if has_script {
+    // TypeScript 模式: 检查不要用 import React from 'react'
+    if has_tsx && !tsx_code.is_empty() {
+        if tsx_code.contains("import React") || tsx_code.contains("from 'react'") || tsx_code.contains("from \"react\"") {
+            issues.push(issue(
+                "error",
+                "tsx",
+                "src/main.tsx 中使用了 `import ... from 'react'`。\
+             React 是全局变量 (由 index.html 通过 CDN 加载)，不要 import。\
+             修复: 使用 `const {{ useState }} = React;` 代替 import。",
+            ));
+        }
+        // 检查 JSX 语法基本有效性
+        if !tsx_code.contains("React") && !tsx_code.contains("ReactDOM") {
+            issues.push(issue(
+                "warning",
+                "tsx",
+                "src/main.tsx 中未引用 React 或 ReactDOM。\
+             提示: 使用 `const {{ useState }} = React;` 和 `const {{ createRoot }} = ReactDOM;`。",
+            ));
+        }
+    }
+
+    // ── L1.5: JS/TS 括号匹配预检 ──
+    if !tsx_code.is_empty() {
+        check_js_brackets(&tsx_code, &mut issues);
+    } else if html.contains("<script") {
         let js_code = extract_js_from_html(&html);
         if !js_code.is_empty() {
             check_js_brackets(&js_code, &mut issues);
         }
     }
 
-    // ── L2: 权限一致性 ──
+    // ── L2: 权限一致性 (在 HTML + TSX 中检查) ──
     if !declared_perms.is_empty() {
-        // 检查 HTML 中使用的 RPC 方法是否都有对应的 permission
-        let used_methods = extract_rpc_methods(&html);
-        for method in &used_methods {
-            if let Some(required_perm) = RPC_METHOD_PERMISSIONS.iter().find(|(m, _)| *m == method).map(|(_, p)| *p) {
+        // 检查 HTML + TSX 中使用的 hx API 调用是否都有对应的 permission
+        let used_apis = extract_hx_apis(&combined_code);
+        for api in &used_apis {
+            if let Some(required_perm) = HX_API_PERMISSIONS
+                .iter()
+                .find(|(m, _)| api.starts_with(m))
+                .map(|(_, p)| *p)
+            {
                 if !declared_perms.iter().any(|p| p == required_perm) {
                     issues.push(issue(
                         "error",
                         "rpc",
                         format!(
-                            "HTML 中调用了 RPC 方法 `{method}`, 需要权限 `{required_perm}`, \
+                            "代码中调用了 `{api}`, 需要权限 `{required_perm}`, \
                              但 manifest.permissions 中未声明。\
                              修复: 在 manifest.json 的 permissions 数组中添加 \"{required_perm}\""
                         ),
@@ -230,26 +283,25 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
                 }
             }
         }
-    } else if has_rpc {
-        // 有 RPC 调用但没有声明任何权限
+    } else if has_hx_api {
+        // 有 API 调用但没有声明任何权限
         issues.push(issue(
             "warning",
             "rpc",
-            "index.html 中有桥接调用但 manifest 未声明 permissions。\
-             提示: 在 manifest.json 中添加 permissions, 如 [\"fs-read\", \"fs-write\", \"exec\", \"dialog\", \"network\"]",
+            "index.html 中有 hx API 调用但 manifest 未声明 permissions。\
+             提示: 在 manifest.json 中添加 permissions, 如 [\"fs-read\", \"fs-write\", \"exec\", \"dialog\"]",
         ));
     }
 
-    // L1: 新架构应用建议在 manifest 中声明 permissions
+    // L1: 建议在 manifest 中声明 permissions
     if declared_perms.is_empty() {
         issues.push(issue(
             "warning",
             "manifest",
-            "新架构应用建议在 manifest 中声明 `permissions` (如 [\"fs-read\",\"exec\",\"dialog\"])。\
-             未声明则桥接调用会被默认拒绝。",
+            "建议在 manifest 中声明 `permissions` (如 [\"fs-read\",\"exec\",\"dialog\"])。\
+             未声明的 hx API 调用会在运行时被拒绝。",
         ));
     }
-
     let ok = !issues.iter().any(|i| i.level == "error");
     ValidationReport { ok, issues }
 }
@@ -430,39 +482,35 @@ fn check_js_brackets(js: &str, issues: &mut Vec<ValidationIssue>) {
     }
 }
 
-/// 从 HTML 中提取 RPC 方法名。
-/// 匹配模式: rpc('method_name' 或 rpc("method_name" 或 "method":"method_name"
-fn extract_rpc_methods(html: &str) -> Vec<String> {
-    let mut methods = Vec::new();
-    let known_methods: Vec<&str> = RPC_METHOD_PERMISSIONS.iter().map(|(m, _)| *m).collect();
+/// 从 HTML 中提取 hx API 调用。
+///
+/// 匹配模式: `hx.methodName(`
+/// 例如: `hx.readFile(`, `hx.writeFile(`
+fn extract_hx_apis(html: &str) -> Vec<String> {
+    let mut apis = Vec::new();
+    let known_prefixes: Vec<&str> = HX_API_PERMISSIONS
+        .iter()
+        .map(|(m, _)| *m)
+        .collect();
 
-    // 模式1: rpc('method' 或 rpc("method"
-    for cap in regex_lite::Regex::new(r#"rpc\(\s*['"](\w+)['"]"#)
+    // 匹配 hx.<methodName>(
+    for cap in regex_lite::Regex::new(r"\bhx\.(\w+)\s*\(")
         .unwrap()
         .captures_iter(html)
     {
         if let Some(m) = cap.get(1) {
-            let method = m.as_str().to_string();
-            methods.push(method);
-        }
-    }
-
-    // 模式2: "method":"method_name" (在 fetch body 中)
-    for cap in regex_lite::Regex::new(r#""method"\s*:\s*"(\w+)""#)
-        .unwrap()
-        .captures_iter(html)
-    {
-        if let Some(m) = cap.get(1) {
-            let method = m.as_str().to_string();
-            if !methods.contains(&method) {
-                methods.push(method);
+            let api = format!("hx.{}", m.as_str());
+            // Keep it if it matches a known prefix
+            let is_known = known_prefixes
+                .iter()
+                .any(|p| api.starts_with(p));
+            if is_known && !apis.contains(&api) {
+                apis.push(api);
             }
         }
     }
 
-    // 过滤: 只保留已知方法 (避免误报)
-    methods.retain(|m| known_methods.contains(&m.as_str()));
-    methods
+    apis
 }
 
 #[cfg(test)]
@@ -471,6 +519,75 @@ mod tests {
 
     fn good_manifest() -> String {
         r#"{"name":"测试","id":"test-app","category":"developer"}"#.to_string()
+    }
+
+    #[test]
+    fn tsx_app_passes() {
+        let tmp = std::env::temp_dir().join(format!("va_tsx_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(
+            tmp.join("manifest.json"),
+            r#"{"name":"测试","id":"test-tsx","category":"developer","permissions":["fs-read","exec"]}"#,
+        )
+        .unwrap();
+        // Auto-generated HTML shell (TypeScript mode)
+        std::fs::write(
+            tmp.join("index.html"),
+            r#"<html><head></head><body><div id="root"></div><script src="/js/app.js"></script></body></html>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join("src/main.tsx"),
+            r#"
+const { useState } = React;
+const { createRoot } = ReactDOM;
+
+function App() {
+    const [count, setCount] = useState(0);
+    async function readFile() {
+        const r = await window.hx.readFile('test.txt');
+        const r2 = await window.hx.exec('python a.py');
+    }
+    return <div onClick={() => setCount(c => c + 1)}>{count}</div>;
+}
+
+createRoot(document.getElementById('root')!).render(<App />);
+"#,
+        )
+        .unwrap();
+        let r = validate_custom_app(&tmp);
+        assert!(r.ok, "TypeScript/React 应用应无 error: {:?}", r.issues);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn tsx_app_import_react_fails() {
+        let tmp = std::env::temp_dir().join(format!("va_tsx_import_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::write(
+            tmp.join("manifest.json"),
+            r#"{"name":"测试","id":"test-tsx-import","permissions":["fs-read"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join("index.html"),
+            r#"<html><head></head><body></body></html>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join("src/main.tsx"),
+            r#"
+import React from 'react';
+function App() { return <div>hello</div>; }
+"#,
+        )
+        .unwrap();
+        let r = validate_custom_app(&tmp);
+        assert!(!r.ok, "import React 应报 error: {:?}", r.issues);
+        assert!(r.issues.iter().any(|i| i.code == "tsx"), "应有 tsx 类 error");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -485,16 +602,16 @@ mod tests {
         .unwrap();
         std::fs::write(
             tmp.join("index.html"),
-            "<html><body><script>fetch('app://localhost/rpc',{method:'POST'})</script></body></html>",
+            r#"<html><head></head><body><script>window.hx.readFile('test.txt').then(c => console.log(c));</script></body></html>"#,
         )
         .unwrap();
         let r = validate_custom_app(&tmp);
-        assert!(r.ok, "新架构应用应无 error: {:?}", r.issues);
+        assert!(r.ok, "hx-shell 应用应无 error: {:?}", r.issues);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn new_model_app_passes() {
+    fn hx_app_passes() {
         let tmp = std::env::temp_dir().join(format!("va_new_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -505,16 +622,16 @@ mod tests {
         .unwrap();
         std::fs::write(
             tmp.join("index.html"),
-            r#"<html><body><script>
+            r#"<html><head></head><body><script>
 async function run() {
-    let r = await rpc('fs_read', {path: 'test.txt'});
-    let r2 = await rpc('exec', {cmd: 'python', args: ['a.py']});
+    const r = await window.hx.readFile('test.txt');
+    const r2 = await window.hx.exec('python a.py');
 }
 </script></body></html>"#,
         )
         .unwrap();
         let r = validate_custom_app(&tmp);
-        assert!(r.ok, "新架构应用应无 error: {:?}", r.issues);
+        assert!(r.ok, "hx-shell 应用应无 error: {:?}", r.issues);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -567,7 +684,7 @@ async function run() {
         .unwrap();
         std::fs::write(
             tmp.join("index.html"),
-            "<html><body><script>fetch('app://localhost/rpc')</body></html>",
+            "<html><head></head><body><script>window.hx.readFile()</body></html>",
         )
         .unwrap();
         let r = validate_custom_app(&tmp);
@@ -577,7 +694,7 @@ async function run() {
     }
 
     #[test]
-    fn rpc_method_without_permission_fails() {
+    fn api_without_permission_fails() {
         let tmp = std::env::temp_dir().join(format!("va_noperm_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -586,10 +703,10 @@ async function run() {
             r#"{"name":"测试","id":"test-np","permissions":["fs-read"]}"#,
         )
         .unwrap();
-        // 使用 exec 方法但只声明了 fs-read 权限
+        // 使用 execCommand 但只声明了 fs-read 权限
         std::fs::write(
             tmp.join("index.html"),
-            r#"<html><body><script>rpc('exec', {cmd: 'python'})</script></body></html>"#,
+            r#"<html><head></head><body><script>window.hx.exec('python')</script></body></html>"#,
         )
         .unwrap();
         let r = validate_custom_app(&tmp);
@@ -620,10 +737,10 @@ async function run() {
     }
 
     #[test]
-    fn extract_rpc_methods_works() {
-        let html = r#"<script>rpc('fs_read', {path: 'a'}); rpc("exec", {cmd: 'x'});</script>"#;
-        let methods = extract_rpc_methods(html);
-        assert!(methods.contains(&"fs_read".to_string()), "应检测到 fs_read: {methods:?}");
-        assert!(methods.contains(&"exec".to_string()), "应检测到 exec: {methods:?}");
+    fn extract_hx_apis_works() {
+        let html = r#"<script>window.hx.readFile('a'); window.hx.exec('x');</script>"#;
+        let apis = extract_hx_apis(html);
+        assert!(apis.contains(&"hx.readFile".to_string()), "应检测到 readFile: {apis:?}");
+        assert!(apis.contains(&"hx.exec".to_string()), "应检测到 exec: {apis:?}");
     }
 }

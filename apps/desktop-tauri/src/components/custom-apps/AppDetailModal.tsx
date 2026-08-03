@@ -51,6 +51,8 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
   const [tab, setTab] = useState<Tab>("overview");
   const [editing, setEditing] = useState(false);
   const [indexHtml, setIndexHtml] = useState("");
+  const [appSource, setAppSource] = useState("");
+  const [codeFile, setCodeFile] = useState<"app_source" | "index_html">("app_source");
   const [saving, setSaving] = useState(false);
   const [packaging, setPackaging] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +69,9 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
       const data = await getCustomApp(appId);
       setApp(data);
       setIndexHtml(data.index_html ?? "");
+      setAppSource(data.app_source ?? "");
+      // Default to app_source if available, otherwise index_html
+      setCodeFile(data.app_source ? "app_source" : "index_html");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -79,9 +84,14 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
     setSaving(true);
     setError(null);
     try {
-      const updated = await updateCustomApp(appId, {
-        index_html: indexHtml !== (app.index_html ?? "") ? indexHtml : undefined,
-      });
+      const updates: Parameters<typeof updateCustomApp>[1] = {};
+      if (appSource !== (app.app_source ?? "")) {
+        updates.app_source = appSource;
+      }
+      if (indexHtml !== (app.index_html ?? "")) {
+        updates.index_html = indexHtml;
+      }
+      const updated = await updateCustomApp(appId, updates);
       setApp(updated);
       setEditing(false);
       setSuccess("保存成功");
@@ -98,13 +108,14 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
     if (!app) return;
     setEditing(false);
     setIndexHtml(app.index_html ?? "");
+    setAppSource(app.app_source ?? "");
   };
 
   const handlePackage = async () => {
     setPackaging(true);
     setError(null);
     try {
-      const result = await packageCustomApp(appId);
+      const result = await packageCustomApp(appId, "sidecar");
       setSuccess(result.message);
       await loadApp();
       onChanged();
@@ -318,22 +329,42 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
           {tab === "code" && (
             <div className="app-detail-code-panel">
               <div className="app-detail-filebar">
-                <span className="app-detail-filebar__item app-detail-filebar__item--active">
+                {app.app_source != null && (
+                  <button
+                    className={`app-detail-filebar__item ${codeFile === "app_source" ? "app-detail-filebar__item--active" : ""}`}
+                    onClick={() => setCodeFile("app_source")}
+                  >
+                    <FileCode2 size={14} /> main.tsx
+                  </button>
+                )}
+                <button
+                  className={`app-detail-filebar__item ${codeFile === "index_html" ? "app-detail-filebar__item--active" : ""}`}
+                  onClick={() => setCodeFile("index_html")}
+                >
                   <FileCode2 size={14} /> index.html
-                </span>
+                </button>
               </div>
               <div className="app-detail-code__editor-wrap">
                 {editing ? (
                   <textarea
                     className="app-detail-code__editor"
-                    value={indexHtml}
-                    onChange={(e) => setIndexHtml(e.target.value)}
+                    value={codeFile === "app_source" ? appSource : indexHtml}
+                    onChange={(e) => {
+                      if (codeFile === "app_source") {
+                        setAppSource(e.target.value);
+                      } else {
+                        setIndexHtml(e.target.value);
+                      }
+                    }}
                     spellCheck={false}
-                    placeholder="应用 HTML 源代码"
+                    placeholder={codeFile === "app_source" ? "TypeScript/React 源代码" : "HTML 源代码"}
                   />
                 ) : (
                   <pre className="app-detail-code__view">
-                    <code>{indexHtml || "// 此应用没有 HTML 源代码"}</code>
+                    <code>
+                      {(codeFile === "app_source" ? appSource : indexHtml) ||
+                        `// 此应用没有 ${codeFile === "app_source" ? "TypeScript" : "HTML"} 源代码`}
+                    </code>
                   </pre>
                 )}
               </div>

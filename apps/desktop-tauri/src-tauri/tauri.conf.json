@@ -54,8 +54,8 @@
       "resources/ocr/pp-ocrv5_mobile_det.onnx",
       "resources/ocr/pp-ocrv5_mobile_rec.onnx",
       "resources/ocr/ppocrv5_dict.txt",
-      "resources/loader/hermix-app-loader.exe",
-      "resources/loader/inject_app.exe"
+      "resources/loader/hx-shell.exe",
+      "resources/loader/WebView2Loader.dll"
     ]
   },
   "plugins": {

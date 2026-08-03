@@ -1,5 +1,0 @@
-[build]
-# 自定义应用加载器是独立 workspace (见 Cargo.toml 的空 [workspace]),
-# 不希望产物污染宿主 release/target. 这里固定到本地 target/,
-# 链接器/rustflags 仍继承父目录 .cargo/config.toml (MSVC + rust-lld).
-target-dir = "target"

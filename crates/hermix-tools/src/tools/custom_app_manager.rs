@@ -8,14 +8,15 @@
 //! - `list`: List all installed apps
 //! - `get`: Get an app's details and source code
 //! - `delete`: Uninstall an app
-//! - `package`: Package an app as a standalone EXE (wry loader + inject_app)
+//! - `package`: Package an app as a standalone EXE (sidecar or neu-build mode)
 //! - `run`: Launch a packaged app
-//! - `validate`: Static validation (manifest + HTML + RPC + permissions)
-//! - `smoke`: Runtime smoke test (launch + capture JS errors)
+//! - `validate`: Static validation (manifest + HTML + Neutralino API + permissions)
+//! - `smoke`: Runtime smoke test (launch + capture errors)
 //!
 //! Architecture: App = self-contained index.html + manifest.json.
-//! index.html calls system capabilities via fetch("app://localhost/rpc").
-//! Packaging injects html+manifest into a wry-based loader → single exe.
+//! Uses Neutralinojs runtime (~2MB binary + neutralino.js client library).
+//! index.html calls system capabilities via Neutralino.* API.
+//! Sidecar packaging copies binary + resources → zero-dependency exe.
 //!
 //! The actual file operations are delegated to `hermix_plugin::PluginManager`.
 
@@ -39,20 +40,20 @@ use crate::ToolRegistry;
 pub fn register(registry: &ToolRegistry, manager: Arc<PluginManager>) {
     let handler = Arc::new(CustomAppManagerHandler::new(manager));
     let schema = handler.schema();
-    registry.register_with_risk(
-        "custom_app_manager",
-        "custom_app",
-        schema,
-        handler,
-        Arc::new(|| true),
-        vec![],
-        true,
-        "Create, update, list, package, and run user-facing desktop applications (custom apps). Actions: create, update, list, get, delete, package, run.",
-        "📦",
-        None,
-        RiskLevel::Caution,
-        false,
-    );
+        registry.register_with_risk(
+            "custom_app_manager",
+            "custom_app",
+            schema,
+            handler,
+            Arc::new(|| true),
+            vec![],
+            true,
+            "Create, update, list, package, and run user-facing desktop applications (custom apps) using Neutralinojs runtime. Actions: create, update, list, get, delete, package, run, validate, smoke.",
+            "📦",
+            None,
+            RiskLevel::Caution,
+            false,
+        );
 }
 
 /// Handler for the custom_app_manager tool.
@@ -106,11 +107,27 @@ impl CustomAppManagerHandler {
 
         let index_html = request.index_html.as_deref()
             .or_else(|| params.get("index_html").and_then(|v| v.as_str()));
+        let app_source = request.app_source.as_deref()
+            .or_else(|| params.get("app_source").and_then(|v| v.as_str()));
+
+        // source_files is already deserialized as HashMap<String, String> by CreateAppRequest
+        // Fallback: if serde didn't deserialize it (e.g. values were non-string JSON), try manually
+        let source_files_map: Option<std::collections::HashMap<String, String>> =
+            request.source_files.clone().or_else(|| {
+                params.get("source_files").and_then(|v| v.as_object()).map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+            });
+
         let entry = self
             .manager
             .install_plugin(
                 &request.manifest,
                 index_html,
+                app_source,
+                source_files_map.as_ref(),
                 icon_data,
             )
             .map_err(|e| ToolError::ExecutionFailed(format!("创建应用失败: {e}")))?;
@@ -131,6 +148,14 @@ impl CustomAppManagerHandler {
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
 
         let index_html = params.get("index_html").and_then(|v| v.as_str());
+        let app_source = params.get("app_source").and_then(|v| v.as_str());
+        let source_files_obj = params.get("source_files").and_then(|v| v.as_object());
+        let source_files_map: Option<std::collections::HashMap<String, String>> =
+            source_files_obj.map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            });
 
         // Parse manifest if provided (for updating permissions etc.)
         // Normalize: if manifest is a string, try to parse it as JSON first.
@@ -156,15 +181,15 @@ impl CustomAppManagerHandler {
             None
         };
 
-        if index_html.is_none() && manifest.is_none() {
+        if index_html.is_none() && app_source.is_none() && manifest.is_none() {
             return Err(ToolError::InvalidParams(
-                "至少需要提供 index_html 或 manifest 之一".into(),
+                "至少需要提供 app_source、index_html 或 manifest 之一".into(),
             ));
         }
 
         let entry = self
             .manager
-            .update_plugin(id, index_html, manifest.as_ref())
+            .update_plugin(id, index_html, app_source, source_files_map.as_ref(), manifest.as_ref())
             .map_err(|e| ToolError::ExecutionFailed(format!("更新应用失败: {e}")))?;
 
         let response: AppResponse = (&entry).into();
@@ -243,17 +268,27 @@ impl CustomAppManagerHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
 
+        let build_mode = params
+            .get("build_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("sidecar");
+
+        let mode = build_mode
+            .parse::<hermix_plugin::PackageMode>()
+            .map_err(|e| ToolError::InvalidParams(format!("无效的 build_mode: {e}")))?;
+
         let exe_path = self
             .manager
-            .package_plugin(id)
+            .package_plugin_with_mode(id, mode)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("打包应用失败: {e}")))?;
 
         let result = json!({
             "success": true,
-            "message": format!("应用 '{id}' 打包成功"),
+            "message": format!("应用 '{id}' 打包成功 ({build_mode} 模式)"),
             "exe_path": exe_path.to_string_lossy(),
             "output_dir": exe_path.parent().map(|p| p.to_string_lossy().to_string()),
+            "build_mode": build_mode,
         });
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
@@ -281,7 +316,7 @@ impl CustomAppManagerHandler {
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
 
-    /// 开发期自验证 (L0+L1+L2): 校验 manifest 完整性 + HTML 结构 + RPC 调用模式 + JS 括号匹配 + 权限一致性.
+    /// 开发期自验证 (L0+L1+L2): 校验 manifest 完整性 + HTML 结构 + Neutralino API 调用 + JS 括号匹配 + 权限一致性.
     /// 不打包、不改任何文件, 仅静态分析. 返回结构化报告. 每个 issue 的 message 包含修复提示.
     async fn validate(&self, params: &Value) -> Result<String, ToolError> {
         let id = params
@@ -298,7 +333,7 @@ impl CustomAppManagerHandler {
         let result = json!({
             "success": report.ok,
             "message": if report.ok {
-                format!("应用 '{id}' 开发期校验通过 (manifest + HTML + RPC + 权限一致性)")
+                format!("应用 '{id}' 开发期校验通过 (manifest + HTML + Neutralino API + 权限一致性)")
             } else {
                 format!("应用 '{id}' 开发期校验发现问题, 请根据 issues 修复后重试")
             },
@@ -307,8 +342,8 @@ impl CustomAppManagerHandler {
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
 
-    /// L2 运行时冒烟测试: 先刷新打包产物, 再启动壳加载应用并捕获运行时错误.
-    /// 通过 `run_smoke_test_async` 在 blocking 线程上启动壳、轮询日志.
+    /// 运行时冒烟测试: 先刷新打包产物, 再启动 neutralino exe 并捕获错误.
+    /// 通过 `run_smoke_test_async` 在 blocking 线程上启动 exe、检查进程存活.
     async fn smoke(&self, params: &Value) -> Result<String, ToolError> {
         let id = params
             .get("id")
@@ -320,7 +355,7 @@ impl CustomAppManagerHandler {
             return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
         }
 
-        // 先刷新打包产物 (wry loader + inject_app 注入)
+        // 先刷新打包产物 (sidecar 模式)
         self.manager
             .package_plugin(id)
             .await
@@ -332,7 +367,7 @@ impl CustomAppManagerHandler {
         let result = json!({
             "success": report.ok,
             "message": if report.ok {
-                format!("应用 '{id}' 运行时冒烟测试通过 (已挂载, 无运行时错误)")
+                format!("应用 '{id}' 运行时冒烟测试通过 (进程启动成功, 无错误)")
             } else {
                 format!("应用 '{id}' 运行时冒烟测试发现问题 (见 smoke.errors)")
             },
@@ -424,7 +459,33 @@ impl ToolHandler for CustomAppManagerHandler {
             "index_html".into(),
             json!({
                 "type": "string",
-                "description": "自包含 index.html 源代码 (新架构 wry 加载器模型，可选)。页面通过 fetch('app://localhost/rpc', {method:'POST', body: JSON.stringify({method, params})}) 调用桥接 (fs_*/exec/fetch/dialog_*/path_*/env_*/temp_*)。配合 manifest.permissions 声明所需权限。与 backend_code/ui_code 互斥，优先于旧架构。"
+                "description": "【模式一: 纯 HTML】自包含 index.html 的**完整源代码内容** (非文件路径!)。必须以 <!DOCTYPE html> 开头，包含完整的 HTML+CSS+JS。\n\n**关键要求**:\n1. 必须在 <head> 中引入客户端库: <script src=\"/js/neutralino.js\"></script>\n2. 必须在使用任何 API 前调用: Neutralino.init()\n3. 使用 Neutralino.* API 调用系统能力\n4. 配合 manifest.permissions 声明所需权限\n\n**注意**: 推荐使用 app_source (TypeScript/React) 模式以获得更好的开发体验。"
+            }),
+        );
+
+        props.insert(
+            "app_source".into(),
+            json!({
+                "type": "string",
+                "description": "【模式二: TypeScript/React (★推荐)】应用的 TypeScript/React 入口源码。写入 src/main.tsx，打包时 esbuild 自动转译为 resources/js/app.js。\n\n**关键规则**:\n1. React 和 ReactDOM 是全局变量 (由 index.html 通过 CDN 加载)，**不要** import:\n   ✅ const { useState, useEffect } = React;\n   ✅ const { createRoot } = ReactDOM;\n   ❌ import React from 'react';  // 会报错!\n2. Neutralino 是全局变量 (由 index.html 引入 /js/neutralino.js):\n   ✅ Neutralino.init();\n   ✅ await Neutralino.filesystem.readFile(path);\n3. 可使用 TypeScript 语法、JSX、async/await\n4. 可通过 source_files 拆分组件到多个文件，用相对路径 import:\n   import { Header } from './components/Header';\n5. 如果不提供 index_html，系统自动生成 HTML 壳 (含 React CDN + neutralino.js)\n6. create 时与 index_html 二选一，app_source 优先"
+            }),
+        );
+
+        props.insert(
+            "source_files".into(),
+            json!({
+                "type": "object",
+                "description": "额外的 TypeScript 源文件 (可选，配合 app_source 使用)。键为相对于 src/ 的路径，值为文件内容。\n例: {\"components/Header.tsx\": \"export function Header() { return <h1>标题</h1>; }\", \"utils/helpers.ts\": \"export function formatSize(n: number) { return (n / 1024).toFixed(1) + 'KB'; }\"}\n\n然后在 app_source 中通过相对路径 import:\nimport { Header } from './components/Header';\nimport { formatSize } from './utils/helpers';",
+                "additionalProperties": { "type": "string" }
+            }),
+        );
+
+        props.insert(
+            "build_mode".into(),
+            json!({
+                "type": "string",
+                "description": "打包模式 (package action 可选)。sidecar: 零依赖直接复制二进制+资源 (默认); neu-build: 使用 neu build 编译 (需 Node.js + @neutralinojs/neu CLI, 源码编译到 resources.neur)。",
+                "enum": ["sidecar", "neu-build"]
             }),
         );
 
@@ -438,7 +499,7 @@ impl ToolHandler for CustomAppManagerHandler {
 
         tool_schema(
             "custom_app_manager",
-            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行、开发期校验(validate)、运行时冒烟测试(smoke)。应用 = 自包含 index.html + manifest.json，由 wry 加载器打包为独立 exe。index.html 中通过 rpc('方法名', {参数}) 调用系统能力 (fs_*/exec/shell/fetch/dialog_*/path_*/env_*/temp_*)，需在 manifest.permissions 中声明所需权限。开发流程: 写代码→validate→失败则按 issues 修复→再 validate，直到 ok=true；如需进一步确认运行时无报错，可调用 smoke。",
+            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行、开发期校验(validate)、运行时冒烟测试(smoke)。基于 Neutralinojs 运行时 (~2MB)。\n\n**两种开发模式**:\n- **TypeScript/React 模式 (★推荐)**: 提供 app_source (TypeScript/React 源码)，打包时 esbuild 自动转译。React 通过 CDN 全局加载。\n- **纯 HTML 模式**: 提供 index_html (自包含 HTML+JS)。\n\n打包支持 sidecar (默认,零依赖) 和 neu-build (需 Node.js) 两种模式。开发流程: 写代码→validate→失败则按 issues 修复→再 validate，直到 ok=true；如需进一步确认运行时无报错，可调用 smoke。",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }
