@@ -960,9 +960,7 @@ impl AgentLoop {
         tracing::Span::current().record("tool_count", tool_schemas.len());
 tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run)");
 self.notify_phase(&LoopPhase::Init, 0);
-let mut post_tool_nudge_count: u32 = 0;
-        let mut agent_recovery_nudge_count: u32 = 0;
-        let mut completion_verify_nudge_count: u32 = 0;
+let mut empty_stop_retry_count: u32 = 0;
 
         let session_id = self.config.session_id.as_deref().unwrap_or("");
         let mut tool_errors: Vec<hermix_core::ToolErrorRecord> = Vec::new();
@@ -1312,13 +1310,8 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                         None,
                     ));
                 }
-                // No visible text — fall through to decide_empty_response
-                let recent_tool_failure =
-                    crate::empty_response_handler::ToolFailureRecord::from_recent_error(
-                        &tool_errors,
-                        total_turns,
-                    );
-                let outcome = crate::empty_response_handler::decide_empty_response(
+// No visible text — fall through to decide_empty_response
+let outcome = crate::empty_response_handler::decide_empty_response(
                     crate::empty_response_handler::EmptyResponseInput {
                         assistant_msg: &assistant_msg,
                         api_mode: self.config.api_mode.clone(),
@@ -1328,10 +1321,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                         codex_ack_continuations,
                         autonomous_mode: self.config.autonomous_mode,
                         autonomous_nudge_count,
-                        post_tool_nudge_count,
-                        agent_recovery_nudge_count,
-                        recent_tool_failure,
-                        completion_verify_nudge_count,
+                        empty_stop_retry_count,
                         total_turns,
                         max_turns: self.config.max_turns,
                         max_autonomous_nudges: default_max_autonomous_nudges(),
@@ -1341,9 +1331,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 );
                 codex_ack_continuations = outcome.new_codex_ack_continuations;
                 autonomous_nudge_count = outcome.new_autonomous_nudge_count;
-                post_tool_nudge_count = outcome.new_post_tool_nudge_count;
-                agent_recovery_nudge_count = outcome.new_agent_recovery_nudge_count;
-                completion_verify_nudge_count = outcome.new_completion_verify_nudge_count;
+                empty_stop_retry_count = outcome.new_empty_stop_retry_count;
                 if self.apply_fallback_outcome(
                     &mut ctx,
                     outcome.action,
@@ -1642,9 +1630,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
         tracing::Span::current().record("tool_count", tool_schemas.len());
         tracing::debug!(phase = %LoopPhase::Init, "Agent loop initialized (run_stream)");
 self.notify_phase(&LoopPhase::Init, 0);
-        let mut post_tool_nudge_count: u32 = 0;
-        let mut agent_recovery_nudge_count: u32 = 0;
-        let mut completion_verify_nudge_count: u32 = 0;
+        let mut empty_stop_retry_count: u32 = 0;
         let session_id = self.config.session_id.as_deref().unwrap_or("");
 
         let mut state = LoopState::default();
@@ -2179,17 +2165,12 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                         last_finish_reason.clone(),
                     ));
                 }
-                // C2 refactor: protocol fallback single point. The
-                // Codex-ack / autonomous-nudge / patch-last-assistant /
-                // finalize decisions used to be open-coded here and
-                // duplicated in `run_blocking`. Now both call sites
-                // delegate to `decide_empty_response`.
-                let recent_tool_failure =
-                    crate::empty_response_handler::ToolFailureRecord::from_recent_error(
-                        &tool_errors,
-                        total_turns,
-                    );
-                let outcome = crate::empty_response_handler::decide_empty_response(
+// C2 refactor: protocol fallback single point. The
+// Codex-ack / autonomous-nudge / patch-last-assistant /
+// finalize decisions used to be open-coded here and
+// duplicated in `run_blocking`. Now both call sites
+// delegate to `decide_empty_response`.
+let outcome = crate::empty_response_handler::decide_empty_response(
                     crate::empty_response_handler::EmptyResponseInput {
                         assistant_msg: &assistant_msg,
                         api_mode: self.config.api_mode.clone(),
@@ -2199,10 +2180,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                         codex_ack_continuations,
                         autonomous_mode: self.config.autonomous_mode,
                         autonomous_nudge_count,
-                        post_tool_nudge_count,
-                        agent_recovery_nudge_count,
-                        recent_tool_failure,
-                        completion_verify_nudge_count,
+                        empty_stop_retry_count,
                         total_turns,
                         max_turns: self.config.max_turns,
                         max_autonomous_nudges: default_max_autonomous_nudges(),
@@ -2212,9 +2190,7 @@ self.notify_phase(&LoopPhase::PostLlmCall, total_turns);
                 );
                 codex_ack_continuations = outcome.new_codex_ack_continuations;
                 autonomous_nudge_count = outcome.new_autonomous_nudge_count;
-                post_tool_nudge_count = outcome.new_post_tool_nudge_count;
-                agent_recovery_nudge_count = outcome.new_agent_recovery_nudge_count;
-                completion_verify_nudge_count = outcome.new_completion_verify_nudge_count;
+                empty_stop_retry_count = outcome.new_empty_stop_retry_count;
                 if self.apply_fallback_outcome(
                     &mut ctx,
                     outcome.action,

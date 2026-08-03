@@ -106,6 +106,7 @@ pub fn apply_stream_collect_chunk(
     tool_calls: &mut Vec<ToolCall>,
     last_usage: &mut Option<UsageStats>,
     finish_reason: &mut Option<String>,
+    was_untagged_reasoning_detected: &mut bool,
     on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
 ) {
     let mut chunk = chunk;
@@ -146,55 +147,51 @@ pub fn apply_stream_collect_chunk(
                 // fine-tunes) put their reasoning monologue directly in
                 // `delta.content` WITHOUT `<think>` tags and WITHOUT
                 // `delta.reasoning_content`. The flush-time
-                // `looks_like_untagged_reasoning` check (below at line
-                // ~785) catches this for the persisted message, but
-                // during streaming the text has already been forwarded
-                // as `StreamEvent::Text` → the frontend rendered it as
-                // body text (visible, not folded) instead of a
-                // reasoning block (folded inside ProcessTimeline).
+                // `looks_like_untagged_reasoning` check catches this for
+                // the persisted message, but during streaming the text
+                // has already been forwarded as `StreamEvent::Text` →
+                // the frontend rendered it as body text (visible, not
+                // folded) instead of a reasoning block.
                 //
-                // Fix: check on EVERY chunk. Once the accumulated
-                // `content` matches the untagged-reasoning heuristic:
-                // 1. Clear `content` (previous text was already sent
-                //    as `StreamEvent::Text`; the frontend
-                //    retroactively converts those text steps to
-                //    reasoning steps when the first
-                //    `StreamEvent::Thinking` arrives — see
-                //    App.tsx `onReasoningChunk`).
-                // 2. Route THIS chunk's `visible_text` to
-                //    `on_thinking` → `StreamEvent::Thinking`.
-                // 3. For all SUBSEQUENT chunks, the
-                //    `is_untagged_reasoning_mode` check below
-                //    catches them and routes to `on_thinking` too.
+                // Fix: check on EVERY chunk while reasoning_content is
+                // still empty (no <think> tags or delta.extra.thinking
+                // yet). Once the accumulated `content` matches the
+                // untagged-reasoning heuristic, move ALL accumulated
+                // content to reasoning and set the
+                // `was_untagged_reasoning_detected` flag so subsequent
+                // chunks are also routed to reasoning.
                 //
-                // Detection condition: `reasoning_content` is empty
-                // (no explicit thinking from `<think>` tags or
-                // `delta.extra.thinking` yet) AND we haven't already
-                // entered untagged-reasoning mode.
-                //
-                // Continuation condition: once detected, subsequent
-                // chunks are caught by checking `reasoning_content` is
-                // non-empty AND `content` is empty AND
-                // `think_parser.is_in_think() == false` — that
-                // combination can only mean we swapped content into
-                // reasoning via this path (if `<think>` tags were
-                // used, `think_parser` would be in think mode; if
-                // `delta.extra.thinking` was used, `content` would
-                // have the model's actual reply).
-                let is_untagged_reasoning_mode = !reasoning_content.is_empty()
-                    && content.is_empty()
-                    && !think_parser.is_in_think();
-                if !is_untagged_reasoning_mode
+                // IMPORTANT: the flag is the ONLY way to enter
+                // continuation mode. The previous heuristic
+                // (`!reasoning_content.is_empty() && content.is_empty()
+                // && !think_parser.is_in_think()`) was fundamentally
+                // broken — it also matched the state AFTER `</think>`
+                // (reasoning_content non-empty from the think block,
+                // content empty because body text hasn't started yet,
+                // think_parser not in think mode), causing ALL body text
+                // to be swallowed into the reasoning fold.
+                if !*was_untagged_reasoning_detected
                     && reasoning_content.is_empty()
                     && !thinking_emitted_this_chunk
                 {
+                    // If tool_calls deltas have already arrived, the
+                    // model is in tool-dispatch mode — the short text
+                    // before the tool call is the model's visible
+                    // output (e.g. "让我查看一下目录"), NOT reasoning.
+                    // Skip the untagged-reasoning heuristic entirely;
+                    // swallowing it into the reasoning fold causes
+                    // the user to see only a thinking block with no
+                    // body text followed by a tool card.
+                    let has_tool_call_deltas = !tool_calls.is_empty();
                     // Tentatively push to content so the heuristic
                     // can evaluate the full accumulated text.
                     content.push_str(&visible_text);
                     if let Some(ref cb) = callbacks.on_stream_delta {
                         cb(&visible_text);
                     }
-                    if crate::python_alignment::looks_like_untagged_reasoning(content) {
+                    if !has_tool_call_deltas
+                        && crate::python_alignment::looks_like_untagged_reasoning(content)
+                    {
                         // Detected! Move ALL accumulated content to
                         // reasoning. Previous chunks were already
                         // forwarded as `StreamEvent::Text` — the
@@ -203,6 +200,9 @@ pub fn apply_stream_collect_chunk(
                         // reasoning steps (see App.tsx).
                         let moved = std::mem::take(content);
                         reasoning_content.push_str(&moved);
+                        // Set the flag so subsequent chunks are routed
+                        // to reasoning via the continuation branch.
+                        *was_untagged_reasoning_detected = true;
                         // Only call on_thinking for THIS chunk's text
                         // (previous chunks' text was already sent as
                         // StreamEvent::Text; calling on_thinking with
@@ -217,9 +217,9 @@ pub fn apply_stream_collect_chunk(
                         // Not reasoning — keep as visible text.
                         *text = visible_text;
                     }
-                } else if is_untagged_reasoning_mode {
-                    // Already in untagged-reasoning mode — route
-                    // directly to reasoning, don't touch content.
+                } else if *was_untagged_reasoning_detected {
+                    // Continuation: untagged-reasoning was detected in
+                    // a previous chunk — route directly to reasoning.
                     reasoning_content.push_str(&visible_text);
                     if let Some(ref cb) = callbacks.on_thinking {
                         cb(&visible_text);
@@ -484,6 +484,14 @@ pub(crate) async fn collect_stream_inner(
     let mut finish_reason: Option<String> = None;
     let mut think_parser = ThinkBlockParser::new();
     let mut tool_call_sanitizer = ToolCallSanitizer::new();
+    // Track whether the untagged-reasoning heuristic actually fired
+    // (as opposed to reasoning_content being non-empty from <think> tags
+    // or delta.extra.thinking). Without this flag, the is_untagged_reasoning_mode
+    // check below would incorrectly route body text to reasoning after </think>,
+    // because after </think>: reasoning_content is non-empty, content is empty,
+    // and think_parser.is_in_think() is false — the same combination as
+    // untagged-reasoning mode.
+    let mut was_untagged_reasoning_detected = false;
 
     let activity_secs = config.stream_activity_interval_secs;
     // tight tripwire for the "SSE opened but no chunk ever
@@ -580,6 +588,7 @@ pub(crate) async fn collect_stream_inner(
                                 &mut tool_calls,
                                 &mut last_usage,
                                 &mut finish_reason,
+                                &mut was_untagged_reasoning_detected,
                                 on_chunk,
                             );
                         }
@@ -740,6 +749,7 @@ pub(crate) async fn collect_stream_inner(
                                     &mut tool_calls,
                                     &mut last_usage,
                                     &mut finish_reason,
+                                    &mut was_untagged_reasoning_detected,
                                     on_chunk,
                                 );
                                 continue 'silence_watch;
@@ -871,8 +881,11 @@ pub(crate) async fn collect_stream_inner(
     // "trying to reconstruct...", etc.) and never used a ` <think` tag,
     // route it to `reasoning_content` so the UI renders it as a collapsed
     // thinking block instead of flooding the chat.
+    // Skip this when tool_calls are present — the text before a tool call
+    // is the model's visible output, not reasoning.
     if !content.is_empty()
         && reasoning_content.is_empty()
+        && tool_calls.is_empty()
         && crate::python_alignment::looks_like_untagged_reasoning(&content)
     {
         tracing::warn!(
@@ -980,6 +993,7 @@ mod tests {
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut last_usage: Option<UsageStats> = None;
         let mut finish_reason: Option<String> = None;
+        let mut was_untagged_reasoning_detected = false;
         apply_stream_collect_chunk(
             &callbacks,
             chunk,
@@ -991,6 +1005,7 @@ mod tests {
             &mut tool_calls,
             &mut last_usage,
             &mut finish_reason,
+            &mut was_untagged_reasoning_detected,
             &|_ch| {},
         );
 
@@ -1047,6 +1062,7 @@ mod tests {
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut last_usage: Option<UsageStats> = None;
         let mut finish_reason: Option<String> = None;
+        let mut was_untagged_reasoning_detected = false;
         apply_stream_collect_chunk(
             &callbacks,
             chunk,
@@ -1058,6 +1074,7 @@ mod tests {
             &mut tool_calls,
             &mut last_usage,
             &mut finish_reason,
+            &mut was_untagged_reasoning_detected,
             &|_ch| {},
         );
 

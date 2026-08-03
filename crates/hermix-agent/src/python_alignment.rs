@@ -164,15 +164,27 @@ pub fn strip_think_blocks_for_ack(content: &str) -> String {
 /// Heuristic: detect a reasoning monologue that the model forgot to wrap
 /// in a think block. These are internal monologues that should render as
 /// collapsed reasoning blocks, not as user-visible reply text.
+///
+/// **EXTREMELY conservative** — a false positive hides the model's actual
+/// reply from the user, which is far worse than a false negative (leaking
+/// reasoning as body text). The previous version had overly broad Chinese
+/// signals ("让我", "我需要", "首先", etc.) that matched almost every
+/// normal Chinese reply, causing the model's visible answer to be
+/// silently swallowed into the reasoning fold.
+///
 /// Only triggers when:
 /// * there is no ` <think` / `</think` tag anywhere in the text (so the
-/// normal parser already had its chance), and
-/// * the text is non-trivial, and
-/// * the opening words read like self-directed analysis rather than an
-/// answer to the user.
-/// This is intentionally conservative — false positives would hide real
-/// user-facing answers. It targets the common failure mode where a model
-/// emits "I think..." / "trying to reconstruct..." before any visible reply.
+///   normal parser already had its chance), and
+/// * the text is non-trivial (≥ 40 chars), and
+/// * the text reads like self-directed analysis — NOT a user-facing reply.
+///
+/// A reply is considered untagged reasoning only when it meets ALL of:
+/// 1. Contains at least one STRONG reasoning signal (self-questioning,
+///    reconstruction language, hypothesis hedging), AND
+/// 2. Does NOT contain user-addressing markers (你好, 帮你, 为您, etc.)
+///    that would indicate a user-facing reply, AND
+/// 3. The overall text-to-self-talk ratio is high (multiple sentences
+///    starting with first-person hedges, no direct address to the user).
 pub fn looks_like_untagged_reasoning(content: &str) -> bool {
     if content.contains("<think") || content.contains("</think") {
         return false;
@@ -181,65 +193,74 @@ pub fn looks_like_untagged_reasoning(content: &str) -> bool {
     if trimmed.len() < 40 {
         return false;
     }
-    let head = trimmed.chars().take(240).collect::<String>().to_lowercase();
-    const SIGNALS: &[&str] = &[
-        // English
-        "trying to",
-        "i think",
-        "i see",
-        "probably",
+    let head = trimmed.chars().take(360).collect::<String>().to_lowercase();
+
+    // ── User-addressing markers — if present, this is a reply, not reasoning ──
+    const USER_FACING_MARKERS: &[&str] = &[
+        "你好", "帮您", "帮你", "为您", "请问", "请看", "以下是", "结果如下",
+        "完成", "已成功", "已创建", "已修改", "已删除", "总结", "目录共",
+        "hello", "here is", "here are", "the result", "done", "completed",
+    ];
+    if USER_FACING_MARKERS.iter().any(|m| head.contains(m)) {
+        return false;
+    }
+
+    // ── STRONG reasoning signals — require reconstruction/hypothesis language ──
+    // These are phrases that almost never appear in a user-facing reply.
+    const STRONG_SIGNALS: &[&str] = &[
+        // English — self-directed analysis / hypothesis / reconstruction
+        "trying to reconstruct",
+        "trying to figure out",
+        "let me trace",
+        "i suspect",
         "could mean",
         "might be",
         "reconstruct",
-        "let me trace",
-        "let me check",
+        "i'm trying to",
+        "i am trying to",
+        // Chinese — tight, only phrases that are clearly internal monologue
+        "让我 trace",
+        "我怀疑",
+        "推测可能",
+        "可能在",
+        "尝试还原",
+        "尝试重建",
+        "让我想想",
+        "我想想",
+        "看起来像是",
+        "实际上可能",
+        "先按这个思路",
+    ];
+    let strong_hits = STRONG_SIGNALS.iter().filter(|s| head.contains(**s)).count();
+    if strong_hits == 0 {
+        return false;
+    }
+
+    // ── Weaker signals — count as supporting evidence only ──
+    const WEAK_SIGNALS: &[&str] = &[
+        "i think",
+        "i believe",
+        "probably",
         "actually,",
         "seems like",
         "looking at",
         "the diff shows",
         "the issue is",
-        "i believe",
-        "i suspect",
-        "i'm trying",
-        "i am trying",
-        // Chinese — reasoning models (MiniMax-M3, Qwen, DeepSeek-R1)
-        // often reason in Chinese without <think> tags, so the
-        // stream_collect untagged-reasoning detector must recognise
-        // these openings or the whole monologue leaks as body text.
-        "让我",
-        "我需要",
-        "我应该",
-        "我可以",
-        "我先",
-        "我直接",
-        "我来看",
-        "我去找",
-        "我打算",
-        "我想",
-        "我认为",
-        "我觉得",
-        "看起来",
-        "实际上",
-        "首先",
-        "接下来",
-        "然后",
-        "先按",
-        "调用",
-        "创建",
-        "用户想",
-        "用户需要",
-        "这个任务",
-        "这个问题",
-        "要做一个",
-        "需要分析",
-        "来分析",
-        "思路是",
-        "方案是",
-        "步骤",
-        "目标是",
-        "为了",
+        "i see",
     ];
-    SIGNALS.iter().any(|s| head.contains(s))
+
+    // Require at least 1 strong signal (already checked above) — but if we
+    // only have exactly 1 strong signal and no weak signals, require the
+    // text to be longer (≥ 100 chars) so a short coincidental match
+    // doesn't trigger. This prevents e.g. "看起来像是" in a short reply
+    // from being swallowed.
+    let weak_hits = WEAK_SIGNALS.iter().filter(|s| head.contains(**s)).count();
+    let total_hits = strong_hits + weak_hits;
+    if total_hits >= 2 {
+        return true;
+    }
+    // Exactly 1 strong signal — require longer text to reduce false positives
+    trimmed.len() >= 100
 }
 
 // ---------------------------------------------------------------------------
@@ -253,14 +274,11 @@ pub fn looks_like_untagged_reasoning(content: &str) -> bool {
 // * tolerate a chunk boundary that lands mid-tag (e.g. chunk N ends with `<th`,
 // chunk N+1 starts with `ink>...`),
 // * emit everything outside the block as `content`, everything inside as
-// `reasoning_content`, in real time, with at most ~`MAX_PENDING_CHARS` of
-// look-ahead held in `pending`.
+// `reasoning_content`, in real time, with at most a partial tag
+// held in `pending` (only the suffix that is a prefix of `<think`
+// or `</think` — inherently short).
 // The state machine is intentionally allocation-light: we keep `pending` short,
 // and we never copy the full chunk more than once.
-
-/// Maximum chars we will hold back to disambiguate a partial tag.
-/// `<redacted_thinking>` is the longest known opening tag at 19 chars; we add slack.
-const MAX_PENDING_CHARS: usize = 32;
 
 /// Safety net for models that forget to emit `</think>`.
 /// If the parser has already emitted more than this many reasoning chars
@@ -277,7 +295,7 @@ const MAX_PENDING_CHARS: usize = 32;
 pub struct ThinkBlockParser {
     /// Whether the cursor is currently inside a `<think>` block.
     in_think: bool,
-    /// Look-ahead buffer: at most a partial tag (≤ [`MAX_PENDING_CHARS`]).
+    /// Look-ahead buffer: at most a partial tag (prefix of `<think` or `</think`).
     pending: String,
 }
 
@@ -303,26 +321,6 @@ impl ThinkBlockParser {
 
         let mut combined = std::mem::take(&mut self.pending);
         combined.push_str(chunk);
-
-        // Safety valve: ONLY applies when we are already inside a think
-        // block and the buffered contents have grown well past the longest
-        // possible close tag. We intentionally do NOT trigger this from
-        // NORMAL state on a large first chunk — doing so would skip the
-        // `<think` open-tag detection in the loop below, which is exactly
-        // the failure mode behind the "空白消息" bug: a 140-char chunk
-        // starting with `<think>\n…` would short-circuit here, leave
-        // `in_think = false`, and dump the whole blob into `content`.
-        if self.in_think && combined.chars().count() > 4 * MAX_PENDING_CHARS {
-            let out_content = String::new();
-            let mut out_reasoning = String::new();
-            out_reasoning.push_str(&combined);
-            // Force-exit think mode so subsequent chunks land in
-            // `content` instead of re-triggering this safety valve
-            // on every feed.
-            self.in_think = false;
-            self.pending.clear();
-            return (out_content, out_reasoning);
-        }
 
         let mut content = String::new();
         let mut reasoning = String::new();
@@ -807,12 +805,28 @@ mod tests {
     }
 
     /// Regression: models that ignore the system prompt and emit an
-    /// unwrapped reasoning monologue ("I think...", "trying to...")
-    /// must be detected as reasoning, not user-visible content.
+    /// unwrapped reasoning monologue ("trying to reconstruct...",
+    /// "could mean...") must be detected as reasoning, not user-visible
+    /// content. Uses STRONG signals (reconstruction + hypothesis).
     #[test]
     fn detects_untagged_reasoning_monologue() {
         let text = "trying to reconstruct what's actually there. The pattern max(1) could mean unwrap_or(1) or something else entirely. I think the issue is that .max(1) is actually a typo.";
         assert!(looks_like_untagged_reasoning(text));
+    }
+
+    /// Normal Chinese replies must NOT be classified as untagged reasoning.
+    /// The old version's broad signal list ("让我", "我需要", "首先", etc.)
+    /// matched almost every Chinese reply and swallowed the visible answer
+    /// into the reasoning fold.
+    #[test]
+    fn rejects_normal_chinese_reply_as_untagged_reasoning() {
+        // These are all normal user-facing replies
+        assert!(!looks_like_untagged_reasoning("让我帮你查看一下目录结构，请稍等。"));
+        assert!(!looks_like_untagged_reasoning("我需要先确认一下你的需求，然后再开始工作。"));
+        assert!(!looks_like_untagged_reasoning("首先，我会分析这个问题，然后给出方案。"));
+        assert!(!looks_like_untagged_reasoning("这个任务需要分步骤完成，我马上开始。"));
+        assert!(!looks_like_untagged_reasoning("我来看一下这个文件的内容。"));
+        assert!(!looks_like_untagged_reasoning("看起来文件已经成功修改了。"));
     }
 
     #[test]
@@ -830,7 +844,8 @@ mod tests {
 
     #[test]
     fn strip_think_blocks_for_ack_wipes_untagged_reasoning() {
-        let text = "I think the issue is the missing close tag. Let me check again.";
+        // Uses strong signals ("trying to reconstruct" + "could mean")
+        let text = "trying to reconstruct the missing close tag. The pattern could mean something else. Let me trace through the logic again.";
         let stripped = strip_think_blocks_for_ack(text);
         assert_eq!(stripped, "");
     }

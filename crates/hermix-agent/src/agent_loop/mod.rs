@@ -657,13 +657,9 @@ impl AgentLoop {
         crate::session_lifecycle::emit_mute_transition(on_chunk, stream_mute, next_muted)
     }
 
-    /// apply the four-variant
+    /// apply the three-variant
     /// `EmptyResponseAction` outcome produced by
     /// `crate::empty_response_handler::decide_empty_response`.
-    /// Both `run()` and `run_stream()` previously open-coded this
-    /// match arm — the only difference between the two call sites
-    /// was the tracing message text. This helper centralises the
-    /// match and parameterises the stream-mode log suffix.
     /// Returns `true` when a `ContinueWithUserMsg` or
     /// `ContinueWithSystemNudge` variant injected a message into the
     /// context — the caller should `continue;` to restart the loop

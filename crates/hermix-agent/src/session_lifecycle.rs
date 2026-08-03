@@ -198,13 +198,9 @@ assistant_msg
     (history_includes_tool, assistant_msg, tool_calls)
 }
 
-/// apply the four-variant `EmptyResponseAction`
+/// apply the three-variant `EmptyResponseAction`
 /// outcome produced by
 /// `crate::empty_response_handler::decide_empty_response`.
-/// Both `run()` and `run_stream()` previously open-coded this match
-/// arm — the only difference between the two call sites was the
-/// tracing message text. This helper centralises the match and
-/// parameterises the stream-mode log suffix.
 /// Returns `true` when a `ContinueWithUserMsg` or
 /// `ContinueWithSystemNudge` variant injected a message into the
 /// context — the caller should `continue;` to restart the loop with
