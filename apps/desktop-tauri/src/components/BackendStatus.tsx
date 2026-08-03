@@ -12,6 +12,13 @@ export function BackendStatus() {
   const [gaveUp, setGaveUp] = useState(false);
 
   const check = useCallback(async () => {
+    // Skip all network calls when the circuit breaker is tripped —
+    // the backend is known to be unreachable and polling would only
+    // waste resources. The circuit resets automatically after cooldown.
+    if (api.isCircuitTripped()) {
+      setConnected(false);
+      return;
+    }
     try {
       const config = await api.getConfig();
       setMode(String(config.mode ?? "local"));

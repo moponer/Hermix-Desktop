@@ -258,8 +258,8 @@
 .section-header-toggle:hover { color: var(--color-text-muted); }
 .section-header-icon { color: var(--color-text-faint); flex-shrink: 0; }
 .section-header-count {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 12px;
+font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+font-size: 12.5px;
   color: var(--color-text-faint);
   margin-left: 2px;
 }
@@ -692,10 +692,18 @@
   text-align: left;
 }
 .sidebar-project-toggle .list-row-chevron { color: var(--color-text-faint); flex-shrink: 0; }
-.sidebar-project-toggle .list-row-icon { color: var(--color-text-muted); flex-shrink: 0; }
+.sidebar-project-toggle .list-row-icon {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  width: auto;
+  height: auto;
+  padding: 0;
+  background: none;
+  border-radius: 0;
+}
 .sidebar-project-name {
-  font-size: 12.5px;
-  font-weight: 600;
+font-size: 12.5px;
+font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -764,17 +772,7 @@
   color: var(--color-text-primary);
   font-weight: 500;
 }
-.sidebar-project-session.is-streaming::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--color-accent);
-  box-shadow: 0 0 4px color-mix(in srgb, var(--color-accent) 55%, transparent);
-  flex-shrink: 0;
-  animation: li-pulse 1.4s ease-in-out infinite;
-}
+/* streaming indicator now rendered via JSX (Loader2 spin) — see Sidebar.tsx */
 .sidebar-project-session > .truncate-1 { flex: 1; min-width: 0; }
 .sidebar-project-session-time {
   font-size: 11px;
@@ -867,11 +865,11 @@
 }
 
 .sidebar-action-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
+display: inline-flex;
+align-items: center;
+justify-content: center;
+width: 26px;
+height: 26px;
   padding: 0;
   border: 0;
   border-radius: 5px;
@@ -1001,17 +999,7 @@
   color: var(--color-text-primary);
   font-weight: 500;
 }
-.sidebar-row.is-streaming::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--color-accent);
-  box-shadow: 0 0 4px color-mix(in srgb, var(--color-accent) 55%, transparent);
-  flex-shrink: 0;
-  animation: li-pulse 1.4s ease-in-out infinite;
-}
+/* streaming indicator now rendered via JSX (Loader2 spin) — see Sidebar.tsx */
 
 .sidebar-row-main {
   display: flex;

@@ -144,13 +144,6 @@ export function Sidebar({
   const [chatsCollapsed, setChatsCollapsed] = useState(false);
   const [spacesCollapsed, setSpacesCollapsed] = useState(false);
 
-  // Section hover states — control chevron visibility + hover dropdown menus.
-  // When the mouse enters a section, the chevron arrow appears and a small
-  // dropdown with "新建" / "删除全部" is shown.
-  const [chatHovered, setChatHovered] = useState(false);
-  const [spaceHovered, setSpaceHovered] = useState(false);
-  const [groupChatHovered, setGroupChatHovered] = useState(false);
-
   // Toolbox dropdown — click to toggle, click-outside / Esc to close.
   // Hover does NOT close (only click-outside and Esc), matching the
   // useSidebarMenu pattern used by row-level three-dots menus.
@@ -196,6 +189,13 @@ export function Sidebar({
     title: string;
     body: string;
     onConfirm: () => void;
+  } | null>(null);
+
+  // Rename dialog state — replaces window.prompt with an in-app modal.
+  const [renameState, setRenameState] = useState<{
+    title: string;
+    current: string;
+    onConfirm: (next: string) => void;
   } | null>(null);
 
   const runDelete = useCallback((id: string, label: string, onConfirm: () => void) => {
@@ -355,37 +355,43 @@ export function Sidebar({
     else toastError("复制失败，请检查剪贴板权限");
   }, []);
 
-  const promptRenameSession = useCallback(async (id: string, current: string) => {
-    const next = window.prompt("重命名对话", current);
-    if (next == null) return;
-    const trimmed = next.trim();
-    if (!trimmed || trimmed === current) return;
-    try {
-      const ok = await api.renameSession(id, trimmed);
-      if (ok) toastSuccess("已重命名");
-      else toastError("重命名失败");
-    } catch (e) {
-      console.error("[Sidebar] rename session failed", e);
-      toastError("重命名失败");
-    }
+  const promptRenameSession = useCallback((id: string, current: string) => {
+    setRenameState({
+      title: "重命名对话",
+      current,
+      onConfirm: async (next) => {
+        try {
+          const ok = await api.renameSession(id, next);
+          if (ok) toastSuccess("已重命名");
+          else toastError("重命名失败");
+        } catch (e) {
+          console.error("[Sidebar] rename session failed", e);
+          toastError("重命名失败");
+        }
+      },
+    });
   }, []);
 
   const promptRenameWorkspace = useCallback((id: string, current: string) => {
-    const next = window.prompt("重命名项目", current);
-    if (next == null) return;
-    const trimmed = next.trim();
-    if (!trimmed || trimmed === current) return;
-    renameWorkspace(id, trimmed);
-    toastSuccess("已重命名");
+    setRenameState({
+      title: "重命名项目",
+      current,
+      onConfirm: (next) => {
+        renameWorkspace(id, next);
+        toastSuccess("已重命名");
+      },
+    });
   }, [renameWorkspace]);
 
   const promptRenameRoom = useCallback((id: string, current: string) => {
-    const next = window.prompt("重命名聊天室", current);
-    if (next == null) return;
-    const trimmed = next.trim();
-    if (!trimmed || trimmed === current) return;
-    setChatRooms((prev) => prev.map((r) => (r.id === id ? { ...r, name: trimmed } : r)));
-    toastSuccess("已重命名");
+    setRenameState({
+      title: "重命名聊天室",
+      current,
+      onConfirm: (next) => {
+        setChatRooms((prev) => prev.map((r) => (r.id === id ? { ...r, name: next } : r)));
+        toastSuccess("已重命名");
+      },
+    });
   }, []);
 
   return (
@@ -423,13 +429,8 @@ export function Sidebar({
       {/* Three independent scrollable sections */}
       <div className="sidebar-sections">
         {/* ── 对话 ── */}
-        <section
-          className="sidebar-section"
-          style={{ overflow: chatHovered ? "visible" : undefined }}
-          onMouseEnter={() => setChatHovered(true)}
-          onMouseLeave={() => setChatHovered(false)}
-        >
-          <div className="sidebar-section-header relative">
+        <section className="sidebar-section">
+          <div className="sidebar-section-header">
             <button
               onClick={() => setChatsCollapsed((v) => !v)}
               className="section-header-toggle"
@@ -437,20 +438,22 @@ export function Sidebar({
             >
               <span>对话</span>
               <span className="section-header-count">{ungroupedSessions.length}</span>
-              {chatHovered && (chatsCollapsed
-                ? <ChevronRight size={12} className="section-header-chevron ml-auto" />
-                : <ChevronDown  size={12} className="section-header-chevron ml-auto" />)}
             </button>
-            {chatHovered && (
-              <div className="absolute right-0 top-full mt-1 min-w-[160px] rounded-lg border border-border-primary bg-bg-elevated shadow-pop py-1 z-[1000]">
-                <button type="button" onClick={addChat} className="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] text-text-primary hover:bg-bg-hover transition-colors text-left">
-                  <Plus size={13} /> 新建对话
-                </button>
-                <button type="button" onClick={deleteAllChats} className="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] text-error hover:bg-bg-hover transition-colors text-left">
-                  <Trash2 size={13} /> 删除全部对话
-                </button>
-              </div>
-            )}
+            <SidebarMenu label="对话操作" items={[
+              { key: "new", label: "新建对话", icon: Plus, onClick: addChat },
+              { key: "delete-all", label: "删除全部对话", icon: Trash2, onClick: deleteAllChats, danger: true },
+            ]} />
+            <button
+              type="button"
+              onClick={() => setChatsCollapsed((v) => !v)}
+              className="sidebar-action-btn"
+              title={chatsCollapsed ? "展开" : "折叠"}
+              aria-label={chatsCollapsed ? "展开" : "折叠"}
+            >
+              {chatsCollapsed
+                ? <ChevronRight size={14} />
+                : <ChevronDown size={14} />}
+            </button>
           </div>
           {!chatsCollapsed && (
             <div className="sidebar-section-body">
@@ -480,7 +483,9 @@ export function Sidebar({
                         className="sidebar-row-main"
                         disabled={disabled}
                       >
-                        {isRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
+                        {s.id === streamingSessionId
+                          ? <Loader2 size={13} className="animate-spin text-accent shrink-0" />
+                          : isRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
                         <span className={clsx("truncate-1", isRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
                         {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
                       </button>
@@ -501,13 +506,8 @@ export function Sidebar({
         </section>
 
         {/* ── 项目 ── */}
-        <section
-          className="sidebar-section"
-          style={{ overflow: spaceHovered ? "visible" : undefined }}
-          onMouseEnter={() => setSpaceHovered(true)}
-          onMouseLeave={() => setSpaceHovered(false)}
-        >
-          <div className="sidebar-section-header relative">
+        <section className="sidebar-section">
+          <div className="sidebar-section-header">
             <button
               onClick={() => setSpacesCollapsed((v) => !v)}
               className="section-header-toggle"
@@ -515,20 +515,22 @@ export function Sidebar({
             >
               <span>项目</span>
               <span className="section-header-count">{workspaces.length}</span>
-              {spaceHovered && (spacesCollapsed
-                ? <ChevronRight size={12} className="section-header-chevron ml-auto" />
-                : <ChevronDown  size={12} className="section-header-chevron ml-auto" />)}
             </button>
-            {spaceHovered && (
-              <div className="absolute right-0 top-full mt-1 min-w-[160px] rounded-lg border border-border-primary bg-bg-elevated shadow-pop py-1 z-[1000]">
-                <button type="button" onClick={addWs} className="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] text-text-primary hover:bg-bg-hover transition-colors text-left">
-                  <Plus size={13} /> 添加项目
-                </button>
-                <button type="button" onClick={deleteAllWorkspaces} className="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] text-error hover:bg-bg-hover transition-colors text-left">
-                  <Trash2 size={13} /> 删除全部项目
-                </button>
-              </div>
-            )}
+            <SidebarMenu label="项目操作" items={[
+              { key: "new", label: "添加项目", icon: Plus, onClick: addWs },
+              { key: "delete-all", label: "删除全部项目", icon: Trash2, onClick: deleteAllWorkspaces, danger: true },
+            ]} />
+            <button
+              type="button"
+              onClick={() => setSpacesCollapsed((v) => !v)}
+              className="sidebar-action-btn"
+              title={spacesCollapsed ? "展开" : "折叠"}
+              aria-label={spacesCollapsed ? "展开" : "折叠"}
+            >
+              {spacesCollapsed
+                ? <ChevronRight size={14} />
+                : <ChevronDown size={14} />}
+            </button>
           </div>
           {!spacesCollapsed && (
             <div className="sidebar-section-body">
@@ -546,13 +548,13 @@ export function Sidebar({
                   <div key={ws.id} className={clsx("sidebar-project", wsRemoving && "is-removing", wsDeleting && "is-deleting")}>
                     <div className="sidebar-project-row">
                       <button onClick={() => !wsDisabled && toggleWsCollapsed(ws.id)} className="sidebar-project-toggle" disabled={wsDisabled}>
-                        {collapsed
-                          ? <ChevronRight size={11} className="list-row-chevron" />
-                          : <ChevronDown  size={11} className="list-row-chevron" />}
-                        <FolderOpen size={12} className="list-row-icon" />
+                        <FolderOpen size={13} className="list-row-icon" />
                         {wsRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
                         <span className={clsx("sidebar-project-name", wsRemoving && "opacity-60")}>{ws.name}</span>
                         {wsPinned && <Pin size={10} className="sidebar-row-pin" />}
+                        {collapsed
+                          ? <ChevronRight size={12} className="list-row-chevron ml-auto" />
+                          : <ChevronDown  size={12} className="list-row-chevron ml-auto" />}
                       </button>
                       <div className="sidebar-row-actions">
                         <SidebarMenu label="项目操作" items={workspaceMenu(ws)} />
@@ -583,7 +585,9 @@ export function Sidebar({
                                 className="sidebar-row-main"
                                 disabled={psDisabled}
                               >
-                                {psRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
+                                {s.id === streamingSessionId
+                                  ? <Loader2 size={13} className="animate-spin text-accent shrink-0" />
+                                  : psRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
                                 <span className={clsx("truncate-1", psRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
                                 {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
                               </button>
@@ -611,37 +615,33 @@ export function Sidebar({
         </section>
 
         {/* ── 聊天室 ── */}
-        <section
-          className="sidebar-section"
-          style={{ overflow: groupChatHovered ? "visible" : undefined }}
-          onMouseEnter={() => setGroupChatHovered(true)}
-          onMouseLeave={() => setGroupChatHovered(false)}
-        >
-          <div className="sidebar-section-header relative">
+        <section className="sidebar-section">
+          <div className="sidebar-section-header">
             <button
               onClick={() => setGroupChatCollapsed((v) => !v)}
               className="section-header-toggle"
               aria-expanded={!groupChatCollapsed}
             >
-              <Users size={12} className="section-header-icon" />
               <span>聊天室</span>
               {chatRooms.length > 0 && (
                 <span className="section-header-count">{chatRooms.length}</span>
               )}
-              {groupChatHovered && (groupChatCollapsed
-                ? <ChevronRight size={12} className="section-header-chevron ml-auto" />
-                : <ChevronDown  size={12} className="section-header-chevron ml-auto" />)}
             </button>
-            {groupChatHovered && (
-              <div className="absolute right-0 top-full mt-1 min-w-[160px] rounded-lg border border-border-primary bg-bg-elevated shadow-pop py-1 z-[1000]">
-                <button type="button" onClick={addRoom} className="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] text-text-primary hover:bg-bg-hover transition-colors text-left">
-                  <Plus size={13} /> 新建聊天室
-                </button>
-                <button type="button" onClick={deleteAllRooms} className="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] text-error hover:bg-bg-hover transition-colors text-left">
-                  <Trash2 size={13} /> 删除全部聊天室
-                </button>
-              </div>
-            )}
+            <SidebarMenu label="聊天室操作" items={[
+              { key: "new", label: "新建聊天室", icon: Plus, onClick: addRoom },
+              { key: "delete-all", label: "删除全部聊天室", icon: Trash2, onClick: deleteAllRooms, danger: true },
+            ]} />
+            <button
+              type="button"
+              onClick={() => setGroupChatCollapsed((v) => !v)}
+              className="sidebar-action-btn"
+              title={groupChatCollapsed ? "展开" : "折叠"}
+              aria-label={groupChatCollapsed ? "展开" : "折叠"}
+            >
+              {groupChatCollapsed
+                ? <ChevronRight size={14} />
+                : <ChevronDown size={14} />}
+            </button>
           </div>
           {!groupChatCollapsed && (
             <div className="sidebar-section-body">
@@ -785,6 +785,11 @@ export function Sidebar({
         onConfirm={() => { const s = confirmState; setConfirmState(null); s?.onConfirm(); }}
         onCancel={() => setConfirmState(null)}
       />
+      <RenameDialog
+        state={renameState}
+        onConfirm={(next) => { const s = renameState; setRenameState(null); s?.onConfirm(next); }}
+        onCancel={() => setRenameState(null)}
+      />
     </aside>
   );
 }
@@ -805,10 +810,13 @@ type MenuItemSpec = {
 function useSidebarMenu() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (ref.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      setOpen(false);
     };
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
@@ -820,7 +828,7 @@ function useSidebarMenu() {
       window.removeEventListener("keydown", onEsc);
     };
   }, [open]);
-  return { open, setOpen, ref };
+  return { open, setOpen, ref, popoverRef };
 }
 
 /**
@@ -828,9 +836,21 @@ function useSidebarMenu() {
  * Note: section-header +号 是直接操作按钮（addChat / addWs / addRoom），不走 Popover。
  * Renders the items list with optional left icons and per-item dividers.
  */
-function SidebarPopoverBody({ items, onClose }: { items: MenuItemSpec[]; onClose: () => void }) {
+function SidebarPopoverBody({ items, onClose, popoverRef, position }: {
+  items: MenuItemSpec[];
+  onClose: () => void;
+  popoverRef: React.RefObject<HTMLDivElement | null>;
+  position: { right: number; top: number };
+}) {
+  // Clamp to viewport so the menu never overflows the bottom edge.
+  const top = Math.min(position.top, window.innerHeight - 200);
   return (
-    <div className="sidebar-popover" role="menu">
+    <div
+      ref={popoverRef}
+      className="sidebar-popover"
+      role="menu"
+      style={{ position: "fixed", right: position.right, top, zIndex: 9999 }}
+    >
       {items.map((item) => {
         const Icon = item.icon;
         return (
@@ -857,20 +877,127 @@ function SidebarPopoverBody({ items, onClose }: { items: MenuItemSpec[]; onClose
  * Popover body is shared (see SidebarPopoverBody).
  */
 function SidebarMenu({ label, items }: { label: string; items: MenuItemSpec[] }) {
-  const { open, setOpen, ref } = useSidebarMenu();
+  const { open, setOpen, ref, popoverRef } = useSidebarMenu();
+  const [pos, setPos] = useState<{ right: number; top: number } | null>(null);
+
+  const handleToggle = () => {
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setPos({ right: window.innerWidth - rect.right, top: rect.bottom + 4 });
+    }
+    setOpen((v) => !v);
+  };
+
   return (
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={handleToggle}
         className="sidebar-action-btn"
         title={label}
         aria-label={label}
       >
-        <MoreHorizontal size={14} />
+        <MoreHorizontal size={16} />
       </button>
-      {open && <SidebarPopoverBody items={items} onClose={() => setOpen(false)} />}
+      {open && pos && createPortal(
+        <SidebarPopoverBody
+          items={items}
+          onClose={() => setOpen(false)}
+          popoverRef={popoverRef}
+          position={pos}
+        />,
+        document.body,
+      )}
     </div>
+  );
+}
+
+function RenameDialog({
+  state,
+  onConfirm,
+  onCancel,
+}: {
+  state: { title: string; current: string; onConfirm: (next: string) => void } | null;
+  onConfirm: (next: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState("");
+
+  // Reset input when dialog opens.
+  useEffect(() => {
+    if (state) setValue(state.current);
+  }, [state]);
+
+  if (!state) return null;
+
+  const trimmed = value.trim();
+  const canConfirm = trimmed.length > 0 && trimmed !== state.current;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label="取消"
+        onClick={onCancel}
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+      />
+      <div
+        className={clsx(
+          "relative z-10 w-full max-w-[420px] flex flex-col",
+          "rounded-2xl border shadow-2xl",
+          "bg-bg-secondary border-border-subtle",
+        )}
+      >
+        <div className="flex items-start gap-3 px-5 py-4 border-b border-border-subtle">
+          <div
+            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: "hsla(210, 70%, 55%, 0.12)" }}
+          >
+            <Pencil size={16} style={{ color: "hsl(210, 70%, 50%)" }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-[14px] font-bold text-text-primary">{state.title}</h2>
+            <input
+              autoFocus
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && canConfirm) onConfirm(trimmed);
+                if (e.key === "Escape") onCancel();
+              }}
+              placeholder="输入新名称"
+              className="mt-2 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-[13px] text-text-primary placeholder:text-text-faint outline-none focus:ring-1 focus:ring-accent/30 transition"
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-2.5 px-5 py-4">
+          <button
+            type="button"
+            onClick={() => onConfirm(trimmed)}
+            disabled={!canConfirm}
+            className={clsx(
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-bold",
+              "text-white transition-opacity",
+              canConfirm ? "hover:opacity-90" : "opacity-50 cursor-not-allowed",
+            )}
+            style={{ background: "var(--color-accent)" }}
+          >
+            确认
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className={clsx(
+              "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-semibold",
+              "text-text-muted hover:text-text-secondary hover:bg-bg-tertiary transition-colors",
+            )}
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

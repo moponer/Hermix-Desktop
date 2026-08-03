@@ -18,42 +18,112 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ── Circuit breaker ─────────────────────────────────────────────
+// When the backend is unreachable, multiple components fire requests
+// simultaneously, each going through withRetry (N retries each).
+// ERR_INSUFFICIENT_RESOURCES also produces TypeError: Failed to fetch,
+// so withRetry retries — creating a positive feedback loop that exhausts
+// the browser's connection pool (Chrome limits ~6 concurrent per origin).
+// The circuit breaker breaks this cycle: after N consecutive network
+// failures across ALL callers, all requests are immediately rejected for
+// a cooldown period, giving the browser time to reclaim sockets.
+
+let _consecutiveFailures = 0;
+const CIRCUIT_FAILURE_THRESHOLD = 8;
+const CIRCUIT_COOLDOWN_MS = 15_000;
+let _circuitTrippedUntil = 0;
+
+/** True when the circuit breaker is in cooldown — all requests are
+ *  immediately rejected without hitting the network. Components that
+ *  poll (BackendStatus, CustomAppsView) should check this to skip. */
+export function isCircuitTripped(): boolean {
+  return Date.now() < _circuitTrippedUntil;
+}
+
+function _recordFailure() {
+  _consecutiveFailures++;
+  if (_consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD && _circuitTrippedUntil <= Date.now()) {
+    _circuitTrippedUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
+    console.warn(
+      `[circuit] Tripped after ${_consecutiveFailures} consecutive network failures — ` +
+      `cooldown ${CIRCUIT_COOLDOWN_MS}ms. All API requests will be rejected until ${new Date(_circuitTrippedUntil).toLocaleTimeString()}.`,
+    );
+  }
+}
+
+function _recordSuccess() {
+  if (_consecutiveFailures > 0) {
+    _consecutiveFailures = 0;
+    _circuitTrippedUntil = 0;
+  }
+}
+
 /**
  * Retry wrapper: if fetch throws a network error (ECONNREFUSED / ECONNRESET
- * — i.e., the sidecar hasn't bound port 3000 yet), retry up to 5 times with
- * exponential backoff (200ms … 3.2s). This avoids the boot-time console
- * spam of 15+ ERR_CONNECTION_REFUSED errors.
+ * — i.e., the sidecar hasn't bound port 3000 yet), retry up to 3 times with
+ * exponential backoff (200ms … 800ms). This avoids the boot-time console
+ * spam of ERR_CONNECTION_REFUSED errors.
+ *
+ * **Circuit breaker**: after CIRCUIT_FAILURE_THRESHOLD consecutive network
+ * failures across all callers, the circuit trips and all subsequent requests
+ * are immediately rejected for CIRCUIT_COOLDOWN_MS. This prevents the
+ * positive feedback loop where ERR_INSUFFICIENT_RESOURCES causes retries
+ * that further exhaust the browser's connection pool.
  *
  * If the request succeeds but returns non-2xx, throw immediately (don't retry
  * HTTP errors — those are real problems, not startup races).
  */
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
-  const MAX_RETRIES = 5;
+  // Circuit breaker: reject immediately if tripped.
+  if (isCircuitTripped()) {
+    throw new TypeError("Failed to fetch (circuit breaker open)");
+  }
+
+  const MAX_RETRIES = 3;
   const BASE_DELAY_MS = 200;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await fn();
+      const result = await fn();
+      _recordSuccess();
+      return result;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       // Only retry on network-level errors (TypeError from fetch when the
-      // server isn't listening yet). Don't retry on HTTP 4xx/5xx responses.
+      // server isn't listening yet). Don't retry on HTTP 4xx/5xx responses
+      // or on AbortError (timeout — retrying would make overload worse).
       if (!msg.includes("Failed to fetch") && !msg.includes("NetworkError")) {
+        throw err;
+      }
+      _recordFailure();
+      // If the circuit just tripped, stop retrying immediately.
+      if (isCircuitTripped()) {
         throw err;
       }
       if (attempt >= MAX_RETRIES) {
         throw err;
       }
-      const delayMs = BASE_DELAY_MS * (1 << attempt); // 200, 400, 800, 1600, 3200
+      const delayMs = BASE_DELAY_MS * (1 << attempt); // 200, 400, 800
       await sleep(delayMs);
     }
   }
   throw new Error("retry exhausted"); // unreachable, just for TS
 }
 
+/** Per-request timeout in milliseconds. Prevents connections from
+ *  hanging indefinitely when the backend is slow or unresponsive,
+ *  which would otherwise exhaust the browser's connection pool. */
+const FETCH_TIMEOUT_MS = 10_000;
+
 async function fetchApi<T = void>(path: string, init?: RequestInit, { parseJson = true }: { parseJson?: boolean } = {}): Promise<T> {
   return withRetry(async () => {
-    const response = await fetch(apiUrl(path), init);
+    // Combine a per-request timeout with any caller-provided signal
+    // so long-running requests don't hold connections open indefinitely.
+    const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+    const signal = init?.signal
+      ? AbortSignal.any([init.signal, timeoutSignal])
+      : timeoutSignal;
+    const response = await fetch(apiUrl(path), { ...init, signal });
     if (!response.ok) {
       const text = await response.text().catch(() => response.statusText);
       throw new Error(text || `HTTP ${response.status}`);
@@ -65,8 +135,10 @@ async function fetchApi<T = void>(path: string, init?: RequestInit, { parseJson 
   });
 }
 
-/** Fetch a JSON response from the API. */
-async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+/** Fetch a JSON response from the API. Exported so modules that need
+ *  raw endpoint access (e.g. customAppApi.ts) can share the circuit
+ *  breaker, timeout, and retry infrastructure. */
+export async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return fetchApi<T>(path, init, { parseJson: true });
 }
 

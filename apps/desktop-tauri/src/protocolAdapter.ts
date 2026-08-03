@@ -283,47 +283,58 @@ function looksLikeUntaggedReasoning(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length < 40) return false;
   const head = trimmed.slice(0, 360).toLowerCase();
-  const signals = [
-    // English
-    "trying to",
-    "i think",
-    "i see",
-    "probably",
+
+  // ── User-addressing markers — if present, this is a reply, not reasoning ──
+  const userFacingMarkers = [
+    "你好", "帮您", "帮你", "为您", "请问", "请看", "以下是", "结果如下",
+    "完成", "已成功", "已创建", "已修改", "已删除", "总结", "目录共",
+    "hello", "here is", "here are", "the result", "done", "completed",
+  ];
+  if (userFacingMarkers.some((m) => head.includes(m))) return false;
+
+  // ── STRONG reasoning signals — require reconstruction/hypothesis language ──
+  const strongSignals = [
+    "trying to reconstruct",
+    "trying to figure out",
+    "let me trace",
+    "i suspect",
     "could mean",
     "might be",
     "reconstruct",
-    "let me trace",
-    "let me check",
+    "i'm trying to",
+    "i am trying to",
+    "让我 trace",
+    "我怀疑",
+    "推测可能",
+    "可能在",
+    "尝试还原",
+    "尝试重建",
+    "让我想想",
+    "我想想",
+    "看起来像是",
+    "实际上可能",
+    "先按这个思路",
+  ];
+  const strongHits = strongSignals.filter((s) => head.includes(s)).length;
+  if (strongHits === 0) return false;
+
+  // ── Weaker signals — count as supporting evidence only ──
+  const weakSignals = [
+    "i think",
+    "i believe",
+    "probably",
     "actually,",
     "seems like",
     "looking at",
     "the diff shows",
     "the issue is",
-    "i believe",
-    "i suspect",
-    "i'm trying",
-    "i am trying",
-    // Chinese — model often reasons in Chinese without ‌​ tags
-    // IMPORTANT: these must be TIGHT — false positives hide real
-    // user-facing answers. Removed over-broad signals like "首先",
-    // "接下来", "调用", "创建" which appear in normal answers.
-    "让我来",
-    "我需要先",
-    "我应该先",
-    "我先看看",
-    "我先分析",
-    "我直接看",
-    "我来看一下",
-    "我想想",
-    "我认为应该",
-    "我觉得可能",
-    "看起来像是",
-    "实际上可能",
-    "先按这个思路",
-    "我去找找",
-    "看下这个",
+    "i see",
   ];
-  return signals.some((s) => head.includes(s));
+  const weakHits = weakSignals.filter((s) => head.includes(s)).length;
+  const totalHits = strongHits + weakHits;
+  if (totalHits >= 2) return true;
+  // Exactly 1 strong signal — require longer text to reduce false positives
+  return trimmed.length >= 100;
 }
 
 /**
