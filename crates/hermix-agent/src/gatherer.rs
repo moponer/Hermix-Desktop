@@ -22,6 +22,22 @@ const MAX_GATHER_ROUNDS: usize = 2;
 /// Maximum characters to keep from a gathered file preview.
 const GATHER_FILE_PREVIEW_CHARS: usize = 2000;
 
+/// 安全截断到 `max` 字节 —— 不会把 UTF-8 多字节字符拦腰砍断。
+/// `String::truncate` / `&s[..n]` 在 n 落在中文/emoji 字符中间时会 panic
+/// （`assertion failed: self.is_char_boundary`），工具输出含中文必踩。
+/// 返回截断后仍是合法 UTF-8 的子串（len ≤ max）。
+fn safe_truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    // 从 max 往回找最近的字符边界
+    let mut idx = max;
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    &s[..idx]
+}
+
 /// A single "need" identified by the checker LLM.
 #[derive(Debug, Clone, PartialEq)]
 enum GatherNeed {
@@ -172,7 +188,7 @@ fn extract_relevant_sections(content: &str, path: &str, max_chars: usize) -> Str
     if scored_lines.is_empty() {
         let truncated = if content.len() > max_chars {
             format!("{}…\n(预览截断，共 {} 字符，可用 read_file 读取完整内容)",
-                &content[..max_chars], content.len())
+                safe_truncate(content, max_chars), content.len())
         } else {
             content.to_string()
         };
@@ -185,7 +201,7 @@ fn extract_relevant_sections(content: &str, path: &str, max_chars: usize) -> Str
     // Include header
     for line in &header {
         if line.len() > 200 {
-            result.push_str(&line[..200]);
+            result.push_str(safe_truncate(line, 200));
             result.push_str("...\n");
         } else {
             result.push_str(line);
@@ -202,15 +218,16 @@ fn extract_relevant_sections(content: &str, path: &str, max_chars: usize) -> Str
             || (i > 0 && matched_indices.contains(&(i - 1)))
             || (i + 1 < body.len() && matched_indices.contains(&(i + 1)))
         {
-            let display = if line.len() > 200 { &line[..200] } else { line };
+            let display = if line.len() > 200 { safe_truncate(line, 200) } else { line };
             result.push_str(display);
             result.push('\n');
         }
     }
 
-    // Truncate result to max_chars
+    // Truncate result to max_chars（安全截断，避免多字节字符 panic）
     if result.len() > max_chars {
-        result.truncate(max_chars);
+        let keep_len = safe_truncate(&result, max_chars).len();
+        result.truncate(keep_len);
         result.push_str("\n...(相关片段提取完)");
     }
     result
