@@ -19,7 +19,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 );
 
 // Remove the splash screen only after the backend health check passes
-// (hermix:server-ready event from Tauri) OR after a 15s safety timeout.
+// (hermix:server-ready event from Tauri) OR after a 30s safety timeout
+// (matched to the Tauri-side /health probe deadline in lib.rs:502).
 function dismissSplash() {
   const splash = document.getElementById("splash");
   if (splash) {
@@ -35,7 +36,10 @@ function safeDismiss(timedOut = false) {
   dismissed = true;
   dismissSplash();
   if (timedOut) {
-    toastError("后端服务启动超时（15s）。应用可能无法正常工作，请尝试重启。");
+    // 兜底超时已对齐 Tauri 端 /health 探测 30s 窗口（lib.rs:502）。
+    // 后端通常 LLM warmup ~1s + awakening tick 1 约 10s 就绪，30s 足够。
+    // 真正触发到这里 = 后端启动确实有问题，不是误报。
+    toastError("后端服务启动超时（30s）。应用可能无法正常工作，请尝试重启。");
   }
 }
 
@@ -44,6 +48,7 @@ listen("hermix:server-ready", () => {
   setTimeout(() => safeDismiss(false), 600);
 });
 
-// Safety timeout: if the event never fires (e.g. sidecar failed),
-// dismiss the splash after 15s so the user isn't stuck.
-setTimeout(() => safeDismiss(true), 15000);
+// Safety timeout: matched to Tauri-side /health probe deadline
+// (lib.rs:502 sets 30s). 之前的 15s 与后端 30s 探测窗口不匹配，
+// 误报"启动超时"实际后端已连上（LLM warmup 1s、awakening tick 1~10s 都过了）。
+setTimeout(() => safeDismiss(true), 30000);
