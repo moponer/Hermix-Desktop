@@ -562,7 +562,7 @@ impl PluginManager {
 }
 
 /// Decode a base64-encoded icon Image (PNG/ICO).
-fn base64_decode_icon(data: &str) -> Result<Vec<u8>, PluginError> {
+pub(crate) fn base64_decode_icon(data: &str) -> Result<Vec<u8>, PluginError> {
     let b64 = if data.starts_with("data:") {
         data.split(',')
             .next_back()

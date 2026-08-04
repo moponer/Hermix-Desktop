@@ -65,40 +65,47 @@ impl HxShellPackager {
         Self { shell_path, loader_dll_path }
     }
 
-    /// 若模板壳/加载器缺失，尝试从程序资源目录懒部署到目标位置。
+    /// 若模板壳/加载器缺失**或版本过旧**，从程序资源目录懒部署到目标位置。
     ///
     /// Hermix 是 portable 应用：新机器 / 更新后 `HERMIX_HOME/loader/`
-    /// 可能没有 hx-shell.exe。此时从 `current_exe` 旁边的
+    /// 可能没有 hx-shell.exe，或存在旧版（无 window.hx init script /
+    /// 无新增 API）。此时从 `current_exe` 旁边的
     /// `resources/loader/`（Tauri bundle 内置）复制一份过去，保证打包可用。
+    ///
+    /// 2026-08-04 增强：**版本死锁修复**。旧逻辑只在文件缺失时复制，
+    /// 导致 `HERMIX_HOME/loader/` 里一旦有旧版壳，新壳永远不被部署
+    /// （主人报 "window.hx 没注入" 的直接根因）。现在通过比较
+    /// `BUILD_PROBE_*` 标记：若目标壳比资源壳旧（或缺失标记），覆盖复制。
     /// 复制失败不 panic —— 后续 `package()` 会给出明确的 ShellNotFound。
     fn ensure_shell_deployed(&self) {
-        let missing: Vec<(&PathBuf, &str)> = vec![
-            (&self.shell_path, "hx-shell.exe"),
-            (&self.loader_dll_path, "WebView2Loader.dll"),
-        ]
-        .into_iter()
-        .filter(|(p, _)| !p.exists())
-        .collect();
-        if missing.is_empty() {
-            return;
-        }
-
-        // 找资源源目录：current_exe 旁 resources/loader/
+        // 源目录：current_exe 旁 resources/loader/
         let Some(exe_dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) else {
             return;
         };
-        for (target, file_name) in &missing {
-            // 直接位于 exe 旁
-            let mut src = exe_dir.join("resources").join("loader").join(file_name);
-            if !src.exists() {
-                // 或 exe 旁平级（无 resources/ 嵌套）
-                src = exe_dir.join(file_name);
-            }
-            if src.exists() {
-                if let Some(parent) = target.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+        let src_candidates = |file_name: &str| -> Option<std::path::PathBuf> {
+            let direct = exe_dir.join("resources").join("loader").join(file_name);
+            if direct.exists() { return Some(direct); }
+            let flat = exe_dir.join(file_name);
+            if flat.exists() { return Some(flat); }
+            None
+        };
+
+        // 逐个检查：缺失 → 复制；存在但版本旧 → 覆盖
+        let items: [(&PathBuf, &str); 2] = [
+            (&self.shell_path, "hx-shell.exe"),
+            (&self.loader_dll_path, "WebView2Loader.dll"),
+        ];
+        for (target, file_name) in items {
+            if let Some(src) = src_candidates(file_name) {
+                let needs_copy = !target.exists() || shell_is_stale(target, &src);
+                if needs_copy {
+                    if let Some(parent) = target.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    // Windows 上直接覆盖运行中/只读文件会失败；先尝试删旧再复制
+                    let _ = std::fs::remove_file(target);
+                    let _ = std::fs::copy(&src, target);
                 }
-                let _ = std::fs::copy(&src, target);
             }
         }
     }
@@ -172,51 +179,63 @@ impl HxShellPackager {
         Ok(format!("<script>\n{js}\n</script>"))
     }
 
-    /// 构造完整 HTML：纯 HTML 模式直接用 index.html；
-    /// TSX 模式把 React UMD + ReactDOM UMD + esbuild 产物 inline 进模板。
-    fn build_final_html(&self, app_dir: &Path) -> Result<Vec<u8>, HxPackError> {
+    /// 构造完整 payload bytes + 可选 icon png bytes：
+    /// - 纯 HTML 模式：`[icon_png?][icon_len:8LE][html][html_len:8LE][MAGIC]`
+    /// - TSX 模式：React UMD + ReactDOM UMD + esbuild 产物 inline 进 HTML 壳后再打包。
+    /// icon 段可选：有就前置，没就省略（保持向后兼容旧 exe）。
+    /// `icon_png_out` 仅在 manifest 有 icon_data 时为 Some(bytes)；None 时不打 icon 段。
+    fn build_final_payload(
+        &self,
+        app_dir: &Path,
+    ) -> Result<(Vec<u8>, Option<Vec<u8>>), HxPackError> {
         let html_path = app_dir.join("index.html");
-        let raw = std::fs::read(&html_path).map_err(|_| {
+        let raw_html = std::fs::read(&html_path).map_err(|_| {
             HxPackError::NoIndexHtml(html_path.display().to_string())
         })?;
 
+        // 读取可选图标（优先级：icon_data base64 > icon 库内 SVG 名 > icon_file）
+        // - `icon_data`: base64 PNG data URL（旧方式）
+        // - `icon`: SVG 库内名字符串，如 "music" → 读内置图标库 resources/icons/music.svg
+        // - `icon_file`: 应用目录里的图标文件名（如 icon.png）
+        let icon_png = read_icon_data(app_dir).or_else(|| read_icon_library_svg(app_dir));
+
         // 是否有 TSX 源码？
         let has_tsx = app_dir.join("src").join("main.tsx").exists();
-        if !has_tsx {
-            return Ok(raw);
-        }
-
-        // TSX 模式：React UMD + 编译产物 inline
-        let react_umd = std::fs::read_to_string(Self::resolve_loader_file("react/react.production.min.js"))
-            .map_err(|_| HxPackError::ReactUmMissing("react.production.min.js".into()))?;
-        let react_dom_umd = std::fs::read_to_string(Self::resolve_loader_file("react/react-dom.production.min.js"))
-            .map_err(|_| HxPackError::ReactUmMissing("react-dom.production.min.js".into()))?;
-        let compiled = self.compile_tsx(app_dir)?;
-
-        // 模板：<div id="root"> + React UMD + ReactDOM UMD + app.js
-        // 若 index.html 已有 <div id="root">，保留标题/样式；否则用标准模板
-        let title = "Hermix App";
-        let html = String::from_utf8_lossy(&raw);
-        let has_root = html.contains("id=\"root\"") || html.contains("id='root'");
-        let body = if has_root {
-            // 用原始 html 作为壳，把 </body> 前注入脚本
-            let mut s = html.to_string();
-            let scripts = format!(
-                "<script>\n{react_umd}\n</script>\n<script>\n{react_dom_umd}\n</script>\n{compiled}"
-            );
-            if let Some(pos) = s.rfind("</body>") {
-                s.insert_str(pos, &scripts);
-            } else {
-                s.push_str(&scripts);
-            }
-            s
+        let html_vec = if !has_tsx {
+            raw_html
         } else {
-            format!(
-                "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head><meta charset=\"utf-8\" /><title>{title}</title></head>\n<body>\n<div id=\"root\"></div>\n<script>\n{react_umd}\n</script>\n<script>\n{react_dom_umd}\n</script>\n{compiled}\n</body>\n</html>"
-            )
+            // TSX 模式：React UMD + 编译产物 inline 进模板
+            let react_umd = std::fs::read_to_string(Self::resolve_loader_file("react/react.production.min.js"))
+                .map_err(|_| HxPackError::ReactUmMissing("react.production.min.js".into()))?;
+            let react_dom_umd = std::fs::read_to_string(Self::resolve_loader_file("react/react-dom.production.min.js"))
+                .map_err(|_| HxPackError::ReactUmMissing("react.dom.production.min.js".into()))?;
+            let compiled = self.compile_tsx(app_dir)?;
+
+            let title = "Hermix App";
+            let html = String::from_utf8_lossy(&raw_html);
+            let has_root = html.contains("id=\"root\"") || html.contains("id='root'");
+            let body = if has_root {
+                let mut s = html.to_string();
+                s = s.replace(r#"<script src="/js/app.js"></script>"#, "");
+                s = s.replace(r#"<script src='/js/app.js'></script>"#, "");
+                let scripts = format!(
+                    "<script>\n{react_umd}\n</script>\n<script>\n{react_dom_umd}\n</script>\n{compiled}"
+                );
+                if let Some(pos) = s.rfind("</body>") {
+                    s.insert_str(pos, &scripts);
+                } else {
+                    s.push_str(&scripts);
+                }
+                s
+            } else {
+                format!(
+                    "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head><meta charset=\"utf-8\" /><title>{title}</title></head>\n<body>\n<div id=\"root\"></div>\n<script>\n{react_umd}\n</script>\n<script>\n{react_dom_umd}\n</script>\n{compiled}\n</body>\n</html>"
+                )
+            };
+            body.into_bytes()
         };
 
-        Ok(body.into_bytes())
+        Ok((html_vec, icon_png))
     }
 
     /// 打包 app 目录 → dist/<id>.exe（单文件）+ WebView2Loader.dll
@@ -227,13 +246,19 @@ impl HxShellPackager {
             HxPackError::ShellNotFound(self.shell_path.display().to_string())
         })?;
 
-        let html = self.build_final_html(app_dir)?;
+        let (html, icon_png) = self.build_final_payload(app_dir)?;
 
         let dist_dir = app_dir.join("dist");
         std::fs::create_dir_all(&dist_dir)?;
 
         let exe_path = dist_dir.join(format!("{id}.exe"));
         let mut out = shell;
+        // payload trailer: [icon_png?][icon_len:8LE][html][html_len:8LE][MAGIC]
+        // 壳 read_self_icon 会自动检测前导 icon 段
+        if let Some(icon) = icon_png.as_ref() {
+            out.extend_from_slice(icon);
+            out.extend_from_slice(&(icon.len() as u64).to_le_bytes());
+        }
         out.extend_from_slice(&html);
         out.extend_from_slice(&(html.len() as u64).to_le_bytes());
         out.extend_from_slice(MAGIC);
@@ -246,4 +271,76 @@ impl HxShellPackager {
 
         Ok(exe_path)
     }
+}
+
+/// 比较目标壳与资源壳的 BUILD_PROBE 版本标记。
+/// 目标缺少标记、或标记比资源旧 → true（需要覆盖）。
+/// 两侧都无法识别标记 → 按文件大小判断（更大的通常更新）。
+fn shell_is_stale(target: &Path, src: &Path) -> bool {
+    fn probe(p: &Path) -> Option<u32> {
+        let bytes = std::fs::read(p).ok()?;
+        let hay = String::from_utf8_lossy(&bytes);
+        // 提取 BUILD_PROBE_YYYY_DC_V<N> 里的版本号
+        let find = |marker: &str| {
+            let idx = hay.find(marker)?;
+            let rest = &hay[idx + marker.len()..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            digits.parse::<u32>().ok()
+        };
+        find("BUILD_PROBE_2026_DC_V").or_else(|| find("BUILD_PROBE"))
+    }
+    match (probe(target), probe(src)) {
+        (Some(t), Some(s)) => t < s,
+        (None, Some(_)) => true,          // 目标无标记（旧版）→ 覆盖
+        (Some(_), None) => false,         // 资源无标记 → 不动
+        (None, None) => {
+            // 双无标记：按大小比（旧壳更小）
+            std::fs::metadata(target)
+                .and_then(|t| std::fs::metadata(src).map(|s| (t.len(), s.len())))
+                .map(|(t, s)| t < s)
+                .unwrap_or(false)
+        }
+    }
+}
+
+/// 从 manifest.json 读 icon_data（base64 data URL 或纯 base64），解码为 PNG bytes。
+/// 返回 None 表示没有图标或解码失败（壳会降级为无图标窗口）。
+fn read_icon_data(app_dir: &Path) -> Option<Vec<u8>> {
+    let manifest_path = app_dir.join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let raw = v.get("icon_data").and_then(|x| x.as_str())?;
+    crate::base64_decode_icon(raw).ok()
+}
+
+/// 从 manifest.json 读 `icon` 字段（图标库内 SVG 名，如 "music"），
+/// 从内置图标库 `resources/icons/<name>.svg` 读取 SVG 内容。
+/// 返回 None 表示没有 icon 字段或库中无此图标（壳降级为无图标窗口）。
+fn read_icon_library_svg(app_dir: &Path) -> Option<Vec<u8>> {
+    let manifest_path = app_dir.join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let name = v.get("icon").and_then(|x| x.as_str())?;
+    let name = name.trim();
+    if name.is_empty() || name.contains("base64") || name.len() > 64 {
+        return None; // 非法名（可能是 base64 data URL 混进 icon 字段）
+    }
+    // 图标库候选路径：当前 exe 旁 resources/icons/ → HERMIX_HOME/loader/icons/
+    let cands = [
+        std::env::current_exe().ok().and_then(|e| {
+            e.parent().map(|d| d.join("resources").join("icons").join(format!("{name}.svg")))
+        }),
+        Some(
+            hermix_config::paths::hermix_home()
+                .join("loader").join("icons").join(format!("{name}.svg")),
+        ),
+    ]
+    .into_iter()
+    .flatten();
+    for c in cands {
+        if c.exists() {
+            return std::fs::read(&c).ok();
+        }
+    }
+    None
 }

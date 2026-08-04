@@ -1,0 +1,6 @@
+/target/
+/.target/
+/.target2/
+/out-target/
+*.log
+hx-shell.log

@@ -1,0 +1,1052 @@
+// Windows GUI 子系统：不弹控制台窗口，双击 exe 直接出 WebView 窗口
+// 必须是文件第一条 — inner attribute 在 doc comment 之前声明
+#![windows_subsystem = "windows"]
+
+//! hx-shell — 极简 WebView2 应用壳（基于 wry）
+//!
+//! 单文件模式：自身 exe 尾部带 [icon?][len:8LE][html][len:8LE][MAGIC:HXAPP1]
+//!
+//! 绑定（页面端）：
+//!   window.hx.*  — 文档化公开 API（writeFile/readFile/getInfo/exec/...）
+//!   window.invoke(cmd, args) → Promise — 底层 RPC（window.hx.* 内部调用）
+//!     内部走 window.chrome.webview.postMessage({id, m:cmd, a:args})
+//!     Rust 处理后 evaluate_script 回调 window['__hx_resolve_{id}'](result)
+//!
+//! 已实现命令（Rust 端）：
+//!   writeFile(path, content) / readFile(path) / getInfo()
+//!   exec({cmd, args}) → {stdout, stderr, exitCode}
+//!   appendFile(path, content) / removeFile(path)
+//!   readDir(path) → [entries] / stat(path) → {size, isDir, modified}
+//!   createDir(path) / removeDir(path)
+//!   shell_temp_file({prefix, suffix}) → 临时文件路径字符串
+//!   shell_fs_write({path, content})
+//!   shell_exec({cmd, args:[...], timeoutSecs}) → {stdout, stderr, exitCode}
+//!   shell_fs_delete({path})
+//!
+//! hxfile:// 自定义协议：
+//!   hxfile://localhost/<path> → 直接读取本地文件返回给 WebView
+//!   用于 <audio src="hxfile://localhost/C:/Music/song.mp3">
+//!   window.hx.fileUrl(path) 把路径转成 hxfile:// URL
+
+use std::borrow::Cow;
+use std::path::PathBuf;
+
+use tao::event::{Event, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoop};
+use tao::window::{Icon, WindowBuilder};
+use wry::http::{header::CONTENT_TYPE, Request, Response};
+use wry::WebViewBuilder;
+
+const MAGIC: &[u8] = b"HXAPP1";
+
+pub const BUILD_PROBE: &str = "BUILD_PROBE_2026_DC_V6";
+
+// ------------------------------------------------------------------
+// 调试日志（写 exe 同目录 hx-shell.log）
+// ------------------------------------------------------------------
+fn hx_log(msg: &str) {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let path = dir.join("hx-shell.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                use std::io::Write;
+                let _ = writeln!(f, "{}", msg);
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// 自读尾部 payload（单文件模式）
+// 格式：
+//   旧版：[html][html_len:8LE][MAGIC]
+//   新版(有图标)：[icon_png|svg][icon_len:8LE][html][html_len:8LE][MAGIC]
+// 通过 icon_len 段是否存在判断。
+// ------------------------------------------------------------------
+fn read_self_payload() -> Option<Vec<u8>> {
+    let self_exe = std::env::current_exe().ok()?;
+    let bytes = std::fs::read(&self_exe).ok()?;
+    if bytes.len() < 14 {
+        return None;
+    }
+    let tail = &bytes[bytes.len() - 6..];
+    if tail != MAGIC {
+        return None;
+    }
+    let len_start = bytes.len() - 6 - 8;
+    let html_len = u64::from_le_bytes(bytes[len_start..len_start + 8].try_into().ok()?) as usize;
+    if html_len == 0 || len_start < html_len {
+        return None;
+    }
+    let html_bytes = &bytes[len_start - html_len..len_start];
+    Some(html_bytes.to_vec())
+}
+
+/// 读取尾部 icon 段（如有）。返回 RGBA bytes + width + height。
+/// 支持两种格式：
+/// - PNG 段（`\x89PNG` 开头）→ 内置极简 PNG 解码器
+/// - SVG 段（`<svg` / `<?xml` 开头）→ resvg 渲染为 RGBA
+fn read_self_icon() -> Option<(Vec<u8>, u32, u32)> {
+    let self_exe = std::env::current_exe().ok()?;
+    let bytes = std::fs::read(&self_exe).ok()?;
+    if bytes.len() < 22 { return None; } // 至少 2*8 + 6 = 22
+    let tail = &bytes[bytes.len() - 6..];
+    if tail != MAGIC { return None; }
+    let html_len_start = bytes.len() - 6 - 8;
+    let html_len = u64::from_le_bytes(bytes[html_len_start..html_len_start + 8].try_into().ok()?) as usize;
+    if html_len == 0 || html_len_start < html_len { return None; }
+    // html 前面是否还有 icon 段？
+    if html_len_start < html_len + 8 { return None; }
+    let icon_len_start = html_len_start - html_len - 8;
+    let icon_len = u64::from_le_bytes(bytes[icon_len_start..icon_len_start + 8].try_into().ok()?) as usize;
+    if icon_len == 0 || icon_len > 1024 * 1024 || icon_len_start < icon_len { return None; }
+    let icon_bytes = &bytes[icon_len_start - icon_len..icon_len_start];
+    // SVG 检测：以 '<' 开头（<svg / <?xml），否则当 PNG 处理
+    let looks_svg = icon_bytes
+        .iter()
+        .skip_while(|b| b.is_ascii_whitespace())
+        .take(1)
+        .next()
+        .copied()
+        == Some(b'<');
+    if looks_svg {
+        decode_svg_to_rgba(std::str::from_utf8(icon_bytes).ok()?)
+    } else {
+        decode_png_to_rgba(icon_bytes)
+    }
+}
+
+/// 用 resvg 把 SVG 渲染成 RGBA。输出尺寸按 SVG viewBox 实际大小（图标通常 24×24 太小，
+/// 放大到 256×256 作为窗口图标）。失败返回 None。
+fn decode_svg_to_rgba(svg: &str) -> Option<(Vec<u8>, u32, u32)> {
+    use resvg::tiny_skia::{self, Pixmap};
+    use resvg::usvg;
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_str(svg, &opt).ok()?;
+    let size = tree.size();
+    let (w, h) = (size.width().max(1.0), size.height().max(1.0));
+    // Lucide 默认 24×24 → 放大到 256 窗口图标，保持宽高比
+    let scale = 256.0 / w.max(h);
+    let target_w = (w * scale).round().max(1.0) as u32;
+    let target_h = (h * scale).round().max(1.0) as u32;
+    let mut pixmap = Pixmap::new(target_w, target_h)?;
+    let ts = tiny_skia::Transform::from_scale(scale, scale);
+    resvg::render(&tree, ts, &mut pixmap.as_mut());
+    Some((pixmap.data().to_vec(), target_w, target_h))
+}
+
+/// 极简 PNG 解码（仅支持非隔行 8-bit RGBA/RGB 真彩图）。
+/// 委托给 `image` crate 太重；自实现：解析 IHDR → 找 IDAT → zlib 解压 → 还原 filter → 合并通道。
+/// 若失败返回 None，壳降级为无图标。
+fn decode_png_to_rgba(png: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    // PNG signature
+    if png.len() < 8 || &png[..8] != b"\x89PNG\r\n\x1a\n" { return None; }
+    let mut pos = 8;
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let mut bit_depth = 0u8;
+    let mut color_type = 0u8;
+    let mut idat = Vec::new();
+    while pos + 8 <= png.len() {
+        let len = u32::from_be_bytes(png[pos..pos + 4].try_into().ok()?) as usize;
+        let kind = &png[pos + 4..pos + 8];
+        let data = &png[pos + 8..pos + 8 + len];
+        match kind {
+            b"IHDR" if data.len() >= 13 => {
+                width = u32::from_be_bytes(data[0..4].try_into().ok()?);
+                height = u32::from_be_bytes(data[4..8].try_into().ok()?);
+                bit_depth = data[8];
+                color_type = data[9];
+                if bit_depth != 8 { return None; }
+                // 2=RGB, 6=RGBA
+                if color_type != 2 && color_type != 6 { return None; }
+            }
+            b"IDAT" => idat.extend_from_slice(data),
+            b"IEND" => break,
+            _ => {}
+        }
+        pos += 8 + len + 4; // len + type + data + crc
+    }
+    if width == 0 || height == 0 || idat.is_empty() { return None; }
+
+    // zlib decompress（PNG IDAT 是 zlib stream）
+    use flate2::read::ZlibDecoder;
+    use std::io::Read;
+    let mut raw = Vec::with_capacity(idat.len() * 2);
+    if ZlibDecoder::new(&idat[..]).read_to_end(&mut raw).is_err() { return None; }
+
+    let channels = if color_type == 6 { 4 } else { 3 };
+    let stride = width as usize * channels;
+    let mut pixels = vec![0u8; height as usize * stride];
+    let mut prev_row = vec![0u8; stride];
+
+    for y in 0..height as usize {
+        let row_start = y * (stride + 1); // +1 for filter byte
+        if row_start + stride > raw.len() { return None; }
+        let filter = raw[row_start];
+        let row = &raw[row_start + 1..row_start + 1 + stride];
+        let out = &mut pixels[y * stride..(y + 1) * stride];
+        match filter {
+            0 => out.copy_from_slice(row),
+            1 => { // Sub
+                for x in 0..stride {
+                    let left = if x >= channels { out[x - channels] } else { 0 };
+                    out[x] = row[x].wrapping_add(left);
+                }
+            }
+            2 => { // Up
+                for x in 0..stride {
+                    out[x] = row[x].wrapping_add(prev_row[x]);
+                }
+            }
+            3 => { // Average
+                for x in 0..stride {
+                    let left = if x >= channels { out[x - channels] } else { 0 };
+                    out[x] = row[x].wrapping_add(((left as u16 + prev_row[x] as u16) / 2) as u8);
+                }
+            }
+            4 => { // Paeth
+                for x in 0..stride {
+                    let a = if x >= channels { out[x - channels] } else { 0 };
+                    let b = prev_row[x];
+                    let c = if x >= channels { prev_row[x - channels] } else { 0 };
+                    let p = a as i16 + b as i16 - c as i16;
+                    let pa = (p - a as i16).abs();
+                    let pb = (p - b as i16).abs();
+                    let pc = (p - c as i16).abs();
+                    let pr = if pa <= pb && pa <= pc { a }
+                             else if pb <= pc { b }
+                             else { c };
+                    out[x] = row[x].wrapping_add(pr);
+                }
+            }
+            _ => return None,
+        }
+        prev_row.copy_from_slice(out);
+    }
+
+    // RGB → RGBA
+    let rgba = if channels == 4 {
+        pixels
+    } else {
+        let mut out = Vec::with_capacity(pixels.len() * 4 / 3);
+        for chunk in pixels.chunks(3) {
+            out.extend_from_slice(chunk);
+            out.push(255);
+        }
+        out
+    };
+    Some((rgba, width, height))
+}
+
+// ------------------------------------------------------------------
+// 内置绑定（JSON-RPC over WebView2 postMessage）
+// ------------------------------------------------------------------
+
+/// writeFile(path, content) — 数组形式参数
+fn hx_write_file(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    let content = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    match std::fs::write(path, content) {
+        Ok(()) => serde_json::json!({"ok": true}),
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+/// readFile(path) — 数组形式参数（文本 only）
+fn hx_read_file(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    match std::fs::read_to_string(path) {
+        Ok(content) => serde_json::json!({"ok": true, "data": content}),
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+/// readFileBytes(path) — 二进制读取，返回 base64 字符串（页面端 atob 解码）
+fn hx_read_file_bytes(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::json!({"ok": true, "data": base64_encode(&bytes)}),
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+/// writeFileBytes(path, base64) — 二进制写入
+fn hx_write_file_bytes(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    let b64 = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    match base64_decode(b64) {
+        Some(bytes) => match std::fs::write(path, &bytes) {
+            Ok(()) => serde_json::json!({"ok": true}),
+            Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+        },
+        None => serde_json::json!({"ok": false, "err": "invalid base64"}),
+    }
+}
+
+/// getInfo() — 壳信息 + 完整 API 清单
+/// LLM 调用此方法发现可用 API，不依赖可能过时的 SKILL.md 文档
+fn hx_get_info() -> serde_json::Value {
+    serde_json::json!({"ok": true, "data": {
+        "shell": "hx-shell",
+        "engine": "wry/WebView2",
+        "single_file": read_self_payload().is_some(),
+        "version": BUILD_PROBE,
+        // ── API 清单：LLM 必须只使用这里列出的方法 ──
+        "apis": {
+            "writeFile":     {"params": ["path: string", "content: string"], "returns": "{ok, err?}"},
+            "readFile":      {"params": ["path: string"], "returns": "{ok, data: string, err?}", "note": "文本文件 only"},
+            "readFileBytes": {"params": ["path: string"], "returns": "{ok, data: base64, err?}", "note": "二进制文件 → base64"},
+            "writeFileBytes":{"params": ["path: string", "base64: string"], "returns": "{ok, err?}", "note": "二进制写入"},
+            "appendFile":     {"params": ["path: string", "content: string"], "returns": "{ok, err?}"},
+            "removeFile":     {"params": ["path: string"], "returns": "{ok, err?}"},
+            "readDir":        {"params": ["path: string"], "returns": "{ok, data: string[], err?}", "note": "纯名字数组"},
+            "readDirDetailed":{"params": ["path: string"], "returns": "{ok, data: [{name, isDir, isFile, size, modified}], err?}", "note": "带元信息"},
+            "stat":           {"params": ["path: string"], "returns": "{ok, data: {size, isDir, isFile, modified}, err?}"},
+            "createDir":      {"params": ["path: string"], "returns": "{ok, err?}"},
+            "removeDir":      {"params": ["path: string"], "returns": "{ok, err?}"},
+            "exec":           {"params": ["{cmd: string, args: string[]}"], "returns": "{ok, data: {stdout, stderr, exitCode}, err?}"},
+            "openDialog":     {"params": ["{title?, directory?, filters?}"], "returns": "{ok, data: string | null, err?}", "note": "原生文件选择"},
+            "saveDialog":     {"params": ["{title?, defaultName?, filters?}"], "returns": "{ok, data: string | null, err?}", "note": "原生保存对话框"},
+            "getInfo":        {"params": [], "returns": "{ok, data: this_object}"},
+            "fileUrl":        {"params": ["path: string"], "returns": "string", "note": "path → hxfile:// URL for <audio>/<img>/<video>"},
+            "showMessage":    {"params": ["msg: string"], "returns": "{ok, data}"},
+        },
+        // ── 自定义协议 ──
+        "protocols": {
+            "hxfile": "hxfile://localhost/<path> — WebView 直接读取本地文件（音频/图片/视频），支持 seek"
+        },
+        // ── 明确不支持的 API（别猜，别试）──
+        "notSupported": ["clipboardGet", "clipboardSet", "getEnv", "fetch"],
+    }})
+}
+
+/// appendFile(path, content) — 追加写入
+fn hx_append_file(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    let content = args.get(1).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    use std::io::Write;
+    match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        Ok(mut f) => match f.write_all(content.as_bytes()) {
+            Ok(()) => serde_json::json!({"ok": true}),
+            Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+        },
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+/// removeFile(path) — 删除文件
+fn hx_remove_file(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => serde_json::json!({"ok": true}),
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+/// readDir(path) — 列出目录内容（纯名字 string[]）
+fn hx_read_dir(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    match std::fs::read_dir(path) {
+        Ok(entries) => {
+            let names: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            serde_json::json!({"ok": true, "data": names})
+        }
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+/// readDirDetailed(path) — 列出目录内容，带每个条目的元信息
+fn hx_read_dir_detailed(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    match std::fs::read_dir(path) {
+        Ok(entries) => {
+            let items: Vec<serde_json::Value> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    let md = e.metadata().ok();
+                    let (size, is_dir, is_file, modified) = md
+                        .map(|m| {
+                            (
+                                m.len(),
+                                m.is_dir(),
+                                m.is_file(),
+                                m.modified()
+                                    .ok()
+                                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0),
+                            )
+                        })
+                        .unwrap_or((0, false, false, 0));
+                    serde_json::json!({
+                        "name": name,
+                        "size": size,
+                        "isDir": is_dir,
+                        "isFile": is_file,
+                        "modified": modified,
+                    })
+                })
+                .collect();
+            serde_json::json!({"ok": true, "data": items})
+        }
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+/// stat(path) — 文件元信息
+fn hx_stat(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    match std::fs::metadata(path) {
+        Ok(md) => {
+            let modified = md.modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            serde_json::json!({"ok": true, "data": {
+                "size": md.len(),
+                "isDir": md.is_dir(),
+                "isFile": md.is_file(),
+                "modified": modified,
+            }})
+        }
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+/// createDir(path) — 创建目录
+fn hx_create_dir(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    match std::fs::create_dir_all(path) {
+        Ok(()) => serde_json::json!({"ok": true}),
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+/// removeDir(path) — 删除目录（递归）
+fn hx_remove_dir(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => serde_json::json!({"ok": true}),
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+// ------------------------------------------------------------------
+// exec — 执行外部命令（对象形式参数 {cmd, args}）
+// 含 program-not-found fallback：常见 Windows 程序 (powershell, cmd)
+// 在 PATH 不全或被剥离的子进程中找不到时，自动回退到 System32 全路径
+// ------------------------------------------------------------------
+fn hx_exec(args: &serde_json::Value) -> serde_json::Value {
+    // 兼容两种形式：对象 {cmd, args} 或 数组 ["cmd", "arg1", ...]
+    let (cmd, argv) = if args.is_array() {
+        let arr = args.as_array().unwrap();
+        let cmd = arr.get(0).and_then(|v| v.as_str()).unwrap_or("");
+        let argv: Vec<String> = arr.iter().skip(1)
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+        (cmd, argv)
+    } else {
+        let cmd = args.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+        let argv: Vec<String> = args.get("args")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+        (cmd, argv)
+    };
+
+    if cmd.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty cmd"});
+    }
+
+    // Program-not-found fallback（Windows 常见路径）
+    let resolved_cmd = resolve_program_path(cmd);
+    let resolved_cmd_ref = resolved_cmd.as_deref().unwrap_or(cmd);
+
+    let output = std::process::Command::new(resolved_cmd_ref).args(&argv).output();
+    match output {
+        Ok(o) => serde_json::json!({
+            "ok": true,
+            "data": {
+                "stdout": String::from_utf8_lossy(&o.stdout).to_string(),
+                "stderr": String::from_utf8_lossy(&o.stderr).to_string(),
+                "exitCode": o.status.code().unwrap_or(-1),
+            }
+        }),
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+/// 在 PATH 找不到时，自动尝试 Windows System32 常见程序路径
+/// 返回 None 表示无 fallback（继续用原 cmd 让 Command 自身报错）
+fn resolve_program_path(cmd: &str) -> Option<String> {
+    // 已经是绝对路径直接返回 None（让 Command 自己处理）
+    if cmd.contains(':') || cmd.starts_with('\\') || cmd.starts_with('/') {
+        return None;
+    }
+    // 只对短命令名 fallback（避免误判带参数的长字符串）
+    let name = cmd.split_whitespace().next().unwrap_or(cmd);
+    if name.contains('\\') || name.contains('/') || name.contains('.') {
+        return None;
+    }
+    let lower = name.to_ascii_lowercase();
+    let candidates: &[&str] = match lower.as_str() {
+        "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe" => &[
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        ],
+        "cmd" | "cmd.exe" => &[
+            r"C:\Windows\System32\cmd.exe",
+        ],
+        "where" | "where.exe" => &[
+            r"C:\Windows\System32\where.exe",
+        ],
+        _ => return None,
+    };
+    for path in candidates {
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
+// ------------------------------------------------------------------
+// openDialog / saveDialog — 原生文件/目录选择（rfd）
+// ------------------------------------------------------------------
+
+/// openDialog({title?, directory?, multi?, filters?}) — 文件/目录选择
+/// - directory: true → 选目录；否则选文件
+/// - multi: true → 多选（返回 string[]）
+/// - filters: [{"name": "图片", "extensions": ["png","jpg"]}]
+fn hx_open_dialog(args: &serde_json::Value) -> serde_json::Value {
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(title) = args.get("title").and_then(|v| v.as_str()) {
+        dialog = dialog.set_title(title);
+    }
+    if let Some(dir) = args.get("directory").and_then(|v| v.as_str()) {
+        dialog = dialog.set_directory(dir);
+    }
+    if let Some(filters) = args.get("filters").and_then(|v| v.as_array()) {
+        for f in filters {
+            if let (Some(name), Some(exts)) = (
+                f.get("name").and_then(|v| v.as_str()),
+                f.get("extensions").and_then(|v| v.as_array()),
+            ) {
+                let exts: Vec<&str> = exts.iter().filter_map(|v| v.as_str()).collect();
+                if !exts.is_empty() {
+                    dialog = dialog.add_filter(name, &exts);
+                }
+            }
+        }
+    }
+    let is_dir = args.get("directory").and_then(|v| v.as_bool()).unwrap_or(false);
+    let multi = args.get("multi").and_then(|v| v.as_bool()).unwrap_or(false);
+    if is_dir {
+        match dialog.pick_folder() {
+            Some(p) => serde_json::json!({"ok": true, "data": p.to_string_lossy().to_string()}),
+            None => serde_json::json!({"ok": true, "data": null}),
+        }
+    } else if multi {
+        match dialog.pick_files() {
+            Some(files) => {
+                let paths: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                serde_json::json!({"ok": true, "data": paths})
+            }
+            None => serde_json::json!({"ok": true, "data": null}),
+        }
+    } else {
+        match dialog.pick_file() {
+            Some(p) => serde_json::json!({"ok": true, "data": p.to_string_lossy().to_string()}),
+            None => serde_json::json!({"ok": true, "data": null}),
+        }
+    }
+}
+
+/// saveDialog({title?, defaultName?, filters?}) — 保存对话框
+fn hx_save_dialog(args: &serde_json::Value) -> serde_json::Value {
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(title) = args.get("title").and_then(|v| v.as_str()) {
+        dialog = dialog.set_title(title);
+    }
+    if let Some(name) = args.get("defaultName").and_then(|v| v.as_str()) {
+        dialog = dialog.set_file_name(name);
+    }
+    if let Some(filters) = args.get("filters").and_then(|v| v.as_array()) {
+        for f in filters {
+            if let (Some(name), Some(exts)) = (
+                f.get("name").and_then(|v| v.as_str()),
+                f.get("extensions").and_then(|v| v.as_array()),
+            ) {
+                let exts: Vec<&str> = exts.iter().filter_map(|v| v.as_str()).collect();
+                if !exts.is_empty() {
+                    dialog = dialog.add_filter(name, &exts);
+                }
+            }
+        }
+    }
+    match dialog.save_file() {
+        Some(p) => serde_json::json!({"ok": true, "data": p.to_string_lossy().to_string()}),
+        None => serde_json::json!({"ok": true, "data": null}),
+    }
+}
+
+// ------------------------------------------------------------------
+// 磁盘清理器所需的 shell_* 命令（对象形式参数，保留向后兼容）
+// ------------------------------------------------------------------
+
+fn hx_shell_temp_file(args: &serde_json::Value) -> serde_json::Value {
+    let prefix = args.get("prefix").and_then(|v| v.as_str()).unwrap_or("hx_");
+    let suffix = args.get("suffix").and_then(|v| v.as_str()).unwrap_or("");
+    let n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("{}{}{}", prefix, n, suffix));
+    serde_json::json!({"ok": true, "data": path.to_string_lossy().to_string()})
+}
+
+fn hx_shell_fs_write(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+    match std::fs::write(path, content) {
+        Ok(()) => serde_json::json!({"ok": true}),
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+fn hx_shell_fs_delete(args: &serde_json::Value) -> serde_json::Value {
+    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return serde_json::json!({"ok": false, "err": "empty path"});
+    }
+    let r = std::fs::remove_file(path).or_else(|_| std::fs::remove_dir_all(path));
+    match r {
+        Ok(()) => serde_json::json!({"ok": true}),
+        Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
+    }
+}
+
+fn hx_shell_exec(args: &serde_json::Value) -> serde_json::Value {
+    hx_exec(args)
+}
+
+// ------------------------------------------------------------------
+// base64 辅助（无外部依赖，手写最小实现）
+// ------------------------------------------------------------------
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+        let n = (b0 as u32) << 16 | (b1 as u32) << 8 | b2 as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(n >> 6) as usize & 63] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[n as usize & 63] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits = 0;
+    for c in s.chars() {
+        let v = match c {
+            'A'..='Z' => c as u32 - 'A' as u32,
+            'a'..='z' => c as u32 - 'a' as u32 + 26,
+            '0'..='9' => c as u32 - '0' as u32 + 52,
+            '+' => 62,
+            '/' => 63,
+            '=' => break,
+            _ if c.is_whitespace() => continue,
+            _ => return None,
+        };
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+// ------------------------------------------------------------------
+// hxfile:// 自定义协议 — 让 WebView 直接访问本地文件
+// ------------------------------------------------------------------
+
+/// 简单 MIME 类型推断（基于文件扩展名）
+fn mime_type(path: &str) -> &'static str {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".html") || lower.ends_with(".htm") { "text/html" }
+    else if lower.ends_with(".css") { "text/css" }
+    else if lower.ends_with(".js") { "text/javascript" }
+    else if lower.ends_with(".json") { "application/json" }
+    else if lower.ends_with(".txt") { "text/plain" }
+    // 音频
+    else if lower.ends_with(".mp3") { "audio/mpeg" }
+    else if lower.ends_with(".flac") { "audio/flac" }
+    else if lower.ends_with(".wav") { "audio/wav" }
+    else if lower.ends_with(".ogg") { "audio/ogg" }
+    else if lower.ends_with(".m4a") { "audio/mp4" }
+    else if lower.ends_with(".aac") { "audio/aac" }
+    else if lower.ends_with(".wma") { "audio/x-ms-wma" }
+    // 图片
+    else if lower.ends_with(".png") { "image/png" }
+    else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") { "image/jpeg" }
+    else if lower.ends_with(".gif") { "image/gif" }
+    else if lower.ends_with(".svg") { "image/svg+xml" }
+    else if lower.ends_with(".webp") { "image/webp" }
+    else if lower.ends_with(".bmp") { "image/bmp" }
+    // 视频
+    else if lower.ends_with(".mp4") { "video/mp4" }
+    else if lower.ends_with(".webm") { "video/webm" }
+    else if lower.ends_with(".avi") { "video/x-msvideo" }
+    else if lower.ends_with(".mkv") { "video/x-matroska" }
+    else { "application/octet-stream" }
+}
+
+/// URL percent-decode（处理 %20 等编码字符）
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i+1] as char).to_digit(16);
+            let lo = (bytes[i+2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+/// hxfile:// 协议处理器：从 URL 路径读取本地文件
+fn hxfile_handler(_webview_id: &str, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+    let uri_path = request.uri().path();
+    hx_log(&format!("hxfile: {}", uri_path));
+
+    // URL 格式: hxfile://localhost/C:/Music/song.mp3
+    // uri_path = /C:/Music/song.mp3 → 去掉前导 / 得到文件路径
+    let file_path = if let Some(stripped) = uri_path.strip_prefix('/') {
+        percent_decode(stripped)
+    } else {
+        percent_decode(uri_path)
+    };
+
+    match std::fs::read(&file_path) {
+        Ok(content) => {
+            let mime = mime_type(&file_path);
+            http::Response::builder()
+                .header(CONTENT_TYPE, mime)
+                .header("Access-Control-Allow-Origin", "*")
+                .body(Cow::Owned(content))
+                .unwrap()
+        }
+        Err(e) => {
+            hx_log(&format!("hxfile error: {} → {}", file_path, e));
+            http::Response::builder()
+                .header(CONTENT_TYPE, "text/plain")
+                .status(404)
+                .body(Cow::Owned(format!("File not found: {file_path}").into_bytes()))
+                .unwrap()
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// 入口
+// ------------------------------------------------------------------
+fn main() -> wry::Result<()> {
+    // Panic hook：GUI 子系统下没有 stderr，用 MessageBox 显示崩溃信息
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("hx-shell 崩溃\n\n{}", info);
+        hx_log(&format!("PANIC: {msg}"));
+        #[cfg(windows)]
+        unsafe {
+            use std::ffi::CString;
+            if let Ok(c_msg) = CString::new(msg.clone()) {
+                use std::os::raw::{c_int, c_uint};
+                extern "system" {
+                    fn MessageBoxA(
+                        hwnd: *mut std::os::raw::c_void,
+                        lp_text: *const std::os::raw::c_char,
+                        lp_caption: *const std::os::raw::c_char,
+                        u_type: c_uint,
+                    ) -> c_int;
+                }
+                let title = CString::new("hx-shell Error").unwrap();
+                MessageBoxA(
+                    std::ptr::null_mut(),
+                    c_msg.as_ptr(),
+                    title.as_ptr(),
+                    0x10, // MB_ICONERROR
+                );
+            }
+        }
+    }));
+
+    hx_log(&format!("=== hx-shell start {} ===", BUILD_PROBE));
+    hx_log(&format!("exe: {:?}", std::env::current_exe().ok()));
+    let event_loop = EventLoop::new();
+    hx_log("event_loop created");
+    // 解析尾部 icon 段（若有），用作窗口标题栏 + 任务栏图标
+    let window_icon = read_self_icon().and_then(|(rgba, w, h)| {
+        match Icon::from_rgba(rgba, w, h) {
+            Ok(ic) => { hx_log(&format!("window icon loaded: {}x{}", w, h)); Some(ic) }
+            Err(e) => { hx_log(&format!("Icon::from_rgba failed: {e:?}")); None }
+        }
+    });
+    let window = WindowBuilder::new()
+        .with_title("Hermix App")
+        .with_inner_size(tao::dpi::LogicalSize::new(900.0, 640.0))
+        .with_window_icon(window_icon)
+        .build(&event_loop)
+        .unwrap_or_else(|e| {
+            let msg = format!("窗口创建失败: {e}");
+            hx_log(&msg);
+            panic!("{msg}");
+        });
+    hx_log("window created");
+
+    let payload = read_self_payload();
+    hx_log(&format!("payload: {} bytes", payload.as_ref().map(|p| p.len()).unwrap_or(0)));
+    let res_dir = exe_dir().join("resources");
+    hx_log(&format!("res_dir: {}", res_dir.display()));
+
+    let webview_ref: std::sync::Arc<std::sync::Mutex<Option<wry::WebView>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let wv_ref = webview_ref.clone();
+    let builder = WebViewBuilder::new()
+        // hxfile:// 自定义协议 — 让 <audio>/<img>/<video> 能直接访问本地文件
+        .with_custom_protocol("hxfile".into(), hxfile_handler)
+        .with_ipc_handler(move |req| {
+            let body = req.body().to_string();
+            hx_log(&format!("IPC: {}", body));
+            let v: serde_json::Value = serde_json::from_str(&body)
+                .unwrap_or_else(|_| serde_json::json!({"id": null, "m": "_noop", "a": []}));
+            let id = v["id"].as_str().unwrap_or("").to_string();
+            let m = v["m"].as_str().unwrap_or("");
+            let a = v["a"].clone();
+            let result = match m {
+                // 文档化公开 API
+                "writeFile" => hx_write_file(&a),
+                "readFile" => hx_read_file(&a),
+                "readFileBytes" => hx_read_file_bytes(&a),
+                "writeFileBytes" => hx_write_file_bytes(&a),
+                "getInfo" => hx_get_info(),
+                "exec" => hx_exec(&a),
+                "appendFile" => hx_append_file(&a),
+                "removeFile" => hx_remove_file(&a),
+                "readDir" => hx_read_dir(&a),
+                "readDirDetailed" => hx_read_dir_detailed(&a),
+                "stat" => hx_stat(&a),
+                "createDir" => hx_create_dir(&a),
+                "removeDir" => hx_remove_dir(&a),
+                "openDialog" => hx_open_dialog(&a),
+                "saveDialog" => hx_save_dialog(&a),
+                // 磁盘清理器专用（向后兼容）
+                "shell_temp_file" => hx_shell_temp_file(&a),
+                "shell_fs_write" => hx_shell_fs_write(&a),
+                "shell_exec" => hx_shell_exec(&a),
+                "shell_fs_delete" => hx_shell_fs_delete(&a),
+                _ => serde_json::json!({"ok": false, "err": format!("unknown: {m}")}),
+            };
+            // 回调 JS 端 resolver，传入完整 result 对象
+            let js = format!("window['__hx_resolve_{}']({})", id, result);
+            if let Ok(w) = wv_ref.lock() {
+                if let Some(wv) = w.as_ref() {
+                    let _ = wv.evaluate_script(&js);
+                }
+            }
+        })
+        // init_script 在任何页面 JS 之前执行：
+        // 1) 暴露 window.invoke(cmd, args) → Promise — 底层 RPC
+        // 2) 暴露 window.hx.* — 文档化公开 API，包装 window.invoke
+        .with_initialization_script(r#"
+            (function(){
+              try {
+                window.__hx_id = 0;
+
+                // ── 底层 RPC：window.invoke(cmd, args) → Promise ──
+                window.invoke = function(cmd, args) {
+                  return new Promise(function(resolve) {
+                    var id = 'hx' + (++window.__hx_id);
+                    window['__hx_resolve_' + id] = function(r){
+                      delete window['__hx_resolve_' + id];
+                      resolve(r);
+                    };
+                    try {
+                      window.chrome.webview.postMessage(JSON.stringify({ id: id, m: cmd, a: args || {} }));
+                    } catch (e) { resolve({ok: false, err: String(e)}); }
+                  });
+                };
+
+                // ── 文档化公开 API：window.hx.* ──
+                window.hx = {
+                  // 文件系统
+                  writeFile: function(path, content) {
+                    return window.invoke('writeFile', [path, content]);
+                  },
+                  readFile: function(path) {
+                    return window.invoke('readFile', [path]);
+                  },
+                  // 二进制读取 → base64（页面端 atob 解码）
+                  readFileBytes: function(path) {
+                    return window.invoke('readFileBytes', [path]);
+                  },
+                  // 二进制写入（base64）
+                  writeFileBytes: function(path, b64) {
+                    return window.invoke('writeFileBytes', [path, b64]);
+                  },
+                  appendFile: function(path, content) {
+                    return window.invoke('appendFile', [path, content]);
+                  },
+                  removeFile: function(path) {
+                    return window.invoke('removeFile', [path]);
+                  },
+                  readDir: function(path) {
+                    return window.invoke('readDir', [path]);
+                  },
+                  // 带元信息的目录列表
+                  readDirDetailed: function(path) {
+                    return window.invoke('readDirDetailed', [path]);
+                  },
+                  stat: function(path) {
+                    return window.invoke('stat', [path]);
+                  },
+                  createDir: function(path) {
+                    return window.invoke('createDir', [path]);
+                  },
+                  removeDir: function(path) {
+                    return window.invoke('removeDir', [path]);
+                  },
+                  // 原生对话框（rfd）
+                  openDialog: function(opts) {
+                    return window.invoke('openDialog', opts || {});
+                  },
+                  saveDialog: function(opts) {
+                    return window.invoke('saveDialog', opts || {});
+                  },
+                  // 进程/系统
+                  exec: function(cmd, args) {
+                    return window.invoke('exec', {cmd: cmd, args: args || []});
+                  },
+                  getInfo: function() {
+                    return window.invoke('getInfo', {});
+                  },
+                  // 本地文件 URL — 把文件路径转成 hxfile:// URL
+                  fileUrl: function(path) {
+                    if (!path) return '';
+                    var p = String(path).replace(/\\\\/g, '/');
+                    if (p.charAt(0) === '/') p = p.slice(1);
+                    p = encodeURIComponent(p).replace(/%2F/gi, '/');
+                    return 'hxfile://localhost/' + p;
+                  },
+                  showMessage: function(msg) {
+                    return Promise.resolve({ok: true, data: String(msg || '')});
+                  },
+                };
+              } catch(e) {
+                if (typeof console !== 'undefined') console.error('hx init error:', e);
+              }
+            })();
+        "#);
+
+    // 页面 HTML：单文件模式用尾部 payload，开发模式读外部 resources/index.html
+    let html_source: String = if let Some(p) = payload {
+        String::from_utf8_lossy(&p).to_string()
+    } else {
+        let fp = res_dir.join("index.html");
+        hx_log(&format!("dev mode: loading {}", fp.display()));
+        std::fs::read_to_string(&fp).unwrap_or_else(|e| {
+            format!("<!DOCTYPE html><html><body><h1 style='color:red'>index.html 加载失败: {e}</h1></body></html>")
+        })
+    };
+    hx_log(&format!("html source: {} bytes", html_source.len()));
+
+    let webview = builder
+        .with_html(html_source.clone())
+        .build(&window)?;
+    hx_log("webview build OK (with_html)");
+    webview_ref.lock().unwrap().replace(webview);
+    hx_log("enter event_loop");
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::WaitUntil(
+            std::time::Instant::now() + std::time::Duration::from_millis(500));
+        if let Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } = event
+        {
+            *control_flow = ControlFlow::Exit
+        }
+    });
+}
+
+fn exe_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
