@@ -1,6 +1,6 @@
 ---
 name: custom-app-development
-version: 6
+version: 9
 description: >
   自定义应用开发助手。当用户要求创建桌面应用、桌面工具、独立程序、
   窗口应用、打包成 EXE 的程序时使用。通过 custom_app_manager 工具
@@ -33,6 +33,26 @@ tags:
 ---
 
 # Custom App Development（基于 hx-shell）
+
+## 第零步：调 getInfo() 发现 API（强制）
+
+**写任何代码之前，先在应用 init 脚本中调用 `await window.hx.getInfo()`，检查返回的 `apis` 列表。**
+
+- `getInfo()` 返回当前壳**实际可用**的 API 清单（方法名、参数、返回值）+ 自定义协议 + 不支持的 API
+- **只使用 `getInfo()` 返回的 `apis` 列表中的方法**。不要从记忆里拿 API 名称，不要猜
+- 如果某个你想要的功能不在列表中：
+  1. 用 `hx.exec()` 调系统命令作为替代（如 `dir`/`tasklist`/`ipconfig`）
+  2. 或者用纯前端 JS（`localStorage`/`fetch`/`Canvas`/`IndexedDB`）
+  3. 或者告诉用户该功能在 hx-shell 中不支持
+- `getInfo()` 是运行时真相源。本文档可能过时，但 `getInfo()` 永远准确
+
+```js
+// 应用启动时第一行代码
+const info = await window.hx.getInfo();
+if (!info.ok) throw new Error('hx-shell bridge not available');
+console.log('Available APIs:', Object.keys(info.data.apis));
+// 之后只用这些 API 写应用逻辑
+```
 
 ## 运行时：hx-shell
 
@@ -75,17 +95,110 @@ export default {
 
 ## 绑定 API（window.hx.*）
 
-壳通过 WebView2 原生桥提供 RPC。LLM 直接调用：
+壳通过 WebView2 原生桥提供 RPC。所有方法返回 Promise，resolve 完整结果对象 `{ok, data?, err?}`。
+调用方通过 `r.ok` 判断成功/失败，通过 `r.data` 取数据，通过 `r.err` 取错误信息。
+
+### 文件系统
 
 | 方法 | 参数 | 返回 | 说明 |
 |---|---|---|---|
-| `hx.writeFile(path, content)` | string, string | `{ok}` | 写文件（UTF-8） |
-| `hx.readFile(path)` | string | `{ok, data}` | 读文件 |
-| `hx.getInfo()` | — | `{ok, data}` | 壳信息 |
+| `hx.writeFile(path, content)` | string, string | `{ok}` | 写文件（UTF-8 文本） |
+| `hx.readFile(path)` | string | `{ok, data}` | 读文件（**仅文本**，返回 UTF-8 字符串） |
+| `hx.readFileBytes(path)` | string | `{ok, data}` | 读二进制 → **base64**（页面端 `atob()` 解码） |
+| `hx.writeFileBytes(path, b64)` | string, string | `{ok}` | 二进制写入（base64 输入） |
+| `hx.appendFile(path, content)` | string, string | `{ok}` | 追加写入 |
+| `hx.removeFile(path)` | string | `{ok}` | 删除文件 |
+| `hx.readDir(path)` | string | `{ok, data: [...]}` | 列出目录内容（返回文件名数组） |
+| `hx.readDirDetailed(path)` | string | `{ok, data}` | 带元信息列表 `[{name,isDir,isFile,size,modified}]`，免去逐个 stat |
+| `hx.stat(path)` | string | `{ok, data}` | 文件元信息（size/isDir/isFile/modified） |
+| `hx.createDir(path)` | string | `{ok}` | 创建目录（递归） |
+| `hx.removeDir(path)` | string | `{ok}` | 删除目录（递归） |
+
+### 本地文件 URL（hxfile:// 协议）
+
+| 方法 | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `hx.fileUrl(path)` | string | string | 把本地路径转成 `hxfile://` URL，可直接用于 `<audio>`/`<img>`/`<video>` src |
 
 ```js
-await window.hx.writeFile("data.txt", "hello");
-const data = await window.hx.readFile("data.txt");
+// 播放本地音乐
+const url = window.hx.fileUrl('C:\\Music\\song.mp3');
+// url = 'hxfile://localhost/C:/Music/song.mp3'
+audioElement.src = url;
+audioElement.play();
+```
+
+**重要**：`hx.readFile` 只能读**文本文件**。对于二进制文件（MP3/图片/PDF）：
+- **首选** `hx.fileUrl(path)` 生成 URL 直接喂 `<audio>`/`<img>`/`<video>`（`hxfile://` 协议 Rust 端读磁盘，支持 seek，不占 IPC 内存）
+- **需要拿到字节**时用 `hx.readFileBytes(path)` → base64 → `atob()` 转 Uint8Array
+
+### 进程/系统
+
+| 方法 | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `hx.exec(cmd, args)` | string, string[] | `{ok, data}` | 执行外部命令，返回 `{stdout, stderr, exitCode}` |
+| `hx.getInfo()` | — | `{ok, data}` | 壳信息（shell/engine/version/single_file/完整 API 清单） |
+
+### 原生对话框（V6 壳新增）
+
+| 方法 | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `hx.openDialog({title?, directory?, multi?, filters?})` | object | `{ok, data}` | 原生文件/目录选择，**免 PowerShell 绕** |
+| `hx.saveDialog({title?, defaultName?, filters?})` | object | `{ok, data}` | 原生保存对话框 |
+
+```js
+// 选目录（音乐播放器用这个）
+const r = await window.hx.openDialog({ title: "选择音乐文件夹", directory: true });
+if (r.ok && r.data) console.log(r.data); // 'C:\\Music'
+
+// 选文件（带过滤器）
+const f = await window.hx.openDialog({
+  title: "选图片",
+  filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg"] }],
+});
+
+// 多选文件
+const fs = await window.hx.openDialog({ multi: true });
+// fs.data = ['C:\\a.txt', 'C:\\b.txt']
+
+// 保存
+const s = await window.hx.saveDialog({ title: "保存为", defaultName: "report.json" });
+```
+
+### 窗口图标（manifest.icon 用内置 Lucide 图标库名）
+
+manifest 的 `icon` 字段 = **Lucide 图标库名**（如 `"music"` / `"settings"` / `"folder"`），
+打包器从内置图标库（2007 个 SVG）读对应图标注入 payload，壳用 resvg 渲染成窗口图标。
+**不要传 base64 大图**（>50KB 会解码失败）。
+
+```json
+"manifest": {
+  "id": "music-player",
+  "name": "本地音乐",
+  "icon": "music",
+  "permissions": ["fs-read", "exec", "dialog"]
+}
+```
+
+常用图标名：`music` / `play` / `pause` / `skip-forward` / `folder` / `file-text` /
+`settings` / `search` / `download` / `upload` / `trash` / `edit` / `plus` / `x` /
+`check` / `alert-circle` / `image` / `video` / `mic` / `headphones` / `monitor` /
+`printer` / `camera` / `book-open` / `message-square` / `send` / `bell` / `star` / `heart`
+（完整 2007 个清单见 `apps/desktop-tauri/src-tauri/resources/icons/`，文件名去掉 `.svg` 即名字）
+
+```js
+// 文本读写
+await window.hx.writeFile('data.txt', 'hello');
+const r = await window.hx.readFile('data.txt');
+if (r.ok) console.log(r.data); // "hello"
+
+// 扫描文件夹（readDirDetailed 直接带大小/类型）
+const r2 = await window.hx.readDirDetailed('C:\\Music');
+if (r2.ok) console.log(r2.data);
+// [{name:'song1.mp3', isFile:true, size:5242880}, ...]
+
+// 播放音频
+audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
 ```
 
 **实现原理**（了解即可）：
@@ -95,11 +208,18 @@ const data = await window.hx.readFile("data.txt");
 
 **别用 fetch 到 `https://app.localhost/hx/...`**（custom scheme 的 fetch 被 Chromium CORS 拒绝）—— 必须用 `window.chrome.webview.postMessage`！
 
+### 媒体/二进制文件访问
+
+- **音频播放**：`hx.readDir(dir)` 扫描文件夹 → `hx.fileUrl(path)` 生成 URL → `<audio src=url>`
+- **图片显示**：`hx.fileUrl(path)` → `<img src=url>`
+- **视频播放**：`hx.fileUrl(path)` → `<video src=url>`
+- `hxfile://` 协议支持 seek（拖动进度条），不占 IPC 内存
+
 ### 系统能力不足？用纯前端 JS
 
 - 数据：`localStorage` / `IndexedDB` / **SQLite-wasm**（本地数据库）
 - 网络：`fetch()`（到 https URL）
-- 媒体：Canvas / WebGL / `<video>` / `<audio>`
+- 媒体：Canvas / WebGL / `<video>` / `<audio>` + `hxfile://` 协议
 - 算力：**wasm 库**（ffmpeg-wasm、pdf-wasm、jszip）
 
 ## 前端默认标准（必须遵守，违反视为不合格）
@@ -180,8 +300,9 @@ const data = await window.hx.readFile("data.txt");
 
 1. 写 `manifest.json`：
    ```json
-   {"id": "my-app", "name": "我的应用", "window_config": {"width": 900, "height": 600, "resizable": true}}
+   {"id": "my-app", "name": "我的应用", "version": "1.0.0", "long_description": "功能介绍...\n使用方法...\n更新方法...\n分发方法...", "window_config": {"width": 900, "height": 600, "resizable": true}}
    ```
+   **`long_description` 必填**：包含功能介绍、使用方法、更新方法、分发方法，在详情界面"说明"Tab 展示给用户。
 2. 写 `index.html`（自包含，或 Vite 单文件构建产物）——**按"前端默认标准"生成界面**
 3. 调 `custom_app_manager.create({manifest, index_html, app_source?, source_files?})`
 4. （可选）`validate` 检查 HTML/JS 完整性
@@ -192,14 +313,18 @@ const data = await window.hx.readFile("data.txt");
 
 ## 关键约束
 
+- **整个应用就是一个 `index.html`**：没有 backend.ts / ui.tsx 分离文件！所有 HTML/CSS/JS 都内联在单个 index.html 里。TSX 模式由 esbuild 编译后 inline。
 - **不要 import React**：`window.React` 是全局变量（从 CDN 或单文件 HTML 内嵌），用 `const { useState } = React;`
 - **不要 `fetch('app://...')`**：CORS 拒绝。用 `window.hx.*`（内部走 chrome.webview.postMessage）
 - **不要依赖 Node.js API**（path/fs/child_process）：沙箱里没有，用 `window.hx.*` 替代
+- **不要用 Tauri API**（`convertFileSrc`/`shell_dialog_open`/`shell_fs_read_bytes`）：这些在 hx-shell 里**不存在**！只有 `window.hx.*` 这一套 API
+- **二进制文件用 `hx.fileUrl`**：`readFile` 只读文本，MP3/图片/视频用 `hx.fileUrl(path)` 生成 URL
 - **不要用 sourcemap 单独文件**：Vite 单文件输出不要 `.map`（影响单文件化）
 - **HTML 文件编码**：UTF-8，无 BOM
 - **不要 CDN**：Vue/React/图标全部内联（离线可用）
-- **不要 emoji**：图标用内联 SVG
+- **不要 emoji**：图标用内联 SVG（manifest.json 里也不要用 emoji 当 icon）
 - **默认浅色**：不要上来就写深色
+- **manifest.json 禁止 emoji**：icon 字段不要用 emoji，留空或用文字
 
 ## 模板：纯 HTML 工具（浅色 + SVG 图标）
 
@@ -270,6 +395,110 @@ $('info').onclick = async () => {
   const r = await window.hx.getInfo();
   out(JSON.stringify(r, null, 2));
 };
+</script>
+</body>
+</html>
+```
+
+## 模板：本地音乐播放器（readDir + fileUrl + audio）
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>音乐播放器</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 14px/1.6 system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #fafafa; color: #18181b; display: flex; flex-direction: column; height: 100vh; }
+  .toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 20px; background: #fff;
+             border-bottom: 1px solid #e4e4e7; }
+  .toolbar input { flex: 1; height: 36px; background: #f4f4f5; border: 1px solid #e4e4e7;
+                   border-radius: 8px; padding: 0 12px; font: 13px/1 Consolas, monospace; }
+  button { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px;
+           background: #f4f4f5; color: #18181b; border: 1px solid #e4e4e7; border-radius: 8px;
+           cursor: pointer; font-size: 13px; }
+  button:hover { background: #e4e4e7; }
+  button.primary { background: #4b7a5e; color: #fff; border: none; font-weight: 500; }
+  button svg { width: 16px; height: 16px; }
+  .playlist { flex: 1; overflow-y: auto; padding: 8px 0; }
+  .song { display: flex; align-items: center; gap: 10px; padding: 8px 20px; cursor: pointer; }
+  .song:hover { background: #f4f4f5; }
+  .song.active { background: #e4e4e7; color: #4b7a5e; font-weight: 500; }
+  .song svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .player { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: #fff;
+            border-top: 1px solid #e4e4e7; }
+  .player audio { flex: 1; height: 36px; }
+  .status { padding: 4px 20px; color: #71717a; font-size: 12px; background: #fff;
+            border-top: 1px solid #e4e4e7; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <input id="dirInput" placeholder="输入音乐文件夹路径，如 C:\Music" value="">
+    <button class="primary" id="scan">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h6l2 4h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/></svg>
+      扫描
+    </button>
+  </div>
+  <div class="playlist" id="playlist">
+    <div class="song" style="color:#71717a;cursor:default">输入路径后点扫描</div>
+  </div>
+  <div class="player">
+    <button id="prev" title="上一首">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+    </button>
+    <audio id="audio" controls></audio>
+    <button id="next" title="下一首">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+    </button>
+  </div>
+  <div class="status" id="status">就绪</div>
+<script>
+const $ = id => document.getElementById(id);
+const EXT = ['.mp3','.flac','.wav','.ogg','.m4a','.aac','.wma'];
+let songs = [], current = -1;
+
+function status(msg) { $('status').textContent = msg; }
+
+async function scan() {
+  const dir = $('dirInput').value.trim();
+  if (!dir) { status('请输入文件夹路径'); return; }
+  status('扫描中...');
+  const r = await window.hx.readDir(dir);
+  if (!r.ok) { status('扫描失败: ' + r.err); return; }
+  songs = r.data.filter(f => EXT.some(e => f.toLowerCase().endsWith(e)));
+  status('找到 ' + songs.length + ' 首歌曲');
+  renderList();
+}
+
+function renderList() {
+  const html = songs.map((s, i) =>
+    '<div class="song' + (i === current ? ' active' : '') + '" data-i="' + i + '">' +
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>' +
+    s + '</div>').join('');
+  $('playlist').innerHTML = html || '<div class="song" style="color:#71717a;cursor:default">无音乐文件</div>';
+}
+
+function play(i) {
+  if (i < 0 || i >= songs.length) return;
+  current = i;
+  const dir = $('dirInput').value.trim().replace(/\\+$/, '');
+  const path = dir + '\\' + songs[i];
+  $('audio').src = window.hx.fileUrl(path);
+  $('audio').play();
+  status('播放中: ' + songs[i]);
+  renderList();
+}
+
+$('playlist').addEventListener('click', e => {
+  const el = e.target.closest('.song[data-i]');
+  if (el) play(parseInt(el.dataset.i));
+});
+$('audio').addEventListener('ended', () => play(current + 1));
+$('prev').onclick = () => play(current - 1);
+$('next').onclick = () => play(current + 1);
+$('scan').onclick = scan;
+$('dirInput').addEventListener('keydown', e => { if (e.key === 'Enter') scan(); });
 </script>
 </body>
 </html>

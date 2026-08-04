@@ -577,6 +577,14 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         "office-cli",
         include_str!("skills/office/office-cli/SKILL.md"),
     ),
+    // custom-app-development: hx-shell 自定义应用开发指南（含真实 schema / API / 图标库）。
+    // 2026-08-04 纳入内置 seed——此前只存在于开发机 ~/.hermix/skills/desktop/ 的历史遗留，
+    // 打包分发到别的电脑会缺失。category 用 "desktop" 与既有目录保持一致。
+    (
+        "desktop",
+        "custom-app-development",
+        include_str!("skills/custom-app-development.md"),
+    ),
 ];
 
 /// Materialise the bundled builtin skills into `skills_dir`. Returns the
