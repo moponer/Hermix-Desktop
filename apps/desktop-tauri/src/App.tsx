@@ -1767,6 +1767,14 @@ streamPhaseRef.current = null;
             // dead, no more sub-agent events will arrive, and
             // leaving stale "执行中" entries would confuse the user.
             setSubAgents({});
+            // ★ FIX: clear the "正在执行 N 个工具…" indicator.
+            // onDone's stranded-tools clear only fires on the normal
+            // path; onError (backend reject / WS error) skipped it,
+            // so any tool still in `runningToolRef` would leave the
+            // counter stale and the indicator stuck at "执行中"
+            // even after the stream is dead. Now we wipe both.
+            runningToolRef.current.clear();
+            setRunningToolCount(0);
           },
           onToolStart: ({ toolCallId, tool, content }) => {
             // Tool events are now appended to the

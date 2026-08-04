@@ -1307,7 +1307,12 @@ const clearPendingImages = useCallback(() => {
    */
   function isRowRenderable(m: ChatMessage): boolean {
     if (m.role === "user") {
-      return typeof m.content === "string" && m.content.trim().length > 0;
+      // 纯图片/纯附件消息：content 为空但 images 非空 → 必须渲染
+      // （否则"只发图片不填文字"时用户气泡被过滤，整个对话像"没发出"）
+      return (
+        (typeof m.content === "string" && m.content.trim().length > 0) ||
+        (Array.isArray(m.images) && m.images.length > 0)
+      );
     }
     if (m.role !== "assistant") return true;
     if (m.stopReason && m.stopReason.length > 0) return true;
