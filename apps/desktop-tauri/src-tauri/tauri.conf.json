@@ -34,7 +34,8 @@
     "createUpdaterArtifacts": false,
     "externalBin": [
       "binaries/hermix",
-      "binaries/officecli"
+      "binaries/officecli",
+      "binaries/markitdown"
     ],
     "publisher": "Hermix",
     "shortDescription": "Hermix Desktop portable AI agent (Windows)",

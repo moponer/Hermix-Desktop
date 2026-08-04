@@ -315,6 +315,7 @@ pub const DEFAULT_RESIDENT_TOOLS: &[&str] = &[
     // hiding them behind tool_search/tool_call bridges.
     "read_pdf",
     "read_image",
+    "markitdown",
     // File operations — move/rename must be resident so the LLM
     // can rename files without resorting to terminal mv (quoting issues).
     "move_file",

@@ -37,6 +37,7 @@ pub mod memory;
 pub mod messaging;
 pub mod model_providers;
 pub mod office_cli;
+pub mod markitdown;
 pub mod ppt_themes;
 pub mod create_presentation;
 pub mod pdf;
@@ -159,6 +160,13 @@ pub fn register_all(
     // tool to re-assert and `set_enabled_toolsets("office", false)`
     // actually disables something.
     office_cli::register(registry, terminal_backend.clone(), registry.terminal_workspace_handle());
+    //P1.8-style : `markitdown` converts arbitrary local documents
+    // (PDF/PPTX/DOCX/XLSX/HTML/EPUB/CSV/JSON/XML/MSG/ZIP/image) into
+    // compact LLM-friendly Markdown — the token-saving file reader.
+    // Tagged with the dedicated `"document"` toolset (matches
+    // `essential::ESSENTIAL_TOOLSETS`) so the floor can re-assert it and
+    // a user `enabled_toolsets.json` cannot silently disable it.
+    markitdown::register(registry, terminal_backend.clone());
     // High-level PPT generator: LLM provides JSON spec (theme + slides),
     // tool generates all office_cli commands internally.
     // Inspired by oh-my-ppt's JSON→slide approach.
