@@ -182,7 +182,7 @@ export interface SmokeReport {
   detail: string;
 }
 
-// Runs static checks (manifest integrity, HTML structure, Neutralino API
+// Runs static checks (manifest integrity, HTML structure, hx API
 // patterns, permission consistency, JS bracket balance) before
 // packaging. Agent development loops should call this after editing
 // app code and retry until `ok === true`.
@@ -190,7 +190,7 @@ export async function validateCustomApp(id: string): Promise<ValidationReport> {
   return invoke<ValidationReport>("custom_app_validate", { id });
 }
 
-// Launches the packaged neutralino exe and checks if it stays alive.
+// Launches the packaged hx-shell exe and checks if it stays alive.
 // Returns structured errors when `ok === false`.
 export async function smokeTestCustomApp(id: string): Promise<SmokeReport> {
   return invoke<SmokeReport>("custom_app_smoke_test", { id });

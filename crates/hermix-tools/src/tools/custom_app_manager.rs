@@ -8,15 +8,16 @@
 //! - `list`: List all installed apps
 //! - `get`: Get an app's details and source code
 //! - `delete`: Uninstall an app
-//! - `package`: Package an app as a standalone EXE (sidecar or neu-build mode)
+//! - `package`: Package an app as a standalone EXE (hx-shell tail-injection)
 //! - `run`: Launch a packaged app
-//! - `validate`: Static validation (manifest + HTML + Neutralino API + permissions)
+//! - `validate`: Static validation (manifest + HTML + hx API + permissions)
 //! - `smoke`: Runtime smoke test (launch + capture errors)
 //!
 //! Architecture: App = self-contained index.html + manifest.json.
-//! Uses Neutralinojs runtime (~2MB binary + neutralino.js client library).
-//! index.html calls system capabilities via Neutralino.* API.
-//! Sidecar packaging copies binary + resources → zero-dependency exe.
+//! Uses hx-shell runtime (wry/WebView2, ~1.2MB single-file exe).
+//! index.html calls system capabilities via window.hx.* API
+//! (WebView2 native postMessage bridge, no external client library needed).
+//! Packaging = tail-inject HTML into hx-shell.exe -> single distributable exe.
 //!
 //! The actual file operations are delegated to `hermix_plugin::PluginManager`.
 
@@ -48,7 +49,7 @@ pub fn register(registry: &ToolRegistry, manager: Arc<PluginManager>) {
             Arc::new(|| true),
             vec![],
             true,
-            "Create, update, list, package, and run user-facing desktop applications (custom apps) using Neutralinojs runtime. Actions: create, update, list, get, delete, package, run, validate, smoke.",
+            "Create, update, list, package, and run user-facing desktop applications (custom apps) using hx-shell runtime (wry/WebView2). Actions: create, update, list, get, delete, package, run, validate, smoke.",
             "📦",
             None,
             RiskLevel::Caution,
@@ -316,7 +317,7 @@ impl CustomAppManagerHandler {
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
 
-    /// 开发期自验证 (L0+L1+L2): 校验 manifest 完整性 + HTML 结构 + Neutralino API 调用 + JS 括号匹配 + 权限一致性.
+    /// 开发期自验证 (L0+L1+L2): 校验 manifest 完整性 + HTML 结构 + hx API 调用 + JS 括号匹配 + 权限一致性.
     /// 不打包、不改任何文件, 仅静态分析. 返回结构化报告. 每个 issue 的 message 包含修复提示.
     async fn validate(&self, params: &Value) -> Result<String, ToolError> {
         let id = params
@@ -333,7 +334,7 @@ impl CustomAppManagerHandler {
         let result = json!({
             "success": report.ok,
             "message": if report.ok {
-                format!("应用 '{id}' 开发期校验通过 (manifest + HTML + Neutralino API + 权限一致性)")
+                format!("应用 '{id}' 开发期校验通过 (manifest + HTML + hx API + 权限一致性)")
             } else {
                 format!("应用 '{id}' 开发期校验发现问题, 请根据 issues 修复后重试")
             },
@@ -342,7 +343,7 @@ impl CustomAppManagerHandler {
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
 
-    /// 运行时冒烟测试: 先刷新打包产物, 再启动 neutralino exe 并捕获错误.
+    /// 运行时冒烟测试: 先刷新打包产物, 再启动 hx-shell exe 并捕获错误.
     /// 通过 `run_smoke_test_async` 在 blocking 线程上启动 exe、检查进程存活.
     async fn smoke(&self, params: &Value) -> Result<String, ToolError> {
         let id = params
@@ -432,7 +433,7 @@ impl ToolHandler for CustomAppManagerHandler {
                     "name": { "type": "string", "description": "应用名称" },
                     "version": { "type": "string", "description": "语义版本号" },
                     "description": { "type": "string", "description": "简短描述" },
-                    "long_description": { "type": "string", "description": "详细描述" },
+                    "long_description": { "type": "string", "description": "应用说明文档（README），必须包含：功能介绍、使用方法、更新方法、分发方法。在详情界面'说明'Tab 中展示给用户" },
                     "author": { "type": "string", "description": "作者" },
                     "icon": { "type": "string", "description": "Emoji 图标" },
                     "category": { "type": "string", "description": "分类 (file-tools, media, productivity, other 等)" },
@@ -459,7 +460,7 @@ impl ToolHandler for CustomAppManagerHandler {
             "index_html".into(),
             json!({
                 "type": "string",
-                "description": "【模式一: 纯 HTML】自包含 index.html 的**完整源代码内容** (非文件路径!)。必须以 <!DOCTYPE html> 开头，包含完整的 HTML+CSS+JS。\n\n**关键要求**:\n1. 必须在 <head> 中引入客户端库: <script src=\"/js/neutralino.js\"></script>\n2. 必须在使用任何 API 前调用: Neutralino.init()\n3. 使用 Neutralino.* API 调用系统能力\n4. 配合 manifest.permissions 声明所需权限\n\n**注意**: 推荐使用 app_source (TypeScript/React) 模式以获得更好的开发体验。"
+                "description": "【模式一: 纯 HTML】自包含 index.html 的**完整源代码内容** (非文件路径!)。必须以 <!DOCTYPE html> 开头，包含完整的 HTML+CSS+JS。\n\n**关键要求**:\n1. 使用 window.hx.* API 调用系统能力 (writeFile/readFile/readDir/exec/getInfo/fileUrl 等)\n2. 写代码前先调 await window.hx.getInfo() 发现可用 API 列表\n3. 二进制文件 (音频/图片/视频) 用 window.hx.fileUrl(path) 生成 hxfile:// URL\n4. 不需要引入任何外部客户端库 — hx.* 由 WebView2 原生桥注入\n5. 配合 manifest.permissions 声明所需权限\n\n**注意**: 推荐使用 app_source (TypeScript/React) 模式以获得更好的开发体验。"
             }),
         );
 
@@ -467,7 +468,7 @@ impl ToolHandler for CustomAppManagerHandler {
             "app_source".into(),
             json!({
                 "type": "string",
-                "description": "【模式二: TypeScript/React (★推荐)】应用的 TypeScript/React 入口源码。写入 src/main.tsx，打包时 esbuild 自动转译为 resources/js/app.js。\n\n**关键规则**:\n1. React 和 ReactDOM 是全局变量 (由 index.html 通过 CDN 加载)，**不要** import:\n   ✅ const { useState, useEffect } = React;\n   ✅ const { createRoot } = ReactDOM;\n   ❌ import React from 'react';  // 会报错!\n2. Neutralino 是全局变量 (由 index.html 引入 /js/neutralino.js):\n   ✅ Neutralino.init();\n   ✅ await Neutralino.filesystem.readFile(path);\n3. 可使用 TypeScript 语法、JSX、async/await\n4. 可通过 source_files 拆分组件到多个文件，用相对路径 import:\n   import { Header } from './components/Header';\n5. 如果不提供 index_html，系统自动生成 HTML 壳 (含 React CDN + neutralino.js)\n6. create 时与 index_html 二选一，app_source 优先"
+                "description": "【模式二: TypeScript/React (★推荐)】应用的 TypeScript/React 入口源码。写入 src/main.tsx，打包时 esbuild 自动转译为 resources/js/app.js。\n\n**关键规则**:\n1. React 和 ReactDOM 是全局变量 (由 esbuild 打包注入)，**不要** import:\n   ✅ const { useState, useEffect } = React;\n   ✅ const { createRoot } = ReactDOM;\n   ❌ import React from 'react';  // 会报错!\n2. 使用 window.hx.* API 调用系统能力 (WebView2 原生桥注入，无需外部库):\n   ✅ await window.hx.writeFile(path, content);\n   ✅ await window.hx.readFile(path);\n   ✅ await window.hx.getInfo(); // 发现可用 API\n   ✅ window.hx.fileUrl(path); // 二进制文件 → hxfile:// URL\n3. 可使用 TypeScript 语法、JSX、async/await\n4. 可通过 source_files 拆分组件到多个文件，用相对路径 import:\n   import { Header } from './components/Header';\n5. 如果不提供 index_html，系统自动生成 HTML 壳\n6. create 时与 index_html 二选一，app_source 优先"
             }),
         );
 
@@ -484,7 +485,7 @@ impl ToolHandler for CustomAppManagerHandler {
             "build_mode".into(),
             json!({
                 "type": "string",
-                "description": "打包模式 (package action 可选)。sidecar: 零依赖直接复制二进制+资源 (默认); neu-build: 使用 neu build 编译 (需 Node.js + @neutralinojs/neu CLI, 源码编译到 resources.neur)。",
+                "description": "打包模式 (package action 可选)。sidecar: tail-inject HTML 到 hx-shell.exe 尾部生成单文件 exe (默认, 零依赖); neu-build: 旧模式, 不推荐。",
                 "enum": ["sidecar", "neu-build"]
             }),
         );
@@ -499,7 +500,7 @@ impl ToolHandler for CustomAppManagerHandler {
 
         tool_schema(
             "custom_app_manager",
-            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行、开发期校验(validate)、运行时冒烟测试(smoke)。基于 Neutralinojs 运行时 (~2MB)。\n\n**两种开发模式**:\n- **TypeScript/React 模式 (★推荐)**: 提供 app_source (TypeScript/React 源码)，打包时 esbuild 自动转译。React 通过 CDN 全局加载。\n- **纯 HTML 模式**: 提供 index_html (自包含 HTML+JS)。\n\n打包支持 sidecar (默认,零依赖) 和 neu-build (需 Node.js) 两种模式。开发流程: 写代码→validate→失败则按 issues 修复→再 validate，直到 ok=true；如需进一步确认运行时无报错，可调用 smoke。",
+            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行、开发期校验(validate)、运行时冒烟测试(smoke)。基于 hx-shell 运行时 (wry/WebView2, ~1.2MB)。\n\n**API**: 使用 window.hx.* 调用系统能力 (writeFile/readFile/readDir/exec/getInfo/fileUrl 等)。写代码前先调 await window.hx.getInfo() 发现可用 API。\n\n**两种开发模式**:\n- **TypeScript/React 模式 (★推荐)**: 提供 app_source (TypeScript/React 源码)，打包时 esbuild 自动转译。React 由 esbuild 打包注入，无 CDN 依赖。\n- **纯 HTML 模式**: 提供 index_html (自包含 HTML+JS)。\n\n打包: sidecar 模式 (tail-inject HTML 到 hx-shell.exe → 单文件 exe)。开发流程: 写代码→validate→失败则按 issues 修复→再 validate，直到 ok=true；如需进一步确认运行时无报错，可调用 smoke。",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }

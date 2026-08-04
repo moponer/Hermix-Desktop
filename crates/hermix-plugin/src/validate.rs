@@ -223,8 +223,10 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
             "warning",
             "rpc",
             "未检测到 hx API 调用。\
-             提示: 使用 window.hx.writeFile(path, content) 等调用系统能力，\
-             或 window.chrome.webview.postMessage 与壳通信。",
+             提示: 先调 await window.hx.getInfo() 发现可用 API，\
+             然后使用 window.hx.writeFile(path, content) 等调用系统能力，\
+             或 window.chrome.webview.postMessage 与壳通信。\
+             二进制文件用 window.hx.fileUrl(path) 生成 hxfile:// URL。",
         ));
     }
 

@@ -143,7 +143,7 @@ pub async fn custom_app_run(id: String) -> Result<serde_json::Value, String> {
         .await
         .map_err(|e| format!("编译应用失败: {e}"))?;
 
-    // 启动已打包的 exe (Neutralinojs sidecar 产物; 独立进程)
+    // 启动已打包的 exe (hx-shell sidecar 产物; 独立进程)
     manager
         .run_plugin(&id)
         .await
@@ -195,7 +195,7 @@ pub async fn custom_app_open_dir(id: String) -> Result<(), String> {
 /// 开发期自验证: 在打包/运行前校验应用源码, 把打包期错误提前到开发期暴露。
 ///
 /// 校验内容 (见 `hermix_plugin::validate_custom_app`):
-/// - manifest 完整性 + HTML 结构 + Neutralino API 调用 + 权限一致性 + JS 括号匹配
+/// - manifest 完整性 + HTML 结构 + hx API 调用 + 权限一致性 + JS 括号匹配
 ///
 /// 返回结构化报告 `{ ok, issues: [{level, code, message}] }`。
 /// agent 开发循环应在生成/修改应用代码后调用本命令, `ok == false` 时继续

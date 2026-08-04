@@ -16,6 +16,14 @@ import {
   Shield,
   Save,
   Pencil,
+  BookOpen,
+  Tag,
+  Download,
+  RefreshCcw,
+  Terminal,
+  CheckCircle2,
+  Box,
+  HardDrive,
 } from "lucide-react";
 import type { CustomAppResponse } from "../../lib/customAppApi";
 import {
@@ -32,7 +40,7 @@ interface AppDetailModalProps {
   onChanged: () => void;
 }
 
-type Tab = "overview" | "code";
+type Tab = "overview" | "code" | "readme";
 
 const PERM_HINTS: Record<string, string> = {
   "fs-read": "读取本地文件系统",
@@ -212,6 +220,12 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
           >
             <Code2 size={14} /> 代码
           </button>
+          <button
+            className={`modal-tab ${tab === "readme" ? "modal-tab--active" : ""}`}
+            onClick={() => setTab("readme")}
+          >
+            <BookOpen size={14} /> 说明
+          </button>
         </div>
 
         <div className="modal-body">
@@ -368,6 +382,123 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                   </pre>
                 )}
               </div>
+            </div>
+          )}
+
+          {tab === "readme" && (
+            <div className="app-detail-readme">
+              {/* Badges */}
+              <div className="app-detail-readme__badges">
+                <span className="app-detail-badge app-detail-badge--version">
+                  <Tag size={11} /> v{manifest.version}
+                </span>
+                <span className="app-detail-badge app-detail-badge--author">
+                  <User size={11} /> {manifest.author || "未知"}
+                </span>
+                <span className="app-detail-badge app-detail-badge--category">
+                  <Folder size={11} /> {manifest.category || "其他"}
+                </span>
+                {is_packaged ? (
+                  <span className="app-detail-badge app-detail-badge--success">
+                    <CheckCircle2 size={11} /> 已打包
+                  </span>
+                ) : (
+                  <span className="app-detail-badge app-detail-badge--muted">
+                    <Box size={11} /> 未打包
+                  </span>
+                )}
+                <span className="app-detail-badge app-detail-badge--info">
+                  <Maximize size={11} /> {manifest.window_config.width}x{manifest.window_config.height}
+                </span>
+                <span className="app-detail-badge app-detail-badge--info">
+                  <HardDrive size={11} /> hx-shell
+                </span>
+              </div>
+
+              {/* Description */}
+              <section className="app-detail-readme__section">
+                <h4 className="app-detail-readme__heading">简介</h4>
+                <p className="app-detail-readme__text">{manifest.description}</p>
+                {manifest.long_description && (
+                  <pre className="app-detail-readme__long">{manifest.long_description}</pre>
+                )}
+              </section>
+
+              {/* Tags */}
+              {manifest.tags.length > 0 && (
+                <section className="app-detail-readme__section">
+                  <h4 className="app-detail-readme__heading">标签</h4>
+                  <div className="app-detail-readme__tags">
+                    {manifest.tags.map((t) => (
+                      <span key={t} className="app-detail-badge app-detail-badge--muted">{t}</span>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* Permissions */}
+              <section className="app-detail-readme__section">
+                <h4 className="app-detail-readme__heading">权限</h4>
+                {manifest.permissions.length > 0 ? (
+                  <div className="app-detail-readme__perms">
+                    {manifest.permissions.map((p) => (
+                      <span key={p} className="app-detail-badge app-detail-badge--perm">
+                        <Shield size={11} /> {p}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="app-detail-readme__text app-detail-readme__text--muted">此应用不需要特殊权限</p>
+                )}
+              </section>
+
+              {/* Usage */}
+              <section className="app-detail-readme__section">
+                <h4 className="app-detail-readme__heading">
+                  <Terminal size={14} /> 使用方法
+                </h4>
+                <div className="app-detail-readme__text">
+                  <p>1. 点击右下角"运行"按钮在本地启动应用</p>
+                  <p>2. 或点击"打包"生成独立 EXE，双击即可运行</p>
+                  <p>3. 打包后的 EXE 无需安装，用户电脑需有 WebView2 运行时（Windows 10+ 自带）</p>
+                </div>
+              </section>
+
+              {/* Update */}
+              <section className="app-detail-readme__section">
+                <h4 className="app-detail-readme__heading">
+                  <RefreshCcw size={14} /> 更新方法
+                </h4>
+                <div className="app-detail-readme__text">
+                  <p>1. 在"代码"标签页编辑源码后点击"保存"</p>
+                  <p>2. 重新"打包"生成最新 EXE</p>
+                  <p>3. 或在对话中让 LLM 修改应用，修改后重新打包</p>
+                </div>
+              </section>
+
+              {/* Distribution */}
+              <section className="app-detail-readme__section">
+                <h4 className="app-detail-readme__heading">
+                  <Download size={14} /> 分发方法
+                </h4>
+                <div className="app-detail-readme__text">
+                  <p>1. 打包后在 dist/ 目录生成独立 EXE（单文件，含 HTML 注入）</p>
+                  <p>2. 将 EXE 直接发给用户，双击即跑</p>
+                  <p>3. 目标电脑需要 Windows 10+ 和 WebView2 运行时（系统自带）</p>
+                  <p>4. 无需安装 Node.js、Rust 或任何开发工具链</p>
+                </div>
+              </section>
+
+              {/* Tech */}
+              <section className="app-detail-readme__section">
+                <h4 className="app-detail-readme__heading">技术栈</h4>
+                <div className="app-detail-readme__text">
+                  <p>运行时: hx-shell (wry + WebView2, ~1.2MB)</p>
+                  <p>API: window.hx.* (writeFile / readFile / readDir / exec / getInfo / fileUrl 等)</p>
+                  <p>协议: hxfile:// 本地文件访问</p>
+                  <p>打包: HTML 尾部注入 hx-shell.exe 生成单文件 EXE</p>
+                </div>
+              </section>
             </div>
           )}
         </div>

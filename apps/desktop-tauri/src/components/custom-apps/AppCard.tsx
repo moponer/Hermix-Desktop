@@ -1,5 +1,6 @@
 // AppCard — displays a single custom app in the grid view
 
+import type { MouseEvent } from "react";
 import { Package, FolderOpen, Play, Trash2, Eye } from "lucide-react";
 import type { CustomAppSummary } from "../../lib/customAppApi";
 
@@ -12,6 +13,12 @@ interface AppCardProps {
   onDelete: () => void;
   packaging?: boolean;
 }
+
+// 防冒泡：右上角 icon 按钮点击时不应触发 header 的 onView（查看详情）
+const stopProp = (fn: () => void) => (e: MouseEvent) => {
+  e.stopPropagation();
+  fn();
+};
 
 const CATEGORY_LABELS: Record<string, string> = {
   "file-tools": "文件工具",
@@ -45,10 +52,32 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
           <h3 className="custom-app-card__name">{app.name}</h3>
           <span className="custom-app-card__version">v{app.version}</span>
         </div>
+        {/* 右上角：已打包时显示徽章 + 打开目录 + 重新打包 (icon-only 紧凑) */}
         {app.is_packaged && (
-          <span className="custom-app-card__badge custom-app-card__badge--packaged">
-            已打包
-          </span>
+          <div className="custom-app-card__header-actions">
+            <span className="custom-app-card__badge custom-app-card__badge--packaged">
+              已打包
+            </span>
+            <button
+              className="custom-app-card__icon-btn"
+              onClick={stopProp(onOpenDist)}
+              title="打开打包后的应用目录"
+            >
+              <FolderOpen size={14} />
+            </button>
+            <button
+              className="custom-app-card__icon-btn custom-app-card__icon-btn--package"
+              onClick={stopProp(onPackage)}
+              disabled={packaging}
+              title={
+                packaging
+                  ? "打包中…"
+                  : "重新打包（用最新 hx-shell 壳覆盖 dist）"
+              }
+            >
+              <Package size={14} />
+            </button>
+          </div>
         )}
       </div>
 
@@ -80,16 +109,8 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
           <Play size={14} />
           运行
         </button>
-        {app.is_packaged ? (
-          <button
-            className="custom-app-card__btn custom-app-card__btn--open"
-            onClick={onOpenDist}
-            title="打开打包后的应用目录"
-          >
-            <FolderOpen size={14} />
-            打开目录
-          </button>
-        ) : (
+        {/* 未打包：在底部显示"打包"按钮（已打包的状态下，"打开目录"和"重新打包"挪到了右上角） */}
+        {!app.is_packaged && (
           <button
             className="custom-app-card__btn custom-app-card__btn--package"
             onClick={onPackage}
