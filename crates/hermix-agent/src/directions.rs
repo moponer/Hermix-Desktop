@@ -30,7 +30,8 @@ Before calling a generic tool like `terminal`, `process_registry`, or `execute_c
 
 ## File path handling
 When the user provides an explicit file path, call the matching tool directly with that path:
-- `.pdf` → `read_pdf`
+- `.pdf` → `read_pdf` (faster dedicated path; `markitdown` also handles PDFs)
+- Office / structured docs (`.docx`/`.pptx`/`.xlsx`/`.html`/`.epub`/`.csv`/`.json`/`.xml`/`.msg`/`.zip`) → `markitdown` (token-cheapest Markdown extraction; covers everything except pure text/code and images)
 - text/code → `read_file`
 - creating files → `write_file`
 - rename/move → `move_file(source, destination)`
