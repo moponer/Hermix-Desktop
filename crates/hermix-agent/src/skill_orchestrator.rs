@@ -564,6 +564,15 @@ impl SkillOrchestrator {
             body.trim().to_string(),
         ];
 
+        // Health warning: if the skill scores below the maintenance
+        // threshold, surface it directly to the model instead of only
+        // logging it. Without this the warning was invisible to the LLM —
+        // it would trust a stale skill's schema and repeat its mistakes.
+        if let Some(warning) = skill_health_warning(&info.skill_md_path, &content) {
+            parts.push(String::new());
+            parts.push(warning);
+        }
+
         if !user_instruction.is_empty() {
             parts.push(String::new());
             parts.push(format!(
@@ -614,7 +623,14 @@ impl SkillOrchestrator {
                          of this session unless the user overrides them.]",
                         info.name
                     );
-                    prompt_parts.push(format!("{}\n\n{}", activation, body.trim()));
+                    let mut rendered = format!("{}\n\n{}", activation, body.trim());
+                    // Same health-warning injection as the slash-command
+                    // path — a low-scoring skill must not be trusted blindly.
+                    if let Some(warning) = skill_health_warning(&info.skill_md_path, &content) {
+                        rendered.push_str("\n\n");
+                        rendered.push_str(&warning);
+                    }
+                    prompt_parts.push(rendered);
                     loaded_names.push(info.name.clone());
                 }
                 None => {
@@ -625,6 +641,36 @@ impl SkillOrchestrator {
 
         (prompt_parts.join("\n\n"), loaded_names, missing)
     }
+}
+
+/// Compute a health warning for a SKILL.md file, if it scores below
+/// the maintenance threshold (0.5).
+///
+/// This is the *in-context* half of the health gate: the scan-time
+/// `score_skill_md` only logs a WARN line that no LLM ever sees. When
+/// the skill's content is actually injected into a prompt, we re-score
+/// it silently and, if it's unhealthy, tell the model explicitly to
+/// distrust stale schema / field names and verify against the real tool
+/// definition — and to fix the SKILL.md rather than working around it.
+///
+/// Returns `None` for healthy skills so healthy injections are unchanged.
+fn skill_health_warning(path: &std::path::Path, content: &str) -> Option<String> {
+    let breakdown = crate::skill_health::score_skill_md_silent(path, content);
+    let composite = breakdown.composite();
+    if composite >= 0.5 {
+        return None;
+    }
+    // NOTE on wording: do NOT phrase this as "stop and explain / fix
+    // first". In a 2026-08-03 incident the LLM read a softer version
+    // as "describe the intended call in prose instead of emitting it"
+    // and stopped with no tool_call — the Finalize path then treated
+    // the prose as a real answer (owner-reported "自己停住了").
+    // The wording below explicitly tells the model to KEEP making the
+    // real tool_call, and only uses schema cross-check + SKILL.md fix
+    // as post-call cleanup.
+    Some(format!(
+        "[SKILL-HEALTH-WARNING] This skill's health score is {composite:.2}/1.0, below the 0.5 maintenance threshold — its content may be OUTDATED. Field names, action enums, and examples here may NOT match the real tool definitions. Required action: (1) emit the actual tool_call now with your best-guess schema — DO NOT just describe the intended call in prose. (2) If the tool returns a validation error, cross-check the error against the tool's real schema and retry once. (3) Only after the call succeeds (or is confirmed unsalvageable) consider fixing the SKILL.md file itself."
+    ))
 }
 
 #[cfg(test)]

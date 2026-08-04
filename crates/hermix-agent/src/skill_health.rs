@@ -213,6 +213,25 @@ pub fn score_corpus(skills_dir: &std::path::Path) -> SkillHealthReport {
 ///
 /// Returns the breakdown so callers can log per-axis warnings.
 pub fn score_skill_md(path: &std::path::Path, content: &str) -> HealthBreakdown {
+    score_skill_md_inner(path, content, true)
+}
+
+/// Same scoring as [`score_skill_md`] but without the WARN log line.
+///
+/// Used by hot paths that re-score a skill every time its content is
+/// injected into the LLM prompt (e.g. `build_skill_invocation_message`,
+/// `build_preloaded_skills_prompt`). Logging there would spam the same
+/// warning on every invocation — the scan-time `score_skill_md` call
+/// already reported it once.
+pub fn score_skill_md_silent(path: &std::path::Path, content: &str) -> HealthBreakdown {
+    score_skill_md_inner(path, content, false)
+}
+
+fn score_skill_md_inner(
+    path: &std::path::Path,
+    content: &str,
+    log_warning: bool,
+) -> HealthBreakdown {
     let mut b = HealthBreakdown::default();
     let (frontmatter, body) = crate::skill_orchestrator::parse_frontmatter(content);
 
@@ -322,7 +341,7 @@ pub fn score_skill_md(path: &std::path::Path, content: &str) -> HealthBreakdown 
     b.bonus_section_count = if count_headings(body) > 3 { 1.0 } else { 0.0 };
 
     let composite = b.composite();
-    if composite < 0.5 {
+    if log_warning && composite < 0.5 {
         tracing::warn!(
             skill_path = %path.display(),
             composite = composite,
