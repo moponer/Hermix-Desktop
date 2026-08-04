@@ -1,6 +1,6 @@
 ---
 name: custom-app-development
-version: 9
+version: 10
 description: >
   自定义应用开发助手。当用户要求创建桌面应用、桌面工具、独立程序、
   窗口应用、打包成 EXE 的程序时使用。通过 custom_app_manager 工具
@@ -323,6 +323,25 @@ audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
 - **HTML 文件编码**：UTF-8，无 BOM
 - **不要 CDN**：Vue/React/图标全部内联（离线可用）
 - **不要 emoji**：图标用内联 SVG（manifest.json 里也不要用 emoji 当 icon）
+
+## 关键约束（桌面定位）
+
+- **【致命】禁止用浏览器 input/file API 选文件/目录**：`<input type="file">` / `<input type="file" webkitdirectory multiple>` /
+  `FileReader` / `<input>` 手输路径 —— 这些会触发 WebView2 原生"上传文件?"确认弹窗（蓝色"上传/取消"按钮），
+  **跟桌面小工具的定位完全不搭**。桌面应用必须用壳层 rfd 原生对话框：
+  ```js
+  // ✅ 正确：调壳层 API，弹 Windows 原生选择框（无确认弹窗）
+  const r = await window.hx.openDialog({ title: "选音乐文件夹", directory: true });
+  if (r.ok && r.data) console.log(r.data);
+
+  // ❌ 错误：浏览器 input 触发"上传"确认弹窗
+  <input type="file" webkitdirectory multiple onchange="..." />
+  ```
+  - 选目录 → `openDialog({directory: true})`
+  - 选文件 → `openDialog({filters: [{name:"图片", extensions:["png","jpg"]}]})`
+  - 多选 → `openDialog({multi: true, ...})`
+  - 保存 → `saveDialog({defaultName: "report.txt"})`
+- **【致命】不要用纯文本 `<input>` 让用户手输路径**：粘贴/转义易错，体验差。**永远用按钮调 `openDialog` 弹原生框**。
 - **默认浅色**：不要上来就写深色
 - **manifest.json 禁止 emoji**：icon 字段不要用 emoji，留空或用文字
 
@@ -434,11 +453,11 @@ $('info').onclick = async () => {
 </head>
 <body>
   <div class="toolbar">
-    <input id="dirInput" placeholder="输入音乐文件夹路径，如 C:\Music" value="">
-    <button class="primary" id="scan">
+    <button class="primary" id="pickDir">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h6l2 4h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/></svg>
-      扫描
+      选择音乐文件夹
     </button>
+    <span id="dirPath" style="color:#71717a;font-size:13px"></span>
   </div>
   <div class="playlist" id="playlist">
     <div class="song" style="color:#71717a;cursor:default">输入路径后点扫描</div>
@@ -456,17 +475,29 @@ $('info').onclick = async () => {
 <script>
 const $ = id => document.getElementById(id);
 const EXT = ['.mp3','.flac','.wav','.ogg','.m4a','.aac','.wma'];
-let songs = [], current = -1;
+let songs = [], current = -1, selectedDir = '';
 
 function status(msg) { $('status').textContent = msg; }
 
+// 用壳层 openDialog 弹 Windows 原生选择框 —— 绝不用 <input type="file">/webkitdirectory
+// （那是浏览器 API，会触发"上传文件"确认弹窗，跟桌面小工具定位不搭）
+async function pickDir() {
+  const r = await window.hx.openDialog({ title: "选择音乐文件夹", directory: true });
+  if (!r.ok) { status('选目录失败: ' + (r.err || '')); return; }
+  if (!r.data) return; // 用户取消
+  selectedDir = r.data;
+  $('dirPath').textContent = selectedDir;
+  scan();
+}
+
 async function scan() {
-  const dir = $('dirInput').value.trim();
-  if (!dir) { status('请输入文件夹路径'); return; }
+  if (!selectedDir) { status('请先选择文件夹'); return; }
   status('扫描中...');
-  const r = await window.hx.readDir(dir);
+  const r = await window.hx.readDirDetailed(selectedDir);
   if (!r.ok) { status('扫描失败: ' + r.err); return; }
-  songs = r.data.filter(f => EXT.some(e => f.toLowerCase().endsWith(e)));
+  songs = r.data
+    .filter(it => it.isFile && EXT.some(e => it.name.toLowerCase().endsWith(e)))
+    .map(it => ({ name: it.name, size: it.size, path: selectedDir + '\\' + it.name }));
   status('找到 ' + songs.length + ' 首歌曲');
   renderList();
 }
@@ -475,18 +506,16 @@ function renderList() {
   const html = songs.map((s, i) =>
     '<div class="song' + (i === current ? ' active' : '') + '" data-i="' + i + '">' +
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>' +
-    s + '</div>').join('');
+    s.name + '</div>').join('');
   $('playlist').innerHTML = html || '<div class="song" style="color:#71717a;cursor:default">无音乐文件</div>';
 }
 
 function play(i) {
   if (i < 0 || i >= songs.length) return;
   current = i;
-  const dir = $('dirInput').value.trim().replace(/\\+$/, '');
-  const path = dir + '\\' + songs[i];
-  $('audio').src = window.hx.fileUrl(path);
+  $('audio').src = window.hx.fileUrl(songs[i].path);
   $('audio').play();
-  status('播放中: ' + songs[i]);
+  status('播放中: ' + songs[i].name);
   renderList();
 }
 
@@ -497,8 +526,7 @@ $('playlist').addEventListener('click', e => {
 $('audio').addEventListener('ended', () => play(current + 1));
 $('prev').onclick = () => play(current - 1);
 $('next').onclick = () => play(current + 1);
-$('scan').onclick = scan;
-$('dirInput').addEventListener('keydown', e => { if (e.key === 'Enter') scan(); });
+$('pickDir').onclick = pickDir;
 </script>
 </body>
 </html>
