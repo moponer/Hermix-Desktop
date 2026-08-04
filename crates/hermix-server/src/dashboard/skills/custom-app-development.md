@@ -1,27 +1,29 @@
 ---
 name: custom-app-development
+version: 11
 description: >
   自定义应用开发助手。当用户要求创建桌面应用、桌面工具、独立程序、
   窗口应用、打包成 EXE 的程序时使用。通过 custom_app_manager 工具
-  创建、更新、打包、运行用户自定义桌面应用。底层是 hx-shell
-  (Wry + WebView2) 模板壳 + esbuild，用户无需安装 Rust/Node。
+  创建、更新、打包、运行、校验、冒烟用户自定义桌面应用。
+  基于 hx-shell 运行时（wry/WebView2，~1MB exe），LLM 写前端代码
+  （Vue/React/纯 HTML），Hermix 打包成单文件 exe 分发。
+  用户电脑零工具链：打包 = 文件尾部注入 HTML，浏览器/WebView2 即跑。
   务必在以下场景使用：用户说"做个应用""写个桌面工具""打包成 exe"
   "做个小工具""做个窗口程序""帮我做个 app""创建自定义应用""做个独立程序"
   "做个桌面应用""make an app""create a desktop app""build a tool"
   "package as exe"；或用户描述一个需要独立窗口运行的功能需求时。
-  Keywords (English, for keyword auto-routing): custom app, desktop app,
-  create app, build tool, package exe, standalone application, window app,
-  desktop tool, make an app.
-version: 1.0.0
 tags:
   - custom-app
   - desktop
   - application
-  - packaging
-  - exe
   - hx-shell
+  - wry
   - webview2
-  - esbuild
+  - standalone
+  - exe
+  - vue
+  - react
+  - javascript
   - 自定义应用
   - 桌面应用
   - 打包
@@ -30,343 +32,651 @@ tags:
   - 做个应用
 ---
 
-# Custom App Development (hx-shell + esbuild 方案)
+# Custom App Development（基于 hx-shell）
 
-通过对话创建用户自定义桌面应用。底层是 hx-shell (Wry 0.55 + WebView2) 模板壳 +
-esbuild 转译，用户机器零依赖（Windows 10/11 自带 WebView2）。
+## 第零步：调 getInfo() 发现 API（强制）
 
-## When to Activate
+**写任何代码之前，先在应用 init 脚本中调用 `await window.hx.getInfo()`，检查返回的 `apis` 列表。**
 
-任何用户提出"做一个应用 / 写个工具 / 打包成 exe / 做个独立程序"的请求。
-无论功能是什么（播放器、转换器、批处理、UI 工具），只要用户要的是
-"可独立运行、用户机器零环境"的桌面应用，都走本 skill + custom_app_manager 工具。
-不要让用户用别的方式实现（除非他们明确拒绝这条路径）。
+- `getInfo()` 返回当前壳**实际可用**的 API 清单（方法名、参数、返回值）+ 自定义协议 + 不支持的 API
+- **只使用 `getInfo()` 返回的 `apis` 列表中的方法**。不要从记忆里拿 API 名称，不要猜
+- 如果某个你想要的功能不在列表中：
+  1. 用 `hx.exec()` 调系统命令作为替代（如 `dir`/`tasklist`/`ipconfig`）
+  2. 或者用纯前端 JS（`localStorage`/`fetch`/`Canvas`/`IndexedDB`）
+  3. 或者告诉用户该功能在 hx-shell 中不支持
+- `getInfo()` 是运行时真相源。本文档可能过时，但 `getInfo()` 永远准确
 
-## Core Concepts
+```js
+// 应用启动时第一行代码
+const info = await window.hx.getInfo();
+if (!info.ok) throw new Error('hx-shell bridge not available');
+console.log('Available APIs:', Object.keys(info.data.apis));
+// 之后只用这些 API 写应用逻辑
+```
 
-- **架构**:  hx-shell 单文件壳 + WebView2 渲染 + JSON-RPC 桥 (`window.hx.*` API)。
-  用户机器零依赖 (Windows 10/11 自带 WebView2)。
-- **应用产物**: 一个文件夹 ($HERMIX_HOME/plugins/<id>/)，含 manifest.json + index.html
-  (+ 可选 src/main.tsx 和 source_files 拆分组件)。打包后是 dist/<id>.exe 单文件。
-- **两种开发模式**:
-  1. **HTML 模式 (简单)**: 直接写 index_html，用 <script> 内联 JS，调用 window.hx.* 桥 API。
-  2. **TypeScript/React 模式 (★推荐)**: 提供 app_source (TypeScript 入口) + 可选 source_files，
-     esbuild 自动转译为 resources/js/app.js。React/ReactDOM 由打包器 UMD inline 注入为全局变量（不要 import）。
-- **权限模型**:  manifest.permissions 是字符串数组（fs-read/fs-write/exec/dialog/env/temp/clipboard/network/app），
-  声明后 window.hx.* 对应 API 才允许调用。validate 工具会做一致性检查。
-- **打包模式**:
-  1. sidecar (默认, 零依赖): 复制 hx-shell.exe + 资源 → 用户机器无需任何运行时。
-  2. neu-build (需 Node.js + neu CLI): neu build 编译为 resources.neur，体积更小。
+## 运行时：hx-shell
 
-## Practical Guidance
+- **HX-SHELL** = `wry 0.55.1` + WebView2，单文件 exe 约 **1MB**
+- 打包产物 = `hx-shell.exe` + `index.html` 尾部注入（`[html][len:8LE][HXAPP1]`）
+- 用户电脑**零工具链**：双击 exe 即跑，不依赖 Node/Rust/Node-Webkit 等任何运行时
+- 窗口能力：WebView2 全套（Chromium 渲染、JS 现代语法、wasm）
+- 绑定通道：**WebView2 原生桥** `window.chrome.webview.postMessage` → Rust 侧 `ipc_handler`（**无 CORS 限制**，比 `fetch` 到 custom scheme 可靠）
 
-### custom_app_manager 工具的真实 schema（★ 必须严格按这个写）
+## 应用模型
 
-接受 9 个 action: create / update / list / get / delete / package / run / validate / smoke。
-**create 是用户最常用的入口。**
+```
+HERMIX_HOME/custom-apps/<id>/
+  manifest.json      ← 应用清单（id, name, window_config, permissions）
+  index.html         ← 自包含 HTML（或 Vite 构建产物）
+  src/               ← [可选] Vue/React 源码（Vite 构建后打包成单文件 index.html）
+  dist/
+    <id>.exe         ← 打包产物（hx-shell.exe + html + trailer）
+    WebView2Loader.dll  ← wry 运行时依赖
+```
 
-工具调用必须用以下 JSON 结构（XML 工具调用时用 `<parameter name="...">{...}</parameter>` 包裹）：
+## 两种开发模式
 
-```json
-{
-  "action": "create",
-  "manifest": {
-    "id": "music-player",
-    "name": "本地音乐播放器",
-    "version": "1.0.0",
-    "description": "扫描并播放本地音乐文件",
-    "icon": "🎵",
-    "author": "LLM-generated",
-    "category": "media",
-    "tags": ["music", "player", "media"],
-    "window_config": {"width": 900, "height": 600, "resizable": true, "title": "本地音乐"},
-    "permissions": ["fs-read", "exec", "dialog"]
+| 模式 | 参数 | 产物 | 推荐 |
+|---|---|---|---|
+| **纯 HTML** | `index_html` | 自包含 HTML（内联 CSS+JS） | ✅ 简单工具 |
+| **Vue/React/TS** | `app_source` (TSX) + `index_html` (可选壳) | Vite 构建成单文件 index.html | ✅ 复杂应用 |
+
+### Vite 单文件输出配置（Vue/React 必须）
+
+`vite.config.ts`：
+```ts
+export default {
+  build: {
+    rollupOptions: { output: { inlineDynamicImports: true } },
+    assetsInlineLimit: 100_000_000,   // 所有 JS/CSS/图片内联进单个 index.html
   },
-  "app_source": "/* TypeScript/React 入口代码，详见下方 Working Example */",
-  "source_files": {
-    "components/SongList.tsx": "/* 可选，拆分的子组件 */"
-  }
 }
 ```
 
-字段说明（**不要瞎猜字段名**）:
-- `action` (string, 必填): create/update/list/get/delete/package/run/validate/smoke
-- `manifest` (object, create 必填): 应用元数据，下面"manifest 字段表"逐项列
-- `app_source` (string, 可选, 与 index_html 二选一): TS/React 入口，写到 src/main.tsx
-- `index_html` (string, 可选): 纯 HTML 模式入口，**必须是完整 HTML 文档字符串**（不是文件路径）
-- `source_files` (object, 可选): {"相对路径": "文件内容"}，拆分子组件
-- `icon_data` (string, 可选, 不推荐): base64 PNG；大图易解码失败，**优先用 manifest.icon 库内图标名**
-- `id` (string): 仅 update/get/delete/package/run 用
-- `build_mode` (string, package 可选): "sidecar" (默认) | "neu-build"
+## 绑定 API（window.hx.*）
 
-### manifest 字段表
+壳通过 WebView2 原生桥提供 RPC。所有方法返回 Promise，resolve 完整结果对象 `{ok, data?, err?}`。
+调用方通过 `r.ok` 判断成功/失败，通过 `r.data` 取数据，通过 `r.err` 取错误信息。
 
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|------|------|------|------|------|
-| id | string | ✅ | - | 字母数字-_，唯一 |
-| name | string | ✅ | - | 应用名 |
-| version | string | 否 | "1.0.0" | 语义版本 |
-| description | string | 否 | "" | 简短描述 |
-| icon | string | 否 | "music" | 窗口图标 = Lucide 库内名（如 music/settings/folder），见 Gotchas 图标教学 |
-| author | string | 否 | "LLM-generated" | 作者 |
-| category | string | 否 | "other" | file-tools/media/productivity/developer/other |
-| tags | string[] | 否 | [] | 标签 |
-| window_config | object | 否 | {w:600,h:480} | width/height/resizable/title |
-| permissions | string[] | 否 | [] | 权限列表（合法值见下） |
+### 文件系统
 
-### permissions 合法值
+| 方法 | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `hx.writeFile(path, content)` | string, string | `{ok}` | 写文件（UTF-8 文本） |
+| `hx.readFile(path)` | string | `{ok, data}` | 读文件（**仅文本**，返回 UTF-8 字符串） |
+| `hx.readFileBytes(path)` | string | `{ok, data}` | 读二进制 → **base64**（页面端 `atob()` 解码） |
+| `hx.writeFileBytes(path, b64)` | string, string | `{ok}` | 二进制写入（base64 输入） |
+| `hx.appendFile(path, content)` | string, string | `{ok}` | 追加写入 |
+| `hx.removeFile(path)` | string | `{ok}` | 删除文件 |
+| `hx.readDir(path)` | string | `{ok, data: [...]}` | 列出目录内容（返回文件名数组） |
+| `hx.readDirDetailed(path)` | string | `{ok, data}` | 带元信息列表 `[{name,isDir,isFile,size,modified}]`，免去逐个 stat |
+| `hx.stat(path)` | string | `{ok, data}` | 文件元信息（size/isDir/isFile/modified） |
+| `hx.createDir(path)` | string | `{ok}` | 创建目录（递归） |
+| `hx.removeDir(path)` | string | `{ok}` | 删除目录（递归） |
 
-`fs-read` / `fs-write` / `exec` / `network` / `dialog` / `env` / `temp` / `clipboard` / `app`
-- 错误示例：`"permissions": ["filesystem", "read"]`  ← 俩都非法
-- 正确示例：`"permissions": ["fs-read"]`
-- 数组,不是字符串
+### 本地文件 URL（hxfile:// 协议）
 
-### ★ Working Example: 本地音乐播放器（TS/React 模式）
+| 方法 | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `hx.fileUrl(path)` | string | string | 把本地路径转成 `hxfile://` URL，可直接用于 `<audio>`/`<img>`/`<video>` src |
 
-用户场景：扫描用户选的目录里的 .mp3/.flac/.wav/.m4a/.ogg 文件，列出歌单，点击播放。
-
-**关键技术点（★ 不要走弯路）**:
-- **选目录**：hx-shell **没有 openDialog**。用 `exec` 跑 PowerShell FolderBrowserDialog，stdout 就是目录路径。
-- **列目录**：`readDir(path)` 返回**纯名字数组** `data: string[]`（没有 isDir 字段），要逐个 `stat()` 判断 isFile。
-- **播音频**：**没有 readFileBytes**。用 `fileUrl(path)` 生成 `hxfile://localhost/...` URL 直接给 `<audio src>`，WebView2 原生支持音频 seek。
-
-app_source（写到 src/main.tsx）:
-
-```typescript
-// 全局 React/ReactDOM 由 index.html 注入，不能 import
-const { useState, useRef } = React;
-
-interface Song {
-  path: string;
-  name: string;
-  size: number;
-}
-
-function App() {
-  const [songs, setSongs] = useState<Song[]>([]);
-  const [current, setCurrent] = useState<string>("");
-  const [folder, setFolder] = useState<string>("");
-  const audioRef = useRef<HTMLAudioElement>(null);
-
-  // 选目录：exec 跑 PowerShell FolderBrowserDialog，stdout = 路径
-  const pickFolder = async (): Promise<string> => {
-    const ps = "powershell -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }\"";
-    const r = await window.hx.exec(ps, []);
-    if (!r.ok) throw new Error(r.err || "选目录失败");
-    const line = String(r.data.stdout || "").trim();
-    const m = line.match(/[A-Za-z]:[^\r\n]+/);
-    return m ? m[0] : "";
-  };
-
-  const loadFolder = async () => {
-    const dir = await pickFolder();
-    if (!dir) return;
-    setFolder(dir);
-
-    // readDir 返回纯名字数组；逐个 stat 判断是文件 + 音频扩展名
-    const names: string[] = (await window.hx.readDir(dir)).data || [];
-    const songs: Song[] = [];
-    for (const name of names) {
-      if (!/\.(mp3|flac|wav|m4a|ogg)$/i.test(name)) continue;
-      const p = dir + "\\" + name;
-      const st = await window.hx.stat(p);
-      if (st.ok && st.data && st.data.isFile) {
-        songs.push({ path: p, name, size: st.data.size || 0 });
-      }
-    }
-    setSongs(songs);
-  };
-
-  const play = (path: string) => {
-    // fileUrl → hxfile://localhost/... → <audio> 直接播放（支持 seek）
-    setCurrent(window.hx.fileUrl(path));
-    setTimeout(() => audioRef.current?.play(), 50);
-  };
-
-  return React.createElement("div", { className: "app" },
-    React.createElement("header", null,
-      React.createElement("h1", null, "🎵 本地音乐"),
-      React.createElement("button", { onClick: loadFolder },
-        folder ? "📁 " + folder.split("\\").pop() : "选择音乐文件夹"),
-    ),
-    React.createElement("ul", { className: "playlist" },
-      songs.map((s, i) =>
-        React.createElement("li", {
-          key: s.path,
-          className: current === window.hx.fileUrl(s.path) ? "active" : "",
-          onClick: () => play(s.path),
-        },
-          `${i + 1}. ${s.name} (${(s.size / 1024 / 1024).toFixed(1)} MB)`,
-        ),
-      ),
-    ),
-    current && React.createElement("audio", {
-      ref: audioRef, src: current, controls: true, autoPlay: true,
-    }),
-    songs.length === 0 && React.createElement("p", { className: "hint" },
-      "点击上方按钮选择音乐文件夹"),
-  );
-}
-
-const root = ReactDOM.createRoot(document.getElementById("root")!);
-root.render(React.createElement(App));
+```js
+// 播放本地音乐
+const url = window.hx.fileUrl('C:\\Music\\song.mp3');
+// url = 'hxfile://localhost/C:/Music/song.mp3'
+audioElement.src = url;
+audioElement.play();
 ```
 
-manifest（create 的 manifest 字段）:
+**重要**：`hx.readFile` 只能读**文本文件**。对于二进制文件（MP3/图片/PDF）：
+- **首选** `hx.fileUrl(path)` 生成 URL 直接喂 `<audio>`/`<img>`/`<video>`（`hxfile://` 协议 Rust 端读磁盘，支持 seek，不占 IPC 内存）
+- **需要拿到字节**时用 `hx.readFileBytes(path)` → base64 → `atob()` 转 Uint8Array
+
+### 进程/系统
+
+| 方法 | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `hx.exec(cmd, args)` | string, string[] | `{ok, data}` | 执行外部命令，返回 `{stdout, stderr, exitCode}` |
+| `hx.getInfo()` | — | `{ok, data}` | 壳信息（shell/engine/version/single_file/完整 API 清单） |
+
+### 原生对话框（V6 壳新增）
+
+| 方法 | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `hx.openDialog({title?, directory?, multi?, filters?})` | object | `{ok, data}` | 原生文件/目录选择，**免 PowerShell 绕** |
+| `hx.saveDialog({title?, defaultName?, filters?})` | object | `{ok, data}` | 原生保存对话框 |
+
+```js
+// 选目录（音乐播放器用这个）
+const r = await window.hx.openDialog({ title: "选择音乐文件夹", directory: true });
+if (r.ok && r.data) console.log(r.data); // 'C:\\Music'
+
+// 选文件（带过滤器）
+const f = await window.hx.openDialog({
+  title: "选图片",
+  filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg"] }],
+});
+
+// 多选文件
+const fs = await window.hx.openDialog({ multi: true });
+// fs.data = ['C:\\a.txt', 'C:\\b.txt']
+
+// 保存
+const s = await window.hx.saveDialog({ title: "保存为", defaultName: "report.json" });
+```
+
+### 窗口控制（V7 壳 — 无装饰窗口必备）
+
+**V7 壳起窗口无原生标题栏**（`decorations: false`）。应用必须自行实现标题栏，包括：
+- 拖动区域（鼠标按下标题栏空白处可移动窗口）
+- 窗口控制按钮（最小化 / 最大化 / 关闭）
+
+| 方法 | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `hx.win.minimize()` | — | `{ok}` | 最小化窗口 |
+| `hx.win.toggleMaximize()` | — | `{ok, data: {maximized: bool}}` | 切换最大化/还原 |
+| `hx.win.close()` | — | never | 关闭窗口（直接退出进程） |
+| `hx.win.setTitle(title)` | string | `{ok}` | 动态设置窗口标题 |
+| `hx.win.startDrag()` | — | `{ok, err?}` | 鼠标按下标题栏时调用，启动窗口拖动 |
+| `hx.win.isMaximized()` | — | `{ok, data: bool}` | 检查窗口是否最大化 |
+
+### 自定义标题栏模板（必须包含在每个应用中）
+
+每个自定义应用的 HTML **顶部必须包含标题栏**。以下是标准标题栏 snippet，直接粘贴到 `<body>` 最前面：
+
+```html
+<!-- 自定义标题栏 — 无装饰窗口必备 -->
+<div class="hx-titlebar" onmousedown="window.hx.win.startDrag()">
+  <span class="hx-titlebar__title" id="hxTitle">应用名称</span>
+  <div class="hx-titlebar__controls">
+    <button class="hx-titlebar__btn" onclick="window.hx.win.minimize()" title="最小化">
+      <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="6" width="8" height="1" fill="currentColor"/></svg>
+    </button>
+    <button class="hx-titlebar__btn" onclick="window.hx.win.toggleMaximize()" title="最大化/还原">
+      <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+    </button>
+    <button class="hx-titlebar__btn hx-titlebar__btn--close" onclick="window.hx.win.close()" title="关闭">
+      <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.2"/></svg>
+    </button>
+  </div>
+</div>
+```
+
+标题栏 CSS（浅色主题）：
+```css
+.hx-titlebar {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 32px; padding: 0 0 0 12px;
+  background: #f0f0f0; border-bottom: 1px solid #e4e4e7;
+  user-select: none; -webkit-user-select: none;
+}
+.hx-titlebar__title { font-size: 12px; color: #71717a; }
+.hx-titlebar__controls { display: flex; height: 100%; }
+.hx-titlebar__btn {
+  width: 46px; height: 100%; border: none; background: transparent;
+  color: #52525b; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.hx-titlebar__btn:hover { background: #e4e4e7; }
+.hx-titlebar__btn--close:hover { background: #c62828; color: #fff; }
+```
+
+**深色主题标题栏**（仅当应用使用深色主题时）：
+```css
+.hx-titlebar { background: #1c1c20; border-bottom: 1px solid #2e2e34; }
+.hx-titlebar__title { color: #a0a0a8; }
+.hx-titlebar__btn { color: #d0d0dc; }
+.hx-titlebar__btn:hover { background: #2e2e34; }
+.hx-titlebar__btn--close:hover { background: #c62828; color: #fff; }
+```
+
+**交互要点**：
+- `onmousedown="window.hx.win.startDrag()"` — 鼠标按下标题栏空白区时启动窗口拖动
+- 按钮的 `onclick` 必须在 mousedown 时不触发 startDrag（按钮在 controls 容器内，mousedown 事件冒泡到标题栏会同时触发 startDrag）
+- **解决方案**：在 controls 容器上加 `onmousedown="event.stopPropagation()"` 阻止冒泡
+
+修正版：
+```html
+<div class="hx-titlebar" onmousedown="window.hx.win.startDrag()">
+  <span class="hx-titlebar__title">应用名称</span>
+  <div class="hx-titlebar__controls" onmousedown="event.stopPropagation()">
+    <!-- 按钮 -->
+  </div>
+</div>
+```
+
+manifest 的 `icon` 字段 = **Lucide 图标库名**（如 `"music"` / `"settings"` / `"folder"`），
+打包器从内置图标库（2007 个 SVG）读对应图标注入 payload，壳用 resvg 渲染成窗口图标。
+**不要传 base64 大图**（>50KB 会解码失败）。
 
 ```json
-{
+"manifest": {
   "id": "music-player",
   "name": "本地音乐",
-  "icon": "🎵",
-  "category": "media",
-  "tags": ["music", "player"],
-  "window_config": {"width": 900, "height": 600, "title": "本地音乐"},
+  "icon": "music",
   "permissions": ["fs-read", "exec", "dialog"]
 }
 ```
 
-### create 之后的工作流
+常用图标名：`music` / `play` / `pause` / `skip-forward` / `folder` / `file-text` /
+`settings` / `search` / `download` / `upload` / `trash` / `edit` / `plus` / `x` /
+`check` / `alert-circle` / `image` / `video` / `mic` / `headphones` / `monitor` /
+`printer` / `camera` / `book-open` / `message-square` / `send` / `bell` / `star` / `heart`
+（完整 2007 个清单见 `apps/desktop-tauri/src-tauri/resources/icons/`，文件名去掉 `.svg` 即名字）
 
-1. `validate` → 不通过按 issues 改
-2. 提示用户去 dashboard "应用" 页面点 "打包" (默认 sidecar)
-3. `run` → 启动已打包的 exe
-4. 后续代码修改 → `update` action 替换 app_source
+```js
+// 文本读写
+await window.hx.writeFile('data.txt', 'hello');
+const r = await window.hx.readFile('data.txt');
+if (r.ok) console.log(r.data); // "hello"
 
-### UI 设计规范（★ 强制遵守，主人铁律 2026-08-03）
+// 扫描文件夹（readDirDetailed 直接带大小/类型）
+const r2 = await window.hx.readDirDetailed('C:\\Music');
+if (r2.ok) console.log(r2.data);
+// [{name:'song1.mp3', isFile:true, size:5242880}, ...]
 
-**默认浅色主题，简约美观，有呼吸感。** 除以下两种例外外：
-- **用户明确要求**（如"做个深色的""要紫色调"）
-- **纯展示动效**（如播放旋转唱片、加载动画背景、渐变的封面图）
+// 播放音频
+audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
+```
 
-以下"AI 味"设计**一律禁止**：
-- ❌ **渐变色**：按钮、图标、标题、边框不得用 `linear-gradient` / `radial-gradient` 做渐变
-- ❌ **紫色系**：禁 purple / violet / indigo / fuchsia 家族（如 `#f093fb`、`#667eea`、`#764ba2`、`#f5576c` 渐变组合）
-- ❌ **组件边框线堆砌**：不要给每个元素都描一道细边框（`border: 1px solid rgba(...)` 满屏），那是"组件库模板感"
-- ❌ **花哨发光**：`box-shadow: 0 20px 60px rgba(紫,0.4)` 这种大阴影发光
+**实现原理**（了解即可）：
+- `hx.writeFile(p,c)` → `window.chrome.webview.postMessage(JSON.stringify({id, m:"writeFile", a:[p,c]}))`
+- Rust 端 ipc_handler 收到 → 处理 → `evaluate_script("window['__hx_resolve_<id>'](result)")`
+- JS 端 `window['__hx_resolve_<id>']` 是 Promise resolver → 返回结果
 
-**默认配色（浅色）**：
-| 用途 | 值 |
-|------|-----|
+**别用 fetch 到 `https://app.localhost/hx/...`**（custom scheme 的 fetch 被 Chromium CORS 拒绝）—— 必须用 `window.chrome.webview.postMessage`！
+
+### 媒体/二进制文件访问
+
+- **音频播放**：`hx.readDir(dir)` 扫描文件夹 → `hx.fileUrl(path)` 生成 URL → `<audio src=url>`
+- **图片显示**：`hx.fileUrl(path)` → `<img src=url>`
+- **视频播放**：`hx.fileUrl(path)` → `<video src=url>`
+- `hxfile://` 协议支持 seek（拖动进度条），不占 IPC 内存
+
+### 系统能力不足？用纯前端 JS
+
+- 数据：`localStorage` / `IndexedDB` / **SQLite-wasm**（本地数据库）
+- 网络：`fetch()`（到 https URL）
+- 媒体：Canvas / WebGL / `<video>` / `<audio>` + `hxfile://` 协议
+- 算力：**wasm 库**（ffmpeg-wasm、pdf-wasm、jszip）
+
+## 前端默认标准（必须遵守，违反视为不合格）
+
+> **这是硬性标准**。LLM 生成的任何自定义应用界面，默认必须符合以下规范；
+> 只有用户**明确要求**深色/特殊风格时才允许偏离。
+
+### 1. 默认浅色主题（不要上来就写深色）
+
+- **默认浅色**：白/浅灰底 + 深灰文字。**禁止默认深色**（深色仅作可选主题，且要提供切换入口）
+- 配色用**中性灰家族**，禁止蓝灰（slate）和任何饱和蓝/紫/靛（blue/indigo/violet/purple）
+- 浅色基准色板：
+
+| 用途 | 色值 |
+|---|---|
 | 页面背景 | `#fafafa` |
-| 卡片/面板 | `#ffffff` |
-| 次级背景 | `#f4f4f5` |
-| 边框（必要处） | `#e4e4e7` |
+| 卡片/面板背景 | `#ffffff` |
+| 次级背景（输入框/悬浮） | `#f4f4f5` |
+| 边框/分隔线 | `#e4e4e7` |
 | 主文字 | `#18181b` |
-| 次要文字 | `#71717a` |
-| 强调色（按钮主操作） | `#4b7a5e`（墨绿） |
+| 次级文字 | `#71717a` |
+| 强调色（主按钮/选中态） | `#4b7a5e`（墨绿，Hermix 品牌色） |
+| 成功/危险（如需要） | `#2e7d32` / `#c62828`（低饱和） |
 
-**布局原则**：
-- 标题 / 工具栏 / 内容区 / 状态栏 分区清晰
-- 卡片式，统一圆角 8-10px，间距留白充足（padding 20px+）
-- 主操作按钮用**墨绿实底 + 白字**；次要操作用**浅灰底 + 深灰字**（无边框或极淡边框）
-- 图标：主操作按钮必须有内联 SVG（lucide 风格 24×24，`stroke="currentColor"`），禁 emoji 当图标、禁外链图标库
-- 强调文字用墨绿或深灰，不要彩色渐变
+- 文本对比度 ≥ 4.5:1；强调色按钮上用白字
+- `prefers-color-scheme: dark` 可作为**可选**增强，但默认仍是浅色
 
-**自检清单（生成代码前过一遍）**：
-1. 无渐变（grep 一下 `gradient` 应为空，除纯展示动效）
-2. 无紫/蓝紫（`#f093fb` / `#667eea` / `#764ba2` / purple / violet 全无）
-3. 无满屏细边框
-4. 背景浅色（`#fafafa` / `#ffffff` 系）
-5. 图标是 SVG 不是 emoji
-6. 圆角统一、间距留白充足
+### 2. 简约大气，布局合理
 
-### 其它 action 速查
+- **信息层级清晰**：标题区（应用名+简述）→ 工具栏/操作区 → 内容区 → 状态/输出区
+- 卡片式布局：功能块用卡片分组，卡片间 12-16px 间距
+- 最大内容宽度 ~880px，居中；边距 20-24px
+- 控件尺寸：按钮 ≥32px 高、点击目标 ≥36px；输入框与按钮对齐
+- 圆角：卡片 10px、按钮 8px、输入框 8px；统一
+- 留白充足，不要贴边堆叠；单屏放不下用滚动，不要压缩
+- 标题字号 18-20px；正文 14px；辅助信息 12px；行高 1.6
 
-- list: 列所有应用 (无参数)
-- get: 看应用详情+源码 (需 id)
-- update: 替换 app_source / index_html / manifest (需 id)
-- delete: 卸载应用 (需 id)
-- package: 打包成 exe (需 id, 可选 build_mode)
-- run: 启动已打包应用 (需 id)
-- validate: 静态校验 manifest+HTML+API+权限 (需 id)
-- smoke: 先打包再启 exe 看进程存活 (需 id)
+### 3. 该有的图标不能少（但禁止 emoji）
 
-## Gotchas
+- **操作按钮必须有图标**：保存/打开/删除/刷新/导出/设置等主操作，图标是刚需
+- 图标用 **内联 SVG**（lucide 风格，24×24 viewBox，`stroke="currentColor"`，`stroke-width="2"`，无填充），**禁止外链图标库**（离线不可用）、**禁止 emoji 当图标**
+- 常用图标 SVG path（lucide，直接内嵌）：
+  - 保存 `M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z` + `M17 21v-8H7v8` + `M7 3v5h8`
+  - 文件夹打开 `M6 2h6l2 4h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z`
+  - 刷新 `M21 12a9 9 0 1 1-2.64-6.36` + `M21 3v6h-6`
+  - 删除 `M3 6h18` + `M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2` + `M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6`
+  - 下载 `M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4` + `M7 10l5 5 5-5` + `M12 15V3`
+  - 设置 `M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z` + 齿轮外圈
+  - 运行/播放 `M5 3l14 9-14 9V3z`
+  - 信息 `M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z` + `M12 16v-4` + `M12 8h.01`
+- 图标规格：16-18px，与文字 6px 间距（`display:inline-flex;align-items:center;gap:6px`）
+- 状态区可用小圆点/色块表示（如运行中=绿点），也禁止用 emoji
 
-- **【致命】不要用 backend_code / ui_code 字段**！这是旧 skill 残留的字段名，
-  真实 schema 完全没有这俩。create 必填的是 `app_source` (TS) 或 `index_html` (HTML)。
-  看到模型还在写 backend_code 立即纠正。
-- **【致命】不要 import React/ReactDOM**！这两是全局变量 (由壳注入)，
-  `import React from 'react'` 必然报错。用 `const { useState } = React;`。
-- **【致命】API 命名**: 用 `window.hx.*`，不是 `Neutralino.*` 也不是 `shell_*`。
-  **真实可用的 hx API（以壳 `getInfo()` 为准）**:
-  - 文件: `writeFile(path, content)` / `readFile(path)` (文本 only) /
-    `appendFile(path, content)` / `removeFile(path)` / `readDir(path)` (**返回纯名字 string[]**) /
-    `stat(path)` ({size,isDir,isFile,modified}) / `createDir(path)` / `removeDir(path)`
-  - 进程: `exec(cmd, args)` → {stdout, stderr, exitCode}
-  - 媒体: `fileUrl(path)` → `hxfile://localhost/...` (给 `<audio src>` 直读本地文件, 支持 seek)
-  - 其它: `getInfo()` (API 清单) / `showMessage(msg)`
-  - **NOT SUPPORTED**: `openDialog` / `saveDialog` / `clipboardGet` / `clipboardSet` / `readFileBytes` / `getEnv` / `fetch`
-    —— 不要写这些, 运行时返回 {ok:false}。
-- **【致命】运行时 window.hx 注入依赖壳版本**: 打包用 `$HERMIX_HOME/loader/hx-shell.exe`。
-  若该文件是旧版 (不含 `window.hx` init script), 打包出的 exe 所有 hx API 都 undefined →
-  按钮点不动。**症状 = 控制台 "window.hx is undefined"**。修法: 用新版壳覆盖
-  `~/.hermix/loader/hx-shell.exe` (从仓库 apps/desktop-tauri/src-tauri/resources/loader/ 拷贝),
-  然后重新 package。
-- **【致命】exec 找不到 powershell 等常见程序**: hx-shell 的 `exec(cmd, args)` 用
-  `std::process::Command::new(cmd)`, 依赖 PATH 完整。Tauri/WebView2 子进程的 PATH 可能
-  剥离了 `C:\Windows\System32\WindowsPowerShell\v1.0\`, 直接 `await hx.exec("powershell", ...)`
-  会返回 `program not found`。**新壳已内置 fallback** (powershell / cmd / pwsh / where
-  自动用 System32 全路径), 但**旧壳没有** → 必须用新版壳。短期绕过: app 代码用完整
-  路径 `"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"`。
-- **【窗口图标】manifest.icon 用内置 Lucide 图标库名（★推荐，不要 base64）**:
-  - manifest `icon` 字段 = Lucide 图标名（如 `"music"` / `"settings"` / `"folder"`），
-    打包器从内置图标库（2007 个 SVG）读对应图标注入 payload，壳运行时用 resvg 渲染成窗口图标。
-  - **2007 个可用图标名清单**: 见 `apps/desktop-tauri/src-tauri/resources/icons/`（文件名去掉 `.svg` 就是名字）。
-  - 常见图标名：music / play / pause / skip-forward / folder / file-text / settings / search /
-    download / upload / trash / edit / plus / x / check / alert-circle / image / video / mic /
-    headphones / monitor / printer / camera / book-open / message-square / send / bell / star / heart
-  - 旧方式 `icon_data`（base64 PNG）仍兼容，但**不推荐**：base64 大图（>50KB）会解码失败。
-  - 格式: `"icon": "music"`（字符串），不要带 `.svg` 后缀，不要传 base64。
-- **【致命】UI 配色反 AI 味（主人铁律）**: 默认浅色主题。**禁止**渐变按钮/图标（`linear-gradient`）、紫色系（`#f093fb`/`#667eea`/`#764ba2`/purple/violet/fuchsia）、满屏细边框线、大阴影发光。唯一例外：用户明确要求、或纯展示动效。主操作按钮 = 墨绿实底 `#4b7a5e` + 白字；背景 `#fafafa`/卡片 `#ffffff`；图标用内联 SVG 禁 emoji。详见 Practical Guidance 的 UI 设计规范 + 自检清单。
-- **【常见错】tags/permissions 必须是数组**：常见 LLM 写成 `"permissions": "fs-read"`
-  正确: `"permissions": ["fs-read"]`。
-- **【常见错】manifest 必须传 JSON 对象，不是字符串**。
-  XML 工具调用时: `<parameter name="manifest">{"id":"x","name":"y"}</parameter>`
-  不是 `<parameter name="manifest"><id>x</id><name>y</name></parameter>`。
-  如果用 XML 子标签，服务端会提示 "expected struct"。
-- **【常见错】permissions 写错英文**: `filesystem` / `file` / `disk` / `os` 都是非法的，
-  只能是 fs-read/fs-write/exec/dialog/env/temp/clipboard/network/app。
-- **【常见错】audio 不能用 file:// 直读本地 MP3** (浏览器安全策略)，
-  正确姿势: `window.hx.fileUrl(path)` → `hxfile://localhost/C:/...` → `<audio src>`。
-  不要用 Blob/readFileBytes (该 API 不存在)。
-- **【debug】create 之后跑一次 validate** 看 issues 数组，按 code 修。
-  validate 比浏览器报错更直接（能告诉你 "permission missing: exec"）。
-- **【注意】build_mode 默认 sidecar，零依赖；neu-build 需 Node.js + neu CLI**。
-  用户机器无 Node 时，sidecar 是唯一能跑的。
-- **【注意】Window width/height 单位是 px** (CSS pixel)，不要传 100% 这种相对值。
-- **【注意】index_html 必须是完整 HTML 文档字符串**（含 <!DOCTYPE html>），
-  不是文件路径也不是片段。
+### 4. 文本与语言
 
-## Integration
+- **界面文案用简体中文**（除非用户指定英文）；术语保持英文（如"Export"写成"导出"）
+- **禁止 emoji**（包括标题、按钮、状态、装饰）——这是硬性要求
+- 文案简洁、动词开头（"保存文件"不是"文件保存操作"）；错误提示要具体（"无法读取 data.txt：文件不存在"）
 
-- **与 dashboard 协作**: create 成功后，$HERMIX_HOME/plugins/<id>/ 目录出现，
-  主人去 desktop-tauri 应用的 "应用" 页面能看到。点 "打包" 按钮会调
-  custom_app_manager.package action。
-- **与 hermix CLI 协作**: `hermix plugin list / get / package / run` 提供等效
-  命令行入口。
-- **与 file-tools 协作**: 创作期间可以用 read_file/write_file 查 manifest.json
-  现状 (放 $HERMIX_HOME/plugins/<id>/manifest.json)。
-- **与 system 能力对比**: 不要让用户去装 Tauri / Neutralino / Electron 等其他
-  框架,本系统是 hx-shell 自家壳,不依赖外部运行时。
-- **失败时调试链**:
-  1. 看 create 错误信息 (含具体缺什么字段)
-  2. create 成功但应用跑不起来 → validate 看 issues
-  3. validate 通过但运行时崩 → smoke 看进程退出码和 stderr
-  4. smoke 通过但 UI 错 → 在打包后的 dist/<id>.exe 上按 F12 (开发模式壳支持)
+### 5. 交互细节
 
-## References
+- 加载/处理中要有反馈：按钮禁用+"处理中…"文字，或顶部细进度条；禁止无反馈干等
+- 操作成功要有轻提示（toast/状态文字变绿），失败要红字+具体原因
+- 表单校验即时反馈（空值/格式错误），回车可提交
+- 所有外部资源**禁止 CDN**（unpkg/jsdelivr 等）：Vue/React 库要么 Vite 打包内联，要么内嵌进单文件 HTML；字体用系统字体栈 `system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif`
 
-- **核心源码**:
-  - `crates/hermix-tools/src/tools/custom_app_manager.rs` — 工具入口 + schema 定义
-  - `crates/hermix-plugin/src/api.rs` — CreateAppRequest / PluginManifest 类型
-  - `crates/hermix-plugin/src/manifest.rs` — manifest 字段 + permissions→Neutralino allowlist 映射
-  - `crates/hermix-plugin/src/validate.rs` — 静态校验 (L0 manifest + L1 hx API + L2 权限)
-  - `crates/hermix-plugin/src/smoke.rs` — 运行时冒烟 (启 exe + 抓 stderr)
-  - `crates/hermix-plugin/src/loader_packager.rs` — sidecar / neu-build 两种打包
-  - `crates/hermix-plugin/src/hx_packager.rs` — hx-shell 模板壳定位
-- **运行路径**: $HERMIX_HOME/plugins/<id>/{manifest.json,index.html,src/main.tsx,...}
-- **打包产物**: $HERMIX_HOME/plugins/<id>/dist/<id>.exe (sidecar 模式)
-- **前端入口**: apps/desktop-tauri/src/pages/CustomApps (Tauri dashboard)
-- **hx-shell 工程**: 主人本机编译 (<USERPROFILE>\AppData\Local\Temp\hx-wry-shell)
+### 6. 自检清单（交付前过一遍）
+
+- [ ] 浅色默认、中性灰配色、无蓝紫
+- [ ] 主操作按钮都有 SVG 图标
+- [ ] 全文无 emoji
+- [ ] 无 CDN 外链（Vue/React/图标全部内联）
+- [ ] 布局有层级：标题/工具栏/内容/状态分区
+- [ ] 按钮/输入框尺寸一致、间距统一
+- [ ] 失败场景有具体错误提示
+
+## agent 开发流
+
+1. 写 `manifest.json`：
+   ```json
+   {"id": "my-app", "name": "我的应用", "version": "1.0.0", "long_description": "功能介绍...\n使用方法...\n更新方法...\n分发方法...", "window_config": {"width": 900, "height": 600, "resizable": true}}
+   ```
+   **`long_description` 必填**：包含功能介绍、使用方法、更新方法、分发方法，在详情界面"说明"Tab 展示给用户。
+2. 写 `index.html`（自包含，或 Vite 单文件构建产物）——**按"前端默认标准"生成界面**
+3. 调 `custom_app_manager.create({manifest, index_html, app_source?, source_files?})`
+4. （可选）`validate` 检查 HTML/JS 完整性
+5. （可选）`smoke` 自动冒烟（执行 `hx.writeFile("auto-verify.txt", ...)` + 读回）
+6. `package` 打包成 `dist/<id>.exe` + `dist/WebView2Loader.dll`
+7. `run` 启动 app
+8. 把 `dist/<id>.exe` 发给用户，用户双击即跑（WebView2 系统自带，无需安装）
+
+## 关键约束
+
+- **【致命】窗口无原生标题栏（V7 壳）**：窗口 `decorations: false`，**必须**在 HTML 顶部自行实现标题栏（拖动区 + 最小化/最大化/关闭按钮）。不写标题栏 = 用户无法移动/关闭窗口（只能 Alt+F4）。用 `window.hx.win.*` API 控制窗口。标题栏模板见上方"自定义标题栏模板"章节。
+- **整个应用就是一个 `index.html`**：没有 backend.ts / ui.tsx 分离文件！所有 HTML/CSS/JS 都内联在单个 index.html 里。TSX 模式由 esbuild 编译后 inline。
+- **不要 import React**：`window.React` 是全局变量（从 CDN 或单文件 HTML 内嵌），用 `const { useState } = React;`
+- **不要 `fetch('app://...')`**：CORS 拒绝。用 `window.hx.*`（内部走 chrome.webview.postMessage）
+- **不要依赖 Node.js API**（path/fs/child_process）：沙箱里没有，用 `window.hx.*` 替代
+- **不要用 Tauri API**（`convertFileSrc`/`shell_dialog_open`/`shell_fs_read_bytes`）：这些在 hx-shell 里**不存在**！只有 `window.hx.*` 这一套 API
+- **二进制文件用 `hx.fileUrl`**：`readFile` 只读文本，MP3/图片/视频用 `hx.fileUrl(path)` 生成 URL
+- **不要用 sourcemap 单独文件**：Vite 单文件输出不要 `.map`（影响单文件化）
+- **HTML 文件编码**：UTF-8，无 BOM
+- **不要 CDN**：Vue/React/图标全部内联（离线可用）
+- **不要 emoji**：图标用内联 SVG（manifest.json 里也不要用 emoji 当 icon）
+
+## 关键约束（桌面定位）
+
+- **【致命】禁止用浏览器 input/file API 选文件/目录**：`<input type="file">` / `<input type="file" webkitdirectory multiple>` /
+  `FileReader` / `<input>` 手输路径 —— 这些会触发 WebView2 原生"上传文件?"确认弹窗（蓝色"上传/取消"按钮），
+  **跟桌面小工具的定位完全不搭**。桌面应用必须用壳层 rfd 原生对话框：
+  ```js
+  // ✅ 正确：调壳层 API，弹 Windows 原生选择框（无确认弹窗）
+  const r = await window.hx.openDialog({ title: "选音乐文件夹", directory: true });
+  if (r.ok && r.data) console.log(r.data);
+
+  // ❌ 错误：浏览器 input 触发"上传"确认弹窗
+  <input type="file" webkitdirectory multiple onchange="..." />
+  ```
+  - 选目录 → `openDialog({directory: true})`
+  - 选文件 → `openDialog({filters: [{name:"图片", extensions:["png","jpg"]}]})`
+  - 多选 → `openDialog({multi: true, ...})`
+  - 保存 → `saveDialog({defaultName: "report.txt"})`
+- **【致命】不要用纯文本 `<input>` 让用户手输路径**：粘贴/转义易错，体验差。**永远用按钮调 `openDialog` 弹原生框**。
+- **默认浅色**：不要上来就写深色
+- **manifest.json 禁止 emoji**：icon 字段不要用 emoji，留空或用文字
+
+## 模板：纯 HTML 工具（浅色 + SVG 图标）
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>文本工具</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 14px/1.6 system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #fafafa; color: #18181b; display: flex; flex-direction: column; height: 100vh; }
+  /* ── 自定义标题栏（V7 壳无原生标题栏，必须自行实现）── */
+  .hx-titlebar { display: flex; align-items: center; justify-content: space-between;
+    height: 32px; padding: 0 0 0 12px; background: #f0f0f0; border-bottom: 1px solid #e4e4e7;
+    user-select: none; -webkit-user-select: none; flex-shrink: 0; }
+  .hx-titlebar__title { font-size: 12px; color: #71717a; }
+  .hx-titlebar__controls { display: flex; height: 100%; }
+  .hx-titlebar__btn { width: 46px; height: 100%; border: none; background: transparent;
+    color: #52525b; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .hx-titlebar__btn:hover { background: #e4e4e7; }
+  .hx-titlebar__btn--close:hover { background: #c62828; color: #fff; }
+  /* ── 内容区 ── */
+  .content { padding: 24px; flex: 1; overflow-y: auto; }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: #71717a; font-size: 12px; margin-bottom: 20px; }
+  .card { background: #fff; border: 1px solid #e4e4e7; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 14px; color: #71717a; font-weight: 500; margin-bottom: 12px; }
+  textarea { width: 100%; height: 160px; background: #f4f4f5; border: 1px solid #e4e4e7;
+             border-radius: 8px; padding: 10px; resize: vertical; font: 13px/1.5 Consolas, monospace; }
+  .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  button { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px;
+           background: #f4f4f5; color: #18181b; border: 1px solid #e4e4e7; border-radius: 8px;
+           cursor: pointer; font-size: 13px; }
+  button:hover { background: #e4e4e7; }
+  button.primary { background: #4b7a5e; color: #fff; border: none; font-weight: 500; }
+  button.primary:hover { background: #3d654c; }
+  button svg { width: 16px; height: 16px; }
+  .out { margin-top: 12px; background: #f4f4f5; border-radius: 8px; padding: 10px;
+         font: 12px/1.5 Consolas, monospace; color: #2e7d32; white-space: pre-wrap; min-height: 24px; }
+  .out.error { color: #c62828; }
+</style>
+</head>
+<body>
+<!-- 自定义标题栏 — onmousedown 启动窗口拖动，controls 阻止冒泡 -->
+<div class="hx-titlebar" onmousedown="window.hx.win.startDrag()">
+  <span class="hx-titlebar__title">文本工具</span>
+  <div class="hx-titlebar__controls" onmousedown="event.stopPropagation()">
+    <button class="hx-titlebar__btn" onclick="window.hx.win.minimize()" title="最小化"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="6" width="8" height="1" fill="currentColor"/></svg></button>
+    <button class="hx-titlebar__btn" onclick="window.hx.win.toggleMaximize()" title="最大化/还原"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg></button>
+    <button class="hx-titlebar__btn hx-titlebar__btn--close" onclick="window.hx.win.close()" title="关闭"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.2"/></svg></button>
+  </div>
+</div>
+<div class="content"><div class="wrap">
+  <h1>文本工具</h1>
+  <p class="sub">本地文本编辑与保存</p>
+  <div class="card">
+    <h2>内容</h2>
+    <textarea id="in" placeholder="在这里输入文本…"></textarea>
+    <div class="row">
+      <button class="primary" id="save">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+        保存文件
+      </button>
+      <button id="read">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h6l2 4h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/></svg>
+        读取文件
+      </button>
+      <button id="info">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        壳信息
+      </button>
+    </div>
+    <div class="out" id="out">—</div>
+  </div>
+</div></div> <!-- /wrap /content -->
+<script>
+const $ = id => document.getElementById(id);
+const out = (s, err) => { $('out').textContent = s; $('out').classList.toggle('error', !!err); };
+$('save').onclick = async () => {
+  const r = await window.hx.writeFile('output.txt', $('in').value);
+  out(r.ok ? '已保存到 output.txt' : '保存失败: ' + r.err, !r.ok);
+};
+$('read').onclick = async () => {
+  const r = await window.hx.readFile('output.txt');
+  out(r.ok ? r.data : '读取失败: ' + r.err, !r.ok);
+};
+$('info').onclick = async () => {
+  const r = await window.hx.getInfo();
+  out(JSON.stringify(r, null, 2));
+};
+</script>
+</body>
+</html>
+```
+
+## 模板：本地音乐播放器（readDir + fileUrl + audio）
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>音乐播放器</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font: 14px/1.6 system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #fafafa; color: #18181b; display: flex; flex-direction: column; height: 100vh; }
+  .toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 20px; background: #fff;
+             border-bottom: 1px solid #e4e4e7; }
+  .toolbar input { flex: 1; height: 36px; background: #f4f4f5; border: 1px solid #e4e4e7;
+                   border-radius: 8px; padding: 0 12px; font: 13px/1 Consolas, monospace; }
+  button { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px;
+           background: #f4f4f5; color: #18181b; border: 1px solid #e4e4e7; border-radius: 8px;
+           cursor: pointer; font-size: 13px; }
+  button:hover { background: #e4e4e7; }
+  button.primary { background: #4b7a5e; color: #fff; border: none; font-weight: 500; }
+  button svg { width: 16px; height: 16px; }
+  .playlist { flex: 1; overflow-y: auto; padding: 8px 0; }
+  .song { display: flex; align-items: center; gap: 10px; padding: 8px 20px; cursor: pointer; }
+  .song:hover { background: #f4f4f5; }
+  .song.active { background: #e4e4e7; color: #4b7a5e; font-weight: 500; }
+  .song svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .player { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: #fff;
+            border-top: 1px solid #e4e4e7; }
+  .player audio { flex: 1; height: 36px; }
+  .status { padding: 4px 20px; color: #71717a; font-size: 12px; background: #fff;
+            border-top: 1px solid #e4e4e7; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <button class="primary" id="pickDir">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h6l2 4h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/></svg>
+      选择音乐文件夹
+    </button>
+    <span id="dirPath" style="color:#71717a;font-size:13px"></span>
+  </div>
+  <div class="playlist" id="playlist">
+    <div class="song" style="color:#71717a;cursor:default">输入路径后点扫描</div>
+  </div>
+  <div class="player">
+    <button id="prev" title="上一首">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+    </button>
+    <audio id="audio" controls></audio>
+    <button id="next" title="下一首">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+    </button>
+  </div>
+  <div class="status" id="status">就绪</div>
+<script>
+const $ = id => document.getElementById(id);
+const EXT = ['.mp3','.flac','.wav','.ogg','.m4a','.aac','.wma'];
+let songs = [], current = -1, selectedDir = '';
+
+function status(msg) { $('status').textContent = msg; }
+
+// 用壳层 openDialog 弹 Windows 原生选择框 —— 绝不用 <input type="file">/webkitdirectory
+// （那是浏览器 API，会触发"上传文件"确认弹窗，跟桌面小工具定位不搭）
+async function pickDir() {
+  const r = await window.hx.openDialog({ title: "选择音乐文件夹", directory: true });
+  if (!r.ok) { status('选目录失败: ' + (r.err || '')); return; }
+  if (!r.data) return; // 用户取消
+  selectedDir = r.data;
+  $('dirPath').textContent = selectedDir;
+  scan();
+}
+
+async function scan() {
+  if (!selectedDir) { status('请先选择文件夹'); return; }
+  status('扫描中...');
+  const r = await window.hx.readDirDetailed(selectedDir);
+  if (!r.ok) { status('扫描失败: ' + r.err); return; }
+  songs = r.data
+    .filter(it => it.isFile && EXT.some(e => it.name.toLowerCase().endsWith(e)))
+    .map(it => ({ name: it.name, size: it.size, path: selectedDir + '\\' + it.name }));
+  status('找到 ' + songs.length + ' 首歌曲');
+  renderList();
+}
+
+function renderList() {
+  const html = songs.map((s, i) =>
+    '<div class="song' + (i === current ? ' active' : '') + '" data-i="' + i + '">' +
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>' +
+    s.name + '</div>').join('');
+  $('playlist').innerHTML = html || '<div class="song" style="color:#71717a;cursor:default">无音乐文件</div>';
+}
+
+function play(i) {
+  if (i < 0 || i >= songs.length) return;
+  current = i;
+  $('audio').src = window.hx.fileUrl(songs[i].path);
+  $('audio').play();
+  status('播放中: ' + songs[i].name);
+  renderList();
+}
+
+$('playlist').addEventListener('click', e => {
+  const el = e.target.closest('.song[data-i]');
+  if (el) play(parseInt(el.dataset.i));
+});
+$('audio').addEventListener('ended', () => play(current + 1));
+$('prev').onclick = () => play(current - 1);
+$('next').onclick = () => play(current + 1);
+$('pickDir').onclick = pickDir;
+</script>
+</body>
+</html>
+```
+
+## 模板：Vue 3 单文件（内嵌，无 CDN）
+
+> Vue 运行时必须内嵌进单文件 HTML（用 `vue.global.prod.js` 内容直接粘贴到 `<script>` 前），
+> **禁止 `<script src="https://unpkg.com/vue...">`**（离线白屏）。
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>Vue 应用</title>
+<style>
+  /* 同样遵守"前端默认标准"：浅色、中性灰、SVG 图标 */
+  body { font: 14px/1.6 system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #fafafa; color: #18181b; padding: 24px; }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  button { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px;
+           background: #4b7a5e; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; }
+  button svg { width: 16px; height: 16px; }
+  .msg { margin-top: 12px; color: #71717a; font-size: 13px; }
+</style>
+<!-- 内嵌 Vue 运行时：粘贴 vue.global.prod.js 的完整内容到此处 -->
+<script>/* VUE_RUNTIME_INLINED_HERE */</script>
+</head>
+<body>
+<div id="app">
+  <div class="wrap">
+    <h1>Vue 应用</h1>
+    <button @click="save">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+      保存
+    </button>
+    <p class="msg">{{ msg }}</p>
+  </div>
+</div>
+<script>
+const { createApp, ref } = Vue;
+createApp({
+  setup() {
+    const msg = ref('就绪');
+    async function save() {
+      const r = await window.hx.writeFile('a.txt', 'hello');
+      msg.value = r.ok ? '已保存' : '保存失败: ' + r.err;
+    }
+    return { msg, save };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
+```

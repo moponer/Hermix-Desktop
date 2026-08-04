@@ -1,6 +1,6 @@
 ---
 name: custom-app-development
-version: 10
+version: 11
 description: >
   自定义应用开发助手。当用户要求创建桌面应用、桌面工具、独立程序、
   窗口应用、打包成 EXE 的程序时使用。通过 custom_app_manager 工具
@@ -165,7 +165,84 @@ const fs = await window.hx.openDialog({ multi: true });
 const s = await window.hx.saveDialog({ title: "保存为", defaultName: "report.json" });
 ```
 
-### 窗口图标（manifest.icon 用内置 Lucide 图标库名）
+### 窗口控制（V7 壳 — 无装饰窗口必备）
+
+**V7 壳起窗口无原生标题栏**（`decorations: false`）。应用必须自行实现标题栏，包括：
+- 拖动区域（鼠标按下标题栏空白处可移动窗口）
+- 窗口控制按钮（最小化 / 最大化 / 关闭）
+
+| 方法 | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `hx.win.minimize()` | — | `{ok}` | 最小化窗口 |
+| `hx.win.toggleMaximize()` | — | `{ok, data: {maximized: bool}}` | 切换最大化/还原 |
+| `hx.win.close()` | — | never | 关闭窗口（直接退出进程） |
+| `hx.win.setTitle(title)` | string | `{ok}` | 动态设置窗口标题 |
+| `hx.win.startDrag()` | — | `{ok, err?}` | 鼠标按下标题栏时调用，启动窗口拖动 |
+| `hx.win.isMaximized()` | — | `{ok, data: bool}` | 检查窗口是否最大化 |
+
+### 自定义标题栏模板（必须包含在每个应用中）
+
+每个自定义应用的 HTML **顶部必须包含标题栏**。以下是标准标题栏 snippet，直接粘贴到 `<body>` 最前面：
+
+```html
+<!-- 自定义标题栏 — 无装饰窗口必备 -->
+<div class="hx-titlebar" onmousedown="window.hx.win.startDrag()">
+  <span class="hx-titlebar__title" id="hxTitle">应用名称</span>
+  <div class="hx-titlebar__controls">
+    <button class="hx-titlebar__btn" onclick="window.hx.win.minimize()" title="最小化">
+      <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="6" width="8" height="1" fill="currentColor"/></svg>
+    </button>
+    <button class="hx-titlebar__btn" onclick="window.hx.win.toggleMaximize()" title="最大化/还原">
+      <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+    </button>
+    <button class="hx-titlebar__btn hx-titlebar__btn--close" onclick="window.hx.win.close()" title="关闭">
+      <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.2"/></svg>
+    </button>
+  </div>
+</div>
+```
+
+标题栏 CSS（浅色主题）：
+```css
+.hx-titlebar {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 32px; padding: 0 0 0 12px;
+  background: #f0f0f0; border-bottom: 1px solid #e4e4e7;
+  user-select: none; -webkit-user-select: none;
+}
+.hx-titlebar__title { font-size: 12px; color: #71717a; }
+.hx-titlebar__controls { display: flex; height: 100%; }
+.hx-titlebar__btn {
+  width: 46px; height: 100%; border: none; background: transparent;
+  color: #52525b; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.hx-titlebar__btn:hover { background: #e4e4e7; }
+.hx-titlebar__btn--close:hover { background: #c62828; color: #fff; }
+```
+
+**深色主题标题栏**（仅当应用使用深色主题时）：
+```css
+.hx-titlebar { background: #1c1c20; border-bottom: 1px solid #2e2e34; }
+.hx-titlebar__title { color: #a0a0a8; }
+.hx-titlebar__btn { color: #d0d0dc; }
+.hx-titlebar__btn:hover { background: #2e2e34; }
+.hx-titlebar__btn--close:hover { background: #c62828; color: #fff; }
+```
+
+**交互要点**：
+- `onmousedown="window.hx.win.startDrag()"` — 鼠标按下标题栏空白区时启动窗口拖动
+- 按钮的 `onclick` 必须在 mousedown 时不触发 startDrag（按钮在 controls 容器内，mousedown 事件冒泡到标题栏会同时触发 startDrag）
+- **解决方案**：在 controls 容器上加 `onmousedown="event.stopPropagation()"` 阻止冒泡
+
+修正版：
+```html
+<div class="hx-titlebar" onmousedown="window.hx.win.startDrag()">
+  <span class="hx-titlebar__title">应用名称</span>
+  <div class="hx-titlebar__controls" onmousedown="event.stopPropagation()">
+    <!-- 按钮 -->
+  </div>
+</div>
+```
 
 manifest 的 `icon` 字段 = **Lucide 图标库名**（如 `"music"` / `"settings"` / `"folder"`），
 打包器从内置图标库（2007 个 SVG）读对应图标注入 payload，壳用 resvg 渲染成窗口图标。
@@ -313,6 +390,7 @@ audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
 
 ## 关键约束
 
+- **【致命】窗口无原生标题栏（V7 壳）**：窗口 `decorations: false`，**必须**在 HTML 顶部自行实现标题栏（拖动区 + 最小化/最大化/关闭按钮）。不写标题栏 = 用户无法移动/关闭窗口（只能 Alt+F4）。用 `window.hx.win.*` API 控制窗口。标题栏模板见上方"自定义标题栏模板"章节。
 - **整个应用就是一个 `index.html`**：没有 backend.ts / ui.tsx 分离文件！所有 HTML/CSS/JS 都内联在单个 index.html 里。TSX 模式由 esbuild 编译后 inline。
 - **不要 import React**：`window.React` 是全局变量（从 CDN 或单文件 HTML 内嵌），用 `const { useState } = React;`
 - **不要 `fetch('app://...')`**：CORS 拒绝。用 `window.hx.*`（内部走 chrome.webview.postMessage）
@@ -354,7 +432,19 @@ audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font: 14px/1.6 system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-         background: #fafafa; color: #18181b; padding: 24px; }
+         background: #fafafa; color: #18181b; display: flex; flex-direction: column; height: 100vh; }
+  /* ── 自定义标题栏（V7 壳无原生标题栏，必须自行实现）── */
+  .hx-titlebar { display: flex; align-items: center; justify-content: space-between;
+    height: 32px; padding: 0 0 0 12px; background: #f0f0f0; border-bottom: 1px solid #e4e4e7;
+    user-select: none; -webkit-user-select: none; flex-shrink: 0; }
+  .hx-titlebar__title { font-size: 12px; color: #71717a; }
+  .hx-titlebar__controls { display: flex; height: 100%; }
+  .hx-titlebar__btn { width: 46px; height: 100%; border: none; background: transparent;
+    color: #52525b; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .hx-titlebar__btn:hover { background: #e4e4e7; }
+  .hx-titlebar__btn--close:hover { background: #c62828; color: #fff; }
+  /* ── 内容区 ── */
+  .content { padding: 24px; flex: 1; overflow-y: auto; }
   .wrap { max-width: 880px; margin: 0 auto; }
   h1 { font-size: 20px; margin-bottom: 4px; }
   .sub { color: #71717a; font-size: 12px; margin-bottom: 20px; }
@@ -376,7 +466,16 @@ audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
 </style>
 </head>
 <body>
-<div class="wrap">
+<!-- 自定义标题栏 — onmousedown 启动窗口拖动，controls 阻止冒泡 -->
+<div class="hx-titlebar" onmousedown="window.hx.win.startDrag()">
+  <span class="hx-titlebar__title">文本工具</span>
+  <div class="hx-titlebar__controls" onmousedown="event.stopPropagation()">
+    <button class="hx-titlebar__btn" onclick="window.hx.win.minimize()" title="最小化"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="6" width="8" height="1" fill="currentColor"/></svg></button>
+    <button class="hx-titlebar__btn" onclick="window.hx.win.toggleMaximize()" title="最大化/还原"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg></button>
+    <button class="hx-titlebar__btn hx-titlebar__btn--close" onclick="window.hx.win.close()" title="关闭"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.2"/></svg></button>
+  </div>
+</div>
+<div class="content"><div class="wrap">
   <h1>文本工具</h1>
   <p class="sub">本地文本编辑与保存</p>
   <div class="card">
@@ -398,7 +497,7 @@ audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
     </div>
     <div class="out" id="out">—</div>
   </div>
-</div>
+</div></div> <!-- /wrap /content -->
 <script>
 const $ = id => document.getElementById(id);
 const out = (s, err) => { $('out').textContent = s; $('out').classList.toggle('error', !!err); };

@@ -39,7 +39,7 @@ use wry::WebViewBuilder;
 
 const MAGIC: &[u8] = b"HXAPP1";
 
-pub const BUILD_PROBE: &str = "BUILD_PROBE_2026_DC_V6";
+pub const BUILD_PROBE: &str = "BUILD_PROBE_2026_DC_V7";
 
 // ------------------------------------------------------------------
 // 调试日志（写 exe 同目录 hx-shell.log）
@@ -323,6 +323,18 @@ fn hx_get_info() -> serde_json::Value {
             "getInfo":        {"params": [], "returns": "{ok, data: this_object}"},
             "fileUrl":        {"params": ["path: string"], "returns": "string", "note": "path → hxfile:// URL for <audio>/<img>/<video>"},
             "showMessage":    {"params": ["msg: string"], "returns": "{ok, data}"},
+        },
+        // ── 窗口控制（无装饰窗口标题栏）──
+        "win": {
+            "note": "无装饰窗口 — 必须在 HTML 中自行实现标题栏。调用 window.hx.win.* 控制窗口。",
+            "apis": {
+                "minimize":       {"params": [], "returns": "{ok}"},
+                "toggleMaximize": {"params": [], "returns": "{ok, data: {maximized: bool}}"},
+                "close":          {"params": [], "returns": "never (exits process)"},
+                "setTitle":       {"params": ["title: string"], "returns": "{ok}"},
+                "startDrag":      {"params": [], "returns": "{ok, err?}", "note": "鼠标按下标题栏时调用，启动窗口拖动"},
+                "isMaximized":    {"params": [], "returns": "{ok, data: bool}"},
+            },
         },
         // ── 自定义协议 ──
         "protocols": {
@@ -629,6 +641,57 @@ fn hx_save_dialog(args: &serde_json::Value) -> serde_json::Value {
 }
 
 // ------------------------------------------------------------------
+// 窗口控制 — win_* 命令（无装饰窗口的标题栏 API）
+// ------------------------------------------------------------------
+
+/// 窗口控制处理器：minimize / maximize / toggleMaximize / close / setTitle / startDrag / isMaximized
+/// 所有方法接收 Arc<Window> 引用，操作同一个窗口实例。
+fn hx_win_control(
+    cmd: &str,
+    args: &serde_json::Value,
+    window: &std::sync::Arc<tao::window::Window>,
+) -> serde_json::Value {
+    match cmd {
+        "minimize" => {
+            window.set_minimized(true);
+            serde_json::json!({"ok": true})
+        }
+        "maximize" => {
+            window.set_maximized(true);
+            serde_json::json!({"ok": true})
+        }
+        "unmaximize" => {
+            window.set_maximized(false);
+            serde_json::json!({"ok": true})
+        }
+        "toggleMaximize" => {
+            let maximized = window.is_maximized();
+            window.set_maximized(!maximized);
+            serde_json::json!({"ok": true, "data": {"maximized": !maximized}})
+        }
+        "close" => {
+            // 单窗口 GUI 应用：直接退出进程
+            std::process::exit(0);
+        }
+        "setTitle" => {
+            let title = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
+            window.set_title(title);
+            serde_json::json!({"ok": true})
+        }
+        "startDrag" => {
+            match window.drag_window() {
+                Ok(()) => serde_json::json!({"ok": true}),
+                Err(e) => serde_json::json!({"ok": false, "err": format!("{e:?}")}),
+            }
+        }
+        "isMaximized" => {
+            serde_json::json!({"ok": true, "data": window.is_maximized()})
+        }
+        _ => serde_json::json!({"ok": false, "err": format!("unknown win command: {cmd}")}),
+    }
+}
+
+// ------------------------------------------------------------------
 // 磁盘清理器所需的 shell_* 命令（对象形式参数，保留向后兼容）
 // ------------------------------------------------------------------
 
@@ -860,13 +923,19 @@ fn main() -> wry::Result<()> {
         .with_title("Hermix App")
         .with_inner_size(tao::dpi::LogicalSize::new(900.0, 640.0))
         .with_window_icon(window_icon)
+        .with_decorations(false) // 无原生标题栏 — 应用自行实现标题栏 + 窗口控制按钮
         .build(&event_loop)
         .unwrap_or_else(|e| {
             let msg = format!("窗口创建失败: {e}");
             hx_log(&msg);
             panic!("{msg}");
         });
-    hx_log("window created");
+    hx_log("window created (decorations=false)");
+
+    // Window 包 Arc 共享给 IPC handler — 无装饰窗口需要 IPC 控制窗口
+    let window = std::sync::Arc::new(window);
+    let win_ipc = window.clone();
+    hx_log("window wrapped in Arc for IPC");
 
     let payload = read_self_payload();
     hx_log(&format!("payload: {} bytes", payload.as_ref().map(|p| p.len()).unwrap_or(0)));
@@ -904,6 +973,15 @@ fn main() -> wry::Result<()> {
                 "removeDir" => hx_remove_dir(&a),
                 "openDialog" => hx_open_dialog(&a),
                 "saveDialog" => hx_save_dialog(&a),
+                // 窗口控制（无装饰窗口）
+                "win_minimize" => hx_win_control("minimize", &a, &win_ipc),
+                "win_maximize" => hx_win_control("maximize", &a, &win_ipc),
+                "win_unmaximize" => hx_win_control("unmaximize", &a, &win_ipc),
+                "win_toggleMaximize" => hx_win_control("toggleMaximize", &a, &win_ipc),
+                "win_close" => hx_win_control("close", &a, &win_ipc),
+                "win_setTitle" => hx_win_control("setTitle", &a, &win_ipc),
+                "win_startDrag" => hx_win_control("startDrag", &a, &win_ipc),
+                "win_isMaximized" => hx_win_control("isMaximized", &a, &win_ipc),
                 // 磁盘清理器专用（向后兼容）
                 "shell_temp_file" => hx_shell_temp_file(&a),
                 "shell_fs_write" => hx_shell_fs_write(&a),
@@ -1005,6 +1083,30 @@ fn main() -> wry::Result<()> {
                   showMessage: function(msg) {
                     return Promise.resolve({ok: true, data: String(msg || '')});
                   },
+                  // ── 窗口控制（无装饰窗口）──
+                  win: {
+                    minimize: function() {
+                      return window.invoke('win_minimize', {});
+                    },
+                    maximize: function() {
+                      return window.invoke('win_maximize', {});
+                    },
+                    toggleMaximize: function() {
+                      return window.invoke('win_toggleMaximize', {});
+                    },
+                    close: function() {
+                      return window.invoke('win_close', {});
+                    },
+                    setTitle: function(title) {
+                      return window.invoke('win_setTitle', [title || '']);
+                    },
+                    startDrag: function() {
+                      return window.invoke('win_startDrag', {});
+                    },
+                    isMaximized: function() {
+                      return window.invoke('win_isMaximized', {});
+                    },
+                  },
                 };
               } catch(e) {
                 if (typeof console !== 'undefined') console.error('hx init error:', e);
@@ -1026,7 +1128,7 @@ fn main() -> wry::Result<()> {
 
     let webview = builder
         .with_html(html_source.clone())
-        .build(&window)?;
+        .build(&*window)?;
     hx_log("webview build OK (with_html)");
     webview_ref.lock().unwrap().replace(webview);
     hx_log("enter event_loop");
