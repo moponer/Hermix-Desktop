@@ -162,12 +162,9 @@ impl IncrementalSummary {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaskKind {
-    Email,
-    IpAddress,
     OpenaiKey,
     AwsAccessKey,
     GithubToken,
-    LongHex,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -202,12 +199,9 @@ impl MaskingStrategy {
         let mut hits: Vec<(usize, usize, MaskKind)> = Vec::new();
         for kind in &self.enabled {
             match kind {
-                MaskKind::Email => scan(body, b'@', b'.', 3, *kind, &mut hits),
-                MaskKind::IpAddress => scan(body, b'.', b'.', 6, *kind, &mut hits),
                 MaskKind::OpenaiKey => scan_prefixed(body, "sk-", 30, *kind, &mut hits),
                 MaskKind::AwsAccessKey => scan_prefixed(body, "AKIA", 16, *kind, &mut hits),
                 MaskKind::GithubToken => scan_prefixed(body, "ghp_", 36, *kind, &mut hits),
-                MaskKind::LongHex => scan_long_hex(body, 32, *kind, &mut hits),
             }
         }
         // Sort by start, overlap-merge.
@@ -243,28 +237,6 @@ impl MaskingStrategy {
     }
 }
 
-fn scan(
-    body: &str,
-    delim1: u8,
-    delim2: u8,
-    min_chunk: usize,
-    kind: MaskKind,
-    out: &mut Vec<(usize, usize, MaskKind)>,
-) {
-    let bytes = body.as_bytes();
-    for i in 0..bytes.len() {
-        if bytes[i] == delim1 {
-            // Look for the second delim within min_chunk..30 chars.
-            for j in (i + min_chunk)..bytes.len().min(i + 32) {
-                if bytes[j] == delim2 {
-                    out.push((i, j + 1, kind));
-                    break;
-                }
-            }
-        }
-    }
-}
-
 fn scan_prefixed(
     body: &str,
     prefix: &str,
@@ -289,68 +261,11 @@ fn scan_prefixed(
     }
 }
 
-fn scan_long_hex(
-    body: &str,
-    min_len: usize,
-    kind: MaskKind,
-    out: &mut Vec<(usize, usize, MaskKind)>,
-) {
-    let bytes = body.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_hexdigit() {
-            let mut j = i;
-            while j < bytes.len() && bytes[j].is_ascii_hexdigit() {
-                j += 1;
-            }
-            if j - i >= min_len {
-                // Skip masking if this hex run looks like a filename —
-                // i.e. it's immediately followed by a dot + 1-5
-                // alphanumeric chars (e.g. `ab12cd34...ef.jpg`). Real
-                // API keys / tokens never have file extensions after
-                // them, but hash-based filenames (MD5=32, SHA1=40)
-                // are commonly caught by the 32-char threshold.
-                if is_followed_by_file_extension(bytes, j) {
-                    i = j;
-                    continue;
-                }
-                out.push((i, j, kind));
-                i = j;
-                continue;
-            }
-        }
-        i += 1;
-    }
-}
-
-/// Check if `bytes[pos]` starts a file-extension pattern: a literal `.`
-/// followed by 1-5 ASCII alphanumeric characters, then a non-alphanumeric
-/// boundary (or end of input). Examples that match: `.jpg`, `.png`,
-/// `.webp`, `.json`. This prevents `scan_long_hex` from redacting
-/// hash-based filenames like `D:\data\a1b2c3d4...d4.jpg`.
-fn is_followed_by_file_extension(bytes: &[u8], pos: usize) -> bool {
-    if pos >= bytes.len() || bytes[pos] != b'.' {
-        return false;
-    }
-    let mut k = pos + 1;
-    let ext_start = k;
-    while k < bytes.len() && bytes[k].is_ascii_alphanumeric() {
-        k += 1;
-    }
-    let ext_len = k - ext_start;
-    // Extension must be 1-5 chars and followed by a boundary
-    // (end of input, quote, whitespace, path separator, etc.)
-    ext_len >= 1 && ext_len <= 5
-}
-
 fn placeholder_for(kind: MaskKind) -> String {
     match kind {
-        MaskKind::Email => "[REDACTED:email]".to_string(),
-        MaskKind::IpAddress => "[REDACTED:ip]".to_string(),
         MaskKind::OpenaiKey => "[REDACTED:openai-key]".to_string(),
         MaskKind::AwsAccessKey => "[REDACTED:aws-key]".to_string(),
         MaskKind::GithubToken => "[REDACTED:gh-token]".to_string(),
-        MaskKind::LongHex => "[REDACTED:hex]".to_string(),
     }
 }
 
@@ -387,17 +302,19 @@ pub fn fingerprint_messages(roles: &[&str]) -> String {
 }
 
 /// The default redaction policy used at the runtime boundary
-/// (`execute_tool_calls`): API keys, tokens, IPs, emails, long-hex
-/// blobs. Centralised here so callers don't have to remember which
-/// kinds are safe to ship to the LLM.
+/// (`execute_tool_calls`). **Only true secrets are redacted** —
+/// API keys / tokens with strict vendor prefixes. IP addresses,
+/// emails and long hex blobs are deliberately NOT redacted by
+/// default: in a local desktop assistant these are the user's own
+/// environment data (file names, paths, `ipconfig` output, URLs),
+/// and the old over-broad `scan`-based IP pattern mangled real
+/// file names (e.g. `22222[REDACTED:ip].pdf`). Keep the default
+/// list to low-false-positive, high-value secret shapes only.
 pub fn default_redaction_strategy() -> MaskingStrategy {
     MaskingStrategy::new(&[
         MaskKind::OpenaiKey,
         MaskKind::AwsAccessKey,
         MaskKind::GithubToken,
-        MaskKind::LongHex,
-        MaskKind::IpAddress,
-        MaskKind::Email,
     ])
 }
 
@@ -704,30 +621,19 @@ mod tests {
     }
 
     #[test]
-    fn masking_email_basic() {
-        let m = MaskingStrategy::new(&[MaskKind::Email]);
-        let (out, _) = m.apply("ping alice@example.com please");
-        assert!(!out.contains("alice@example.com"));
-        assert!(out.contains("ping"));
-        assert!(out.contains("[REDACTED:email]"));
-    }
-
-    #[test]
-    fn masking_email_excludes_too_short() {
-        let m = MaskingStrategy::new(&[MaskKind::Email]);
-        // 'a@b' has no TLD; should NOT match (we require two '.'s).
-        let (out, _) = m.apply("see a@b for info");
-        // We only emit a span when both '@' and '.' are within a
-        // short window. 'a@b' has no '.' so the email regex skips.
-        assert!(out.contains("a@b"));
-    }
-
-    #[test]
-    fn masking_ip_basic() {
-        let m = MaskingStrategy::new(&[MaskKind::IpAddress]);
-        let (out, _) = m.apply("server is 192.168.1.42 now");
-        assert!(!out.contains("192.168.1.42"));
-        assert!(out.contains("[REDACTED:ip]"));
+    fn default_strategy_only_redacts_api_keys() {
+        // Per owner decision: ONLY API keys are redacted by default.
+        // IPs, emails, file names, hex blobs and prose pass through
+        // untouched — they are the user's own local data.
+        let (out, spans) = default_redaction_strategy().apply(
+            "D:\\qcc\\22222-1.1.1.1.pdf server 192.168.1.42 mail a@b.com\nsk-live1234567890ABCDEFGHIJKLMNOPQRST AKIAIOSFODNN7EXAMPLE",
+        );
+        assert!(out.contains("D:\\qcc\\22222-1.1.1.1.pdf"), "file name must survive");
+        assert!(out.contains("192.168.1.42"), "IP must survive by default");
+        assert!(out.contains("a@b.com"), "email must survive by default");
+        assert!(!out.contains("sk-live1234567890ABCDEFGHIJKLMNOPQRST"), "OpenAI key must be redacted");
+        assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"), "AWS key must be redacted");
+        assert_eq!(spans.len(), 2, "exactly two key spans expected");
     }
 
     #[test]
@@ -739,11 +645,12 @@ mod tests {
 
     #[test]
     fn masking_overlap_merges() {
-        let m = MaskingStrategy::new(&[MaskKind::LongHex]);
-        let (out, _) =
-            m.apply("here is a 0123456789abcdef0123456789abcdef01234567 hex token");
-        assert!(!out.contains("0123456789abcdef0123456789abcdef01234567"));
-        assert!(out.contains("[REDACTED:hex]"));
+        // Two adjacent key hits merge into a single span.
+        let m = MaskingStrategy::new(&[MaskKind::OpenaiKey]);
+        let (out, spans) =
+            m.apply("sk-aaaabbbbccccddddeeeeffffgggghhhh sk-aaaabbbbccccddddeeeeffffgggghhhh");
+        assert!(!out.contains("sk-aaaabbbb"));
+        assert!(spans.len() <= 2);
     }
 
     //
