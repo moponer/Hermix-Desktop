@@ -126,6 +126,52 @@ impl Default for LocalBackend {
     }
 }
 
+/// Strip a leading `cmd` / `cmd.exe` token and any run of `/c`
+/// (`/C`) switches from a Windows shell command, returning the
+/// remaining command (still borrowed from the input). The caller can
+/// then unconditionally wrap the result in `cmd.exe /c <rest>`
+/// without producing a doubled `/c` when the model already prefixed
+/// `cmd /c` — or, worse, the malformed `cmd /c/c "..."` that some
+/// LLMs emit when they mirror Git-Bash's `//c`.
+///
+/// Without this normalization, the old `starts_with("cmd /c ")`
+/// guard missed `cmd /c/c` (there is no trailing space after the
+/// second `/c`) and fell through to the default branch, which
+/// prepended *another* `/c` → `cmd.exe /c cmd /c/c "..."`. That is a
+/// malformed command: cmd.exe treats the second `/c` as "run the
+/// program named `/c`", which hangs indefinitely. See the
+/// `normalize_windows_cmd_prefix_*` regression tests below.
+fn normalize_windows_cmd_prefix(command: &str) -> &str {
+    let mut rest = command.trim_start();
+    // Drop a leading `cmd` / `cmd.exe` token (case-insensitive,
+    // whitespace-delimited so `cmdfoo` is never mistaken for cmd).
+    {
+        let lowered = rest.to_lowercase();
+        let first_token_end = lowered
+            .find(|c: char| c.is_whitespace())
+            .unwrap_or(lowered.len());
+        let first = &lowered[..first_token_end];
+        if first == "cmd" || first == "cmd.exe" {
+            rest = &rest[first_token_end..].trim_start();
+        }
+    }
+    // Drop any leading `/c` (`/C`) switches — may repeat. After
+    // stripping `cmd`, the leading `/c` is always the cmd.exe `/c`
+    // switch (a real command never starts with `/c`), so we strip it
+    // unconditionally regardless of what follows (a quoted arg, more
+    // switches, or end-of-string).
+    loop {
+        let t = rest.trim_start();
+        let lower_t = t.to_lowercase();
+        if lower_t.starts_with("/c") {
+            rest = t[2..].trim_start();
+            continue;
+        }
+        break;
+    }
+    rest
+}
+
 #[async_trait]
 impl TerminalBackend for LocalBackend {
     async fn execute_command(
@@ -266,21 +312,18 @@ impl TerminalBackend for LocalBackend {
                     c.arg("-Command").arg(after_pws);
                 }
                 c
-            } else if lower.starts_with("cmd /c ") {
-                // LLM wrapped in "cmd /c" — strip it, we already use cmd.exe /c
-                let rest = &trimmed["cmd /c ".len()..];
-                let mut c = TokioCommand::new("cmd.exe");
-                c.arg("/c").arg(rest);
-                c
-            } else if lower.starts_with("cmd.exe /c ") {
-                let rest = &trimmed["cmd.exe /c ".len()..];
-                let mut c = TokioCommand::new("cmd.exe");
-                c.arg("/c").arg(rest);
-                c
             } else {
-                // Default: cmd.exe /c <command>
+                // Default + `cmd`/`cmd.exe` prefixed paths: normalize
+                // away any leading `cmd` / `cmd.exe` token and any run
+                // of `/c` switches, then wrap once with `cmd.exe /c`.
+                // Idempotent: `cmd /c "x"`, `cmd.exe /c "x"`, and the
+                // malformed `cmd /c/c "x"` all collapse to the same
+                // `cmd.exe /c "x"`. This prevents the doubled-`/c`
+                // hang (cmd.exe would block waiting for a literal
+                // program named `/c`). See `normalize_windows_cmd_prefix`.
+                let normalized = normalize_windows_cmd_prefix(trimmed);
                 let mut c = TokioCommand::new("cmd.exe");
-                c.arg("/c").arg(command);
+                c.arg("/c").arg(normalized);
                 c
             }
         };
@@ -636,6 +679,54 @@ mod tests {
     fn test_detect_image_magic_not_image() {
         let header = b"Hello, world! This is a text file.";
         assert_eq!(detect_image_magic(header), None);
+    }
+
+    #[test]
+    fn normalize_windows_cmd_prefix_strips_single_cmd_c() {
+        assert_eq!(normalize_windows_cmd_prefix("cmd /c \"dir\""), "\"dir\"");
+    }
+
+    #[test]
+    fn normalize_windows_cmd_prefix_strips_cmd_exe_c() {
+        assert_eq!(
+            normalize_windows_cmd_prefix("cmd.exe /c \"tasklist\""),
+            "\"tasklist\""
+        );
+    }
+
+    #[test]
+    fn normalize_windows_cmd_prefix_collapses_double_c() {
+        // The malformed `cmd /c/c "..."` some LLMs emit must
+        // collapse to a single invocation, not a doubled `/c`.
+        assert_eq!(
+            normalize_windows_cmd_prefix("cmd /c/c \"tasklist | findstr /I hermix\""),
+            "\"tasklist | findstr /I hermix\""
+        );
+    }
+
+    #[test]
+    fn normalize_windows_cmd_prefix_passthrough_when_unprefixed() {
+        assert_eq!(
+            normalize_windows_cmd_prefix("tasklist | findstr /I hermix"),
+            "tasklist | findstr /I hermix"
+        );
+    }
+
+    #[test]
+    fn normalize_windows_cmd_prefix_drops_repeated_slashes() {
+        assert_eq!(
+            normalize_windows_cmd_prefix("cmd /c /c /c \"echo hi\""),
+            "\"echo hi\""
+        );
+    }
+
+    #[test]
+    fn normalize_windows_cmd_prefix_does_not_strip_cmdfoo() {
+        // `cmdfoo` must not be mistaken for the `cmd` token.
+        assert_eq!(
+            normalize_windows_cmd_prefix("cmdfoo /c \"x\""),
+            "cmdfoo /c \"x\""
+        );
     }
 
     #[tokio::test]
