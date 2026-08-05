@@ -387,109 +387,61 @@ async fn execute_inner(
         // useful metadata operations.
         let binary_nudge = detect_binary_file_reference(command);
 
-        // Defense-in-depth: detect shell metacharacters that could be
-        // used for command chaining or injection. This catches generic
-        // injection vectors that might not be in the approval pattern
-        // list. Commands with metacharacters require explicit user
-        // confirmation (cannot be bypassed with HERMIX_CONFIRM=1).
-        if let Some(metachar_desc) = detect_shell_metacharacters(command) {
-            tracing::warn!(
-                command,
-                metachar_desc,
-                "terminal command contains shell metacharacters"
-            );
-            // Always require confirmation for metacharacter commands,
-            // even with HERMIX_CONFIRM=1 marker. This prevents the
-            // marker from being used to bypass this safety check.
+        // -------------------------------------------------------------------
+        // SINGLE approval gate. Metacharacter (pipe-to-shell injection) and
+        // confirm-pattern checks are merged into ONE prompt. Previously they
+        // were two independent `request_ws_approval` calls — a command that
+        // is BOTH an injection vector AND a confirm-pattern hit popped the
+        // approval card twice ("同一个审批项目连续两次跳出审批窗口"). Now a
+        // command requires confirmation at most once, with both reasons shown.
+        // Denied stays the highest priority (no pointless prompt first).
+        // -------------------------------------------------------------------
+        let metachar_desc = detect_shell_metacharacters(command);
+        let stripped = command.strip_prefix("HERMIX_CONFIRM=1 ");
+        let effective_cmd = stripped.unwrap_or(command);
+
+        let decision = this.approval.check_approval(effective_cmd);
+        let needs_confirm = if metachar_desc.is_some() {
+            // Pipe-to-shell stays prompt-worthy even with a
+            // HERMIX_CONFIRM=1 marker (matches the legacy metachar gate).
+            true
+        } else {
+            match decision {
+                ApprovalDecision::Denied => {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "Command denied by security policy: {}",
+                        effective_cmd
+                    )));
+                }
+                // HERMIX_CONFIRM=1 already confirms a confirm-pattern hit.
+                ApprovalDecision::RequiresConfirmation => stripped.is_none(),
+                ApprovalDecision::Approved => false,
+            }
+        };
+
+        if needs_confirm {
+            let display = match metachar_desc {
+                Some(d) => format!("{} (contains {})", effective_cmd, d),
+                None => effective_cmd.to_string(),
+            };
             if let Some(decision) = this
-                .request_ws_approval(
-                    &format!("{} (contains {})", command, metachar_desc),
-                    approval_ctx,
-                )
+                .request_ws_approval(&display, approval_ctx)
                 .await
             {
                 if !matches!(decision, ApprovalOutcome::Approved) {
                     let reason = match decision {
                         ApprovalOutcome::DeniedByUser => "denied by user",
                         ApprovalOutcome::TimedOut { timeout_secs } => {
-                            &format!("approval timed out after {timeout_secs}s")
+                            return Err(ToolError::ExecutionFailed(format!(
+                                "Command approval timed out after {timeout_secs}s: {}",
+                                effective_cmd
+                            )))
                         }
-                        ApprovalOutcome::ChannelClosed => "connection closed before response",
-                        ApprovalOutcome::Approved => {
-                            // Guarded by !matches!(decision, Approved) above;
-                            // reaching here is a logic error, not unreachable.
-                            tracing::error!("ApprovalOutcome::Approved reached inside denial branch");
-                            "approved (unexpected)"
+                        ApprovalOutcome::ChannelClosed => {
+                            "connection closed before response"
                         }
-                    };
-                    return Err(ToolError::ExecutionFailed(format!(
-                        "Command {reason}: {}",
-                        command
-                    )));
-                }
-            } else {
-                // No WS context — require HERMIX_CONFIRM=1 for metachar commands
-                if command.strip_prefix("HERMIX_CONFIRM=1 ").is_none() {
-                    return Err(ToolError::ExecutionFailed(format!(
-                        "Command contains shell metacharacters ({}): {}\n\n\
-                         This command requires explicit user confirmation.\n\
-                         Tell the user what this command does and ask for permission. \
-                         If they approve, retry with:\n  HERMIX_CONFIRM=1 {}",
-                        metachar_desc, command, command
-                    )));
-                }
-                // HERMIX_CONFIRM=1 is present — proceed with metachar command
-                tracing::info!(
-                    command = %command,
-                    metachar_desc,
-                    "metachar command confirmed by user via HERMIX_CONFIRM marker"
-                );
-            }
-        }
-
-        // Check for the user-override marker. When the LLM confirms
-        // with the user and retries with HERMIX_CONFIRM=1, we skip the
-        // confirmation-pattern check to allow the command through.
-        let stripped = command.strip_prefix("HERMIX_CONFIRM=1 ");
-        let effective_cmd = stripped.unwrap_or(command);
-
-        match this.approval.check_approval(effective_cmd) {
-            ApprovalDecision::Denied => {
-                return Err(ToolError::ExecutionFailed(format!(
-                    "Command denied by security policy: {}",
-                    effective_cmd
-                )));
-            }
-            ApprovalDecision::RequiresConfirmation => {
-                if stripped.is_some() {
-                    // LLM already confirmed with the user and retried
-                    // with the HERMIX_CONFIRM=1 marker — proceed.
-                    tracing::info!(
-                        command = %effective_cmd,
-                        "command confirmed by user via HERMIX_CONFIRM marker"
-                    );
-                } else if let Some(decision) = this
-                    .request_ws_approval(effective_cmd, approval_ctx)
-                    .await
-                {
-                    // WS path. The agent service wired
-                    // `TerminalApprovalContext` for this turn; we emit
-                    // a `request_approval` event and `.await` the
-                    // user's verdict. `Approved` ⇒ fall through and
-                    // execute. Any other outcome (user denied, timed
-                    // out, channel closed) ⇒ error out below so the
-                    // LLM can reformulate.
-                    if !matches!(decision, ApprovalOutcome::Approved) {
-                        let reason = match decision {
-                            ApprovalOutcome::DeniedByUser => "denied by user",
-                            ApprovalOutcome::TimedOut { timeout_secs } => {
-                                &format!("approval timed out after {timeout_secs}s")
-                            }
-                            ApprovalOutcome::ChannelClosed => "connection closed before response",
                         ApprovalOutcome::Approved => {
-                            // Guarded by !matches!(decision, Approved) above;
-                            // reaching here is a logic error, not unreachable.
-                            tracing::error!("ApprovalOutcome::Approved reached inside denial branch");
+                            // Guarded by !matches! above.
                             "approved (unexpected)"
                         }
                     };
@@ -497,25 +449,26 @@ async fn execute_inner(
                         "Command {reason}: {}",
                         effective_cmd
                     )));
-                    }
-                    tracing::info!(
-                        command = %effective_cmd,
-                        "command confirmed by user via WS approval card"
-                    );
-                } else {
-                    // No WS context wired (headless test, CLI run,
-                    // or unit test that bypassed the agent service):
-                    // fall back to the legacy text flow so the LLM
-                    // can still bounce the user through `HERMIX_CONFIRM=1`.
-                    return Err(ToolError::ExecutionFailed(format!(
-                        "Command requires user confirmation: {}\n\n\
-                         Tell the user what this command does and ask for permission. \
-                         If they approve, retry with:\n  HERMIX_CONFIRM=1 {}",
-                        effective_cmd, effective_cmd
-                    )));
                 }
+                // Persist the session approval so a follow-up call with
+                // the same command / rule family skips the prompt.
+                this.approval.approve_for_session(effective_cmd);
+                tracing::info!(
+                    command = %effective_cmd,
+                    "command confirmed by user via WS approval card"
+                );
+            } else if stripped.is_none() {
+                // No WS context wired (headless test, CLI run, or unit
+                // test that bypassed the agent service): fall back to
+                // the legacy text flow so the LLM can still bounce the
+                // user through `HERMIX_CONFIRM=1`.
+                return Err(ToolError::ExecutionFailed(format!(
+                    "Command requires user confirmation: {}\n\n\
+                     Tell the user what this command does and ask for permission. \
+                     If they approve, retry with:\n  HERMIX_CONFIRM=1 {}",
+                    effective_cmd, effective_cmd
+                )));
             }
-            ApprovalDecision::Approved => {}
         }
 
         let timeout = params.get("timeout").and_then(|v| v.as_u64());
