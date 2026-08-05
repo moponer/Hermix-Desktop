@@ -135,7 +135,13 @@ impl ToolHandler for MarkitdownHandler {
         // `markitdown` auto-detects the file type from its extension /
         // magic number, so no explicit type flag is needed here (the CLI
         // only honours `--ext` for stdin input anyway).
-        let args = vec![path.to_string()];
+        let mut args = vec![path.to_string()];
+        // v0.1.1+: `--max-chars` caps the output length for ALL formats —
+        // the token-saving guard for huge documents.
+        if let Some(max_chars) = params.get("max_chars").and_then(|v| v.as_u64()) {
+            args.push("--max-chars".to_string());
+            args.push(max_chars.to_string());
+        }
 
         let command_str = format!(
             "{} {}",
@@ -194,20 +200,30 @@ impl ToolHandler for MarkitdownHandler {
                 "description": "Conversion timeout in milliseconds (default: 60000)"
             }),
         );
+        props.insert(
+            "max_chars".into(),
+            json!({
+                "type": "integer",
+                "description": "Optional output cap in characters (maps to CLI --max-chars, all formats). Protects context from huge documents; default: no cap."
+            }),
+        );
 
         tool_schema(
             "markitdown",
             "Convert a LOCAL document (PDF/PPTX/DOCX/XLSX/HTML/EPUB/CSV/JSON/XML/MSG/ZIP/image) into \
              compact LLM-friendly Markdown. Use this to read the *content* of non-plaintext files \
              cheaply instead of dumping raw bytes into context — it drastically cuts token usage. \
-             Prefer `read_pdf` for pure PDFs (faster dedicated path); use `markitdown` for everything else. \
              Local files only; URLs are rejected.\n\n\
              ## When to use\n\
              - You need the text/content of a .docx/.pptx/.xlsx/.html/.epub/.csv/.pdf/etc. for reasoning.\n\
              - You want the token-cheapest representation of a document.\n\n\
+             ## PDF 分工 (v0.1.1+)\n\
+             - **文本型 PDF**：本工具直接转换，默认路径已带轻量结构化（编号列表 / 编号小节标题转为 Markdown），可传 `max_chars` 截断大文档。\n\
+             - **扫描件 / 图片型 PDF**（转换结果为空或乱码）：本工具无 OCR，改用 `read_pdf`（其 OCR 降级链兜底）。\n\
+             - 拿不准 PDF 类型时：先本工具，空/乱 → `read_pdf`。\n\n\
              ## Tips\n\
              - markitdown auto-detects the file type from its extension / magic number — just pass the path.\n\
-             - For pure PDFs, `read_pdf` is usually faster; `markitdown` covers all other formats.",
+             - Non-PDF formats all go through markitdown.",
             JsonSchema::object(props, vec!["path".into()]),
         )
     }
