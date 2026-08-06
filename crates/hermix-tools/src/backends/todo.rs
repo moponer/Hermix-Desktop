@@ -144,11 +144,9 @@ impl TodoBackend for FileTodoBackend {
         // synthesize a new one. This keeps old LLM behavior (no group)
         // working while letting LLM explicitly start a new plan.
         //
-        // 主人要求（2026-08-05）：同一批次的任务必须在一个面板里。
-        // LLM 常在同一轮回复里连发多个 create（拆步骤），若每次都
-        // mint 新 group，前端会渲染出 N 张独立卡片。这里改为：
-        // 同一 `origin_message_id`（同一轮回复）内已存在的 group 直接
-        // 复用；只有跨回复（新 message）且未指定 group_id 时才开新组。
+        // 同一轮回复（相同 origin_message_id）内复用已存在的 group，
+        // 避免同批次多个 create 各自生成独立卡片；跨回复未指定
+        // group_id 时才新建组。
         let resolved_group_id = match group_id {
             Some(g) if !g.is_empty() => g.to_string(),
             _ => {
@@ -465,8 +463,7 @@ mod tests {
 
     #[test]
     fn same_message_creates_reuse_one_group() {
-        // 主人要求：同一轮回复（同 message_id）的多个 create 必须落在
-        // 同一 group，前端只渲染一张卡片，而不是每步一张。
+        // 同一 message_id 下的多个 create 必须落到同一 group，前端只渲染一张卡片。
         let b = temp_backend();
         let g1 = create_item(&b, "step A", None, None, "s1", "msg-1");
         let g2 = create_item(&b, "step B", None, None, "s1", "msg-1");

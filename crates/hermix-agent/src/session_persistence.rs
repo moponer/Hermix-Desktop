@@ -771,7 +771,7 @@ impl SessionPersistence {
             CREATE INDEX IF NOT EXISTS idx_compression_summary_history_session
                 ON compression_summary_history(session_id, created_at);
 
-            -- (2026-06-27): append-only LLM token usage log.
+            -- append-only LLM token usage log.
             -- `messages` carries the conversational transcript but its
             -- `flush_messages` DELETE+INSERT cycle means per-message
             -- `usage` would be wiped on every save. Storing usage in

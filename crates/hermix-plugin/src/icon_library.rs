@@ -346,11 +346,7 @@ pub fn patch_exe_icon(
 ///
 /// 解码失败 / 图片太小时降级为仅保留单帧 256(原图), 减少负担。
 ///
-/// (2026-08-05) 根本性解决图标层级统一:
-///   之前 `hx_packager.rs` 没调过 `patch_exe_icon`, dist exe 任务栏图标
-///   永远是 hx-shell 默认♬ — 跟卡片 icon_file 完全无关。现在打包时如果
-///   manifest.icon_file 存在, 直接用它替换任务栏图标; 不存在则维持
-///   `generate_icon_resources` 的兜底路径。
+/// 若 manifest.icon_file 存在则用其替换任务栏图标；否则维持 `generate_icon_resources` 的兜底路径。
 #[cfg(windows)]
 pub fn generate_ico_resources_from_png(
     png_data: &[u8],

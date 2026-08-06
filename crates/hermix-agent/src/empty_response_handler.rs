@@ -1,6 +1,6 @@
 //! Protocol fallback single point — **trust + know** model.
 //!
-//! ## Design philosophy (revised 2026-08-01)
+//! ## Design philosophy
 //!
 //! **Core principle: trust the LLM's judgment, but know its work state.**
 //!

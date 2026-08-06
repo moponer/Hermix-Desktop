@@ -72,10 +72,8 @@ impl HxShellPackager {
     /// 无新增 API）。此时从 `current_exe` 旁边的
     /// `resources/loader/`（Tauri bundle 内置）复制一份过去，保证打包可用。
     ///
-    /// 2026-08-04 增强：**版本死锁修复**。旧逻辑只在文件缺失时复制，
-    /// 导致 `HERMIX_HOME/loader/` 里一旦有旧版壳，新壳永远不被部署
-    /// （主人报 "window.hx 没注入" 的直接根因）。现在通过比较
-    /// `BUILD_PROBE_*` 标记：若目标壳比资源壳旧（或缺失标记），覆盖复制。
+    /// 通过比较 `BUILD_PROBE_*` 标记部署壳：若目标壳缺失或比资源壳旧，
+    /// 覆盖复制 `resources/loader/` 下的壳，避免旧版壳残留导致功能缺失。
     /// 复制失败不 panic —— 后续 `package()` 会给出明确的 ShellNotFound。
     fn ensure_shell_deployed(&self) {
         // 源目录：current_exe 旁 resources/loader/
@@ -193,8 +191,7 @@ impl HxShellPackager {
             HxPackError::NoIndexHtml(html_path.display().to_string())
         })?;
 
-        // 读取可选图标（统一 resolver, 2026-08-05 图标三处统一核心）:
-        // 优先级链: icon_file (PNG) > icon_data (base64 PNG, 旧兼容) > icon (内置库 SVG 名)
+        // 读取可选图标，优先级链: icon_file (PNG) > icon_data (base64 PNG, 旧兼容) > icon (内置库 SVG 名)，
         // 返回 bytes + is_svg 标记 (hx-shell read_self_icon 同时支持 SVG/PNG).
         let resolved_icon = resolve_app_icon(app_dir);
 
@@ -274,11 +271,8 @@ impl HxShellPackager {
 
         // ── 第二层: 把同一个图标嵌入 dist exe 的 Windows 资源表 ──
         //
-        // 2026-08-05 主人反馈: 自定义应用打包后任务栏图标显示 hx-shell 默认♬
-        // 跟卡片 icon_file 完全无关。"三个图标位置不统一,从根本上解决"。
-        //
-        // 根因: Windows 任务栏图标 = exe 资源的 RT_GROUP_ICON (PE 资源节),
-        //       不读 exe 尾部的 payload。hx-shell 编译时嵌入的默认 ♬ 永远占位。
+        // Windows 任务栏图标取自 exe 的 RT_GROUP_ICON 资源节，不读 exe 尾部的
+        // payload；hx-shell 编译时嵌入的默认图标永久占位，需写入 PE 资源表替换。
         //
         // 解法: 复用 `icon_library::patch_exe_icon*` (已写好但从未被 hx_packager
         //       调用!) 把 `manifest` 的 icon (统一 resolver) 缩放多尺寸、
@@ -337,7 +331,7 @@ impl HxShellPackager {
     }
 }
 
-/// 统一图标解析 (2026-08-05 图标三处统一核心: 卡片/窗口/任务栏同源)。
+/// 统一图标解析：卡片 / 窗口 / 任务栏三处使用同一图标来源。
 ///
 /// 优先级链 (LLM 开发规范, 见 SKILL.md/README):
 ///   1. `icon_file` — 应用目录内 PNG 文件名 (完全自定义 logo)

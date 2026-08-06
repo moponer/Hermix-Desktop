@@ -661,10 +661,8 @@ fn skill_health_warning(path: &std::path::Path, content: &str) -> Option<String>
         return None;
     }
     // NOTE on wording: do NOT phrase this as "stop and explain / fix
-    // first". In a 2026-08-03 incident the LLM read a softer version
-    // as "describe the intended call in prose instead of emitting it"
-    // and stopped with no tool_call — the Finalize path then treated
-    // the prose as a real answer (owner-reported "自己停住了").
+    // first". 较温和的措辞曾被模型理解为"用散文描述意图而非真正发出调用"，
+    // 导致无 tool_call 直接收尾，Finalize 把散文当作真实答案。
     // The wording below explicitly tells the model to KEEP making the
     // real tool_call, and only uses schema cross-check + SKILL.md fix
     // as post-call cleanup.
