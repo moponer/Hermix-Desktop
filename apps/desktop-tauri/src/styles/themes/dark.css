@@ -6,21 +6,21 @@
  * 确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值。
  */
 :root[data-theme="dark"] {
-  --color-bg-app:         #0f0f12;
-  --color-bg-primary:     #1c1c20;
-  --color-bg-secondary:   #232328;
-  --color-bg-tertiary:    #2e2e34;
-  --color-bg-hover:       #2a2a30;
-  --color-bg-active:      #353539;
-  --color-bg-card:        #1c1c20;
-  --color-bg-elevated:    #25252a;
-  --color-bg-code:        #1a1d23;
-  --color-bg-code-header: #22252b;
-  --color-bg-code-border: #33333a;
+  --color-bg-app:         #141414;
+  --color-bg-primary:     #1f1f1f;
+  --color-bg-secondary:   #2c2c2c;        /* 左栏背景：纯中性炭灰，贴近 WorkBuddy 暗色左栏，提亮去冷味 */
+  --color-bg-tertiary:    #383838;
+  --color-bg-hover:       #333333;
+  --color-bg-active:      #444444;
+  --color-bg-card:        #1f1f1f;
+  --color-bg-elevated:    #2a2a2a;
+  --color-bg-code:        #171717;        /* 比卡片 #1f1f1f 深 2 档 (∆L -3): 代码区明显独立 */
+  --color-bg-code-header: #202020;        /* 比 code 浅 1 档: header 浮在代码区之上 */
+  --color-bg-code-border: #3a3a3a;
 
-  --color-border-primary:   #3a3a40;
-  --color-border-secondary: #4a4a52;
-  --color-border-subtle:    #34343a;
+  --color-border-primary:   #3a3a3a;
+  --color-border-secondary: #4a4a4a;
+  --color-border-subtle:    #343434;
 
   --color-text-primary:   #fafafa;
   --color-text-secondary: #d4d4d8;
