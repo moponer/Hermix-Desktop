@@ -12,34 +12,9 @@ use hermix_core::{
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use once_cell::sync::OnceCell;
 
 use crate::credential_guard::CredentialGuard;
 use crate::ToolRegistry;
-use hermix_ocr::{OarOcrEngine, OcrConfig, OcrEngine, OcrError};
-
-/// Lazily-built, process-wide shared OCR engine (oar-ocr / PP-OCRv5 mobile).
-///
-/// Models live at `<hermix_home>/ocr/`. If the models are missing the engine
-/// fails to build; callers then fall back to a sub-agent's `read_image`
-/// (LLM multimodal vision). The engine is cached so the ~21 MB models load
-/// only once per process.
-///
-/// `pub(crate)` so `pdf.rs` can reuse the exact same engine instance for the
-/// scanned-PDF OCR tier (Tier 4) instead of building a second one.
-pub(crate) fn ocr_engine() -> Result<&'static OarOcrEngine, OcrError> {
-    static ENGINE: OnceCell<OarOcrEngine> = OnceCell::new();
-    ENGINE.get_or_try_init(|| {
-        let ocr_dir = hermix_config::paths::hermix_home().join("ocr");
-        let cfg = OcrConfig {
-            det_model: ocr_dir.join("pp-ocrv5_mobile_det.onnx"),
-            rec_model: ocr_dir.join("pp-ocrv5_mobile_rec.onnx"),
-            dict_path: ocr_dir.join("ppocrv5_dict.txt"),
-            confidence_threshold: 0.7,
-        };
-        OarOcrEngine::new(&cfg)
-    })
-}
 
 // ---------------------------------------------------------------------------
 // Registration (P1.3 migration: file tools move out of register_builtins.rs)
@@ -782,39 +757,16 @@ impl ToolHandler for ReadImageHandler {
         let b64 = general_purpose::STANDARD.encode(&bytes);
 
         if ocr {
-            match ocr_engine() {
-                Ok(engine) => match engine.recognize_path(path) {
-                    Ok(words) => {
-                        let low = words
-                            .iter()
-                            .filter(|w| w.confidence < engine.confidence_threshold())
-                            .count();
-                        return Ok(json!({
-                            "tool": "read_image",
-                            "ok": true,
-                            "path": path,
-                            "ocr": true,
-                            "ocr_text": words.iter().map(|w| w.text.clone()).collect::<Vec<_>>().join("\n"),
-                            "ocr_words": words
-                                .iter()
-                                .map(|w| json!({ "text": w.text, "confidence": w.confidence }))
-                                .collect::<Vec<_>>(),
-                            "low_confidence_count": low,
-                            "mime_type": mime,
-                            "size_bytes": bytes.len(),
-                            "_image_data": b64,
-                        }).to_string());
-                    }
-                    Err(e) => return Err(ToolError::ExecutionFailed(format!(
-                        "OCR recognition failed for '{path}': {e}. Image pixels are still \
-                         returned via _image_data for LLM vision fallback."
-                    ))),
-                },
-                Err(e) => return Err(ToolError::ExecutionFailed(format!(
-                    "OCR engine unavailable: {e}. Local OCR models may be missing at \
-                     <hermix_home>/ocr/. The image is still returned via _image_data for LLM vision."
-                ))),
-            }
+            // Local OCR engine (oar-ocr / PP-OCRv5 mobile) was removed from
+            // the build. The image is still returned via `_image_data` below
+            // so the LLM can read it with its own vision; surface a clear
+            // note instead of calling an engine that no longer exists.
+            return Err(ToolError::ExecutionFailed(
+                "Local OCR has been removed from this build. The image is still returned via \
+                 `_image_data` — let the LLM read it with vision, or delegate to a sub-agent \
+                 `read_image`."
+                    .into(),
+            ));
         }
 
         Ok(json!({
@@ -841,7 +793,7 @@ impl ToolHandler for ReadImageHandler {
             "ocr".into(),
             json!({
                 "type": "boolean",
-                "description": "If true, also run local OCR (oar-ocr / PP-OCRv5 mobile) and return structured text + per-word confidence alongside the image. Words below `confidence_threshold` are flagged via `low_confidence_count` — verify those with the LLM's own vision (the image is still returned in `_image_data`). Default false."
+                "description": "Local OCR has been removed from this build. Passing true returns an error — the image is always returned in `_image_data` so the LLM can read it directly with native multimodal vision (free, offline, no API key). Default false."
             }),
         );
 

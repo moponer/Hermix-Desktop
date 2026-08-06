@@ -181,66 +181,6 @@ fn ensure_bundled_skills(resource_dir: &std::path::Path, skills_dir: &std::path:
     }
 }
 
-/// Copy bundled OCR models (packaged via `tauri.conf.json` → `resources`)
-/// into `HERMIX_HOME/ocr/` on first launch. Idempotent: each model file is
-/// skipped if it already exists, so re-runs are no-ops and an updated model
-/// shipped in a later release only lands when the user hasn't customized it.
-///
-/// This is what makes the local OCR engine (`hermix_ocr` / oar-ocr /
-/// PP-OCRv5) work fully offline — `ocr_engine()` (in `hermix-tools`) loads
-/// these exact files from `HERMIX_HOME/ocr/` at runtime. If the models are
-/// missing (dev build, or a release that omitted `bundle.resources`), OCR
-/// simply stays disabled and callers fall back to a sub-agent's `read_image`
-/// vision path. No models present → silent no-op, never an error.
-fn ensure_ocr_models(resource_dir: &std::path::Path, ocr_dir: &std::path::Path) {
-    let bundled = resource_dir.join("resources/ocr");
-    if !bundled.exists() {
-        // No bundled models at this resource path — dev build or unpackaged.
-        // Silent no-op; OCR stays disabled until models are staged.
-        return;
-    }
-    if let Err(e) = std::fs::create_dir_all(ocr_dir) {
-        eprintln!("[Hermix] failed to create ocr dir {}: {e}", ocr_dir.display());
-        return;
-    }
-    let mut copied = 0u32;
-    for entry in match std::fs::read_dir(&bundled) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("[Hermix] cannot read bundled ocr dir: {e}");
-            return;
-        }
-    } {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let src_path = entry.path();
-        if !src_path.is_file() {
-            continue;
-        }
-        let dst_path = ocr_dir.join(entry.file_name());
-        if dst_path.exists() {
-            // Already extracted on a prior launch; skip so updates are
-            // intentional (re-copy only when the target is absent).
-            continue;
-        }
-        match std::fs::copy(&src_path, &dst_path) {
-            Ok(_) => copied += 1,
-            Err(e) => eprintln!(
-                "[Hermix] failed to copy ocr model {}: {e}",
-                src_path.display()
-            ),
-        }
-    }
-    if copied > 0 {
-        println!(
-            "[Hermix] extracted {copied} OCR model files to {}",
-            ocr_dir.display()
-        );
-    }
-}
-
 /// Extract the custom-app runtime pieces (neutralino binary + client library) from
 /// the bundled Tauri resources into `HERMIX_HOME` so they are reachable
 /// at a stable path regardless of whether the app is installed (portable)
@@ -462,10 +402,9 @@ pub fn run() {
             ensure_builtin_skills(&skills_dir);
             if let Ok(resource_dir) = app.path().resource_dir() {
                 ensure_bundled_skills(&resource_dir, &skills_dir);
-                ensure_ocr_models(&resource_dir, &hermix_home.join("ocr"));
                 ensure_loader(&resource_dir, &hermix_home);
             } else {
-                eprintln!("[Hermix] cannot resolve resource_dir — bundled skills and OCR models will not be extracted");
+                eprintln!("[Hermix] cannot resolve resource_dir — bundled skills and loader will not be extracted");
             }
 
             let sidecar = Arc::new(Mutex::new(HermixSidecar::new()));

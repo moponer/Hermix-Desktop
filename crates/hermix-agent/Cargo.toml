@@ -12,7 +12,6 @@ hermix-config = { workspace = true }
 hermix-intelligence = { workspace = true }
 hermix-focus = { workspace = true }
 hermix-tools = { workspace = true }
-hermix-ocr = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -38,10 +37,9 @@ uuid = { workspace = true, features = ["v4"] }
 parking_lot = "0.12"
 indexmap = { workspace = true }
 libloading = { workspace = true }
-# 2026-07-05: replaces the xorshift64-on-static-counter PRNG used for
-# SQLITE_BUSY retry jitter. Better statistical quality and per-thread
-# independent streams. `rand` would also work but pulls in a heavier
-# dependency for what is effectively a few random u64s.
+# Replaces the static-counter PRNG previously used for SQLITE_BUSY retry
+# jitter: better statistical quality and per-thread independent streams,
+# without pulling in the heavier `rand` dependency for a few random u64s.
 fastrand = "2"
 fs4 = { workspace = true }
 

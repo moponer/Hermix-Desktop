@@ -22,7 +22,6 @@ use serde_json::Value;
 
 use hermix_core::PermissionProfile;
 use crate::smart_model_routing::{ApiMode, SmartModelRoutingConfig};
-use hermix_ocr::OcrConfig;
 
 // ---------------------------------------------------------------------------
 // RetryConfig
@@ -513,12 +512,6 @@ pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persist_user_message: Option<String>,
 
-    /// Local OCR engine configuration (oar-ocr / PP-OCRv5 mobile).
-    /// Model paths default to the OS data-local dir; the agent layer
-    /// resolves `hermix_home()` and overrides at runtime.
-    #[serde(default)]
-    pub ocr: OcrConfig,
-
     /// Max retries when the model emits unknown tool names.
     #[serde(default = "default_invalid_tool_call_max_retries")]
     pub invalid_tool_call_max_retries: u32,
@@ -922,7 +915,6 @@ impl Default for AgentConfig {
             max_routed_tools: default_max_routed_tools(),
             active_toolsets: Vec::new(),
             autonomous_mode: default_autonomous_mode(),
-            ocr: OcrConfig::default(),
         }
     }
 }
