@@ -13,10 +13,10 @@
 // Design constraints (matching the master design spec):
 // - "无蓝紫" — gray/zinc family only, no slate/blue/violet.
 // - Plain click to toggle done <-> pending; no drag-reorder.
-// - Priority visual = a 4px left bar (gray for medium, brighter
-// for high, dimmer for low). No badges.
+// - Priority visual = subtle amber background tint for high-priority
+//   rows (no left bar / border — 主人禁边框线，层级靠 bg 色差).
 // - Group title row above the items when set (LLM-provided label
-// like "rename all files").
+//   like "rename all files").
 
 import { useState, useCallback, useMemo, type MutableRefObject } from "react";
 import { ChevronDown, ChevronRight, ListTodo, Loader2 } from "lucide-react";
@@ -25,14 +25,14 @@ import * as api from "../api";
 import type { TodoItem } from "../api";
 import { toastError } from "../hooks/useToast";
 
-const PRIORITY_BAR_COLOR: Record<string, string> = {
-  high: "var(--color-text-primary)",
-  medium: "var(--color-text-secondary)",
-  low: "var(--color-text-faint)",
+const PRIORITY_BG: Record<string, string> = {
+  high: "hsla(43, 96%, 56%, 0.07)",
+  medium: "transparent",
+  low: "transparent",
 };
 
-function priorityColor(p: string): string {
-  return PRIORITY_BAR_COLOR[p] ?? PRIORITY_BAR_COLOR.medium;
+function priorityBg(p: string): string {
+  return PRIORITY_BG[p] ?? PRIORITY_BG.medium;
 }
 
 function priorityLabel(p: string): string {
@@ -60,7 +60,16 @@ export interface TodoListCardProps {
 }
 
 export function TodoListCard({ groupId, groupTitle, itemsById, onPatch, justPatchedRef }: TodoListCardProps) {
-  const [collapsed, setCollapsed] = useState(false);
+  // Derived default: 任务全部完成/失败 → 默认折叠成单行 (产品体验).
+  // 2026-08-05 主人反馈: 消息发出后旧 todo 卡片一直展开挂在消息流里占屏。
+  //   - 全部结案 (completed/failed) → 一行 "✓ N/N" 不再霸屏
+  //   - 进行中 (有 pending/in_progress) → 展开看细节
+  //   - 用户手展开已完成的卡片不会被自动覆盖 (useState 只取初值)
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    const all = Object.values(itemsById);
+    if (all.length === 0) return false;
+    return all.every((i) => i.status === "completed" || i.status === "failed");
+  });
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const items = useMemo(() => {
@@ -172,7 +181,7 @@ function TodoRow({
         isDone && "todo-row-done",
         busy && "todo-row-busy",
       )}
-      style={{ borderLeftColor: priorityColor(item.priority) }}
+      style={{ background: priorityBg(item.priority) }}
     >
       <button
         type="button"

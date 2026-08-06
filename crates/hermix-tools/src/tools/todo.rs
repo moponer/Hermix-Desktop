@@ -630,7 +630,7 @@ impl ToolHandler for TodoHandler {
             "group_title".into(),
             json!({
                 "type": "string",
-                "description": "Human label for a new plan (for example rename all files). Pass this on the FIRST create of a new plan; subsequent creates in the same plan should reuse the returned group_id and omit group_title."
+                "description": "Human label for a new plan (for example rename all files). Pass this on the FIRST create of a new plan; subsequent creates in the same plan should reuse the returned group_id and omit group_title. IMPORTANT: every create in the same assistant reply is auto-joined into ONE plan card — do NOT pass a fresh group_title per step of the same batch; only start a new plan in a later reply when the topic genuinely changes."
             }),
         );
         props.insert(

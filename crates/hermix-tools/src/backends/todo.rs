@@ -143,9 +143,31 @@ impl TodoBackend for FileTodoBackend {
         // If group_id is missing, fall back to the active group_id or
         // synthesize a new one. This keeps old LLM behavior (no group)
         // working while letting LLM explicitly start a new plan.
+        //
+        // 主人要求（2026-08-05）：同一批次的任务必须在一个面板里。
+        // LLM 常在同一轮回复里连发多个 create（拆步骤），若每次都
+        // mint 新 group，前端会渲染出 N 张独立卡片。这里改为：
+        // 同一 `origin_message_id`（同一轮回复）内已存在的 group 直接
+        // 复用；只有跨回复（新 message）且未指定 group_id 时才开新组。
         let resolved_group_id = match group_id {
             Some(g) if !g.is_empty() => g.to_string(),
-            _ => uuid::Uuid::new_v4().to_string(),
+            _ => {
+                let same_turn_group = origin_message_id
+                    .and_then(|mid| {
+                        items
+                            .iter()
+                            .rev()
+                            .find(|i| {
+                                i.origin_message_id.as_deref() == Some(mid)
+                                    && !i.group_id.is_empty()
+                            })
+                            .map(|i| i.group_id.clone())
+                    });
+                match same_turn_group {
+                    Some(g) => g,
+                    None => uuid::Uuid::new_v4().to_string(),
+                }
+            }
         };
         let item = TodoItem {
             id: id.clone(),
@@ -410,5 +432,71 @@ impl TodoBackend for FileTodoBackend {
             "dependencies": deps,
             "all_deps_satisfied": all_deps_satisfied
         }).to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_backend() -> FileTodoBackend {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("hx_todo_test_{ts}.json"));
+        FileTodoBackend::new(path)
+    }
+
+    fn create_item(
+        b: &FileTodoBackend,
+        title: &str,
+        group_id: Option<&str>,
+        group_title: Option<&str>,
+        session_id: &str,
+        message_id: &str,
+    ) -> String {
+        // blocks on the async create via a mini runtime
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let out = rt.block_on(b.create(title, None, None, group_id, group_title, Some(session_id), Some(message_id))).unwrap();
+        serde_json::from_str::<serde_json::Value>(&out).unwrap()["group_id"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn same_message_creates_reuse_one_group() {
+        // 主人要求：同一轮回复（同 message_id）的多个 create 必须落在
+        // 同一 group，前端只渲染一张卡片，而不是每步一张。
+        let b = temp_backend();
+        let g1 = create_item(&b, "step A", None, None, "s1", "msg-1");
+        let g2 = create_item(&b, "step B", None, None, "s1", "msg-1");
+        let g3 = create_item(&b, "step C", None, None, "s1", "msg-1");
+        assert_eq!(g1, g2, "same-turn creates must share one group");
+        assert_eq!(g1, g3, "same-turn creates must share one group");
+    }
+
+    #[test]
+    fn different_message_gets_fresh_group() {
+        let b = temp_backend();
+        let g1 = create_item(&b, "turn 1", None, None, "s1", "msg-1");
+        let g2 = create_item(&b, "turn 2", None, None, "s1", "msg-2");
+        assert_ne!(g1, g2, "a later reply starting a new plan should mint a fresh group");
+    }
+
+    #[test]
+    fn explicit_group_id_is_respected() {
+        let b = temp_backend();
+        let g1 = create_item(&b, "attach", Some("plan-9"), None, "s1", "msg-1");
+        let g2 = create_item(&b, "also attach", Some("plan-9"), None, "s1", "msg-9");
+        assert_eq!(g1, "plan-9");
+        assert_eq!(g2, "plan-9", "explicit group_id must always win");
+    }
+
+    #[test]
+    fn explicit_group_title_starts_new_group() {
+        let b = temp_backend();
+        let g1 = create_item(&b, "plan A item", None, Some("Plan A"), "s1", "msg-1");
+        let g2 = create_item(&b, "plan B item", None, Some("Plan B"), "s1", "msg-2");
+        assert_ne!(g1, g2, "an explicit new group_title on a later reply starts a new plan");
     }
 }
