@@ -1,6 +1,6 @@
 {
   "id": "rainforest",
-  "label": "雨林·墨绿",
-  "description": "深森林绿静态色场 + 轻微暗角阴影",
+  "label": "雨林·冷灰",
+  "description": "冷灰实色色场 + 冷银 accent，实色面板不透明",
   "builtin": true
 }
