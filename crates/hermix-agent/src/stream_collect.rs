@@ -42,7 +42,12 @@ use crate::runtime_provider::{build_runtime_provider, credential_pool_for_route}
 #[derive(Debug)]
 pub(crate) enum StreamCollectOutcome {
     Complete(LlmResponse),
-    Interrupted(LlmResponse),
+    /// `Interrupted` carries the captured backend error (if any). For a
+    /// user-initiated interrupt this is `None`; for a mid-stream
+    /// transport/provider failure (`finish_reason == "stream_error"`)
+    /// it holds the raw error text so `run_loop` can thread it into
+    /// `AgentResult::last_error` for the frontend error card.
+    Interrupted(LlmResponse, Option<String>),
 }
 
 /// Pack the streamed content/reasoning/tool_calls into the final assistant
@@ -544,7 +549,7 @@ pub(crate) async fn collect_stream_inner(
                                     usage: last_usage.clone(),
                                     model: active_model.to_string(),
                                     finish_reason: Some("interrupted".to_string()),
-                                }));
+                                }, None));
                             }
                             let chunk = match chunk_result {
                                 Ok(c) => c,
@@ -574,7 +579,7 @@ pub(crate) async fn collect_stream_inner(
                                         usage: last_usage.clone(),
                                         model: active_model.to_string(),
                                         finish_reason: Some("stream_error".to_string()),
-                                    }));
+                                    }, Some(e.to_string())));
                                 }
                             };
                             apply_stream_collect_chunk(
@@ -707,8 +712,8 @@ pub(crate) async fn collect_stream_inner(
                                         message,
                                         usage: last_usage.clone(),
                                         model: active_model.to_string(),
-                                        finish_reason: Some("interrupted".to_string()),
-                                    }));
+                                    finish_reason: Some("interrupted".to_string()),
+                                }, None));
                                 }
                                 let chunk = match chunk_result {
                                     Ok(c) => c,
@@ -735,7 +740,7 @@ pub(crate) async fn collect_stream_inner(
                                             usage: last_usage.clone(),
                                             model: active_model.to_string(),
                                             finish_reason: Some("stream_error".to_string()),
-                                        }));
+                                        }, Some(e.to_string())));
                                     }
                                 };
                                 apply_stream_collect_chunk(
@@ -1514,7 +1519,7 @@ mod tests {
         );
         let outcome = result.unwrap();
         match outcome {
-            StreamCollectOutcome::Interrupted(resp) => {
+            StreamCollectOutcome::Interrupted(resp, _) => {
                 assert!(
                     resp.finish_reason.as_deref() == Some("stream_error")
                         || resp.finish_reason.as_deref() == Some("timeout"),
@@ -1626,7 +1631,7 @@ mod tests {
         );
         let outcome = result.unwrap();
         match outcome {
-            StreamCollectOutcome::Interrupted(_) => {
+            StreamCollectOutcome::Interrupted(_, _) => {
                 // First-chunk timeout fired — provider went silent.
                 // This is the expected path when both timeouts are 1s.
             }

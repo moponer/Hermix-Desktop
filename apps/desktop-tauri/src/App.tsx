@@ -612,7 +612,11 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
    * the chat just sits there silent (which is what the previous
    * version did).
    */
-  const [streamError, setStreamError] = useState<string | null>(null);
+  /** Stream-level error surfaced to the chat. `message` is the
+   *  friendly, localized summary; `detail` (optional) is the raw,
+   *  un-localized backend error shown as a collapsible "技术详情"
+   *  subtext so English provider errors don't pollute the main UI. */
+  const [streamError, setStreamError] = useState<{ message: string; detail?: string } | null>(null);
   const clearStreamError = useCallback(() => setStreamError(null), []);
 
   /**
@@ -1436,10 +1440,11 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
         session = await api.createSession(title, draftWs ?? undefined);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        setStreamError(
-          `后端服务未启动或不可达 (${msg})。` +
-          `请检查 hermix.exe 是否在 target/debug/ 下、端口 3000 是否被占用。`,
-        );
+        setStreamError({
+          message:
+            `后端服务未启动或不可达 (${msg})。` +
+            `请检查 hermix.exe 是否在 target/debug/ 下、端口 3000 是否被占用。`,
+        });
         return;
       }
       setSessions((prev) => [session, ...prev]);
@@ -1730,7 +1735,7 @@ streamPhaseRef.current = null;
             }
           },
           onChunk: appendChunk,
-          onError: (err) => {
+          onError: (err, detail) => {
             // The error frame arrives immediately (no API key,
             // config error, etc.) — React may batch the
             // setStreamingSessionId(sessionId)+null into one render
@@ -1745,7 +1750,8 @@ streamPhaseRef.current = null;
             // the error text — the user sees the spinner disappear
             // with no error shown in the assistant bubble.
             const assistantIdAtError = currentAssistantIdRef.current;
-            const errText = `⚠️ ${localizeStreamError(err)}`;
+            const friendly = localizeStreamError(err);
+            const errText = `⚠️ ${friendly}`;
             setStreamPhase(null);
             setSessions((prev) => prev.map((s) => {
               if (s.id !== sessionId) return s;
@@ -1761,7 +1767,10 @@ streamPhaseRef.current = null;
             }));
             currentAssistantIdRef.current = null;
             if (sessionId === activeSessionId) {
-              setStreamError(localizeStreamError(err));
+              // Keep the friendly localized message as the primary
+              // text; stash the raw backend error as `detail` so the
+              // error card can show it as a collapsible "技术详情".
+              setStreamError({ message: friendly, detail });
             }
             // Clear live sub-agent panel on error — the stream is
             // dead, no more sub-agent events will arrive, and
@@ -2523,7 +2532,7 @@ return {
       // placeholder was filtered out (e.g. the WS rejected the
       // handshake before any chunk landed).
       if (sessionId === activeSessionId) {
-        setStreamError(localizeStreamError(e instanceof Error ? e.message : String(e)));
+        setStreamError({ message: localizeStreamError(e instanceof Error ? e.message : String(e)) });
       }
     }
   }, [activeSessionId, sessions, sendStream]);

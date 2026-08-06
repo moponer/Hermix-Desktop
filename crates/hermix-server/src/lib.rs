@@ -5298,7 +5298,7 @@ async fn handle_ws_stream_send(
                 if reply.finish_reason.as_deref() == Some("error") {
                     let code = "backend_error".to_string();
                     let message =
-                        "对话因后端错误中断（模型或网络调用失败）。已保留已生成的部分内容，请稍后重试。"
+                        "对话因后端错误中断。已保留已生成的部分内容，请稍后重试。"
                             .to_string();
                     if let Err(e) = tx
                         .send(WsEnvelope {
@@ -5308,6 +5308,7 @@ async fn handle_ws_stream_send(
                             event: StreamEvent::Error {
                                 code,
                                 message: redact_sensitive(&message),
+                                detail: reply.last_error.clone(),
                             },
                         })
                         .await
@@ -5376,6 +5377,7 @@ async fn handle_ws_stream_send(
                         event: StreamEvent::Error {
                             code,
                             message: redact_sensitive(&message),
+                            detail: Some(e.to_string()),
                         },
                     })
                     .await
@@ -6188,7 +6190,7 @@ fn room_event_to_stream(
             reason,
         }),
         RoomEvent::RoomCompleted { room_id } => Some(StreamEvent::RoomCompleted { room_id }),
-        RoomEvent::SoftError { code, message, .. } => Some(StreamEvent::Error { code, message }),
+        RoomEvent::SoftError { code, message, .. } => Some(StreamEvent::Error { code, message, detail: None }),
         // Streaming-think events from the dispatcher pipeline. The wire
         // shape is whatever the transport `GroupChatChunk` / `…Done`
         // variants already carry — we just route the role/agent_id

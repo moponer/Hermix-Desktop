@@ -478,6 +478,13 @@ pub struct AgentReply {
     /// - `None` — the agent did not surface a reason (e.g. an error path)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
+    /// Raw backend error text captured when the loop failed (e.g. invalid
+    /// tool-call arguments emitted by the model that the provider rejected
+    /// with a 400). Surfaced to the frontend as the error card's
+    /// "技术详情" (technical detail) subtext — the user-facing `message`
+    /// stays in Chinese, this holds the raw English for diagnosis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

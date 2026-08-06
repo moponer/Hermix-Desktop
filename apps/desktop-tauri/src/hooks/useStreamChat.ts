@@ -259,7 +259,12 @@ interface StreamCallbacks {
     sessionId: string;
   }) => Promise<{ answer: string }>;
   onDone?: (fullText: string, stopReason?: string, durationMs?: number) => void;
-  onError?: (error: string) => void;
+  /**
+   * Terminal error. `detail` carries the raw, un-localized backend
+   * error (e.g. an LLM 400 "invalid function arguments…") so the UI can
+   * show it as a collapsible "技术详情" subtext instead of dropping it.
+   */
+  onError?: (error: string, detail?: string) => void;
   /**
    * Live reasoning text from the LLM (`<think>...</think>` block),
    * stripped from the user-visible content by `ThinkBlockParser` and
@@ -409,7 +414,7 @@ export function useStreamChat(activeSessionId: string | null) {
   // Holds the `settle` function of the current `send` call so
   // `cancel()` can invoke it directly (synchronously resolving the
   // promise) instead of waiting for the async WS `onclose` event.
-  const settleRef = useRef<((text: string, err?: string, reason?: string, phaseHint?: StreamPhase) => void) | null>(null);
+  const settleRef = useRef<((text: string, err?: string, reason?: string, phaseHint?: StreamPhase, detail?: string) => void) | null>(null);
   // Client-side dedup: track last sent (hash, timestamp) to prevent
   // the same content from being sent multiple times within the window.
   const lastSendRef = useRef<{ hash: string; ts: number } | null>(null);
@@ -692,7 +697,7 @@ export function useStreamChat(activeSessionId: string | null) {
         };
         disarmTimeoutsRef.current = disarmTimeouts;
 
-        const settle = (text: string, err?: string, reason?: string, phaseHint?: StreamPhase) => {
+        const settle = (text: string, err?: string, reason?: string, phaseHint?: StreamPhase, detail?: string) => {
           if (doneRef.current) return;
           // Guard against stale WS event handlers. If a new
           // `send()` has started (incrementing `activeSendIdRef`), this
@@ -730,7 +735,7 @@ export function useStreamChat(activeSessionId: string | null) {
           const cleanText = text.replace(/\n?\[(?:activity|status):[^\]]*\]\s*/g, "");
 
           if (err) {
-            callbacks.onError?.(err);
+            callbacks.onError?.(err, detail);
             // `pendingRejectRef` holds the raw `reject` (no mutex wrap).
             // Fall back to the local `reject` if the ref has already
             // been nulled (e.g. on a second settle call).
@@ -1551,7 +1556,9 @@ export function useStreamChat(activeSessionId: string | null) {
               }
 
               if (evtType === "error") {
-                settle("", data?.message || data?.event?.message || "Stream error", undefined, "error");
+                const errMsg = data?.message || data?.event?.message || "Stream error";
+                const errDetail = data?.detail || data?.event?.detail;
+                settle("", errMsg, undefined, "error", errDetail);
                 return;
               }
 

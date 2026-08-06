@@ -67,9 +67,9 @@
   border: 1px solid var(--color-border-subtle);
 }
 .prose pre {
-  /* CodeBlock 组件把 highlighter 包在独立浅色容器里。
-     内层 <pre> 保持 transparent,让 wrapper 的 #fafafa 透出,
-     避免双层背景。 */
+  /* CodeBlock 组件: outer wrapper 用 --color-bg-code 给代码区清晰独立
+     背景 (vs chat 气泡 / 卡片), 增强主题色下的对比层次.
+     内层 <pre> 保持 transparent, 让 wrapper 的背景透出. */
   background: transparent;
   color: var(--color-text-on-code);
   border-radius: 0;
@@ -78,6 +78,13 @@
   margin: 0.5em 0;
   box-shadow: none;
   border: none;
+}
+/* 让 outer code-block wrapper 显式用专属代码背景 (跟主题色一起变化).
+   之前依赖 --color-bg-code-header 给 toolbar, 但代码区本身没设,
+   在浅色主题下跟卡片白底几乎看不出差别. */
+.code-block-wrapper,
+.code-block-toolbar + .code-block-body {
+  background: var(--color-bg-code);
 }
 /* Inside the CodeBlock component, the outer wrapper owns the
    rounded corners and the spacing. Reset the `.prose pre` rules
@@ -660,60 +667,106 @@
 /* ── Stream error banner ─────────────────────────────────────────
    A quiet inline alert above the composer: short title + actionable
    detail, no raw provider URL, and no large warning emoji. */
-.stream-error-banner {
+.stream-error-card {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
+  gap: 10px;
   width: 100%;
-  padding: 8px 10px;
+  margin-top: 10px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 28%, transparent);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-warning) 8%, var(--color-bg-secondary));
+  background: color-mix(in srgb, var(--color-warning) 9%, var(--color-bg-secondary));
   color: var(--color-text-secondary);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
-.stream-error-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  margin-top: 1px;
-  color: var(--color-warning);
-}
-.stream-error-content {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  gap: 1px;
-}
-.stream-error-title {
-  color: var(--color-text-primary);
-  font-size: 12px;
-  font-weight: 600;
-}
-.stream-error-detail {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: var(--color-text-secondary);
-}
-.stream-error-dismiss {
+.stream-error-card__icon {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  margin: -2px -3px 0 0;
+  width: 26px;
+  height: 26px;
+  margin-top: 1px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-warning) 18%, transparent);
+  color: var(--color-warning);
+}
+.stream-error-card__body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.stream-error-card__title {
+  color: var(--color-text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.stream-error-card__message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+.stream-error-card__detail {
+  margin-top: 2px;
+  border-top: 1px solid color-mix(in srgb, var(--color-warning) 18%, transparent);
+  padding-top: 4px;
+}
+.stream-error-card__detail > summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--color-text-faint);
+  font-size: 11.5px;
+  user-select: none;
+  outline: none;
+}
+.stream-error-card__detail > summary::-webkit-details-marker {
+  display: none;
+}
+.stream-error-card__detail > summary::before {
+  content: "\25B8\00a0";
+}
+.stream-error-card__detail[open] > summary::before {
+  content: "\25BE\00a0";
+}
+.stream-error-card__detail > pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-warning) 6%, var(--color-bg-primary));
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+}
+.stream-error-card__dismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -3px -4px 0 0;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-faint);
   cursor: pointer;
-  transition: color var(--duration-fast) ease;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
 }
-.stream-error-dismiss:hover,
-.stream-error-dismiss:focus-visible {
+.stream-error-card__dismiss:hover,
+.stream-error-card__dismiss:focus-visible {
   color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
   outline: none;
 }
 

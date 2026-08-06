@@ -816,7 +816,12 @@ interface ChatViewProps {
    * the optimistic empty assistant row is filtered out by the
    * `isRowRenderable` filter and the chat just sits there silent.
    */
-  streamError?: string | null;
+  /**
+   * Stream-level error surfaced to the chat. `message` is the friendly
+   * localized summary; `detail` (optional) is the raw, un-localized
+   * backend error shown as a collapsible "技术详情" subtext.
+   */
+  streamError?: { message: string; detail?: string } | null;
   /** Reset the stream error in the parent after the user has seen it. */
   onClearStreamError?: () => void;
   /**
@@ -897,6 +902,55 @@ usageSnapshot?: {
   pendingFileAttachment?: string | null;
   /** Called after pendingFileAttachment is consumed so the parent can clear it. */
   onConsumeFileAttachment?: () => void;
+}
+
+/**
+ * StreamErrorCard — the error surface shown when a send fails
+ * (backend 400/5xx, transport error, WS reject, etc.).
+ *
+ * Design: a soft warning-tinted card (amber, never blue/purple per the
+ * project's no-blue-violet rule) with an icon tile, a friendly Chinese
+ * title + message as the **primary** text, and — when the backend
+ * supplied a raw error — a collapsible "技术详情" subtext holding the
+ * original English provider error. The raw text stays folded by default
+ * so the main UI reads cleanly in Chinese while the real cause is one
+ * click away for debugging.
+ */
+function StreamErrorCard({
+  message,
+  detail,
+  onDismiss,
+}: {
+  message: string;
+  detail?: string;
+  onDismiss?: () => void;
+}) {
+  return (
+    <div className="stream-error-card" role="alert">
+      <span className="stream-error-card__icon" aria-hidden="true">
+        <AlertTriangle size={16} />
+      </span>
+      <div className="stream-error-card__body">
+        <div className="stream-error-card__title">发送失败</div>
+        <div className="stream-error-card__message">{message}</div>
+        {detail && detail.trim().length > 0 && (
+          <details className="stream-error-card__detail">
+            <summary>技术详情</summary>
+            <pre>{detail.trim()}</pre>
+          </details>
+        )}
+      </div>
+      <button
+        type="button"
+        className="stream-error-card__dismiss"
+        onClick={() => onDismiss?.()}
+        title="关闭"
+        aria-label="关闭错误提示"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
 }
 
 export function ChatView({
@@ -1929,29 +1983,16 @@ const clearPendingImages = useCallback(() => {
               placeholder="Hermix帮你做事 — 写作、规划、分析、学习、开发..."
             />
 
-            {/* Stream error banner — same component as the
+            {/* Stream error card — same component as the
                 post-session branch uses, so the welcome page also
                 tells the user "last attempt failed, here's why"
                 instead of the mascot silently absorbing the error. */}
             {streamError && (
-              <div className="stream-error-banner mt-3" role="alert">
-                <span className="stream-error-icon" aria-hidden="true"><AlertTriangle size={14} /></span>
-                <div className="stream-error-content">
-                  <span className="stream-error-title">发送失败</span>
-                  <span className="stream-error-detail">
-                    {streamError.length > 160 ? streamError.slice(0, 160) + "…" : streamError}
-                  </span>
-                </div>
-                <button
-                  onClick={onClearStreamError}
-                  className="stream-error-dismiss"
-                  title="关闭"
-                  type="button"
-                  aria-label="关闭错误提示"
-                >
-                  <X size={14} />
-                </button>
-              </div>
+              <StreamErrorCard
+                message={streamError.message}
+                detail={streamError.detail}
+                onDismiss={onClearStreamError}
+              />
             )}
           </div>
         </div>
@@ -2159,28 +2200,15 @@ const clearPendingImages = useCallback(() => {
             <AcuiPanel state={acuiState} decide={acuiBus} />
           )}
 
-          {/* Stream error banner — shown above the input until dismissed
+          {/* Stream error card — shown above the input until dismissed
               or a new message is sent.  Compact, dismissable, and
               clearly separated from the conversation history. */}
           {streamError && (
-            <div className="stream-error-banner" role="alert">
-              <span className="stream-error-icon" aria-hidden="true"><AlertTriangle size={14} /></span>
-              <div className="stream-error-content">
-                <span className="stream-error-title">发送失败</span>
-                <span className="stream-error-detail">
-                  {streamError.length > 160 ? streamError.slice(0, 160) + "…" : streamError}
-                </span>
-              </div>
-              <button
-                onClick={onClearStreamError}
-                className="stream-error-dismiss"
-                title="关闭"
-                type="button"
-                aria-label="关闭错误提示"
-              >
-                <X size={14} />
-              </button>
-            </div>
+            <StreamErrorCard
+              message={streamError.message}
+              detail={streamError.detail}
+              onDismiss={onClearStreamError}
+            />
           )}
 
 {/* Day 1-B: compaction pipeline status banner. Rendered above

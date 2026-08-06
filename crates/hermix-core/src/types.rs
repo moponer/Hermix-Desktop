@@ -588,6 +588,14 @@ pub struct AgentResult {
     /// can show a "已截断 / 已中断 / 已完成" chip without re-parsing chunks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
+    /// Raw backend error text captured when the loop failed (e.g. an
+    /// LLM 400 "invalid function arguments", a 5xx, or a transport
+    /// error). Surfaced to the frontend as the muted/collapsible
+    /// "技术详情" subtext of the error card so the user sees the real
+    /// cause instead of a generic "backend error" message. `None` for
+    /// clean completions / user interrupts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
     /// Compressed context summary from the most recent compaction.
     /// Persisted to the session DB so it survives across sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]

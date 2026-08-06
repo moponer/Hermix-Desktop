@@ -1116,6 +1116,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                             state.cost_guard.session_cost_usd,
                             session_started_hooks_fired,
                             persist_user_idx,
+                            Some(e.to_string()),
                         ));
                     }
                 };
@@ -1783,7 +1784,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                                 "finish_reason": resp.finish_reason,
                             })
                         },
-                        Ok(StreamCollectOutcome::Interrupted(_)) => serde_json::json!({
+                        Ok(StreamCollectOutcome::Interrupted(_, _)) => serde_json::json!({
                             "attempt": inner_attempt,
                             "model": active_model,
                             "stream": true,
@@ -1821,12 +1822,13 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                                 state.cost_guard.session_cost_usd,
                                 session_started_hooks_fired,
                                 persist_user_idx,
+                                Some(e.to_string()),
                             ));
                         }
                     };
                     match stream_outcome {
                         StreamCollectOutcome::Complete(resp) => resp,
-                        StreamCollectOutcome::Interrupted(partial) => {
+                        StreamCollectOutcome::Interrupted(partial, captured_error) => {
                             state
                                 .cost_guard
                                 .record_usage(partial.usage.as_ref(), partial.model.as_str(), &self.config);
@@ -1836,6 +1838,10 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                             // user stop carries "interrupted". Only the
                             // former is a backend failure that must be
                             // surfaced to the frontend as an error.
+                            // `captured_error` is the raw transport/provider
+                            // error text (e.g. an LLM 400), threaded into
+                            // `AgentResult::last_error` so the frontend can
+                            // show the real cause instead of a generic banner.
                             let errored = partial.finish_reason.as_deref() == Some("stream_error");
                             ctx.add_message(partial.message);
                             return Ok(self.graceful_interrupt_result_with(
@@ -1847,6 +1853,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                                 session_started_hooks_fired,
                                 persist_user_idx,
                                 errored,
+                                captured_error,
                             ));
                         }
                     }
@@ -1886,6 +1893,7 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                                 state.cost_guard.session_cost_usd,
                                 session_started_hooks_fired,
                                 persist_user_idx,
+                                Some(e.to_string()),
                             ));
                         }
                     }

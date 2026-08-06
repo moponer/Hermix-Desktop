@@ -526,6 +526,7 @@ pub fn finalize_agent_result(
         session_cost_usd: Some(session_cost_usd),
         session_started_hooks_fired,
         finish_reason,
+        last_error: None,
         compressed_summary: latest_compressed_summary
             .lock()
             .ok()

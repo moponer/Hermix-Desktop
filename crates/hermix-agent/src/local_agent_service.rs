@@ -1740,6 +1740,7 @@ impl AgentService for LocalAgentService {
             text: reply_text,
             message_count: messages.len(),
             finish_reason: None,
+            last_error: None,
         })
     }
 
@@ -2881,6 +2882,7 @@ impl AgentService for LocalAgentService {
             text: reply_text,
             message_count: messages.len(),
             finish_reason: result.finish_reason.clone(),
+            last_error: result.last_error.clone(),
         })
     }
 

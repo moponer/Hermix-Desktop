@@ -408,6 +408,7 @@ impl AgentLoop {
             session_started_hooks_fired,
             persist_user_idx,
             false,
+            None,
         )
     }
 
@@ -424,6 +425,7 @@ impl AgentLoop {
         session_cost_usd: f64,
         session_started_hooks_fired: bool,
         persist_user_idx: Option<usize>,
+        last_error: Option<String>,
     ) -> AgentResult {
         self.graceful_interrupt_result_with(
             ctx,
@@ -434,6 +436,7 @@ impl AgentLoop {
             session_started_hooks_fired,
             persist_user_idx,
             true,
+            last_error,
         )
     }
 
@@ -457,6 +460,7 @@ impl AgentLoop {
         session_started_hooks_fired: bool,
         persist_user_idx: Option<usize>,
         errored: bool,
+        last_error: Option<String>,
     ) -> AgentResult {
         // `errored` distinguishes a *backend* failure from a
         // *user-initiated* interrupt (stop button, WS disconnect).
@@ -469,7 +473,7 @@ impl AgentLoop {
         } else {
             Some("interrupted".to_string())
         };
-        self.finalize_agent_result(
+        let mut result = self.finalize_agent_result(
             ctx,
             total_turns,
             tool_errors,
@@ -480,7 +484,14 @@ impl AgentLoop {
             false,
             true,
             finish_reason,
-        )
+        );
+        // Post-set the captured backend error so it can be surfaced to
+        // the frontend as the error card's "技术详情" subtext. Done here
+        // (rather than threading a new param through `finalize_agent_result`)
+        // to keep that signature stable for the ~20 non-stream callers in
+        // `run_loop.rs`.
+        result.last_error = last_error;
+        result
     }
 
     /// Notify upstream listeners that the loop entered a new phase.
@@ -538,7 +549,7 @@ impl AgentLoop {
         // success = finished naturally without interruption.
         let success = finished_naturally && !interrupted;
         self.notify_task_complete(success, None);
-        crate::session_lifecycle::finalize_agent_result(
+        let result = crate::session_lifecycle::finalize_agent_result(
             &self.config,
             &self.focus_stack,
             self.memory_router.as_ref(),
@@ -557,7 +568,8 @@ impl AgentLoop {
             interrupted,
             finish_reason,
             Some(&self.callbacks),
-        )
+        );
+        result
     }
 
     /// .3a : the post-LLM logic that was duplicated

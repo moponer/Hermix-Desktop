@@ -336,6 +336,7 @@ mod tests {
                 text: "ok".into(),
                 message_count: 1,
                 finish_reason: Some("stop".into()),
+                last_error: None,
             })
         }
         async fn send_message_stream(
@@ -349,6 +350,7 @@ mod tests {
                 text: "ok".into(),
                 message_count: 1,
                 finish_reason: Some("stop".into()),
+                last_error: None,
             })
         }
         async fn get_session_messages(

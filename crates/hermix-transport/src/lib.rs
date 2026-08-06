@@ -671,7 +671,17 @@ pub enum StreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    Error { code: String, message: String },
+    Error {
+        code: String,
+        message: String,
+        /// Raw, un-localized backend error (e.g. an LLM 400 "invalid
+        /// function arguments…" or a 5xx body). Surfaced to the frontend
+        /// as the muted/collapsible "技术详情" subtext so the user sees
+        /// the real cause instead of a generic banner. `None` when the
+        /// error is already fully described by `message`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
     Done {
         content: String,
         /// Why the stream ended. Mirrors `AgentResult.finish_reason`.
