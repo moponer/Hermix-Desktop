@@ -496,6 +496,7 @@ function ProcessTimeline({
           onClick={() => setUserOverride((v) => v ?? true ? false : true)}
           className="reasoning-header tl-process-header"
           aria-expanded={expanded}
+          title={settledLabel}
         >
           {expanded ? (
             <ChevronDown size={12} className="reasoning-chevron reasoning-chevron-open" />
@@ -503,7 +504,7 @@ function ProcessTimeline({
             <ChevronRight size={12} className="reasoning-chevron" />
           )}
           <CheckCircle2 size={11} className="tl-process-check" />
-          <span className="reasoning-label">{settledLabel}</span>
+          <span className="reasoning-label">思考与工具</span>
         </button>
       )}
       {/* Chronological render: text steps stay visible at their true
@@ -759,6 +760,15 @@ function AssistantMessage({
   );
   const steps = useMemo(() => resolveSteps(message), [message]);
   const toolCalls = message.tool_calls ?? [];
+  /** 工具执行统计：合并进消息头的统一 meta 行（与时间戳同排），
+      不再单独占一行。折叠头的完整文案降级为 hover title。 */
+  const toolSummary = (() => {
+    if (!toolCalls.length) return null;
+    const done = toolCalls.filter((tc) => tc.status !== "running").length;
+    const n = done || toolCalls.length;
+    const d = formatDuration(message.durationMs);
+    return d ? `已完成 ${n} 个工具 ${d}` : `已完成 ${n} 个工具`;
+  })();
   /** True when there's at least one tool still in "running" state */
   const hasRunningTool = useMemo(
     () => toolCalls.some((tc) => tc.status === "running" || !tc.status),
@@ -786,6 +796,8 @@ function AssistantMessage({
             <span className="h-tiny tabular-nums">{formatRelativeTime(message.timestamp)}</span>
             {message.model && <span className="h-tiny opacity-60">·</span>}
             {message.model && <span className="h-tiny">{message.model}</span>}
+            {toolSummary && <span className="h-tiny opacity-60">·</span>}
+            {toolSummary && <span className="h-tiny">{toolSummary}</span>}
             {message.stopReason && <StopReasonChip reason={message.stopReason} meta={message.stopReasonMeta} />}
             {message.compressed && (
               <span
