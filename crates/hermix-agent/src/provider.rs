@@ -317,6 +317,77 @@ impl GenericProvider {
             .unwrap_or(false)
     }
 
+    /// Coerce a tool-call `arguments` value into a *valid JSON string*.
+    ///
+    /// OpenAI-compatible providers (incl. MiniMax) reject the entire
+    /// request with HTTP 400 `invalid function arguments json string` if
+    /// any tool call's `arguments` is not parseable JSON. Some models
+    /// (notably MiniMax-M3) occasionally emit malformed arguments; we
+    /// repair what we can and fall back to `{}` rather than letting every
+    /// replayed turn 400 and kill the session.
+    fn coerce_arguments_to_json_string(args: &Value) -> String {
+        match args {
+            Value::String(s) => {
+                if serde_json::from_str::<Value>(s).is_ok() {
+                    return s.clone();
+                }
+                // Repair attempt: drop trailing commas before `}` / `]`
+                // (a common MiniMax glitch: `{"a":1,}` or `[1,2,]`).
+                let repaired = Self::strip_json_trailing_commas(s);
+                if serde_json::from_str::<Value>(&repaired).is_ok() {
+                    return repaired;
+                }
+                tracing::warn!(
+                    arguments = %s,
+                    "tool call arguments are not valid JSON; falling back to empty object"
+                );
+                "{}".to_string()
+            }
+            // Already a structured value (object / number / …) — serialize it.
+            other => serde_json::to_string(other).unwrap_or_else(|_| "{}".to_string()),
+        }
+    }
+
+    /// Normalize a stored `function` object so its `arguments` is always a
+    /// valid JSON string before it is sent to the provider.
+    fn normalize_tool_function(mut function: Value) -> Value {
+        if let Some(obj) = function.as_object_mut() {
+            let fixed = match obj.get("arguments").cloned() {
+                Some(a) => Self::coerce_arguments_to_json_string(&a),
+                None => "{}".to_string(),
+            };
+            obj.insert("arguments".to_string(), Value::String(fixed));
+        }
+        function
+    }
+
+    /// Remove trailing commas immediately before `}` or `]` so that
+    /// `{"a":1,}` / `[1,2,]` become valid JSON.
+    fn strip_json_trailing_commas(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == ',' {
+                // peek at the next non-whitespace char
+                let mut peek = chars.clone();
+                let mut next = None;
+                while let Some(&nc) = peek.peek() {
+                    if nc.is_whitespace() {
+                        peek.next();
+                    } else {
+                        next = Some(nc);
+                        break;
+                    }
+                }
+                if next == Some('}') || next == Some(']') {
+                    continue; // drop the trailing comma
+                }
+            }
+            out.push(c);
+        }
+        out
+    }
+
     fn sanitize_messages_for_strict_api(messages: &[Message], enabled: bool) -> Value {
         let mut out = Vec::with_capacity(messages.len());
         for msg in messages {
@@ -364,25 +435,22 @@ impl GenericProvider {
                 let mut rebuilt_tool_calls: Vec<Value> = Vec::with_capacity(tool_calls.len());
                 for tc in tool_calls.iter() {
                     if let Some(obj) = tc.as_object() {
-                        let id = obj.get("id").cloned();
-                        let function = obj.get("function").cloned().or_else(|| {
-                            let name = obj.get("name").and_then(|v| v.as_str())?;
-                            let arguments = obj
-                                .get("arguments")
+                            let id = obj.get("id").cloned();
+                            let function = obj
+                                .get("function")
                                 .cloned()
-                                .map(|v| {
-                                    if let Some(s) = v.as_str() {
-                                        Value::String(s.to_string())
-                                    } else {
-                                        Value::String(v.to_string())
-                                    }
-                                })
-                                .unwrap_or_else(|| Value::String("{}".to_string()));
-                            Some(serde_json::json!({
-                                "name": name,
-                                "arguments": arguments,
-                            }))
-                        });
+                                .map(Self::normalize_tool_function)
+                                .or_else(|| {
+                                let name = obj.get("name").and_then(|v| v.as_str())?;
+                                let arguments = obj
+                                    .get("arguments")
+                                    .map(Self::coerce_arguments_to_json_string)
+                                    .unwrap_or_else(|| "{}".to_string());
+                                Some(serde_json::json!({
+                                    "name": name,
+                                    "arguments": arguments,
+                                }))
+                            });
                         // Defensive: drop malformed legacy tool_call items that cannot be
                         // converted into OpenAI-compatible {"function": {...}} shape.
                         if function.is_none() {

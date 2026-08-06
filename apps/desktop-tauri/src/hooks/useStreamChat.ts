@@ -1510,7 +1510,7 @@ export function useStreamChat(activeSessionId: string | null) {
                 if (reason === "error") {
                   settle(
                     "",
-                    "对话因后端错误中断（模型或网络调用失败）",
+                    "对话因后端错误中断（已保留已生成的部分内容，请稍后重试）",
                     undefined,
                     "error",
                   );
