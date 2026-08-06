@@ -106,43 +106,55 @@ static DENIED_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     ]
 });
 
+/// A built-in confirm rule: a semantic family name (used as the
+/// session-approval key) + the compiled regex. The name is the
+/// "命令类别" (command category) — e.g. `taskkill-force`, `del`,
+/// `net-service` — so that approving one command in a family covers
+/// other commands in the SAME family (different arguments) but NEVER
+/// grants immunity to a different family that happens to share the
+/// same shell prefix (`cmd /c ...`).
+struct ConfirmRule {
+    name: &'static str,
+    re: Regex,
+}
+
 /// Patterns that require confirmation.
-static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+static CONFIRM_PATTERNS: LazyLock<Vec<ConfirmRule>> = LazyLock::new(|| {
     vec![
         // sudo commands
-        re(r"(?i)\bsudo\b"),
+        ConfirmRule { name: "sudo", re: re(r"(?i)\bsudo\b") },
         // rm -r (but not rm -rf which is denied)
-        re(r"(?i)\brm\s+-[^f]*r"),
+        ConfirmRule { name: "rm-recursive", re: re(r"(?i)\brm\s+-[^f]*r") },
         // System service manipulation
-        re(r"(?i)\bsystemctl\s+(start|stop|restart|enable|disable)\s"),
+        ConfirmRule { name: "systemctl-service", re: re(r"(?i)\bsystemctl\s+(start|stop|restart|enable|disable)\s") },
         // Package management
-        re(r"(?i)\b(apt|apt-get|yum|dnf|pacman|brew)\s+(install|remove|purge)\b"),
+        ConfirmRule { name: "package-manager", re: re(r"(?i)\b(apt|apt-get|yum|dnf|pacman|brew)\s+(install|remove|purge)\b") },
         // Network configuration
-        re(r"(?i)\biptables\b"),
-        re(r"(?i)\bifconfig\s"),
+        ConfirmRule { name: "iptables", re: re(r"(?i)\biptables\b") },
+        ConfirmRule { name: "ifconfig", re: re(r"(?i)\bifconfig\s") },
         // Process killing
-        re(r"(?i)\bkill\s+-9\b"),
-        re(r"(?i)\bkillall\b"),
+        ConfirmRule { name: "kill-9", re: re(r"(?i)\bkill\s+-9\b") },
+        ConfirmRule { name: "killall", re: re(r"(?i)\bkillall\b") },
         // Disk operations
-        re(r"(?i)\bformat\b"),
+        ConfirmRule { name: "format", re: re(r"(?i)\bformat\b") },
         // Cron modifications
-        re(r"(?i)\bcrontab\s+-r\b"),
+        ConfirmRule { name: "crontab-remove", re: re(r"(?i)\bcrontab\s+-r\b") },
         // Shell pipe to sh
-        re(r"\|\s*(ba)?sh\b"),
+        ConfirmRule { name: "pipe-to-shell", re: re(r"\|\s*(ba)?sh\b") },
         // Curl pipe to shell
-        re(r"(?i)curl\s+.*\|\s*(ba)?sh"),
+        ConfirmRule { name: "curl-pipe-shell", re: re(r"(?i)curl\s+.*\|\s*(ba)?sh") },
         // Writing to system directories
-        re(r"(?i)>\s*/etc/"),
-        re(r"(?i)>\s*/usr/"),
+        ConfirmRule { name: "write-etc", re: re(r"(?i)>\s*/etc/") },
+        ConfirmRule { name: "write-usr", re: re(r"(?i)>\s*/usr/") },
         // Docker operations that affect system
-        re(r"(?i)\bdocker\s+(rm|rmi|system\s+prune)\b"),
+        ConfirmRule { name: "docker-remove", re: re(r"(?i)\bdocker\s+(rm|rmi|system\s+prune)\b") },
         // Git force push
-        re(r"(?i)\bgit\s+push\s+.*--force"),
-        re(r"(?i)\bgit\s+push\s+-f\b"),
+        ConfirmRule { name: "git-force-push", re: re(r"(?i)\bgit\s+push\s+.*--force") },
+        ConfirmRule { name: "git-force-push", re: re(r"(?i)\bgit\s+push\s+-f\b") },
         // Windows file deletion
-        re(r"(?i)\bdel\s+"),
-        re(r"(?i)\berase\s+"),
-        re(r"(?i)\brmdir\s+(/\w+\s+)*/s\b"),
+        ConfirmRule { name: "del", re: re(r"(?i)\bdel\s+") },
+        ConfirmRule { name: "erase", re: re(r"(?i)\berase\s+") },
+        ConfirmRule { name: "rmdir-recursive", re: re(r"(?i)\brmdir\s+(/\w+\s+)*/s\b") },
         // Windows (pass): destructive-but-not-catastrophic ops.
         // The user might legitimately want to run these, but the
         // LLM should ask first.
@@ -162,26 +174,26 @@ static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // - `sfc /scannow` is read-only so not blocked
         // - `DISM /Online /Cleanup-Image /RestoreHealth` is
         // system-state-modifying
-        re(r"(?i)\btaskkill\s+(/\w+\s+)*/f\b"),
-        re(r"(?i)\b(taskkill|tskill)\s+"),
-        re(r"(?i)\breg\s+delete\s+"),
-        re(r"(?i)\bnet\s+(stop|start)\s+"),
-        re(r"(?i)\bRemove-Item\b.*(-Recurse|-Force)"),
-        re(r"(?i)\b(Stop|Restart|Set)-Service\b"),
-        re(r"(?i)\bwevtutil\s+cl\b"),
-        re(r"(?i)\bvssadmin\s+delete\s+shadows\b"),
-        re(r"(?i)\bwmic\s+.*\bdelete\b"),
-        re(r"(?i)\bnetsh\s+(advfirewall|interface)\b"),
-        re(r"(?i)\bpowercfg\s+/h\s+off\b"),
-        re(r"(?i)\b(takeown|icacls)\s+"),
-        re(r"(?i)\bDISM\s+/Online\s+/Cleanup-Image\s+/RestoreHealth\b"),
-        re(r"(?i)\bsfc\s+/scannow\b"),
+        ConfirmRule { name: "taskkill-force", re: re(r"(?i)\btaskkill\s+(/\w+\s+)*/f\b") },
+        ConfirmRule { name: "taskkill", re: re(r"(?i)\b(taskkill|tskill)\s+") },
+        ConfirmRule { name: "reg-delete", re: re(r"(?i)\breg\s+delete\s+") },
+        ConfirmRule { name: "net-service", re: re(r"(?i)\bnet\s+(stop|start)\s+") },
+        ConfirmRule { name: "remove-item", re: re(r"(?i)\bRemove-Item\b.*(-Recurse|-Force)") },
+        ConfirmRule { name: "service-cmdlet", re: re(r"(?i)\b(Stop|Restart|Set)-Service\b") },
+        ConfirmRule { name: "wevtutil-clear", re: re(r"(?i)\bwevtutil\s+cl\b") },
+        ConfirmRule { name: "vssadmin-delete", re: re(r"(?i)\bvssadmin\s+delete\s+shadows\b") },
+        ConfirmRule { name: "wmic-delete", re: re(r"(?i)\bwmic\s+.*\bdelete\b") },
+        ConfirmRule { name: "netsh", re: re(r"(?i)\bnetsh\s+(advfirewall|interface)\b") },
+        ConfirmRule { name: "powercfg-hibernate", re: re(r"(?i)\bpowercfg\s+/h\s+off\b") },
+        ConfirmRule { name: "ownership-acl", re: re(r"(?i)\b(takeown|icacls)\s+") },
+        ConfirmRule { name: "dism-restore", re: re(r"(?i)\bDISM\s+/Online\s+/Cleanup-Image\s+/RestoreHealth\b") },
+        ConfirmRule { name: "sfc-scan", re: re(r"(?i)\bsfc\s+/scannow\b") },
         // PowerShell encoded command (very commonly abused):
         // powershell -enc <base64> / powershell -EncodedCommand <base64>
         // Also `-ExecutionPolicy Bypass` because it implies the
         // user is trying to skip a safety control.
-        re(r"(?i)\bpowershell(\.exe)?\s+.*(-enc(odedCommand)?\s|-e\s)"),
-        re(r"(?i)\b-ExecutionPolicy\s+Bypass\b"),
+        ConfirmRule { name: "powershell-encoded", re: re(r"(?i)\bpowershell(\.exe)?\s+.*(-enc(odedCommand)?\s|-e\s)") },
+        ConfirmRule { name: "execution-policy-bypass", re: re(r"(?i)\b-ExecutionPolicy\s+Bypass\b") },
     ]
 });
 
@@ -339,8 +351,11 @@ impl TerminalApprovalContext {
 pub struct ApprovalManager {
     /// Custom denied patterns (compiled regexes).
     denied_patterns: Vec<Regex>,
-    /// Custom confirm patterns (compiled regexes).
-    confirm_patterns: Vec<Regex>,
+    /// Custom confirm patterns: (source pattern, compiled regex).
+    /// The source pattern doubles as the session-approval rule key
+    /// (`custom:<pattern>`), giving custom rules the same stable
+    /// family-level dedup as built-in `ConfirmRule`s.
+    confirm_patterns: Vec<(String, Regex)>,
     /// Persistent user "Always Allow" list. When `Some`, any
     /// `RequiresConfirmation` decision that ALSO matches an
     /// allowlist pattern is downgraded to `Approved`. `Denied` is
@@ -361,8 +376,9 @@ pub struct ApprovalManager {
     /// We deliberately use a separate file from `approval_allowlist.json`
     /// (the "always allow" persistent patterns) — the allowlist is
     /// pattern-based and survives forever; session approvals are
-    /// exact-match commands and survive across restarts but can be
-    /// wiped by `clear_session_approvals()` (e.g. on `/new`).
+    /// keyed by confirm-rule family (`taskkill-force`, `del`, …) and
+    /// survive across restarts but can be wiped by
+    /// `clear_session_approvals()` (e.g. on `/new`).
     /// wrapped in `Mutex` so `approve_for_session` can
     /// be called from a `&self` context — the terminal tool's
     /// WS-approval path needs to persist "this exact command was
@@ -395,26 +411,24 @@ impl ApprovalManager {
             .join(" ")
     }
 
-    /// Extract a prefix key from a command for session-level approval
-    /// matching. Takes the first 2 whitespace-separated tokens (e.g.
-    /// `storage_analyzer --path` from `storage_analyzer --path "C:\"`)
-    /// so that approving one invocation of a command also covers
-    /// subsequent invocations with different arguments.
-    /// Rationale : the previous implementation used the
-    /// full normalized command string as the session key, which meant
-    /// `storage_analyzer --path "C:\"` and `storage_analyzer --path
-    /// "C:\Users"` were treated as two different commands — the user
-    /// had to approve each one separately. Prefix matching (first 2
-    /// tokens) groups them so a single approval covers all arguments.
-    /// For single-token commands (e.g. `ls`), the key is just the
-    /// command name itself.
-    fn command_prefix_key(command: &str) -> String {
-        command
-            .trim()
-            .split_whitespace()
-            .take(2)
-            .collect::<Vec<_>>()
-            .join(" ")
+    /// Find the confirm-rule key for `command`, or `None` if no
+    /// confirm rule matches. Built-in rules are checked first, then
+    /// custom patterns (keyed by their source pattern). The returned
+    /// key is the **semantic command category** (`taskkill-force`,
+    /// `del`, `systemctl-service`, …), NOT the raw shell prefix
+    /// (`cmd /c`) — see `ConfirmRule` for the rationale.
+    fn match_confirm_rule(&self, command: &str) -> Option<String> {
+        for rule in CONFIRM_PATTERNS.iter() {
+            if rule.re.is_match(command) {
+                return Some(rule.name.to_string());
+            }
+        }
+        for (src, re) in &self.confirm_patterns {
+            if re.is_match(command) {
+                return Some(format!("custom:{src}"));
+            }
+        }
+        None
     }
 
     /// Attach a user allowlist. Returns `self` for builder-style use.
@@ -465,7 +479,7 @@ impl ApprovalManager {
     /// Add a custom confirm-required pattern.
     pub fn add_confirm_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
         let re = Regex::new(pattern)?;
-        self.confirm_patterns.push(re);
+        self.confirm_patterns.push((pattern.to_string(), re));
         Ok(())
     }
 
@@ -512,55 +526,47 @@ impl ApprovalManager {
             }
         }
 
-        // 2. Session-level approval — if this command prefix was approved
-        // in the current session, skip re-prompting. This only runs
-        // AFTER denied patterns are checked, so catastrophic commands
-        // are always rejected. Uses prefix-based matching (first 2
-        // tokens) so `storage_analyzer --path "C:\"` approval also
-        // covers `storage_analyzer --path "C:\Users"`.
-        let prefix_key = Self::command_prefix_key(command);
+        // 2. Confirm patterns — built-in then custom. Determine the
+        //    matching RULE FAMILY first (before consulting session
+        //    approvals) so session-level dedup is keyed by the
+        //    semantic command category (`taskkill-force`, `del`,
+        //    `systemctl-service`, …) rather than the raw shell prefix
+        //    (`cmd /c`). This fixes two symmetric defects of the old
+        //    prefix-key design:
+        //    (a) security hole — approving `cmd /c "taskkill ..."`
+        //    once silently authorized EVERY command sharing the
+        //    `cmd /c` prefix, including `del` / `reg delete` /
+        //    `net stop` (the confirm gate was never reached);
+        //    (b) UX noise — `taskkill /F ...` and `taskkill /IM ...`
+        //    got different prefix keys and re-prompted each other
+        //    even though they are the same family.
+        let Some(rule_key) = self.match_confirm_rule(command) else {
+            // No confirm rule matched → implicit allowlist.
+            return ApprovalDecision::Approved;
+        };
+
+        // 3. Session-level approval — if this RULE FAMILY was approved
+        //    earlier in the session, skip re-prompting. Runs AFTER the
+        //    confirm-rule lookup so the key is the family, not the
+        //    shell prefix; the deny/readonly checks above still take
+        //    precedence. A poisoned mutex is treated as "no session
+        //    approval" — better to re-prompt than to crash a turn.
         if let Ok(set) = self.session_approved.lock() {
-            if set.contains(&prefix_key) {
+            if set.contains(&rule_key) {
                 return ApprovalDecision::Approved;
             }
         }
-        // Poisoned mutex is treated as "no session approval" — fall
-        // through to pattern check. Better to re-prompt than to crash
-        // a turn.
 
-        // 2. Confirm patterns — built-in then custom. If a confirm
-        // pattern matched, the allowlist gets a chance to
-        // downgrade to Approved.
-        let mut matched_confirm = false;
-        for re in CONFIRM_PATTERNS.iter() {
-            if re.is_match(command) {
-                matched_confirm = true;
-                break;
-            }
-        }
-        if !matched_confirm {
-            for re in &self.confirm_patterns {
-                if re.is_match(command) {
-                    matched_confirm = true;
-                    break;
-                }
+        // 4. User allowlist — if any pattern matches, downgrade to
+        //    Approved. The allowlist is the user's "I trust this
+        //    enough to skip the prompt next time" decision.
+        if let Some(al) = &self.user_allowlist {
+            if al.matches(command) {
+                return ApprovalDecision::Approved;
             }
         }
 
-        if matched_confirm {
-            // 3. User allowlist — if any pattern matches, downgrade
-            // to Approved. The allowlist is the user's "I trust
-            // this enough to skip the prompt next time" decision.
-            if let Some(al) = &self.user_allowlist {
-                if al.matches(command) {
-                    return ApprovalDecision::Approved;
-                }
-            }
-            return ApprovalDecision::RequiresConfirmation;
-        }
-
-        // 4. No patterns matched → implicit allowlist = Approved.
-        ApprovalDecision::Approved
+        ApprovalDecision::RequiresConfirmation
     }
 
     /// Async version of check_approval (same logic, for trait compatibility).
@@ -569,18 +575,25 @@ impl ApprovalManager {
     }
 
     /// Record a command as approved for the current session.
-    /// Subsequent `check_approval` calls for the same command will
-    /// return `Approved` without prompting. Does NOT override `Denied`
-    /// decisions (catastrophic patterns stay catastrophic).
+    /// Subsequent `check_approval` calls for the same rule family
+    /// (e.g. any `taskkill /F ...`) will return `Approved` without
+    /// prompting. Does NOT override `Denied` decisions (catastrophic
+    /// patterns stay catastrophic).
     /// Use [`Self::approve_for_session_with_persist`] when you also
     /// want the approval to survive a process restart.
     /// `&self` (was `&mut self`) so the terminal tool's
     /// WS-approval path can persist the per-session approval without
     /// requiring `&mut self` on the handler. Backed by `Mutex` internally.
     pub fn approve_for_session(&self, command: &str) {
-        let prefix_key = Self::command_prefix_key(command);
-        if let Ok(mut set) = self.session_approved.lock() {
-            set.insert(prefix_key);
+        // Key by the matched confirm-rule family (not the raw command
+        // prefix). If the command matches no confirm rule (e.g. it was
+        // approved through the metachar gate but isn't a known
+        // dangerous family), we deliberately record nothing:
+        // re-prompting is safer than granting blanket immunity.
+        if let Some(rule_key) = self.match_confirm_rule(command) {
+            if let Ok(mut set) = self.session_approved.lock() {
+                set.insert(rule_key);
+            }
         }
     }
 
@@ -601,13 +614,18 @@ impl ApprovalManager {
         // touching disk so a slow IO doesn't block readers of the
         // same HashSet (the WS-approval path may be racing the
         // normal request flow).
-        let prefix_key = Self::command_prefix_key(command);
+        // Key by the matched confirm-rule family (see
+        // `approve_for_session`). No matching rule → nothing to
+        // record; skip the disk write entirely.
+        let Some(rule_key) = self.match_confirm_rule(command) else {
+            return Ok(());
+        };
         let snapshot: std::collections::HashSet<String> = {
             let mut set = self
                 .session_approved
                 .lock()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-            set.insert(prefix_key);
+            set.insert(rule_key);
             set.clone()
         };
         if let Some(path) = persist_path {
@@ -636,12 +654,15 @@ impl ApprovalManager {
         }
     }
 
-    /// Check if a command was previously approved in this session.
+    /// Check if a command's rule family was previously approved in
+    /// this session.
     pub fn is_approved_in_session(&self, command: &str) -> bool {
-        let prefix_key = Self::command_prefix_key(command);
+        let Some(rule_key) = self.match_confirm_rule(command) else {
+            return false;
+        };
         self.session_approved
             .lock()
-            .map(|s| s.contains(&prefix_key))
+            .map(|s| s.contains(&rule_key))
             .unwrap_or(false)
     }
 
@@ -1696,7 +1717,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("session_approvals.json");
 
-        let mut m = ApprovalManager::new();
+        let m = ApprovalManager::new();
         m.approve_for_session_with_persist("systemctl restart nginx", Some(&path))
             .unwrap();
         m.approve_for_session_with_persist("apt install foo", Some(&path))
@@ -1710,8 +1731,9 @@ mod tests {
 
         let loaded = load_session_approvals(&path);
         assert_eq!(loaded.len(), 2);
-        assert!(loaded.contains("systemctl restart"));
-        assert!(loaded.contains("apt install"));
+        // Keys are the confirm-rule FAMILIES, not raw command prefixes.
+        assert!(loaded.contains("systemctl-service"));
+        assert!(loaded.contains("package-manager"));
 
         // Fresh manager sees the same session approvals.
         let m2 = ApprovalManager::new();
@@ -1732,7 +1754,8 @@ mod tests {
         let path = tmp.path().join("session_approvals.json");
 
         let m = ApprovalManager::new();
-        m.approve_for_session_with_persist("cmd", Some(&path)).unwrap();
+        m.approve_for_session_with_persist("systemctl restart nginx", Some(&path))
+            .unwrap();
         assert!(path.exists());
 
         m.clear_session_approvals(Some(&path));
@@ -1807,47 +1830,53 @@ mod tests {
         );
     }
 
-    /// Session approval now uses prefix matching: approving
-    /// `storage_analyzer --path "C:\\"` also covers
-    /// `storage_analyzer --path "C:\\Users"`.
-    /// Use `apt install` as the "different command" probe because it
-    /// matches a CONFIRM_PATTERN (unlike `storage_clean` which falls
-    /// through to the implicit-Approved default at check_approval:551).
+    /// Session approval is keyed by the confirm-rule FAMILY: approving
+    /// `taskkill /F /IM cargo.exe` covers other `taskkill /F`
+    /// invocations with different arguments, but NEVER a different
+    /// family that happens to share the same shell prefix
+    /// (`cmd /c "del ..."`).
     #[test]
-    fn session_approval_prefix_matching() {
+    fn session_approval_is_keyed_by_rule_family() {
         let m = ApprovalManager::new();
-        m.approve_for_session("storage_analyzer --path \"C:\\\"");
-        // Different argument, same prefix → should be Approved.
+        m.approve_for_session("cmd /c \"taskkill /F /IM cargo.exe\"");
+        // Same family, different args → Approved (no re-prompt).
         assert_eq!(
-            m.check_approval("storage_analyzer --path \"C:\\Users\""),
+            m.check_approval("cmd /c \"taskkill /F /IM rustc.exe\""),
             ApprovalDecision::Approved,
-            "prefix-based session approval should cover different arguments"
+            "same rule family (taskkill-force) should be covered"
         );
-        // Different command entirely (matches CONFIRM_PATTERN, so it
-        // would require confirmation *if* the prefix wasn't already
-        // approved) → still RequiresConfirmation.
+        // Different family under the SAME shell prefix → must NOT be
+        // covered (this was the old prefix-key security hole).
         assert_eq!(
-            m.check_approval("apt install --yes ripgrep"),
+            m.check_approval("cmd /c \"del /f /q C:\\important\""),
             ApprovalDecision::RequiresConfirmation,
-            "different command prefix should not be covered"
+            "different family must not inherit shell-prefix immunity"
+        );
+        // A command with NO confirm rule is still implicitly approved.
+        assert_eq!(
+            m.check_approval("dir C:\\Users"),
+            ApprovalDecision::Approved
         );
     }
 
-    /// `command_prefix_key` extracts the first 2 tokens for matching.
+    /// The security-hole regression: approving one `cmd /c` command
+    /// used to authorize every command sharing the `cmd /c` prefix.
+    /// Now each confirm family is isolated.
     #[test]
-    fn command_prefix_key_extracts_first_two_tokens() {
-        assert_eq!(
-            ApprovalManager::command_prefix_key("storage_analyzer --path \"C:\\\""),
-            "storage_analyzer --path"
-        );
-        assert_eq!(
-            ApprovalManager::command_prefix_key("ls"),
-            "ls"
-        );
-        assert_eq!(
-            ApprovalManager::command_prefix_key("  powershell   -Command   \"Get-Process\"  "),
-            "powershell -Command"
-        );
+    fn session_approval_does_not_leak_across_shell_prefix() {
+        let m = ApprovalManager::new();
+        m.approve_for_session("cmd /c \"taskkill /F /IM cargo.exe\"");
+        for leak in [
+            "cmd /c \"net stop SomeService\"",
+            "cmd /c \"reg delete HKCU\\Software\\Foo\"",
+            "cmd /c \"powercfg /h off\"",
+        ] {
+            assert_eq!(
+                m.check_approval(leak),
+                ApprovalDecision::RequiresConfirmation,
+                "`{leak}` must not be covered by an unrelated approval"
+            );
+        }
     }
 
     // -----------------------------------------------------------------
