@@ -388,9 +388,69 @@ impl GenericProvider {
         out
     }
 
-    fn sanitize_messages_for_strict_api(messages: &[Message], enabled: bool) -> Value {
-        let mut out = Vec::with_capacity(messages.len());
+    /// Drop `tool` role messages whose `tool_call_id` doesn't match any
+    /// surviving assistant `tool_call.id`. See Pass 0 inside
+    /// `sanitize_messages_for_strict_api` for the full rationale (TL;DR:
+    /// strict providers like MiniMax-M3 400 with `(2013) tool call result
+    /// does not follow tool call` when an orphan tool_result slips into
+    /// the request body).
+    fn drop_orphan_tool_results(messages: &[Message]) -> Vec<Message> {
+        let mut surviving_call_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for msg in messages {
+            if msg.role == MessageRole::Assistant {
+                if let Some(tcs) = msg.tool_calls.as_ref() {
+                    for tc in tcs {
+                        if !tc.id.is_empty() {
+                            surviving_call_ids.insert(tc.id.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        let before = messages.len();
+        let kept: Vec<Message> = messages
+            .iter()
+            .filter(|m| {
+                !(m.role == MessageRole::Tool
+                    && m.tool_call_id
+                        .as_ref()
+                        .map(|cid| !surviving_call_ids.contains(cid))
+                        .unwrap_or(false))
+            })
+            .cloned()
+            .collect();
+        let dropped = before - kept.len();
+        if dropped > 0 {
+            tracing::warn!(
+                dropped = dropped,
+                "dropping orphan tool_results before LLM request — no matching assistant \
+                 tool_call (prevents 400 'tool call result does not follow tool call (2013)' \
+                 on strict providers)"
+            );
+        }
+        kept
+    }
+
+    fn sanitize_messages_for_strict_api(messages: &[Message], enabled: bool) -> Value {
+        // Pass 0: drop orphan tool_results BEFORE the per-message
+        // normalization. A `tool` role message whose `tool_call_id`
+        // doesn't match any surviving assistant `tool_call.id` will be
+        // rejected by strict providers (e.g. MiniMax-M3) with HTTP 400
+        // `invalid params, tool call result does not follow tool call
+        // (2013)` — the provider can't pair the tool_result with any
+        // preceding tool_use. This happens when a prior request cycle
+        // dropped a malformed tool_call (e.g. via `normalize_tool_function`'s
+        // `function.is_none()` branch on line 456) but left the
+        // corresponding tool_result dangling in the history. Mirrors
+        // `compression::sanitize_tool_pairs` but runs on every request
+        // so the orphan is fixed before going out, not only on the next
+        // compression cycle.
+        let messages = Self::drop_orphan_tool_results(messages);
+
+        let mut out = Vec::with_capacity(messages.len());
+        for msg in &messages {
             let mut api_msg = serde_json::to_value(msg).unwrap_or_else(|_| serde_json::json!({}));
 
             // MiniMax M3 (and possibly other strict API providers)
