@@ -15,8 +15,9 @@ import { BackendStatus } from "./BackendStatus";
 import type { Session, NavPage } from "../types";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { usePinnedArchived } from "../hooks/usePinnedArchived";
-import { pickDirectory, openInExplorer, copyText } from "../desktopBridge";
+import { openInExplorer, copyText } from "../desktopBridge";
 import { storage, sessionKey } from "../utils/storageCompat";
+import { formatRelativeTime } from "../utils/time";
 import * as api from "../api";
 import { toastSuccess, toastError } from "../hooks/useToast";
 
@@ -141,6 +142,20 @@ export function Sidebar({
   }, [orphanPaths, addWorkspace]);
 
   const [collapsedWs, setCollapsedWs] = useState<Set<string>>(new Set());
+
+  // Auto-destroy workspaces that have no sessions — an empty project has
+  // nothing to show, so it disappears from the list entirely. Sessions are
+  // stored independently, so this only drops the path→name mapping; the
+  // orphan-reconciliation effect re-creates the workspace if a session in
+  // that path shows up again.
+  useEffect(() => {
+    const emptyIds = workspaces
+      .filter((ws) => (sessionsByWs[ws.path] || []).length === 0)
+      .map((ws) => ws.id);
+    if (emptyIds.length === 0) return;
+    emptyIds.forEach((id) => removeWorkspace(id));
+  }, [workspaces, sessionsByWs, removeWorkspace]);
+
   const [chatsCollapsed, setChatsCollapsed] = useState(false);
   const [spacesCollapsed, setSpacesCollapsed] = useState(false);
 
@@ -238,16 +253,6 @@ export function Sidebar({
     }).catch((e) => { console.warn("[Sidebar] fetch rooms failed:", e); });
   }, []);
 
-  const handleAddWorkspace = async () => {
-    const path = await pickDirectory();
-    if (!path) return;
-    const name = path.split(/[\\/]/).filter(Boolean).pop() || "工作区";
-    addWorkspace(name, path);
-  };
-
-  // 删除全部 走 settings / 长按，section header +号 改为直接新建（无 Popover）
-  // 三个 section 的 + onClick 处理:
-
   const handleCreateRoom = useCallback(async () => {
     const trimmed = newRoomName.trim();
     if (!trimmed || creatingRoom) return;
@@ -274,50 +279,6 @@ export function Sidebar({
     }
   }, [newRoomName, creatingRoom, onPageChange, onRoomSelect]);
 
-  /* ── 三个 section header 的 +号：直接操作（不弹菜单） ── */
-  const addChat   = () => onNewChat();
-  const addWs     = () => { void handleAddWorkspace(); };
-  const addRoom   = () => { setGroupChatCollapsed(false); setShowNewRoom(true); };
-
-  /* ── 删除全部 — 走 confirm dialog, 批量执行 ── */
-  const deleteAllChats = useCallback(() => {
-    if (ungroupedSessions.length === 0) return;
-    const count = ungroupedSessions.length;
-    setConfirmState({
-      title: "删除全部对话",
-      body: `将清理 ${count} 个对话的全部消息记录。\n此操作不可恢复。`,
-      onConfirm: () => {
-        ungroupedSessions.forEach(s => onDeleteSession(s.id));
-        toastSuccess(`已删除 ${count} 个对话`);
-      },
-    });
-  }, [ungroupedSessions, onDeleteSession]);
-
-  const deleteAllWorkspaces = useCallback(() => {
-    if (workspaces.length === 0) return;
-    const count = workspaces.length;
-    setConfirmState({
-      title: "删除全部项目",
-      body: `将移除 ${count} 个项目及其在侧边栏的分组。\n此操作不可恢复。`,
-      onConfirm: () => {
-        workspaces.forEach(ws => removeWorkspace(ws.id));
-        toastSuccess(`已移除 ${count} 个项目`);
-      },
-    });
-  }, [workspaces, removeWorkspace]);
-
-  const deleteAllRooms = useCallback(() => {
-    if (chatRooms.length === 0) return;
-    const count = chatRooms.length;
-    setConfirmState({
-      title: "删除全部聊天室",
-      body: `将解散 ${count} 个聊天室。\n此操作不可恢复。`,
-      onConfirm: () => {
-        setChatRooms([]);
-        toastSuccess(`已解散 ${count} 个聊天室`);
-      },
-    });
-  }, [chatRooms]);
 
   /* ── 子项 / 项目组菜单构造器 ── */
   // 单条会话菜单（参考图 5）：重命名 / 置顶 / 归档 / 删除 — 无分割线
@@ -436,23 +397,11 @@ export function Sidebar({
               className="section-header-toggle"
               aria-expanded={!chatsCollapsed}
             >
+              {chatsCollapsed
+                ? <ChevronRight size={14} className="shrink-0" />
+                : <ChevronDown size={14} className="shrink-0" />}
               <span>对话</span>
               <span className="section-header-count">{ungroupedSessions.length}</span>
-            </button>
-            <SidebarMenu label="对话操作" items={[
-              { key: "new", label: "新建对话", icon: Plus, onClick: addChat },
-              { key: "delete-all", label: "删除全部对话", icon: Trash2, onClick: deleteAllChats, danger: true },
-            ]} />
-            <button
-              type="button"
-              onClick={() => setChatsCollapsed((v) => !v)}
-              className="sidebar-action-btn"
-              title={chatsCollapsed ? "展开" : "折叠"}
-              aria-label={chatsCollapsed ? "展开" : "折叠"}
-            >
-              {chatsCollapsed
-                ? <ChevronRight size={14} />
-                : <ChevronDown size={14} />}
             </button>
           </div>
           {!chatsCollapsed && (
@@ -487,6 +436,7 @@ export function Sidebar({
                           ? <Loader2 size={13} className="animate-spin text-accent shrink-0" />
                           : isRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
                         <span className={clsx("truncate-1", isRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
+                        <span className="sidebar-row-meta">{formatRelativeTime(s.updated_at)}</span>
                         {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
                       </button>
                       <div className="sidebar-row-actions">
@@ -498,7 +448,7 @@ export function Sidebar({
               )}
               {ungroupedSessions.length >= 5 && (
                 <button type="button" className="sidebar-show-more" title="查看全部对话">
-                  展开显示
+                  查看更多({ungroupedSessions.length})
                 </button>
               )}
             </div>
@@ -513,23 +463,11 @@ export function Sidebar({
               className="section-header-toggle"
               aria-expanded={!spacesCollapsed}
             >
+              {spacesCollapsed
+                ? <ChevronRight size={14} className="shrink-0" />
+                : <ChevronDown size={14} className="shrink-0" />}
               <span>项目</span>
               <span className="section-header-count">{workspaces.length}</span>
-            </button>
-            <SidebarMenu label="项目操作" items={[
-              { key: "new", label: "添加项目", icon: Plus, onClick: addWs },
-              { key: "delete-all", label: "删除全部项目", icon: Trash2, onClick: deleteAllWorkspaces, danger: true },
-            ]} />
-            <button
-              type="button"
-              onClick={() => setSpacesCollapsed((v) => !v)}
-              className="sidebar-action-btn"
-              title={spacesCollapsed ? "展开" : "折叠"}
-              aria-label={spacesCollapsed ? "展开" : "折叠"}
-            >
-              {spacesCollapsed
-                ? <ChevronRight size={14} />
-                : <ChevronDown size={14} />}
             </button>
           </div>
           {!spacesCollapsed && (
@@ -547,7 +485,7 @@ export function Sidebar({
                 return (
                   <div key={ws.id} className={clsx("sidebar-project", wsRemoving && "is-removing", wsDeleting && "is-deleting")}>
                     <div className="sidebar-project-row">
-                      <button onClick={() => !wsDisabled && toggleWsCollapsed(ws.id)} className="sidebar-project-toggle" disabled={wsDisabled}>
+                      <button onClick={() => !wsDisabled && wsSessions.length > 0 && toggleWsCollapsed(ws.id)} className="sidebar-project-toggle" disabled={wsDisabled || wsSessions.length === 0}>
                         <FolderOpen size={13} className="list-row-icon" />
                         {wsRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
                         <span className={clsx("sidebar-project-name", wsRemoving && "opacity-60")}>{ws.name}</span>
@@ -589,6 +527,7 @@ export function Sidebar({
                                   ? <Loader2 size={13} className="animate-spin text-accent shrink-0" />
                                   : psRemoving ? <Loader2 size={13} className="animate-spin" /> : null}
                                 <span className={clsx("truncate-1", psRemoving && "opacity-60")}>{s.title || "新建对话"}</span>
+                                <span className="sidebar-row-meta">{formatRelativeTime(s.updated_at)}</span>
                                 {isPinned(s.id, "session") && <Pin size={10} className="sidebar-row-pin" />}
                               </button>
                               <div className="sidebar-row-actions">
@@ -599,13 +538,10 @@ export function Sidebar({
                         })}
                         {wsSessions.length >= 5 && (
                           <button type="button" className="sidebar-show-more sidebar-show-more-inset" title="查看全部会话">
-                            展开显示
+                            查看更多({wsSessions.length})
                           </button>
                         )}
                       </div>
-                    )}
-                    {!collapsed && wsSessions.length === 0 && (
-                      <p className="sidebar-project-empty">该项目尚无会话</p>
                     )}
                   </div>
                 );
@@ -622,25 +558,13 @@ export function Sidebar({
               className="section-header-toggle"
               aria-expanded={!groupChatCollapsed}
             >
+              {groupChatCollapsed
+                ? <ChevronRight size={14} className="shrink-0" />
+                : <ChevronDown size={14} className="shrink-0" />}
               <span>聊天室</span>
               {chatRooms.length > 0 && (
                 <span className="section-header-count">{chatRooms.length}</span>
               )}
-            </button>
-            <SidebarMenu label="聊天室操作" items={[
-              { key: "new", label: "新建聊天室", icon: Plus, onClick: addRoom },
-              { key: "delete-all", label: "删除全部聊天室", icon: Trash2, onClick: deleteAllRooms, danger: true },
-            ]} />
-            <button
-              type="button"
-              onClick={() => setGroupChatCollapsed((v) => !v)}
-              className="sidebar-action-btn"
-              title={groupChatCollapsed ? "展开" : "折叠"}
-              aria-label={groupChatCollapsed ? "展开" : "折叠"}
-            >
-              {groupChatCollapsed
-                ? <ChevronRight size={14} />
-                : <ChevronDown size={14} />}
             </button>
           </div>
           {!groupChatCollapsed && (
@@ -832,8 +756,9 @@ function useSidebarMenu() {
 }
 
 /**
- * Popover body — shared by SidebarMenu (three-dots trigger).
- * Note: section-header +号 是直接操作按钮（addChat / addWs / addRoom），不走 Popover。
+ * Popover body — shared by the per-row action menus (rename / pin / archive /
+ * delete). Section headers no longer use the Popover: their "+" actions were
+ * removed and collapse/expand is now an inline chevron toggle.
  * Renders the items list with optional left icons and per-item dividers.
  */
 function SidebarPopoverBody({ items, onClose, popoverRef, position }: {

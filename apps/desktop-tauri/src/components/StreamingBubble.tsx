@@ -332,20 +332,11 @@ function StreamingBubbleImpl({
           ) : null
         )}
 
-        {/* "正在回复" 流光指示器 — 仅当 body 已有内容但流仍活跃时显示，
-             让用户知道 agent 在持续思考/调工具而没有结束。
-             严格边界：此组件只挂在 StreamingBubble（isStreaming=true）内，
-             历史消息重载时根本不渲染 — 满足用户"恢复历史不显示"的要求。
-             至少要有一段 reasoning 才挂，避免和上面"无内容 placeholder"重复。
-             当有工具卡片正在运行时，隐藏 shimmer 指示器——
-             工具卡片的 🔄 运行中 + 进度条已经是足够的状态指示，
-             shimmer 的"正在回复"会在工具卡片下方制造冗余动画，
-             让用户误以为"什么都没在做"。工具运行中时只保留工具卡片，
-             工具完成后再恢复 shimmer。 */}
-        {!hasNoContent && isStreamingPhase && !hasRunningToolInSteps &&
-         ((unifiedSteps && unifiedSteps.length > 0)
-            ? unifiedSteps.some((s) => s.kind === "reasoning")
-            : (reasoningContent ?? "").trim().length > 0) && (
+        {/* "正在回复" 流光指示器 — 只要有文本内容且仍在流式输出就显示，
+             让用户明确知道后端还在工作（调工具/生成下一段）。
+             工具运行中隐藏（工具卡片自带 🔄 进度条，足够表达状态）。
+             段间隙 dot 已由 showGapDot 在段落边界独立处理。 */}
+        {!hasNoContent && isStreamingPhase && !hasRunningToolInSteps && (
           <div className="flex items-center py-1.5 text-text-muted" data-testid="live-shimmer-indicator">
             <InlineThinkingDot
               variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "shimmer"}

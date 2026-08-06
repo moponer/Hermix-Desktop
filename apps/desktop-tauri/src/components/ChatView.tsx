@@ -2217,83 +2217,40 @@ Today the prop is always null (no backend wiring yet) so
 the banner is a no-op. Day 2 will plumb the WS event. */}
 <CompactionStatusBanner status={compactionStatus} onDismiss={onDismissCompaction} />
 
-{/* Context usage indicator — shows current context window usage
-as a small bar with token count and percentage. The percentage is
-computed against `maxTokens` (the model's context window) so the
-bar, text, and percent all say the same thing. Turns amber at ≥85%
-and red at ≥95% of the window. */}
+{/* Context usage indicator — compact badge (not a full-width bar).
+    Shows a colored dot + percentage; hover reveals exact token counts.
+    Turns amber at ≥85%, red at ≥95%. */}
 {contextUsage && contextUsage.maxTokens > 0 ? (
-  <div className="mb-2 flex items-center gap-2 px-1 text-[11px] text-text-secondary">
+  <div className="mb-1.5 flex justify-end px-1">
     {(() => {
       const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);
       const pct = Math.min(100, (contextUsage.usedTokens / contextUsage.maxTokens) * 100);
-      const color = pct >= 95 ? "bg-rose-500" : pct >= 85 ? "bg-amber-500" : "bg-emerald-500";
-      const textColor = pct >= 95 ? "text-rose-600 dark:text-rose-400" : pct >= 85 ? "text-amber-600 dark:text-amber-400" : "";
-      // derive the live cache-hit rate from the most
-      // recent `usage_update` snapshot. Anthropic-style semantics —
-      // hit rate = cache_read / (cache_read + uncached prompt). The
-      // chip only renders when there's at least one snapshot, so
-      // the bar doesn't shift width mid-stream when it appears.
-      let cacheChip: React.ReactNode = null;
+      const dotColor = pct >= 95 ? "bg-rose-500" : pct >= 85 ? "bg-amber-500" : "bg-emerald-500";
+      const textColor = pct >= 95 ? "text-rose-600 dark:text-rose-400" : pct >= 85 ? "text-amber-600 dark:text-amber-400" : "text-text-secondary";
+      let cacheInfo = "";
       if (usageSnapshot) {
         const cacheRead = usageSnapshot.cacheReadTokens;
         const uncached = usageSnapshot.promptTokens;
         const total = cacheRead + uncached;
-        const hasData = total > 0;
-        const rate = hasData ? (cacheRead / total) * 100 : 0;
-        // Tiered colors: green ≥80%, amber 50–80%, muted below.
-        // Zero hits with non-zero prompt tokens → "未命中" muted grey.
-        let rateText: string;
-        let rateTone: string;
-        if (!hasData) {
-          rateText = "—";
-          rateTone = "text-text-faint";
-        } else if (cacheRead === 0) {
-          rateText = "未命中";
-          rateTone = "text-text-faint";
-        } else if (rate >= 80) {
-          rateText = `${Math.round(rate)}% 缓存命中`;
-          rateTone = "text-emerald-600 dark:text-emerald-400";
-        } else if (rate >= 50) {
-          rateText = `${Math.round(rate)}% 缓存命中`;
-          rateTone = "text-amber-600 dark:text-amber-400";
-        } else {
-          rateText = `${Math.round(rate)}% 缓存命中`;
-          rateTone = "text-text-secondary";
+        if (total > 0) {
+          const rate = Math.round((cacheRead / total) * 100);
+          cacheInfo = ` | 缓存 ${rate}%`;
         }
-        cacheChip = (
-          <span
-            data-testid="cache-hit-chip"
-            className={`shrink-0 tabular-nums px-1.5 py-0.5 rounded-md border border-border-subtle transition-colors duration-300 ${rateTone}`}
-            title={
-              hasData
-                ? `缓存读取 ${cacheRead.toLocaleString()} tok / 输入 ${(cacheRead + uncached).toLocaleString()} tok`
-                : "暂无缓存数据"
-            }
-          >
-            {rateText}
-          </span>
-        );
       }
-      return (<>
-        <div className="flex-1 h-1.5 rounded-full bg-black/5 dark:bg-white/10 overflow-hidden">
-          <div className={`h-full rounded-full transition-all duration-300 ${color}`} style={{ width: `${pct}%` }} />
-        </div>
-        <span className={`shrink-0 tabular-nums ${textColor}`}>
-          {fmt(contextUsage.usedTokens)} / {fmt(contextUsage.maxTokens)} tokens ({Math.round(pct)}%)
+      return (
+        <span
+          className={`inline-flex items-center gap-1.5 tabular-nums text-[11px] ${textColor} cursor-default`}
+          title={`${fmt(contextUsage.usedTokens)} / ${fmt(contextUsage.maxTokens)} tokens (${Math.round(pct)}%)${cacheInfo}`}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+          {Math.round(pct)}%
         </span>
-        {cacheChip}
-      </>);
+      );
     })()}
   </div>
 ) : !isStreaming && (
-  // 恢复的会话（非流式）没有活跃 WS 流，后端不推送
-  // context_usage，因此显示占位而非整块静默消失，避免与 live 会话
-  // 行为不一致。一旦用户发送消息、收到首个 context_usage 事件即被
-  // 上面的真实进度条替换。
-  <div className="mb-2 flex items-center gap-2 px-1 text-[11px] text-text-faint">
-    <div className="flex-1 h-1.5 rounded-full bg-black/5 dark:bg-white/10" />
-    <span className="shrink-0">上下文用量将在发送消息后更新</span>
+  <div className="mb-1.5 flex justify-end px-1">
+    <span className="text-[10px] text-text-faint">—</span>
   </div>
 )}
 
