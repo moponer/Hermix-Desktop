@@ -596,13 +596,13 @@
   color: var(--color-text-secondary);
 }
 
-/* 用户气泡 — dark mode 用 accent-soft 保持与浅色一致的设计语言 */
+/* 用户气泡 — dark mode 用中性炭灰底 + 淡边框，避免 accent 冷灰/蓝味 */
 .dark .msg-bubble-user {
-  background: var(--color-accent-soft);
-  border-color: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-border-subtle);
 }
 .dark .msg-bubble-user:hover {
-  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  background: var(--color-bg-hover);
 }
 
 /* 用户消息附属 (file-pill 等已有独立 dark 规则) */
@@ -632,15 +632,51 @@
 .dark .tw-msg-result-peek {
   color: var(--color-text-muted);
 }
-.dark .tw-msg-output {
-  background: transparent;  /* 与父容器 (chat-assistant #1c1c20) 同底 */
+/* 2026-08-05 主人反馈: 工具调用展开后跟正文一样, 没有层次感.
+   解法: 输出区用 --color-bg-code (独立背景) + 左 border (rail),
+   形成"代码/终端面板"感, 跟 chat 气泡/思考区明显分层. 主题色自动适配
+   (每个主题都有专属 --color-bg-code + --color-border-subtle). */
+.tw-msg-output {
+  background: var(--color-bg-code);
+  border-left: 3px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin-top: 6px;
   color: var(--color-text-primary);
+  transition: background var(--duration-fast) ease,
+              border-color var(--duration-fast) ease;
+}
+.dark .tw-msg-output {
+  background: var(--color-bg-code);
+  color: var(--color-text-primary);
+}
+.tw-msg-output-text {
+  color: inherit;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .dark .tw-msg-output-text {
   color: inherit;
 }
+.tw-msg-output-empty {
+  color: var(--color-text-faint);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+}
 .dark .tw-msg-output-empty {
   color: var(--color-text-faint);
+}
+.tw-msg-output-copy {
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid var(--color-border-subtle);
+}
+.tw-msg-output-copy:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 .dark .tw-msg-output-copy {
   color: var(--color-text-muted);
@@ -745,9 +781,9 @@
   background: var(--color-bg-secondary);
 }
 .dark .prose code {
-  background: var(--color-bg-tertiary);
+  background: transparent;
   color: var(--color-text-primary);
-  border-color: var(--color-border-subtle);
+  border-color: transparent;
 }
 .dark .prose pre {
   color: var(--color-text-on-code);
@@ -944,7 +980,6 @@
   gap: 8px;
   padding: 6px 8px;
   border-radius: var(--radius-md);
-  border-left: 3px solid var(--color-border-subtle);
   transition: background var(--duration-fast) ease;
   background: transparent;
 }
@@ -1232,19 +1267,31 @@ opacity: 0.7;
   gap: 16px;
 }
 
-/* App Card */
+/* App Card — 主人不喜欢边框线 (2026-08-05 反馈)
+   bg 与视图背景拉开层级 (zinc #1c1c20 vs 父视图 #0f0f12 #18181b 系列)
+   靠 box-shadow 双层浮起来 + hover 时阴影进一步抬升 + 微微上浮 */
 .custom-app-card {
   display: flex;
   flex-direction: column;
   padding: 16px;
-  background: var(--color-bg-secondary, #1e1e32);
+  background: var(--color-bg-secondary, #1c1c20);
   border: none;
-  border-radius: var(--radius-md, 8px);
-  transition: background 0.15s;
+  border-radius: var(--radius-md, 10px);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.25),
+    0 4px 12px rgba(0, 0, 0, 0.18);
+  transition:
+    background 0.15s,
+    box-shadow 0.15s,
+    transform 0.15s;
 }
 
 .custom-app-card:hover {
-  background: var(--color-bg-tertiary, #2a2a3e);
+  background: var(--color-bg-tertiary, #232328);
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.3),
+    0 10px 24px rgba(0, 0, 0, 0.28);
+  transform: translateY(-1px);
 }
 
 .custom-app-card__header {
@@ -1254,17 +1301,29 @@ opacity: 0.7;
   cursor: pointer;
 }
 
+/* icon 容器固定 36×36，圆角 8px，浅灰底色（容器即"图标框"） */
 .custom-app-card__icon {
-  font-size: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 8px;
+  background: var(--color-bg-tertiary, #232328);
+  color: var(--color-accent, #d0d0dc);
+  font-size: 20px;
   line-height: 1;
 }
 
 .custom-app-card__icon-img {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   object-fit: contain;
-  border-radius: 6px;
+  border-radius: 8px;
   flex-shrink: 0;
+  background: var(--color-bg-tertiary, #232328);
 }
 
 .custom-app-card__info {

@@ -9,7 +9,7 @@
   font-weight: 400;
   letter-spacing: 0.005em;
 }
-.prose p { margin: 0 0 0.65em; }
+.prose p { margin: 0 0 0.85em; }
 .prose p:last-child { margin-bottom: 0; }
 .prose strong { color: var(--color-text-primary); font-weight: 540; letter-spacing: -0.005em; }
 .prose em { font-style: italic; color: var(--color-text-secondary); }
@@ -37,13 +37,13 @@
 .prose h3 { font-size: 1.08em; }
 .prose h4 { font-size: 0.98em; color: var(--color-text-secondary); }
 .prose ul, .prose ol { 
-  padding-left: 1.6em; 
-  margin: 0.5em 0; 
+  padding-left: 1.4em; 
+  margin: 0.7em 0; 
   list-style-position: outside;
 }
 .prose ul { list-style-type: disc; }
 .prose ol { list-style-type: decimal; }
-.prose li { margin: 0.15em 0; }
+.prose li { margin: 0.3em 0; }
 .prose li::marker { color: var(--color-text-secondary); }
 .prose blockquote {
   padding: 0 0 0 0.8em;
@@ -57,14 +57,18 @@
 .prose th, .prose td { padding: 0.4em 0.6em; border: 1px solid var(--color-bg-tertiary); }
 .prose th { background: var(--color-bg-secondary); font-weight: 600; color: var(--color-text-primary); }
 .prose code {
-  background: var(--color-bg-tertiary);
-  padding: 1px 6px;
-  border-radius: 4px;
+  background: transparent;
+  padding: 0 2px;
+  border-radius: 0;
   font-size: 0.95em;
   color: var(--color-text-primary);
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
   font-weight: 500;
-  border: 1px solid var(--color-border-subtle);
+  border: none;
+  text-decoration: underline 1px var(--color-border-subtle);
+  text-underline-offset: 2px;
+  white-space: break-spaces;
+  vertical-align: baseline;
 }
 .prose pre {
   /* CodeBlock 组件: outer wrapper 用 --color-bg-code 给代码区清晰独立
@@ -109,10 +113,12 @@
   color: inherit;
   font-size: 13px;
   border: 0;
+  border-radius: 0;
   font-weight: 400;
   line-height: 1.6;
   display: block;
   overflow-x: auto;
+  text-decoration: none;
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
 }
 
@@ -131,18 +137,18 @@
   contain-intrinsic-size: auto 150px;
 }
 .msg-bubble-user {
-  background: var(--color-accent-soft);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 14%, transparent);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-2xl);
   padding: 10px 14px;
   font-size: var(--font-size-body);
-  line-height: 1.68;
+  line-height: 1.72;
   color: var(--color-text-primary);
   max-width: 80%;
-  transition: background var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
 }
 .msg-bubble-user:hover {
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  background: var(--color-bg-hover);
 }
 .msg-user-column {
   display: flex;

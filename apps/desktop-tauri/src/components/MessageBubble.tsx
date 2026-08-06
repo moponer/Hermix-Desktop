@@ -472,17 +472,6 @@ function ProcessTimeline({
     0,
   );
 
-  // Count error tools so the collapsed chip can surface failures at a
-  // glance ("已完成 5 个工具 (2 失败)"), even when the body is collapsed.
-  const errorTools = stepGroups.reduce(
-    (acc, groups) =>
-      acc +
-      (groups
-        ? groups.filter((g) => g.status === "error").length
-        : 0),
-    0,
-  );
-
   // Header label: only used when settled (isStreaming=false). Live
   // renders no header — the content flows inline like prose.
   // "已完成"                    ← no timing data
@@ -490,9 +479,10 @@ function ProcessTimeline({
   // "已完成 1m 23s"             ← ≥ 1 minute (s always shown, never 0-padded)
   // "已完成 5 个工具 7s"        ← when tools ran (count + duration)
   const durationPart = formatDuration(durationMs);
-  const errorPart = errorTools > 0 ? ` (${errorTools} 失败)` : "";
+  // 失败信息不再拼进顶头文案（避免刺眼的"N 失败"banner），
+  // 由折叠头的 AlertTriangle 图标低调表示即可。
   const settledLabel = totalTools > 0
-    ? (durationPart ? `已完成 ${totalTools} 个工具${errorPart} ${durationPart}` : `已完成 ${totalTools} 个工具${errorPart}`)
+    ? (durationPart ? `已完成 ${totalTools} 个工具 ${durationPart}` : `已完成 ${totalTools} 个工具`)
     : (durationPart ? `已完成 ${durationPart}` : "已完成");
 
   return (
@@ -512,11 +502,7 @@ function ProcessTimeline({
           ) : (
             <ChevronRight size={12} className="reasoning-chevron" />
           )}
-          {errorTools > 0 ? (
-            <AlertTriangle size={11} className="tl-process-check tl-process-check--err" />
-          ) : (
-            <CheckCircle2 size={11} className="tl-process-check" />
-          )}
+          <CheckCircle2 size={11} className="tl-process-check" />
           <span className="reasoning-label">{settledLabel}</span>
         </button>
       )}
