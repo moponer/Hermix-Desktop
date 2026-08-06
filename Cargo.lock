@@ -2378,6 +2378,7 @@ dependencies = [
  "base64 0.22.1",
  "hermix-config",
  "hermix-core",
+ "image",
  "regex-lite",
  "resvg",
  "serde",

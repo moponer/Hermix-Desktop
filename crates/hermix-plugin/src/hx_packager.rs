@@ -193,11 +193,10 @@ impl HxShellPackager {
             HxPackError::NoIndexHtml(html_path.display().to_string())
         })?;
 
-        // 读取可选图标（优先级：icon_data base64 > icon 库内 SVG 名 > icon_file）
-        // - `icon_data`: base64 PNG data URL（旧方式）
-        // - `icon`: SVG 库内名字符串，如 "music" → 读内置图标库 resources/icons/music.svg
-        // - `icon_file`: 应用目录里的图标文件名（如 icon.png）
-        let icon_png = read_icon_data(app_dir).or_else(|| read_icon_library_svg(app_dir));
+        // 读取可选图标（统一 resolver, 2026-08-05 图标三处统一核心）:
+        // 优先级链: icon_file (PNG) > icon_data (base64 PNG, 旧兼容) > icon (内置库 SVG 名)
+        // 返回 bytes + is_svg 标记 (hx-shell read_self_icon 同时支持 SVG/PNG).
+        let resolved_icon = resolve_app_icon(app_dir);
 
         // 是否有 TSX 源码？
         let has_tsx = app_dir.join("src").join("main.tsx").exists();
@@ -235,7 +234,11 @@ impl HxShellPackager {
             body.into_bytes()
         };
 
-        Ok((html_vec, icon_png))
+        // icon_bytes 是 (bytes, is_svg) — 塞尾部 payload 时 SVG/PNG 都行
+        // (hx-shell read_self_icon 双格式解析), 直接取 bytes.
+        let icon_bytes = resolved_icon.map(|(b, _is_svg)| b);
+
+        Ok((html_vec, icon_bytes))
     }
 
     /// 打包 app 目录 → dist/<id>.exe（单文件）+ WebView2Loader.dll
@@ -269,8 +272,119 @@ impl HxShellPackager {
             let _ = std::fs::copy(&self.loader_dll_path, dst);
         }
 
+        // ── 第二层: 把同一个图标嵌入 dist exe 的 Windows 资源表 ──
+        //
+        // 2026-08-05 主人反馈: 自定义应用打包后任务栏图标显示 hx-shell 默认♬
+        // 跟卡片 icon_file 完全无关。"三个图标位置不统一,从根本上解决"。
+        //
+        // 根因: Windows 任务栏图标 = exe 资源的 RT_GROUP_ICON (PE 资源节),
+        //       不读 exe 尾部的 payload。hx-shell 编译时嵌入的默认 ♬ 永远占位。
+        //
+        // 解法: 复用 `icon_library::patch_exe_icon*` (已写好但从未被 hx_packager
+        //       调用!) 把 `manifest` 的 icon (统一 resolver) 缩放多尺寸、
+        //       构造多帧 ICO、通过 BeginUpdateResourceW 写进 dist exe 的资源表。
+        //
+        // 统一性 (icon 三处同源):
+        //   - icon_file (PNG) → 直接转 ICO
+        //   - icon (内置库 SVG 名) → 先 SVG→PNG (resvg, 无字体依赖) → ICO
+        //   - 都没有 → category 自动生成 (确定性)
+        //   与窗口标题栏 (尾部 payload) 用的是同一个 resolver 结果。
+        //
+        // 失败安全: 仅是"任务栏图标不对", 不影响 exe 运行或尾部 payload —
+        //          patch 失败只告警,不重写 dist exe。
+        #[cfg(windows)]
+        {
+            use crate::icon_library;
+
+            // 统一图标源 (同 build_final_payload): PNG 或 SVG
+            let icon_bytes = resolve_app_icon(app_dir);
+            if let Some((bytes, is_svg)) = icon_bytes {
+                // SVG → PNG (任务栏需要位图): 用 256 主尺寸 (ICO 内部再缩放)
+                let png = if is_svg {
+                    icon_library::render_svg_bytes_to_sized_png(&bytes, 256)
+                        .map_err(|e| {
+                            tracing::warn!("SVG→PNG 失败 (任务栏用 hx-shell 默认): {e}");
+                        })
+                        .ok()
+                } else {
+                    Some(bytes)
+                };
+                if let Some(png) = png {
+                    if let Err(e) = icon_library::patch_exe_icon_from_png(&exe_path, &png) {
+                        tracing::warn!(
+                            "为 {} 打 exe 图标资源补丁失败 (任务栏图标用 hx-shell 默认, 不影响运行): {}",
+                            exe_path.display(),
+                            e
+                        );
+                    }
+                }
+            } else {
+                // 兜底: 没有任何用户图标时, 用内置 category 图标库自动生成, 至少比 hx-shell
+                //       默认♬ 更"应用专属"(每个应用根据 id 哈希得到确定性颜色 + 分类字形)
+                let manifest_name = id.to_string();
+                let category = read_icon_category(app_dir).unwrap_or_else(|| "other".to_string());
+                if let Ok((group, icons, _ico)) =
+                    icon_library::generate_icon_resources(&manifest_name, id, &category)
+                {
+                    if let Err(e) = icon_library::patch_exe_icon(&exe_path, &group, &icons) {
+                        tracing::warn!("自动生成图标嵌入失败 (不影响运行): {e}");
+                    }
+                }
+            }
+        }
+
         Ok(exe_path)
     }
+}
+
+/// 统一图标解析 (2026-08-05 图标三处统一核心: 卡片/窗口/任务栏同源)。
+///
+/// 优先级链 (LLM 开发规范, 见 SKILL.md/README):
+///   1. `icon_file` — 应用目录内 PNG 文件名 (完全自定义 logo)
+///   2. `icon_data` — base64 PNG data URL (旧方式, 兼容保留)
+///   3. `icon` — 内置 lucide 图标库名字符串, 如 "music" → resources/icons/music.svg
+///   4. 单 emoji / 无 → None (调用方走 category 自动生成, 见 icon_library::generate_icon_resources)
+///
+/// 返回 (bytes, is_svg): bytes 是 PNG 或 SVG; is_svg 供任务栏 ICO 转换判断.
+/// 窗口标题栏 (hx-shell read_self_icon) 与任务栏 (patch_exe_icon) 都从这里取.
+fn resolve_app_icon(app_dir: &Path) -> Option<(Vec<u8>, bool)> {
+    // 1. icon_file (PNG)
+    if let Some(png) = read_icon_file_png(app_dir) {
+        return Some((png, false));
+    }
+    // 2. icon_data (base64 PNG, 旧兼容)
+    if let Some(png) = read_icon_data(app_dir) {
+        return Some((png, false));
+    }
+    // 3. icon (内置库 SVG 名)
+    if let Some(svg) = read_icon_library_svg(app_dir) {
+        return Some((svg, true));
+    }
+    None
+}
+
+/// 读 `manifest.json` 的 `icon_file` 字段（如 "icon.png"），应用目录下查找 → 读 PNG bytes。
+/// 不存在返回 None (调用方回退到尾部 payload 的 icon 段)。
+fn read_icon_file_png(app_dir: &Path) -> Option<Vec<u8>> {
+    let manifest_path = app_dir.join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let file_name = v.get("icon_file").and_then(|x| x.as_str())?;
+    let file_name = file_name.trim();
+    if file_name.is_empty() {
+        return None;
+    }
+    std::fs::read(app_dir.join(file_name)).ok()
+}
+
+/// 读 `manifest.json` 的 `category` 字段（兜底自动图标生成时用）。
+#[cfg(windows)]
+fn read_icon_category(app_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(app_dir.join("manifest.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("category")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
 }
 
 /// 比较目标壳与资源壳的 BUILD_PROBE 版本标记。

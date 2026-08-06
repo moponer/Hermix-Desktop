@@ -544,9 +544,12 @@ impl PluginManager {
                 exe_path.display()
             )));
         }
-        std::process::Command::new(&exe_path)
+        let child = std::process::Command::new(&exe_path)
             .spawn()
             .map_err(|e| PluginError::ExecutionFailed(format!("launch app failed: {e}")))?;
+        // 窗口居中由 hx-shell 内部完成 (main.rs WindowBuilder::with_outer_position,
+        // 2026-08-05 已在 apps/hx-shell/src/main.rs 修复) — spawn 侧不做额外处理。
+        drop(child);
         Ok(())
     }
 

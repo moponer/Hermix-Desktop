@@ -330,6 +330,10 @@ The `todo` tool lets you track a multi-step plan and show the user live progress
 - Prefer `update` to `failed`/`completed` over `delete` (delete only when genuinely obsolete).
 - Multiple plans can coexist. Use `group_title` on the first `create` of a new plan to label it;
   pass `group_id` on subsequent creates to continue the same plan.
+- **All `create`s inside one assistant reply belong to the same plan** — the backend
+  auto-joins them into one group (they render as a single card). Only start a NEW plan
+  (fresh `group_title`) in a *later* reply when the topic genuinely changes; never
+  spawn a new plan per step of the same batch — that floods the UI with one card per step.
 - One plan per topic.";
 
 const TASK_TRACKER_GUIDANCE: &str = "\

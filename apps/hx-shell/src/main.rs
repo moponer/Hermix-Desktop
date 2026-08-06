@@ -919,18 +919,46 @@ fn main() -> wry::Result<()> {
             Err(e) => { hx_log(&format!("Icon::from_rgba failed: {e:?}")); None }
         }
     });
-    let window = WindowBuilder::new()
+    // 2026-08-05 主人反馈: 自定义应用窗口启动在屏幕左侧/左上角, 不居中。
+    // 根因: tao WindowBuilder 未设置位置, Windows 默认 (0,0)。
+    // 解法: 计算主显示器中心, 创建窗口时直接居中 (tao 0.35 API):
+    //   - MonitorHandle: size() -> PhysicalSize<u32>, position() -> PhysicalPosition<i32>,
+    //     scale_factor() -> f64 (无 work_area 方法 — 用整屏中心, 任务栏占位可接受)
+    //   - WindowBuilder::with_position(Position) (0.35 没有 with_outer_position)
+    // 取不到 monitor (理论不会发生, Windows 必有主显示器) → 退回默认位置, 不 panic。
+    const WIN_W_LOGICAL: f64 = 900.0;
+    const WIN_H_LOGICAL: f64 = 640.0;
+    let start_position: Option<tao::dpi::Position> = event_loop
+        .primary_monitor()
+        .map(|m| {
+            let scale = m.scale_factor();
+            let origin_x = m.position().x as f64 / scale; // 逻辑
+            let origin_y = m.position().y as f64 / scale;
+            let area_w = m.size().width as f64 / scale;
+            let area_h = m.size().height as f64 / scale;
+            let x = origin_x + (area_w - WIN_W_LOGICAL) / 2.0;
+            let y = origin_y + (area_h - WIN_H_LOGICAL) / 2.0;
+            hx_log(&format!(
+                "centering window at logical ({x:.1}, {y:.1}), monitor={area_w:.0}x{area_h:.0} scale={scale}"
+            ));
+            tao::dpi::Position::Logical(tao::dpi::LogicalPosition::new(x, y))
+        });
+    let mut win_builder = WindowBuilder::new()
         .with_title("Hermix App")
-        .with_inner_size(tao::dpi::LogicalSize::new(900.0, 640.0))
+        .with_inner_size(tao::dpi::LogicalSize::new(WIN_W_LOGICAL, WIN_H_LOGICAL))
         .with_window_icon(window_icon)
-        .with_decorations(false) // 无原生标题栏 — 应用自行实现标题栏 + 窗口控制按钮
+        .with_decorations(false); // 无原生标题栏 — 应用自行实现标题栏 + 窗口控制按钮
+    if let Some(pos) = start_position {
+        win_builder = win_builder.with_position(pos);
+    }
+    let window = win_builder
         .build(&event_loop)
         .unwrap_or_else(|e| {
             let msg = format!("窗口创建失败: {e}");
             hx_log(&msg);
             panic!("{msg}");
         });
-    hx_log("window created (decorations=false)");
+    hx_log("window created (decorations=false, centered)");
 
     // Window 包 Arc 共享给 IPC handler — 无装饰窗口需要 IPC 控制窗口
     let window = std::sync::Arc::new(window);

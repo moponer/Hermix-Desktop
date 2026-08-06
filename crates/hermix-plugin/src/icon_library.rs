@@ -143,7 +143,7 @@ fn build_svg(inner: &str, color: &str, size: u32) -> String {
 }
 
 /// 将 SVG 栅格化为 PNG 字节 (正方形, 边长由 SVG 内 width/height 决定)。
-fn render_svg_to_png(svg: &str) -> Result<Vec<u8>, String> {
+pub fn render_svg_to_png(svg: &str) -> Result<Vec<u8>, String> {
     let opt = usvg::Options::default();
     let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| format!("SVG 解析失败: {e}"))?;
     let sz = tree.size();
@@ -155,6 +155,23 @@ fn render_svg_to_png(svg: &str) -> Result<Vec<u8>, String> {
     pixmap
         .encode_png()
         .map_err(|e| format!("PNG 编码失败: {e}"))
+}
+
+/// 将任意尺寸 SVG 栅格化为指定边长 `size` 的方形 PNG。
+/// 用于任务栏 ICO 多尺寸生成 (图标库 SVG 是 24×24, 需放大到 256)。
+/// 内部: 把 SVG 的 width/height 覆写为 size, 再走 render_svg_to_png。
+pub fn render_svg_bytes_to_sized_png(svg_bytes: &[u8], size: u32) -> Result<Vec<u8>, String> {
+    let text = std::str::from_utf8(svg_bytes)
+        .map_err(|e| format!("SVG 非 UTF-8: {e}"))?;
+    // 用 XML 属性替换 width/height (内置库 SVG 是 <svg ... width="24" height="24" ...>)
+    // 保守: 只替换 `width="N"` / `height="N"` 到目标尺寸, 不动 viewBox.
+    let re = regex_lite::Regex::new(r#"width="\d+(\.\d+)?""#)
+        .expect("width regex");
+    let mut out = re.replace(text, format!("width=\"{size}\"")).to_string();
+    let re_h = regex_lite::Regex::new(r#"height="\d+(\.\d+)?""#)
+        .expect("height regex");
+    out = re_h.replace(&out, format!("height=\"{size}\"")).to_string();
+    render_svg_to_png(&out)
 }
 
 /// 生成单个尺寸的 PNG 图标 (默认 256×256)。
@@ -317,6 +334,92 @@ pub fn patch_exe_icon(
         ));
     }
     Ok(())
+}
+
+/// 从已存在的 PNG 字节 (`manifest.icon_file` 用户上传的任意尺寸) 生成
+/// 嵌入 .exe 资源所需的多尺寸 PNG + ICO/GRPICONDIR 资源数据。
+///
+/// 与 `generate_icon_resources` 的差异:
+/// - 不依赖内置矢量图标库, 直接用用户提供的 PNG
+/// - 用 `image` crate 解码 + 重采样到 16/32/48/256 四个尺寸
+/// - 输出同样的 `(group, icons, ico)` 格式, 调 `patch_exe_icon` 即可
+///
+/// 解码失败 / 图片太小时降级为仅保留单帧 256(原图), 减少负担。
+///
+/// (2026-08-05) 根本性解决图标层级统一:
+///   之前 `hx_packager.rs` 没调过 `patch_exe_icon`, dist exe 任务栏图标
+///   永远是 hx-shell 默认♬ — 跟卡片 icon_file 完全无关。现在打包时如果
+///   manifest.icon_file 存在, 直接用它替换任务栏图标; 不存在则维持
+///   `generate_icon_resources` 的兜底路径。
+#[cfg(windows)]
+pub fn generate_ico_resources_from_png(
+    png_data: &[u8],
+) -> Result<(Vec<u8> /*group*/, Vec<(u16, Vec<u8>)> /*icons*/, Vec<u8> /*ico_file*/), String> {
+    use image::imageops::FilterType;
+
+    let img = image::load_from_memory(png_data)
+        .map_err(|e| format!("PNG 解码失败 (image crate): {e}"))?;
+
+    // 缩放到 ICO_SIZES 各档 (高质量重采样, FilterType::Lanczos3)
+    let mut pngs: Vec<(u32, Vec<u8>)> = Vec::new();
+    for &target_size in ICO_SIZES {
+        let resized = img.resize_exact(target_size, target_size, FilterType::Lanczos3);
+        let mut buf = std::io::Cursor::new(Vec::new());
+        resized
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .map_err(|e| format!("PNG 编码失败: {e}"))?;
+        pngs.push((target_size, buf.into_inner()));
+    }
+
+    // ── 构造 ICO 文件字节 (PNG 直接内嵌) ──
+    let mut ico: Vec<u8> = Vec::new();
+    ico.extend_from_slice(&[0, 0]); // reserved
+    ico.extend_from_slice(&[1, 0]); // type = icon
+    ico.extend_from_slice(&[(pngs.len() as u8), 0]); // count
+    let mut image_offset: u32 = 6 + (pngs.len() as u32) * 16;
+    for (size, png) in &pngs {
+        let w = if *size >= 256 { 0u8 } else { *size as u8 };
+        ico.push(w);
+        ico.push(w);
+        ico.push(0); // color count
+        ico.push(0); // reserved
+        ico.extend_from_slice(&[1, 0]); // planes
+        ico.extend_from_slice(&[32, 0]); // bit count
+        ico.extend_from_slice(&(png.len() as u32).to_le_bytes());
+        ico.extend_from_slice(&image_offset.to_le_bytes());
+        image_offset += png.len() as u32;
+        ico.extend_from_slice(png);
+    }
+
+    // ── 构造 RT_GROUP_ICON (GRPICONDIR, 14 字节/条目, 用 id 替换 offset) ──
+    let mut group: Vec<u8> = Vec::new();
+    group.extend_from_slice(&[0, 0]);
+    group.extend_from_slice(&[1, 0]);
+    group.extend_from_slice(&[(pngs.len() as u8), 0]);
+    let mut icon_entries: Vec<(u16, Vec<u8>)> = Vec::new();
+    for (i, (size, png)) in pngs.iter().enumerate() {
+        let id = (i + 1) as u16;
+        let w = if *size >= 256 { 0u8 } else { *size as u8 };
+        group.push(w);
+        group.push(w);
+        group.push(0);
+        group.push(0);
+        group.extend_from_slice(&[1, 0]); // planes
+        group.extend_from_slice(&[32, 0]); // bit count
+        group.extend_from_slice(&(png.len() as u32).to_le_bytes());
+        group.extend_from_slice(&id.to_le_bytes()); // id (替换 ICO 中的 offset)
+        icon_entries.push((id, png.clone()));
+    }
+
+    Ok((group, icon_entries, ico))
+}
+
+/// 便捷封装: 读 `manifest.icon_file` (PNG) → 打 exe 资源补丁。
+/// 任何一步失败返回 Err, 调用方据此告警; .exe 仍可正常运行。
+#[cfg(windows)]
+pub fn patch_exe_icon_from_png(exe_path: &Path, png_data: &[u8]) -> Result<(), String> {
+    let (group, icons, _ico) = generate_ico_resources_from_png(png_data)?;
+    patch_exe_icon(exe_path, &group, &icons)
 }
 
 #[cfg(test)]

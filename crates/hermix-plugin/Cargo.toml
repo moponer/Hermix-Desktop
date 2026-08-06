@@ -21,7 +21,13 @@ regex-lite = "0.1"
 resvg = "0.42"
 usvg = "0.42"
 tiny-skia = "0.11"
+# PNG 解码 + 多分辨率缩放 (打 exe 图标补丁时需要)
+# 任务: 收到 manifest.icon_file (任意尺寸 PNG), 缩放到 16/32/48/256 多种
+# 尺寸, 编码成多帧 ICO 嵌入 dist exe Windows 资源 — 让任务栏/资源管理器
+# 显示应用自己的图标, 而非 hx-shell.exe 默认图标。
+image = { version = "0.25", default-features = false, features = ["png"] }
 # 打包时为复制出的 app-shell.exe 打内嵌图标补丁 (仅 Windows)
+# 窗口居中在 hx-shell 内部解决 (tao WindowBuilder::with_outer_position) — 此处无需 Win32 API
 windows-sys = { version = "0.52", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
