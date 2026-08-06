@@ -211,20 +211,27 @@ export function toRefractorLang(lang: string): string | null {
 // `react-syntax-highlighter`'s `oneDark` / `oneLight` produced so the
 // unified refractor path stays visually consistent with the old
 // Prism output.
+//
+// 2026-08-05 主人反馈: token 对比度不够, 关键字/字符串/函数辨识度提升:
+//   - keyword 加粗 (fontWeight: 600) — 关键字醒目区分于标识符
+//   - boolean/number/constant 加粗 — 字面量一眼可见
+//   - function 加粗 — 调用点立刻识别
+//   - comment 加亮 + italic — 视觉"次要"但不褪色
+//   - 提高 string 饱和度 (绿更绿) — 跟 identifier 黄区分更远
 const ONE_DARK: Record<string, React.CSSProperties> = {
-  comment: { color: "#5c6370", fontStyle: "italic" },
-  prolog: { color: "#5c6370", fontStyle: "italic" },
-  doctype: { color: "#5c6370", fontStyle: "italic" },
-  cdata: { color: "#5c6370", fontStyle: "italic" },
+  comment: { color: "#7c8694", fontStyle: "italic" },
+  prolog: { color: "#7c8694", fontStyle: "italic" },
+  doctype: { color: "#7c8694", fontStyle: "italic" },
+  cdata: { color: "#7c8694", fontStyle: "italic" },
   punctuation: { color: "#abb2bf" },
   property: { color: "#e06c75" },
   tag: { color: "#e45649" },
-  boolean: { color: "#d19a66" },
-  number: { color: "#d19a66" },
-  constant: { color: "#d19a66" },
+  boolean: { color: "#d19a66", fontWeight: 600 },
+  number: { color: "#d19a66", fontWeight: 600 },
+  constant: { color: "#d19a66", fontWeight: 600 },
   symbol: { color: "#d19a66" },
   deleted: { color: "#e06c75" },
-  selector: { color: "#d19a66" },
+  selector: { color: "#98c379" },
   "attr-name": { color: "#d19a66" },
   string: { color: "#98c379" },
   char: { color: "#98c379" },
@@ -235,11 +242,11 @@ const ONE_DARK: Record<string, React.CSSProperties> = {
   url: { color: "#61afef" },
   atrule: { color: "#c678dd" },
   "attr-value": { color: "#98c379" },
-  keyword: { color: "#c678dd" },
-  function: { color: "#61afef" },
+  keyword: { color: "#c678dd", fontWeight: 600 },
+  function: { color: "#61afef", fontWeight: 600 },
   "class-name": { color: "#e6c07b" },
-  regex: { color: "#98c379" },
-  important: { color: "#c678dd" },
+  regex: { color: "#56b6c2" },
+  important: { color: "#c678dd", fontWeight: 600 },
   variable: { color: "#e06c75" },
   bold: { color: "#abb2bf", fontWeight: "bold" },
   italic: { color: "#abb2bf", fontStyle: "italic" },
@@ -248,6 +255,8 @@ const ONE_DARK: Record<string, React.CSSProperties> = {
 // Light-mode counterpart to ONE_DARK. Without this, light-theme code
 // blocks used dark tokens on a light background — readable but with
 // noticeably worse contrast than dark-mode.
+// 2026-08-05 同 ONE_DARK 增强策略: keyword/function/boolean 加粗,
+// comment 调亮 + italic (浅色背景上中灰易消, 用暖灰 +9 步).
 const ONE_LIGHT: Record<string, React.CSSProperties> = {
   comment: { color: "#a0a1a7", fontStyle: "italic" },
   prolog: { color: "#a0a1a7", fontStyle: "italic" },
@@ -256,27 +265,27 @@ const ONE_LIGHT: Record<string, React.CSSProperties> = {
   punctuation: { color: "#383a42" },
   property: { color: "#e45649" },
   tag: { color: "#e45649" },
-  boolean: { color: "#98c80d" },
-  number: { color: "#98c80d" },
-  constant: { color: "#98c80d" },
-  symbol: { color: "#98c80d" },
+  boolean: { color: "#b07d00", fontWeight: 600 },
+  number: { color: "#b07d00", fontWeight: 600 },
+  constant: { color: "#b07d00", fontWeight: 600 },
+  symbol: { color: "#b07d00" },
   deleted: { color: "#e45649" },
-  selector: { color: "#98c80d" },
-  "attr-name": { color: "#98c80d" },
-  string: { color: "#50a14f" },
-  char: { color: "#50a14f" },
+  selector: { color: "#50a14f" },
+  "attr-name": { color: "#b07d00" },
+  string: { color: "#3a9b3a" },
+  char: { color: "#3a9b3a" },
   builtin: { color: "#c18401" },
   inserted: { color: "#50a14f" },
   operator: { color: "#0184bc" },
   entity: { color: "#e45649" },
   url: { color: "#0184bc" },
   atrule: { color: "#a626a4" },
-  "attr-value": { color: "#50a14f" },
-  keyword: { color: "#a626a4" },
-  function: { color: "#4078f2" },
+  "attr-value": { color: "#3a9b3a" },
+  keyword: { color: "#a626a4", fontWeight: 600 },
+  function: { color: "#4078f2", fontWeight: 600 },
   "class-name": { color: "#c18401" },
-  regex: { color: "#50a14f" },
-  important: { color: "#a626a4" },
+  regex: { color: "#0184bc" },
+  important: { color: "#a626a4", fontWeight: 600 },
   variable: { color: "#e056a0" },
   bold: { color: "#383a42", fontWeight: "bold" },
   italic: { color: "#383a42", fontStyle: "italic" },
