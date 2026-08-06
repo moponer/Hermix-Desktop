@@ -16,8 +16,8 @@
   --color-bg-active:      #e8dcc8;
   --color-bg-card:        #fffdf8;
   --color-bg-elevated:    #fffefb;
-  --color-bg-code:        #f5ede0;
-  --color-bg-code-header: #faf3e8;
+  --color-bg-code:        #ede2d0;        /* 比卡片 #fffdf8 深 2 档 (暖奶咖): 代码区独立 */
+  --color-bg-code-header: #f5ede0;        /* 比 code 浅 1 档: header 浮起 */
   --color-bg-code-border: #ddd0bc;
 
   --color-chat-assistant-bg: var(--color-bg-primary);

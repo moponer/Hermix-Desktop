@@ -37,6 +37,25 @@ body {
   color: var(--color-text-primary);
 }
 
+/* 代码区选区: 极轻 alpha (15%) — 让用户能感知自己在 select, 但不抢
+   token 颜色本身的注意力. 38% accent 时被主人误认为 "行 stripe". */
+pre ::selection,
+code ::selection,
+.code-pre ::selection,
+.code-body ::selection {
+  background: color-mix(in srgb, var(--color-info) 15%, transparent);
+  color: var(--color-text-primary);
+}
+
+/* Chrome Ctrl+F 搜索高亮: 默认 ::target-text 给所有匹配字符加橘黄色矩形,
+   跨 token 时叠加成"每行矩形背景"假象 (主人 19:48 反馈).
+   重置为透明 + 用浏览器原生 ::selection 即可 (用户仍然能看出哪里匹配).
+   2026-08-05: 这是 code 区 "行背景" 的真正根因 (非 selection, 是 target-text). */
+::target-text {
+  background: transparent;
+  color: var(--color-text-primary);
+}
+
 /* ── Focus (no focus border color) ─────────────────────────────── */
 :focus,
 :focus-visible {

@@ -24,9 +24,9 @@
   --color-bg-card: #ffffff;
   --color-bg-card-hover: #fafafa;
   --color-bg-elevated: #ffffff;       /* popovers, modals: white over cream */
-  --color-bg-code: #fafafa;          /* 浅色独立代码块:白卡感(不是纯白,避免与气泡背景对比太弱) */
-  --color-bg-code-header: #ffffff;   /* 比 code 亮一档:header 视觉上"浮"在代码区之上 */
-  --color-bg-code-border: #e4e4e7;   /* 用 border-primary:清晰但不抢眼 */
+  --color-bg-code: #ededee;          /* 浅色独立代码块:明显比卡片白 #ffffff 深一档 (∆L -5), 代码区视觉独立 */
+  --color-bg-code-header: #f5f5f7;    /* 比 code 浅 1 档:header 视觉上"浮"在代码区之上 (呼应 bg-app) */
+  --color-bg-code-border: #e4e4e7;    /* 用 border-primary:清晰但不抢眼 */
   --color-chat-assistant-bg: #ffffff;      /* 主回复气泡 (light: 等同 bg-primary 白底) */
   --color-chat-tool-bg: #fafafa;          /* 工具调用卡片 (light: 等同 bg-secondary 灰阶,不用 slate-50 微蓝) */
   --color-chat-terminal-bg: #000000;      /* 终端/代码输出背景 (light 接近黑, 兼容 macOS 风格) */
