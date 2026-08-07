@@ -695,7 +695,6 @@ pub(crate) async fn collect_stream_inner(
                 tokio::select! {
                     biased;
                     chunk_opt = stream.next() => {
-                        eprintln!("DEBUG stream.next() arm fired");
                         match chunk_opt {
                             None => break 'silence_watch,
                             Some(chunk_result) => {
