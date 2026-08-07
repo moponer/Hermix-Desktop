@@ -2407,9 +2407,16 @@ function ApprovalCard({
 
   return (
     <div className="tw-msg">
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen((v) => !v);
+          }
+        }}
         className="tw-msg-row"
         data-tool-kind="approval"
         data-state={stateAttr}
@@ -2449,7 +2456,7 @@ function ApprovalCard({
             </span>
           )}
         </span>
-      </button>
+      </div>
 
       {open && (
         <div className="tw-msg-body">
