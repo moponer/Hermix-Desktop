@@ -1706,13 +1706,116 @@
   border: 1px solid var(--color-border-primary, #e4e4e7);
   background: var(--color-bg-secondary, #fafafa);
   overflow: hidden;
-  transition: opacity 160ms ease;
+  /* Collapse animation: when `.is-resolved` is added, the card
+     smoothly shrinks from the full-card layout to the one-line
+     summary row below. */
+  transition: max-height 320ms cubic-bezier(0.4, 0, 0.2, 1),
+              padding 320ms ease,
+              border-color 200ms ease;
+  max-height: 720px; /* generous ceiling; collapsed state shrinks to 48px */
+  padding: 0;
+}
+.approval-card.is-resolved {
+  max-height: 48px;
+  /* keep the same border + bg so the row reads as a related artifact */
 }
 .dark .approval-card {
   border-color: var(--color-border-primary, #3a3a40);
   background: var(--color-bg-secondary, #232328);
 }
 .approval-card.is-done { opacity: 0.92; }
+
+/* Full-card layout (pending state). Wrapper carries opacity +
+   max-height transitions so the visible swap is animated, not a flash. */
+.approval-full {
+  display: flex;
+  flex-direction: column;
+  max-height: 720px;
+  opacity: 1;
+  transition: opacity 200ms ease, max-height 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.approval-card.is-resolved .approval-full {
+  max-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Collapsed one-line summary (resolved state). Hidden until the card
+   flips to `.is-resolved`; fades + grows in via the same transition. */
+.approval-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: height 280ms cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 180ms ease 60ms,
+              padding 280ms ease;
+  white-space: nowrap;
+}
+.approval-card.is-resolved .approval-summary {
+  height: 48px;
+  opacity: 1;
+  padding: 0 14px;
+}
+
+.approval-summary-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.approval-summary-icon-ok { background: rgba(75, 122, 94, 0.14); color: #4b7a5e; }
+.approval-summary-icon-err { background: rgba(198, 40, 40, 0.14); color: #c62828; }
+.approval-summary-icon-expired { background: var(--color-bg-tertiary, rgba(128,128,128,0.14)); color: var(--color-text-secondary); }
+
+.approval-summary-tool {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+
+.approval-summary-desc {
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.approval-summary-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.approval-summary-badge-ok {
+  background: rgba(75, 122, 94, 0.12);
+  color: #4b7a5e;
+}
+.approval-summary-badge-err {
+  background: rgba(198, 40, 40, 0.10);
+  color: #c62828;
+}
+.approval-summary-badge-expired {
+  background: var(--color-bg-tertiary, rgba(128,128,128,0.12));
+  color: var(--color-text-secondary);
+}
+
+.approval-summary-result {
+  font-size: 11.5px;
+  color: var(--color-text-tertiary, #888);
+  flex-shrink: 0;
+}
 
 /* Title bar — risk color tints create clear header/body hierarchy */
 .approval-head {

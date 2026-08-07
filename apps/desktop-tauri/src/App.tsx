@@ -1596,9 +1596,20 @@ streamPhaseRef.current = null;
       reason?: string;
       sessionId: string;
     }): Promise<{ decision: ApprovalDecision }> => {
+      // The approval card belongs to the *current* assistant turn —
+      // the agent is blocked waiting for the user, not starting a new
+      // turn. We deliberately do NOT create a new assistant placeholder
+      // here (that was the old behavior, and it produced a fresh
+      // avatar + divider for every approval — 10 approvals = 10 new
+      // conversation segments). The card lives in the message stream
+      // right after the frozen assistant bubble; when the agent
+      // resumes and streams follow-up text, `appendChunk` keeps
+      // writing to the SAME `currentAssistantIdRef.current`
+      // (preserved below), so the user sees one assistant bubble
+      // with all approval cards beneath it — the correct shape.
       const previousAssistantId = currentAssistantIdRef.current;
-      const nextAssistantId = `reply-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      currentAssistantIdRef.current = nextAssistantId;
+      // NOTE: do NOT advance `currentAssistantIdRef` here — the
+      // resumed LLM stream must target the same assistant.
 
       const approvalMsg: ChatMessage = {
         id: `approval-${req.requestId}`,
@@ -1624,23 +1635,15 @@ streamPhaseRef.current = null;
           linkedAssistantId: previousAssistantId,
         },
       };
-      const newAssistantMsg: ChatMessage = {
-        id: nextAssistantId,
-        role: "assistant",
-        content: "",
-        timestamp: new Date().toISOString(),
-      };
+      // No new assistant placeholder — see comment at top of fn.
 
       setSessions((prev) => prev.map((s) => {
         if (s.id !== sessionId) return s;
-        // Insert approval + new assistant placeholder *after* the
-        // previous (now-frozen) assistant message. The approval card
-        // is the only place in the timeline where the order is
-        // literally "assistant, approval, assistant" — a rare but
-        // correct shape.
+        // Insert just the approval message; the next assistant text
+        // resumes on the existing `previousAssistantId` bubble.
         return {
           ...s,
-          messages: [...s.messages, approvalMsg, newAssistantMsg],
+          messages: [...s.messages, approvalMsg],
           updated_at: new Date().toISOString(),
         };
       }));
@@ -1684,8 +1687,11 @@ streamPhaseRef.current = null;
       );
 
       if (!existing) {
-        const nextAssistantId = `reply-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        currentAssistantIdRef.current = nextAssistantId;
+        // Same fix as onApprovalRequest: clarify cards belong to the
+        // current assistant turn — do not spawn a fresh assistant
+        // placeholder. Resumed LLM chunks continue on the existing
+        // `currentAssistantIdRef.current`.
+        // NOTE: do NOT advance `currentAssistantIdRef` here.
 
         const clarifyMsg: ChatMessage = {
           id: `clarify-${req.requestId}`,
@@ -1699,18 +1705,12 @@ streamPhaseRef.current = null;
             answer: null,
           },
         };
-        const newAssistantMsg: ChatMessage = {
-          id: nextAssistantId,
-          role: "assistant",
-          content: "",
-          timestamp: new Date().toISOString(),
-        };
 
         setSessions((prev) => prev.map((s) => {
           if (s.id !== sessionId) return s;
           return {
             ...s,
-            messages: [...s.messages, clarifyMsg, newAssistantMsg],
+            messages: [...s.messages, clarifyMsg],
             updated_at: new Date().toISOString(),
           };
         }));

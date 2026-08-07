@@ -2388,7 +2388,7 @@ function ApprovalCard({
   };
 
   return (
-    <div className={`approval-card h-enter ${riskClass} ${cardStateClass}`}>
+    <div className={`approval-card h-enter ${riskClass} ${cardStateClass}${decided ? " is-resolved" : ""}`}>
       {/* Title bar — risk-tinted strip separates header from body */}
       <div className="approval-head">
         <span className="approval-icon" style={{ background: iconBg }} title={vis.pillLabel}>
@@ -2454,24 +2454,33 @@ function ApprovalCard({
               </button>
             </div>
           </div>
-        ) : (
-          /* Resolved: status badge + one-line result */
-          <div className="approval-result">
-            <span className={`approval-badge ${
-              approved ? "is-ok" : isExpired ? "is-expired" : "is-err"
-            }`}>
-              {approved ? "已允许" : isExpired ? "已超时" : "已拒绝"}
-            </span>
-            <span className="approval-result-text">
-              {approved
-                ? "操作已继续执行"
-                : isExpired
-                  ? "审批超时，操作已被自动取消；如仍想执行，请重新发起"
-                  : "操作已中止"}
-            </span>
-          </div>
-        )}
+        ) : null}
       </div>
+
+      {/* Collapsed one-line summary (resolved state) — tool | desc | status | result */}
+      {decided ? (
+        <div className="approval-summary">
+          <span className={`approval-summary-icon approval-summary-icon-${approved ? "ok" : isExpired ? "expired" : "err"}`}>
+            {approved
+              ? <Check size={12} />
+              : isExpired
+                ? <Clock size={12} />
+                : <X size={12} />}
+          </span>
+          <span className="approval-summary-tool">{meta.tool}</span>
+          <span className="approval-summary-desc">{desc}</span>
+          <span className={`approval-summary-badge approval-summary-badge-${approved ? "ok" : isExpired ? "expired" : "err"}`}>
+            {approved ? "已允许" : isExpired ? "已超时" : "已拒绝"}
+          </span>
+          <span className="approval-summary-result">
+            {approved
+              ? "操作已继续执行"
+              : isExpired
+                ? "操作已自动取消"
+                : "操作已中止"}
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
