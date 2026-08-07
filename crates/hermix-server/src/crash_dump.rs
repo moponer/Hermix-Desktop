@@ -127,7 +127,7 @@ fn build_dump(
         } else {
             // Truncate backtrace to avoid massive dumps.
             if bt_str.len() > 4000 {
-                format!("{}...(truncated)", &bt_str[..4000])
+                format!("{}...(truncated)", &bt_str[..bt_str.floor_char_boundary(4000)])
             } else {
                 bt_str
             }

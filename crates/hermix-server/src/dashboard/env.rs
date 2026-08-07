@@ -138,7 +138,11 @@ fn redact(value: &str) -> String {
     if value.len() <= 8 {
         "****".to_string()
     } else {
-        format!("{}...{}", &value[..4], &value[value.len() - 4..])
+        format!(
+            "{}...{}",
+            &value[..value.floor_char_boundary(4)],
+            &value[value.floor_char_boundary(value.len().saturating_sub(4))..]
+        )
     }
 }
 

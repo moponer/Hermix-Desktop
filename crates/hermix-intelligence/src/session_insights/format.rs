@@ -111,7 +111,7 @@ pub fn format_terminal(report: &InsightsReport) -> String {
         ));
         for m in &report.models {
             let mut name = m.model.clone();
-            name.truncate(28);
+            name.truncate(name.floor_char_boundary(28));
             let cost_cell = if m.has_pricing {
                 format!("${:>6.2}", m.cost)
             } else {
@@ -293,7 +293,7 @@ pub fn format_gateway(report: &InsightsReport) -> String {
                 "N/A".into()
             };
             let mut name = m.model.clone();
-            name.truncate(25);
+            name.truncate(name.floor_char_boundary(25));
             lines.push(format!(
                 "  {} — {} sessions, {} tokens, {}",
                 name,
@@ -375,7 +375,7 @@ fn format_full_date(ts: f64) -> String {
 fn format_tool_row(t: &ToolBreakdownRow) -> String {
     let mut tool = t.tool.clone();
     if tool.len() > 28 {
-        tool.truncate(28);
+        tool.truncate(tool.floor_char_boundary(28));
     }
     format!(
         "  {:<28} {:>8} {:>7.1}%",

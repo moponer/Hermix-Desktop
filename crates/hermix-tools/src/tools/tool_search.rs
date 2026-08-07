@@ -298,7 +298,7 @@ impl ToolHandler for ToolSearchHandler {
             .take(limit)
             .map(|(s, score)| {
                 let short_desc = if s.description.len() > 200 {
-                    format!("{}...", &s.description[..197])
+                    format!("{}...", &s.description[..s.description.floor_char_boundary(197)])
                 } else {
                     s.description.clone()
                 };

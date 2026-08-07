@@ -128,7 +128,7 @@ impl ReadPdfHandler {
         let mut out = text;
         let truncated = out.len() > max_chars;
         if truncated {
-            out.truncate(max_chars);
+            out.truncate(out.floor_char_boundary(max_chars));
             out.push_str("\n\n[...truncated, use a smaller `pages` range to read more]");
         }
         let abs = to_absolute_path(path);
@@ -205,7 +205,7 @@ except Exception as e:
         let mut out = text.to_string();
         let truncated = out.len() > max_chars;
         if truncated {
-            out.truncate(max_chars);
+            out.truncate(out.floor_char_boundary(max_chars));
             out.push_str("\n\n[...truncated, use a smaller `pages` range to read more]");
         }
         let abs = to_absolute_path(path);
@@ -255,7 +255,7 @@ except Exception as e:
                 let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
                 let truncated = text.len() > max_chars;
                 if truncated {
-                    text.truncate(max_chars);
+                    text.truncate(text.floor_char_boundary(max_chars));
                     text.push_str("\n\n[...truncated, use a smaller `pages` range to read more]");
                 }
                 let abs = to_absolute_path(path);

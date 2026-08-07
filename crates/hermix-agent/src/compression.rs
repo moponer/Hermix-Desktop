@@ -309,7 +309,7 @@ pub fn summarize_tool_result(tool_name: &str, tool_args: &str, tool_content: &st
     // "duplicate tool call" bug.
     if t.contains("terminal") || t.contains("bash") || t.contains("exec") {
         let cmd = get_str("command");
-        let cmd = if cmd.len() > 80 { format!("{}...", &cmd[..77]) } else { cmd };
+        let cmd = if cmd.len() > 80 { format!("{}...", &cmd[..cmd.floor_char_boundary(77)]) } else { cmd };
         return format!("[ALREADY EXECUTED] [terminal] ran `{cmd}` -> {line_count} lines output");
     }
     if t.contains("read_file") {
@@ -360,7 +360,7 @@ pub fn summarize_tool_result(tool_name: &str, tool_args: &str, tool_content: &st
     }
     if t.contains("delegate_task") {
         let goal = get_str("goal");
-        let goal = if goal.len() > 60 { format!("{}...", &goal[..57]) } else { goal };
+        let goal = if goal.len() > 60 { format!("{}...", &goal[..goal.floor_char_boundary(57)]) } else { goal };
         return format!("[ALREADY EXECUTED] [delegate_task] '{goal}' ({content_len} chars)");
     }
     if t.contains("execute_code") || t.contains("code_execution") {
@@ -385,7 +385,7 @@ pub fn summarize_tool_result(tool_name: &str, tool_args: &str, tool_content: &st
     let mut first_args = Vec::new();
     for (k, v) in args.as_object().map(|o| o.iter()).into_iter().flatten().take(2) {
         if let Some(s) = v.as_str() {
-            let sv = if s.len() > 40 { format!("{}...", &s[..37]) } else { s.to_string() };
+            let sv = if s.len() > 40 { format!("{}...", &s[..s.floor_char_boundary(37)]) } else { s.to_string() };
             first_args.push(format!("{k}={sv}"));
         }
     }
@@ -1784,7 +1784,7 @@ impl ContextCompressor {
                             let mut tc_parts = Vec::with_capacity(tcs.len());
                             for tc in tcs {
                                 let args = if tc.function.arguments.len() > TOOL_ARGS_MAX {
-                                    format!("{}...", &tc.function.arguments[..TOOL_ARGS_HEAD])
+                                    format!("{}...", &tc.function.arguments[..tc.function.arguments.floor_char_boundary(TOOL_ARGS_HEAD)])
                                 } else {
                                     tc.function.arguments.clone()
                                 };

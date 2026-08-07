@@ -131,7 +131,7 @@ impl SessionFrame {
             SessionFrameKind::LongTool => "tool",
         };
         let task = if self.task.len() > 40 {
-            format!("{}…", &self.task[..40])
+            format!("{}…", &self.task[..self.task.floor_char_boundary(40)])
         } else {
             self.task.clone()
         };

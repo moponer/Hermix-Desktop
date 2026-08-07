@@ -65,7 +65,10 @@ pub fn build_active_skills_block(
     );
     let cap = char_budget.saturating_sub(footer.len());
     let mut out = injection;
-    out.truncate(cap);
+    // `cap` is a byte budget; truncating at a non-UTF-8 boundary panics
+    // (`is_char_boundary` assert) whenever the injection contains CJK —
+    // floor to the nearest valid boundary instead.
+    out.truncate(out.floor_char_boundary(cap));
     out.push_str(&footer);
     Some(out)
 }
@@ -2601,6 +2604,44 @@ mod p2_t1_tests {
         );
         // Body section may exceed budget by footer length only —
         // i.e. total ≤ budget + footer length.
+        assert!(block.len() <= 2_000 + 80);
+    }
+
+    #[test]
+    fn p2_t1_block_truncates_cjk_safely_at_budget() {
+        // Regression: `out.truncate(cap)` panicked with
+        // `assertion failed: self.is_char_boundary(new_len)` whenever the
+        // budget fell mid-way through a multi-byte CJK character — every
+        // Chinese-language skill (custom-app-development etc.) that
+        // exceeded the budget crashed the whole turn. The truncated
+        // string must be a valid UTF-8 boundary.
+        let tmp = tempfile::tempdir().unwrap();
+        // English descriptions so the ASCII query matches (the matcher
+        // splits on whitespace), but the *bodies* are CJK — that's the
+        // shape of real Chinese skills, and where the byte-level truncate
+        // used to explode.
+        let pad_line = "自适应应用开发注意事项核心概念实践指南模板示例集成参考。".repeat(4);
+        for slug in ["long-a", "long-b", "long-c"] {
+            let d = tmp.path().join(slug);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(
+                d.join("SKILL.md"),
+                format!(
+                    "---\nname: {slug}\ndescription: long skill {slug}\ntags: [long]\n---\n{pad_line}\n{pad_line}\n"
+                ),
+            )
+            .unwrap();
+        }
+
+        let block = build_active_skills_block(tmp.path(), "show me a long skill please", 2_000)
+            .expect("match expected");
+        assert!(
+            block.contains("truncated at 2000 chars total"),
+            "footer missing"
+        );
+        // The whole block must be valid UTF-8 (would panic if we'd kept
+        // the byte-level truncate) and stay within budget + footer.
+        assert!(std::str::from_utf8(block.as_bytes()).is_ok());
         assert!(block.len() <= 2_000 + 80);
     }
 }

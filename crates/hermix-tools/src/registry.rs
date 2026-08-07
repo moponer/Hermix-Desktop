@@ -1658,6 +1658,6 @@ fn truncate_one_line(desc: &str) -> String {
     if first_line.len() <= 50 {
         first_line.to_string()
     } else {
-        format!("{}…", &first_line[..47])
+        format!("{}…", &first_line[..first_line.floor_char_boundary(47)])
     }
 }
