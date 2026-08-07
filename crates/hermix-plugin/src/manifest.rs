@@ -5,6 +5,7 @@
 //! validation of these manifests.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Plugin manifest parsed from manifest.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,14 +38,14 @@ pub struct PluginManifest {
     #[serde(default = "default_category")]
     pub category: String,
     /// Tags for search/filtering.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_seq")]
     pub tags: Vec<String>,
     /// Window configuration for the plugin's independent window.
     /// Defaults to 600×480 resizable if omitted.
     #[serde(default)]
     pub window_config: WindowConfig,
     /// Permissions required by the plugin (e.g., "fs-read", "fs-write", "net").
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_seq")]
     pub permissions: Vec<String>,
     /// External dependencies.
     #[serde(default)]
@@ -65,6 +66,67 @@ fn default_author() -> String {
 
 fn default_icon() -> String {
     "📦".to_string()
+}
+
+/// Tolerant deserializer for `Vec<String>` fields that the LLM may shape wrong.
+///
+/// Accepts any of:
+/// - absent / null  -> empty vec (matches `#[serde(default)]`)
+/// - a single string -> `[string]`
+/// - an array -> each element coerced to string
+/// - an object -> its keys collected as strings
+///
+/// This prevents the raw `invalid type: map, expected a sequence` serde error
+/// when the LLM writes `permissions`/`tags` as a string or as an object
+/// (e.g. `{"fs-read": true}`) instead of an array.
+fn deserialize_string_or_seq<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::String(s) => Ok(vec![s]),
+        Value::Array(arr) => Ok(arr
+            .into_iter()
+            .map(|v| match v {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                other => other.to_string(),
+            })
+            .collect()),
+        Value::Object(map) => Ok(map.keys().cloned().collect()),
+        other => Err(serde::de::Error::custom(format!(
+            "expected a string, array, or object for a string list; got {other:?}"
+        ))),
+    }
+}
+
+/// Optional variant for `Option<Vec<String>>` fields (e.g. `npm`).
+fn deserialize_opt_string_or_seq<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Null => Ok(None),
+        Value::String(s) => Ok(Some(vec![s])),
+        Value::Array(arr) => Ok(Some(
+            arr.into_iter()
+                .map(|v| match v {
+                    Value::String(s) => s,
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    other => other.to_string(),
+                })
+                .collect(),
+        )),
+        Value::Object(map) => Ok(Some(map.keys().cloned().collect())),
+        other => Err(serde::de::Error::custom(format!(
+            "expected a string, array, or object for an optional string list; got {other:?}"
+        ))),
+    }
 }
 
 /// Window configuration for the plugin's independent window.
@@ -106,7 +168,7 @@ fn default_true() -> bool { true }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginDependencies {
     /// npm packages to install.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_string_or_seq")]
     pub npm: Option<Vec<String>>,
 }
 
@@ -249,4 +311,45 @@ pub fn generate_neutralino_config(manifest: &PluginManifest) -> serde_json::Valu
             }
         }
     })
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `tags`/`permissions` must accept a single string instead of an array.
+    #[test]
+    fn string_tags_permissions_normalized() {
+        let m: PluginManifest = serde_json::from_str(
+            r#"{"id":"a","name":"A","tags":"onetag","permissions":"fs-read"}"#,
+        )
+        .expect("string list fields should be tolerated");
+        assert_eq!(m.tags, vec!["onetag"]);
+        assert_eq!(m.permissions, vec!["fs-read"]);
+    }
+
+    /// `tags`/`permissions` must accept an object whose keys become the list
+    /// (the typical LLM mistake of writing `{"fs-read": true}`).
+    #[test]
+    fn object_tags_permissions_normalized_to_keys() {
+        let m: PluginManifest = serde_json::from_str(
+            r#"{"id":"a","name":"A","permissions":{"fs-read":true,"exec":true}}"#,
+        )
+        .expect("object list fields should be tolerated");
+        // serde_json::Map is BTreeMap-backed → keys iterate in sorted order;
+        // assert order-agnostically since permissions semantics don't care.
+        let mut got = m.permissions;
+        got.sort();
+        assert_eq!(got, vec!["exec", "fs-read"]);
+    }
+
+    /// `npm` (Option<Vec<String>>) must accept a single string.
+    #[test]
+    fn npm_string_normalized_to_some() {
+        let m: PluginManifest =
+            serde_json::from_str(r#"{"id":"a","name":"A","dependencies":{"npm":"lodash"}}"#)
+                .expect("string npm should be tolerated");
+        assert_eq!(m.dependencies.and_then(|d| d.npm), Some(vec!["lodash".to_string()]));
+    }
 }

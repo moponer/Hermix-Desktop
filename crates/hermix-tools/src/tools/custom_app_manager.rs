@@ -91,8 +91,11 @@ impl CustomAppManagerHandler {
 
         let request: CreateAppRequest = serde_json::from_value(params.clone())
             .map_err(|e| {
-                let hint = if e.to_string().contains("expected struct") || e.to_string().contains("expected map") {
+                let msg = e.to_string();
+                let hint = if msg.contains("expected struct") || msg.contains("expected map") {
                     " — manifest 参数必须是 JSON 对象 (如 {\"id\":\"x\",\"name\":\"y\"})，不能是字符串或 XML 子标签。在 XML 工具调用中，请用 <parameter name=\"manifest\">{...JSON...}</parameter> 传递。"
+                } else if msg.contains("expected a sequence") || msg.contains("expected sequence") {
+                    " — tags / permissions / npm 必须是字符串数组 (如 [\"fs-read\",\"exec\"])，不要写成字符串或对象。即使写错也会被自动归一化，但请尽量传数组。"
                 } else {
                     ""
                 };
@@ -170,8 +173,11 @@ impl CustomAppManagerHandler {
             };
             let m: PluginManifest = serde_json::from_value(manifest_val)
                 .map_err(|e| {
-                    let hint = if e.to_string().contains("expected struct") || e.to_string().contains("expected map") {
+                    let msg = e.to_string();
+                    let hint = if msg.contains("expected struct") || msg.contains("expected map") {
                         " — manifest 参数必须是 JSON 对象，不能是字符串或 XML 子标签"
+                    } else if msg.contains("expected a sequence") || msg.contains("expected sequence") {
+                        " — tags / permissions / npm 必须是字符串数组 (如 [\"fs-read\",\"exec\"])，不要写成字符串或对象"
                     } else {
                         ""
                     };
