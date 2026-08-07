@@ -194,17 +194,41 @@ impl ToolHandler for ReadFileHandler {
 
         let limit = params.get("limit").and_then(|v| v.as_u64());
 
-        self.backend
+        let content = self
+            .backend
             .read_file(path, offset, limit)
             .await
-            .map_err(|e| ToolError::from_message(e.to_string()))
-            .map(|content| {
-                // Prefix the content with an absolute-path header so the LLM
-                // (and the front-end artifact extractor) can unambiguously
-                // reference the file later. Format mirrors write_file.
-                let abs = to_absolute_path(path);
-                format!("[file: {abs}]\n{content}")
-            })
+            .map_err(|e| ToolError::from_message(e.to_string()))?;
+
+        // Character-level output cap. The backend's `limit` is line-based
+        // and optional — a huge file (e.g. a multi-MB log) or a file with
+        // very long single lines (minified JS) can otherwise produce a
+        // multi-MB tool_result that blows up the next LLM request's
+        // context and 400s. Cap here so the LLM always gets a bounded
+        // body plus a hint to page through with offset/limit.
+        const MAX_OUTPUT_CHARS: usize = 300_000;
+        let mut body = String::with_capacity(MAX_OUTPUT_CHARS.min(content.len()));
+        let mut chars_read = 0usize;
+        let mut overflow = false;
+        for ch in content.chars() {
+            if chars_read >= MAX_OUTPUT_CHARS {
+                overflow = true;
+                break;
+            }
+            body.push(ch);
+            chars_read += 1;
+        }
+        if overflow {
+            body.push_str(&format!(
+                "\n\n[truncated: file exceeds {MAX_OUTPUT_CHARS} chars, showing the first {MAX_OUTPUT_CHARS}. Use offset/limit to read further chunks]"
+            ));
+        }
+
+        // Prefix the content with an absolute-path header so the LLM
+        // (and the front-end artifact extractor) can unambiguously
+        // reference the file later. Format mirrors write_file.
+        let abs = to_absolute_path(path);
+        Ok(format!("[file: {abs}]\n{body}"))
     }
 
     fn schema(&self) -> ToolSchema {
