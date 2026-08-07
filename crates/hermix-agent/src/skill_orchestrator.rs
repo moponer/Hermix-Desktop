@@ -106,6 +106,15 @@ fn parse_yaml_frontmatter(yaml: &str) -> SkillFrontmatter {
     // following `- item` lines until a non-indented key appears.
     let mut block_list_key: Option<String> = None;
 
+    // Folded-scalar accumulator (YAML `>` / `|`). Multi-line
+    // descriptions in SKILL.md frontmatter use `description: >`
+    // followed by indented lines. Without folding support those lines
+    // are skipped and the description reduces to the literal ">" —
+    // the skill's activation triggers are lost and health scoring
+    // only grants partial description credit.
+    let mut folded_key: Option<String> = None;
+    let mut folded_value = String::new();
+
     for line in yaml.lines() {
         // Strip trailing comments — but only outside quoted values.
         // Simple heuristic: split on " #" or "  #" so URLs and
@@ -115,6 +124,30 @@ fn parse_yaml_frontmatter(yaml: &str) -> SkillFrontmatter {
             None => (line.to_string(), false),
         };
         let line = line.trim_end();
+
+        // Folded-scalar continuation: indented lines (or blank lines
+        // inside the block) accumulate into the pending key's value.
+        if let Some(key) = folded_key.as_ref() {
+            let is_indented = line.starts_with(' ') || line.starts_with('\t');
+            if is_indented || line.is_empty() {
+                if !line.is_empty() {
+                    if !folded_value.is_empty() && !folded_value.ends_with('\n') {
+                        folded_value.push(' ');
+                    }
+                    folded_value.push_str(line.trim());
+                } else {
+                    // Blank line inside a folded block = paragraph break.
+                    folded_value.push('\n');
+                }
+                continue;
+            }
+            // First non-indented line ends the folded block — commit.
+            assign_frontmatter_scalar(&mut fm, key, folded_value.trim());
+            folded_key = None;
+            folded_value.clear();
+            // Fall through: this line is parsed as a fresh key below.
+        }
+
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -141,6 +174,15 @@ fn parse_yaml_frontmatter(yaml: &str) -> SkillFrontmatter {
             let key = key.trim();
             let value = value.trim().trim_matches('"').trim_matches('\'');
 
+            // YAML folded (`>`) / literal (`|`) block start — subsequent
+            // indented lines belong to this key.
+            if value == ">" || value == "|" {
+                folded_key = Some(canonical_frontmatter_key(key));
+                folded_value = String::new();
+                block_list_key = None;
+                continue;
+            }
+
             // Empty value → expect block-list mode on subsequent
             // indented lines.
             if value.is_empty() {
@@ -166,16 +208,14 @@ fn parse_yaml_frontmatter(yaml: &str) -> SkillFrontmatter {
 
             // Scalar value.
             block_list_key = None;
-            match canonical_frontmatter_key(key).as_str() {
-                "name" => fm.name = Some(value.to_string()),
-                "description" => fm.description = Some(value.to_string()),
-                "version" => fm.version = Some(value.to_string()),
-                "author" => fm.author = Some(value.to_string()),
-                "license" => fm.license = Some(value.to_string()),
-                "category" => fm.category = Some(value.to_string()),
-                _ => {} // unknown keys are tolerated (forward-compat)
-            }
+            assign_frontmatter_scalar(&mut fm, key, value);
         }
+    }
+
+    // Flush any folded block that ran to the end of the file without a
+    // terminating non-indented line.
+    if let Some(key) = folded_key {
+        assign_frontmatter_scalar(&mut fm, &key, folded_value.trim());
     }
 
     fm
@@ -219,6 +259,21 @@ fn assign_block_list(fm: &mut SkillFrontmatter, key: &str, items: Vec<String>) {
         "tags" => fm.tags = Some(items),
         "allowed_tools" => fm.allowed_tools = Some(items),
         _ => {}
+    }
+}
+
+/// Assign a scalar frontmatter value to the matching field. Centralized so
+/// both the plain `key: value` path and the folded-block (`key: >` / `|`)
+/// commit path write through the same mapping.
+fn assign_frontmatter_scalar(fm: &mut SkillFrontmatter, key: &str, value: &str) {
+    match canonical_frontmatter_key(key).as_str() {
+        "name" => fm.name = Some(value.to_string()),
+        "description" => fm.description = Some(value.to_string()),
+        "version" => fm.version = Some(value.to_string()),
+        "author" => fm.author = Some(value.to_string()),
+        "license" => fm.license = Some(value.to_string()),
+        "category" => fm.category = Some(value.to_string()),
+        _ => {} // unknown keys are tolerated (forward-compat)
     }
 }
 
@@ -691,6 +746,59 @@ mod tests {
         let (fm, body) = parse_frontmatter(content);
         assert!(fm.name.is_none());
         assert!(body.contains("Just a body"));
+    }
+
+    #[test]
+    fn parse_folded_scalar_description() {
+        // Multi-line `description: >` blocks (custom-app-development,
+        // i-have-adhd, etc.) must fold into a single description string —
+        // previously the parser kept only the literal ">" and the
+        // activation triggers were lost.
+        let content = "\
+---
+name: custom-app-development
+description: >
+  自定义应用开发助手。当用户要求创建桌面应用时使用。
+  务必在以下场景使用：用户说\"做个应用\"、\"打包成 exe\"。
+  或者用户描述需要独立窗口运行的功能需求时。
+tags:
+  - desktop
+---
+# Body";
+        let (fm, body) = parse_frontmatter(content);
+        assert_eq!(fm.name.as_deref(), Some("custom-app-development"));
+        let desc = fm.description.expect("folded description parsed");
+        assert!(
+            !desc.contains('>'),
+            "folded description must not be the literal '>': {desc}"
+        );
+        assert!(desc.contains("自定义应用开发助手"), "got: {desc}");
+        assert!(desc.contains("做个应用"), "got: {desc}");
+        assert!(desc.contains("打包成 exe"), "got: {desc}");
+        // The trigger phrase is now visible to the health scorer.
+        assert!(crate::skill_health::description_has_trigger(&desc));
+        // Folding must not swallow the block-list tags that follow it.
+        let tags = fm.tags.expect("tags parsed");
+        assert_eq!(tags, vec!["desktop".to_string()]);
+        assert!(body.contains("Body"));
+    }
+
+    #[test]
+    fn parse_folded_scalar_at_file_end() {
+        // Folded block running to the end of the frontmatter (no trailing
+        // key to terminate it) must still be committed.
+        let content = "\
+---
+name: end-fold
+description: |
+  line one
+  line two
+---
+# Body";
+        let (fm, _body) = parse_frontmatter(content);
+        let desc = fm.description.expect("folded description at file end");
+        assert!(desc.contains("line one"), "got: {desc}");
+        assert!(desc.contains("line two"), "got: {desc}");
     }
 
     //: agentskills.io open-standard frontmatter

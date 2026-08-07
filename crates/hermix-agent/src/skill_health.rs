@@ -136,7 +136,7 @@ const TRIGGER_PHRASES: &[&str] = &[
 ];
 
 /// Check if the description contains a trigger phrase.
-fn description_has_trigger(desc: &str) -> bool {
+pub(crate) fn description_has_trigger(desc: &str) -> bool {
     let lower = desc.to_lowercase();
     TRIGGER_PHRASES.iter().any(|phrase| lower.contains(phrase))
 }
