@@ -968,9 +968,12 @@ function DeleteConfirmDialog({
             <p className="mt-1 text-[12px] text-text-muted whitespace-pre-wrap leading-relaxed">
               {state.body}
             </p>
+            <p className="mt-2 text-[10.5px] text-text-faint">
+              此操作不可恢复
+            </p>
           </div>
         </div>
-        <div className="flex items-center gap-2.5 px-5 py-4">
+        <div className="flex items-center justify-end gap-2.5 px-5 py-4">
           <button
             type="button"
             onClick={onCancel}
@@ -992,7 +995,6 @@ function DeleteConfirmDialog({
           >
             删除
           </button>
-          <span className="ml-auto text-[10.5px] text-text-faint">此操作不可恢复</span>
         </div>
       </div>
     </div>,
