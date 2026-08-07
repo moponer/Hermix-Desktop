@@ -56,6 +56,11 @@ export interface ApprovalMessageMeta {
    *  confusing "4 minutes left" countdown that's actually
    *  invalid. */
   expiresAt?: number | null;
+  /** LLM-supplied one-line rationale for why this tool call is being
+   *  made (terminal schema `reason`). Surfaced verbatim on the approval
+   *  card so the user can judge intent before deciding. Absent for
+   *  approvals from models that don't fill it or legacy rows. */
+  reason?: string | null;
   /** Frontend-generated id of the assistant message this approval is
    *  visually attached to. The server doesn't enforce this — it's a
    *  hint for "the previous assistant turn ended just before this

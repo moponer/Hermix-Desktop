@@ -137,6 +137,7 @@ impl TerminalHandler {
     async fn request_ws_approval(
         &self,
         effective_cmd: &str,
+        reason: Option<&str>,
         approval_ctx: &TerminalApprovalContext,
     ) -> Option<ApprovalOutcome> {
         //the context is now passed in directly — no mutex
@@ -173,6 +174,7 @@ impl TerminalHandler {
             "tool": "terminal",
             "arguments": {
                 "command": effective_cmd,
+                "reason": reason.unwrap_or(""),
             },
             "risk": "caution",
         }));
@@ -248,6 +250,15 @@ impl ToolHandler for TerminalHandler {
             json!({
                 "type": "string",
                 "description": "The command to execute"
+            }),
+        );
+        props.insert(
+            "reason".into(),
+            json!({
+                "type": "string",
+                "description": "One-sentence explanation of WHY this command is being run and what it does, \
+                                for the user's approval card (e.g. \"安装项目依赖中的 requests 库\"). \
+                                Required whenever the command has side effects — always fill it."
             }),
         );
         props.insert(
@@ -424,8 +435,14 @@ async fn execute_inner(
                 Some(d) => format!("{} (contains {})", effective_cmd, d),
                 None => effective_cmd.to_string(),
             };
+            // LLM-supplied rationale for the approval card (see schema).
+            let reason = params
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
             if let Some(decision) = this
-                .request_ws_approval(&display, approval_ctx)
+                .request_ws_approval(&display, reason, approval_ctx)
                 .await
             {
                 if !matches!(decision, ApprovalOutcome::Approved) {

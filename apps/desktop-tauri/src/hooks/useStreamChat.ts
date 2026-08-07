@@ -240,6 +240,10 @@ interface StreamCallbacks {
      *  countdown feature — the card falls back to a no-countdown
      *  state in that case. */
     expiresAt?: number | null;
+    /** LLM-supplied one-line rationale (terminal schema `reason`),
+     *  surfaced verbatim on the approval card. Absent for models that
+     *  don't fill it or non-terminal tools. */
+    reason?: string;
     /** The chat session this request belongs to. The server doesn't tag
      *  it on the wire, so `useStreamChat` adds it from the local closure
      *  that was passed to `send()`. The approval card manager uses this
@@ -1150,6 +1154,11 @@ export function useStreamChat(activeSessionId: string | null) {
                 const requestId = ev?.request_id ?? ev?.requestId;
                 const tool = ev?.tool ?? "tool";
                 const args = ev?.args ?? ev?.arguments;
+                // LLM-supplied rationale (terminal schema `reason`),
+                // surfaced on the approval card. May be absent (older
+                // models / non-terminal tools) — card falls back to a
+                // generic note.
+                const reason = typeof ev?.reason === "string" ? ev.reason : undefined;
                 // The server's `StreamEvent::RequestApproval` field is
                 // `risk` (snake_case in JSON), but older drafts used
                 // `risk_level` / `riskLevel`. Accept any of them.
@@ -1163,7 +1172,7 @@ export function useStreamChat(activeSessionId: string | null) {
                 if (!requestId) return;
                 if (callbacks.onApprovalRequest) {
                   callbacks
-                    .onApprovalRequest({ requestId, tool, args, riskLevel, expiresAt, sessionId })
+                    .onApprovalRequest({ requestId, tool, args, riskLevel, reason, expiresAt, sessionId })
                     .then((resp) => {
                       // Re-arm idle/stale timers — the agent loop is about
                       // to resume, so the stream watchdog must be active again.

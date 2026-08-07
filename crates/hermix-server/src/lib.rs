@@ -4443,6 +4443,15 @@ async fn handle_ws_stream_send(
                     .and_then(|v| v.as_str())
                     .unwrap_or("caution")
                     .to_string();
+                // LLM-supplied rationale from the tool call's `reason`
+                // parameter (terminal tool schema). Surfaced verbatim on
+                // the approval card so the user knows what the command
+                // is for before deciding.
+                let reason = arguments
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
                 // The previous implementation used `try_send` here,
                 // which silently dropped the event if the bounded
                 // mpsc was momentarily full (channel cap is 128, set
@@ -4490,7 +4499,7 @@ async fn handle_ws_stream_send(
                         tool: tool.clone(),
                         arguments: arguments.clone(),
                         risk: risk.clone(),
-                        reason: None,
+                        reason,
                         // Wall-clock deadline (Unix ms) when the
                         // server will auto-deny this request. Drives
                         // the front-end countdown UI so the user

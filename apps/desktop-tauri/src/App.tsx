@@ -1592,6 +1592,8 @@ streamPhaseRef.current = null;
        *  the *original* server-side deadline (not a fresh
        *  re-derivation, which would briefly lie across a reload). */
       expiresAt?: number | null;
+      /** LLM-supplied one-line rationale (terminal schema `reason`). */
+      reason?: string;
       sessionId: string;
     }): Promise<{ decision: ApprovalDecision }> => {
       const previousAssistantId = currentAssistantIdRef.current;
@@ -1608,6 +1610,7 @@ streamPhaseRef.current = null;
           tool: req.tool,
           args: req.args,
           riskLevel: req.riskLevel,
+          reason: req.reason ?? null,
           decision: null,
           decidedAt: null,
           // Persist the server-emitted deadline so a page reload

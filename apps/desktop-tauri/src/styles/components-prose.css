@@ -1766,6 +1766,29 @@
   white-space: nowrap;
 }
 
+/* LLM-supplied rationale — one line under the head row. */
+.approval-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  border-radius: 8px;
+  padding: 7px 10px;
+  margin-top: 2px;
+}
+.approval-reason svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+}
+.dark .approval-reason {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+}
+
 /* Countdown pill (pending only) */
 .approval-countdown-pill {
   display: inline-flex;
