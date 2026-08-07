@@ -100,6 +100,11 @@ export function MessageBubble({
   if (message.role === "user") return <UserMessage message={message} />;
   if (message.role === "system") return <SystemMessage message={message} />;
   if (message.role === "approval") {
+    // 已决议的审批卡直接消失，不在消息流留痕。
+    // Pending 态才渲染 ApprovalCard。
+    if (message.approval?.decision) {
+      return null;
+    }
     return (
       <ApprovalCard
         message={message}
