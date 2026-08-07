@@ -41,6 +41,40 @@ const BUILTIN_SKILLS: &[(&str, &str)] = &[
     ("hermix/custom-app-development", CUSTOM_APP_SKILL),
 ];
 
+/// Default `SOUL.md` (persona) shipped *inside the binary* via `include_str!`.
+/// On first launch we write it to `<HERMIX_HOME>/SOUL.md` ONLY if that file is
+/// absent — so a fresh install ships with the curated persona, but any user
+/// edit to their SOUL.md is never clobbered on upgrade or re-launch.
+///
+/// To change what new installs ship with, edit `builtin-soul/SOUL.md` in this
+/// crate (NOT the runtime `~/.hermix/SOUL.md`) and rebuild — same single-source
+/// pattern as `BUILTIN_SKILLS`.
+const DEFAULT_SOUL_MD: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/builtin-soul/SOUL.md"
+));
+
+/// Seed `<HERMIX_HOME>/SOUL.md` on first launch if it does not already exist.
+/// Never overwrites an existing file, so user customizations persist across
+/// upgrades. The default content is embedded at compile time, so this works
+/// in both dev and packaged builds without touching the Tauri resource dir.
+fn ensure_default_soul_md(hermix_home: &std::path::Path) {
+    let target = hermix_home.join("SOUL.md");
+    if target.exists() {
+        return; // user already has a SOUL.md — never clobber it
+    }
+    if let Some(parent) = target.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("[Hermix] failed to create HERMIX_HOME {}: {e}", parent.display());
+            return;
+        }
+    }
+    match std::fs::write(&target, DEFAULT_SOUL_MD) {
+        Ok(()) => println!("[Hermix] seeded default SOUL.md to {}", target.display()),
+        Err(e) => eprintln!("[Hermix] failed to write default SOUL.md {}: {e}", target.display()),
+    }
+}
+
 /// Write built-in skills into `skills_dir` on first launch. If the on-disk
 /// SKILL.md has a lower `version` in its YAML frontmatter than the embedded
 /// copy, the file is overwritten — this ensures schema/API changes in the
@@ -406,6 +440,10 @@ pub fn run() {
             } else {
                 eprintln!("[Hermix] cannot resolve resource_dir — bundled skills and loader will not be extracted");
             }
+
+            // 1c. Seed the default SOUL.md (persona) on first launch if the
+            //     user hasn't created one yet. Embedded, so no resource lookup.
+            ensure_default_soul_md(&hermix_home);
 
             let sidecar = Arc::new(Mutex::new(HermixSidecar::new()));
             app.manage(AppState {
