@@ -473,6 +473,7 @@ export function useStreamChat(activeSessionId: string | null) {
   // never settle — the user's previous send would hang forever).
   useEffect(() => {
     return () => {
+      console.log("[WS-CLOSE] site=unmount (组件卸载时仍有在途流，主动关闭 WS)");
       wsRef.current?.close();
       wsRef.current = null;
     };
@@ -727,6 +728,7 @@ export function useStreamChat(activeSessionId: string | null) {
           streamingSessionIdRef.current = null;
           setStreamingSessionId(null);
           setStreamingStatus(null);
+          console.log(`[WS-CLOSE] site=settle reason=${reason ?? "natural-done"}`);
           wsRef.current?.close();
           wsRef.current = null;
           if (reason) stopReason = reason;
@@ -1723,6 +1725,7 @@ export function useStreamChat(activeSessionId: string | null) {
     // Defensive: ensure WS is closed and streaming state is cleared
     // even if settle() somehow didn't run (e.g. settleRef was
     // already nulled by a racing onclose handler).
+    console.log("[WS-CLOSE] site=cancel (用户点击停止的防御性兜底)");
     wsRef.current?.close();
     wsRef.current = null;
     streamingSessionIdRef.current = null;
