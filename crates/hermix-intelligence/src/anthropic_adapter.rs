@@ -647,6 +647,28 @@ pub fn normalize_anthropic_response(
                     .and_then(|n| n.as_str())
                     .unwrap_or("")
                     .to_string();
+                // MiniMax-M3 经 Anthropic 端点返回 tool_use 时，偶发把工具名
+                // 编码成占位字面量 "tool_call"（或 name 留空），真实工具名
+                // 被塞进 input 的顶层 `name`/`tool` 字段（或 input.function.name）。
+                // 这里兜底提取，拿不到才保留原值，交由下游 validator 重试，
+                // 避免会话因工具名退化而直接 finalize 中断。
+                if name.is_empty() || name == "tool_call" {
+                    if let Some(obj) = block.get("input").and_then(|i| i.as_object()) {
+                        for key in ["name", "tool", "function"] {
+                            if let Some(v) = obj.get(key) {
+                                let extracted = if key == "function" {
+                                    v.get("name").and_then(|n| n.as_str())
+                                } else {
+                                    v.as_str()
+                                };
+                                if let Some(n) = extracted {
+                                    name = n.to_string();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
                 if strip_tool_prefix && name.starts_with(MCP_TOOL_PREFIX) {
                     name = name[MCP_TOOL_PREFIX.len()..].to_string();
                 }
