@@ -240,20 +240,21 @@ pub(crate) async fn resolve_pre_dispatch(
                     Some(notify) => {
                         let notified = notify.notified();
                         tokio::pin!(notified);
-                        // Safety-net timeout: 5 minutes. This is NOT the
-                        // approval-card timeout (DEFAULT_APPROVAL_TIMEOUT
-                        // is zero per user request — the user has
-                        // unlimited time to decide). This fires ONLY when
-                        // the `request_approval` event was lost or the
+                        // Safety-net timeout: 24 hours. The user-facing
+                        // approval card has NO timeout (`DEFAULT_APPROVAL_TIMEOUT`
+                        // is zero and the ApprovalRegistry never spawns a
+                        // `TimedOut` task) — the user must click to
+                        // resolve. This safety net fires ONLY when the
+                        // `request_approval` event was lost or the
                         // frontend didn't render the card, so the user
                         // never saw the prompt and the oneshot would
-                        // otherwise park forever. 5 minutes is long
-                        // enough that a real user clicking a real card
-                        // will never hit it, but short enough that a
-                        // stuck agent recovers instead of hanging
-                        // indefinitely.
+                        // otherwise park forever. 24h is long enough
+                        // that no real session would ever hit it, but
+                        // still short enough that a stuck agent
+                        // eventually self-recovers (e.g. an overnight
+                        // abandoned session) instead of leaking tasks.
                         let safety_net = tokio::time::sleep(
-                            std::time::Duration::from_secs(300),
+                            std::time::Duration::from_secs(86_400),
                         );
                         tokio::pin!(safety_net);
                         tokio::select! {
@@ -264,12 +265,12 @@ pub(crate) async fn resolve_pre_dispatch(
                                 tracing::warn!(
                                     tool = %tool_name,
                                     tool_call_id = %id,
-                                    "resolve_pre_dispatch: safety-net timeout (300s) — \
+                                    "resolve_pre_dispatch: safety-net timeout (24h) — \
                                      request_approval event may have been lost or \
                                      frontend didn't render the card; auto-denying \
                                      to unblock the agent",
                                 );
-                                Ok(ApprovalOutcome::TimedOut { timeout_secs: 300 })
+                                Ok(ApprovalOutcome::TimedOut { timeout_secs: 86_400 })
                             }
                         }
                     }
@@ -592,7 +593,7 @@ mod tests {
     async fn awaited_approval_timed_out_maps_to_timed_out() {
         let tc = tc("storage_clean", r#"{"paths":["/tmp/x"]}"#);
         let map = resolve_pre_dispatch(
-            Some(&hook_awaiting(ApprovalOutcome::TimedOut { timeout_secs: 300 })),
+            Some(&hook_awaiting(ApprovalOutcome::TimedOut { timeout_secs: 86_400 })),
             &[tc],
             None,
             None,
