@@ -425,11 +425,30 @@ impl GenericProvider {
         let mut pairing_broken = false; // set when non-tool/assistant appears between pairs
         let before = messages.len();
         let mut dropped_count = 0usize;
+        let mut stripped_call_count = 0usize;
+        // Index into `kept` of the most recent assistant message that
+        // emitted tool_calls — used to strip *unanswered* tool_uses
+        // (see `strip_unanswered_tool_calls` below).
+        let mut last_assistant_idx: Option<usize> = None;
         let mut kept: Vec<Message> = Vec::with_capacity(messages.len());
 
         for msg in messages {
             match msg.role {
                 MessageRole::Assistant => {
+                    // Before resetting the pairing window, strip tool_uses
+                    // from the previous assistant that never received a
+                    // tool result. Strict providers (MiniMax-M3) 400 with
+                    // `(2013) tool call result does not follow tool call`
+                    // not only on stray tool results but also on assistant
+                    // tool_uses left unanswered (a stream that died
+                    // mid-tool-call persists a half-assistant, and the next
+                    // request replays it).
+                    stripped_call_count += Self::strip_unanswered_tool_calls(
+                        &mut kept,
+                        last_assistant_idx,
+                        &pending_call_ids,
+                        &consumed,
+                    );
                     // A new assistant message (with or without tool_calls)
                     // resets the pairing window. Its own tool_calls repopulate
                     // the pending set; any tools from prior cycles that
@@ -445,6 +464,7 @@ impl GenericProvider {
                         }
                     }
                     kept.push(msg);
+                    last_assistant_idx = Some(kept.len() - 1);
                 }
                 MessageRole::Tool => {
                     let cid_opt = msg
@@ -495,18 +515,137 @@ impl GenericProvider {
             }
         }
 
-        if dropped_count > 0 {
+        // Array end: strip tool_uses from the final assistant that never
+        // got their results (same reasoning as the per-assistant pass above).
+        stripped_call_count += Self::strip_unanswered_tool_calls(
+            &mut kept,
+            last_assistant_idx,
+            &pending_call_ids,
+            &consumed,
+        );
+
+        if dropped_count > 0 || stripped_call_count > 0 {
             tracing::warn!(
                 dropped = dropped_count,
+                stripped = stripped_call_count,
                 total = before,
                 kept = kept.len(),
                 "strict-pairing pass: dropped tool messages whose tool_call_id \
-                 doesn't immediately follow a matching assistant tool_use \
+                 doesn't immediately follow a matching assistant tool_use, and \
+                 stripped assistant tool_uses that never received a result \
                  (prevents 400 'tool call result does not follow tool call (2013)' \
                  on MiniMax-M3 and similar strict providers)"
             );
         }
         kept
+    }
+
+    /// Remove `tool_call`s from the most recent assistant message whose IDs
+    /// are still pending but were never consumed by a `tool` result message.
+    ///
+    /// Strict providers (MiniMax-M3) reject *unanswered* tool_uses the same
+    /// way they reject stray tool results — the pairing must be complete in
+    /// both directions. Half-assistant messages (a stream interrupted while
+    /// the model was emitting `tool_calls`, persisted before the tools ran)
+    /// replay on the next request and trip `(2013) tool call result does not
+    /// follow tool call`. Stripping the unanswered calls keeps the request
+    /// valid: the assistant keeps whatever prose it produced, the dangling
+    /// call vanishes, and the next turn re-invokes the tool if needed.
+    ///
+    /// Returns the number of stripped calls (0 when there is nothing to do).
+    fn strip_unanswered_tool_calls(
+        kept: &mut [Message],
+        last_assistant_idx: Option<usize>,
+        pending_call_ids: &std::collections::HashSet<String>,
+        consumed: &std::collections::HashSet<String>,
+    ) -> usize {
+        let Some(ai) = last_assistant_idx else {
+            return 0;
+        };
+        let unanswered: Vec<String> = pending_call_ids
+            .iter()
+            .filter(|id| !consumed.contains(*id))
+            .cloned()
+            .collect();
+        if unanswered.is_empty() {
+            return 0;
+        }
+        let Some(tcs) = kept[ai].tool_calls.as_mut() else {
+            return 0;
+        };
+        let before = tcs.len();
+        tcs.retain(|tc| !unanswered.contains(&tc.id));
+        let stripped = before - tcs.len();
+        if tcs.is_empty() {
+            kept[ai].tool_calls = None;
+        }
+        if stripped > 0 {
+            tracing::debug!(
+                assistant_idx = ai,
+                stripped = stripped,
+                "stripping unanswered assistant tool_calls (no tool result ever arrived)"
+            );
+        }
+        stripped
+    }
+
+    /// Merge consecutive `assistant` messages into one.
+    ///
+    /// Pass 1 (`enforce_strict_tool_pairing`) may drop tool messages whose
+    /// pairing was broken, which can leave two assistant messages adjacent
+    /// in the final array (assistant(tool_use) whose results were dropped,
+    /// directly followed by the next assistant). Some strict providers
+    /// (e.g. Bedrock — see `prompt_assembly::messages_for_api_call`, which
+    /// already merges consecutive *user* messages) reject consecutive
+    /// same-role messages outright. Merging here is the mirror treatment
+    /// for the assistant side and is safe: two adjacent assistants have no
+    /// tool results between them by definition, so concatenating content
+    /// and tool_calls preserves semantics.
+    fn merge_adjacent_assistant_messages(messages: Vec<Message>) -> Vec<Message> {
+        let mut merged: Vec<Message> = Vec::with_capacity(messages.len());
+        let mut merged_count = 0usize;
+        for msg in messages {
+            if msg.role == MessageRole::Assistant {
+                if let Some(last) = merged.last_mut() {
+                    if last.role == MessageRole::Assistant {
+                        // Concatenate content (if the tail one has any).
+                        if let Some(ref c) = msg.content {
+                            if !c.is_empty() {
+                                if let Some(ref mut lc) = last.content {
+                                    lc.push('\n');
+                                    lc.push_str(c);
+                                } else {
+                                    last.content = Some(c.clone());
+                                }
+                            }
+                        }
+                        // Append tail tool_calls to the head one.
+                        if let Some(ref tcs) = msg.tool_calls {
+                            if let Some(ref mut ltc) = last.tool_calls {
+                                ltc.extend(tcs.clone());
+                            } else {
+                                last.tool_calls = Some(tcs.clone());
+                            }
+                        }
+                        // Carry content_parts if the head has none yet.
+                        if last.content_parts.is_none() {
+                            last.content_parts = msg.content_parts.clone();
+                        }
+                        merged_count += 1;
+                        continue;
+                    }
+                }
+            }
+            merged.push(msg);
+        }
+        if merged_count > 0 {
+            tracing::warn!(
+                merged = merged_count,
+                "strict-api pass: merged adjacent assistant messages \
+                 (prevents consecutive same-role rejection)"
+            );
+        }
+        merged
     }
 
     /// Drop `tool` role messages whose `tool_call_id` doesn't match any
@@ -583,6 +722,12 @@ impl GenericProvider {
         // when the IDs do match — pairing is the only thing that matters.
         let messages = Self::enforce_strict_tool_pairing(messages);
 
+        // Pass 2: merge any adjacent assistant messages left behind by
+        // Pass 1's tool-result drops. Strict providers reject consecutive
+        // same-role messages (Bedrock rejects consecutive users; the
+        // assistant side is the mirror case).
+        let messages = Self::merge_adjacent_assistant_messages(messages);
+
         let mut out = Vec::with_capacity(messages.len());
         for msg in &messages {
             let mut api_msg = serde_json::to_value(msg).unwrap_or_else(|_| serde_json::json!({}));
@@ -648,6 +793,22 @@ impl GenericProvider {
                         // Defensive: drop malformed legacy tool_call items that cannot be
                         // converted into OpenAI-compatible {"function": {...}} shape.
                         if function.is_none() {
+                            continue;
+                        }
+                        // Also drop tool_calls whose function name is empty/missing —
+                        // stream_collect filters these on live streams, but replayed
+                        // persisted messages may still carry them, and a strict provider
+                        // 400s on a nameless tool_use.
+                        let fn_name = function
+                            .as_ref()
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("");
+                        if fn_name.is_empty() {
+                            tracing::debug!(
+                                tool_call_id = ?id,
+                                "dropping tool_call with empty function name (legacy persisted message)"
+                            );
                             continue;
                         }
                         let mut stripped = serde_json::Map::new();
@@ -896,7 +1057,7 @@ impl LlmProvider for GenericProvider {
                     }
                 };
 
-                buffer.push_str(&String::from_utf8_lossy(&chunk_bytes));
+                buffer.push_str(&String::from_utf8_lossy(&chunk_bytes).replace("\r\n", "\n"));
 
                 // Process complete SSE events (separated by double newlines)
                 while let Some(event_end) = buffer.find("\n\n") {
@@ -2745,5 +2906,186 @@ mod tests {
         ];
         let out = GenericProvider::enforce_strict_tool_pairing(messages);
         assert_eq!(out.len(), 6, "everything survives (clean pairings)");
+    }
+
+    #[test]
+    fn strict_pairing_strips_unanswered_calls_when_next_assistant_arrives() {
+        // assistant(A) → [no tool(A) result] → assistant(B) → tool(B).
+        // The half assistant's tool_call A never received a result; it must
+        // be stripped so the strict provider does not 400 (2013) on an
+        // unanswered tool_use.
+        let messages = vec![
+            user_msg("do it"),
+            assistant_with_calls(&[("call_a", "read_file")]),
+            // no tool_result("call_a") — stream died after the call was emitted
+            user_msg("continue"),
+            assistant_with_calls(&[("call_b", "write_file")]),
+            tool_result("call_b", "done"),
+        ];
+        let out = GenericProvider::enforce_strict_tool_pairing(messages);
+        assert_eq!(out.len(), 5, "all 5 messages survive");
+        // The first assistant must have its unanswered call_a stripped.
+        let first_assistant = out.iter().find(|m| {
+            m.role == MessageRole::Assistant
+                && m.tool_calls
+                    .as_ref()
+                    .is_some_and(|tcs| tcs.iter().any(|tc| tc.id == "call_a"))
+        });
+        assert!(
+            first_assistant.is_none(),
+            "call_a tool_use must be stripped — it never received a result"
+        );
+        // call_b pairing intact.
+        let last_tool = out.last().expect("last message is tool(B)");
+        assert_eq!(last_tool.tool_call_id.as_deref(), Some("call_b"));
+    }
+
+    #[test]
+    fn strict_pairing_strips_unanswered_calls_at_array_end() {
+        // The final assistant carries tool_calls but the array ends before
+        // any tool result arrives (interrupted turn, persisted before tools
+        // ran). The dangling calls must be stripped on the next request.
+        let messages = vec![
+            user_msg("go"),
+            assistant_with_calls(&[("call_a", "read_file"), ("call_b", "search_files")]),
+            tool_result("call_a", "file-a"),
+            // call_b result never arrived; array ends here.
+        ];
+        let out = GenericProvider::enforce_strict_tool_pairing(messages);
+        assert_eq!(out.len(), 3);
+        let assistant = &out[1];
+        let tcs = assistant.tool_calls.as_ref().expect("tool_calls present");
+        assert_eq!(tcs.len(), 1, "call_b stripped, call_a kept");
+        assert_eq!(tcs[0].id, "call_a");
+        assert_eq!(out[2].tool_call_id.as_deref(), Some("call_a"));
+    }
+
+    #[test]
+    fn strict_pairing_strips_all_calls_when_none_answered() {
+        // Half assistant whose tool_calls were emitted but the whole stream
+        // died — no results at all. tool_calls must become None.
+        let messages = vec![
+            user_msg("go"),
+            assistant_with_calls(&[("call_a", "read_file")]),
+            // array ends, no tool result anywhere
+        ];
+        let out = GenericProvider::enforce_strict_tool_pairing(messages);
+        assert_eq!(out.len(), 2);
+        assert!(
+            out[1].tool_calls.is_none(),
+            "unanswered tool_calls must be removed entirely"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Pass 2: merge_adjacent_assistant_messages
+    // ---------------------------------------------------------------
+
+    fn plain_assistant(text: &str) -> Message {
+        Message {
+            role: MessageRole::Assistant,
+            content: Some(text.into()),
+            content_parts: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+            ephemeral: false,
+        }
+    }
+
+    #[test]
+    fn merge_adjacent_assistants_concatenates_content() {
+        let messages = vec![
+            plain_assistant("first"),
+            plain_assistant("second"),
+            user_msg("after"),
+        ];
+        let out = GenericProvider::merge_adjacent_assistant_messages(messages);
+        assert_eq!(out.len(), 2, "two assistants collapse into one");
+        assert_eq!(out[0].content.as_deref(), Some("first\nsecond"));
+        assert_eq!(out[1].role, MessageRole::User);
+    }
+
+    #[test]
+    fn merge_adjacent_assistants_merges_tool_calls() {
+        let messages = vec![
+            assistant_with_calls(&[("call_a", "read_file")]),
+            assistant_with_calls(&[("call_b", "write_file")]),
+        ];
+        let out = GenericProvider::merge_adjacent_assistant_messages(messages);
+        assert_eq!(out.len(), 1, "two tool-call assistants collapse into one");
+        let tcs = out[0].tool_calls.as_ref().expect("tool_calls preserved");
+        assert_eq!(tcs.len(), 2);
+        assert_eq!(tcs[0].id, "call_a");
+        assert_eq!(tcs[1].id, "call_b");
+    }
+
+    #[test]
+    fn merge_adjacent_assistants_leaves_alternating_untouched() {
+        let messages = vec![
+            user_msg("u1"),
+            plain_assistant("a1"),
+            user_msg("u2"),
+            plain_assistant("a2"),
+        ];
+        let out = GenericProvider::merge_adjacent_assistant_messages(messages);
+        assert_eq!(out.len(), 4, "alternating roles never merge");
+    }
+
+    #[test]
+    fn sanitize_full_pipeline_merges_assistants_after_pairing_drop() {
+        // assistant(A) → user → assistant(B) → tool(A)[dropped by Pass 1]
+        // → assistant(C). Pass 1 drops tool(A) (pairing broken by user),
+        // leaving assistant(B) and assistant(C) adjacent; Pass 2 must
+        // merge them into a single assistant message.
+        let messages = vec![
+            user_msg("go"),
+            assistant_with_calls(&[("call_a", "read_file")]),
+            user_msg("interrupt"),
+            assistant_with_calls(&[("call_b", "write_file")]),
+            tool_result("call_a", "file-a"),
+            plain_assistant("final"),
+        ];
+        let out = GenericProvider::sanitize_messages_for_strict_api(&messages, true);
+        let arr = out.as_array().expect("array of api messages");
+        // Expect: user("go"), assistant(A), user("interrupt"),
+        //         assistant(B + C merged), ... — and NO tool role message.
+        let roles: Vec<_> = arr
+            .iter()
+            .filter_map(|m| m.get("role").and_then(|r| r.as_str()))
+            .collect();
+        let tool_count = roles.iter().filter(|r| **r == "tool").count();
+        assert_eq!(tool_count, 0, "orphan tool result must be dropped");
+        let assistant_idxs: Vec<usize> = roles
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| **r == "assistant")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(assistant_idxs.len(), 2, "two assistant messages remain");
+        // The second assistant carries both call_b tool_call and merged
+        // "final" content.
+        let merged = &arr[assistant_idxs[1]];
+        let tcs = merged
+            .get("tool_calls")
+            .and_then(|t| t.as_array())
+            .expect("merged assistant keeps tool_calls");
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(
+            tcs[0].get("id").and_then(|v| v.as_str()),
+            Some("call_b"),
+            "only call_b survives (call_a's result was dropped)"
+        );
+        assert!(
+            merged
+                .get("content")
+                .and_then(|c| c.as_str())
+                .map(|c| c.contains("final"))
+                .unwrap_or(false),
+            "merged content includes tail assistant text"
+        );
     }
 }

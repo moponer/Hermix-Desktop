@@ -1843,7 +1843,29 @@ self.notify_phase(&LoopPhase::LlmCall, total_turns);
                             // `AgentResult::last_error` so the frontend can
                             // show the real cause instead of a generic banner.
                             let errored = partial.finish_reason.as_deref() == Some("stream_error");
-                            ctx.add_message(partial.message);
+                            // A stream that died mid-tool-call persists a half
+                            // assistant whose tool_calls never ran, so no tool
+                            // result will ever pair with them. Replaying that
+                            // history trips strict providers (MiniMax-M3) with
+                            // 400 "(2013) tool call result does not follow tool
+                            // call". Strip the unexecuted calls here — the
+                            // prose is kept, the tools simply get re-invoked on
+                            // the next turn.
+                            let mut partial_message = partial.message;
+                            if partial_message.tool_calls.is_some() {
+                                let stripped = partial_message
+                                    .tool_calls
+                                    .as_ref()
+                                    .map(|tcs| tcs.len())
+                                    .unwrap_or(0);
+                                partial_message.tool_calls = None;
+                                tracing::warn!(
+                                    stripped = stripped,
+                                    "interrupted stream: discarding unexecuted tool_calls \
+                                     before persisting partial assistant message"
+                                );
+                            }
+                            ctx.add_message(partial_message);
                             return Ok(self.graceful_interrupt_result_with(
                                 &ctx,
                                 total_turns,
