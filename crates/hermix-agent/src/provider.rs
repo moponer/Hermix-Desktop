@@ -388,6 +388,127 @@ impl GenericProvider {
         out
     }
 
+    /// Strict-pairing pass for tool messages: walks the messages in order,
+    /// tracks the most recent assistant message that emitted tool_calls,
+    /// and drops any `tool` role message whose `tool_call_id` is NOT in
+    /// that assistant's call set, OR whose ID was already consumed by
+    /// an earlier sibling tool message in the same assistant pairing.
+    ///
+    /// Unlike `drop_orphan_tool_results` (which only checks global ID
+    /// membership), this enforces the structural rule that strict
+    /// providers like MiniMax-M3 require:
+    ///   assistant(tool_use=[A, B]) → tool(A) → tool(B)
+    /// is valid, but
+    ///   assistant(tool_use=[A, B]) → user("...") → tool(A)
+    /// is rejected with `(2013) tool call result does not follow tool
+    /// call` even though `A` exists in the surviving set — because the
+    /// assistant that emitted `A` no longer immediately precedes the
+    /// tool result that pairs with it. Compressed sessions that splice
+    /// a summary block in between are the typical culprit.
+    ///
+    /// Also drops tool messages with `tool_call_id: None` or empty string,
+    /// because the strict provider rejects anonymous tool results outright
+    /// — we'd rather drop them than 400 the entire request.
+    fn enforce_strict_tool_pairing(messages: Vec<Message>) -> Vec<Message> {
+        // Track the set of `tool_call.id`s emitted by the most recent
+        // assistant that produced tool_calls. Tool messages that follow
+        // must reference one of these IDs. A non-tool, non-assistant
+        // message (user follow-up, system reminder, compressed summary)
+        // sitting between assistant(tool_use) and tool(result) breaks
+        // the pairing per the strict provider's contract, so any
+        // subsequent tool message before a fresh assistant(tool_calls)
+        // is dropped.
+        let mut pending_call_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut consumed: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut pairing_broken = false; // set when non-tool/assistant appears between pairs
+        let before = messages.len();
+        let mut dropped_count = 0usize;
+        let mut kept: Vec<Message> = Vec::with_capacity(messages.len());
+
+        for msg in messages {
+            match msg.role {
+                MessageRole::Assistant => {
+                    // A new assistant message (with or without tool_calls)
+                    // resets the pairing window. Its own tool_calls repopulate
+                    // the pending set; any tools from prior cycles that
+                    // haven't been consumed are considered abandoned.
+                    pending_call_ids.clear();
+                    consumed.clear();
+                    pairing_broken = false;
+                    if let Some(tcs) = msg.tool_calls.as_ref() {
+                        for tc in tcs {
+                            if !tc.id.is_empty() {
+                                pending_call_ids.insert(tc.id.clone());
+                            }
+                        }
+                    }
+                    kept.push(msg);
+                }
+                MessageRole::Tool => {
+                    let cid_opt = msg
+                        .tool_call_id
+                        .as_ref()
+                        .filter(|s| !s.is_empty())
+                        .cloned();
+                    let drop_reason: Option<&'static str> = match cid_opt {
+                        None => Some("missing tool_call_id"),
+                        Some(ref cid)
+                            if pending_call_ids.is_empty()
+                                || !pending_call_ids.contains(cid) =>
+                        {
+                            Some("tool_call_id not in pending assistant tool_calls")
+                        }
+                        Some(ref cid) if consumed.contains(cid) => {
+                            Some("duplicate tool_call_id within same assistant pairing")
+                        }
+                        Some(_) if pairing_broken => {
+                            Some("pairing broken by intervening non-tool/assistant message")
+                        }
+                        _ => None,
+                    };
+                    if let Some(reason) = drop_reason {
+                        dropped_count += 1;
+                        tracing::debug!(
+                            tool_call_id = ?msg.tool_call_id,
+                            reason = reason,
+                            "dropping tool message — fails strict pairing for MiniMax-style providers"
+                        );
+                        continue;
+                    }
+                    if let Some(cid) = cid_opt {
+                        consumed.insert(cid);
+                    }
+                    kept.push(msg);
+                }
+                _ => {
+                    // user / system / any other role. By itself it does NOT
+                    // clear pending — but it DOES mark the prior pairing as
+                    // broken, so any subsequent tool message that hasn't
+                    // already been consumed is dropped. The pairing is
+                    // restored only when a fresh assistant(tool_calls)
+                    // arrives.
+                    pairing_broken = true;
+                    kept.push(msg);
+                }
+            }
+        }
+
+        if dropped_count > 0 {
+            tracing::warn!(
+                dropped = dropped_count,
+                total = before,
+                kept = kept.len(),
+                "strict-pairing pass: dropped tool messages whose tool_call_id \
+                 doesn't immediately follow a matching assistant tool_use \
+                 (prevents 400 'tool call result does not follow tool call (2013)' \
+                 on MiniMax-M3 and similar strict providers)"
+            );
+        }
+        kept
+    }
+
     /// Drop `tool` role messages whose `tool_call_id` doesn't match any
     /// surviving assistant `tool_call.id`. See Pass 0 inside
     /// `sanitize_messages_for_strict_api` for the full rationale (TL;DR:
@@ -448,6 +569,19 @@ impl GenericProvider {
         // so the orphan is fixed before going out, not only on the next
         // compression cycle.
         let messages = Self::drop_orphan_tool_results(messages);
+
+        // Pass 1: enforce strict tool_use ↔ tool_result *adjacency*. Strict
+        // providers (MiniMax-M3) reject bodies whose `tool` role messages
+        // don't immediately follow the matching assistant `tool_use`,
+        // independently of whether the IDs exist anywhere in history. Pass
+        // 0 only filters globally-orphaned IDs; this pass also drops tool
+        // messages whose pairing was broken by a non-tool, non-assistant
+        // message (e.g. a `user` follow-up, or a compressed summary)
+        // sitting between the assistant that emitted the tool_use and
+        // the tool that returned its result. The strict provider's error
+        // is `tool call result does not follow tool call (2013)`, even
+        // when the IDs do match — pairing is the only thing that matters.
+        let messages = Self::enforce_strict_tool_pairing(messages);
 
         let mut out = Vec::with_capacity(messages.len());
         for msg in &messages {
@@ -2422,5 +2556,194 @@ mod tests {
         assert_eq!(converted[0]["name"], "read_file");
         assert_eq!(converted[0]["description"], "Read a file");
         assert!(converted[0].get("input_schema").is_some());
+    }
+
+    // ---------------------------------------------------------------
+    // Strict-pairing tests (Pass 1 of sanitize_messages_for_strict_api).
+    // The MiniMax-M3 provider returns 400 "tool call result does not
+    // follow tool call (2013)" whenever a `tool` role message does not
+    // immediately follow the matching assistant tool_use. Pass 1 walks
+    // history and drops tool messages that violate adjacency.
+    // ---------------------------------------------------------------
+
+    fn assistant_with_calls(calls: &[(&str, &str)]) -> Message {
+        Message {
+            role: MessageRole::Assistant,
+            content: None,
+            content_parts: None,
+            tool_calls: Some(
+                calls
+                    .iter()
+                    .map(|(id, name)| ToolCall {
+                        id: (*id).to_string(),
+                        function: hermix_core::FunctionCall {
+                            name: (*name).to_string(),
+                            arguments: "{}".into(),
+                        },
+                    })
+                    .collect(),
+            ),
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+            ephemeral: false,
+        }
+    }
+
+    fn tool_result(id: &str, content: &str) -> Message {
+        Message {
+            role: MessageRole::Tool,
+            content: Some(content.into()),
+            content_parts: None,
+            tool_calls: None,
+            tool_call_id: Some(id.into()),
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+            ephemeral: false,
+        }
+    }
+
+    fn user_msg(text: &str) -> Message {
+        Message {
+            role: MessageRole::User,
+            content: Some(text.into()),
+            content_parts: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+            ephemeral: false,
+        }
+    }
+
+    #[test]
+    fn strict_pairing_keeps_well_paired_tool_results() {
+        // assistant(A, B) → tool(A) → tool(B)
+        let messages = vec![
+            user_msg("read file"),
+            assistant_with_calls(&[("call_a", "read_file"), ("call_b", "read_file")]),
+            tool_result("call_a", "file-a"),
+            tool_result("call_b", "file-b"),
+        ];
+        let out = GenericProvider::enforce_strict_tool_pairing(messages);
+        assert_eq!(out.len(), 4, "all 4 messages should survive");
+        assert_eq!(out[2].tool_call_id.as_deref(), Some("call_a"));
+        assert_eq!(out[3].tool_call_id.as_deref(), Some("call_b"));
+    }
+
+    #[test]
+    fn strict_pairing_drops_tool_after_intervening_user_message() {
+        // assistant(A) → user("thanks") → tool(A)
+        // Strict providers reject — user between assistant.tool_use and tool
+        // results breaks the pairing.
+        let messages = vec![
+            user_msg("read file"),
+            assistant_with_calls(&[("call_a", "read_file")]),
+            user_msg("thanks"),
+            tool_result("call_a", "file-a"),
+        ];
+        let out = GenericProvider::enforce_strict_tool_pairing(messages);
+        assert_eq!(out.len(), 3, "tool result must be dropped");
+        assert!(out
+            .iter()
+            .all(|m| m.role != MessageRole::Tool || m.tool_call_id.is_none()));
+    }
+
+    #[test]
+    fn strict_pairing_resets_on_new_assistant_message() {
+        // assistant(A) → tool(A) → assistant(B) → tool(B) is the cleanest
+        // case: each pairing resets cleanly.
+        let messages = vec![
+            user_msg("first request"),
+            assistant_with_calls(&[("call_a", "read_file")]),
+            tool_result("call_a", "file-a"),
+            user_msg("second request"),
+            assistant_with_calls(&[("call_b", "read_file")]),
+            tool_result("call_b", "file-b"),
+        ];
+        let out = GenericProvider::enforce_strict_tool_pairing(messages);
+        assert_eq!(out.len(), 6, "both pairings intact");
+    }
+
+    #[test]
+    fn strict_pairing_drops_orphan_id_not_in_any_assistant() {
+        // assistant(A) → tool(A) → tool("orphan_id") — orphan_id is not in
+        // pending set, must be dropped even though it might look paired.
+        let messages = vec![
+            assistant_with_calls(&[("call_a", "read_file")]),
+            tool_result("call_a", "file-a"),
+            tool_result("orphan_id", "from nowhere"),
+        ];
+        let out = GenericProvider::enforce_strict_tool_pairing(messages);
+        assert_eq!(out.len(), 2, "orphan tool result must be dropped");
+        assert_eq!(out[1].tool_call_id.as_deref(), Some("call_a"));
+    }
+
+    #[test]
+    fn strict_pairing_drops_tool_with_missing_id() {
+        // Some persisted sessions have `tool` role messages with no
+        // tool_call_id. Strict providers reject them outright.
+        let messages = vec![
+            assistant_with_calls(&[("call_a", "read_file")]),
+            tool_result("call_a", "file-a"),
+            // tool message with no tool_call_id
+            {
+                let mut m = tool_result("ignored_placeholder", "orphan");
+                m.tool_call_id = None;
+                m
+            },
+        ];
+        let out = GenericProvider::enforce_strict_tool_pairing(messages);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1].tool_call_id.as_deref(), Some("call_a"));
+    }
+
+    #[test]
+    fn strict_pairing_drops_duplicate_id_in_same_pairing() {
+        // assistant(A) → tool(A) → tool(A) — second tool(A) is a duplicate
+        // (e.g. retry storm from a partial stream persistence).
+        let messages = vec![
+            assistant_with_calls(&[("call_a", "read_file")]),
+            tool_result("call_a", "first"),
+            tool_result("call_a", "second"),
+        ];
+        let out = GenericProvider::enforce_strict_tool_pairing(messages);
+        assert_eq!(out.len(), 2, "second tool(A) must be dropped");
+    }
+
+    #[test]
+    fn strict_pairing_preserves_empty_assistant_between_calls() {
+        // assistant(A) → tool(A) → assistant (no tool_calls, content only)
+        // → user("...") → assistant(B) → tool(B)
+        // The empty-content assistant should clear the pending window.
+        let mut empty_assistant = Message {
+            role: MessageRole::Assistant,
+            content: Some("intermediate reply".into()),
+            content_parts: None,
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+            execution_timeline: None,
+            ephemeral: false,
+        };
+        empty_assistant.tool_calls = None;
+        let messages = vec![
+            assistant_with_calls(&[("call_a", "read_file")]),
+            tool_result("call_a", "file-a"),
+            empty_assistant,
+            user_msg("now do x"),
+            assistant_with_calls(&[("call_b", "write_file")]),
+            tool_result("call_b", "done"),
+        ];
+        let out = GenericProvider::enforce_strict_tool_pairing(messages);
+        assert_eq!(out.len(), 6, "everything survives (clean pairings)");
     }
 }
