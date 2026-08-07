@@ -4,7 +4,7 @@ import { describeShellCommand } from "../lib/commandDescribe";
 import {
   ChevronDown, ChevronRight, Terminal, Globe, Wrench,
   AlertCircle, AlertTriangle, CheckCircle2, Loader2, Copy, Check,
-  ShieldCheck, ShieldAlert, HelpCircle, Sparkles, Brain,
+  ShieldCheck, ShieldAlert, HelpCircle, X, Sparkles, Brain,
   FileText, FilePlus, ArrowRight,
   CheckCheck, Search, FolderOpen, Edit3, Trash2, Eye,
   FileSearch, Database, GitBranch, SearchX,
@@ -2353,19 +2353,32 @@ function ApprovalCard({
   const isPending = !meta.decision;
   const approved = meta.decision === "approved";
   const isExpired = meta.decision === "expired";
+  const decided = !isPending;
   const desc = describeToolArgs(meta.tool, meta.args);
 
-  // Follow the `.tw-msg` family (read_file / grep / …) so approval
-  // cards look identical to other tool events in the timeline. Single
-  // row + expandable body. Pending approvals stay open (the user
-  // needs the full command visible to decide); resolved approvals
-  // collapse to one row, which they can re-expand by clicking.
-  const [open, setOpen] = useState(isPending);
-  // When `meta.decision` flips externally (allow/deny click), sync.
-  useEffect(() => { setOpen(isPending); }, [isPending]);
+  // Card state class — drives a *subtle tinted wash* only (see
+  // components-prose.css). The card no longer paints a colored border
+  // or a left accent bar; the decision is signalled by the colored
+  // status pill + icon badge instead. This is the user-feedback fix
+  // for the old "green-bordered box with a 3px left color bar" look.
+  const cardStateClass = decided
+    ? (approved ? "approval-card--ok" : isExpired ? "approval-card--expired" : "approval-card--deny")
+    : "";
 
-  const copyCommand = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  // Risk tint class — drives the title-bar color (see components-prose.css).
+  // Dangerous → red wash, caution → amber wash, anything else → neutral.
+  const riskClass = (meta.riskLevel ?? "").toLowerCase() === "dangerous"
+    ? "is-danger"
+    : (meta.riskLevel ?? "").toLowerCase() === "caution"
+      ? "is-warn"
+      : "";
+
+  // Icon badge bg + content
+  const iconBg = decided
+    ? (approved ? "rgba(75, 122, 94, 0.12)" : isExpired ? "rgba(130, 130, 130, 0.10)" : "rgba(198, 40, 40, 0.10)")
+    : vis.iconBg;
+
+  const copyCommand = () => {
     const text = meta.args && typeof meta.args === "object"
       ? ((meta.args as Record<string, unknown>).command as string | undefined) ?? desc
       : desc;
@@ -2373,113 +2386,106 @@ function ApprovalCard({
       navigator.clipboard.writeText(text).catch(() => {});
     }
   };
-  const handleApprove = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onApprove?.(meta.requestId);
-  };
-  const handleDeny = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onDeny?.(meta.requestId);
-  };
-
-  const IconBadge = approved
-    ? <Check size={12} />
-    : isExpired
-      ? <Clock size={12} />
-      : <Icon size={12} />;
-  const stateAttr = approved
-    ? "ok"
-    : isExpired
-      ? "err"
-      : isPending
-        ? "run"
-        : "pending";
-  const badgeText = approved
-    ? "已允许"
-    : isExpired
-      ? "已超时"
-      : "已拒绝";
-  const resultText = approved
-    ? "操作已继续执行"
-    : isExpired
-      ? "操作已自动取消"
-      : "操作已中止";
 
   return (
-    <div className="tw-msg">
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setOpen((v) => !v)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setOpen((v) => !v);
-          }
-        }}
-        className="tw-msg-row"
-        data-tool-kind="approval"
-        data-state={stateAttr}
-        data-open={open ? "true" : undefined}
-        title={desc}
-      >
-        <span className="tw-msg-icon-tile" style={{ background: vis.iconBg }}>
-          {IconBadge}
+    <div className={`approval-card h-enter ${riskClass} ${cardStateClass}${decided ? " is-resolved" : ""}`}>
+      {/* Title bar — risk-tinted strip separates header from body */}
+      <div className="approval-head">
+        <span className="approval-icon" style={{ background: iconBg }} title={vis.pillLabel}>
+          {decided ? (
+            approved
+              ? <Check size={13} />
+              : isExpired
+                ? <Clock size={13} style={{ color: "var(--color-text-muted, #888)" }} />
+                : <X size={13} />
+          ) : (
+            <Icon size={13} className={vis.iconClass} />
+          )}
         </span>
-        <span className="tw-msg-verb">请求执行</span>
-        <span className="tw-msg-primary">{meta.tool}</span>
-        {desc && <span className="tw-msg-sep">|</span>}
-        {desc && <span className="tw-msg-peek">{desc}</span>}
+        <p className="approval-title">请求执行 <em>{meta.tool}</em></p>
+        <span className="approval-risk">{vis.pillLabel}</span>
+      </div>
 
-        <span className="tw-msg-right">
-          {isPending ? (
-            <>
+      {/* Body */}
+      <div className="approval-body">
+        {/* LLM-supplied rationale (terminal schema `reason`) */}
+        {meta.reason ? (
+          <div className="approval-reason">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+            <span>{meta.reason}</span>
+          </div>
+        ) : null}
+
+        {/* Command (full text, never truncated) */}
+        <div className="approval-cmd-bar">
+          <pre className="approval-cmd">{desc}</pre>
+          <button type="button" className="approval-copy" onClick={copyCommand} title="复制完整内容">
+            复制
+          </button>
+        </div>
+
+        {/* Generic risk note — only when reason is absent; LLM reason
+            already explains intent, no need to add scary boilerplate. */}
+        {!meta.reason ? (
+          <p className="approval-note">执行任意命令，可读写文件系统。仅在你确认命令可信时允许。</p>
+        ) : null}
+
+        {/* Pending: waiting indicator + actions */}
+        {isPending ? (
+          <div className="approval-foot">
+            <p className="approval-wait">
+              <span className="approval-dot" />
+              等待你的决定 · 无超时
+            </p>
+            <div className="approval-btns">
               <button
                 type="button"
-                className="approval-btn approval-btn--deny"
-                onClick={handleDeny}
+                onClick={() => onDeny?.(meta.requestId)}
+                className="approval-btn-deny"
               >
                 拒绝
               </button>
               <button
                 type="button"
-                className="approval-btn approval-btn--allow"
-                onClick={handleApprove}
+                onClick={() => onApprove?.(meta.requestId)}
+                className="approval-btn-allow"
               >
                 允许
               </button>
-            </>
-          ) : (
-            <span className={`tw-msg-badge tw-msg-${approved ? "done" : "err"}-badge`}>
-              {badgeText}
-              <span className="approval-result-tail">· {resultText}</span>
-            </span>
-          )}
-        </span>
+            </div>
+          </div>
+        ) : null}
       </div>
 
-      {open && (
-        <div className="tw-msg-body">
-          {meta.reason && (
-            <div className="approval-reason-row">
-              <span className="approval-reason-label">为什么</span>
-              <span className="approval-reason-text">{meta.reason}</span>
-            </div>
-          )}
-          <div className="approval-cmd-bar">
-            <pre className="approval-cmd">{desc}</pre>
-            <button type="button" className="approval-copy" onClick={copyCommand} title="复制完整命令">
-              复制
-            </button>
-          </div>
-          {!meta.reason && (
-            <p className="tw-msg-note">执行任意命令，可读写文件系统。仅在你确认命令可信时允许。</p>
-          )}
+      {/* Collapsed one-line summary (resolved state) — tool | desc | status | result */}
+      {decided ? (
+        <div className="approval-summary">
+          <span className={`approval-summary-icon approval-summary-icon-${approved ? "ok" : isExpired ? "expired" : "err"}`}>
+            {approved
+              ? <Check size={12} />
+              : isExpired
+                ? <Clock size={12} />
+                : <X size={12} />}
+          </span>
+          <span className="approval-summary-tool">{meta.tool}</span>
+          <span className="approval-summary-desc">{desc}</span>
+          <span className={`approval-summary-badge approval-summary-badge-${approved ? "ok" : isExpired ? "expired" : "err"}`}>
+            {approved ? "已允许" : isExpired ? "已超时" : "已拒绝"}
+          </span>
+          <span className="approval-summary-result">
+            {approved
+              ? "操作已继续执行"
+              : isExpired
+                ? "操作已自动取消"
+                : "操作已中止"}
+          </span>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
+
+// ── Clarify card (role="clarify") ──────────────────────────────────
 // Inlines a question UI for the agent's `clarify` tool. The agent is
 // blocked waiting on the answer; resolving the WS round-trip routes
 // the user's choice back as `clarify_response`.
