@@ -1685,79 +1685,264 @@
    colored status pill, never by painting the card's edges. The old
    left accent bar (.approval-accent) is gone — state is carried by
    the tinted wash + status pill instead. */
+/* ================================================================
+   Approval card — redone (2026-08-07):
+   * Two-zone layout: risk-tinted title bar (header) + body.
+   * Command text is never truncated — full command shown verbatim
+     with a copy button (legacy `.approval-desc` clipped with ellipsis,
+     which silently hid the dangerous part of long commands).
+   * Countdown removed — safety-net timeout is 24h (`cf739ae`), the
+     user must click; no countdown UI.
+   * Decision pills replaced with single `.approval-result` row
+     (status badge + one-line text) for the resolved state.
+   ================================================================ */
 .approval-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
   margin: 4px 0 12px;
-  padding: 12px 14px;
-  /* 审批卡独立于正文气泡成块，收窄到与工具卡一致的宽度，
-     不撑满整个对话列（长命令/长参数时视觉更收敛）。 */
-  max-width: min(520px, 100%);
+  max-width: min(560px, 100%);
   align-self: flex-start;
-  /* 贴合对话卡片语言：圆角对齐代码块/工具卡；层次背景比气泡深一档；
-     用明显 border 取代浮起阴影——对话里所有卡片都不带阴影，一张浮起的
-     白卡嵌在气泡里才会"突兀、跟对话不贴合"。 */
-  border-radius: var(--radius-lg, 8px);
+  border-radius: var(--radius-lg, 12px);
   border: 1px solid var(--color-border-primary, #e4e4e7);
   background: var(--color-bg-secondary, #fafafa);
   overflow: hidden;
-  transition: background 160ms ease, border-color 160ms ease;
+  transition: opacity 160ms ease;
 }
 .dark .approval-card {
-  background: var(--color-bg-secondary, #232328);
   border-color: var(--color-border-primary, #3a3a40);
+  background: var(--color-bg-secondary, #232328);
 }
-.approval-card:hover {
-  border-color: var(--color-border-secondary, #d4d4d8);
-}
-.dark .approval-card:hover {
-  border-color: var(--color-border-secondary, #4a4a52);
-}
+.approval-card.is-done { opacity: 0.92; }
 
-/* Inner content wrapper (the single child now that the accent bar
-   is removed; the card itself owns the padding). */
-.approval-inner {
-  min-width: 0;
-}
-
-/* Header row: icon + body + actions on one line */
+/* Title bar — risk color tints create clear header/body hierarchy */
 .approval-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 28px;
+  gap: 9px;
+  padding: 10px 14px;
+  border-bottom: 0.5px solid var(--color-border-tertiary, rgba(128,128,128,0.15));
+}
+.approval-card.is-danger .approval-head {
+  background: rgba(198, 40, 40, 0.07);
+  border-bottom-color: rgba(198, 40, 40, 0.18);
+}
+.approval-card.is-warn .approval-head {
+  background: rgba(217, 119, 6, 0.07);
+  border-bottom-color: rgba(217, 119, 6, 0.18);
+}
+.dark .approval-card.is-danger .approval-head {
+  background: rgba(198, 40, 40, 0.14);
+  border-bottom-color: rgba(198, 40, 40, 0.28);
+}
+.dark .approval-card.is-warn .approval-head {
+  background: rgba(217, 119, 6, 0.12);
+  border-bottom-color: rgba(217, 119, 6, 0.24);
 }
 
-/* Icon badge — 24×24 rounded square, status-tinted */
 .approval-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
   flex-shrink: 0;
 }
 
-/* Body: tool name + description */
-.approval-body {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
+.approval-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.approval-title em {
+  font-style: normal;
+  font-weight: 400;
+  opacity: 0.72;
+  margin-left: 3px;
 }
 
+.approval-risk {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-secondary);
+}
+
+/* Body zone */
+.approval-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 14px;
+}
+
+/* LLM-supplied rationale — shown above the command so the user
+   reads intent before evidence (the command itself). */
+.approval-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary, #ededee);
+  border-radius: 8px;
+  padding: 8px 11px;
+  margin: 0;
+}
+.dark .approval-reason { background: var(--color-bg-tertiary, #2e2e34); }
+.approval-reason svg { flex-shrink: 0; margin-top: 3px; color: var(--color-text-tertiary); }
+
+/* Command block — full text, no ellipsis, with copy button */
+.approval-cmd-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.approval-cmd {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  background: var(--color-bg-tertiary, #ededee);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: var(--color-text-primary);
+  /* never truncate — legacy bug clipped dangerous commands at ellipsis */
+}
+.dark .approval-cmd { background: var(--color-bg-tertiary, #2e2e34); }
+.approval-copy {
+  flex-shrink: 0;
+  margin-top: 1px;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 0.5px solid var(--color-border-tertiary, rgba(128,128,128,0.15));
+  background: transparent;
+  color: var(--color-text-tertiary, #999);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.approval-copy:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-secondary, rgba(128,128,128,0.3));
+}
+
+.approval-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--color-text-tertiary, #888);
+}
+
+/* Pending state — waiting pulse + buttons */
+.approval-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 4px;
+}
+.approval-wait {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+.approval-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-warning, #d97706);
+  animation: approval-pulse 1.6s ease-in-out infinite;
+}
+@keyframes approval-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .approval-dot { animation: none; opacity: 1; }
+}
+
+.approval-btns { display: flex; gap: 8px; }
+.approval-btn-deny,
+.approval-btn-allow {
+  font-size: 12.5px;
+  font-weight: 500;
+  height: 30px;
+  padding: 0 15px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+.approval-btn-deny {
+  background: transparent;
+  border: 0.5px solid var(--color-border-secondary, rgba(128,128,128,0.3));
+  color: var(--color-text-secondary);
+}
+.approval-btn-allow {
+  border: 0;
+  background: #4b7a5e;
+  color: #fff;
+}
+.approval-btn-deny:hover,
+.approval-btn-allow:hover { opacity: 0.88; }
+
+/* Resolved state — status badge + one-line text */
+.approval-result {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-top: 2px;
+}
+.approval-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.approval-badge.is-ok {
+  background: rgba(75, 122, 94, 0.12);
+  color: #4b7a5e;
+}
+.approval-badge.is-err {
+  background: rgba(198, 40, 40, 0.10);
+  color: #c62828;
+}
+.approval-badge.is-expired {
+  background: var(--color-bg-tertiary, rgba(128,128,128,0.12));
+  color: var(--color-text-secondary);
+}
+.approval-result-text {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* Legacy class shims — kept so any leftover references in the
+   codebase don't error during the migration window; nothing new
+   should reference these. */
+.approval-inner { min-width: 0; }
 .approval-tool {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--color-text-primary);
   white-space: nowrap;
-  letter-spacing: -0.01em;
 }
-
 .approval-desc {
   font-size: 11.5px;
   color: var(--color-text-secondary);
@@ -1765,31 +1950,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-/* LLM-supplied rationale — one line under the head row. */
-.approval-reason {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-tertiary);
-  border-radius: 8px;
-  padding: 7px 10px;
-  margin-top: 2px;
-}
-.approval-reason svg {
-  flex-shrink: 0;
-  margin-top: 2px;
-  color: var(--color-text-tertiary);
-}
-.dark .approval-reason {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-secondary);
-}
-
-/* Countdown pill (pending only) */
 .approval-countdown-pill {
   display: inline-flex;
   align-items: center;

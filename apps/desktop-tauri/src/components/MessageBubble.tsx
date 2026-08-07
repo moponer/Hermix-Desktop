@@ -8,7 +8,7 @@ import {
   FileText, FilePlus, ArrowRight,
   CheckCheck, Search, FolderOpen, Edit3, Trash2, Eye,
   FileSearch, Database, GitBranch, SearchX,
-  Hammer, Bot, Clock, Timer,
+  Hammer, Bot, Clock,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MarkdownBody } from "./MarkdownBody";
@@ -2187,26 +2187,21 @@ function ToolCallsFallback({ calls }: { calls: NonNullable<ChatMessage["tool_cal
 // body). Routing them here gives them a real visual identity that
 // reads as "the agent is asking, not yet answering".
 
-/** Format a millisecond duration as `0m 30s` / `4m 32s`. */
-function formatApprovalCountdown(ms: number): string {
-  const totalSec = Math.max(0, Math.round(ms / 1000));
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return `${m}m ${s.toString().padStart(2, "0")}s`;
-}
-
 /** Live countdown hook — re-renders once per second while the
- *  deadline is still in the future. Returns null when no deadline. */
-function useApprovalCountdown(expiresAt: number | null | undefined): number | null {
-  const [now, setNow] = useState<number>(() => Date.now());
-  useEffect(() => {
-    if (typeof expiresAt !== "number") return;
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [expiresAt]);
-  if (typeof expiresAt !== "number") return null;
-  return Math.max(0, expiresAt - now);
-}
+ *  deadline is still in the future. Returns null when no deadline.
+ *  Removed for the redesigned card (24h safety net, no urgency cue)
+ *  but kept here commented for the next time someone wants it.
+ */
+// function useApprovalCountdown(expiresAt: number | null | undefined): number | null {
+//   const [now, setNow] = useState<number>(() => Date.now());
+//   useEffect(() => {
+//     if (typeof expiresAt !== "number") return;
+//     const id = window.setInterval(() => setNow(Date.now()), 1000);
+//     return () => window.clearInterval(id);
+//   }, [expiresAt]);
+//   if (typeof expiresAt !== "number") return null;
+//   return Math.max(0, expiresAt - now);
+// }
 
 function riskVisual(risk?: string) {
   // Matches the server's `RiskLevel` enum
@@ -2361,12 +2356,6 @@ function ApprovalCard({
   const decided = !isPending;
   const desc = describeToolArgs(meta.tool, meta.args);
 
-  // Live countdown against the server-emitted deadline
-  const remainingMs = useApprovalCountdown(meta.expiresAt);
-  const showCountdown = isPending && typeof remainingMs === "number";
-  const countdownIsDanger =
-    typeof remainingMs === "number" && remainingMs <= 30_000;
-
   // Card state class — drives a *subtle tinted wash* only (see
   // components-prose.css). The card no longer paints a colored border
   // or a left accent bar; the decision is signalled by the colored
@@ -2376,88 +2365,110 @@ function ApprovalCard({
     ? (approved ? "approval-card--ok" : isExpired ? "approval-card--expired" : "approval-card--deny")
     : "";
 
+  // Risk tint class — drives the title-bar color (see components-prose.css).
+  // Dangerous → red wash, caution → amber wash, anything else → neutral.
+  const riskClass = (meta.riskLevel ?? "").toLowerCase() === "dangerous"
+    ? "is-danger"
+    : (meta.riskLevel ?? "").toLowerCase() === "caution"
+      ? "is-warn"
+      : "";
+
   // Icon badge bg + content
   const iconBg = decided
-    ? (approved ? "rgba(16, 185, 129, 0.10)" : isExpired ? "rgba(130, 130, 130, 0.10)" : "rgba(239, 68, 68, 0.10)")
+    ? (approved ? "rgba(75, 122, 94, 0.12)" : isExpired ? "rgba(130, 130, 130, 0.10)" : "rgba(198, 40, 40, 0.10)")
     : vis.iconBg;
 
+  const copyCommand = () => {
+    const text = meta.args && typeof meta.args === "object"
+      ? ((meta.args as Record<string, unknown>).command as string | undefined) ?? desc
+      : desc;
+    if (typeof navigator !== "undefined" && navigator.clipboard && text) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+  };
+
   return (
-    <div className={`approval-card h-enter ${cardStateClass}`}>
-      <div className="approval-inner">
-        {/* Icon + tool row */}
-        <div className="approval-head">
-          <span
-            className="approval-icon"
-            style={{ background: iconBg }}
-            title={vis.pillLabel}
-          >
-            {decided ? (
-              approved
-                ? <Check size={12} className="text-success" />
-                : isExpired
-                  ? <Clock size={12} style={{ color: "var(--color-text-muted, #888)" }} />
-                  : <X size={12} className="text-error" />
-            ) : (
-              <Icon size={12} className={vis.iconClass} />
-            )}
-          </span>
-
-          <div className="approval-body">
-            <span className="approval-tool">{meta.tool}</span>
-            <span className="approval-desc">{desc}</span>
-          </div>
-          {meta.reason ? (
-            <div className="approval-reason">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-              <span>{meta.reason}</span>
-            </div>
-          ) : null}
-
-          {/* Countdown pill (pending only) */}
-          {showCountdown && (
-            <span className={`approval-countdown-pill ${countdownIsDanger ? "is-danger" : ""}`}>
-              <Timer size={10} />
-              {formatApprovalCountdown(remainingMs)}
-            </span>
+    <div className={`approval-card h-enter ${riskClass} ${cardStateClass}`}>
+      {/* Title bar — risk-tinted strip separates header from body */}
+      <div className="approval-head">
+        <span className="approval-icon" style={{ background: iconBg }} title={vis.pillLabel}>
+          {decided ? (
+            approved
+              ? <Check size={13} />
+              : isExpired
+                ? <Clock size={13} style={{ color: "var(--color-text-muted, #888)" }} />
+                : <X size={13} />
+          ) : (
+            <Icon size={13} className={vis.iconClass} />
           )}
+        </span>
+        <p className="approval-title">请求执行 <em>{meta.tool}</em></p>
+        <span className="approval-risk">{vis.pillLabel}</span>
+      </div>
 
-          {/* Right side */}
-          <div className="approval-actions">
-            {decided ? (
-              <span className={`approval-decision ${
-                approved ? "is-ok" : isExpired ? "is-expired" : "is-err"
-              }`}>
-                {approved ? "已允许" : isExpired ? "已超时" : "已拒绝"}
-              </span>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => onDeny?.(meta.requestId)}
-                  className="approval-btn approval-btn--deny"
-                >
-                  拒绝
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onApprove?.(meta.requestId)}
-                  className="approval-btn approval-btn--ok"
-                >
-                  允许
-                </button>
-              </>
-            )}
+      {/* Body */}
+      <div className="approval-body">
+        {/* LLM-supplied rationale (terminal schema `reason`) */}
+        {meta.reason ? (
+          <div className="approval-reason">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+            <span>{meta.reason}</span>
           </div>
+        ) : null}
+
+        {/* Command (full text, never truncated) */}
+        <div className="approval-cmd-bar">
+          <pre className="approval-cmd">{desc}</pre>
+          <button type="button" className="approval-copy" onClick={copyCommand} title="复制完整内容">
+            复制
+          </button>
         </div>
 
-        {/* Footer text for resolved state */}
-        {decided && (
-          <div className="approval-footer">
-            {approved
-              ? "操作已继续执行"
-              : isExpired
-                ? "审批超时，操作已被自动取消；如仍想执行，请重新发起"
-                : "操作已中止"}
+        {/* Generic risk note — only when reason is absent; LLM reason
+            already explains intent, no need to add scary boilerplate. */}
+        {!meta.reason ? (
+          <p className="approval-note">执行任意命令，可读写文件系统。仅在你确认命令可信时允许。</p>
+        ) : null}
+
+        {/* Pending: waiting indicator + actions */}
+        {isPending ? (
+          <div className="approval-foot">
+            <p className="approval-wait">
+              <span className="approval-dot" />
+              等待你的决定 · 无超时
+            </p>
+            <div className="approval-btns">
+              <button
+                type="button"
+                onClick={() => onDeny?.(meta.requestId)}
+                className="approval-btn-deny"
+              >
+                拒绝
+              </button>
+              <button
+                type="button"
+                onClick={() => onApprove?.(meta.requestId)}
+                className="approval-btn-allow"
+              >
+                允许
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Resolved: status badge + one-line result */
+          <div className="approval-result">
+            <span className={`approval-badge ${
+              approved ? "is-ok" : isExpired ? "is-expired" : "is-err"
+            }`}>
+              {approved ? "已允许" : isExpired ? "已超时" : "已拒绝"}
+            </span>
+            <span className="approval-result-text">
+              {approved
+                ? "操作已继续执行"
+                : isExpired
+                  ? "审批超时，操作已被自动取消；如仍想执行，请重新发起"
+                  : "操作已中止"}
+            </span>
           </div>
         )}
       </div>
