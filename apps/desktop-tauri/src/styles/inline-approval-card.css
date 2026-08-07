@@ -515,6 +515,10 @@
 }
 
 /* ── §6. Highlight ring (clicking the toast scrolls and flashes) ── */
+.msg-card.approval-card {
+  /* 内嵌审批卡同样收窄到 520px，与 MessageBubble 版审批卡对齐。 */
+  max-width: min(520px, 100%);
+}
 .approval-card.is-highlighted,
 .msg-card.approval-card.is-highlighted {
   animation: approval-highlight-flash 2.4s ease-out;

@@ -1135,6 +1135,17 @@ export function useStreamChat(activeSessionId: string | null) {
                 approvalPending = true;
                 if (idleTimeout !== null) { clearTimeout(idleTimeout); idleTimeout = null; }
                 if (staleStreamTimer !== null) { clearTimeout(staleStreamTimer); staleStreamTimer = null; }
+                // The agent loop is paused waiting for the user's click, but
+                // the turn's `done` event only arrives after the approval
+                // resolves — so `streamingSessionId` would otherwise stay
+                // set and ChatView keeps rendering a "正在思考…" bubble next
+                // to the approval card. The approval card itself IS the
+                // waiting state; clear the streaming placeholder now and let
+                // a fresh stream-start event (if the loop continues) re-arm
+                // it later.
+                streamingSessionIdRef.current = null;
+                setStreamingSessionId(null);
+                setStreamingStatus(null);
                 const ev = data?.event ?? data;
                 const requestId = ev?.request_id ?? ev?.requestId;
                 const tool = ev?.tool ?? "tool";
