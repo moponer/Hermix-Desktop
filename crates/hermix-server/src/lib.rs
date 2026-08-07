@@ -5355,16 +5355,38 @@ async fn handle_ws_stream_send(
                     let elapsed_ms = agent_task_started.elapsed().as_millis();
                     let ws_was_disconnected = ws_disconnected_for_task
                         .load(std::sync::atomic::Ordering::SeqCst);
-                    tracing::warn!(
-                        session = %session_id_clone,
-                        error = %e,
-                        elapsed_ms = elapsed_ms,
-                        ws_was_disconnected = ws_was_disconnected,
-                        "Done event failed to send — client may not have received terminal event. \
-                         If ws_was_disconnected=true, the WS closed before the agent finished \
-                         (client disconnect or network drop). If false, the agent finished but \
-                         the mpsc channel was already closed by the forward loop (race)."
-                    );
+                    // Log level reflects the diagnostic interest:
+                    //   * WS already closed (client disconnect / network
+                    //     drop / laptop sleep) → the agent finished its
+                    //     turn but no one was listening. The next time
+                    //     the client reconnects they get the persisted
+                    //     messages anyway. This is *expected* during
+                    //     background runs, so log at debug to avoid
+                    //     log spam on every dormant session.
+                    //   * WS still open (ws_was_disconnected=false) →
+                    //     the mpsc channel was closed by the forward
+                    //     loop while the WS itself was still up — that's
+                    //     a genuine race worth surfacing at WARN.
+                    if ws_was_disconnected {
+                        tracing::debug!(
+                            session = %session_id_clone,
+                            error = %e,
+                            elapsed_ms = elapsed_ms,
+                            "Done event missed — client already disconnected, \
+                             persisted transcript still reaches them on next reconnect"
+                        );
+                    } else {
+                        tracing::warn!(
+                            session = %session_id_clone,
+                            error = %e,
+                            elapsed_ms = elapsed_ms,
+                            ws_was_disconnected = ws_was_disconnected,
+                            "Done event failed to send — client may not have received terminal event. \
+                             If ws_was_disconnected=true, the WS closed before the agent finished \
+                             (client disconnect or network drop). If false, the agent finished but \
+                             the mpsc channel was already closed by the forward loop (race)."
+                        );
+                    }
                 }
             }
             Err(e) => {
