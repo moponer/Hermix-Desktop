@@ -797,7 +797,48 @@ fn build_stable_layer(
         }
     }
 
-    let rendered = builder.build().to_string();
+    let mut rendered = builder.build().to_string();
+
+    // ★ Protocol-completeness: inline the five required section markers
+    // into the stable layer itself. Without this, every fresh process /
+    // cache miss produces a prompt with zero `### Identity`-style markers
+    // and the SectionGate audit patches all five in (WARN
+    // "SectionGate auto-patched 5 missing required sections" + markers
+    // appended at the prompt tail, growing the prompt every rebuild).
+    // Inlining mirrors `Section::default_body()` but with the real
+    // per-turn facts (tool presence / workspace) so the model is never
+    // told "no tools are active" when tools ARE available.
+    {
+        use crate::context::Section;
+        let has_tools = !tool_schemas.is_empty();
+        let has_workspace = config
+            .workspace
+            .as_deref()
+            .map(str::trim)
+            .map(|w| !w.is_empty())
+            .unwrap_or(false);
+        let protocol = [
+            Section::Identity.default_body().to_string(),
+            if has_tools {
+                "### Active tools\nSee the active tools list above.".to_string()
+            } else {
+                Section::ToolList.default_body().to_string()
+            },
+            if has_tools {
+                "### Tool enforcement\nTools are active. Prefer tool calls over prose when action is required.".to_string()
+            } else {
+                Section::ToolEnforce.default_body().to_string()
+            },
+            if has_workspace {
+                "### Working directory\nSee the Active Workspace block above.".to_string()
+            } else {
+                Section::WorkingDir.default_body().to_string()
+            },
+            Section::Timestamp.default_body().to_string(),
+        ]
+        .join("\n\n");
+        rendered.push_str(&format!("\n\n{protocol}"));
+    }
 
     tracing::debug!(
         target: "hermix.prompt_cache",
@@ -1095,6 +1136,20 @@ mod tests {
             )
         };
         assert!(!stable1.is_empty(), "cached stable layer must be non-empty");
+        // Regression: the stable layer must inline the protocol markers so
+        // SectionGate never reports `patched=5` on a fresh cache miss.
+        for marker in [
+            "### Identity",
+            "### Active tools",
+            "### Tool enforcement",
+            "### Working directory",
+            "### Current time",
+        ] {
+            assert!(
+                stable1.contains(marker),
+                "stable layer must inline protocol marker {marker:?} (SectionGate would patch otherwise)"
+            );
+        }
 
         // Second call with same config: hit → reuses cached stable layer.
         let prompt2 = build_system_prompt(&cfg, &slot, None, "", &[], &cfg.model, 0);
