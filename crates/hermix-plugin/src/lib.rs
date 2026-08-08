@@ -552,6 +552,24 @@ impl PluginManager {
         Ok(())
     }
 
+    /// 测试版 / dev 运行：构建单文件 html，用 `hx-shell.exe --html <path>` 直接加载。
+    /// 不重新打包单 exe、不在 exe 尾部拼数据，因此不会触发 Defender 对
+    /// 「单文件打包」的结构型误报（Behavior:Win32/DefenseEvasion.A!ml）。
+    pub async fn run_dev_plugin(&self, id: &str) -> Result<(), PluginError> {
+        let entry = self
+            .get_plugin(id)
+            .ok_or_else(|| PluginError::NotFound(id.to_string()))?;
+        if entry.index_html.is_none() {
+            return Err(PluginError::PackagingFailed(
+                "app missing index.html, cannot run".into(),
+            ));
+        }
+        self.packager
+            .run_dev(&entry.dir, &entry.manifest.id)
+            .map_err(|e| PluginError::ExecutionFailed(format!("启动测试版失败: {e}")))?;
+        Ok(())
+    }
+
     /// Get the plugins directory path.
     pub fn plugins_dir(&self) -> &Path {
         &self.plugins_dir

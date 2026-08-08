@@ -4,7 +4,13 @@
 
 //! hx-shell — 极简 WebView2 应用壳（基于 wry）
 //!
-//! 单文件模式：自身 exe 尾部带 [icon?][len:8LE][html][len:8LE][MAGIC:HXAPP1]
+//! 单文件（打包）模式：HTML 与图标作为 PE 资源 (RT_RCDATA) 嵌入 exe，
+//! 取代旧版「exe 末尾拼接 payload」（该结构会触发 Defender 误报）。
+//! 旧版 EOF 尾部格式仍作兜底：
+//!   [icon?][len:8LE][html][len:8LE][MAGIC:HXAPP1]
+//!
+//! 测试版（dev）模式：启动时传 `--html <path>` 直接加载外部 html 文件，
+//! 不读 exe 内 payload、不落单 exe，便于开发期快速预览。
 //!
 //! 绑定（页面端）：
 //!   window.hx.*  — 文档化公开 API（writeFile/readFile/getInfo/exec/...）
@@ -41,6 +47,13 @@ const MAGIC: &[u8] = b"HXAPP1";
 
 pub const BUILD_PROBE: &str = "BUILD_PROBE_2026_DC_V7";
 
+// 自定义应用 PE 资源 (RT_RCDATA 整数 id)，与 hermix_plugin::icon_library 约定一致。
+// 取代旧版「exe 末尾拼接 payload」：尾部附加大块数据会触发 Defender
+// Behavior:Win32/DefenseEvasion.A!ml 误报（被识别为 packer/cryptor 重叠数据）。
+const RT_RCDATA: windows_sys::core::PCWSTR = 10u16 as *const u16;
+const RES_HXAPP: u16 = 1000; // html payload
+const RES_HXICON: u16 = 1001; // 图标 PNG/SVG
+
 // ------------------------------------------------------------------
 // 调试日志（写 exe 同目录 hx-shell.log）
 // ------------------------------------------------------------------
@@ -57,13 +70,62 @@ fn hx_log(msg: &str) {
 }
 
 // ------------------------------------------------------------------
-// 自读尾部 payload（单文件模式）
+// 从当前 exe 的 PE 资源 (RT_RCDATA) 读取自定义应用 payload / 图标。
+// 取代旧版「exe 末尾拼接 payload」：尾部附加大块数据正是 Defender
+// Behavior:Win32/DefenseEvasion.A!ml 的结构型触发点。打包器用
+// hermix_plugin::icon_library::embed_app_payload 写入同名资源。
+// ------------------------------------------------------------------
+#[cfg(windows)]
+fn read_pe_resource(id: u16) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Foundation::HMODULE;
+    use windows_sys::Win32::System::LibraryLoader::{
+        FindResourceW, GetModuleHandleW, LoadResource, LockResource, SizeofResource,
+    };
+    unsafe {
+        let module: HMODULE = GetModuleHandleW(std::ptr::null());
+        if module == 0 {
+            return None;
+        }
+        let res = FindResourceW(module, id as *const u16, RT_RCDATA);
+        if res == 0 {
+            return None;
+        }
+        let hglob = LoadResource(module, res);
+        if hglob.is_null() {
+            return None;
+        }
+        let size = SizeofResource(module, res);
+        if size == 0 {
+            return None;
+        }
+        let ptr = LockResource(hglob);
+        if ptr.is_null() {
+            return None;
+        }
+        Some(std::slice::from_raw_parts(ptr as *const u8, size as usize).to_vec())
+    }
+}
+
+#[cfg(not(windows))]
+fn read_pe_resource(_id: u16) -> Option<Vec<u8>> {
+    None
+}
+
+// ------------------------------------------------------------------
+// 自读尾部 payload（单文件模式，PE 资源未命中时的兜底）
 // 格式：
 //   旧版：[html][html_len:8LE][MAGIC]
 //   新版(有图标)：[icon_png|svg][icon_len:8LE][html][html_len:8LE][MAGIC]
 // 通过 icon_len 段是否存在判断。
 // ------------------------------------------------------------------
 fn read_self_payload() -> Option<Vec<u8>> {
+    // 优先 PE 资源 (RT_RCDATA 1000)，结构合法，不触发 Defender 尾部探测
+    if let Some(v) = read_pe_resource(RES_HXAPP) {
+        if !v.is_empty() {
+            return Some(v);
+        }
+    }
+    // 兜底：旧版 exe 末尾拼接 payload
     let self_exe = std::env::current_exe().ok()?;
     let bytes = std::fs::read(&self_exe).ok()?;
     if bytes.len() < 14 {
@@ -87,6 +149,24 @@ fn read_self_payload() -> Option<Vec<u8>> {
 /// - PNG 段（`\x89PNG` 开头）→ 内置极简 PNG 解码器
 /// - SVG 段（`<svg` / `<?xml` 开头）→ resvg 渲染为 RGBA
 fn read_self_icon() -> Option<(Vec<u8>, u32, u32)> {
+    // 优先 PE 资源 (RT_RCDATA 1001)，打包器写入的图标 PNG/SVG
+    if let Some(icon_bytes) = read_pe_resource(RES_HXICON) {
+        if !icon_bytes.is_empty() {
+            let looks_svg = icon_bytes
+                .iter()
+                .skip_while(|b| b.is_ascii_whitespace())
+                .take(1)
+                .next()
+                .copied()
+                == Some(b'<');
+            return if looks_svg {
+                decode_svg_to_rgba(std::str::from_utf8(&icon_bytes).ok()?)
+            } else {
+                decode_png_to_rgba(&icon_bytes)
+            };
+        }
+    }
+    // 兜底：旧版 exe 末尾拼接 icon 段
     let self_exe = std::env::current_exe().ok()?;
     let bytes = std::fs::read(&self_exe).ok()?;
     if bytes.len() < 22 { return None; } // 至少 2*8 + 6 = 22
@@ -880,6 +960,14 @@ fn hxfile_handler(_webview_id: &str, request: Request<Vec<u8>>) -> Response<Cow<
 // 入口
 // ------------------------------------------------------------------
 fn main() -> wry::Result<()> {
+    // --html <path>：直接加载外部 html 文件（测试版 / dev 模式），不读 exe 内 payload、
+    // 不在 exe 尾部拼数据，因此不会触发 Defender 对「单文件打包」的结构型误报。
+    let args: Vec<String> = std::env::args().collect();
+    let html_arg: Option<String> = args
+        .iter()
+        .position(|a| a == "--html")
+        .and_then(|i| args.get(i + 1).cloned());
+
     // Panic hook：GUI 子系统下没有 stderr，用 MessageBox 显示崩溃信息
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("hx-shell 崩溃\n\n{}", info);
@@ -1143,7 +1231,13 @@ fn main() -> wry::Result<()> {
         "#);
 
     // 页面 HTML：单文件模式用尾部 payload，开发模式读外部 resources/index.html
-    let html_source: String = if let Some(p) = payload {
+    let html_source: String = if let Some(p) = &html_arg {
+        // 测试版 / dev 模式：直接加载外部 html 文件，不落单 exe、不拼 payload
+        hx_log(&format!("dev mode (--html): loading {}", p));
+        std::fs::read_to_string(p).unwrap_or_else(|e| {
+            format!("<!DOCTYPE html><html><body><h1 style='color:red'>--html 加载失败: {e}</h1></body></html>")
+        })
+    } else if let Some(p) = payload {
         String::from_utf8_lossy(&p).to_string()
     } else {
         let fp = res_dir.join("index.html");

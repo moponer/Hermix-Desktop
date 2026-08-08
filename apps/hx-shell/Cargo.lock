@@ -1313,6 +1313,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "tao",
+ "windows-sys 0.52.0",
  "wry",
 ]
 

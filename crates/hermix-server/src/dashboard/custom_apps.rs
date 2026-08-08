@@ -237,34 +237,24 @@ pub async fn run_app(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let manager = get_manager(&state)?;
 
-    // Build first so the run reflects the latest source (dev/test loop).
-    manager.package_plugin(&id).await.map_err(|e| {
+    // 测试版 / dev 运行：构建单文件 html 后用 `hx-shell --html` 直接加载，
+    // 不重新打包单 exe（打包走 /package 接口）。反映最新源码，便于开发期
+    // 预览，且不会产生触发 Defender 误报的单文件打包结构。
+    manager.run_dev_plugin(&id).await.map_err(|e| {
         let status = match &e {
             hermix_plugin::PluginError::LoaderNotFound(_) => StatusCode::SERVICE_UNAVAILABLE,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        (
-            status,
-            Json(json!({ "error": format!("编译应用失败: {e}") })),
-        )
-    })?;
-
-    // Launch the packaged exe (model-agnostic: spawns dist/<id>.exe).
-    manager.run_plugin(&id).await.map_err(|e| {
-        let status = match &e {
             hermix_plugin::PluginError::NotFound(_) => StatusCode::NOT_FOUND,
-            hermix_plugin::PluginError::LoaderNotFound(_) => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (
             status,
-            Json(json!({ "error": format!("启动应用失败: {e}") })),
+            Json(json!({ "error": format!("启动测试版失败: {e}") })),
         )
     })?;
 
     Ok(Json(json!({
         "success": true,
-        "message": format!("应用 '{id}' 已启动"),
+        "message": format!("应用 '{id}' 测试版已启动"),
     })))
 }
 

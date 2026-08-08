@@ -15,6 +15,7 @@ opt-level = 1
 [dependencies]
 wry = { version = "0.55.1", features = ["protocol"] }
 tao = "0.35.3"
+windows-sys = { version = "0.52", features = ["Win32_System_LibraryLoader", "Win32_Foundation"] }
 serde_json = "1"
 http = "1"
 flate2 = "1"

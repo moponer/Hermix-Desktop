@@ -255,6 +255,129 @@ pub fn generate_icon_resources(
 /// `RT_GROUP_ICON` 在 windows-sys 0.52 未导出 (它是 MAKEINTRESOURCE(14))。
 const RT_GROUP_ICON: windows_sys::core::PCWSTR = 14u16 as *const u16;
 
+/// `RT_RCDATA` 在 windows-sys 0.52 未导出 (它是 MAKEINTRESOURCE(10))。
+const RT_RCDATA: windows_sys::core::PCWSTR = 10u16 as *const u16;
+
+/// 自定义应用资源名 (RT_RCDATA 整数 id)。
+const RES_HXAPP: u16 = 1000; // html payload
+const RES_HXICON: u16 = 1001; // 窗口标题栏图标 PNG
+
+/// 把自定义应用的 HTML 与图标 PNG 作为 PE 资源 (RT_RCDATA) 嵌入 exe。
+///
+/// 取代旧的「exe 末尾拼接 payload」方式：尾部附加大块数据正是 Defender
+/// `Behavior:Win32/DefenseEvasion.A!ml` 的结构型触发点（被识别为 packer/cryptor
+/// 重叠数据）。改为正规资源节后结构合法；若再配代码签名，信誉触发也消失。
+///
+/// 仅改资源节，不动代码/清单。同 id 重复写入会替换旧值。
+/// `BeginUpdateResourceW(path, FALSE)` 保留 loader 原有资源（含 RT_GROUP_ICON 任务栏图标）。
+#[cfg(windows)]
+pub fn embed_app_payload(
+    exe_path: &Path,
+    html: &[u8],
+    icon_png: Option<&[u8]>,
+) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{BOOL, FALSE, HANDLE, TRUE};
+    use windows_sys::Win32::System::LibraryLoader::{
+        BeginUpdateResourceW, EndUpdateResourceW, UpdateResourceW,
+    };
+
+    let path_w: Vec<u16> = exe_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // 保留现有资源 (FALSE)，只增/改 HXAPP/HXICON。
+    let h: HANDLE = unsafe { BeginUpdateResourceW(path_w.as_ptr(), FALSE) };
+    if h == 0 {
+        return Err(format!(
+            "BeginUpdateResourceW 失败: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let write = |h: HANDLE, name: u16, data: &[u8]| -> Result<(), String> {
+        let ok: BOOL = unsafe {
+            UpdateResourceW(
+                h,
+                RT_RCDATA,
+                name as *const u16,
+                0,
+                data.as_ptr() as *const core::ffi::c_void,
+                data.len() as u32,
+            )
+        };
+        if ok == FALSE {
+            let _ = unsafe { EndUpdateResourceW(h, TRUE) };
+            Err(format!(
+                "UpdateResourceW(name={name}) 失败: {}",
+                std::io::Error::last_os_error()
+            ))
+        } else {
+            Ok(())
+        }
+    };
+
+    if let Err(e) = write(h, RES_HXAPP, html) {
+        let _ = unsafe { EndUpdateResourceW(h, TRUE) };
+        return Err(e);
+    }
+    if let Some(icon) = icon_png {
+        if let Err(e) = write(h, RES_HXICON, icon) {
+            let _ = unsafe { EndUpdateResourceW(h, TRUE) };
+            return Err(e);
+        }
+    }
+
+    let ok: BOOL = unsafe { EndUpdateResourceW(h, FALSE) }; // 提交
+    if ok == FALSE {
+        return Err(format!(
+            "EndUpdateResourceW 失败: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+/// 从当前 exe 的 PE 资源 (RT_RCDATA) 读取自定义应用 payload / 图标。
+/// 找不到（未打包 / 非 Windows）返回 None，调用方回退到 EOF 尾部或默认值。
+#[cfg(windows)]
+pub fn read_app_resource(id: u16) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Foundation::HMODULE;
+    use windows_sys::Win32::System::LibraryLoader::{
+        FindResourceW, GetModuleHandleW, LoadResource, LockResource, SizeofResource,
+    };
+
+    unsafe {
+        let module: HMODULE = GetModuleHandleW(std::ptr::null());
+        if module == 0 {
+            return None;
+        }
+        let res = FindResourceW(module, id as *const u16, RT_RCDATA);
+        if res == 0 {
+            return None;
+        }
+        let hglob = LoadResource(module, res);
+        if hglob.is_null() {
+            return None;
+        }
+        let size = SizeofResource(module, res);
+        if size == 0 {
+            return None;
+        }
+        let ptr = LockResource(hglob);
+        if ptr.is_null() {
+            return None;
+        }
+        Some(std::slice::from_raw_parts(ptr as *const u8, size as usize).to_vec())
+    }
+}
+
+#[cfg(not(windows))]
+pub fn read_app_resource(_id: u16) -> Option<Vec<u8>> {
+    None
+}
+
 /// 给已复制出的 `.exe` 打内嵌图标补丁 (仅 Windows)。
 ///
 /// 只改资源节, 不碰代码。即便失败也只返回 Err, 调用方据此告警,

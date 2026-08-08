@@ -51,6 +51,8 @@ pub enum HxPackError {
     EsbuildFailed(String),
     #[error("React UMD 缺失: {0}")]
     ReactUmMissing(String),
+    #[error("启动失败: {0}")]
+    LaunchFailed(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -252,17 +254,24 @@ impl HxShellPackager {
         std::fs::create_dir_all(&dist_dir)?;
 
         let exe_path = dist_dir.join(format!("{id}.exe"));
-        let mut out = shell;
-        // payload trailer: [icon_png?][icon_len:8LE][html][html_len:8LE][MAGIC]
-        // 壳 read_self_icon 会自动检测前导 icon 段
-        if let Some(icon) = icon_png.as_ref() {
-            out.extend_from_slice(icon);
-            out.extend_from_slice(&(icon.len() as u64).to_le_bytes());
+        // 先写出原始 loader 壳，再把 HTML + 图标 PNG 作为 PE 资源 (RT_RCDATA)
+        // 嵌入。取代「exe 末尾拼接 payload」：尾部附加大块数据正是 Defender
+        // Behavior:Win32/DefenseEvasion.A!ml 的结构型触发点（被识别为
+        // packer/cryptor 重叠数据）。改为正规资源节后结构合法。
+        std::fs::write(&exe_path, &shell)?;
+        if let Err(e) = crate::icon_library::embed_app_payload(&exe_path, &html, icon_png.as_deref()) {
+            tracing::warn!("嵌入 PE 资源失败, 回退 EOF 尾部注入 (可能触发 Defender 误报): {e}");
+            // 回退：保留旧尾部拼接，保证可用（但可能误报）
+            let mut out = std::fs::read(&exe_path)?;
+            if let Some(icon) = icon_png.as_ref() {
+                out.extend_from_slice(icon);
+                out.extend_from_slice(&(icon.len() as u64).to_le_bytes());
+            }
+            out.extend_from_slice(&html);
+            out.extend_from_slice(&(html.len() as u64).to_le_bytes());
+            out.extend_from_slice(MAGIC);
+            std::fs::write(&exe_path, out)?;
         }
-        out.extend_from_slice(&html);
-        out.extend_from_slice(&(html.len() as u64).to_le_bytes());
-        out.extend_from_slice(MAGIC);
-        std::fs::write(&exe_path, out)?;
 
         if self.loader_dll_path.exists() {
             let dst = dist_dir.join("WebView2Loader.dll");
@@ -327,7 +336,92 @@ impl HxShellPackager {
             }
         }
 
+        // 可选代码签名：HERMIX_CODESIGN_* 配置驱动；未配置则跳过 + 告警。
+        // 签名是消除 Defender 信誉型误报 (Behavior:Win32/DefenseEvasion.A!ml)
+        // 的决定性因素——结构合法(PE 资源)只解决一半，信誉(签名)解决另一半。
+        sign_exe_if_configured(&exe_path);
+
         Ok(exe_path)
+    }
+}
+
+impl HxShellPackager {
+    // 测试版 / dev 运行：构建单文件 html，写到 dist/<id>.dev.html，
+    // 用 `hx-shell.exe --html <path>` 直接加载。不落单 exe、不在 exe 尾
+    // 部拼数据，因此不会触发 Defender 对「单文件打包」的结构型误报。
+    pub fn run_dev(&self, app_dir: &Path, id: &str) -> Result<(), HxPackError> {
+        self.ensure_shell_deployed();
+        let (html, _icon) = self.build_final_payload(app_dir)?;
+        let dist_dir = app_dir.join("dist");
+        std::fs::create_dir_all(&dist_dir)?;
+        let html_path = dist_dir.join(format!("{id}.dev.html"));
+        std::fs::write(&html_path, &html)?;
+        let child = std::process::Command::new(&self.shell_path)
+            .arg("--html")
+            .arg(&html_path)
+            .spawn()
+            .map_err(|e| HxPackError::LaunchFailed(e.to_string()))?;
+        drop(child);
+        Ok(())
+    }
+}
+
+/// 可选代码签名：若配置了 `HERMIX_CODESIGN_PFX`，调用 signtool 对打包产物签名。
+///
+/// 环境变量：
+/// - `HERMIX_CODESIGN_PFX`：证书路径（.pfx/.p12）。空/未设 → 跳过（仅告警）。
+/// - `HERMIX_CODESIGN_PASSWORD`：证书密码（默认空）。
+/// - `HERMIX_CODESIGN_TIMESTAMP_URL`：RFC3161 时间戳服务（默认 DigiCert）。
+/// - `HERMIX_SIGNTOOL`：signtool 路径（默认从 PATH 找）。
+///
+/// 失败仅告警不中断打包（exe 仍可用，只是未签名）。未配置证书时静默跳过。
+fn sign_exe_if_configured(exe_path: &Path) {
+    let pfx = match std::env::var("HERMIX_CODESIGN_PFX") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            tracing::info!(
+                "未配置 HERMIX_CODESIGN_PFX，跳过代码签名（要消除 Defender 误报请自备 OV/EV 代码签名证书并配置该变量）"
+            );
+            return;
+        }
+    };
+    let password = std::env::var("HERMIX_CODESIGN_PASSWORD").unwrap_or_default();
+    let timestamp = std::env::var("HERMIX_CODESIGN_TIMESTAMP_URL")
+        .unwrap_or_else(|_| "http://timestamp.digicert.com".to_string());
+    let signtool = std::env::var("HERMIX_SIGNTOOL").unwrap_or_else(|_| "signtool".to_string());
+
+    let status = std::process::Command::new(&signtool)
+        .args([
+            "sign",
+            "/fd",
+            "SHA256",
+            "/tr",
+            &timestamp,
+            "/td",
+            "SHA256",
+            "/f",
+            &pfx,
+            "/p",
+            &password,
+            &exe_path.to_string_lossy(),
+        ])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            tracing::info!("代码签名成功: {}", exe_path.display());
+        }
+        Ok(s) => {
+            tracing::warn!(
+                "signtool 退出码 {s}（签名失败，exe 未签名）: {}",
+                exe_path.display()
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                "无法启动 signtool（请确保 signtool 在 PATH 或设 HERMIX_SIGNTOOL）: {e}；exe 未签名"
+            );
+        }
     }
 }
 
