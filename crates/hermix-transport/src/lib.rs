@@ -318,6 +318,12 @@ pub struct WsEnvelope {
     pub event: StreamEvent,
 }
 
+/// Default `outcome` for a `Done` event when the sender doesn't set
+/// one (backward-compatible: older servers always meant "completed").
+fn default_done_outcome() -> Option<String> {
+    Some("completed".to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
@@ -688,6 +694,16 @@ pub enum StreamEvent {
         /// `None` when the reason is unknown (e.g. non-streaming path).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         finish_reason: Option<String>,
+        /// Terminal outcome classification. `completed` = the turn
+        /// finished naturally and the session is alive (front-end may
+        /// close the WS). `failed` / `interrupted` = the agent loop
+        /// ended without a usable result (backend error, invalid tool
+        /// exhaustion, user stop). The front-end MUST keep the session
+        /// alive on non-`completed` outcomes and surface a recoverable
+        /// prompt instead of tearing down the WS — a backend failure is
+        /// not a session death.
+        #[serde(default = "default_done_outcome", skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
     },
     // ── Todo (task list) events ─────────────────────────────
     /// Snapshot of the full task list. Sent on (a) session start so
@@ -1089,6 +1105,7 @@ mod tests {
             event: StreamEvent::Done {
                 content: "ok".into(),
                 finish_reason: None,
+                outcome: Some("completed".into()),
             },
         };
         let value = serde_json::to_value(envelope).expect("serialize envelope");

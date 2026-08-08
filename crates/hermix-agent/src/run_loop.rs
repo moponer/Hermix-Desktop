@@ -1416,6 +1416,12 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 crate::tool_call_validator::ApplyResult::Proceed => {}
                 crate::tool_call_validator::ApplyResult::Continue => continue,
                 crate::tool_call_validator::ApplyResult::ReturnFatal => {
+                    // #A (global fix): an invalid-tool exhaustion is a
+                    // recoverable backend failure, NOT a clean completion.
+                    // `interrupted=true` so the server sets the `Done`
+                    // outcome to "interrupted" and the front-end keeps the
+                    // session alive (no WS teardown, pending approvals
+                    // preserved) instead of silently killing the turn.
                     return Ok(self.finalize_agent_result(
                         &ctx,
                         total_turns,
@@ -1425,7 +1431,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                         session_started_hooks_fired,
                         persist_user_idx,
                         false,
-                        false,
+                        true,
                         None,
                     ));
                 }
@@ -2310,6 +2316,10 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                 crate::tool_call_validator::ApplyResult::Proceed => {}
                 crate::tool_call_validator::ApplyResult::Continue => continue,
                 crate::tool_call_validator::ApplyResult::ReturnFatal => {
+                    // #A (global fix): invalid-tool exhaustion is a
+                    // recoverable backend failure → mark `interrupted` so
+                    // the front-end keeps the session alive (see run_loop
+                    // ~1418 for the matching change in the other call site).
                     return Ok(self.finalize_agent_result(
                         &ctx,
                         total_turns,
@@ -2319,7 +2329,7 @@ self.notify_phase(&LoopPhase::ToolValidation, total_turns);
                         session_started_hooks_fired,
                         persist_user_idx,
                         false,
-                        false,
+                        true,
                         last_finish_reason.clone(),
                     ));
                 }

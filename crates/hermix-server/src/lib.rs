@@ -5339,6 +5339,13 @@ async fn handle_ws_stream_send(
                         event: StreamEvent::Done {
                             content: done_content,
                             finish_reason: done_finish_reason,
+                            outcome: Some(if reply.interrupted
+                                || reply.finish_reason.as_deref() == Some("error")
+                            {
+                                "interrupted".to_string()
+                            } else {
+                                "completed".to_string()
+                            }),
                         },
                     })
                     .await

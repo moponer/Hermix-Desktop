@@ -702,7 +702,14 @@ export function useStreamChat(activeSessionId: string | null) {
         };
         disarmTimeoutsRef.current = disarmTimeouts;
 
-        const settle = (text: string, err?: string, reason?: string, phaseHint?: StreamPhase, detail?: string) => {
+        const settle = (
+          text: string,
+          err?: string,
+          reason?: string,
+          phaseHint?: StreamPhase,
+          detail?: string,
+          keepSessionAlive?: boolean,
+        ) => {
           if (doneRef.current) return;
           // Guard against stale WS event handlers. If a new
           // `send()` has started (incrementing `activeSendIdRef`), this
@@ -725,12 +732,23 @@ export function useStreamChat(activeSessionId: string | null) {
           if (pending) callbacks.onChunk?.(pending);
 
           doneRef.current = true;
-          streamingSessionIdRef.current = null;
-          setStreamingSessionId(null);
-          setStreamingStatus(null);
-          console.log(`[WS-CLOSE] site=settle reason=${reason ?? "natural-done"}`);
-          wsRef.current?.close();
-          wsRef.current = null;
+          // keepSessionAlive (backend outcome != "completed"): a backend
+          // failure / invalid-tool exhaustion / unfinished turn is NOT a
+          // session death. Keep the WS open and the session id so a
+          // pending approval or a user retry can still resume — only a
+          // clean `completed` (or an explicit cancel/unmount) tears down
+          // the socket. Without this, a failed tool call silently closed
+          // the connection and dropped any in-flight approval.
+          if (keepSessionAlive) {
+            console.log(`[WS-KEEPALIVE] site=settle reason=${reason ?? "interrupted"} (outcome!=completed, session preserved)`);
+          } else {
+            streamingSessionIdRef.current = null;
+            setStreamingSessionId(null);
+            setStreamingStatus(null);
+            console.log(`[WS-CLOSE] site=settle reason=${reason ?? "natural-done"}`);
+            wsRef.current?.close();
+            wsRef.current = null;
+          }
           if (reason) stopReason = reason;
           // Emit terminal phase
           updatePhase(phaseHint ?? (err ? "error" : "completed"));
@@ -1529,17 +1547,38 @@ export function useStreamChat(activeSessionId: string | null) {
               if (evtType === "done") {
                 const reason: string | undefined =
                   data?.finish_reason || data?.event?.finish_reason;
+                // Terminal outcome classification from the server.
+                // `completed` = turn finished naturally, safe to close
+                // the WS. `failed` / `interrupted` = the agent loop ended
+                // without a usable result (backend error, invalid-tool
+                // exhaustion, user stop). We MUST keep the session alive
+                // and surface a recoverable prompt — a backend failure is
+                // not a session death (a reload would otherwise lose the
+                // partial work and the pending approval). Backward-compat:
+                // older servers omit `outcome`, so treat absence as
+                // "completed" only when finish_reason isn't a known
+                // failure signal.
+                const outcome: string | undefined =
+                  data?.outcome || data?.event?.outcome;
+                const isFailedOutcome =
+                  outcome === "failed" || outcome === "interrupted";
                 // (defensive) a backend-caused failure may arrive as a
                 // `done` with finish_reason "error" (e.g. a future
                 // refactor or an older server build). Route it to the
                 // error path so the user sees a red banner + "出错了"
                 // instead of a misleading "completed" with partial content.
-                if (reason === "error") {
+                if (isFailedOutcome || reason === "error") {
+                  // Backend failure / unfinished turn: keep the session
+                  // alive (don't close the WS) so the user can retry or a
+                  // pending approval can still resolve. Surface a red
+                  // banner + "出错了" instead of a misleading "completed".
                   settle(
                     "",
                     "对话因后端错误中断（已保留已生成的部分内容，请稍后重试）",
                     undefined,
                     "error",
+                    undefined,
+                    true,
                   );
                   return;
                 }

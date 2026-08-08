@@ -668,6 +668,22 @@ pub fn normalize_anthropic_response(
                             }
                         }
                     }
+                    // #3 (global fix): the parse layer is the single
+                    // place that repairs wire-level tool-name corruption.
+                    // If we still couldn't recover the real name, surface
+                    // it loudly instead of silently forwarding the
+                    // placeholder — a silent "tool_call" would only fail
+                    // later at the validator and cost the user a retry
+                    // loop. Dumping `input` lets us extend the extractor
+                    // when MiniMax nests the name somewhere new.
+                    if name.is_empty() || name == "tool_call" {
+                        tracing::warn!(
+                            block_id = block.get("id").and_then(|i| i.as_str()),
+                            input = %block.get("input").map(|v| v.to_string()).unwrap_or_default(),
+                            "anthropic_adapter: could not recover real tool name from \
+                             degenerate tool_use (name was empty or 'tool_call')"
+                        );
+                    }
                 }
                 if strip_tool_prefix && name.starts_with(MCP_TOOL_PREFIX) {
                     name = name[MCP_TOOL_PREFIX.len()..].to_string();
