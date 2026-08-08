@@ -1164,7 +1164,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const handleApproveApproval = useCallback(
     (requestId: string) => {
       const now = Date.now();
-      console.error(`[APPROVAL-CLICK] id=${requestId} t=${now}`);
+      console.info(`[APPROVAL-CLICK] id=${requestId} t=${now}`);
 
       // removed the App.tsx `wsSendRaw(payload)` step that used
       // to live here. It was REDUNDANT with the main WS path in
@@ -1223,11 +1223,11 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
             // stops looking like a red failure in the
             // console.
             if (data.matched) {
-              console.error(
+              console.warn(
                 `[APPROVAL-REST] id=${requestId} matched=true — REST delivered (WS path likely dropped the message)`,
               );
             } else {
-              console.log(
+              console.info(
                 `[APPROVAL-REST] id=${requestId} matched=false — idempotent miss, WS path already resolved this request`,
               );
             }
@@ -1246,7 +1246,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
 
   const handleDenyApproval = useCallback(
     (requestId: string) => {
-      console.error(`[APPROVAL-DENY] id=${requestId} t=${Date.now()}`);
+      console.info(`[APPROVAL-DENY] id=${requestId} t=${Date.now()}`);
 
       // mirror the approve-path cleanup — drop the redundant
       // wsSendRaw() step here too. The main WS path in useStreamChat.ts

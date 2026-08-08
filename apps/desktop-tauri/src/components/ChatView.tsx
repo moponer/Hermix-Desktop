@@ -2167,6 +2167,30 @@ const clearPendingImages = useCallback(() => {
             />
           )}
 
+          {/* ── Working vs. done: single source of truth ───────────────
+              The chat has exactly three mutually-exclusive bottom states:
+
+              1. Streaming / thinking — `isStreaming` is true (authority:
+                 `useStreamChat.streamingSessionId`). The `StreamingBubble`
+                 renders the phase chip ("正在生成…", "响应较慢", etc.).
+
+              2. Post-stream activity — `isStreaming` is false but the
+                 agent loop is still running tools or waiting for an
+                 approval (`postStreamActivity` true or `pendingToolsCount`
+                 > 0). `AgentActivityIndicator` shows "AI 正在分析结果 /
+                 准备下一步…".
+
+              3. Done / waiting for user — none of the above. The turn
+                 has fully ended and the socket is either closed or idle.
+                 `WaitForInputIndicator` shows "可以继续提问".
+
+              The settled `MessageBubble` header MUST NOT contradict this
+              global state. `StopReasonChip` only renders for *abnormal*
+              terminations (error, interrupted, timeout, partial, length,
+              slow). Normal terminations (`stop`, `tool_calls`) render
+              nothing, because "工具调用中" on a settled message while
+              the bottom says "可以继续提问" is a lie. */}
+
           {/* Post-stream gap indicator. Shown after the LLM stream
               settles but before the agent loop either ends or starts
               its next turn. Replaces the silent blank gap that used

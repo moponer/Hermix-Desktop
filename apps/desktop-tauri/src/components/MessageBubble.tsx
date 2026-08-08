@@ -143,17 +143,27 @@ export function MessageBubble({
 }
 
 // ── Stop-reason chip ─────────────────────────────────────────────
-// `stop` needs no chip — the timestamp on the left already signals
-// completion. Other reasons keep a muted label + tiny icon (no
-// colored pill) so their visual weight matches the timestamp.
+// Terminal-state chip shown on settled assistant messages.
+//
+// Authority: this chip MUST reflect the *actual* end state of the turn.
+// `stop` and `tool_calls` are normal terminations — the assistant chose
+// to finish or chose to invoke tools as part of a completed turn. They
+// do NOT mean "still working" and must not be rendered as an activity
+// indicator. Only exceptional terminations (error, truncation, timeout,
+// backend interruption, partial close) get a chip so the user knows why
+// the answer ended abnormally.
+//
+// `WaitForInputIndicator` at the bottom of `ChatView` is the canonical
+// "done / waiting for you" signal; this chip is only for abnormal ends.
 function StopReasonChip({ reason, meta }: { reason: string; meta?: string }) {
-  // stop → render nothing (the message has clearly settled; no label needed)
-  if (reason === "stop") return null;
+  // Normal terminations: render nothing. The content + WaitForInputIndicator
+  // already communicate completion; a "工具调用中" chip on a settled
+  // message directly contradicts the "可以继续提问" hint below it.
+  if (reason === "stop" || reason === "tool_calls") return null;
 
   const map: Record<string, { label: string; cls: string }> = {
     length:      { label: "已截断",         cls: "text-text-warning" },
     interrupted: { label: "已中断",         cls: "text-text-faint italic" },
-    tool_calls:  { label: "工具调用中",      cls: "text-text-faint italic" },
     error:       { label: "出错了",         cls: meta === "stream-error" || meta === "non-error" ? "text-text-faint italic" : "text-text-error" },
     timeout:     { label: "超时",           cls: "text-text-warning italic" },
     slow:        { label: "响应较慢",        cls: "text-text-warning" },

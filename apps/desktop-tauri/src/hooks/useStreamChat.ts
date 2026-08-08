@@ -418,7 +418,17 @@ export function useStreamChat(activeSessionId: string | null) {
   // Holds the `settle` function of the current `send` call so
   // `cancel()` can invoke it directly (synchronously resolving the
   // promise) instead of waiting for the async WS `onclose` event.
-  const settleRef = useRef<((text: string, err?: string, reason?: string, phaseHint?: StreamPhase, detail?: string) => void) | null>(null);
+  const settleRef = useRef<
+    | ((
+        text: string,
+        err?: string,
+        reason?: string,
+        phaseHint?: StreamPhase,
+        detail?: string,
+        keepSessionAlive?: boolean,
+      ) => void)
+    | null
+  >(null);
   // Client-side dedup: track last sent (hash, timestamp) to prevent
   // the same content from being sent multiple times within the window.
   const lastSendRef = useRef<{ hash: string; ts: number } | null>(null);
