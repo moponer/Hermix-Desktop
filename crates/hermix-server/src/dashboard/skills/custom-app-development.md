@@ -2,16 +2,19 @@
 name: custom-app-development
 version: 11
 description: >
-  自定义应用开发助手。当用户要求创建桌面应用、桌面工具、独立程序、
-  窗口应用、打包成 EXE 的程序时使用。通过 custom_app_manager 工具
-  创建、更新、打包、运行、校验、冒烟用户自定义桌面应用。
-  基于 hx-shell 运行时（wry/WebView2，~1MB exe），LLM 写前端代码
-  （Vue/React/纯 HTML），Hermix 打包成单文件 exe 分发。
-  用户电脑零工具链：打包 = 文件尾部注入 HTML，浏览器/WebView2 即跑。
-  务必在以下场景使用：用户说"做个应用""写个桌面工具""打包成 exe"
-  "做个小工具""做个窗口程序""帮我做个 app""创建自定义应用""做个独立程序"
-  "做个桌面应用""make an app""create a desktop app""build a tool"
-  "package as exe"；或用户描述一个需要独立窗口运行的功能需求时。
+  自定义应用开发助手。当用户要求创建/开发一个桌面应用、桌面工具、独立程序、
+  窗口应用、软件、小软件、打包成 EXE 的程序时使用。通过 custom_app_manager 工具
+  创建、更新、打包、运行(dev测试版)、校验、冒烟用户自定义桌面应用。
+  基于 hx-shell 运行时（wry/WebView2，单文件 exe），LLM 写前端代码
+  （TypeScript/React/纯 HTML），Hermix 打包成单文件 exe 分发。
+  用户电脑零工具链：打包 = 将 HTML/JS 作为 PE 资源节(RT_RCDATA)嵌入 hx-shell.exe，
+  WebView2 即跑，无尾部注入、无结构型 Defender 误报。
+  务必在以下场景使用：用户说"做个应用""开发一个应用""写个应用""生成一个应用"
+  "开发一个工具""做个工具""写个小软件""做个软件""做一个桌面程序""做一个独立程序"
+  "帮我做个 app""创建自定义应用""写个桌面工具""打包成 exe""make an app"
+  "create a desktop app""build a tool""develop a software""package as exe"；
+  或用户描述一个需要独立窗口运行的功能需求时。凡是"工具/应用/软件/桌面程序"类诉求，
+  一律判定为自定义应用并走本 skill，不要调其他通用代码工具。
 tags:
   - custom-app
   - desktop
@@ -23,13 +26,25 @@ tags:
   - exe
   - vue
   - react
+  - typescript
   - javascript
   - 自定义应用
   - 桌面应用
-  - 打包
+  - 软件开发
+  - 做个应用
+  - 开发应用
+  - 开发工具
+  - 做个工具
+  - 写个应用
+  - 写个软件
+  - 做个软件
   - 独立程序
   - 窗口应用
-  - 做个应用
+  - 桌面程序
+  - 小软件
+  - 软件
+  - 工具
+  - 应用
 ---
 
 # Custom App Development（基于 hx-shell）
@@ -57,7 +72,7 @@ console.log('Available APIs:', Object.keys(info.data.apis));
 ## 运行时：hx-shell
 
 - **HX-SHELL** = `wry 0.55.1` + WebView2，单文件 exe 约 **1MB**
-- 打包产物 = `hx-shell.exe` + `index.html` 尾部注入（`[html][len:8LE][HXAPP1]`）
+- 打包产物 = `hx-shell.exe` 的 PE 资源节(RT_RCDATA)嵌入 HTML/JS payload（替代旧式 exe 尾部注入）
 - 用户电脑**零工具链**：双击 exe 即跑，不依赖 Node/Rust/Node-Webkit 等任何运行时
 - 窗口能力：WebView2 全套（Chromium 渲染、JS 现代语法、wasm）
 - 绑定通道：**WebView2 原生桥** `window.chrome.webview.postMessage` → Rust 侧 `ipc_handler`（**无 CORS 限制**，比 `fetch` 到 custom scheme 可靠）
@@ -70,8 +85,9 @@ HERMIX_HOME/custom-apps/<id>/
   index.html         ← 自包含 HTML（或 Vite 构建产物）
   src/               ← [可选] Vue/React 源码（Vite 构建后打包成单文件 index.html）
   dist/
-    <id>.exe         ← 打包产物（hx-shell.exe + html + trailer）
+    <id>.exe         ← 打包产物（hx-shell.exe + HTML/JS 作为 PE 资源嵌入）
     WebView2Loader.dll  ← wry 运行时依赖
+    <id>.dev.html    ← 测试版（run action 用 hx-shell --html 直接加载，不落单 exe）
 ```
 
 ## 两种开发模式
@@ -373,20 +389,29 @@ audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
 - [ ] 按钮/输入框尺寸一致、间距统一
 - [ ] 失败场景有具体错误提示
 
-## agent 开发流
+## agent 开发流（一次性到位交付）
 
-1. 写 `manifest.json`：
+**核心铁律**：用户说"做个/开发一个/写个 工具/应用/软件"时，**直接判定为自定义应用**，不要反问、不要调其他通用代码工具。按下面 7 步走完，**代码一次性到位、前端美观、功能完整、无任何报错**才交付。
+
+1. **识别 + 分析前后端最优方案**：确认是自定义应用后，先想清楚——
+   - 数据存哪（localStorage / `hx.writeFile` 落盘 / `hx.exec` 调系统命令）
+   - 用哪些 `hx.*` API（先 `await window.hx.getInfo()` 取可用清单）
+   - UI 布局（标题栏 + 工具栏 + 内容 + 状态区，浅色中性灰、无蓝紫、无 emoji）
+2. 写 `manifest.json`：
    ```json
    {"id": "my-app", "name": "我的应用", "version": "1.0.0", "long_description": "功能介绍...\n使用方法...\n更新方法...\n分发方法...", "window_config": {"width": 900, "height": 600, "resizable": true}}
    ```
-   **`long_description` 必填**：包含功能介绍、使用方法、更新方法、分发方法，在详情界面"说明"Tab 展示给用户。
-2. 写 `index.html`（自包含，或 Vite 单文件构建产物）——**按"前端默认标准"生成界面**
-3. 调 `custom_app_manager.create({manifest, index_html, app_source?, source_files?})`
-4. （可选）`validate` 检查 HTML/JS 完整性
-5. （可选）`smoke` 自动冒烟（执行 `hx.writeFile("auto-verify.txt", ...)` + 读回）
-6. `package` 打包成 `dist/<id>.exe` + `dist/WebView2Loader.dll`
-7. `run` 启动 app
-8. 把 `dist/<id>.exe` 发给用户，用户双击即跑（WebView2 系统自带，无需安装）
+   **`long_description` 必填**：含功能介绍、**使用方法、更新方法（回来用 update action 改代码）、分发方法（package 出单 exe）**，在详情界面"说明"Tab 展示。
+3. 写代码（`index_html` 自包含 或 `app_source` TSX + `source_files?`）——**严格按"前端默认标准"与"自检清单"生成界面**，禁 CDN / 禁 emoji / 禁 input-file / 必带标题栏。
+4. 调 `custom_app_manager.create({manifest, index_html, app_source?, source_files?})`。
+5. **`validate` 循环到 ok=true**（L0 manifest + L1 HTML/JS + L2 权限 + L3 前端质量）。每轮失败按 issues 的 message 修复，再 validate，直到 `ok=true`。**不得带着 error 交付**。
+6. **`run` 测试版即时预览**：`run` 用 dev 模式（`hx-shell --html` 加载 `dist/<id>.dev.html`），不落单 exe，即时看到效果。如需确认运行时无报错，调 `smoke`（先 `package` 再启动 exe 抓 stderr）。
+7. **交付说明（必须告诉用户）**：
+   - **去哪运行**：已用 `run` 启动测试版；或桌面端"运行"按钮（`HERMIX_HOME/custom-apps/<id>/dist/<id>.dev.html`）。
+   - **如何打包**：调 `package` → 生成 `dist/<id>.exe` + `WebView2Loader.dll`，双击即跑（WebView2 系统自带），可发给别人。
+   - **如何回来继续更新**：直接调 `update` action 改 `app_source`/`index_html`，再 `run` 即时预览；或桌面端"编辑"按钮回到本 skill 继续迭代。
+
+**禁止**：带着 validate error 交付 / 用 input-file 让用户选文件（改用 `hx.openDialog`）/ 引 CDN / 留 emoji / 缺标题栏。
 
 ## 关键约束
 

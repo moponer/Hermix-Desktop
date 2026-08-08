@@ -8,16 +8,18 @@
 //! - `list`: List all installed apps
 //! - `get`: Get an app's details and source code
 //! - `delete`: Uninstall an app
-//! - `package`: Package an app as a standalone EXE (hx-shell tail-injection)
-//! - `run`: Launch a packaged app
-//! - `validate`: Static validation (manifest + HTML + hx API + permissions)
+//! - `package`: Package an app as a standalone EXE (hx-shell PE resource embedding)
+//! - `run`: Launch the app in dev/test mode (single-file html via hx-shell --html)
+//! - `validate`: Static validation (manifest + HTML + hx API + permissions + frontend quality)
 //! - `smoke`: Runtime smoke test (launch + capture errors)
 //!
 //! Architecture: App = self-contained index.html + manifest.json.
 //! Uses hx-shell runtime (wry/WebView2, ~1.2MB single-file exe).
 //! index.html calls system capabilities via window.hx.* API
 //! (WebView2 native postMessage bridge, no external client library needed).
-//! Packaging = tail-inject HTML into hx-shell.exe -> single distributable exe.
+//! Packaging = embed HTML/JS payload into hx-shell.exe as a PE resource section
+//! (RT_RCDATA) -> single distributable exe. No tail-injection, no struct-type
+//! Defender false positive.
 //!
 //! The actual file operations are delegated to `hermix_plugin::PluginManager`.
 
@@ -306,19 +308,32 @@ impl CustomAppManagerHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
 
-        // Existence check (run_plugin re-looks-up internally).
+        // Existence check (run_dev_plugin re-looks-up internally).
         self.manager
             .get_plugin(id)
             .ok_or_else(|| ToolError::NotFound(format!("应用不存在: {id}")))?;
 
+        // 运行 = 测试版(dev 模式): 构建单文件 html, 用 hx-shell --html 直接加载,
+        // 不重新打包单 exe, 与 Desktop 的"运行"按钮语义一致.
         self.manager
-            .run_plugin(id)
+            .run_dev_plugin(id)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("启动应用失败: {e}")))?;
 
+        // 供用户直接定位测试版 html 与运行入口.
+        let dev_html = self
+            .manager
+            .plugins_dir()
+            .join(id)
+            .join("dist")
+            .join(format!("{id}.dev.html"));
+
         let result = json!({
             "success": true,
-            "message": format!("应用 '{id}' 已启动"),
+            "message": format!("应用 '{id}' 已以测试版(dev)模式启动"),
+            "dev_html": dev_html.to_string_lossy(),
+            "run_hint": "测试版用 hx-shell --html 直接加载, 不生成单 exe. 要发布请调用 package action.",
+            "update_hint": "回到继续开发: 直接调用 update action 改 app_source/index_html, 再 run 即时预览.",
         });
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
@@ -491,7 +506,7 @@ impl ToolHandler for CustomAppManagerHandler {
             "build_mode".into(),
             json!({
                 "type": "string",
-                "description": "打包模式 (package action 可选)。sidecar: tail-inject HTML 到 hx-shell.exe 尾部生成单文件 exe (默认, 零依赖); neu-build: 旧模式, 不推荐。",
+                "description": "打包模式 (package action 可选)。sidecar: 将 HTML/JS payload 作为 PE 资源节(RT_RCDATA)嵌入 hx-shell.exe 生成单文件 exe (默认, 零依赖, 无结构型 Defender 误报); neu-build: 旧模式, 不推荐。",
                 "enum": ["sidecar", "neu-build"]
             }),
         );
@@ -506,7 +521,7 @@ impl ToolHandler for CustomAppManagerHandler {
 
         tool_schema(
             "custom_app_manager",
-            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行、开发期校验(validate)、运行时冒烟测试(smoke)。基于 hx-shell 运行时 (wry/WebView2, ~1.2MB)。\n\n**API**: 使用 window.hx.* 调用系统能力 (writeFile/readFile/readDir/exec/getInfo/fileUrl 等)。写代码前先调 await window.hx.getInfo() 发现可用 API。\n\n**两种开发模式**:\n- **TypeScript/React 模式 (★推荐)**: 提供 app_source (TypeScript/React 源码)，打包时 esbuild 自动转译。React 由 esbuild 打包注入，无 CDN 依赖。\n- **纯 HTML 模式**: 提供 index_html (自包含 HTML+JS)。\n\n打包: sidecar 模式 (tail-inject HTML 到 hx-shell.exe → 单文件 exe)。开发流程: 写代码→validate→失败则按 issues 修复→再 validate，直到 ok=true；如需进一步确认运行时无报错，可调用 smoke。",
+            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行(测试版dev模式)、开发期校验(validate)、运行时冒烟测试(smoke)。基于 hx-shell 运行时 (wry/WebView2, ~1.2MB)。\n\n**何时用本工具**: 用户说「做个/开发一个/写个/生成一个 工具/应用/软件/桌面程序/小软件」时, 直接判定为自定义应用, 调用本工具开发, 不要去调其他通用代码工具。\n\n**API**: 使用 window.hx.* 调用系统能力 (writeFile/readFile/readDir/exec/getInfo/fileUrl 等)。写代码前先调 await window.hx.getInfo() 发现可用 API。\n\n**两种开发模式**:\n- **TypeScript/React 模式 (★推荐)**: 提供 app_source (TypeScript/React 源码)，打包时 esbuild 自动转译。React 由 esbuild 打包注入，无 CDN 依赖。\n- **纯 HTML 模式**: 提供 index_html (自包含 HTML+JS)。\n\n**一次性到位交付流程**: 1)识别(用户要的是工具/应用/软件)→ 2)分析前后端最优方案(数据存哪/用哪些 hx API/UI 布局)→ 3)create 或 update 写代码→ 4)validate 循环修复直到 ok=true(L0 manifest + L1 HTML/JS + L2 权限 + L3 前端质量: 禁 CDN/禁 input-file/标题栏/禁 emoji)→ 5)run 测试版即时预览→ 6)确认无运行时报错(必要时 smoke)→ 7)交付说明: 去哪运行(run 已启动)、如何打包(package→单 exe)、如何回来继续更新(update action 改 app_source/index_html 再 run)。\n\n打包: sidecar 模式 (将 HTML/JS 作为 PE 资源节嵌入 hx-shell.exe → 单文件 exe, 无尾部注入)。",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }
