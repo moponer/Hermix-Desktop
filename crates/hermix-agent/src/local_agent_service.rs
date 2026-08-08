@@ -1741,6 +1741,7 @@ impl AgentService for LocalAgentService {
             message_count: messages.len(),
             finish_reason: None,
             last_error: None,
+            interrupted: false,
         })
     }
 
@@ -2883,6 +2884,7 @@ impl AgentService for LocalAgentService {
             message_count: messages.len(),
             finish_reason: result.finish_reason.clone(),
             last_error: result.last_error.clone(),
+            interrupted: result.interrupted,
         })
     }
 

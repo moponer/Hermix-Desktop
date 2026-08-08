@@ -4163,6 +4163,7 @@ async fn handle_ws_stream_send(
             event: StreamEvent::Done {
                 content: String::new(),
                 finish_reason: Some("deduped".to_string()),
+                outcome: Some("completed".to_string()),
             },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {
@@ -4205,6 +4206,7 @@ async fn handle_ws_stream_send(
             event: StreamEvent::Done {
                 content: String::new(),
                 finish_reason: Some("deduped".to_string()),
+                outcome: Some("completed".to_string()),
             },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {

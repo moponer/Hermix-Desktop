@@ -485,6 +485,19 @@ pub struct AgentReply {
     /// stays in Chinese, this holds the raw English for diagnosis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// Whether the turn ended due to an interruption (user cancel, fatal
+    /// invalid-tool exhaustion, backend failure) rather than a natural
+    /// completion. Surfaced so the transport layer can mark the `Done`
+    /// event outcome as `interrupted` and the frontend keeps the session
+    /// alive instead of tearing down the socket.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub interrupted: bool,
+}
+
+/// serde helper: skip serializing `interrupted` when it is `false`.
+#[allow(dead_code)]
+pub(crate) fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 // ---------------------------------------------------------------------------

@@ -337,6 +337,7 @@ mod tests {
                 message_count: 1,
                 finish_reason: Some("stop".into()),
                 last_error: None,
+                interrupted: false,
             })
         }
         async fn send_message_stream(
@@ -351,6 +352,7 @@ mod tests {
                 message_count: 1,
                 finish_reason: Some("stop".into()),
                 last_error: None,
+                interrupted: false,
             })
         }
         async fn get_session_messages(
