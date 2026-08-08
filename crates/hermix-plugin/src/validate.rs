@@ -7,6 +7,8 @@
 //! - **L0 静态契约**: manifest 完整性 + permissions 声明
 //! - **L1 HTML/JS 预检**: 结构完整性、hx API 调用模式、括号匹配
 //! - **L2 权限一致性**: HTML 中的 hx API 调用是否在 permissions 中声明
+//! - **L3 前端质量关卡**: 离线可用 (无 CDN 外链)、桌面定位 (禁 input file)、
+//!   标题栏 (V7 壳必填)、无 emoji、禁 custom scheme fetch。把「前端默认标准」变成可强制硬指标。
 //!
 //! 调用方 (agent 开发循环) 应在生成/修改应用代码后调用
 //! [`validate_custom_app`], 看到 `ok == false` 就继续修复, 直到通过
@@ -304,8 +306,113 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
              未声明的 hx API 调用会在运行时被拒绝。",
         ));
     }
+
+    // ── L3: 前端质量关卡 (交付前强制) ──
+    // 把 custom-app-development SKILL 的「前端默认标准」变成可强制的硬指标，
+    // 让 agent 开发循环在声明「开发完成」前拦截违规，实现「一次性到位」。
+    check_frontend_quality(&combined_code, &mut issues);
+
     let ok = !issues.iter().any(|i| i.level == "error");
     ValidationReport { ok, issues }
+}
+
+/// L3 前端质量关卡: 离线可用 + 桌面定位 + 标题栏 + 无 emoji。
+fn check_frontend_quality(code: &str, issues: &mut Vec<ValidationIssue>) {
+    let lower = code.to_lowercase();
+
+    // 1) CDN 外链 → 离线白屏 (error, 阻断交付)
+    let cdn_hosts = [
+        "unpkg.com",
+        "jsdelivr",
+        "cdnjs.cloudflare",
+        "cdn.tailwindcss",
+        "ajax.googleapis",
+        "cdn.bootcdn",
+        "jsdelivr.net",
+    ];
+    let has_remote_script = code.contains("<script")
+        && (lower.contains("src=\"http") || lower.contains("src='http"));
+    let has_cdn = cdn_hosts.iter().any(|h| lower.contains(h));
+    if has_remote_script || has_cdn {
+        let why = if has_remote_script {
+            "检测到 <script src=\"http...\"> 远程脚本"
+        } else {
+            "检测到 CDN 域名 (unpkg/jsdelivr/cdnjs 等)"
+        };
+        issues.push(issue("error", "frontend", format!(
+            "{why}。自定义应用必须离线可用: Vue/React 运行时与图标必须内联进单文件 HTML \
+             (app_source 模式由 esbuild 注入, 或把库 UMD 源码直接贴进 <script>), 禁止外链 CDN。\
+             外链在用户断网/内网时会白屏。"
+        )));
+    }
+
+    // 2) 浏览器 input file / webkitdirectory → 桌面定位违例 (error)
+    if code.contains("type=\"file\"")
+        || code.contains("type='file'")
+        || code.contains("webkitdirectory")
+        || lower.contains("input type=file")
+    {
+        issues.push(issue(
+            "error",
+            "frontend",
+            "检测到 <input type=\"file\"> / webkitdirectory。桌面应用必须用壳层原生对话框: \
+             window.hx.openDialog({directory:true}) / openDialog({filters:[...]}) / saveDialog(...), \
+             禁止浏览器文件选择 (会触发 WebView2 上传确认弹窗, 与桌面工具定位不符)。",
+        ));
+    }
+
+    // 3) 标题栏缺失 → V7 壳无原生标题栏 (warning)
+    let has_titlebar = code.contains("hx.win.startDrag")
+        || code.contains("win.startDrag")
+        || code.contains("hx-titlebar")
+        || code.contains("class=\"hx-titlebar\"");
+    if !has_titlebar {
+        issues.push(issue(
+            "warning",
+            "frontend",
+            "未检测到自定义标题栏 (hx.win.startDrag / hx-titlebar)。\
+             V7 壳窗口无原生标题栏 (decorations:false), 必须在 HTML 顶部自行实现标题栏 \
+             (拖动区 + 最小化/最大化/关闭按钮), 否则用户无法移动或关闭窗口 (只能 Alt+F4)。",
+        ));
+    }
+
+    // 4) custom scheme fetch → 用 window.hx.* (warning)
+    if lower.contains("fetch(") && (lower.contains("app://") || lower.contains("app.localhost") || lower.contains("/hx/"))
+    {
+        issues.push(issue(
+            "warning",
+            "frontend",
+            "检测到对 custom scheme 的 fetch (app:// / app.localhost / /hx/)。\
+             Chromium 对自定义 scheme 的 fetch 有 CORS 限制会失败。改用 window.hx.* (WebView2 原生桥) 或 fetch 到 https URL。",
+        ));
+    }
+
+    // 5) emoji → 界面禁止 (warning)
+    if let Some(em) = detect_emoji(code) {
+        issues.push(issue(
+            "warning",
+            "frontend",
+            format!(
+                "界面包含 emoji 字符 (如 {em})。自定义应用界面禁止 emoji (标题/按钮/状态/装饰均不可用), \
+                 改用内联 SVG 图标 (lucide 风格, stroke=currentColor)。"
+            ),
+        ));
+    }
+}
+
+/// 检测代码里是否含 emoji (返回第一个命中的字符用于提示)。
+/// 覆盖常见 emoji 平面: Misc Symbols / Dingbats / Emoji。
+fn detect_emoji(s: &str) -> Option<String> {
+    for c in s.chars() {
+        let cp = c as u32;
+        let is_emoji = (0x1F300..=0x1FAFF).contains(&cp)
+            || (0x2600..=0x27BF).contains(&cp)
+            || (0x2B00..=0x2BFF).contains(&cp);
+        if is_emoji {
+            return Some(c.to_string());
+        }
+    }
+    None
 }
 
 /// 从 HTML 中提取 <script> 标签内的 JS 代码。
