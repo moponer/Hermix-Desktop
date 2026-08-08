@@ -114,19 +114,19 @@ pub fn register_builtin_tools(
         }
     }
 
-    // 5. Essential toolset floor. Re-asserts `terminal` / `file` /
-    // `code_execution` / `web` / `memory` / `pdf` / `core` /
-    // `security` AFTER the whitelist above. A hand-edited
-    // `enabled_toolsets.json` containing only `["file", "web"]`
-    // would otherwise leave the LLM answering "I don't have
-    // terminal". See `essential::ensure_essentials_enabled` for
-    // the full rationale.
-    let reasserted = crate::essential::ensure_essentials_enabled(registry);
+    // 5. Essential toolset floor (hard tier only). All tools register
+    // enabled, so this is a no-op safety net: a hard-essential toolset
+    // can never end up disabled at the end of registration. The soft
+    // tier is intentionally NOT applied here — the user's whitelist
+    // (`apply_persisted_toolset_state`) is the authority on optional
+    // toolsets and will turn off any soft toolset the user left out.
+    // See `essential::ensure_essentials_enabled` for the full rationale.
+    let reasserted = crate::essential::ensure_essentials_enabled(registry, false);
     if reasserted > 0 {
         tracing::info!(
             entries = reasserted,
-            toolset = ?crate::essential::ESSENTIAL_TOOLSETS,
-            "startup: re-enabled essential toolset floor (whitelist did not contain it)"
+            toolset = ?crate::essential::HARD_ESSENTIAL_TOOLSETS,
+            "startup: re-enabled hard-essential toolset floor (whitelist did not contain it)"
         );
     }
 }

@@ -281,35 +281,42 @@ pub fn apply_persisted_toolset_state(
     );
 
     // Essential toolset floor — runs AFTER the whitelist
-    // reconciliation above. The user's
-    // `enabled_toolsets.json` is the source of truth for
-    // *optional* toolsets, but for the four-or-so
-    // capabilities without which the LLM cannot do useful
-    // work (terminal, file, code_execution, web, memory, pdf,
-    // core, security) we always re-enable, even if the
-    // whitelist would otherwise turn them off. This prevents
-    // the regression where a hand-edited or partially
-    // migrated `enabled_toolsets.json` containing only
-    // `["file", "web"]` causes the LLM to answer "I don't
-    // have terminal" — it does, we just had to override the
-    // stale file. See `hermix_tools::essential` for the
-    // rationale and the canonical list.
-    let reasserted = hermix_tools::essential::ensure_essentials_enabled(registry);
+    // reconciliation above. Optional toolsets are governed by the
+    // user's `enabled_toolsets.json`; the HARD floor (terminal, file,
+    // code_execution, web, memory, pdf, core, security,
+    // security_guidance, custom_app) is always re-enabled so a
+    // hand-edited or partially migrated list containing only
+    // `["file", "web"]` cannot leave the LLM answering "I don't have
+    // terminal". The SOFT floor (document, office, browser, cua,
+    // storage) is re-enabled only when the list is the default
+    // wildcard, so an explicit disable is respected. See
+    // `hermix_tools::essential` for the full rationale.
+    // `soft_floor_active = wildcard`: when the saved whitelist is the
+    // default `["*"]`, fill in the soft essentials too (fresh install
+    // boots fully-capable). When the user has an explicit list, the
+    // soft tier is NOT re-asserted, so a soft toolset they left out
+    // stays disabled (explicit disable respected — no override warning).
+    let reasserted = hermix_tools::essential::ensure_essentials_enabled(registry, wildcard);
     if reasserted > 0 {
-        let missing: Vec<&str> = hermix_tools::essential::ESSENTIAL_TOOLSETS
+        // Only a HARD essential being overridden (user explicitly
+        // disabled a hard floor toolset in a non-wildcard list) is worth
+        // warning about. Soft toolsets are intentionally left to the
+        // user's choice and never produce this warning.
+        let overridden: Vec<&str> = hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS
             .iter()
             .copied()
             .filter(|ts| !wildcard && !persisted.enabled.iter().any(|n| n == ts))
             .collect();
-        tracing::warn!(
-            reasserted_entries = reasserted,
-            overridden_toolsets = ?missing,
-            "essential toolset floor overrode whitelist: toolsets the user \
-             had disabled are being re-enabled because the LLM cannot do \
-             useful work without them. Edit the list in \
-             hermix_tools::essential::ESSENTIAL_TOOLSETS if this is no \
-             longer the desired product behaviour."
-        );
+        if !overridden.is_empty() {
+            tracing::warn!(
+                reasserted_entries = reasserted,
+                overridden_toolsets = ?overridden,
+                "hard-essential toolset floor overrode whitelist: the listed \
+                 toolsets were re-enabled because the product cannot run \
+                 safely without them. Edit HARD_ESSENTIAL_TOOLSETS in \
+                 hermix_tools::essential if this is no longer desired."
+            );
+        }
     }
 }
 
@@ -455,17 +462,20 @@ fn apply_toggle_with_floor(
         }
     }
 
-    let reasserted = hermix_tools::essential::ensure_essentials_enabled(registry);
+    // The user is actively curating their toolset list here, so the soft
+    // floor is NOT applied — a soft toolset the user turned off stays off
+    // (explicit disable respected). Only the hard floor is enforced.
+    let reasserted = hermix_tools::essential::ensure_essentials_enabled(registry, false);
     if reasserted > 0 {
-        for ts in hermix_tools::essential::ESSENTIAL_TOOLSETS {
+        for ts in hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS {
             if registered.contains(*ts) && !new_enabled.iter().any(|n| n == ts) {
                 new_enabled.push(ts.to_string());
             }
         }
         tracing::warn!(
             reasserted_entries = reasserted,
-            floor = ?hermix_tools::essential::ESSENTIAL_TOOLSETS,
-            "runtime toolset toggle overrode essential floor; re-enabling \
+            floor = ?hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS,
+            "runtime toolset toggle overrode hard-essential floor; re-enabling \
              and persisting the floor-applied state so a restart sees the \
              same set."
         );
@@ -878,11 +888,11 @@ mod tests {
         // exactly (we call `set_toolset_enabled` on the same
         // registry) but the public API doesn't expose a getter to
         // assert on, so we test through the returned list.
-        for ts in hermix_tools::essential::ESSENTIAL_TOOLSETS {
+        for ts in hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS {
             if registered.iter().any(|n| n == ts) {
                 assert!(
                     returned.iter().any(|n| n == ts),
-                    "P1.7 regression: returned list must include floor toolset {ts} \
+                    "P1.7 regression: returned list must include hard floor toolset {ts} \
                      even when user requested everything off. Got: {returned:?}"
                 );
             }
@@ -934,11 +944,11 @@ mod tests {
         let mut requested: HashSet<String> = HashSet::new();
         requested.insert("web".to_string());
         let returned = apply_toggle_with_floor(&reg, &registered, &requested);
-        for ts in hermix_tools::essential::ESSENTIAL_TOOLSETS {
+        for ts in hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS {
             if registered.iter().any(|n| n == ts) {
                 assert!(
                     returned.iter().any(|n| n == ts),
-                    "P1.7: partial-user toggle must still re-include floor toolset {ts}"
+                    "P1.7: partial-user toggle must still re-include hard floor toolset {ts}"
                 );
             }
         }
@@ -946,5 +956,37 @@ mod tests {
             returned.contains(&"web".to_string()),
             "P1.7: user's `web` choice must be honoured"
         );
+    }
+
+    #[test]
+    fn apply_toggle_with_floor_respects_explicit_soft_disable() {
+        let (reg, registered) = fixture_registry();
+        // User keeps only `web` (a hard essential). Any soft essential
+        // that is registered must NOT be force-re-enabled by the floor —
+        // an explicit disable must be respected. This is the
+        // anti-regression test for the "essential toolset floor overrode
+        // whitelist" warning that used to fire on startup for `document`.
+        let mut requested: HashSet<String> = HashSet::new();
+        requested.insert("web".to_string());
+        let returned = apply_toggle_with_floor(&reg, &registered, &requested);
+
+        for ts in hermix_tools::essential::SOFT_ESSENTIAL_TOOLSETS {
+            if registered.iter().any(|n| n == ts) {
+                assert!(
+                    !returned.iter().any(|n| n == ts),
+                    "soft essential {ts} must stay off when the user toggled it \
+                     off and did not request it. Got: {returned:?}"
+                );
+            }
+        }
+        // Hard essentials still survive the toggle-off.
+        for ts in hermix_tools::essential::HARD_ESSENTIAL_TOOLSETS {
+            if registered.iter().any(|n| n == ts) {
+                assert!(
+                    returned.iter().any(|n| n == ts),
+                    "hard essential {ts} must survive an explicit toggle-off"
+                );
+            }
+        }
     }
 }
