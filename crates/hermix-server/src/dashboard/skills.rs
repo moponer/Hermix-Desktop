@@ -588,9 +588,10 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         include_str!("skills/office/office-cli/SKILL.md"),
     ),
     // custom-app-development: hx-shell 自定义应用开发指南（含真实 schema / API / 图标库），
-    // 内置为 seed 以便分发到其它机器；category 用 "desktop" 与既有目录保持一致。
+    // 内置为 seed 以便分发到其它机器；单一真相位置定为 "hermix" 分类（与 store 动态扫描
+    // 所有子目录的读取机制一致；运行期副本只在 ~/.hermix/skills/hermix/ 一份）。
     (
-        "desktop",
+        "hermix",
         "custom-app-development",
         include_str!("skills/custom-app-development.md"),
     ),
@@ -650,7 +651,7 @@ mod tests {
     fn seed_builtin_skills_writes_all_skills() {
         let dir = tempdir().unwrap();
         let count = seed_builtin_skills(dir.path()).unwrap();
-        assert_eq!(count, 17, "should seed exactly 17 skills");
+        assert_eq!(count, BUILTIN_SKILLS.len(), "should seed all builtin skills");
         // Verify some exist
         assert!(
             dir.path().join("software-development").join("architecture-design").join("SKILL.md").exists(),
@@ -709,7 +710,7 @@ mod tests {
         seed_builtin_skills(dir.path()).unwrap();
         let store = hermix_skills::FileSkillStore::new(dir.path().to_path_buf());
         let metas = store.list().await.unwrap();
-        assert_eq!(metas.len(), 17, "list should return all 17 seeded skills");
+        assert_eq!(metas.len(), BUILTIN_SKILLS.len(), "list should return all seeded skills");
         // Verify names from each category
         let names: Vec<&str> = metas.iter().map(|m| m.name.as_str()).collect();
         assert!(names.contains(&"architecture-design"));

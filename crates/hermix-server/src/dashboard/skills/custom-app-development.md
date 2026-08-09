@@ -1,6 +1,6 @@
 ---
 name: custom-app-development
-version: 11
+version: 12
 description: >
   自定义应用开发助手。当用户要求创建/开发一个桌面应用、桌面工具、独立程序、
   窗口应用、软件、小软件、打包成 EXE 的程序时使用。通过 custom_app_manager 工具
@@ -90,6 +90,31 @@ HERMIX_HOME/custom-apps/<id>/
     <id>.dev.html    ← 测试版（run action 用 hx-shell --html 直接加载，不落单 exe）
 ```
 
+## manifest 权限声明（必填，否则 validate L2 硬卡）
+
+`manifest.json` 里 **必须** 有 `permissions` 数组。validate 的 L2 关卡做"权限一致性"检查：
+**只要你在 `permissions` 里声明了任意权限，HTML/TSX 中用到的每个 `hx.*` API 就必须有对应权限，
+否则报 error 级（validate `ok=false`，无法交付）。** 没声明任何权限时只是 warning，但运行时壳不拦、
+ validator 仍建议声明。
+
+**有效权限值**：`fs-read` / `fs-write` / `exec` / `dialog` / `app` / `clipboard` / `net`
+
+**`hx.*` API → 所需权限映射**（用了哪个就声明哪个）：
+
+| hx API | 权限 |
+|---|---|
+| `hx.readFile` / `hx.readDir` / `hx.stat` | `fs-read` |
+| `hx.writeFile` / `hx.appendFile` / `hx.removeFile` / `hx.createDir` / `hx.removeDir` / `hx.readFileBytes` / `hx.writeFileBytes` | `fs-write` |
+| `hx.exec` | `exec` |
+| `hx.openDialog` / `hx.saveDialog` / `hx.showMessage` | `dialog` |
+| `hx.getInfo`（**第零步必调** → 必须声明 `app`） | `app` |
+| 剪贴板相关（壳当前未实现，仅占位） | `clipboard` |
+
+**最简安全写法**：不确定就全声明，至少包含 `app`（因为 `getInfo` 是强制第一步）：
+```json
+"permissions": ["fs-read", "fs-write", "exec", "dialog", "app"]
+```
+
 ## 两种开发模式
 
 | 模式 | 参数 | 产物 | 推荐 |
@@ -154,6 +179,7 @@ audioElement.play();
 |---|---|---|---|
 | `hx.exec(cmd, args)` | string, string[] | `{ok, data}` | 执行外部命令，返回 `{stdout, stderr, exitCode}` |
 | `hx.getInfo()` | — | `{ok, data}` | 壳信息（shell/engine/version/single_file/完整 API 清单） |
+| `hx.showMessage(msg)` | string | `{ok, data}` | 弹原生消息框（需 `dialog` 权限） |
 
 ### 原生对话框（V6 壳新增）
 
@@ -389,6 +415,18 @@ audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
 - [ ] 按钮/输入框尺寸一致、间距统一
 - [ ] 失败场景有具体错误提示
 
+## 已有自定义应用定位流程（强制）
+
+只要用户的话涉及"我已有的某个应用/工具/小软件"、"修改/更新/删除/打包/运行我的 XXX"、"帮我看看已安装的应用"、"应用装在哪"——**第一步必须调 `custom_app_manager`**，**严禁**自己拼 hermix home 路径去 `ls`/`read_file`/`read_dir`。
+
+**执行顺序（不允许跳）**：
+1. **`custom_app_manager.list`**：拿到所有已安装应用的 `id + name + description + category`。如果用户没给精确名字（"我那个播放器""之前的音乐 app"），把候选列出来让用户确认；禁止空泛反问"具体是哪个"。
+2. **匹配到唯一应用** → **`custom_app_manager.get({id})`**：读取完整 manifest + source。要修改就 `update`、要运行就 `run`、要打包就 `package`、要删除就 `delete`。
+3. **工具返回空列表** → 告诉用户"当前没有已安装的自定义应用"，不要再去猜 `C:/Users/*/hermix/custom-apps` 之类的路径。
+4. **工具调用失败** → 报告错误，不要连猜多个路径重试。
+
+**反例（严禁）**：截图里连续 `ls C:/Users/Public/hermix/custom-apps`、`C:/Users/qcc/hermix/custom-apps`、`C:/hermix/custom-apps` 全错——HERMIX_HOME 只能在运行时由工具解析，硬猜路径必然失败。
+
 ## agent 开发流（一次性到位交付）
 
 **核心铁律**：用户说"做个/开发一个/写个 工具/应用/软件"时，**直接判定为自定义应用**，不要反问、不要调其他通用代码工具。按下面 7 步走完，**代码一次性到位、前端美观、功能完整、无任何报错**才交付。
@@ -399,21 +437,34 @@ audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
    - UI 布局（标题栏 + 工具栏 + 内容 + 状态区，浅色中性灰、无蓝紫、无 emoji）
 2. 写 `manifest.json`：
    ```json
-   {"id": "my-app", "name": "我的应用", "version": "1.0.0", "long_description": "功能介绍...\n使用方法...\n更新方法...\n分发方法...", "window_config": {"width": 900, "height": 600, "resizable": true}}
+   {"id": "my-app", "name": "我的应用", "version": "1.0.0", "permissions": ["fs-read", "fs-write", "exec", "dialog", "app"], "long_description": "功能介绍...\n使用方法...\n更新方法...\n分发方法...", "window_config": {"width": 900, "height": 600, "resizable": true}}
    ```
    **`long_description` 必填**：含功能介绍、**使用方法、更新方法（回来用 update action 改代码）、分发方法（package 出单 exe）**，在详情界面"说明"Tab 展示。
 3. 写代码（`index_html` 自包含 或 `app_source` TSX + `source_files?`）——**严格按"前端默认标准"与"自检清单"生成界面**，禁 CDN / 禁 emoji / 禁 input-file / 必带标题栏。
-4. 调 `custom_app_manager.create({manifest, index_html, app_source?, source_files?})`。
+4. **先 `custom_app_manager.list` 查重**：若已存在同类应用（按名称/描述/功能判断，如"本地音乐"和"音乐播放器"是同一个东西）→ 直接 `update` 它迭代；否则 `custom_app_manager.create({manifest, index_html, app_source?, source_files?})`。
 5. **`validate` 循环到 ok=true**（L0 manifest + L1 HTML/JS + L2 权限 + L3 前端质量）。每轮失败按 issues 的 message 修复，再 validate，直到 `ok=true`。**不得带着 error 交付**。
 6. **`run` 测试版即时预览**：`run` 用 dev 模式（`hx-shell --html` 加载 `dist/<id>.dev.html`），不落单 exe，即时看到效果。如需确认运行时无报错，调 `smoke`（先 `package` 再启动 exe 抓 stderr）。
 7. **交付说明（必须告诉用户）**：
-   - **去哪运行**：已用 `run` 启动测试版；或桌面端"运行"按钮（`HERMIX_HOME/custom-apps/<id>/dist/<id>.dev.html`）。
+   - **去哪运行**：开发期用 `run` action 启动测试版（hx-shell 内部加载 `dist/<id>.dev.html`，无需手动碰文件）；正式交付用 `package` 出 `dist/<id>.exe` 双击即跑。**严禁让用户用浏览器直接打开 `.html` 文件**——那样 `window.hx.*` 全部不可用，应用必报错。
    - **如何打包**：调 `package` → 生成 `dist/<id>.exe` + `WebView2Loader.dll`，双击即跑（WebView2 系统自带），可发给别人。
    - **如何回来继续更新**：直接调 `update` action 改 `app_source`/`index_html`，再 `run` 即时预览；或桌面端"编辑"按钮回到本 skill 继续迭代。
 
 **禁止**：带着 validate error 交付 / 用 input-file 让用户选文件（改用 `hx.openDialog`）/ 引 CDN / 留 emoji / 缺标题栏。
 
 ## 关键约束
+
+- **【致命】技术栈唯一，禁止再问用户选型**：自定义应用运行时就是 **hx-shell（wry + WebView2）**，不存在"要不要用 Tauri / Electron / Neutralinojs / 终端 TUI"这种问题。
+  - 用户说"做个应用/工具/软件" → 直接按 hx-shell 实现，不要反问技术形态。
+  - 如果某个功能 hx-shell 做不到（如需要系统级 hook、内核驱动、独立 Rust 后台进程），明确告诉用户"该功能超出 hx-shell 能力范围"，而不是换壳。
+  - **hx-shell 不能"加载"Tauri 应用**：Tauri 需要独立编译的 Rust 二进制和框架运行时，hx-shell 只能跑 HTML/JS payload。两者是不同壳，不能混用。
+
+- **【致命】创建前必须 `list` 查重，禁止重复建同类应用**：每次要 `create` 之前，先 `custom_app_manager.list` 看是否已有功能重叠的应用（按名称/描述判断，如"本地音乐"和"音乐播放器"是同一个东西）。若已存在 → 用 `update` 迭代它，**绝不再 `create` 第二个**。否则会出现"两个音乐播放器"这类重复应用，用户要手动清理。
+- **【致命】安装目录由工具解析，禁止手动拼路径写应用文件**：自定义应用由 `custom_app_manager` 的 `create`/`update` action 写入，落盘位置是运行时 `hermix_home()/custom-apps/<id>/`（用户的**数据目录**，与 Hermix 装在哪、源码在哪都无关——换电脑/换安装路径不变）。agent **绝不**自己 `write_file` 拼路径去写应用文件，**更绝不**写到 Hermix 安装目录或项目源码树（`apps/`、`src/`、仓库任意位置）——那是给开发者改框架用的，不是放用户自定义应用的地方。要改应用代码，永远走 `update` action。
+
+- **【致命】任何查看/读取自定义应用的操作都必须先调 `custom_app_manager`，严禁自己拼 `hermix_home` 路径**：
+  - 想知道"已安装哪些自定义应用"、"某个应用是否存在"、"应用装在哪个目录" → **只能**先调 `custom_app_manager.list`；要读单个应用详情 → **只能**调 `custom_app_manager.get({id})`。
+  - **绝对禁止**自己拼以下任何路径去 `ls`/`read_dir`/`read_file`：`C:/Users/*/hermix/custom-apps`、`C:/Users/Public/hermix/custom-apps`、`C:/hermix/custom-apps`、`~/hermix/custom-apps`、`%USERPROFILE%/hermix/custom-apps`、`<repo>/apps/<任何>`。HERMIX_HOME 由 Hermix 运行时根据当前用户/安装位置解析，**不同机器路径不同**，任何硬猜都必然出错（如截图里连续三个路径全错）。
+  - 如果 `custom_app_manager.list` 返回空列表 → 告诉用户"当前没有已安装的自定义应用"；如果工具调用失败 → 报告工具错误，**不要**连猜多个路径试。那种"查看目录 Tool execution failed"连续多次就是典型错误。
 
 - **【致命】窗口无原生标题栏（V7 壳）**：窗口 `decorations: false`，**必须**在 HTML 顶部自行实现标题栏（拖动区 + 最小化/最大化/关闭按钮）。不写标题栏 = 用户无法移动/关闭窗口（只能 Alt+F4）。用 `window.hx.win.*` API 控制窗口。标题栏模板见上方"自定义标题栏模板"章节。
 - **整个应用就是一个 `index.html`**：没有 backend.ts / ui.tsx 分离文件！所有 HTML/CSS/JS 都内联在单个 index.html 里。TSX 模式由 esbuild 编译后 inline。
