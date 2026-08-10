@@ -564,6 +564,27 @@ impl AgentLoop {
                 result.is_error,
             );
             push_tool_result(ctx, tool_calls, &result.tool_call_id, &content);
+            // (human-approval fix): if this tool call was approved by the
+            // USER clicking 允许 on the approval card (not an allowlist /
+            // session-bypass auto-allow), inject an explicit system note so
+            // the LLM knows the tool ran because the *user* consciously
+            // approved it. Without this, the model cannot tell a manual
+            // approval from a silent rule-based allow, and may report the
+            // action as if it auto-passed. We consume the id so the note
+            // fires exactly once, on the turn the tool actually executes.
+            if let Some(ids) = &self.callbacks.human_approved_ids {
+                let mut guard = ids.lock().expect("human_approved_ids poisoned");
+                if guard.remove(&result.tool_call_id) {
+                    drop(guard);
+                    let name = tool_name.unwrap_or("<未知工具>");
+                    ctx.add_message(Message::system(format!(
+                        "[人工审批确认] 你刚才请求的 `{name}` 工具调用，已由用户在审批卡片上点击「允许」人工审查通过。\
+                         这不是自动放行或白名单放行，而是用户有意识的人工批准。请尊重这一人工决策，\
+                         并在向用户汇报时如实说明：该操作是经用户手动批准后才执行的。",
+                        name = name,
+                    )));
+                }
+            }
             // if the result is a *denial* (user拒绝 /
             // 超时 / 连接中断), inject the structured "tell the user"
             // system note right after the tool_result so the LLM's

@@ -2102,6 +2102,16 @@ impl AgentService for LocalAgentService {
         //the global registry .
         let active_call_id_for_start = tool_ctx.active_call_id.clone();
         let active_call_id_for_complete = tool_ctx.active_call_id.clone();
+        // Shared set of tool_call_ids the user manually approved via the
+        // approval card. `on_pre_tool_approved` (a field below) inserts into
+        // it; the agent loop reads it to tell the LLM "this ran because the
+        // USER approved it", distinguishing human approval from
+        // allowlist/session-bypass auto-allow. Defined here (outside the
+        // `AgentCallbacks { }` literal) so every field block below can
+        // capture it.
+        let human_approved_ids = Arc::new(std::sync::Mutex::new(
+            std::collections::HashSet::new(),
+        ));
         let callbacks = AgentCallbacks {
             // Live reasoning bridge: the agent loop calls this for
             // every chunk of `<think>...</think>` text the LLM emits.
@@ -2640,6 +2650,7 @@ impl AgentService for LocalAgentService {
             // separate pending map.
             on_pre_tool_approved: {
                 let profile_arc = profile_arc_for_callback.clone();
+                let human_ids = human_approved_ids.clone();
                 Some(Arc::new(move |tc: &ToolCall| {
                     let raw_params: Value = serde_json::from_str(&tc.function.arguments)
                         .unwrap_or(Value::Object(Default::default()));
@@ -2658,8 +2669,17 @@ impl AgentService for LocalAgentService {
                         command = ?grant.command,
                         "permission_profile: granted resource from approved tool call"
                     );
+                    // Record this as a *manual* (human) approval so the
+                    // agent loop can flag it in the LLM context and the
+                    // model knows the tool ran because the USER approved
+                    // it — not because a rule auto-allowed it.
+                    human_ids
+                        .lock()
+                        .expect("human_approved_ids poisoned")
+                        .insert(tc.id.clone());
                 }))
             },
+            human_approved_ids: Some(human_approved_ids),
             on_prefetch_intent: effective_overrides.on_prefetch_intent.clone(),
             // (type-B root-cause): forward the
             // server-side soft-shutdown `Notify` into the agent's

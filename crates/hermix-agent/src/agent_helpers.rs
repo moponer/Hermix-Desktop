@@ -403,6 +403,19 @@ pub struct AgentCallbacks {
     /// profile so the same resource doesn't re-prompt next turn. See
     /// `tool_dispatch::resolve_pre_dispatch` for the call site.
     pub on_pre_tool_approved: Option<Arc<dyn Fn(&ToolCall) + Send + Sync>>,
+    /// Tracks `tool_call_id`s the user manually approved via the approval
+    /// card. `on_pre_tool_approved` fires ONLY when an `AwaitApproval`
+    /// oneshot resolves to `Approved` — never for allowlist hits,
+    /// session-bypass, or risk-safe `Allow` decisions. So any id here is
+    /// proof the *user* consciously approved that tool call, not a rule
+    /// auto-allowing it. The agent loop reads this in
+    /// `do_post_tool_iteration` and injects an explicit
+    /// "[user manually approved]" system note into the LLM context, so the
+    /// model stops conflating human approval with silent auto-allow.
+    /// `None` (default) means the upstream layer didn't wire the
+    /// collection (headless / unit tests); the loop skips the note.
+    pub human_approved_ids:
+        Option<Arc<std::sync::Mutex<std::collections::HashSet<String>>>>,
     /// H3: Called when the prefetcher resolves with an intent prediction.
     /// Payload is a JSON string containing `{ intent, confidence, results }`
     /// in the same shape as `StreamEvent::PrefetchIntent`.
