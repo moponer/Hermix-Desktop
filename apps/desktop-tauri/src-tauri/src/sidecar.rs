@@ -4,6 +4,14 @@ use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::time::Duration;
 use tauri::Emitter;
 
+// 模块级: 供 sidecar spawn (hermix.exe) 与孤儿扫描 (netstat/tasklist/
+// taskkill) 共用。Windows GUI 应用 spawn console 子进程时必须带
+// CREATE_NO_WINDOW (0x08000000), 否则每次启动/扫描都会闪黑色命令行窗。
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 pub struct HermixSidecar {
     child: Option<Child>,
     stdout: Option<ChildStdout>,
@@ -172,8 +180,6 @@ impl HermixSidecar {
         // NOT clear the parent env, so the child inherits all of
         // them. We also explicitly forward them in case a test
         // harness has scrubbed the parent env.
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let mut cmd = Command::new(&bin);
         // hermix.exe's main.rs (crates/hermix-server/src/main.rs) does
         // NOT parse argv — `serve --port N` would be silently ignored.
@@ -371,6 +377,7 @@ impl HermixSidecar {
         let needle = format!(":{}", port);
         let netstat = match std::process::Command::new("netstat")
             .args(["-ano", "-p", "TCP"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
         {
             Ok(o) => o,
@@ -502,6 +509,7 @@ impl HermixSidecar {
             );
             let kill = std::process::Command::new("taskkill")
                 .args(["/F", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
                 .output();
             match kill {
                 Ok(o) if o.status.success() => {
@@ -552,6 +560,7 @@ impl HermixSidecar {
     fn lookup_image_for_pid(pid: u32) -> String {
         let tasklist = std::process::Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
         match tasklist {
             Ok(o) if o.status.success() => {

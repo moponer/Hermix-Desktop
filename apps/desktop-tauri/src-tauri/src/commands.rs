@@ -586,6 +586,7 @@ pub async fn render_office_preview(
         let output = tokio::process::Command::new(&officecli_bin)
             .args(["view", canonical.to_str().unwrap_or(""), "html"])
             .env("OFFICECLI_NO_AUTO_RESIDENT", "1")
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW: 防黑窗闪烁
             .output()
             .await
             .map_err(|e| format!("failed to run officecli: {e}"))?;

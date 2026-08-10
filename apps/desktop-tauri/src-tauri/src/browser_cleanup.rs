@@ -44,6 +44,15 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// Spawn a console tool (taskkill) without flashing a black window:
+/// the launcher is a Windows GUI app, so child console processes must
+/// set CREATE_NO_WINDOW (0x08000000) or the terminal flashes briefly.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Filename of the PID file written by the CDP bootstrap.
 const BROWSER_PID_FILENAME: &str = "browser.pid";
 
@@ -118,6 +127,7 @@ pub fn kill_spawned_chrome() {
     // renderer alive and the next probe sees 9222 still bound.
     let result = std::process::Command::new("taskkill")
         .args(["/F", "/T", "/PID", &pid.to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
