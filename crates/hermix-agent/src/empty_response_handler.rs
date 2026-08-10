@@ -300,7 +300,8 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
     // turn but produced NO visible text. Trusting the stop here would
     // end the turn with zero words for the user: "任务结束但没有任何
     // 总结" (tool calls visible, conclusion invisible). Push the model
-    // once to write a task summary (done/root-cause/fix/notes); a
+    // once to write ANY concluding reply — the content/tone/detail is
+    // entirely the LLM's choice, we only require that it speaks; a
     // second silent stop is respected via the cap.
     if work_state == WorkState::StoppedSilently
         && (input.max_turns == 0 || input.total_turns < input.max_turns)
@@ -315,7 +316,7 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
         );
         return EmptyResponseOutput {
             action: EmptyResponseAction::ContinueWithSystemNudge(
-                "你刚才调用了工具但本轮没有输出任何文字。请立即给用户一个完整的任务总结：已完成什么、发现了什么根因、做了什么修复、还有什么需要注意或确认。不要只调用工具而不说话。".to_string(),
+                "你刚才调用了工具但本轮没有输出任何文字。请给用户一个总结性的回复（内容、详略、语气由你决定）。不要只调用工具而不说话。".to_string(),
             ),
             new_codex_ack_continuations: input.codex_ack_continuations,
             new_autonomous_nudge_count: input.autonomous_nudge_count,
