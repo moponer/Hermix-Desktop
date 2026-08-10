@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
 import {
   PanelRight,
   Lock,
+  ArrowDown,
 } from "lucide-react";
 import {
   shouldFollowOnStreamChunk,
@@ -1028,6 +1029,10 @@ contextUsage = null,
   // the bottom, so browsing history doesn't get interrupted by
   // new streaming chunks.
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Show/hide the floating "scroll to bottom" button. Mirrors
+  // hasUserScrolledUpRef so we don't re-render on every scroll tick.
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const showScrollToBottomRef = useRef(false);
   // (Bug #5): the previous `isNearBottom` callback lived
   // here, but with the scrollIntoView → scrollTop rewrite the value
   // is now read directly inside `handleContainerScroll` (same
@@ -1486,6 +1491,8 @@ const clearPendingImages = useCallback(() => {
     if (prevSessionIdRef.current === currentId) return;
     prevSessionIdRef.current = currentId;
     hasUserScrolledUpRef.current = false;
+    showScrollToBottomRef.current = false;
+    setShowScrollToBottom(false);
     justRestoredRef.current = true;
   }, [session?.id]);
 
@@ -1496,7 +1503,12 @@ const clearPendingImages = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-    hasUserScrolledUpRef.current = dist >= 150; // matches threshold in isNearBottom
+    const isUp = dist >= 150; // matches threshold in isNearBottom
+    hasUserScrolledUpRef.current = isUp;
+    if (showScrollToBottomRef.current !== isUp) {
+      showScrollToBottomRef.current = isUp;
+      setShowScrollToBottom(isUp);
+    }
   }, []);
 
   // Non-streaming: scroll on message count change (new message, session switch).
@@ -2027,7 +2039,7 @@ const clearPendingImages = useCallback(() => {
       {/* Todo cards are spliced inline next to their originating
         assistant message (see `streamRow` useMemo above), instead of a
         separate strip at the top of the stream. */}
-      <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
+      <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="relative flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
         <div className="msg-stream-list max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-5">
           {streamRow.map((row, idx) => {
             if (row.kind === "todo") {
@@ -2228,11 +2240,12 @@ const clearPendingImages = useCallback(() => {
               the bottom says "可以继续提问" is a lie. */}
 
           {/* ── 底部状态：唯一真相来源 ──
-              忙碌（isStreaming || postStreamActivity || pendingToolsCount>0
-                   || 近 4s 内有 agent 活动事件）
+              忙碌 (isStreaming || sending || streamingAssistantId 还在
+                   || postStreamActivity || pendingToolsCount>0
+                   || 近 4s 内有 agent 活动事件)
               → 显示"正在回复 / 分析中 / 执行工具"，正文仍在输出或 agent 仍在干活；
               完全空闲（全部为 false）→ 才显示"可以继续提问"。
-              关键：绝不能在本体还在输出 / agent 还在跑时显示"可以继续提问"。 */}
+              关键：绝不能在本体还在输出 / agent 还在跑时显示"可以继续提问"。*/}
           {(() => {
             const recentActivityWindowMs = 4000;
             const hasRecentActivity =
@@ -2240,6 +2253,8 @@ const clearPendingImages = useCallback(() => {
               Date.now() - lastActivityAt < recentActivityWindowMs;
             const busy =
               isStreaming ||
+              sending ||
+              !!streamingAssistantId ||
               postStreamActivity ||
               pendingToolsCount > 0 ||
               hasRecentActivity;
@@ -2276,6 +2291,28 @@ const clearPendingImages = useCallback(() => {
 
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Scroll-to-bottom shortcut: appears when the user has scrolled
+            up to read history, letting them jump back to the latest message
+            with one click. Positioned relative to the scroll viewport so it
+            stays fixed over the content while scrolling. */}
+        {showScrollToBottom && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom(true)}
+            className="absolute right-6 bottom-5 z-20 flex items-center justify-center w-9 h-9 rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95"
+            style={{
+              background: "var(--color-bg-elevated)",
+              color: "var(--color-text-primary)",
+              border: "1px solid var(--color-border-subtle)",
+              boxShadow: "0 4px 14px rgba(0,0,0,0.25)",
+            }}
+            title="滚动到底部"
+            aria-label="滚动到底部"
+          >
+            <ArrowDown size={18} />
+          </button>
+        )}
       </div>
 
       <div className="px-3 sm:px-4 pb-4 shrink-0">
