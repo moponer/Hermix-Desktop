@@ -11,6 +11,7 @@
 //!
 //! 测试版（dev）模式：启动时传 `--html <path>` 直接加载外部 html 文件，
 //! 不读 exe 内 payload、不落单 exe，便于开发期快速预览。
+//! 若 html 文件缺失/不可读，显示友好错误页（含原因与运行/打包提示），而非崩溃。
 //!
 //! 绑定（页面端）：
 //!   window.hx.*  — 文档化公开 API（writeFile/readFile/getInfo/exec/...）
@@ -1230,21 +1231,29 @@ fn main() -> wry::Result<()> {
             })();
         "#);
 
-    // 页面 HTML：单文件模式用尾部 payload，开发模式读外部 resources/index.html
+    // 页面 HTML：单文件模式用尾部 payload，开发模式读外部 html 文件
     let html_source: String = if let Some(p) = &html_arg {
         // 测试版 / dev 模式：直接加载外部 html 文件，不落单 exe、不拼 payload
         hx_log(&format!("dev mode (--html): loading {}", p));
-        std::fs::read_to_string(p).unwrap_or_else(|e| {
-            format!("<!DOCTYPE html><html><body><h1 style='color:red'>--html 加载失败: {e}</h1></body></html>")
-        })
+        match std::fs::read_to_string(p) {
+            Ok(s) => s,
+            Err(e) => {
+                hx_log(&format!("--html load failed: {e}"));
+                dev_error_html(&format!("--html 加载失败: {e}"), p)
+            }
+        }
     } else if let Some(p) = payload {
         String::from_utf8_lossy(&p).to_string()
     } else {
         let fp = res_dir.join("index.html");
         hx_log(&format!("dev mode: loading {}", fp.display()));
-        std::fs::read_to_string(&fp).unwrap_or_else(|e| {
-            format!("<!DOCTYPE html><html><body><h1 style='color:red'>index.html 加载失败: {e}</h1></body></html>")
-        })
+        match std::fs::read_to_string(&fp) {
+            Ok(s) => s,
+            Err(e) => {
+                hx_log(&format!("index.html load failed: {e}"));
+                dev_error_html(&format!("index.html 加载失败: {e}"), &fp.display().to_string())
+            }
+        }
     };
     hx_log(&format!("html source: {} bytes", html_source.len()));
 
@@ -1266,6 +1275,56 @@ fn main() -> wry::Result<()> {
             *control_flow = ControlFlow::Exit
         }
     });
+}
+
+// HTML 转义（防 XSS / 路径特殊字符破坏页面结构）
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// dev 测试版加载失败时显示的友好错误页。
+/// 灰系配色、无蓝紫，符合 Hermix 设计铁律。reason/hint_path 经 html_escape 防注入。
+/// 用结构化 format! 占位符生成，绝不把 Rust 控制流嵌进 HTML 字符串（那是上次损坏的根因）。
+fn dev_error_html(reason: &str, hint_path: &str) -> String {
+    let reason_esc = html_escape(reason);
+    let path_esc = html_escape(hint_path);
+    format!(
+        r#"<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>加载失败 · Hermix App</title>
+<style>
+  * {{ box-sizing: border-box; }}
+  html,body {{ margin:0; min-height:100%; background:#0f0f12; color:#d0d0dc;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }}
+  .wrap {{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:32px; }}
+  .card {{ max-width:560px; width:100%; background:#1c1c20; border:1px solid #2e2e34;
+    border-radius:14px; padding:28px 32px; }}
+  .dot {{ width:10px; height:10px; border-radius:50%; background:#e5534b; display:inline-block; vertical-align:middle; margin-right:10px; }}
+  h1 {{ font-size:18px; margin:0 0 16px; font-weight:600; }}
+  .reason {{ background:#232328; border:1px solid #2e2e34; border-radius:8px;
+    padding:12px 14px; font-size:13px; color:#e0e0e8; word-break:break-all; white-space:pre-wrap; margin:0 0 14px; }}
+  .path {{ font-size:12px; color:#9a9aa6; margin:0 0 18px; word-break:break-all; }}
+  .tip {{ font-size:13px; line-height:1.75; color:#b8b8c4; margin:0; }}
+  .tip code {{ background:#232328; padding:2px 6px; border-radius:4px; color:#d0d0dc; font-size:12px; }}
+  strong {{ color:#fff; font-weight:600; }}
+</style></head>
+<body><div class="wrap"><div class="card">
+  <h1><span class="dot"></span>应用加载失败</h1>
+  <p class="reason">{}</p>
+  <p class="path">目标文件：{}</p>
+  <p class="tip">
+    这是 <strong>dev 测试版</strong>。请确认：<br>
+    1. 文件路径是否正确、文件是否存在且可读；<br>
+    2. 若用 <code>hx-shell.exe --html &lt;path&gt;</code> 运行，<code>&lt;path&gt;</code> 应指向生成的 <code>dist/&lt;id&gt;.dev.html</code>；<br>
+    3. 需要分发时，请用 <code>custom_app_manager.package</code> 打包成单文件 exe。
+  </p>
+</div></div></body></html>"#,
+        reason_esc, path_esc
+    )
 }
 
 fn exe_dir() -> PathBuf {
