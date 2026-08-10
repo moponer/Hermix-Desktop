@@ -2971,7 +2971,7 @@ function Composer(p: ComposerProps) {
             >
               <Square size={12} fill="currentColor" />
             </button>
-          ) : p.isStreaming ? (
+          ) : (p.isStreaming || p.sending) ? (
             <button
               onClick={() => p.onStop?.()}
               className="flex items-center justify-center w-8 h-8 rounded-lg transition-all hover:opacity-90"
