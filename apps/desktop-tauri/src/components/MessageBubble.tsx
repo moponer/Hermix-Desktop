@@ -98,6 +98,19 @@ interface MessageBubbleProps {
    * it with the new expert's. `null` means no switch happened.
    */
   expertCutoffAt?: number | null;
+  /**
+   * True when at least one tool call on this message is still running
+   * in the background (between the LLM stream settling and the next
+   * LLM call). Used by the expanded/collapsed decision for the
+   * reasoning + tool timeline block: collapsing while a tool is still
+   * in-flight makes it look like the turn ended when it has not. The
+   * companion `keepOpen` prop covers the explicit "paused for approval"
+   * case; this one covers the implicit "background tool running" /
+   * "streaming session still active" case. Driven by ChatView from
+   * `pendingToolsCount` and `streamingAssistantId`. Defaults to false
+   * so non-ChatView callers (e.g. tests) keep the legacy auto-collapse.
+   */
+  hasRunningTool?: boolean;
 }
 
 export function MessageBubble({
@@ -107,6 +120,7 @@ export function MessageBubble({
   showHeader = true,
   isStreaming = false,
   keepOpen = false,
+  hasRunningTool = false,
   expertCutoffAt,
 }: MessageBubbleProps) {
   if (message.role === "user") return <UserMessage message={message} />;
@@ -150,6 +164,7 @@ export function MessageBubble({
       showHeader={showHeader}
       isStreaming={isStreaming}
       keepOpen={keepOpen}
+      hasRunningTool={hasRunningTool}
       expertCutoffAt={expertCutoffAt}
     />
   );
@@ -770,7 +785,7 @@ function UnifiedTimelineRenderer({
 
 // ── Assistant message ────────────────────────────────────────────
 function AssistantMessage({
-  message, workspaceRoot: _workspaceRoot, showHeader = true, onPathClick, isStreaming, keepOpen = false, expertCutoffAt: _expertCutoffAt,
+  message, workspaceRoot: _workspaceRoot, showHeader = true, onPathClick, isStreaming, keepOpen = false, hasRunningTool: hasRunningToolProp, expertCutoffAt: _expertCutoffAt,
 }: {
   message: ChatMessage;
   workspaceRoot?: string | null;
@@ -787,6 +802,22 @@ function AssistantMessage({
    * tool). See `MessageBubbleProps.keepOpen` for the full rationale.
    */
   keepOpen?: boolean;
+  /**
+   * External "is anything still running for this message" signal from
+   * ChatView (streamingAssistantId still alive + this msg is the
+   * last assistant + pendingToolsCount/hasPendingApproval). When set
+   * (i.e. ChatView passed a real boolean, not undefined), it OVERRIDES
+   * the internal `useMemo` derivation from message.toolCalls. The
+   * internal memo only sees toolCalls whose status="running" locally
+   * — it cannot see that the agent loop is *about to call* another
+   * tool or that the LLM stream has settled but the WS session is
+   * still active. ChatView has those cross-message signals, so when
+   * it provides one we trust it.
+   *
+   * `undefined` (legacy / non-ChatView callers) → fall back to the
+   * internal useMemo so older tests/previews keep working.
+   */
+  hasRunningTool?: boolean;
   /**
    * Whether THIS message is the live streaming message. Only the
    * currently-streaming message is allowed to show the "等待回复"
@@ -827,8 +858,14 @@ function AssistantMessage({
     const d = formatDuration(message.durationMs);
     return d ? `已完成 ${n} 个工具 ${d}` : `已完成 ${n} 个工具`;
   })();
-  /** True when there's at least one tool still in "running" state */
-  const hasRunningTool = useMemo(
+  /** True when there's at least one tool still in "running" state.
+   *  Prefer the cross-message signal from ChatView (`hasRunningToolProp`)
+   *  when provided: it sees the streamingAssistantId + pendingToolsCount
+   *  + hasPendingApproval union, which catches "LLM stream just settled
+   *  but the WS session is still active" — the local toolCalls check
+   *  below cannot. Fall back to the local derivation for non-ChatView
+   *  callers (tests, previews). */
+  const hasRunningTool = hasRunningToolProp ?? useMemo(
     () => toolCalls.some((tc) => tc.status === "running" || !tc.status),
     [toolCalls],
   );

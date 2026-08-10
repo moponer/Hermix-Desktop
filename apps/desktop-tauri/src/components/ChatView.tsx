@@ -2102,6 +2102,20 @@ const clearPendingImages = useCallback(() => {
                   (hasPendingApproval || pendingToolsCount > 0) &&
                   msg.id === lastAssistantId
                 }
+                // 修复(2026-08-10): ChatView 之前漏传此 prop, MessageBubble 内部
+                // expanded 判断收到 undefined → 折叠。原 a0d6c7e4 加了 hasRunningTool
+                // 入参但忘了在调用点接线, 导致"工具后台执行 / 审批等待 / LLM 流
+                // settle 后等下次调用"场景下 thinking 块仍塌。条件:
+                //   - msg 是当前最后一条 assistant (lastAssistantId) — 历史消息折叠
+                //   - 且 agent loop 还在活动: 后台有 tool 在跑 / 有审批等待 /
+                //     streamingAssistantId 仍存在 (LLM 流 settle 但 session 未结束,
+                //     即 useStreamChat 显示 "AI 正在分析结果 / 准备下一步" 这个间隙)
+                hasRunningTool={
+                  msg.id === lastAssistantId &&
+                  (pendingToolsCount > 0 ||
+                    hasPendingApproval ||
+                    !!streamingAssistantId)
+                }
                 onPathClick={onPathClick}
                 expertCutoffAt={expertCutoffAt}
               />
