@@ -12,9 +12,8 @@
  * shows the language label + copy button + oneDark highlight the
  * moment the closing ``` arrives.
  *
- * Phase prop from ChatView drives the status label and the gap
- * animation:
- *   streaming  → "正在生成…" + 段间隙动画
+ * Phase prop from ChatView drives the static status label in the meta line:
+ *   streaming  → "正在思考…" (static, no internal dot animation)
  *   slow       → muted ⚠️ + "响应较慢" (no red, no error tone)
  *   completed  → (meta line collapses — no chip, no time text)
  *   error      → muted gray "出错了"
@@ -22,17 +21,10 @@
  *   partial    → muted gray "未完成"
  *
  * Terminal states render no chip / timestamp (MessageBubble takes over
- * and shows the real time). In-progress states keep the "正在生成…" text
- * and segment-gap animation unchanged.
- *
- * Segment-gap animation:
- *   The "正在生成…" animation moved from the header to the segment gap —
- *   after each output segment ends and before the next begins, a heartbeat
- *   + scanline shows at the start of the next line. Detected via the
- *   markdown ending in a newline: `/\n\s*$/`。
- *   · 文本以换行结尾 → 刚结束一段、下一段还没来 → 显示 dot
- *   · 文本不以换行结尾 → 当前段还在写 → 不显示 dot（避免段内重叠）
- *   · 流结束（phase !== streaming/connecting/slow） → 自动消失
+ * and shows the real time). In-progress states keep the "正在思考…" label
+ * so the bubble still reads as "working", but we intentionally avoid extra
+ * animated dots/shimmers inside the bubble — the single bottom
+ * AgentActivityIndicator is the only motion cue.
  *
  * Unified timeline rendering — reasoning / tools / text
  * are now rendered in chronological order using `unifiedSteps`,
@@ -46,7 +38,6 @@ import { Clock } from "lucide-react";
 import { memo, useDeferredValue, useMemo } from "react";
 import { AlertTriangle, XCircle } from "lucide-react";
 import { Avatar } from "./Avatar";
-import { InlineThinkingDot } from "./InlineThinkingDot";
 import { MarkdownBody } from "./MarkdownBody";
 import { parseContent } from "./messageParser";
 import { ProcessTimeline, MessageCopyAction } from "./MessageBubble";
@@ -140,17 +131,6 @@ const STREAMING_PHASES: ReadonlySet<StreamPhase> = new Set<StreamPhase>([
   "reconnecting",
 ]);
 
-/**
- * 检测 markdown 文本是否"刚结束一段、下一段还没开始"：
- *   · 末尾是单个 `\n` 或两个 `\n`（paragraph break）→ true
- *   · 末尾是空白 + 换行                              → true
- *   · 其他（当前段还在写、或完全空文本）              → false
- */
-function endsAtParagraphBoundary(text: string): boolean {
-  if (text.length === 0) return false;
-  return /\n\s*$/.test(text);
-}
-
 /** Detect retry/error status messages that should show even during streaming phases. */
 function isRetryStatus(statusText: string): boolean {
   return /retry|retrying|重试|invalid.*tool|truncated|empty.*response/i.test(statusText);
@@ -223,23 +203,10 @@ function StreamingBubbleImpl({
     return steps;
   }, [unifiedSteps, reasoningContent, executionTimeline, parsedStream.body]);
 
-  const showGapDot =
-    STREAMING_PHASES.has(effectivePhase) && endsAtParagraphBoundary(deferred);
-
   // When the LLM hasn't sent any text yet (e.g. it just started and is
-  // about to call a tool), show a "thinking…" placeholder so the
-  // avatar + animation is always visible during a turn.
+  // about to call a tool), the static header label "正在思考…" is still
+  // visible, so we no longer need an additional animated placeholder.
   const isStreamingPhase = STREAMING_PHASES.has(effectivePhase);
-  const hasTextStep = effectiveSteps.some((s) => s.kind === "text");
-  const hasNoContent = !hasTextStep;
-
-  // detect whether any tool group is still running so we can
-  // suppress the shimmer indicator while tool cards are active.
-  const hasRunningToolInSteps = isStreamingPhase && effectiveSteps.some(
-    (s) => s.kind === "tools" && s.events.some(
-      (e) => e.type === "tool_start" || e.type === "tool_stdout",
-    ),
-  );
 
   return (
     // Same outer layout as MessageBubble(showHeader=true) so the
@@ -261,13 +228,6 @@ function StreamingBubbleImpl({
             and keeping the action attached to the content it copies. */}
         {showHeader && (
           <div className="flex items-center gap-2 mb-1.5 text-text-faint">
-            {STREAMING_PHASES.has(effectivePhase) && (
-              <InlineThinkingDot
-                size="sm"
-                variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "default"}
-                hideHint
-              />
-            )}
             {status?.icon}
             {status?.label && (
               <span className={`h-tiny ${status?.className ?? ""}`}>{status?.label}</span>
@@ -323,40 +283,6 @@ function StreamingBubbleImpl({
             </div>
           );
         })()}
-
-        {/* Gap dot at the end of the last text step */}
-        {showGapDot && (
-          <InlineThinkingDot
-            asGap
-            variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "default"}
-            hideHint
-          />
-        )}
-
-        {/* Thinking placeholder when no content yet */}
-        {hasNoContent && isStreamingPhase && (
-          showHeader ? (
-            <div className="flex items-center gap-2 py-3 text-text-muted">
-              <InlineThinkingDot
-                variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "default"}
-                hideHint
-              />
-            </div>
-          ) : null
-        )}
-
-        {/* "正在回复" 流光指示器 — 只要有文本内容且仍在流式输出就显示，
-             让用户明确知道后端还在工作（调工具/生成下一段）。
-             工具运行中隐藏（工具卡片自带 🔄 进度条，足够表达状态）。
-             段间隙 dot 已由 showGapDot 在段落边界独立处理。 */}
-        {!hasNoContent && isStreamingPhase && !hasRunningToolInSteps && (
-          <div className="flex items-center py-1.5 text-text-muted" data-testid="live-shimmer-indicator">
-            <InlineThinkingDot
-              variant={effectivePhase === "slow" || effectivePhase === "reconnecting" ? "warning" : "shimmer"}
-              hint={effectivePhase === "slow" ? "响应较慢" : effectivePhase === "reconnecting" ? "正在重连" : "正在回复"}
-            />
-          </div>
-        )}
 
         <MessageCopyAction
           content={text}
