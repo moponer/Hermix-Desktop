@@ -326,6 +326,13 @@ interface StreamCallbacks {
    * (typically via `applyAcuiDirective`).
    */
   onAcuiDirective?: (directive: AcuiDirective) => void;
+  /**
+   * 用户点击「停止」（cancel）时触发——在流层关闭 WS **之前**调用，
+   * 让调用方有机会否决仍在途的审批/澄清请求（直接把 denied / 空答案
+   * 发往后端），使后端 agent loop 立即解除阻塞，而不是干等其 300s
+   * 审批超时。若未提供，cancel 仍正常收尾，只是后端靠超时兜底。
+   */
+  onCancel?: () => void;
 }
 
 export function useStreamChat(activeSessionId: string | null) {
@@ -1815,6 +1822,9 @@ export function useStreamChat(activeSessionId: string | null) {
     // asynchronous WS `onclose` event.  `settle()` is a no-op
     // if it already ran (`done` guard), so double-cancel is safe.
     if (settleRef.current) {
+      // 在 settle 关闭 WS **之前**通知调用方：此时 WS 仍 OPEN，可把
+      // 仍在途的审批/澄清直接否决发往后端，使 agent loop 立即解除阻塞。
+      pendingCallbacksRef.current?.onCancel?.();
       // Disarm timeouts first so they don't fire after we settle.
       disarmTimeoutsRef.current?.();
       settleRef.current("", undefined, "stop", "completed");

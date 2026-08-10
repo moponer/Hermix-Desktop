@@ -528,7 +528,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     max: RIGHT_MAX,
     side: "right",
   });
-  const { streaming, streamingSessionId, streamingStatus, lastActivityAt, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat(activeSessionId);
+  const { streaming, streamingSessionId, streamingStatus, lastActivityAt, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream, wsSendRaw } = useStreamChat(activeSessionId);
 
   // Session message eviction — clear the *previous* session's
   // messages array (keeping message_count) when switching away. This solves
@@ -2121,6 +2121,36 @@ return {
           },
           onApprovalRequest,
           onClarifyRequest,
+          // 用户点击停止时（cancelStream）在 WS 关闭前触发：直接把仍在途的
+          // 审批请求以 denied 否决发往后端，使 agent loop 立即解除阻塞，而非
+          // 干等其 300s 审批超时。clarify 同理以空答案解除阻塞。
+          onCancel: () => {
+            approvalResolversRef.current.forEach((_resolver, requestId) => {
+              const sent = wsSendRaw(
+                JSON.stringify({
+                  type: "approval_response",
+                  request_id: requestId,
+                  decision: "denied",
+                }),
+              );
+              if (!sent) {
+                console.error(`[CANCEL-APPROVAL] ws not open, drop deny id=${requestId}`);
+              }
+            });
+            approvalResolversRef.current.clear();
+            approvalRetryTimersRef.current.forEach((t) => clearInterval(t));
+            approvalRetryTimersRef.current.clear();
+            approvalTimeoutTimersRef.current.forEach((t) => clearTimeout(t));
+            approvalTimeoutTimersRef.current.clear();
+            pendingApprovalSessionsRef.current.clear();
+            // clarify：直接以空答案解除后端 tool call 阻塞（不重发 WS，
+            // 由后端超时兜底；仅清 map 防泄漏）。
+            clarifyResolversRef.current.forEach((resolvers) =>
+              resolvers.forEach((resolve) => resolve("")),
+            );
+            clarifyResolversRef.current.clear();
+            acui.reset();
+          },
           onAcuiDirective: (directive) => acui.apply(directive),
           // Todo (task list) mutations. Forward to the App-level
           // groups store so each plan renders as its own inline
