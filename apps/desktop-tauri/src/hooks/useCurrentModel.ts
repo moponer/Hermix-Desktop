@@ -49,6 +49,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
+import { saveModelList } from "../api";
 
 /** The localStorage key holding the user's model config (provider + model). */
 const MODEL_CONFIG_KEY = STORAGE_KEYS.modelConfig;
@@ -153,16 +154,15 @@ export function useCurrentModel(): CurrentModel {
 export function writeModelConfigAndNotify(cfg: ModelConfigData): void {
   storage.setItem(MODEL_CONFIG_KEY, JSON.stringify(cfg));
   window.dispatchEvent(new CustomEvent(MODEL_CONFIG_CHANGED_EVENT));
-  // Persist to backend (authoritative, durable). Imported lazily to keep
-  // this shared util free of a hard dependency on the API module graph.
+  // Persist to backend (authoritative, durable). Fire-and-forget — a
+  // failure here must never break the local write or the in-tab event
+  // broadcast. `saveModelList` is statically imported: api.ts is already
+  // in the main bundle (imported by many components), so a dynamic import
+  // here would not split a chunk and only added a Vite warning.
   // Frontend `ModelConfigData.enabled` uses camelCase; the backend
   // `ModelSelectorEntry` uses snake_case — map here.
-  import("../api")
-    .then((m) =>
-      m.saveModelList(
-        cfg.enabled.map((e) => ({ provider_id: e.providerId, model_id: e.modelId })),
-        cfg.defaultModel || null,
-      ),
-    )
-    .catch(() => {});
+  saveModelList(
+    cfg.enabled.map((e) => ({ provider_id: e.providerId, model_id: e.modelId })),
+    cfg.defaultModel || null,
+  ).catch(() => {});
 }
