@@ -1415,6 +1415,10 @@
   text-align: left;
   cursor: pointer;
   text-decoration: none;
+  /* 截断长路径/长命令: 主消息工具行紧凑, 完整内容进 ToolGroupCard 折叠详情。
+     max-width 适配主消息宽度 (父 chat-tool-call 通常 ~600px 宽, icon/verb/status
+     大约占 200px, 留给 primary 约 360px). */
+  max-width: min(360px, 50vw);
 }
 .tw-msg-primary--link {
   color: var(--color-link);
