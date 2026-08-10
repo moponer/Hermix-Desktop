@@ -11,19 +11,18 @@ import { useState, useRef, useEffect } from "react";
 import { Loader2, X, Pencil, Send } from "lucide-react";
 
 /**
- * AgentActivityIndicator — shows below the streaming message when
- * the LLM stream has settled but the agent loop may still be working
- * (executing tools, deciding the next turn). Without this, the
- * user sees a blank gap between turns and may assume Hermix stopped
- * responding. The indicator pulses with the appropriate hint:
+ * AgentActivityIndicator — single source of truth for "agent is still
+ * working" at the bottom of the chat. Unified style: always a
+ * **rotating Loader2 spinner** + a single short label. No more mixed
+ * bounce-dot / spinner / dot-stack variants — the user reads it as
+ * one consistent "working" pill regardless of which sub-state
+ * (streaming / tool execution / between-turn analysis) is active.
  *
- *   pendingToolsCount > 0  → "正在执行 N 个工具…"
- *   postStreamActivity    → "AI 正在分析结果 / 准备下一步…"
- *   fully idle             → (renders nothing — the "已完成" pill
- *                             handles that case instead)
- *
- * Layout is intentionally compact: a single 11.5px pill, WorkBuddy-
- * style, so it doesn't compete visually with the main content.
+ *   replying=true             → "正在回复…"
+ *   runningTools > 0          → "正在执行 N 个工具…"
+ *   postStreamActivity (rest) → "正在分析结果…"
+ *   fully idle                → renders nothing (WaitForInputIndicator
+ *                                handles idle with a distinct static pill)
  */
 export function AgentActivityIndicator({
   pendingToolsCount,
@@ -32,47 +31,30 @@ export function AgentActivityIndicator({
 }: {
   pendingToolsCount: number;
   visible: boolean;
-  /** true when the LLM is actively streaming the answer body. Shows
-   *  "正在回复…" instead of the between-turn "analyzing" hint, so the
-   *  bottom status reads consistently with the inline streaming bubble. */
+  /** true when the LLM is actively streaming the answer body. */
   replying?: boolean;
 }) {
   if (!visible) return null;
   const runningTools = pendingToolsCount > 0;
+  // 文案选择: 流式 > 工具 > 分析. 三种共享同一动画 (旋转 Loader2),
+  // 只是文字不同 — 视觉一致, 信息分情况.
+  let label: string;
+  let state: string;
   if (replying) {
-    return (
-      <div className="msg-channel agent-activity" data-state="replying">
-        <div className="agent-activity-pill">
-          <span className="agent-activity-dot-stack">
-            <span className="agent-activity-bounce-dot" />
-            <span className="agent-activity-bounce-dot agent-activity-bounce-dot--delay1" />
-            <span className="agent-activity-bounce-dot agent-activity-bounce-dot--delay2" />
-          </span>
-          <span>正在回复…</span>
-        </div>
-      </div>
-    );
+    label = "正在回复…";
+    state = "replying";
+  } else if (runningTools) {
+    label = `正在执行 ${pendingToolsCount} 个工具…`;
+    state = "tools";
+  } else {
+    label = "正在分析结果…";
+    state = "thinking";
   }
   return (
-    <div className="msg-channel agent-activity" data-state={runningTools ? "tools" : "thinking"}>
+    <div className="msg-channel agent-activity" data-state={state}>
       <div className="agent-activity-pill">
-        {runningTools ? (
-          <>
-            <span className="agent-activity-dot-stack">
-              <Loader2 size={11} className="animate-spin text-text-accent" />
-            </span>
-            <span>正在执行 {pendingToolsCount} 个工具…</span>
-          </>
-        ) : (
-          <>
-            <span className="agent-activity-dot-stack">
-              <span className="agent-activity-bounce-dot" />
-              <span className="agent-activity-bounce-dot agent-activity-bounce-dot--delay1" />
-              <span className="agent-activity-bounce-dot agent-activity-bounce-dot--delay2" />
-            </span>
-            <span>AI 正在分析结果 / 准备下一步…</span>
-          </>
-        )}
+        <Loader2 size={11} className="animate-spin text-text-accent" />
+        <span>{label}</span>
       </div>
     </div>
   );
@@ -96,14 +78,11 @@ export function WaitForInputIndicator({
   hint?: string;
 }) {
   if (!visible) return null;
+  // 静态文字, 无动画 — 与"工作中"指示器 (旋转 Loader2) 形成视觉对比:
+  // 旋转 = 忙; 静止 = 等用户.
   return (
     <div className="msg-channel wait-for-input" data-state="idle">
       <span className="wait-for-input-label">{hint ?? "可以继续提问"}</span>
-      <div className="wait-for-input-dots" aria-label="等待输入" role="status">
-        <span className="wait-for-input-dot" />
-        <span className="wait-for-input-dot wait-for-input-dot--delay1" />
-        <span className="wait-for-input-dot wait-for-input-dot--delay2" />
-      </div>
     </div>
   );
 }
