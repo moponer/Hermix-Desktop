@@ -56,6 +56,13 @@ pub const CODEX_MAX_ACK_CONTINUATIONS: u32 = 2;
 /// means the LLM genuinely has nothing to say.
 pub const MAX_EMPTY_STOP_RETRIES: u32 = 1;
 
+/// Max post-tool summary nudges. When the LLM called tools this turn
+/// but produced no visible text (`StoppedSilently`), push it once to
+/// write a task summary for the user; a second silent stop is
+/// respected (the model genuinely has nothing to say and we must not
+/// loop forever).
+pub const MAX_POST_TOOL_SUMMARIZE: u32 = 1;
+
 /// What should the agent loop do when the LLM responded with no tool
 /// calls?
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +146,9 @@ pub struct EmptyResponseInput<'a> {
     /// Number of `EmptyStop` retries already attempted this session.
     /// Capped at [`MAX_EMPTY_STOP_RETRIES`].
     pub empty_stop_retry_count: u32,
+    /// Number of post-tool summary nudges already sent this session.
+    /// Capped at [`MAX_POST_TOOL_SUMMARIZE`].
+    pub post_tool_summarize_count: u32,
     pub total_turns: u32,
     pub max_turns: u32,
     pub max_autonomous_nudges: u32,
@@ -152,6 +162,9 @@ pub struct EmptyResponseOutput {
     pub new_codex_ack_continuations: u32,
     pub new_autonomous_nudge_count: u32,
     pub new_empty_stop_retry_count: u32,
+    /// Incremented when a post-tool summary nudge is sent. See
+    /// [`MAX_POST_TOOL_SUMMARIZE`].
+    pub new_post_tool_summarize_count: u32,
     /// The classified work state (for logging / observability).
     pub work_state: WorkState,
 }
@@ -193,6 +206,7 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
             new_codex_ack_continuations: input.codex_ack_continuations + 1,
             new_autonomous_nudge_count: input.autonomous_nudge_count,
             new_empty_stop_retry_count: input.empty_stop_retry_count,
+            new_post_tool_summarize_count: input.post_tool_summarize_count,
             work_state,
         };
     }
@@ -246,6 +260,7 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
             new_codex_ack_continuations: input.codex_ack_continuations,
             new_autonomous_nudge_count: input.autonomous_nudge_count + 1,
             new_empty_stop_retry_count: input.empty_stop_retry_count,
+            new_post_tool_summarize_count: input.post_tool_summarize_count,
             work_state,
         };
     }
@@ -276,11 +291,41 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
             new_codex_ack_continuations: input.codex_ack_continuations,
             new_autonomous_nudge_count: input.autonomous_nudge_count,
             new_empty_stop_retry_count: input.empty_stop_retry_count + 1,
+            new_post_tool_summarize_count: input.post_tool_summarize_count,
             work_state,
         };
     }
 
-    // 4. Default: trust the LLM's stop signal and finalize.
+    // 4. Post-tool silent summary nudge — the LLM called tools this
+    // turn but produced NO visible text. Trusting the stop here would
+    // end the turn with zero words for the user: "任务结束但没有任何
+    // 总结" (tool calls visible, conclusion invisible). Push the model
+    // once to write a task summary (done/root-cause/fix/notes); a
+    // second silent stop is respected via the cap.
+    if work_state == WorkState::StoppedSilently
+        && (input.max_turns == 0 || input.total_turns < input.max_turns)
+        && input.post_tool_summarize_count < MAX_POST_TOOL_SUMMARIZE
+    {
+        tracing::info!(
+            work_state = %work_state,
+            nudge = input.post_tool_summarize_count + 1,
+            max = MAX_POST_TOOL_SUMMARIZE,
+            total_turns = input.total_turns,
+            "post_tool_summarize: tools ran but no visible text — nudging for a task summary"
+        );
+        return EmptyResponseOutput {
+            action: EmptyResponseAction::ContinueWithSystemNudge(
+                "你刚才调用了工具但本轮没有输出任何文字。请立即给用户一个完整的任务总结：已完成什么、发现了什么根因、做了什么修复、还有什么需要注意或确认。不要只调用工具而不说话。".to_string(),
+            ),
+            new_codex_ack_continuations: input.codex_ack_continuations,
+            new_autonomous_nudge_count: input.autonomous_nudge_count,
+            new_empty_stop_retry_count: input.empty_stop_retry_count,
+            new_post_tool_summarize_count: input.post_tool_summarize_count + 1,
+            work_state,
+        };
+    }
+
+    // 5. Default: trust the LLM's stop signal and finalize.
     // The LLM chose to stop — we respect that. If it produced no
     // visible text, the `local_agent_service` falls back to
     // `reasoning_content` as the visible reply so the user always
@@ -297,6 +342,7 @@ pub fn decide_empty_response(input: EmptyResponseInput<'_>) -> EmptyResponseOutp
         new_codex_ack_continuations: input.codex_ack_continuations,
         new_autonomous_nudge_count: input.autonomous_nudge_count,
         new_empty_stop_retry_count: input.empty_stop_retry_count,
+        new_post_tool_summarize_count: input.post_tool_summarize_count,
         work_state,
     }
 }
@@ -333,6 +379,7 @@ mod tests {
             autonomous_mode: false,
             autonomous_nudge_count: 0,
             empty_stop_retry_count: 0,
+            post_tool_summarize_count: 0,
             total_turns: 3,
             max_turns: 30,
             max_autonomous_nudges: 8,
