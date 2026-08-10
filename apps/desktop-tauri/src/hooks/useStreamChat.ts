@@ -377,6 +377,12 @@ export function useStreamChat(activeSessionId: string | null) {
       cacheCreationTokens: number;
       reasoningTokens: number;
     } | null>(null);
+  // Timestamp of the most recent "agent is doing real work" event.
+  // Updated on text/thinking/tool/file/memory/todo/sub-agent events and
+  // reset when the turn truly ends (settle). ChatView uses this to keep
+  // the bottom "working" indicator alive during silent gaps where the
+  // LLM is not streaming but tools/file changes are still in flight.
+  const [lastActivityAt, setLastActivityAt] = useState<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   // type-B observability + direct-send: send a raw WS text
   // frame on the live socket. Returns false (no-op) if the socket is
@@ -513,6 +519,7 @@ export function useStreamChat(activeSessionId: string | null) {
         // the WS, so this ref would be overwritten on the next real
         // send anyway — but explicit reset keeps the invariant local.)
         sendStartedAtRef.current = Date.now();
+        setLastActivityAt(Date.now());
 
         // ── Client-side message dedup (runs BEFORE setStreamingSessionId) ──
         // A duplicate must resolve("") cleanly instead of `return`-ing from
@@ -609,6 +616,16 @@ export function useStreamChat(activeSessionId: string | null) {
         const updatePhase = (next: StreamPhase) => { phase = next; callbacks.onPhaseChange?.(next); };
         let firstChunkReceived = false;
         let hasContent = false;
+        // Tracks whether *any* non-status stream event has arrived
+        // (text, thinking, tool_start, tool_complete, file_change,
+        // memory_update, memory_recall, todo, sub_agent, etc.). This is
+        // distinct from `hasContent` which only counts user-visible text.
+        // Used by the WS onclose handler to decide "partial" vs "error"
+        // when the socket drops mid-stream: a turn that only produced
+        // reasoning/thinking should still be treated as a partial result,
+        // not a connection error that silently clears the streaming state
+        // and shows "可以继续提问" while the user still sees thinking output.
+        let hasAnyStreamEvent = false;
         // true once `ws.send(payload)` succeeds in the
         // `connected` handler. If the WS closes before any content
         // arrives but AFTER the message was sent to the server, we
@@ -727,6 +744,9 @@ export function useStreamChat(activeSessionId: string | null) {
           // otherwise it would close the new WS and corrupt the new
           // send's state.
           if (activeSendIdRef.current !== mySendId) return;
+          // Turn is truly ending: clear the activity beacon so the
+          // bottom indicator can flip to "可以继续提问" immediately.
+          setLastActivityAt(null);
           disarmTimeouts();
           // Drain any chunks that arrived after the last rAF tick
           // (typical: the "done" event follows a final burst of
@@ -913,6 +933,8 @@ export function useStreamChat(activeSessionId: string | null) {
                 // they never pollute message body.
                 if (piece && !/^\[(?:activity|status):\s*/.test(piece)) {
                   hasContent = true;
+                  hasAnyStreamEvent = true;
+                  setLastActivityAt(Date.now());
                   fullText += piece;
                   chunkBuffer += piece;
                   scheduleChunkFlush();
@@ -929,6 +951,8 @@ export function useStreamChat(activeSessionId: string | null) {
               if (evtType === "thinking") {
                 const piece = typeof evtContent === "string" ? evtContent : "";
                 if (piece) {
+                  hasAnyStreamEvent = true;
+                  setLastActivityAt(Date.now());
                   callbacks.onReasoningChunk?.(piece);
                 }
                 return;
@@ -939,6 +963,8 @@ export function useStreamChat(activeSessionId: string | null) {
                 const toolCallId =
                   data?.tool_call_id || data?.event?.tool_call_id || `legacy-${tool}`;
                 toolRunningRef.current = true;
+                hasAnyStreamEvent = true;
+                setLastActivityAt(Date.now());
                 callbacks.onToolStart?.({ toolCallId, tool, content: evtContent });
                 return;
               }
@@ -958,6 +984,8 @@ export function useStreamChat(activeSessionId: string | null) {
                 // Flip toolRunningRef back to false BEFORE resetStaleTimer
                 // so the watchdog gets re-armed for a fresh STALE window.
                 toolRunningRef.current = false;
+                hasAnyStreamEvent = true;
+                setLastActivityAt(Date.now());
                 resetStaleTimer();
                 callbacks.onToolComplete?.({ toolCallId, tool, content: evtContent, denialKind });
                 return;
@@ -968,6 +996,8 @@ export function useStreamChat(activeSessionId: string | null) {
                 // it as `WsEnvelope.event` with `type: "sub_agent_event"`
                 // and the fields on `data.event`. Forward to the caller
                 // so the "子代理" panel can update the matching row.
+                hasAnyStreamEvent = true;
+                setLastActivityAt(Date.now());
                 const ev = data?.event ?? data;
                 callbacks.onSubAgentEvent?.({
                   subAgentId: ev?.sub_agent_id,
@@ -998,6 +1028,8 @@ export function useStreamChat(activeSessionId: string | null) {
                     ? data.content ?? data.event.content
                     : "";
                 if (content.length > 0) {
+                  hasAnyStreamEvent = true;
+                  setLastActivityAt(Date.now());
                   callbacks.onToolChunk?.({
                     toolCallId,
                     tool,
@@ -1014,6 +1046,8 @@ export function useStreamChat(activeSessionId: string | null) {
               // We pull fields from either the top-level payload or
               // `event.*` to be tolerant of the two WS envelope shapes.
               if (evtType === "file_change") {
+                hasAnyStreamEvent = true;
+                setLastActivityAt(Date.now());
                 const ev = data?.event ?? data ?? {};
                 const filePath = ev?.file_path ?? ev?.filePath ?? "";
                 if (!filePath) return;
@@ -1040,6 +1074,8 @@ export function useStreamChat(activeSessionId: string | null) {
               // see what was remembered. Mirrors the `file_change`
               // branch shape.
               if (evtType === "memory_update") {
+                hasAnyStreamEvent = true;
+                setLastActivityAt(Date.now());
                 const ev = data?.event ?? data ?? {};
                 const action = (ev?.action ?? ev?.memory_action ?? "write") as
                   | "write" | "update" | "delete" | "summarize" | "cleanup" | "snapshot";
@@ -1064,6 +1100,8 @@ export function useStreamChat(activeSessionId: string | null) {
               // forward to onMemoryRecall so App.tsx can render a
               // small "💭 想到 N 条" chip in the conversation.
               if (evtType === "memory_recall") {
+                hasAnyStreamEvent = true;
+                setLastActivityAt(Date.now());
                 const ev = data?.event ?? data ?? {};
                 const trigger = (ev?.trigger ?? "interval") as
                   | "first_turn" | "interval" | "drift";
@@ -1095,6 +1133,8 @@ export function useStreamChat(activeSessionId: string | null) {
               // server state, so reload / reconnect / multi-client hydration
               // stays consistent instead of silently dropping the task list.
               if (evtType === "todo_snapshot") {
+                hasAnyStreamEvent = true;
+                setLastActivityAt(Date.now());
                 const ev = data?.event ?? data ?? {};
                 const items = ev?.items ?? [];
                 const sessionId = ev?.session_id ?? ev?.sessionId ?? "";
@@ -1108,6 +1148,8 @@ export function useStreamChat(activeSessionId: string | null) {
                 return;
               }
               if (evtType === "todo_group_started") {
+                hasAnyStreamEvent = true;
+                setLastActivityAt(Date.now());
                 const ev = data?.event ?? data ?? {};
                 const groupId = ev?.group_id ?? ev?.groupId ?? "";
                 const sessionId = ev?.session_id ?? ev?.sessionId ?? "";
@@ -1125,6 +1167,8 @@ export function useStreamChat(activeSessionId: string | null) {
                 return;
               }
               if (evtType === "todo_item_upserted") {
+                hasAnyStreamEvent = true;
+                setLastActivityAt(Date.now());
                 const ev = data?.event ?? data ?? {};
                 const item = ev?.item;
                 const sessionId = ev?.session_id ?? ev?.sessionId ?? "";
@@ -1138,6 +1182,8 @@ export function useStreamChat(activeSessionId: string | null) {
                 return;
               }
               if (evtType === "todo_item_removed") {
+                hasAnyStreamEvent = true;
+                setLastActivityAt(Date.now());
                 const ev = data?.event ?? data ?? {};
                 const id = ev?.id ?? "";
                 const sessionId = ev?.session_id ?? ev?.sessionId ?? "";
@@ -1660,12 +1706,13 @@ export function useStreamChat(activeSessionId: string | null) {
             // Stale WS guard.
             if (activeSendIdRef.current !== mySendId) return;
             if (!doneRef.current) {
-              // Once we've received any content (text or status), we MUST NOT
-              // retry — the agent loop is already running server-side and a
-              // fresh WS would trigger a second `send_message_stream` call for
-              // the same content. Settle "partial" so the user keeps the text
-              // already received instead of discarding it via an error settle.
-              if (hasContent) {
+              // Once we've received any content (text, thinking, tools,
+              // file/memory/todo/sub-agent events), we MUST NOT retry — the
+              // agent loop is already running server-side and a fresh WS would
+              // trigger a second `send_message_stream` call for the same content.
+              // Settle "partial" so the user keeps what already arrived instead
+              // of discarding it via an error settle.
+              if (hasAnyStreamEvent || hasContent) {
                 settle(fullText, undefined, undefined, "partial");
                 return;
               }
@@ -1703,16 +1750,17 @@ export function useStreamChat(activeSessionId: string | null) {
             // "disconnected".
             if (activeSendIdRef.current !== mySendId) return;
             if (!doneRef.current) {
-              if (hasContent && fullText.length > 0) {
+              if (hasAnyStreamEvent) {
+                // Any non-status event arrived (text, thinking, tools,
+                // file/memory/todo/sub-agent) — the agent loop was running,
+                // so preserve whatever we have as a partial result instead of
+                // treating it as a connection error that wipes the streaming
+                // state and misleads the user with "可以继续提问".
+                settle(fullText, undefined, undefined, "partial");
+              } else if (hasContent) {
+                // Fallback for text-only streams (text events set both flags).
                 settle(fullText, undefined, undefined, "partial");
               } else {
-                // Same hardening as onerror above: if anything arrived
-                // (status, thinking, anything), never retry — the agent loop
-                // is already running.
-                if (hasContent) {
-                  settle(fullText, undefined, undefined, "partial");
-                  return;
-                }
                 // same hardening as onerror — if the
                 // message was already sent, don't retry.
                 if (sentToServerRef.current) {
@@ -1742,7 +1790,7 @@ export function useStreamChat(activeSessionId: string | null) {
         } catch (e) {
           // WS constructor threw (unlikely — URL parsing error, etc.)
           // Try once more before settling.
-          if (!hasContent && retryCount < MAX_RETRIES) {
+          if (!hasAnyStreamEvent && !hasContent && retryCount < MAX_RETRIES) {
             retryCount++;
             const delay = RETRY_DELAYS_MS[Math.min(retryCount - 1, RETRY_DELAYS_MS.length - 1)];
             updatePhase("reconnecting");
@@ -1781,5 +1829,5 @@ export function useStreamChat(activeSessionId: string | null) {
     setStreamingSessionId(null);
   }, []);
 
-  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, cancel, wsSendRaw };
+  return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, lastActivityAt, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, cancel, wsSendRaw };
 }

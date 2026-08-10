@@ -98,18 +98,82 @@ code ::selection,
 .error-boundary-fallback__summary { cursor: pointer; font-size: 12px; color: var(--color-text-faint); }
 .error-boundary-fallback__pre { margin-top: 8px; padding: 12px; background: var(--color-bg-secondary); border-radius: var(--radius-md); font-size: 12px; overflow: auto; max-height: 200px; white-space: pre-wrap; word-break: break-word; color: var(--color-error); }
 
-/* ── Toast notifications ────────────────────────────────────────── */
-.toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-.toast { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: var(--radius-md); font-size: var(--font-size-meta); max-width: 420px; cursor: pointer; pointer-events: auto; box-shadow: var(--shadow-pop); animation: toast-in 0.2s var(--ease-out); }
-@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.toast--error { background: var(--color-error-soft); color: var(--color-error); border: 1px solid var(--color-error); }
-.toast--warning { background: var(--color-warning-soft); color: var(--color-warning); border: 1px solid var(--color-warning); }
-.toast--info { background: var(--color-info-soft); color: var(--color-text-secondary); border: 1px solid var(--color-border-secondary); }
-.toast--success { background: var(--color-success-soft); color: var(--color-success); border: 1px solid var(--color-success); }
-.toast__icon { flex-shrink: 0; font-size: 14px; }
-.toast__msg { flex: 1; line-height: 1.4; }
-.toast__close { flex-shrink: 0; background: none; border: none; cursor: pointer; font-size: 16px; color: inherit; opacity: 0.6; padding: 0 2px; }
-.toast__close:hover { opacity: 1; }
+/* ── Toast notifications (centered, compact, minimal) ───────────── */
+.toast-container {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+.toast {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 180px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 9px 12px 9px 14px;
+  border-radius: 999px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-primary);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.12);
+  color: var(--color-text-primary);
+  pointer-events: auto;
+  cursor: pointer;
+  animation: toast-in 0.22s var(--ease-out);
+}
+.toast--error { --toast-accent: var(--color-error); --toast-soft: var(--color-error-soft); }
+.toast--warning { --toast-accent: var(--color-warning); --toast-soft: var(--color-warning-soft); }
+.toast--info { --toast-accent: var(--color-info); --toast-soft: var(--color-info-soft); }
+.toast--success { --toast-accent: var(--color-success); --toast-soft: var(--color-success-soft); }
+.toast__icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--toast-accent);
+  background: var(--toast-soft);
+}
+.toast__msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+.toast__close {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--color-text-muted);
+  opacity: 0.55;
+  padding: 0;
+  border-radius: 50%;
+  margin-left: 2px;
+}
+.toast__close:hover { opacity: 0.95; background: var(--color-bg-tertiary); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-8px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
 /* ── Spreadsheet cell borders ─────────────────────────────────── */
 .cell-border-subtle {

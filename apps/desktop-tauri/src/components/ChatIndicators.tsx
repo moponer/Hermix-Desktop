@@ -28,12 +28,31 @@ import { Loader2, X, Pencil, Send } from "lucide-react";
 export function AgentActivityIndicator({
   pendingToolsCount,
   visible,
+  replying = false,
 }: {
   pendingToolsCount: number;
   visible: boolean;
+  /** true when the LLM is actively streaming the answer body. Shows
+   *  "正在回复…" instead of the between-turn "analyzing" hint, so the
+   *  bottom status reads consistently with the inline streaming bubble. */
+  replying?: boolean;
 }) {
   if (!visible) return null;
   const runningTools = pendingToolsCount > 0;
+  if (replying) {
+    return (
+      <div className="msg-channel agent-activity" data-state="replying">
+        <div className="agent-activity-pill">
+          <span className="agent-activity-dot-stack">
+            <span className="agent-activity-bounce-dot" />
+            <span className="agent-activity-bounce-dot agent-activity-bounce-dot--delay1" />
+            <span className="agent-activity-bounce-dot agent-activity-bounce-dot--delay2" />
+          </span>
+          <span>正在回复…</span>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="msg-channel agent-activity" data-state={runningTools ? "tools" : "thinking"}>
       <div className="agent-activity-pill">
@@ -68,11 +87,18 @@ export function AgentActivityIndicator({
  * message" — solving the "is it stuck or done?" ambiguity that
  * silent completion causes.
  */
-export function WaitForInputIndicator({ visible }: { visible: boolean }) {
+export function WaitForInputIndicator({
+  visible,
+  hint,
+}: {
+  visible: boolean;
+  /** Optional override for the idle hint text. Defaults to "可以继续提问". */
+  hint?: string;
+}) {
   if (!visible) return null;
   return (
     <div className="msg-channel wait-for-input" data-state="idle">
-      <span className="wait-for-input-label">可以继续提问</span>
+      <span className="wait-for-input-label">{hint ?? "可以继续提问"}</span>
       <div className="wait-for-input-dots" aria-label="等待输入" role="status">
         <span className="wait-for-input-dot" />
         <span className="wait-for-input-dot wait-for-input-dot--delay1" />

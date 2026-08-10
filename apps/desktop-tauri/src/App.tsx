@@ -32,7 +32,6 @@ import type { NavPage, Session, ChatMessage, ApprovalDecision, TimelineStep, Exe
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
 import { storage, STORAGE_KEYS, KNOWN_KEYS, sessionKey } from "./utils/storageCompat";
-import { PendingApprovalToast } from "./components/PendingApprovalToast";
 
 // Welcome-state draft workspace. Read at App-level so
 // both `handleNewChat` (新建对话 button) and `handleSendMessage`
@@ -529,7 +528,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     max: RIGHT_MAX,
     side: "right",
   });
-  const { streaming, streamingSessionId, streamingStatus, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat(activeSessionId);
+  const { streaming, streamingSessionId, streamingStatus, lastActivityAt, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream } = useStreamChat(activeSessionId);
 
   // Session message eviction — clear the *previous* session's
   // messages array (keeping message_count) when switching away. This solves
@@ -682,11 +681,11 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   // backend already auto-denied at 30s and the agent moved on.
   const approvalTimeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   /**
-   * 把待审批 Map.size 镜像成 state，触发 `<PendingApprovalToast>` 重渲染。
-   * 不能在 ref 上直接渲染——useRef 变化不会引起重渲染，所以 mutate 完成后
-   * 必须调用 `setPendingApprovalCount(size)`。
+   * 记录每个待审批请求归属的 sessionId（与 agent 循环压入请求的顺序一致，
+   * JS Map 保证插入顺序）。REST 兜底 approve/deny 时用来定位正确的
+   * `/v1/sessions/<sid>/approval` 端点——请求可能属于用户已切走的 session。
    */
-  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const pendingApprovalSessionsRef = useRef<Map<string, string>>(new Map());
   /**
    * 工具调用被拒绝（用户拒绝 / 超时 / 连接中断）时显示的短时顶部横幅。对应
    * agent 注入的"告诉用户"系统提示给出可见反馈，让用户知道调用为何没执行。
@@ -711,16 +710,6 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     }
     setDenialBanner(null);
   }, []);
-  /**
-   * Mirror for `handleActivateToast` to find the FIRST pending
-   * request's `sessionId` without iterating `sessions` every render.
-   * Entries are added in the same order as the agent loop pushes
-   * `RequestApproval` events, so iteration order is insertion order
-   * (JS Map guarantees that). We trim the entry on resolution.
-   */
-  const pendingApprovalSessionsRef = useRef<Map<string, string>>(
-    new Map(),
-  );
   /**
    * Tracks running tool messages by their stable WS `tool_call_id`
    * so that `onToolChunk` / `onToolComplete` can find the right inline
@@ -1091,6 +1080,8 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
       if (resolver) {
         resolver(decision);
         approvalResolversRef.current.delete(requestId);
+        // also drop the session-ownership mapping kept for the REST fallback
+        pendingApprovalSessionsRef.current.delete(requestId);
         // Clean up retry timer if approval is resolved
         const retryTimer = approvalRetryTimersRef.current.get(requestId);
         if (retryTimer) {
@@ -1103,9 +1094,6 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
           clearTimeout(timeoutTimer);
           approvalTimeoutTimersRef.current.delete(requestId);
         }
-        // mirror the resolver map size to the toast state.
-        pendingApprovalSessionsRef.current.delete(requestId);
-        setPendingApprovalCount(approvalResolversRef.current.size);
         setSessions((prev) =>
           prev.map((s) => ({
             ...s,
@@ -1293,58 +1281,6 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     [activeSessionId, resolveApproval],
   );
 
-  /**
-   * Activate the bottom-right `PendingApprovalToast` —
-   * switch to the session that owns the oldest pending request,
-   * ensure the chat pane is visible, and scroll the matching inline
-   * approval card into view + pulse it briefly so the eye lands there.
-   *
-   * Why this is non-trivial: approvals can land in any session, and
-   * `ChatView` only mounts the *active* session's messages. If we
-   * just called `scrollIntoView` while the user is on the Settings
-   * page, nothing happens because the card isn't in the DOM yet.
-   * So we (a) flip page first, (b) flip activeSessionId if needed,
-   * (c) schedule the scroll one rAF + a safety delay, then (d) drop
-   * the highlight class back off after 2.4s.
-   */
-  const handleActivateToast = useCallback(() => {
-    const firstEntry = pendingApprovalSessionsRef.current.entries().next();
-    if (firstEntry.done) return; // no pending → toast shouldn't render
-    const [firstReqId, firstSessionId] = firstEntry.value;
-
-    // 1. Make sure the chat pane is showing. The user may be on
-    // Automations / Settings / Persona — without this jump the
-    // scroll target isn't mounted and the bubble is a dead link.
-    if (page !== "chat") setPage("chat");
-
-    // 2. Switch to the session the request lives in.
-    if (firstSessionId !== activeSessionId) setActiveSessionId(firstSessionId);
-
-    // 3. After React commits (active session → messages render →
-    // InlineApprovalCard mounts with data-pending-approval-id),
-    // scroll into view + flash. Two RAFs ensures ChatView has
-    // rendered before the querySelector runs. The setTimeout
-    // fallback handles the edge where the session list itself
-    // is mid-transition.
-    // Request IDs are agent-issued UUIDs, so they're safe inside a
-    // CSS attribute selector *without* CSS.escape() — they only
-    // contain `[0-9a-f-]`. Wrapping anyway as a belt-and-braces
-    // guard if the upstream format ever changes.
-    const safeId =
-      typeof CSS !== "undefined" && typeof CSS.escape === "function"
-        ? CSS.escape(firstReqId)
-        : firstReqId.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
-    const scrollToCard = () => {
-      const el = document.querySelector(
-        `[data-pending-approval-id="${safeId}"]`,
-      ) as HTMLElement | null;
-      if (!el) return;
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("is-highlighted");
-      window.setTimeout(() => el.classList.remove("is-highlighted"), 2400);
-    };
-    requestAnimationFrame(() => requestAnimationFrame(scrollToCard));
-  }, [page, activeSessionId, setPage]);
 
   /**
    * User answered a pending clarify card. Resolves the matching
@@ -1663,11 +1599,9 @@ streamPhaseRef.current = null;
 
     return new Promise<{ decision: ApprovalDecision }>((resolve) => {
       approvalResolversRef.current.set(req.requestId, (decision) => resolve({ decision }));
-      // sync to PendingApprovalToast state + record which
-      // session this request lives in so the toast's activate action
-      // can flip to the right session without iterating `sessions`.
+      // record which session owns this request so the REST fallback hits the
+      // right `/v1/sessions/<sid>/approval` endpoint
       pendingApprovalSessionsRef.current.set(req.requestId, sessionId);
-      setPendingApprovalCount(approvalResolversRef.current.size);
     });
     };
 
@@ -2484,12 +2418,10 @@ return {
             // Clean up frontend timeout timers
             approvalTimeoutTimersRef.current.forEach((timer) => clearTimeout(timer));
             approvalTimeoutTimersRef.current.clear();
-            // clear the toast trackers too — every pending
-            // approval just got force-denied by the cleanup, so the
-            // bubble has nothing to remind about. Without this the
-            // bottom-right bubble would stick around after stream end.
+            // clear the approval session-ownership map too — every pending
+            // approval just got force-denied, so the REST fallback has nothing
+            // to look up.
             pendingApprovalSessionsRef.current.clear();
-            setPendingApprovalCount(0);
             // Same deal for clarify — the agent stopped mid-question
             // (cancel, ws close) so we drop any pending resolver with
             // an empty answer; the server's tool call will time out
@@ -2660,19 +2592,6 @@ return {
       <TitleBar
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
       />
-      {/*
-        bottom-right reminder for pending approval requests.
-        `position: fixed` lives entirely on the toast side — it floats
-        above every pane below it via the toast's own `z-index`. We
-        intentionally mount it BEFORE <div className="app-body"> so
-        any future shell-wide modals can z-stack above it if needed.
-      */}
-      <PendingApprovalToast
-        count={pendingApprovalCount}
-        urgent={false}
-        onActivate={handleActivateToast}
-        onDismiss={() => { /* UI-only dismissal; state stays in toast */ }}
-      />
       {denialBanner && (() => {
         const sub =
           denialBanner.kind === "user_denied"
@@ -2782,6 +2701,7 @@ return {
               isStreaming={isStreamingActiveSession}
               streamingPhase={streamPhase ?? (isStreamingActiveSession ? "streaming" : null)}
               streamingStatus={streamingStatus}
+              lastActivityAt={lastActivityAt}
               compactionStatus={compactionStatus}
               onDismissCompaction={() => setCompactionStatus(null)}
 contextUsage={contextUsage}

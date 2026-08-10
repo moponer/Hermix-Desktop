@@ -16,7 +16,7 @@ const variantClass: Record<string, string> = {
 
 const variantIcon: Record<string, string> = {
   error: "✕",
-  warning: "⚠",
+  warning: "!",
   info: "ℹ",
   success: "✓",
 };

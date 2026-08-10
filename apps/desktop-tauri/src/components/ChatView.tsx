@@ -67,6 +67,9 @@ const MemoMessageBubble = memo(MessageBubble, (prev, next) => {
   if (prev.onPathClick !== next.onPathClick) return false;
   // 用户切换专家后，expertCutoffAt 会变化，需要让 memo 重新渲染。
   if (prev.expertCutoffAt !== next.expertCutoffAt) return false;
+  // `keepOpen` 在审批等待 / 工具运行期从 false→true，必须 bust memo，
+  // 否则思考块不会在流结束但仍暂停时保持展开（会误折叠）。
+  if (prev.keepOpen !== next.keepOpen) return false;
   return true;
 });
 
@@ -884,6 +887,10 @@ usageSnapshot?: {
    *  indicator so the user doesn't see a blank gap between the
    *  LLM settling (`done`) and the next agent-loop turn beginning. */
   pendingToolsCount?: number;
+  /** Timestamp (ms) of the most recent agent activity event. Used to
+   *  keep the bottom "working" indicator alive during silent gaps where
+   *  tools/file changes are in flight but the LLM is not streaming text. */
+  lastActivityAt?: number | null;
   /** Message queue for mid-stream input */
   messageQueue?: QueuedMessage[];
   /** Add a message to the queue */
@@ -993,6 +1000,7 @@ export function ChatView({
   onConsumeFileAttachment,
   pendingToolsCount = 0,
   streamingStatus,
+  lastActivityAt,
   compactionStatus = null,
   onDismissCompaction,
 contextUsage = null,
@@ -1057,31 +1065,24 @@ contextUsage = null,
   }, [isStreaming]);
 
   /**
-   * Auto-hide the gap indicator when tools have settled AND no new
-   * streaming session arrived within the 4s budget. Most agent
-   * turns resolve in <500ms; the 4s ceiling covers slow tool runs
-   * (search_files / patch) without leaving the user staring at
-   * "AI 正在分析" forever after the loop genuinely ended.
+   * Auto-hide the gap indicator after the 4s budget when no new
+   * stream started. The 4s ceiling covers slow tool runs (search_files
+   * / patch) without leaving the user staring at "AI 正在分析" forever
+   * after the loop genuinely ended.
+   *
+   * 关键：不要加 "pendingToolsCount===0 后 600ms 即隐藏" 的提前隐藏逻辑。
+   * 在 agent 多轮循环里，一轮（文本）结束、WS 关闭、但下一轮 LLM 还没
+   * 建流的那段空隙，pendingToolsCount 恰为 0 —— 若此时提前把
+   * postStreamActivity 置 false，底部就会误显示"可以继续提问"，而正文
+   * 其实还在输出 / agent 还在干活。所以只有「新流开始」(上面 effect 的
+   * isStreaming 分支) 或「4s 上限」才允许隐藏，确保"可以继续提问"仅在
+   * agent 真正空闲时出现。
    */
   useEffect(() => {
     if (!postStreamActivity) return;
     const t = setTimeout(() => setPostStreamActivity(false), 4000);
     return () => clearTimeout(t);
   }, [postStreamActivity, pendingToolsCount]);
-
-  /**
-   * Hide the gap indicator immediately if pending tools drop to 0
-   * AND no new streaming session began. We give the agent loop a
-   * 600ms grace window so a fast "tool → next turn" sequence
-   * doesn't flash the "已完成" pill before the next StreamingBubble
-   * mounts.
-   */
-  useEffect(() => {
-    if (!postStreamActivity) return;
-    if (pendingToolsCount !== 0 || isStreaming) return;
-    const t = setTimeout(() => setPostStreamActivity(false), 600);
-    return () => clearTimeout(t);
-  }, [postStreamActivity, pendingToolsCount, isStreaming]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // ── Expert / permission / workspace / skills state ─────────────────
@@ -1570,6 +1571,22 @@ const clearPendingImages = useCallback(() => {
       : null;
   const streamingAssistantId = streamingEntry?.id ?? null;
   const streamingMsg = streamingEntry?.msg ?? null;
+  // Last assistant message in the session — the one that should stay
+  // expanded while the agent loop is paused (pending approval card /
+  // still-running tool) instead of collapsing its thinking block the
+  // moment the text stream settles. Only the truly final, idle state
+  // should collapse; a paused turn has NOT finished outputting.
+  const lastAssistantId = useMemo(() => {
+    const msgs = session?.messages ?? [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === "assistant") return msgs[i].id;
+    }
+    return null;
+  }, [session?.messages]);
+  const hasPendingApproval = useMemo(
+    () => (session?.messages ?? []).some((m) => m.role === "approval" && !m.approval?.decision),
+    [session?.messages],
+  );
   // it only recomputes when the messages array or streaming state
   // actually changes. Previously this ran on every render — including
   // every streaming chunk — even though the intermediate values
@@ -2080,6 +2097,10 @@ const clearPendingImages = useCallback(() => {
                 onAnswerClarify={onAnswerClarify}
                 showHeader={showHeader}
                 isStreaming={!!streamingAssistantId && msg.id === streamingAssistantId}
+                keepOpen={
+                  (hasPendingApproval || pendingToolsCount > 0) &&
+                  msg.id === lastAssistantId
+                }
                 onPathClick={onPathClick}
                 expertCutoffAt={expertCutoffAt}
               />
@@ -2191,24 +2212,52 @@ const clearPendingImages = useCallback(() => {
               nothing, because "工具调用中" on a settled message while
               the bottom says "可以继续提问" is a lie. */}
 
-          {/* Post-stream gap indicator. Shown after the LLM stream
-              settles but before the agent loop either ends or starts
-              its next turn. Replaces the silent blank gap that used
-              to make Hermix look "stuck" between turns. */}
-          {!isStreaming && !streamingMsg && postStreamActivity && (
-            <AgentActivityIndicator
-              pendingToolsCount={pendingToolsCount}
-              visible={postStreamActivity}
-            />
-          )}
-
-          {/* "Waiting for input" pill. Shown when the entire agent
-              loop has fully ended (no stream, no pending tools, no
-              post-stream gap window). Replaces the silent "done"
-              state so the user knows Hermix is idle and ready. */}
-          {!isStreaming && !streamingMsg && !postStreamActivity && pendingToolsCount === 0 && (
-            <WaitForInputIndicator visible={!!session && session.messages.length > 0} />
-          )}
+          {/* ── 底部状态：唯一真相来源 ──
+              忙碌（isStreaming || postStreamActivity || pendingToolsCount>0
+                   || 近 4s 内有 agent 活动事件）
+              → 显示"正在回复 / 分析中 / 执行工具"，正文仍在输出或 agent 仍在干活；
+              完全空闲（全部为 false）→ 才显示"可以继续提问"。
+              关键：绝不能在本体还在输出 / agent 还在跑时显示"可以继续提问"。 */}
+          {(() => {
+            const recentActivityWindowMs = 4000;
+            const hasRecentActivity =
+              typeof lastActivityAt === "number" &&
+              Date.now() - lastActivityAt < recentActivityWindowMs;
+            const busy =
+              isStreaming ||
+              postStreamActivity ||
+              pendingToolsCount > 0 ||
+              hasRecentActivity;
+            if (busy) {
+              return (
+                <AgentActivityIndicator
+                  pendingToolsCount={pendingToolsCount}
+                  visible
+                  replying={isStreaming}
+                />
+              );
+            }
+            // 空闲：仅在 agent 真正结束（无流、无后续活动、无待执行工具）时出现。
+            // 若最后一轮只产出推理/工具而无可见正文，"可以继续提问" 会误导，
+            // 改为更诚实的提示，引导用户继续追问。
+            const lastAssistant = session?.messages
+              ?.slice()
+              .reverse()
+              .find((m) => m.role === "assistant");
+            const noVisibleOutput = !!lastAssistant &&
+              (lastAssistant.content ?? "").trim().length === 0 &&
+              (
+                (lastAssistant.reasoningContent ?? "").trim().length > 0 ||
+                (lastAssistant.tool_calls?.length ?? 0) > 0 ||
+                (lastAssistant.execution_timeline?.length ?? 0) > 0
+              );
+            return (
+              <WaitForInputIndicator
+                visible={!!session && session.messages.length > 0}
+                hint={noVisibleOutput ? "已结束，未生成可见回复，可继续追问…" : undefined}
+              />
+            );
+          })()}
 
           <div ref={messagesEndRef} />
         </div>

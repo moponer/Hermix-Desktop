@@ -4,7 +4,7 @@ import { describeShellCommand } from "../lib/commandDescribe";
 import {
   ChevronDown, ChevronRight, Terminal, Globe, Wrench,
   AlertCircle, AlertTriangle, CheckCircle2, Loader2, Copy, Check,
-  ShieldCheck, ShieldAlert, HelpCircle, X, Sparkles, Brain,
+  HelpCircle, X, Sparkles, Brain,
   FileText, FilePlus, ArrowRight,
   CheckCheck, Search, FolderOpen, Edit3, Trash2, Eye,
   FileSearch, Database, GitBranch, SearchX,
@@ -58,6 +58,17 @@ interface MessageBubbleProps {
    * `AssistantMessage` for the full reasoning.
    */
   isStreaming?: boolean;
+  /**
+   * Keep the reasoning/tool block EXPANDED even when `isStreaming` is
+   * false — e.g. the agent loop is paused on a pending approval card or
+   * a long-running tool and has not produced its final output yet.
+   * Without this, the thinking block collapses the moment the text
+   * stream settles (WS closes while awaiting approval), which makes it
+   * look like the turn finished when it has not. Only the truly final,
+   * idle state should collapse. Driven by ChatView from the session's
+   * pending-approval / running-tool signals; defaults false.
+   */
+  keepOpen?: boolean;
   onApproveApproval?: (requestId: string) => void;
   onDenyApproval?: (requestId: string) => void;
   onAnswerClarify?: (requestId: string, answer: string) => void;
@@ -95,6 +106,7 @@ export function MessageBubble({
   onPathClick,
   showHeader = true,
   isStreaming = false,
+  keepOpen = false,
   expertCutoffAt,
 }: MessageBubbleProps) {
   if (message.role === "user") return <UserMessage message={message} />;
@@ -137,6 +149,7 @@ export function MessageBubble({
       workspaceRoot={workspaceRoot}
       showHeader={showHeader}
       isStreaming={isStreaming}
+      keepOpen={keepOpen}
       expertCutoffAt={expertCutoffAt}
     />
   );
@@ -422,12 +435,20 @@ function ToolGroupCard({
 function ProcessTimeline({
   steps,
   isStreaming,
+  keepOpen = false,
   hasRunningTool: _hasRunningTool,
   durationMs,
   onPathClick,
 }: {
   steps: TimelineStep[];
   isStreaming?: boolean;
+  /**
+   * Keep the block expanded even when `isStreaming` is false — the
+   * agent loop is paused (pending approval / running tool) and has not
+   * produced its final output yet. Only the truly idle/final state
+   * collapses the thinking block.
+   */
+  keepOpen?: boolean;
   hasRunningTool: boolean;
   /** Wall-clock time the LLM took for this turn (ms). `undefined` =
    *  no data — reloaded history never has it, so the header just says
@@ -436,9 +457,13 @@ function ProcessTimeline({
   onPathClick?: (path: string, e: React.MouseEvent) => void;
 }) {
   // Streaming → always expanded (no fold UI shown at all).
-  // Settled  → default collapsed; user can click to expand.
+  // Paused (keepOpen) → also expanded: the agent is awaiting approval /
+  //   a running tool and has NOT produced its final output yet, so the
+  //   thinking block must stay open (collapsing here makes it look like
+  //   the turn ended when it has not).
+  // Truly settled → default collapsed; user can click to expand.
   const [userOverride, setUserOverride] = useState<boolean | null>(null);
-  const expanded = isStreaming ? true : (userOverride ?? false);
+  const expanded = isStreaming || keepOpen ? true : (userOverride ?? false);
 
   // When a new turn starts (live → settled → live again), drop the
   // user's manual override so the auto-collapse default kicks in.
@@ -496,9 +521,11 @@ function ProcessTimeline({
   const durationPart = formatDuration(durationMs);
   // 失败信息不再拼进顶头文案（避免刺眼的"N 失败"banner），
   // 由折叠头的 AlertTriangle 图标低调表示即可。
-  const settledLabel = totalTools > 0
-    ? (durationPart ? `已完成 ${totalTools} 个工具 ${durationPart}` : `已完成 ${totalTools} 个工具`)
-    : (durationPart ? `已完成 ${durationPart}` : "已完成");
+  const settledLabel = keepOpen
+    ? (totalTools > 0 ? `处理中 ${totalTools} 个工具` : "处理中")
+    : (totalTools > 0
+      ? (durationPart ? `已完成 ${totalTools} 个工具 ${durationPart}` : `已完成 ${totalTools} 个工具`)
+      : (durationPart ? `已完成 ${durationPart}` : "已完成"));
 
   return (
     <div className="tl-process-timeline">
@@ -627,6 +654,7 @@ function ToolTimelineSection({
 function UnifiedTimelineRenderer({
   steps,
   isStreaming,
+  keepOpen = false,
   onPathClick,
   fileChanges,
   memoryUpdates,
@@ -637,6 +665,10 @@ function UnifiedTimelineRenderer({
 }: {
   steps: TimelineStep[];
   isStreaming?: boolean;
+  /** Forwarded to ProcessTimeline: keep the reasoning/tool block
+   *  expanded while the agent is paused (pending approval / running
+   *  tool) but the text stream has settled. */
+  keepOpen?: boolean;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
   fileChanges: FileChangeEntry[];
   memoryUpdates: MemoryUpdateEntry[];
@@ -678,6 +710,7 @@ function UnifiedTimelineRenderer({
       <ProcessTimeline
         steps={steps}
         isStreaming={isStreaming}
+        keepOpen={keepOpen}
         hasRunningTool={hasRunningTool}
         durationMs={durationMs}
         onPathClick={onPathClick}
@@ -733,7 +766,7 @@ function UnifiedTimelineRenderer({
 
 // ── Assistant message ────────────────────────────────────────────
 function AssistantMessage({
-  message, workspaceRoot: _workspaceRoot, showHeader = true, onPathClick, isStreaming, expertCutoffAt: _expertCutoffAt,
+  message, workspaceRoot: _workspaceRoot, showHeader = true, onPathClick, isStreaming, keepOpen = false, expertCutoffAt: _expertCutoffAt,
 }: {
   message: ChatMessage;
   workspaceRoot?: string | null;
@@ -744,6 +777,12 @@ function AssistantMessage({
    * `showHeader` still controls the single per-turn identity header.
    */
   showHeader?: boolean;
+  /**
+   * Keep the reasoning/tool block expanded even when `isStreaming` is
+   * false (agent paused on a pending approval card or a still-running
+   * tool). See `MessageBubbleProps.keepOpen` for the full rationale.
+   */
+  keepOpen?: boolean;
   /**
    * Whether THIS message is the live streaming message. Only the
    * currently-streaming message is allowed to show the "等待回复"
@@ -841,6 +880,7 @@ function AssistantMessage({
         <UnifiedTimelineRenderer
           steps={steps}
           isStreaming={isStreaming}
+          keepOpen={keepOpen}
           onPathClick={onPathClick}
           fileChanges={fileChanges}
           memoryUpdates={memoryUpdates}
@@ -2218,39 +2258,6 @@ function ToolCallsFallback({ calls }: { calls: NonNullable<ChatMessage["tool_cal
 //   return Math.max(0, expiresAt - now);
 // }
 
-function riskVisual(risk?: string) {
-  // Matches the server's `RiskLevel` enum
-  // (`hermix-core::traits::RiskLevel`):
-  // "safe"     → green shield
-  // "caution"  → amber shield
-  // "dangerous"→ red shield
-  const key = (risk ?? "caution").toLowerCase();
-  if (key === "dangerous") {
-    return {
-      Icon: ShieldAlert,
-      iconClass: "text-error",
-      iconBg: "rgba(239, 68, 68, 0.10)",
-      pillLabel: "高危操作",
-      pillClass: "pill pill-error",
-    };
-  }
-  if (key === "safe") {
-    return {
-      Icon: ShieldCheck,
-      iconClass: "text-success",
-      iconBg: "rgba(16, 185, 129, 0.10)",
-      pillLabel: "安全",
-      pillClass: "pill pill-success",
-    };
-  }
-  return {
-    Icon: ShieldCheck,
-    iconClass: "text-warning",
-    iconBg: "rgba(245, 158, 11, 0.10)",
-    pillLabel: "需确认",
-    pillClass: "pill pill-warning",
-  };
-}
 
 function summarizeArgs(args: unknown): string {
   if (args == null) return "（无参数）";
@@ -2363,35 +2370,24 @@ function ApprovalCard({
       </div>
     );
   }
-  const vis = riskVisual(meta.riskLevel);
-  const { Icon } = vis;
   const isPending = !meta.decision;
   const approved = meta.decision === "approved";
   const isExpired = meta.decision === "expired";
   const decided = !isPending;
   const desc = describeToolArgs(meta.tool, meta.args);
 
-  // Card state class — drives a *subtle tinted wash* only (see
-  // components-prose.css). The card no longer paints a colored border
-  // or a left accent bar; the decision is signalled by the colored
-  // status pill + icon badge instead. This is the user-feedback fix
-  // for the old "green-bordered box with a 3px left color bar" look.
+  // Card state class — drives the resolved-state tint only.
   const cardStateClass = decided
     ? (approved ? "approval-card--ok" : isExpired ? "approval-card--expired" : "approval-card--deny")
     : "";
 
-  // Risk tint class — drives the title-bar color (see components-prose.css).
+  // Risk tint class — drives a subtle border/wash tint on the whole card.
   // Dangerous → red wash, caution → amber wash, anything else → neutral.
   const riskClass = (meta.riskLevel ?? "").toLowerCase() === "dangerous"
     ? "is-danger"
     : (meta.riskLevel ?? "").toLowerCase() === "caution"
       ? "is-warn"
       : "";
-
-  // Icon badge bg + content
-  const iconBg = decided
-    ? (approved ? "rgba(75, 122, 94, 0.12)" : isExpired ? "rgba(130, 130, 130, 0.10)" : "rgba(198, 40, 40, 0.10)")
-    : vis.iconBg;
 
   const copyCommand = () => {
     const text = meta.args && typeof meta.args === "object"
@@ -2404,23 +2400,6 @@ function ApprovalCard({
 
   return (
     <div className={`approval-card h-enter ${riskClass} ${cardStateClass}${decided ? " is-resolved" : ""}`}>
-      {/* Title bar — risk-tinted strip separates header from body */}
-      <div className="approval-head">
-        <span className="approval-icon" style={{ background: iconBg }} title={vis.pillLabel}>
-          {decided ? (
-            approved
-              ? <Check size={13} />
-              : isExpired
-                ? <Clock size={13} style={{ color: "var(--color-text-muted, #888)" }} />
-                : <X size={13} />
-          ) : (
-            <Icon size={13} className={vis.iconClass} />
-          )}
-        </span>
-        <p className="approval-title">请求执行 <em>{meta.tool}</em></p>
-        <span className="approval-risk">{vis.pillLabel}</span>
-      </div>
-
       {/* Body */}
       <div className="approval-body">
         {/* LLM-supplied rationale (terminal schema `reason`) */}
@@ -2445,13 +2424,9 @@ function ApprovalCard({
           <p className="approval-note">执行任意命令，可读写文件系统。仅在你确认命令可信时允许。</p>
         ) : null}
 
-        {/* Pending: waiting indicator + actions */}
+        {/* Pending: actions only */}
         {isPending ? (
           <div className="approval-foot">
-            <p className="approval-wait">
-              <span className="approval-dot" />
-              等待你的决定 · 无超时
-            </p>
             <div className="approval-btns">
               <button
                 type="button"
@@ -2485,14 +2460,14 @@ function ApprovalCard({
           <span className="approval-summary-tool">{meta.tool}</span>
           <span className="approval-summary-desc">{desc}</span>
           <span className={`approval-summary-badge approval-summary-badge-${approved ? "ok" : isExpired ? "expired" : "err"}`}>
-            {approved ? "已允许" : isExpired ? "已超时" : "已拒绝"}
+            {approved ? "你已允许" : isExpired ? "已超时" : "你已拒绝"}
           </span>
           <span className="approval-summary-result">
             {approved
-              ? "操作已继续执行"
+              ? "你已批准，操作继续执行"
               : isExpired
-                ? "操作已自动取消"
-                : "操作已中止"}
+                ? "超时未处理，操作已自动取消"
+                : "你已拒绝，操作已中止"}
           </span>
         </div>
       ) : null}

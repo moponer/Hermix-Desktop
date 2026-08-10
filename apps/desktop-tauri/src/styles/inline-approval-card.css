@@ -13,47 +13,31 @@
      · 按钮高度从 ~22px 拉到 32px、字号 12.5px、加粗
      · 主按钮(允许/发送)用 accent 实色,反按钮(拒绝)用 error-soft
        浅红底 + 红字,两者对比 + 体积都拉满,请求按钮一眼可见
-     · countdown 时间低于 30s 触发 danger 态(原有逻辑)
-     · 右下角 PendingApprovalToast 用了页面全局 fixed 定位,样式同
-       文件下方的 §4。
    ════════════════════════════════════════════════════════════════════ */
-
-/* ── §1. Card header avatar — 28×28 tinted square (warning color) ── */
-.approval-avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-md, 8px);
-  flex-shrink: 0;
-  background: var(--color-warning-soft, rgba(217, 119, 6, 0.12));
-  color: var(--color-warning, #d97706);
-}
 
 /* ── §2. Pill row (line 1: tool pill + risk badge + status pill) ── */
 .approval-pills {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
-  min-height: 22px;
+  min-height: 18px;
 }
 
 /* Tool name pill — monospace, neutral gray */
 .approval-tool-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 8px 3px 7px;
-  border-radius: 7px;
-  font-size: 11.5px;
+  gap: 4px;
+  padding: 2px 7px 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
   font-weight: 500;
   background: var(--color-bg-tertiary, #ededee);
   color: var(--color-text-primary, #0f0f12);
   max-width: 100%;
   overflow: hidden;
-  line-height: 1.35;
+  line-height: 1.3;
 }
 .dark .approval-tool-pill {
   background: var(--color-bg-tertiary, #2e2e34);
@@ -62,7 +46,7 @@
 .approval-tool-pill .font-mono {
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
   font-weight: 500;
-  font-size: 11px;
+  font-size: 10.5px;
 }
 
 /* Generic pill (status indicator at right) */
@@ -70,25 +54,15 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.01em;
   white-space: nowrap;
   line-height: 1.5;
 }
 .approval-pill svg { flex-shrink: 0; }
-
-.approval-pill-pending {
-  color: var(--color-text-secondary, #4a4a50);
-  background: var(--color-bg-secondary, #fafafa);
-  border: 1px solid var(--color-border-subtle, #ececef);
-}
-.dark .approval-pill-pending {
-  color: var(--color-text-secondary, #c8c8cc);
-  border-color: var(--color-border-subtle, #2c2c32);
-}
 
 .approval-pill-approved {
   color: var(--color-success, #16a34a);
@@ -124,27 +98,25 @@
 .approval-line2 {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 6px;
+  margin-top: 6px;
   flex-wrap: wrap;
 }
 .approval-args-text {
   flex: 1 1 auto;
   min-width: 0;
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--color-text-secondary, #52525b);
-  /* 命令预览框嵌在卡片内，用比卡片亮一档的 bg-primary 形成内层层次,
-     避免与卡片同色糊成一片 */
   background: var(--color-bg-primary, #ffffff);
   border: 1px solid var(--color-border-subtle, #ececef);
-  padding: 4px 8px;
+  padding: 3px 7px;
   border-radius: var(--radius-md, 6px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 360px;
-  line-height: 1.45;
+  max-width: 100%;
+  line-height: 1.4;
 }
 .dark .approval-args-text {
   background: var(--color-bg-primary, #1c1c20);
@@ -163,11 +135,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
-  padding-top: 7px;
+  margin-top: 6px;
+  padding-top: 6px;
   border-top: 1px dashed var(--color-border-subtle, #ececef);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  line-height: 1.4;
   color: var(--color-text-muted, #777);
 }
 .dark .approval-resolved-footer {
@@ -249,12 +221,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  height: 32px;
-  min-width: 78px;
-  padding: 0 16px;
-  border-radius: 8px;
-  font-size: 12.5px;
+  gap: 4px;
+  height: 28px;
+  min-width: 66px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.005em;
@@ -322,212 +294,10 @@
   border-color: var(--color-border-primary, #2e2e32);
 }
 
-/* ── §4. Countdown pill — neutral vs danger ───────────────────────
-   本节独立的 countdown pill 样式, 以 §4 编号跟 §1–§3 排序, 集中放在
-   这一节方便查阅。 */
 
-/* Neutral state */
-.approval-pill-countdown {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--color-text-secondary, #4a4a50);
-  background: var(--color-bg-tertiary, #ededee);
-  border: 1px solid var(--color-border-subtle, #ececef);
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-variant-numeric: tabular-nums;
-}
-.dark .approval-pill-countdown {
-  color: var(--color-text-secondary, #c8c8cc);
-  border-color: var(--color-border-subtle, #2c2c32);
-}
-
-/* Danger state (<=30s) */
-.approval-pill-countdown--danger {
-  color: var(--color-error, #dc2626);
-  background: color-mix(in srgb, var(--color-error, #dc2626) 12%, transparent);
-  border-color: transparent;
-  font-weight: 600;
-}
-.approval-pill-countdown--danger .approval-countdown-icon {
-  animation: h-approval-countdown-pulse 1s ease-in-out infinite;
-}
-
-@keyframes h-approval-countdown-pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50%      { transform: scale(1.25); opacity: 0.6; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .approval-pill-countdown--danger .approval-countdown-icon {
-    animation: none;
-  }
-}
-
-/* ── §5. Pending approval toast (右下角浮动气泡) ──────────────────
-   设计目的: 即使用户正在看别处 / 聊天列表滚走了,这个悬浮气泡会一
-   直挂在那里,提醒 "Hermix 在等你的决定"。点击会:
-     · 切到有 pending 卡的 session
-     · 滚动并高亮(2s 黄色 ring 闪烁)第一张未决定的请求卡
-
-   实现细节:
-     · position: fixed bottom-right 24px (跟 macOS / Windows 11 的
-       通知中心同一象限,用户眼熟)
-     · 不用 portal — 它已经是 app-shell root,fixed 即可
-     · z-index: 80 (高于 popover 50 / modal 60,低于 stream-error
-       banner 这类需要盖在 toast 上的元素)
-     · 进入用 translateY 40 → 0 配合 opacity 0 → 1,200ms cubic-bezier
-     · 多卡时折叠成 "+N" 提示,点开 popover 展开
-     · 单卡超过 30s 倒计时后:toast 边框变红、轻微 pulse 提示紧迫
-
-   滚动 + 高亮 行为:
-     · 由 PendingApprovalToast 内点击回调触发,App.tsx 注入一个
-       `pendingApprovalAnchor` state(取最旧未决 requestId 对应的
-       消息 DOM `[data-approval-id]`),scrollIntoView + 加 class
-       `is-highlighted`,2s 后清除。                       */
-.pending-approval-toast {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 80;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 12px 9px 11px;
-  border-radius: 999px;
-  background: var(--color-bg-elevated, #ffffff);
-  border: 1px solid var(--color-border-primary, #e4e4e7);
-  box-shadow:
-    0 4px 14px rgba(0, 0, 0, 0.10),
-    0 1px 3px rgba(0, 0, 0, 0.06),
-    0 0 0 0 color-mix(in srgb, var(--color-warning, #d97706) 35%, transparent);
-  color: var(--color-text-primary, #0f0f12);
-  font-size: 12.5px;
-  font-weight: 500;
-  font-family: inherit;
-  cursor: pointer;
-  user-select: none;
-  animation: pending-toast-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  transition:
-    box-shadow var(--duration-base, 150ms) ease,
-    transform var(--duration-base, 150ms) ease;
-}
-.pending-approval-toast:hover {
-  box-shadow:
-    0 6px 18px rgba(0, 0, 0, 0.14),
-    0 2px 4px rgba(0, 0, 0, 0.08),
-    0 0 0 4px color-mix(in srgb, var(--color-warning, #d97706) 14%, transparent);
-  transform: translateY(-1px);
-}
-.pending-approval-toast:active {
-  transform: translateY(0);
-}
-.pending-approval-toast:focus-visible {
-  outline: 2px solid var(--color-accent, #475569);
-  outline-offset: 2px;
-}
-
-/* Urgent (>30s lapsed on tightest pending) — switch to red ring + pulse */
-.pending-approval-toast[data-urgent="true"] {
-  border-color: color-mix(in srgb, var(--color-error, #dc2626) 40%, transparent);
-  box-shadow:
-    0 4px 14px rgba(0, 0, 0, 0.10),
-    0 1px 3px rgba(0, 0, 0, 0.06),
-    0 0 0 4px color-mix(in srgb, var(--color-error, #dc2626) 16%, transparent);
-  animation: pending-toast-enter 220ms cubic-bezier(0.16, 1, 0.3, 1) both,
-             pending-toast-pulse 1.6s ease-in-out 220ms infinite;
-}
-
-@keyframes pending-toast-enter {
-  from { opacity: 0; transform: translateY(40px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes pending-toast-pulse {
-  0%, 100% { box-shadow: 0 4px 14px rgba(0,0,0,0.10), 0 1px 3px rgba(0,0,0,0.06), 0 0 0 4px color-mix(in srgb, var(--color-error, #dc2626) 16%, transparent); }
-  50%      { box-shadow: 0 4px 14px rgba(0,0,0,0.10), 0 1px 3px rgba(0,0,0,0.06), 0 0 0 8px color-mix(in srgb, var(--color-error, #dc2626) 6%, transparent); }
-}
-
-.pending-approval-toast-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  background: var(--color-warning-soft, rgba(217, 119, 6, 0.12));
-  color: var(--color-warning, #d97706);
-  flex-shrink: 0;
-}
-.pending-approval-toast[data-urgent="true"] .pending-approval-toast-icon {
-  background: color-mix(in srgb, var(--color-error, #dc2626) 14%, transparent);
-  color: var(--color-error, #dc2626);
-}
-
-.pending-approval-toast-label {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  white-space: nowrap;
-  line-height: 1.2;
-}
-.pending-approval-toast-count {
-  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--color-warning, #d97706);
-}
-.pending-approval-toast[data-urgent="true"] .pending-approval-toast-count {
-  color: var(--color-error, #dc2626);
-}
-
-.pending-approval-toast-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  margin-left: 2px;
-  padding: 0;
-  border-radius: 6px;
-  background: transparent;
-  border: 0;
-  color: var(--color-text-faint, #999);
-  cursor: pointer;
-  transition: background var(--duration-fast, 120ms) ease, color var(--duration-fast, 120ms) ease;
-}
-.pending-approval-toast-close:hover {
-  background: var(--color-bg-hover, #f0f0f2);
-  color: var(--color-text-primary, #0f0f12);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pending-approval-toast,
-  .pending-approval-toast[data-urgent="true"] {
-    animation: pending-toast-enter 220ms ease-out both;
-  }
-  .pending-approval-toast[data-urgent="true"] {
-    animation: pending-toast-enter 220ms ease-out both;
-  }
-}
-
-/* ── §6. Highlight ring (clicking the toast scrolls and flashes) ── */
 .msg-card.approval-card {
   /* 内嵌审批卡同样收窄到 520px，与 MessageBubble 版审批卡对齐。 */
-  max-width: min(520px, 100%);
-}
-.approval-card.is-highlighted,
-.msg-card.approval-card.is-highlighted {
-  animation: approval-highlight-flash 2.4s ease-out;
-  border-radius: var(--radius-md, 8px);
-}
-@keyframes approval-highlight-flash {
-  0%   { box-shadow: 0 0 0 0    color-mix(in srgb, var(--color-warning, #d97706) 60%, transparent); }
-  20%  { box-shadow: 0 0 0 6px  color-mix(in srgb, var(--color-warning, #d97706) 50%, transparent); }
-  100% { box-shadow: 0 0 0 0    color-mix(in srgb, var(--color-warning, #d97706) 0%,  transparent); }
+  max-width: min(460px, 100%);
 }
 
 /* ── §7. Denial banner (A+C product fix) ───────────────────────────
