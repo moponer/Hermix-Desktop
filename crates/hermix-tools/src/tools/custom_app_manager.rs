@@ -51,7 +51,7 @@ pub fn register(registry: &ToolRegistry, manager: Arc<PluginManager>) {
             Arc::new(|| true),
             vec![],
             true,
-            "Create, update, list, package, and run user-facing desktop applications (custom apps) using hx-shell runtime (wry/WebView2). Actions: create, update, list, get, delete, package, run, validate, smoke.",
+            "Create, update, list, package, and run user-facing desktop applications (custom apps) using hx-shell runtime (wry/WebView2). Actions: create, update, list, get, delete, package, run, validate, smoke. Also the ONLY entry point to diagnose and fix errors in already-installed apps (e.g. load failures, 'os error 3') — never guess filesystem paths; list/get/validate/smoke are authoritative.",
             "📦",
             None,
             RiskLevel::Caution,
@@ -521,7 +521,9 @@ impl ToolHandler for CustomAppManagerHandler {
 
         tool_schema(
             "custom_app_manager",
-            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行(测试版dev模式)、开发期校验(validate)、运行时冒烟测试(smoke)。基于 hx-shell 运行时 (wry/WebView2, ~1.2MB)。\n\n**何时用本工具**: 用户说「做个/开发一个/写个/生成一个 工具/应用/软件/桌面程序/小软件」时, 直接判定为自定义应用, 调用本工具开发, 不要去调其他通用代码工具。\n\n**API**: 使用 window.hx.* 调用系统能力 (writeFile/readFile/readDir/exec/getInfo/fileUrl 等)。写代码前先调 await window.hx.getInfo() 发现可用 API。\n\n**两种开发模式**:\n- **TypeScript/React 模式 (★推荐)**: 提供 app_source (TypeScript/React 源码)，打包时 esbuild 自动转译。React 由 esbuild 打包注入，无 CDN 依赖。\n- **纯 HTML 模式**: 提供 index_html (自包含 HTML+JS)。\n\n**一次性到位交付流程**: 1)识别(用户要的是工具/应用/软件)→ 2)分析前后端最优方案(数据存哪/用哪些 hx API/UI 布局)→ 3)create 或 update 写代码→ 4)validate 循环修复直到 ok=true(L0 manifest + L1 HTML/JS + L2 权限 + L3 前端质量: 禁 CDN/禁 input-file/标题栏/禁 emoji)→ 5)run 测试版即时预览→ 6)确认无运行时报错(必要时 smoke)→ 7)交付说明: 去哪运行(run 已启动)、如何打包(package→单 exe)、如何回来继续更新(update action 改 app_source/index_html 再 run)。\n\n打包: sidecar 模式 (将 HTML/JS 作为 PE 资源节嵌入 hx-shell.exe → 单文件 exe, 无尾部注入)。",
+            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行(测试版dev模式)、开发期校验(validate)、运行时冒烟测试(smoke)。基于 hx-shell 运行时 (wry/WebView2, ~1.2MB)。\n\n**何时用本工具**:
+- **开发新应用**: 用户说「做个/开发一个/写个/生成一个 工具/应用/软件/桌面程序/小软件」时, 直接判定为自定义应用, 调用本工具开发, 不要去调其他通用代码工具。
+- **排查/修复已安装应用的报错 (★极易漏判)**: 当用户说「我的某个应用打不开/加载失败/报错/崩溃」、贴出类似「index.html 加载失败: 系统找不到指定的路径 (os error 3)」的报错、或提到某个已装应用(如 本地音乐/music-player)有问题时, **也必须用本工具**, 不要去仓库目录 `dir` 或自己翻文件 —— 所有自定义应用都装在运行时 HERMIX_HOME 下的 `custom-apps/<id>/`, 本工具是唯一权威入口。标准诊断流: ① `list` 拿 id → ② `get` 看 manifest+源码 → ③ `validate` 开发期静态校验 → ④ `smoke` 运行时冒烟定位实际报错 → ⑤ `update` 修 → ⑥ `run` 复测。\n\n**API**: 使用 window.hx.* 调用系统能力 (writeFile/readFile/readDir/exec/getInfo/fileUrl 等)。写代码前先调 await window.hx.getInfo() 发现可用 API。\n\n**两种开发模式**:\n- **TypeScript/React 模式 (★推荐)**: 提供 app_source (TypeScript/React 源码)，打包时 esbuild 自动转译。React 由 esbuild 打包注入，无 CDN 依赖。\n- **纯 HTML 模式**: 提供 index_html (自包含 HTML+JS)。\n\n**一次性到位交付流程**: 1)识别(用户要的是工具/应用/软件)→ 2)分析前后端最优方案(数据存哪/用哪些 hx API/UI 布局)→ 3)create 或 update 写代码→ 4)validate 循环修复直到 ok=true(L0 manifest + L1 HTML/JS + L2 权限 + L3 前端质量: 禁 CDN/禁 input-file/标题栏/禁 emoji)→ 5)run 测试版即时预览→ 6)确认无运行时报错(必要时 smoke)→ 7)交付说明: 去哪运行(run 已启动)、如何打包(package→单 exe)、如何回来继续更新(update action 改 app_source/index_html 再 run)。\n\n打包: sidecar 模式 (将 HTML/JS 作为 PE 资源节嵌入 hx-shell.exe → 单文件 exe, 无尾部注入)。",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }

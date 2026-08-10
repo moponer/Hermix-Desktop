@@ -13,8 +13,10 @@ description: >
   "开发一个工具""做个工具""写个小软件""做个软件""做一个桌面程序""做一个独立程序"
   "帮我做个 app""创建自定义应用""写个桌面工具""打包成 exe""make an app"
   "create a desktop app""build a tool""develop a software""package as exe"；
-  或用户描述一个需要独立窗口运行的功能需求时。凡是"工具/应用/软件/桌面程序"类诉求，
-  一律判定为自定义应用并走本 skill，不要调其他通用代码工具。
+  或用户描述一个需要独立窗口运行的功能需求时；
+  或**用户报告某个已安装的自定义应用出错**——如"我的音乐播放器打不开""应用加载失败 (os error 3)""XXX 应用崩溃/报错""本地音乐运行时出错"等。凡是"工具/应用/软件/桌面程序"类诉求，
+  以及"已安装应用的报错/修复/打不开"类诉求，一律判定为自定义应用并走本 skill，不要调其他通用代码工具，
+  更不要自己去 `dir`/`ls` 仓库目录或硬猜 HERMIX_HOME 路径——查/改应用永远只走 `custom_app_manager`。
 tags:
   - custom-app
   - desktop
@@ -417,7 +419,7 @@ audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
 
 ## 已有自定义应用定位流程（强制）
 
-只要用户的话涉及"我已有的某个应用/工具/小软件"、"修改/更新/删除/打包/运行我的 XXX"、"帮我看看已安装的应用"、"应用装在哪"——**第一步必须调 `custom_app_manager`**，**严禁**自己拼 hermix home 路径去 `ls`/`read_file`/`read_dir`。
+只要用户的话涉及"我已有的某个应用/工具/小软件"、"修改/更新/删除/打包/运行我的 XXX"、"帮我看看已安装的应用"、"应用装在哪"、**"我的 XXX 应用报错/打不开/加载失败 (os error 3)/崩溃"**——**第一步必须调 `custom_app_manager`**，**严禁**自己拼 hermix home 路径去 `ls`/`read_file`/`read_dir`。
 
 **执行顺序（不允许跳）**：
 1. **`custom_app_manager.list`**：拿到所有已安装应用的 `id + name + description + category`。如果用户没给精确名字（"我那个播放器""之前的音乐 app"），把候选列出来让用户确认；禁止空泛反问"具体是哪个"。
