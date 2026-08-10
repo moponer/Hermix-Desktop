@@ -221,11 +221,19 @@ cd apps/desktop-tauri && pnpm tsc --noEmit
 # 只产 desktop exe（~15-30 分钟，含所有 workspace crate 链接）
 cd apps/desktop-tauri && cargo tauri build --no-bundle
 
-# desktop exe + Windows NSIS 安装包（~15-30 分钟）
+# desktop exe + Windows NSIS 安装包（~15-30 分钟，首次会自动下载 NSIS 工具）
 cd apps/desktop-tauri && cargo tauri build
 ```
 
-**为什么必须 `--no-bundle` 单独可选项**：Tauri 默认会产 .msi / .app / .deb 多平台包，Hermix 承诺只 Windows，所以跳过 bundle 节省时间；要装机包时再放开。
+产物落 `apps/desktop-tauri/src-tauri/target/release/`：
+
+```
+├── hermix-desktop.exe                    # 裸 exe（内嵌前端 + spawn sidecar）
+├── hermix.exe                            # 后端 sidecar（server, 端口 3000）
+└── bundle/nsis/Hermix Desktop_*_x64-setup.exe   # Windows 安装包 ★
+```
+
+`--no-bundle` 只跳过打包步骤（适合本地跑，快几分钟）；完整 `cargo tauri build` 额外产 NSIS 安装包（压缩 + 安装向导 + 快捷方式 + 卸载注册，分发给别人用）。两者 exe 代码完全一致。
 
 **Windows MSVC 构建**：源码编译需要 MSVC 环境。链接器用 `rust-lld.exe`（`.cargo/config.toml` 已配 + 显式 LIBPATH，不依赖 `LIB` 环境变量），产物位置默认仓库内 `target/`，可被 `CARGO_TARGET_DIR` 覆盖。
 
