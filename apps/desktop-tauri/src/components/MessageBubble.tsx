@@ -2416,6 +2416,24 @@ function ApprovalCard({
   const isExpired = meta.decision === "expired";
   const decided = !isPending;
   const desc = describeToolArgs(meta.tool, meta.args);
+  // LLM-supplied intent: prefer explicit `meta.reason` (server-stored
+  // terminal field), fall back to common LLM habits of writing
+  // `reason` / `purpose` / `intent` / `note` inside the tool's args.
+  // We display whichever exists so the user sees the actual "why"
+  // (e.g. "为新建的 sub-app 创建 manifest") instead of a generic
+  // shell-exec boilerplate. Backend schema (ApprovalMessageMeta) does
+  // NOT carry reason yet — when the agent-server learns to surface it,
+  // the existing `meta.reason` branch wins and args fallback is unused.
+  const argsIntent = (() => {
+    if (!meta.args || typeof meta.args !== "object" || Array.isArray(meta.args)) return null;
+    const a = meta.args as Record<string, unknown>;
+    for (const k of ["reason", "purpose", "intent", "note", "rationale"]) {
+      const v = a[k];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    return null;
+  })();
+  const intent = meta.reason || argsIntent;
 
   // Card state class — drives the resolved-state tint only.
   const cardStateClass = decided
@@ -2443,11 +2461,12 @@ function ApprovalCard({
     <div className={`approval-card h-enter ${riskClass} ${cardStateClass}${decided ? " is-resolved" : ""}`}>
       {/* Body */}
       <div className="approval-body">
-        {/* LLM-supplied rationale (terminal schema `reason`) */}
-        {meta.reason ? (
+        {/* LLM-supplied rationale (terminal schema `reason`, or args
+            fallback for `reason`/`purpose`/`intent`/`note`/`rationale`). */}
+        {intent ? (
           <div className="approval-reason">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-            <span>{meta.reason}</span>
+            <span>{intent}</span>
           </div>
         ) : null}
 
@@ -2459,9 +2478,10 @@ function ApprovalCard({
           </button>
         </div>
 
-        {/* Generic risk note — only when reason is absent; LLM reason
-            already explains intent, no need to add scary boilerplate. */}
-        {!meta.reason ? (
+        {/* Generic risk note — only when no intent is available; if
+            the LLM supplied `reason`/`purpose`/etc. we trust the
+            specific intent over boilerplate warning copy. */}
+        {!intent ? (
           <p className="approval-note">执行任意命令，可读写文件系统。仅在你确认命令可信时允许。</p>
         ) : null}
 
