@@ -34,7 +34,7 @@
 | **BE** | Rust 后端工程师 | crate 实现、持久化、编排核心、HTTP/WS、能力层 |
 | **FE** | 前端 TS 工程师 | React 组件、任务面板、模式切换、结果面板、自动化 UI |
 | **QA** | 测试工程师 | 单元测试、集成测试、parity fixtures、CI gate 验收 |
-| **REL** | 构建/发布 | cargo-env、Tauri bundle、sidecar 同步（铁律 PP）、CI gate 脚本 |
+| **REL** | 构建/发布 | Tauri bundle、sidecar 同步（铁律 PP）、CI gate 脚本 |
 | **TW** | 技术文档 | 本计划维护、模块 README、API 文档 |
 
 ---

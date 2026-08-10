@@ -6,18 +6,16 @@ Hermix Desktop — a portable, zero-install AI assistant. Windows-only (MSVC). R
 
 ## Build & verify
 
-**Windows-only**: source MSVC env before any cargo command in Git Bash:
+**Windows-only (MSVC)**: linker (rust-lld.exe + explicit LIBPATH rustflags) is configured in `.cargo/config.toml`, so plain `cargo` commands work in any terminal (Git Bash / PowerShell / IDE) with no env sourcing. Rust is installed at `C:\Program Files\Rust stable MSVC 1.92`.
 
 ```bash
-. ./cargo-env.sh && cargo check --workspace --all-targets
+cargo check --workspace --all-targets
 ```
-
-Without this, Git Bash's `link.exe` shadows MSVC's and you get opaque linker errors.
 
 Full CI gate (compile + tests + TS typecheck):
 
 ```bash
-. ./cargo-env.sh && ./scripts/ci-gate.sh
+./scripts/ci-gate.sh
 ```
 
 Quick commands:
@@ -28,6 +26,8 @@ cargo test -p hermix-agent --lib      # single crate
 cargo check --workspace --all-targets # compile check
 cd apps/desktop-tauri && pnpm tsc --noEmit  # frontend types
 ```
+
+Build artifacts default to repo-internal `target/` dirs (gitignored). `CARGO_TARGET_DIR` env var overrides the location if a unified path is needed (e.g. CI packaging).
 
 ## Structure
 
@@ -82,7 +82,7 @@ Key crates:
 ## Gotchas
 
 - `.cargo/config.toml` hardcodes MSVC linker path — don't override
-- `cargo-env.sh` strips Git's `link.exe` from PATH — critical for linking
+- Linker is `rust-lld.exe` (`.cargo/config.toml`), which bypasses Git Bash's `link.exe` shadow entirely — no env script needed
 - Tauri v2.9.2 doesn't support standalone zip bundle — NSIS produces portable archive
 - `hermix-server` has `test-helpers` feature for integration tests
 - PR禁区: no multi-platform distribution, no external resource sensing, no cross-platform targets

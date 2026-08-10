@@ -268,12 +268,12 @@ let recent_msgs: Vec<Message> = ctx
 
 ```bash
 # 后端修改
-. ./cargo-env.sh && cargo check --workspace --all-targets
-. ./cargo-env.sh && cargo test --workspace --lib
+cargo check --workspace --all-targets
+cargo test --workspace --lib
 
 # 前端修改
 cd apps/desktop-tauri && pnpm tsc --noEmit
 
 # 完整 CI
-. ./cargo-env.sh && ./scripts/ci-gate.sh
+./scripts/ci-gate.sh
 ```

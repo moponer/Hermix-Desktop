@@ -17,12 +17,12 @@
 # Hard gates (exit non-zero on failure): 1, 2, 3, 6
 # Soft gates (warn but continue): 4, 5
 #
-# Usage (from repo root, in Git Bash):
-#   . ./cargo-env.sh && ./scripts/ci-gate.sh
+# Usage (from repo root, in any terminal):
+#   ./scripts/ci-gate.sh
 #
-# Note: cargo-env.sh MUST be sourced first to strip Git's link.exe
-# from PATH and set up the MSVC environment. Without it, linking
-# fails with opaque errors.
+# Note: no env sourcing needed — the linker (rust-lld.exe + explicit
+# LIBPATH rustflags) is configured in .cargo/config.toml, which also
+# bypasses Git Bash's link.exe shadow.
 set -euo pipefail
 
 echo "============================================"

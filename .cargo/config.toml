@@ -1,21 +1,17 @@
 [build]
-# 编译产物位置（2026-08-10 定案，三次迭代后的最终形态）:
-# 这里**不再配置 target-dir**. 原因:
+# 编译产物位置（2026-08-10 定案，最终形态）:
+# 这里**不配置 target-dir**. 原因:
 #   1. 绝对路径 (如 "<repo>/release/target") 锁死仓库位置,
 #      换机器/clone 全炸 —— 绝不允许.
 #   2. 相对路径 (如 "release/target") 会被 cargo 按**运行时的 cwd** 解析:
 #      纯 cargo 在仓库根跑 → 仓库内, 但 tauri build 的 cargo 子进程相对
 #      src-tauri manifest 解析 → 上溯 4 级跑到仓库外 (<repo-parent>\release),
 #      产物分裂两处, 用户找不到 —— 同样废弃.
-#   3. 唯一正确做法: 不写 target-dir, 产物位置完全交给环境变量
-#      CARGO_TARGET_DIR, 由 cargo-env.sh (仓库根, 随仓库走) 用
-#      `pwd -W` 按脚本所在目录算出并 export. CARGO_TARGET_DIR 优先级
-#      高于本文件任何配置, tauri build 子进程继承 env, 三产物
-#      (CLI + 桌面 exe + NSIS bundle) 全落 <仓库根>/release/target/.
-#      没 source cargo-env.sh 时 cargo 用默认 <仓库根>/target/ ——
-#      依然在仓库内, 不会跑到仓库外. 两个位置 .gitignore 都盖住了.
-#
-# 铁律: 任何 cargo 命令前必须先 `. ./cargo-env.sh`, 见 README.md "构建" 节.
+#   3. 不写 target-dir 时 cargo 用默认位置: 纯 cargo → <仓库根>/target/,
+#      src-tauri 内 → src-tauri/target/. 都在仓库内, .gitignore 已盖,
+#      不会跑到仓库外.
+#   4. 如需统一产物位置 (如 CI 打包), 用环境变量 CARGO_TARGET_DIR 覆盖,
+#      优先级高于本文件任何配置. 项目不内置脚本设它——各环境自己决定.
 #
 # 为什么不在 Cargo.toml 的 [workspace] 段配 target-dir:
 # Cargo 不支持 [workspace].target-dir (会报 `unused manifest key:
@@ -33,7 +29,9 @@
 #   3. 链接时遇到 rust-lld 已知 bug (极少见, 通常是带 debug-info 的静态库)
 #
 # 反 Git Bash link.exe 坑仍然存在: 不要恢复 `link` (无路径), 必须用
-# MSVC 绝对路径或 rust-lld.exe (后者在 rustup toolchain PATH 里).
+# MSVC 绝对路径或 rust-lld.exe. 本机 rust 装在
+# "C:\Program Files\Rust stable MSVC 1.92", rust-lld.exe 在
+# lib\rustlib\x86_64-pc-windows-msvc\bin\ 下, cargo 能解析.
 #
 # 2026-06-29 临时切到 MSVC link.exe 试验失败 → 切回 rust-lld.exe。
 # 失败原因: MSVC link.exe 在 build script 链接阶段 (libsqlite3-sys / moxcms

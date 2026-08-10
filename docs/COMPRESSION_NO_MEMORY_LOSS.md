@@ -37,7 +37,7 @@
 跑法：
 
 ```bash
-. ./cargo-env.sh && cargo test -p hermix-agent --lib \
+cargo test -p hermix-agent --lib \
   compression_child_session_preserves_summary_and_archived_turns \
   aggregate_usage_counts_compressions_and_archived_turns
 ```
