@@ -1,15 +1,21 @@
 [build]
 # 2026-06-20: 把 build artifact 全部赶到外层 release/target/, 不再
-# 污染仓库根. 注意: 路径是**相对当前 cargo 命令执行目录**, 我们
-# 跑 cargo 都从仓库根开始, 所以 `release/target` 等价于
-# `<repo-parent>\hemix-desktop\release\target`.
+# 污染仓库根.
+#
+# 2026-08-10: 改为**绝对路径**. 原因: 相对路径("release/target")在
+# 纯 cargo(仓库根跑)下解析为 `hermix-desktop/release/target`, 但 tauri
+# build 会相对 manifest 目录(src-tauri)解析相对路径, 上溯 4 级变成
+# `<repo-parent>\release\target` —— 同一配置两套解析, 桌面产物分裂到仓库外,
+# 找不到也难清理. 绝对路径下 cargo 与 tauri build 统一指向
+# `<repo>\release\target`, 所有编译产物(CLI + 桌面 +
+# NSIS bundle)单一存放. 注意: 仓库换位置需同步改这里.
 #
 # 为什么不在 Cargo.toml 的 [workspace] 段配 target-dir:
 # Cargo 不支持 [workspace].target-dir (会报 `unused manifest key:
 # workspace.target-dir`), 唯一合规的写法就是这里的 [build] 段
 # 或环境变量 CARGO_TARGET_DIR. cargo 100% 读 .cargo/config.toml,
 # 优先级仅次于 CARGO_TARGET_DIR.
-target-dir = "release/target"
+target-dir = "<repo>/release/target"
 
 [target.x86_64-pc-windows-msvc]
 # 2026-06-24: 改用 rust-lld.exe 替代 MSVC link.exe. 原因: MSVC link.exe
