@@ -1,26 +1,25 @@
 [build]
-# 2026-06-20: 把 build artifact 全部赶到外层 release/target/, 不再
-# 污染仓库根.
+# 编译产物位置（2026-08-10 定案，三次迭代后的最终形态）:
+# 这里**不再配置 target-dir**. 原因:
+#   1. 绝对路径 (如 "<repo>/release/target") 锁死仓库位置,
+#      换机器/clone 全炸 —— 绝不允许.
+#   2. 相对路径 (如 "release/target") 会被 cargo 按**运行时的 cwd** 解析:
+#      纯 cargo 在仓库根跑 → 仓库内, 但 tauri build 的 cargo 子进程相对
+#      src-tauri manifest 解析 → 上溯 4 级跑到仓库外 (<repo-parent>\release),
+#      产物分裂两处, 用户找不到 —— 同样废弃.
+#   3. 唯一正确做法: 不写 target-dir, 产物位置完全交给环境变量
+#      CARGO_TARGET_DIR, 由 cargo-env.sh (仓库根, 随仓库走) 用
+#      `pwd -W` 按脚本所在目录算出并 export. CARGO_TARGET_DIR 优先级
+#      高于本文件任何配置, tauri build 子进程继承 env, 三产物
+#      (CLI + 桌面 exe + NSIS bundle) 全落 <仓库根>/release/target/.
+#      没 source cargo-env.sh 时 cargo 用默认 <仓库根>/target/ ——
+#      依然在仓库内, 不会跑到仓库外. 两个位置 .gitignore 都盖住了.
 #
-# 2026-08-10: target-dir **绝对路径写在 .cargo/config.toml 是错的**
-# —— 会锁死仓库位置(只有 <repo>\ 才能编译), 换机器/
-# clone 都炸. 正确做法: 这里保留相对路径(纯 cargo 在仓库根跑时生效,
-# 可移植, 兜底默认), **真正统一的绝对路径在 cargo-env.sh 里设
-# CARGO_TARGET_DIR 环境变量**. CARGO_TARGET_DIR 优先级高于
-# [build].target-dir, 仓库搬到任意位置 cargo-env.sh 自动跟着算 SCRIPT_DIR,
-# 不需要再改这里. 任何 cargo 命令都必须先 `. ./cargo-env.sh` 才能
-# 拿到统一产物位置, 见 README.md "构建" 节.
-#
-# 注意: tauri build 内部 cargo 子进程会继承 CARGO_TARGET_DIR, 所以
-# "CLI 产物 + 桌面 exe + NSIS bundle" 三个 build 都落脚本所在目录
-# /release/target/, 不会出现"4 级上溯到仓库外"的旧坑.
+# 铁律: 任何 cargo 命令前必须先 `. ./cargo-env.sh`, 见 README.md "构建" 节.
 #
 # 为什么不在 Cargo.toml 的 [workspace] 段配 target-dir:
 # Cargo 不支持 [workspace].target-dir (会报 `unused manifest key:
-# workspace.target-dir`), 唯一合规的写法就是这里的 [build] 段
-# 或环境变量 CARGO_TARGET_DIR. cargo 100% 读 .cargo/config.toml,
-# 优先级仅次于 CARGO_TARGET_DIR.
-target-dir = "release/target"
+# workspace.target-dir`), 唯一合规的入口是环境变量 CARGO_TARGET_DIR.
 
 [target.x86_64-pc-windows-msvc]
 # 2026-06-24: 改用 rust-lld.exe 替代 MSVC link.exe. 原因: MSVC link.exe

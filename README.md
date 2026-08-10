@@ -186,11 +186,13 @@
 
 ## 构建（开发者向）
 
-> **必须先 `. ./cargo-env.sh`** — 不然编译产物会分裂到多个 target-dir（这是 `.cargo/config.toml` 旧版相对路径的 4 级上溯 bug，cargo-env.sh 已用 `CARGO_TARGET_DIR` 环境变量修掉）。脚本本身在仓库根，跟着仓库走，repo 搬到任意位置都不需要改。
+> **必须先 `. ./cargo-env.sh`** — 它把 MSVC bin 注入 PATH，并用 `CARGO_TARGET_DIR` 统一编译产物位置。**没 source 也能编译**（产物落在仓库内 `target/` 兜底），但**产物位置会不同**，所以一律先 source。
+>
+> 产物位置只由 `CARGO_TARGET_DIR` 环境变量控制（cargo-env.sh 用 `pwd -W` 按脚本所在目录算出，随仓库走，不锁绝对路径）。`.cargo/config.toml` 与 `src-tauri/.cargo/config.toml` 均**不配置** target-dir —— 历史教训：相对路径会按 cargo 当前 cwd 解析，tauri build 在 src-tauri 跑时曾上溯 4 级把产物写到仓库外 `<repo-parent>\release\target`，已废弃。
 
 ### 产物位置（统一）
 
-无论 `cargo`、`cargo tauri build`、NSIS bundle 全部落同一处：
+source 环境后，无论 `cargo`、`cargo tauri build`、NSIS bundle 全部落同一处：
 
 ```
 <仓库根>/release/target/release/
@@ -198,6 +200,8 @@
 ├── hermix-desktop.exe               # 桌面 Tauri exe（约 25MB）
 └── bundle/nsis/Hermix Desktop_*_x64-setup.exe   # Windows 安装包
 ```
+
+没 source 时的兜底位置（都在仓库内，不会跑出去）：纯 cargo → `<仓库根>/target/`；src-tauri 内 cargo → `apps/desktop-tauri/src-tauri/target/`。
 
 ### 编译命令
 
@@ -227,7 +231,7 @@ cd apps/desktop-tauri && cargo tauri build
 
 **为什么必须 `--no-bundle` 单独可选项**：Tauri 默认会产 .msi / .app / .deb 多平台包，Hermix 承诺只 Windows，所以跳过 bundle 节省时间；要装机包时再放开。
 
-**Windows MSVC 构建**：源码编译需要 MSVC 环境，`cargo-env.sh` 已配置链接器（`rust-lld.exe` + 显式 LIBPATH，不依赖 `LIB` 环境变量），`.cargo/config.toml` 是兜底默认。
+**Windows MSVC 构建**：源码编译需要 MSVC 环境，`cargo-env.sh` 已配置链接器（`rust-lld.exe` + 显式 LIBPATH，不依赖 `LIB` 环境变量）。`.cargo/config.toml` 只保留链接器配置，target-dir 一律走环境变量。
 
 ---
 
