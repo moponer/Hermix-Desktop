@@ -879,7 +879,20 @@ impl LocalAgentService {
                         cfg.compaction.circuit_breaker_cooldown_secs.unwrap_or(
                             crate::compression::DEFAULT_BREAKER_COOLDOWN_SECS,
                         ),
-                        cfg.compaction.summary_model.clone(),
+                        // 压缩摘要默认跟随用户当前主模型 (config.yaml `model:`),
+                        // 而不是固定走 auxiliary 链的默认模型 (如 MiniMax-M3)。
+                        // 用户配了 gpt / custom-* / 第三方网关时, 压缩用同一个
+                        // provider, 行为一致; 显式配了 `compaction.summary_model`
+                        // 则尊重显式配置。注意: override 是纯 model id
+                        // (如 "agnes-2.5-flash"), 不是 "provider:model" ——
+                        // AuxiliaryClient::call 会把它直接当 model id 发给候选。
+                        cfg.compaction.summary_model.clone().or_else(|| {
+                            Some(
+                                crate::agent_builder::parse_model_string(&compressor_model)
+                                    .1
+                                    .to_string(),
+                            )
+                        }),
                         cfg.compaction.min_summary_tokens,
                         cfg.compaction.summary_tokens_ceiling,
                         cfg.compaction.pressure_threshold_percent,

@@ -224,6 +224,55 @@ fn build_auxiliary_client_inner(
         default_models::GEMINI,
     );
 
+    // 补全: config.yaml `llm_providers` 里固定名单未覆盖的 provider
+    // (例如用户自建的 `custom-*` 动态 provider, 或第三方 OpenAI 兼容
+    // 网关)。主对话用哪个模型, 压缩摘要就应能用同一个 provider ——
+    // 否则用户把主模型配成 gpt/agnes/自定义网关后, 压缩仍绕回上面
+    // 固定名单里的候选, 甚至因为链里根本没有该 provider 而直接失败
+    // ("LLM summary generation failed")。这里把剩余 provider 全部加进
+    // 候选链, 压缩摘要即可跟随用户当前主模型。
+    if let Some(gw) = gateway {
+        for (name, pc) in &gw.llm_providers {
+            // 固定名单已在上方注册过, 跳过避免重复候选。
+            if matches!(
+                name.as_str(),
+                "openrouter" | "openai" | "anthropic" | "minimax" | "gemini" | "kimi" | "zai"
+            ) {
+                continue;
+            }
+            let key = pc
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let Some(key) = key else {
+                summary.skipped.push(format!("{name} (no key)"));
+                continue;
+            };
+            let base_url = pc
+                .base_url
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            // provider.model 可能是逗号分隔的模型列表 (UI 一次写多个);
+            // 取第一个非空项作为该候选的默认模型。
+            let model = pc
+                .model
+                .as_deref()
+                .and_then(|m| m.split(',').map(str::trim).find(|s| !s.is_empty()))
+                .unwrap_or(default_models::OPENAI)
+                .to_string();
+            let provider: Arc<dyn LlmProvider> =
+                Arc::new(GenericProvider::new(base_url, key, model.clone()));
+            builder = builder.add_candidate(ProviderCandidate::new(
+                AuxiliarySource::DirectKey(name.clone()),
+                model,
+                provider,
+            ));
+            summary.registered.push(name.clone());
+        }
+    }
+
     let client = builder.build();
     (client, summary)
 }
