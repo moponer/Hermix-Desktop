@@ -2069,6 +2069,7 @@ const clearPendingImages = useCallback(() => {
                   reasoningContent={streamingMsg.reasoningContent}
                   executionTimeline={streamingMsg.execution_timeline}
                   unifiedSteps={streamingMsg.unified_steps}
+                  keepOpen={hasPendingApproval || pendingToolsCount > 0}
                 />
               );
             }

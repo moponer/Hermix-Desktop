@@ -436,7 +436,7 @@ function ProcessTimeline({
   steps,
   isStreaming,
   keepOpen = false,
-  hasRunningTool: _hasRunningTool,
+  hasRunningTool,
   durationMs,
   onPathClick,
 }: {
@@ -461,9 +461,13 @@ function ProcessTimeline({
   //   a running tool and has NOT produced its final output yet, so the
   //   thinking block must stay open (collapsing here makes it look like
   //   the turn ended when it has not).
+  // Running tool (hasRunningTool) → expanded too: between agent-loop
+  //   turns the LLM stream settles (isStreaming=false) while the tool
+  //   is still executing — collapsing the thinking block in that window
+  //   reads as "agent stopped", which is wrong.
   // Truly settled → default collapsed; user can click to expand.
   const [userOverride, setUserOverride] = useState<boolean | null>(null);
-  const expanded = isStreaming || keepOpen ? true : (userOverride ?? false);
+  const expanded = isStreaming || keepOpen || hasRunningTool ? true : (userOverride ?? false);
 
   // When a new turn starts (live → settled → live again), drop the
   // user's manual override so the auto-collapse default kicks in.

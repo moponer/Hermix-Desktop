@@ -97,6 +97,17 @@ interface StreamingBubbleProps {
    *  the legacy `reasoningContent` + `executionTimeline` + `text`
    *  trio. */
   unifiedSteps?: TimelineStep[];
+  /**
+   * Keep the reasoning/tool block EXPANDED even when the stream phase
+   * is not "streaming" — e.g. a tool is in flight between agent-loop
+   * turns and the LLM stream has settled. Without this, the thinking
+   * block collapses the moment the text stream settles mid-loop,
+   * which makes it look like the turn ended when it has not. Only
+   * the truly final, idle state should collapse. Driven by ChatView
+   * from the session's pending-approval / running-tool signals;
+   * defaults false.
+   */
+  keepOpen?: boolean;
 }
 
 /**
@@ -178,6 +189,7 @@ function StreamingBubbleImpl({
   reasoningContent,
   executionTimeline,
   unifiedSteps,
+  keepOpen = false,
 }: StreamingBubbleProps) {
   const deferred = useDeferredValue(text);
   const effectivePhase = phase ?? "streaming";
@@ -299,6 +311,7 @@ function StreamingBubbleImpl({
               <ProcessTimeline
                 steps={effectiveSteps}
                 isStreaming={isStreamingPhase}
+                keepOpen={keepOpen}
                 hasRunningTool={hasRunningTool}
                 /* durationMs is only displayed when the turn settles
                    (i.e. isStreaming=false), so during the live stream
@@ -360,6 +373,7 @@ export const StreamingBubble = memo(StreamingBubbleImpl, (prev, next) =>
   prev.onPathClick === next.onPathClick &&
   prev.statusText === next.statusText &&
   prev.showHeader === next.showHeader &&
+  prev.keepOpen === next.keepOpen &&
   prev.reasoningContent === next.reasoningContent &&
   prev.executionTimeline === next.executionTimeline &&
   prev.unifiedSteps === next.unifiedSteps,
