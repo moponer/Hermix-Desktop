@@ -2,20 +2,25 @@
 # 2026-06-20: 把 build artifact 全部赶到外层 release/target/, 不再
 # 污染仓库根.
 #
-# 2026-08-10: 改为**绝对路径**. 原因: 相对路径("release/target")在
-# 纯 cargo(仓库根跑)下解析为 `hermix-desktop/release/target`, 但 tauri
-# build 会相对 manifest 目录(src-tauri)解析相对路径, 上溯 4 级变成
-# `<repo-parent>\release\target` —— 同一配置两套解析, 桌面产物分裂到仓库外,
-# 找不到也难清理. 绝对路径下 cargo 与 tauri build 统一指向
-# `<repo>\release\target`, 所有编译产物(CLI + 桌面 +
-# NSIS bundle)单一存放. 注意: 仓库换位置需同步改这里.
+# 2026-08-10: target-dir **绝对路径写在 .cargo/config.toml 是错的**
+# —— 会锁死仓库位置(只有 <repo>\ 才能编译), 换机器/
+# clone 都炸. 正确做法: 这里保留相对路径(纯 cargo 在仓库根跑时生效,
+# 可移植, 兜底默认), **真正统一的绝对路径在 cargo-env.sh 里设
+# CARGO_TARGET_DIR 环境变量**. CARGO_TARGET_DIR 优先级高于
+# [build].target-dir, 仓库搬到任意位置 cargo-env.sh 自动跟着算 SCRIPT_DIR,
+# 不需要再改这里. 任何 cargo 命令都必须先 `. ./cargo-env.sh` 才能
+# 拿到统一产物位置, 见 README.md "构建" 节.
+#
+# 注意: tauri build 内部 cargo 子进程会继承 CARGO_TARGET_DIR, 所以
+# "CLI 产物 + 桌面 exe + NSIS bundle" 三个 build 都落脚本所在目录
+# /release/target/, 不会出现"4 级上溯到仓库外"的旧坑.
 #
 # 为什么不在 Cargo.toml 的 [workspace] 段配 target-dir:
 # Cargo 不支持 [workspace].target-dir (会报 `unused manifest key:
 # workspace.target-dir`), 唯一合规的写法就是这里的 [build] 段
 # 或环境变量 CARGO_TARGET_DIR. cargo 100% 读 .cargo/config.toml,
 # 优先级仅次于 CARGO_TARGET_DIR.
-target-dir = "<repo>/release/target"
+target-dir = "release/target"
 
 [target.x86_64-pc-windows-msvc]
 # 2026-06-24: 改用 rust-lld.exe 替代 MSVC link.exe. 原因: MSVC link.exe

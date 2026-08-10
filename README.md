@@ -186,18 +186,48 @@
 
 ## 构建（开发者向）
 
+> **必须先 `. ./cargo-env.sh`** — 不然编译产物会分裂到多个 target-dir（这是 `.cargo/config.toml` 旧版相对路径的 4 级上溯 bug，cargo-env.sh 已用 `CARGO_TARGET_DIR` 环境变量修掉）。脚本本身在仓库根，跟着仓库走，repo 搬到任意位置都不需要改。
+
+### 产物位置（统一）
+
+无论 `cargo`、`cargo tauri build`、NSIS bundle 全部落同一处：
+
+```
+<仓库根>/release/target/release/
+├── hermix.exe                       # CLI（约 35MB）
+├── hermix-desktop.exe               # 桌面 Tauri exe（约 25MB）
+└── bundle/nsis/Hermix Desktop_*_x64-setup.exe   # Windows 安装包
+```
+
+### 编译命令
+
 ```bash
-# 全 workspace 编译检查
+# 一次性：source 环境（把 MSVC bin 注入 PATH + 设 CARGO_TARGET_DIR）
+. ./cargo-env.sh
+
+# 全 workspace 编译检查（~3-5 分钟）
 cargo check --workspace --all-targets
 
-# 全 workspace 测试（1,834 个）
+# 全 workspace 测试（~10-15 分钟，1,834 个）
 cargo test --workspace --lib
 
 # 前端类型检查
 cd apps/desktop-tauri && pnpm tsc --noEmit
 ```
 
-**Windows MSVC 构建**：源码编译需要 MSVC 环境，`.cargo/config.toml` 已硬编码链接器路径。
+### 编译产物
+
+```bash
+# 只产 desktop exe（~15-30 分钟，含所有 workspace crate 链接）
+cd apps/desktop-tauri && cargo tauri build --no-bundle
+
+# desktop exe + Windows NSIS 安装包（~15-30 分钟）
+cd apps/desktop-tauri && cargo tauri build
+```
+
+**为什么必须 `--no-bundle` 单独可选项**：Tauri 默认会产 .msi / .app / .deb 多平台包，Hermix 承诺只 Windows，所以跳过 bundle 节省时间；要装机包时再放开。
+
+**Windows MSVC 构建**：源码编译需要 MSVC 环境，`cargo-env.sh` 已配置链接器（`rust-lld.exe` + 显式 LIBPATH，不依赖 `LIB` 环境变量），`.cargo/config.toml` 是兜底默认。
 
 ---
 
