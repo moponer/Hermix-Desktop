@@ -328,6 +328,15 @@ crate::credential_guard::check_path_traversal_advisory(path);
                 "description": "The content to write to the file"
             }),
         );
+        props.insert(
+            "reason".into(),
+            json!({
+                "type": "string",
+                "description": "One-sentence explanation of WHY this file is being written and what it does, \
+                                for the user's approval card (e.g. \"为新建的 sub-app 创建 manifest\"). \
+                                Required whenever the write has side effects — always fill it."
+            }),
+        );
 
         tool_schema(
             "write_file",
