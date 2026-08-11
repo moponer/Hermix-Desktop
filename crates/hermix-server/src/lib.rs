@@ -5340,7 +5340,7 @@ async fn handle_ws_stream_send(
                         trace_id: trace_id_owned.clone(),
                         event: StreamEvent::Done {
                             content: done_content,
-                            finish_reason: done_finish_reason,
+                            finish_reason: done_finish_reason.clone(),
                             outcome: Some(if reply.interrupted
                                 || reply.finish_reason.as_deref() == Some("error")
                             {
@@ -5348,6 +5348,16 @@ async fn handle_ws_stream_send(
                             } else {
                                 "completed".to_string()
                             }),
+                            // Always surface the raw backend error (e.g.
+                            // an LLM 401/402/429 body) so the front-end
+                            // can show it as a collapsible "技术详情".
+                            // A separate `Error` event with code
+                            // "backend_error" is already emitted above
+                            // for the finish_reason=error branch; this
+                            // `Done.error` ensures the same detail rides
+                            // along on the terminal event regardless of
+                            // which branch the front-end takes.
+                            error: reply.last_error.clone(),
                         },
                     })
                     .await

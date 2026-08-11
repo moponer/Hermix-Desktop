@@ -1641,12 +1641,20 @@ export function useStreamChat(activeSessionId: string | null) {
                   // alive (don't close the WS) so the user can retry or a
                   // pending approval can still resolve. Surface a red
                   // banner + "出错了" instead of a misleading "completed".
+                  //
+                  // If the backend supplied a raw error (LLM 401/402/429,
+                  // 5xx body, transport error, etc.) it's now carried on
+                  // `event.error` (mirrors `AgentResult.last_error`); the
+                  // `done.error` field replaced the old "技术详情 blind"
+                  // behaviour where the user only saw a generic banner.
+                  const rawError: string | undefined =
+                    data?.error || data?.event?.error;
                   settle(
                     "",
                     "对话因后端错误中断（已保留已生成的部分内容，请稍后重试）",
                     undefined,
                     "error",
-                    undefined,
+                    rawError,
                     true,
                   );
                   return;

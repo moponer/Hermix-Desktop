@@ -704,6 +704,14 @@ pub enum StreamEvent {
         /// not a session death.
         #[serde(default = "default_done_outcome", skip_serializing_if = "Option::is_none")]
         outcome: Option<String>,
+        /// Raw backend error text on failed turns. Mirrors
+        /// `AgentResult.last_error` — populated when `finish_reason`
+        /// is `"error"` so the front-end can surface the real cause
+        /// (e.g. an LLM 401 "invalid api_key" or a 5xx body) instead
+        /// of a generic "后端错误" message. `None` for clean completions
+        /// and user interrupts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     // ── Todo (task list) events ─────────────────────────────
     /// Snapshot of the full task list. Sent on (a) session start so

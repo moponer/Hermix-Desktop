@@ -1687,7 +1687,16 @@ streamPhaseRef.current = null;
             // the error text — the user sees the spinner disappear
             // with no error shown in the assistant bubble.
             const assistantIdAtError = currentAssistantIdRef.current;
-            const friendly = localizeStreamError(err);
+            // Prefer the raw backend error over the canned "后端错误"
+            // wording when it's available. `detail` carries the LLM
+            // provider's actual response (401 "invalid api_key",
+            // 402 "quota exceeded", 429 "rate limit", 5xx body, fetch
+            // failure, etc.) — running it through `localizeStreamError`
+            // extracts a clean Chinese hint like "API key 无效" or
+            // "网络异常", giving the user a categorisable failure
+            // instead of an undifferentiated banner.
+            const rawForFriendly = detail ?? err;
+            const friendly = localizeStreamError(rawForFriendly);
             const errText = `⚠️ ${friendly}`;
             setStreamPhase(null);
             setSessions((prev) => prev.map((s) => {
