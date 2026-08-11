@@ -33,6 +33,7 @@ import {
   updateCustomApp,
   openCustomAppDist,
 } from "../../lib/customAppApi";
+import { formatCategory, formatPermission, permHint } from "./labels";
 
 interface AppDetailModalProps {
   appId: string;
@@ -41,17 +42,6 @@ interface AppDetailModalProps {
 }
 
 type Tab = "overview" | "code" | "readme";
-
-const PERM_HINTS: Record<string, string> = {
-  "fs-read": "读取本地文件系统",
-  "fs-write": "写入本地文件系统",
-  process: "启动外部进程或命令",
-  network: "发起网络请求",
-};
-
-function permHint(name: string): string {
-  return PERM_HINTS[name] ?? `应用请求的权限: ${name}`;
-}
 
 export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProps) {
   const [app, setApp] = useState<CustomAppResponse | null>(null);
@@ -234,60 +224,6 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
 
           {tab === "overview" && (
             <div className="app-detail-overview">
-              <section className="app-detail-hero">
-                <div className="app-detail-hero__main">
-                <div className="app-detail-hero__icon-wrap">
-                  {manifest.icon ? (
-                    <span className="app-detail-hero__icon">{manifest.icon}</span>
-                  ) : manifest.icon_file ? (
-                    <img
-                      className="app-detail-hero__icon-img"
-                      src={`/api/custom-apps/${encodeURIComponent(appId)}/icon`}
-                      alt={manifest.name}
-                      draggable={false}
-                    />
-                  ) : (
-                    <span className="app-detail-hero__icon">📦</span>
-                  )}
-                  </div>
-                  <div className="app-detail-hero__text">
-                    <h3 className="app-detail-hero__name">{manifest.name}</h3>
-                    <p className="app-detail-hero__desc">{manifest.description}</p>
-                    {manifest.long_description && (
-                      <p className="app-detail-hero__long">{manifest.long_description}</p>
-                    )}
-                  </div>
-                </div>
-                <div className="app-detail-hero__actions">
-                  <button
-                    className="app-detail-btn app-detail-btn--primary"
-                    onClick={handleRun}
-                    title="编译并启动应用（本地测试）"
-                  >
-                    <Play size={14} /> 运行
-                  </button>
-                  {is_packaged ? (
-                    <button
-                      className="app-detail-btn app-detail-btn--secondary"
-                      onClick={handleOpenDist}
-                      title="打开打包后的应用目录"
-                    >
-                      <FolderOpen size={14} /> 打开目录
-                    </button>
-                  ) : (
-                    <button
-                      className="app-detail-btn app-detail-btn--secondary"
-                      onClick={handlePackage}
-                      disabled={packaging}
-                      title="打包为可分发独立 EXE"
-                    >
-                      <Package size={14} />
-                      {packaging ? "打包中..." : "打包"}
-                    </button>
-                  )}
-                </div>
-              </section>
-
               <section className="app-detail-section">
                 <h4 className="app-detail-section__title">应用信息</h4>
                 <div className="app-detail-meta">
@@ -303,7 +239,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                   <div className="app-detail-meta__item">
                     <Folder size={13} />
                     <span className="app-detail-meta__label">分类</span>
-                    <span className="app-detail-meta__value">{manifest.category || "—"}</span>
+                    <span className="app-detail-meta__value">{manifest.category ? formatCategory(manifest.category) : "—"}</span>
                   </div>
                   <div className="app-detail-meta__item">
                     <Maximize size={13} />
@@ -327,9 +263,9 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                 {manifest.permissions.length > 0 ? (
                   <div className="app-detail-perms">
                     {manifest.permissions.map((p) => (
-                      <span key={p} className="app-detail-perms__item" title={permHint(p)}>
+                      <span key={p} className="app-detail-perms__item" title={`${permHint(p)}（${p}）`}>
                         <Shield size={12} />
-                        {p}
+                        {formatPermission(p)}
                       </span>
                     ))}
                   </div>
@@ -396,7 +332,7 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                   <User size={11} /> {manifest.author || "未知"}
                 </span>
                 <span className="app-detail-badge app-detail-badge--category">
-                  <Folder size={11} /> {manifest.category || "其他"}
+                  <Folder size={11} /> {manifest.category ? formatCategory(manifest.category) : "其他"}
                 </span>
                 {is_packaged ? (
                   <span className="app-detail-badge app-detail-badge--success">
@@ -442,8 +378,8 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
                 {manifest.permissions.length > 0 ? (
                   <div className="app-detail-readme__perms">
                     {manifest.permissions.map((p) => (
-                      <span key={p} className="app-detail-badge app-detail-badge--perm">
-                        <Shield size={11} /> {p}
+                      <span key={p} className="app-detail-badge app-detail-badge--perm" title={p}>
+                        <Shield size={11} /> {formatPermission(p)}
                       </span>
                     ))}
                   </div>

@@ -1331,6 +1331,14 @@ opacity: 0.7;
   min-width: 0;
 }
 
+/* 名称行：name + version + badge 同行横排, badge 紧贴 version */
+.custom-app-card__name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .custom-app-card__name {
   font-size: 14px;
   font-weight: 600;
@@ -1339,11 +1347,18 @@ opacity: 0.7;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
 .custom-app-card__version {
   font-size: 11px;
   color: var(--color-text-muted, #888);
+  flex-shrink: 0;
+}
+
+.custom-app-card__badge {
+  flex-shrink: 0;
 }
 
 .custom-app-card__badge {
@@ -1355,46 +1370,6 @@ opacity: 0.7;
 
 .custom-app-card__badge--packaged {
   background: rgba(76, 175, 80, 0.15);
-  color: #4caf50;
-}
-
-/* 右上角操作组：已打包时 badge + 打开目录 + 重新打包 */
-.custom-app-card__header-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.custom-app-card__icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm, 4px);
-  background: var(--color-bg-tertiary, #2a2a3e);
-  /* 图标默认色：dark theme 下保证清晰可见 */
-  color: #d0d0dc;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, opacity 0.15s;
-  flex-shrink: 0;
-}
-
-.custom-app-card__icon-btn:hover:not(:disabled) {
-  background: var(--color-bg-quaternary, #333350);
-  color: #ffffff;
-}
-
-.custom-app-card__icon-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.custom-app-card__icon-btn--package:hover:not(:disabled) {
-  background: rgba(76, 175, 80, 0.2);
   color: #4caf50;
 }
 
@@ -1779,84 +1754,6 @@ opacity: 0.7;
   flex-direction: column;
   gap: 20px;
   padding: 20px;
-}
-
-.app-detail-hero {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 20px;
-  background: var(--color-bg-primary, #ffffff);
-  border: 1px solid var(--color-border-subtle, #ececef);
-  border-radius: var(--radius-lg, 8px);
-}
-
-.app-detail-hero__main {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  min-width: 0;
-  flex: 1;
-}
-
-.app-detail-hero__icon-wrap {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  flex-shrink: 0;
-  border-radius: var(--radius-md, 6px);
-  background: var(--color-bg-secondary, #fafafa);
-  border: 1px solid var(--color-border-subtle, #ececef);
-}
-
-.app-detail-hero__icon {
-  font-size: 30px;
-  line-height: 1;
-}
-
-.app-detail-hero__icon-img {
-  width: 40px;
-  height: 40px;
-  object-fit: contain;
-  border-radius: var(--radius-sm, 4px);
-}
-
-.app-detail-hero__text {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
-.app-detail-hero__name {
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--color-text-primary, #2e2e2e);
-  margin: 0;
-}
-
-.app-detail-hero__desc {
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--color-text-secondary, #52525b);
-  margin: 0;
-}
-
-.app-detail-hero__long {
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--color-text-muted, #71717a);
-  margin: 4px 0 0 0;
-}
-
-.app-detail-hero__actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex-shrink: 0;
 }
 
 .app-detail-section {

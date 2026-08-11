@@ -10,7 +10,7 @@
 // 之前的设计: 直接把 app.icon 当文本塞到 28px 容器, 用户填 "music" 就显示大字"music"
 //             挤压布局、字面意义缺失、违反"内置图标库"的设计意图
 
-import type { ComponentType, MouseEvent } from "react";
+import type { ComponentType } from "react";
 import {
   Package,
   FolderOpen,
@@ -94,6 +94,7 @@ import {
   type LucideProps,
 } from "lucide-react";
 import type { CustomAppSummary } from "../../lib/customAppApi";
+import { formatCategory } from "./labels";
 
 interface AppCardProps {
   app: CustomAppSummary;
@@ -104,20 +105,6 @@ interface AppCardProps {
   onDelete: () => void;
   packaging?: boolean;
 }
-
-// 防冒泡：右上角 icon 按钮点击时不应触发 header 的 onView（查看详情）
-const stopProp = (fn: () => void) => (e: MouseEvent) => {
-  e.stopPropagation();
-  fn();
-};
-
-const CATEGORY_LABELS: Record<string, string> = {
-  "file-tools": "文件工具",
-  "media": "媒体",
-  "productivity": "效率工具",
-  "developer": "开发工具",
-  "other": "其他",
-};
 
 // 类目兜底 lucide 图标 — 命中优先级最低, 保底保证显示语义合理
 type IconCmp = ComponentType<LucideProps>;
@@ -271,36 +258,16 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
       <div className="custom-app-card__header" onClick={onView}>
         {iconEl}
         <div className="custom-app-card__info">
-          <h3 className="custom-app-card__name">{app.name}</h3>
-          <span className="custom-app-card__version">v{app.version}</span>
-        </div>
-        {/* 右上角：已打包时显示徽章 + 打开目录 + 重新打包 (icon-only 紧凑) */}
-        {app.is_packaged && (
-          <div className="custom-app-card__header-actions">
-            <span className="custom-app-card__badge custom-app-card__badge--packaged">
-              已打包
-            </span>
-            <button
-              className="custom-app-card__icon-btn"
-              onClick={stopProp(onOpenDist)}
-              title="打开打包后的应用目录"
-            >
-              <FolderOpen size={14} />
-            </button>
-            <button
-              className="custom-app-card__icon-btn custom-app-card__icon-btn--package"
-              onClick={stopProp(onPackage)}
-              disabled={packaging}
-              title={
-                packaging
-                  ? "打包中…"
-                  : "重新打包（用最新 hx-shell 壳覆盖 dist）"
-              }
-            >
-              <Package size={14} />
-            </button>
+          <div className="custom-app-card__name-row">
+            <h3 className="custom-app-card__name">{app.name}</h3>
+            <span className="custom-app-card__version">v{app.version}</span>
+            {app.is_packaged && (
+              <span className="custom-app-card__badge custom-app-card__badge--packaged">
+                已打包
+              </span>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       <p className="custom-app-card__description" onClick={onView}>
@@ -308,9 +275,7 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
       </p>
 
       <div className="custom-app-card__meta">
-        <span className="custom-app-card__category">
-          {CATEGORY_LABELS[app.category] ?? app.category}
-        </span>
+        <span className="custom-app-card__category">{formatCategory(app.category)}</span>
         <span className="custom-app-card__author">by {app.author}</span>
       </div>
 
@@ -331,8 +296,16 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
           <Play size={14} />
           运行
         </button>
-        {/* 未打包：在底部显示"打包"按钮（已打包的状态下，"打开目录"和"重新打包"挪到了右上角） */}
-        {!app.is_packaged && (
+        {app.is_packaged ? (
+          <button
+            className="custom-app-card__btn custom-app-card__btn--secondary"
+            onClick={onOpenDist}
+            title="打开打包后的应用目录"
+          >
+            <FolderOpen size={14} />
+            打开目录
+          </button>
+        ) : (
           <button
             className="custom-app-card__btn custom-app-card__btn--package"
             onClick={onPackage}
