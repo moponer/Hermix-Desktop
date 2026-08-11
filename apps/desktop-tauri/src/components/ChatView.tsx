@@ -1035,8 +1035,11 @@ contextUsage = null,
   const showScrollToBottomRef = useRef(false);
   // (Bug #5): the previous `isNearBottom` callback lived
   // here, but with the scrollIntoView → scrollTop rewrite the value
-  // is now read directly inside `handleContainerScroll` (same
-  // threshold: 150px). Keeping the helper would just be dead code.
+  // is now read directly inside `handleContainerScroll`. Threshold:
+  // 任何 dist > 0 就算"不在底部", 按钮立刻出现; 用户回到底部
+  // (dist=0) 按钮立刻隐藏。早先 150px 阈值过宽——用户已经滚上
+  // 去但没到 150px 时按钮不出现, 不便一键回到底。
+  // Keeping the helper would just be dead code.
 
   /**
    * Post-stream activity heuristic. The agent loop runs many turns
@@ -1503,7 +1506,10 @@ const clearPendingImages = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const isUp = dist >= 150; // matches threshold in isNearBottom
+    // 任何向上滚动 (dist > 0, 含流式自动增长把底部推下去) 都算
+    // "不在底部", 按钮立即可见。点击 scrollToBottom → dist=0 →
+    // onScroll 触发 → 按钮立刻隐藏。
+    const isUp = dist > 0;
     hasUserScrolledUpRef.current = isUp;
     if (showScrollToBottomRef.current !== isUp) {
       showScrollToBottomRef.current = isUp;
