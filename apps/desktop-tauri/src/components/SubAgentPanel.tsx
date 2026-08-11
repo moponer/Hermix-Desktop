@@ -123,6 +123,43 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
                 {typeof sa.turns === "number" && <span>轮次 {sa.turns}</span>}
                 {typeof sa.costUsd === "number" && <span>≈ ¥{sa.costUsd.toFixed(4)}</span>}
               </div>
+              {/* Rolling step log — one line per internal action (tool
+                  call / thinking), newest at the bottom. The backend
+                  sends the last N entries (SUB_AGENT_STEP_LOG_CAP = 6);
+                  older rows fall off, giving a terminal-style scroll. */}
+              {Array.isArray(sa.recentSteps) && sa.recentSteps.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 6,
+                    borderTop: "1px solid var(--color-border-secondary)",
+                    paddingTop: 5,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 2,
+                  }}
+                >
+                  {sa.recentSteps.map((s, i) => (
+                    <div
+                      key={`${sa.subAgentId}-step-${i}`}
+                      style={{
+                        fontSize: 10.5,
+                        fontFamily: 'ui-monospace, "Cascadia Code", Menlo, monospace',
+                        color:
+                          i === sa.recentSteps!.length - 1 && sa.phase === "started"
+                            ? "var(--color-accent)"
+                            : "var(--color-text-faint)",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        lineHeight: 1.5,
+                      }}
+                      title={s}
+                    >
+                      {s}
+                    </div>
+                  ))}
+                </div>
+              )}
               {sa.phase === "failed" && sa.error && (
                 <div
                   style={{

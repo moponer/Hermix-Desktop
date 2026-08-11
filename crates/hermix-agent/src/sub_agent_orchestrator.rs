@@ -55,6 +55,36 @@ pub const SUB_AGENT_MAX_TURNS_CAP: u32 = 12;
 /// analysis but small enough to keep the parent context lean.
 pub const SUB_AGENT_RESULT_MAX_CHARS: usize = 8_000;
 
+/// How many recent internal actions (tool calls / thinking) the
+/// "子代理" panel scrolls. Newest last; older entries fall off.
+pub const SUB_AGENT_STEP_LOG_CAP: usize = 6;
+
+/// One-line human label for a sub-agent tool call, used in the live
+/// step log (e.g. `read_file: manifest.json`, `terminal: npm install -g`).
+/// Falls back to the bare tool name. Best-effort — never errors.
+pub(crate) fn tool_step_label(tool: &str, args: &serde_json::Value) -> String {
+    let name = tool.split('_').last().unwrap_or(tool);
+    let primary = args
+        .as_object()
+        .and_then(|m| {
+            for k in ["path", "command", "query", "url", "tool", "target"] {
+                if let Some(v) = m.get(k).and_then(|v| v.as_str()) {
+                    if !v.trim().is_empty() {
+                        return Some(v.trim().to_string());
+                    }
+                }
+            }
+            None
+        });
+    match primary {
+        Some(p) => {
+            let short: String = p.chars().take(60).collect();
+            format!("{name}: {short}")
+        }
+        None => format!("{name}"),
+    }
+}
+
 /// Lineage record persisted to disk for each spawned sub-agent.
 /// One record is written at `started` and rewritten at terminal state. The file
 /// layout stays intentionally flat so it can also be inspected / tailed by
@@ -391,6 +421,11 @@ impl SubAgentOrchestrator {
     /// wired). Called on each lifecycle phase transition so the UI can show
     /// a live "子代理" panel. Failures are silently ignored — sub-agent
     /// status is best-effort observability, never on the critical path.
+    ///
+    /// `recent_steps` carries the sub-agent's last N internal actions
+    /// (tool calls / thinking, newest last) so the frontend panel can
+    /// render a scrolling log — one line per action — instead of only
+    /// the coarse phase badge.
     fn emit_sub_agent(
         &self,
         sub_agent_id: &str,
@@ -400,6 +435,7 @@ impl SubAgentOrchestrator {
         turns: Option<u32>,
         cost_usd: Option<f64>,
         error: Option<&str>,
+        recent_steps: &[String],
     ) {
         let emitter = match &self.cfg.chunk_emitter {
             Some(e) => e,
@@ -414,6 +450,7 @@ impl SubAgentOrchestrator {
             "turns": turns,
             "cost_usd": cost_usd,
             "error": error,
+            "recent_steps": recent_steps,
         });
         emitter(StreamChunk {
             delta: Some(StreamDelta {
@@ -484,8 +521,15 @@ impl SubAgentOrchestrator {
         // Best-effort lineage persistence — failures must never break delegation.
         self.persist_lineage(&lineage).await;
 
+        // Rolling log of the sub-agent's last N internal actions (tool
+        // calls / thinking), newest last. Shared with the child loop's
+        // callbacks via Arc<Mutex<>> so the frontend's "子代理" panel can
+        // render a scrolling one-line-per-action log in real time.
+        let recent_steps: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
         // Build and run the child.
-        let outcome = self.run_child(&req, &sub_agent_id).await;
+        let outcome = self.run_child(&req, &sub_agent_id, recent_steps.clone()).await;
 
         // Persist the terminal state (updates lineage fields + writes file).
         self.persist_terminal_lineage(&lineage, &outcome).await;
@@ -504,6 +548,10 @@ impl SubAgentOrchestrator {
             ),
             Err(e) => ("failed", None, None, Some(e.to_string())),
         };
+        let steps_snapshot: Vec<String> = recent_steps
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default();
         self.emit_sub_agent(
             &sub_agent_id,
             phase,
@@ -512,6 +560,7 @@ impl SubAgentOrchestrator {
             turns,
             cost_usd,
             err.as_deref(),
+            &steps_snapshot,
         );
 
         match outcome {
@@ -558,10 +607,12 @@ impl SubAgentOrchestrator {
         &self,
         req: &SubAgentRequest,
         sub_agent_id: &str,
+        recent_steps: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     ) -> Result<hermix_core::AgentResult, SubAgentError> {
         // Surface the start so the frontend flips the sub-agent panel from
         // "spawned" to "started" (执行中) as soon as the child loop begins.
-        self.emit_sub_agent(sub_agent_id, "started", &req.task, req.role, None, None, None);
+        let empty_steps: Vec<String> = Vec::new();
+        self.emit_sub_agent(sub_agent_id, "started", &req.task, req.role, None, None, None, &empty_steps);
         let child_interrupt = InterruptController::new();
 
         // Forward parent cancellation to child via a light watcher task.
@@ -624,13 +675,76 @@ impl SubAgentOrchestrator {
             child_tool_registry
         };
         let join = tokio::spawn(async move {
+            // Live step log: the child's tool calls / thinking are
+            // surfaced as one-line entries so the frontend "子代理" panel
+            // scrolls with real activity instead of a static badge.
+            // The closure clones what it needs from `self.cfg` (emitter)
+            // and shares `recent_steps` with the outer scope.
+            let steps_for_cb = recent_steps.clone();
+            let emitter_for_cb = self.cfg.chunk_emitter.clone();
+            let task_for_cb = req.task.clone();
+            let role_for_cb = req.role;
+            let id_for_cb = sub_agent_id.to_string();
+            let callbacks = crate::agent_helpers::AgentCallbacks {
+                on_tool_start: Some(Box::new(move |_tool_call_id, tool, args| {
+                    let step = tool_step_label(tool, args);
+                    if let Ok(mut v) = steps_for_cb.lock() {
+                        v.push(step.clone());
+                        if v.len() > SUB_AGENT_STEP_LOG_CAP {
+                            let excess = v.len() - SUB_AGENT_STEP_LOG_CAP;
+                            v.drain(..excess);
+                        }
+                    }
+                    // Push the updated log live so the panel scrolls as the
+                    // child works, not just at phase transitions.
+                    if let Some(emitter) = &emitter_for_cb {
+                        let snapshot: Vec<String> = steps_for_cb
+                            .lock()
+                            .map(|v| v.clone())
+                            .unwrap_or_default();
+                        let payload = serde_json::json!({
+                            "event": "sub_agent_update",
+                            "sub_agent_id": id_for_cb,
+                            "phase": "started",
+                            "task": task_for_cb,
+                            "role": role_for_cb.as_str(),
+                            "recent_steps": snapshot,
+                        });
+                        emitter(StreamChunk {
+                            delta: Some(StreamDelta {
+                                content: None,
+                                tool_calls: None,
+                                extra: Some(payload),
+                            }),
+                            finish_reason: None,
+                            usage: None,
+                        });
+                    }
+                })),
+                on_thinking: Some(Box::new(move |_text| {
+                    if let Ok(mut v) = steps_for_cb.lock() {
+                        let last = v.last().map(|s| s.as_str());
+                        // De-duplicate consecutive thinking rows so the log
+                        // doesn't fill with "正在思考…" spam between tools.
+                        if last != Some("正在思考…") {
+                            v.push("正在思考…".to_string());
+                            if v.len() > SUB_AGENT_STEP_LOG_CAP {
+                                let excess = v.len() - SUB_AGENT_STEP_LOG_CAP;
+                                v.drain(..excess);
+                            }
+                        }
+                    }
+                })),
+                ..Default::default()
+            };
             let child_agent = AgentLoop::with_interrupt(
                 child_config,
                 Arc::new(child_tool_registry),
                 llm_provider,
                 child_interrupt_for_spawn,
             )
-            .with_delegate_depth(child_depth);
+            .with_delegate_depth(child_depth)
+            .with_callbacks(callbacks);
             child_agent.run(initial, None).await
         });
 

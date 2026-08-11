@@ -1014,6 +1014,12 @@ export function useStreamChat(activeSessionId: string | null) {
                   turns: typeof ev?.turns === "number" ? ev.turns : undefined,
                   costUsd: typeof ev?.cost_usd === "number" ? ev.cost_usd : undefined,
                   error: ev?.error,
+                  // Rolling step log (tool calls / thinking), newest last.
+                  // Mirrors the backend `recent_steps` array. May be
+                  // absent on older servers — panel renders without it.
+                  recentSteps: Array.isArray(ev?.recent_steps)
+                    ? ev.recent_steps.filter((s: unknown) => typeof s === "string")
+                    : undefined,
                 });
                 return;
               }

@@ -2103,7 +2103,9 @@ return {
           onSubAgentEvent: (info: SubAgentEventPayload) => {
             // Accumulate live sub-agent state keyed by subAgentId so the
             // "子代理" panel can show each delegated task's phase in real
-            // time (spawned → started → done / failed).
+            // time (spawned → started → done / failed). `recentSteps`
+            // (rolling tool/thinking log) replaces wholesale on each
+            // event — the backend sends the full newest-last slice.
             if (!info?.subAgentId) return;
             setSubAgents((prev) => ({
               ...prev,
@@ -2115,6 +2117,7 @@ return {
                 turns: info.turns,
                 costUsd: info.costUsd,
                 error: info.error,
+                recentSteps: info.recentSteps,
                 updatedAt: Date.now(),
               },
             }));

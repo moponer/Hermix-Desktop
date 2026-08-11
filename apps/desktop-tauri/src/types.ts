@@ -363,6 +363,10 @@ export interface SubAgentState {
   turns?: number;
   costUsd?: number;
   error?: string;
+  /** Rolling log of the sub-agent's last N internal actions (tool
+   *  calls / thinking), newest last. Rendered as a scrolling log in
+   *  the "子代理" panel. */
+  recentSteps?: string[];
   /** Front-end-side wall-clock of the last phase update. */
   updatedAt: number;
 }
@@ -376,6 +380,11 @@ export interface SubAgentEventPayload {
   turns?: number;
   costUsd?: number;
   error?: string;
+  /** Rolling log of the sub-agent's last N internal actions (tool
+   *  calls / thinking), newest last. Drives the scrolling one-line
+   *  log in the "子代理" panel. Mirrors the backend `recent_steps`
+   *  field on `StreamEvent::SubAgentEvent`. */
+  recentSteps?: string[];
 }
 
 /**
