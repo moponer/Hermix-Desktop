@@ -2418,9 +2418,18 @@ return {
                             && e.content
                             && String(e.content).trim().length > 0
                         );
+                        // Friendly user-facing wording — keep "无完成事件"
+                        // out of the UI. The user-facing "执行已中断"
+                        // is enough; the underlying cause is already
+                        // shown via the message's stop-reason chip
+                        // ("interrupted" / "error") at the message
+                        // header. This stays a soft error (no
+                        // "[ERROR]" prefix) so it reads as "the agent
+                        // stopped before the tool reported back", not
+                        // a hard failure the user must debug.
                         const statusContent = hasStdout
                           ? ""
-                          : "[ERROR] 执行已中断（无完成事件）";
+                          : "执行已中断 — 工具未汇报完成事件";
                         const extraFields: Record<string, any> = {};
                         if (statusContent) {
                           extraFields.content = statusContent;

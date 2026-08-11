@@ -568,11 +568,19 @@ function ProcessTimeline({
           <span className="reasoning-label">思考与工具</span>
         </button>
       )}
-      {/* Chronological render: text steps stay visible at their true
-          position; reasoning + tool steps collapse by default (settled)
-          and expand live / on user toggle. This keeps the narrative
-          order — a lead-in sentence sits above the tool card it
-          preceded, a follow-up sits below it. */}
+      {/* Chronological render:
+          - text steps always stay inline at their true position
+            (the LLM's narrative, with surrounding markdown etc.)
+          - tool steps always render inline too — one
+            ToolGroupCard per call — so the user can follow the
+            agent's actions in chronological order, interleaved
+            with the text it emitted before/after each tool call.
+            ToolGroupCard itself stays collapsed by default (its
+            expand chevron is the only fold), so a turn with many
+            tools doesn't blow up vertical space.
+          - reasoning stays collapsed by default (settled+closed)
+            and only expands live / on user toggle, because LLM
+            thinking can be long. */}
       <div className="tl-process-body">
         {steps.map((step, i) => {
           if (step.kind === "text") {
@@ -590,9 +598,14 @@ function ProcessTimeline({
               </div>
             );
           }
-          // reasoning + tools are hidden unless expanded (settled+open or live)
-          if (!expanded) return null;
+          // Reasoning is the only thing that still respects the
+          // `expanded` fold — long thinking blocks would otherwise
+          // dominate the message body. Tool calls are rendered
+          // inline regardless of fold state so the user can see
+          // them in chronological order alongside the surrounding
+          // text.
           if (step.kind === "reasoning") {
+            if (!expanded) return null;
             return <ReasoningBlock key={`ps-${i}`} content={step.content} />;
           }
           if (step.kind === "tools" && stepGroups[i]) {
