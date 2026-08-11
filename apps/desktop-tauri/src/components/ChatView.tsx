@@ -1583,22 +1583,40 @@ const clearPendingImages = useCallback(() => {
       : null;
   const streamingAssistantId = streamingEntry?.id ?? null;
   const streamingMsg = streamingEntry?.msg ?? null;
-  // Last assistant message in the session — the one that should stay
-  // expanded while the agent loop is paused (pending approval card /
-  // still-running tool) instead of collapsing its thinking block the
-  // moment the text stream settles. Only the truly final, idle state
-  // should collapse; a paused turn has NOT finished outputting.
-  const lastAssistantId = useMemo(() => {
-    const msgs = session?.messages ?? [];
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === "assistant") return msgs[i].id;
-    }
-    return null;
-  }, [session?.messages]);
   const hasPendingApproval = useMemo(
     () => (session?.messages ?? []).some((m) => m.role === "approval" && !m.approval?.decision),
     [session?.messages],
   );
+  /**
+   * Active-turn message set: every message id from the LAST user
+   * message onward while the agent loop is still working
+   * (streaming / running tools / awaiting approval). When the loop
+   * truly settles this becomes empty and the turn collapses — that
+   * is the ONLY moment a ProcessTimeline may auto-fold.
+   *
+   * 根因: 旧实现 keepOpen/hasRunningTool 用 `msg.id === lastAssistantId` 限定,
+   * agent loop 切到同一 turn 的下一条 assistant message 时, 旧 message
+   * 的判定立刻变 false → ProcessTimeline 折叠。视觉表现: 工具调用阶段
+   * 折叠 + 中途切换 message 时短暂"闪展开"。
+   * 解法: 折叠时机 = 整轮 agent 完全 idle, 而不是"切到下一条 assistant"。
+   */
+  const activeTurnMsgIds = useMemo(() => {
+    const msgs = session?.messages ?? [];
+    let lastUserIdx = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === "user") {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx < 0) return new Set<string>();
+    const agentActive =
+      pendingToolsCount > 0 || hasPendingApproval || !!streamingAssistantId;
+    if (!agentActive) return new Set<string>();
+    const s = new Set<string>();
+    for (let i = lastUserIdx; i < msgs.length; i++) s.add(msgs[i].id);
+    return s;
+  }, [session?.messages, pendingToolsCount, hasPendingApproval, streamingAssistantId]);
   // it only recomputes when the messages array or streaming state
   // actually changes. Previously this ran on every render — including
   // every streaming chunk — even though the intermediate values
@@ -2110,23 +2128,13 @@ const clearPendingImages = useCallback(() => {
                 onAnswerClarify={onAnswerClarify}
                 showHeader={showHeader}
                 isStreaming={!!streamingAssistantId && msg.id === streamingAssistantId}
+                // keepOpen/hasRunningTool 改用 activeTurnMsgIds 取代 lastAssistantId
+                // 限定——见 ChatView 该 memo 注释。折叠时机 = 整轮 agent idle。
                 keepOpen={
-                  (hasPendingApproval || pendingToolsCount > 0) &&
-                  msg.id === lastAssistantId
+                  msg.id !== streamingAssistantId && activeTurnMsgIds.has(msg.id)
                 }
-                // 修复(2026-08-10): ChatView 之前漏传此 prop, MessageBubble 内部
-                // expanded 判断收到 undefined → 折叠。原 a0d6c7e4 加了 hasRunningTool
-                // 入参但忘了在调用点接线, 导致"工具后台执行 / 审批等待 / LLM 流
-                // settle 后等下次调用"场景下 thinking 块仍塌。条件:
-                //   - msg 是当前最后一条 assistant (lastAssistantId) — 历史消息折叠
-                //   - 且 agent loop 还在活动: 后台有 tool 在跑 / 有审批等待 /
-                //     streamingAssistantId 仍存在 (LLM 流 settle 但 session 未结束,
-                //     即 useStreamChat 显示 "AI 正在分析结果 / 准备下一步" 这个间隙)
                 hasRunningTool={
-                  msg.id === lastAssistantId &&
-                  (pendingToolsCount > 0 ||
-                    hasPendingApproval ||
-                    !!streamingAssistantId)
+                  msg.id !== streamingAssistantId && activeTurnMsgIds.has(msg.id)
                 }
                 onPathClick={onPathClick}
                 expertCutoffAt={expertCutoffAt}
