@@ -111,32 +111,56 @@ fn probe_inner() -> WebView2Status {
         // crate to avoid a new dependency. The child-process
         // startup cost (~5ms on Windows) is paid exactly once
         // per process lifetime thanks to the AtomicU8 cache.
-
-        let output = Command::new("reg")
-            .args(["query", &key, "/v", "pv"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output();
-
-        match output {
-            Ok(o) if o.status.success() => {
-                // reg.exe prints a line like:
-                //     pv    REG_SZ    120.0.2210.55
-                // We don't actually need the version — the mere
-                // presence of the `pv` value confirms the
-                // runtime is registered. Belt-and-braces:
-                // double-check that the output contains the
-                // `pv` token, so a hypothetical "ERROR: ..." 
-                // message that exited with status 0 can't slip
-                // through.
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                if stdout.contains("pv") && stdout.contains("REG_SZ") {
-                    return WebView2Status::Available;
+        //
+        // `reg.exe` is a console subsystem program; without
+        // CREATE_NO_WINDOW the spawn briefly allocates a
+        // console window each time it's invoked — visible as a
+        // "console flash" on the user's desktop. The launcher
+        // is a GUI app (windows_subsystem="windows"), so it must
+        // always pass this flag for console children.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let output = Command::new("reg")
+                .args(["query", &key, "/v", "pv"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+            if let Ok(o) = output {
+                if o.status.success() {
+                    // reg.exe prints a line like:
+                    //     pv    REG_SZ    120.0.2210.55
+                    // We don't actually need the version — the mere
+                    // presence of the `pv` value confirms the
+                    // runtime is registered. Belt-and-braces:
+                    // double-check that the output contains the
+                    // `pv` token, so a hypothetical "ERROR: ..."
+                    // message that exited with status 0 can't slip
+                    // through.
+                    let stdout = String::from_utf8_lossy(&o.stdout);
+                    if stdout.contains("pv") && stdout.contains("REG_SZ") {
+                        return WebView2Status::Available;
+                    }
                 }
             }
-            Ok(_) | Err(_) => {
-                // Continue to the next view. If both fail we'll
-                // fall through to Missing below.
+            continue;
+        }
+        #[cfg(not(windows))]
+        {
+            let output = Command::new("reg")
+                .args(["query", &key, "/v", "pv"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output();
+            if let Ok(o) = output {
+                if o.status.success() {
+                    let stdout = String::from_utf8_lossy(&o.stdout);
+                    if stdout.contains("pv") && stdout.contains("REG_SZ") {
+                        return WebView2Status::Available;
+                    }
+                }
             }
         }
     }

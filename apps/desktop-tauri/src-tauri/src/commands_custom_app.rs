@@ -167,8 +167,14 @@ pub async fn custom_app_open_dir(id: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        // explorer.exe is GUI but on some Windows builds the spawn
+        // handshake briefly allocates a console window unless we
+        // pass CREATE_NO_WINDOW. Belt-and-braces.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         std::process::Command::new("explorer")
             .arg(&app_dir)
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("打开资源管理器失败: {e}"))?;
     }

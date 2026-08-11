@@ -1,12 +1,19 @@
 import { useState, useEffect, useCallback } from "react";
-import { Cpu, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { Cpu, Loader2, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import * as api from "../api";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toastError } from "../hooks/useToast";
 
 export function BackendStatus() {
-  const [connected, setConnected] = useState<boolean | null>(null);
+  // Three explicit states:
+  //   "connecting" (default) — sidecar spawned, waiting for first ready/health
+  //   "offline"              — health failed (or gave-up event fired)
+  //   "online"               — health OK / hermix:server-ready fired
+  // The previous implementation returned `null` while connecting, which
+  // looked like a dead/hung UI during the 2-6s hermix.exe boot window.
+  type ConnState = "connecting" | "online" | "offline";
+  const [state, setState] = useState<ConnState>("connecting");
   const [mode, setMode] = useState<string>("local");
   const [restarting, setRestarting] = useState(false);
   const [gaveUp, setGaveUp] = useState(false);
@@ -16,19 +23,31 @@ export function BackendStatus() {
     // the backend is known to be unreachable and polling would only
     // waste resources. The circuit resets automatically after cooldown.
     if (api.isCircuitTripped()) {
-      setConnected(false);
+      setState("offline");
       return;
     }
     try {
       const config = await api.getConfig();
       setMode(String(config.mode ?? "local"));
       const ok = await api.checkBackendHealth();
-      setConnected(ok);
-      if (ok) setGaveUp(false);
+      if (ok) {
+        setState("online");
+        setGaveUp(false);
+      } else if (state !== "connecting") {
+        // health explicitly returned false (not a network error).
+        // Don't downgrade the "connecting" state on a single failed
+        // probe — the user would see a flash of "离线" during normal
+        // startup. The `server-restarting` event handles post-boot
+        // downgrades so this branch only fires when the server is
+        // up and reachable but the answer was a hard no.
+        setState("offline");
+      }
     } catch {
-      setConnected(false);
+      // network/transport error during boot — keep "connecting" so we
+      // don't mislead the user into thinking the backend died.
+      if (state !== "connecting") setState("offline");
     }
-  }, []);
+  }, [state]);
 
   useEffect(() => {
     check();
@@ -39,14 +58,27 @@ export function BackendStatus() {
   }, [check]);
 
   // Listen for backend lifecycle events from the Tauri sidecar watchdog.
+  // The "hermix:server-ready" event fires the moment hermix.exe finishes
+  // boot (binds port + reports healthy) — we use it to skip the
+  // health-poll latency for the very first connection.
   useEffect(() => {
+    let unlistenReady: (() => void) | undefined;
     let unlistenRestarting: (() => void) | undefined;
     let unlistenGaveUp: (() => void) | undefined;
     let cancelled = false;
 
+    listen("hermix:server-ready", () => {
+      if (cancelled) return;
+      setState("online");
+      setGaveUp(false);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlistenReady = fn;
+    });
+
     listen<number>("hermix:server-restarting", () => {
       if (cancelled) return;
-      setConnected(false);
+      setState("offline");
       setRestarting(true);
       // After restart, poll health to detect recovery.
       const poll = async () => {
@@ -57,7 +89,7 @@ export function BackendStatus() {
           try {
             const ok = await api.checkBackendHealth();
             if (ok) {
-              setConnected(true);
+              setState("online");
               setRestarting(false);
               return;
             }
@@ -75,6 +107,7 @@ export function BackendStatus() {
       if (cancelled) return;
       setGaveUp(true);
       setRestarting(false);
+      setState("offline");
     }).then((fn) => {
       if (cancelled) fn();
       else unlistenGaveUp = fn;
@@ -82,6 +115,7 @@ export function BackendStatus() {
 
     return () => {
       cancelled = true;
+      unlistenReady?.();
       unlistenRestarting?.();
       unlistenGaveUp?.();
     };
@@ -103,10 +137,11 @@ toastError("后端服务重启失败，请尝试手动重启");
     }
   }, [check]);
 
-  if (connected === null) return null;
-
-  // Shared restart button
-  const restartBtn = (
+  // Shared restart button (shown once the user is in a definable state —
+  // i.e. not "connecting"). During boot the connecting pill already
+  // signals activity; adding a restart button there would invite the
+  // user to fight an in-progress startup.
+  const restartBtn = state !== "connecting" ? (
     <button
       onClick={handleRestart}
       disabled={restarting}
@@ -118,7 +153,7 @@ toastError("后端服务重启失败，请尝试手动重启");
         className={restarting ? "animate-spin text-text-muted" : "text-text-muted"}
       />
     </button>
-  );
+  ) : null;
 
   if (mode === "local") {
     if (gaveUp) {
@@ -138,7 +173,18 @@ toastError("后端服务重启失败，请尝试手动重启");
         </div>
       );
     }
-    if (!connected) {
+    if (state === "connecting") {
+      // Boot window — backend spawned, health probe not yet returned
+      // OK. Don't lie with "离线" while the user can see the spinner
+      // and trust that we're doing work.
+      return (
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-text-muted" title="本地后端正在启动...">
+          <Loader2 size={11} className="animate-spin text-text-muted" />
+          <span>正在连接</span>
+        </div>
+      );
+    }
+    if (state === "offline") {
       return (
         <div className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-text-muted" title="本地模式 — 后端未连接">
           <WifiOff size={11} className="text-text-muted" />
@@ -158,9 +204,20 @@ toastError("后端服务重启失败，请尝试手动重启");
   return (
     <div
       className="flex items-center gap-1.5 px-2 py-1 rounded text-[11px] text-text-muted"
-      title={connected ? "已连接到后端" : "后端未连接"}
+      title={
+        state === "online"
+          ? "已连接到后端"
+          : state === "offline"
+            ? "后端未连接"
+            : "正在连接后端..."
+      }
     >
-      {connected ? (
+      {state === "connecting" ? (
+        <>
+          <Loader2 size={11} className="animate-spin text-text-muted" />
+          <span>正在连接</span>
+        </>
+      ) : state === "online" ? (
         <>
           <Wifi size={11} className="text-success" />
           <span>已连接</span>
