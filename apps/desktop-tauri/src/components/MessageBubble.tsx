@@ -1000,7 +1000,7 @@ function FileChangeBlock({
   const visible = expanded ? changes : changes.slice(0, VISIBLE);
   const hidden = Math.max(0, changes.length - VISIBLE);
   return (
-    <div className="file-change-block">
+    <div className="file-change-block footer-block">
       <div className="file-change-header">
         <FileText size={12} className="shrink-0" />
         <span>文件变更</span>
@@ -2471,7 +2471,7 @@ function ApprovalCard({
   };
 
   return (
-    <div className={`approval-card h-enter ${riskClass} ${cardStateClass}${decided ? " is-resolved" : ""}`}>
+    <div className={`approval-card footer-block h-enter ${riskClass} ${cardStateClass}${decided ? " is-resolved" : ""}`}>
       {/* Body */}
       <div className="approval-body">
         {/* LLM-supplied rationale (terminal schema `reason`, or args

@@ -42,13 +42,17 @@ export function SubAgentPanel({ subAgents }: { subAgents: Record<string, SubAgen
 
   return (
     <div
-      className="sub-agent-panel"
+      className="sub-agent-panel footer-block"
       style={{
         background: "var(--color-bg-secondary)",
         border: "1px solid var(--color-border-secondary)",
         borderRadius: 12,
         padding: "10px 12px",
-        margin: "10px 0",
+        // Vertical margin only — horizontal centering + width are
+        // handled by `.footer-block` so all three trailing blocks
+        // share the same horizontal lane.
+        marginTop: 10,
+        marginBottom: 10,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
