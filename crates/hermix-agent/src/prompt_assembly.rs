@@ -234,6 +234,66 @@ pub fn context_files_prompt(config: &AgentConfig) -> Option<String> {
     }
 }
 
+/// Compact index of installed custom apps, injected into every turn's
+/// system prompt so the LLM always knows which apps exist without
+/// calling `custom_app_manager list` first.
+///
+/// Deliberately tiny per entry (id + display name only — ~15-20 tokens)
+/// so 50+ apps stay under ~1% of a 128k context. Full metadata
+/// (description / permissions / launch steps) is fetched on demand via
+/// `custom_app_manager get id="<id>"` — the agent only pays for the
+/// apps it actually touches.
+///
+/// Rendered block looks like:
+/// ```text
+/// ## 已装的自定义应用
+/// 用户提到应用时用 @app:<id> 引用; 用 custom_app_manager 的 get/run
+/// action 操作它, 不要重复创建已存在的应用。
+/// @app:local-music — 本地音乐
+/// @app:notes — 笔记
+/// ```
+pub fn custom_apps_index_prompt(config: &AgentConfig) -> Option<String> {
+    let apps_dir = config
+        .hermix_home
+        .clone()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(hermix_config::paths::hermix_home)
+        .join("custom-apps");
+    let read_dir = std::fs::read_dir(&apps_dir).ok()?;
+    let mut entries: Vec<String> = Vec::new();
+    for dir in read_dir.flatten() {
+        let manifest_path = dir.path().join("manifest.json");
+        let Ok(raw) = std::fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let id = manifest
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let name = manifest
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(id);
+        if !id.is_empty() {
+            entries.push(format!("@app:{id} — {name}"));
+        }
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    entries.sort();
+    let mut block = String::from(
+        "## 已装的自定义应用\n\
+         用户提到应用或用 @app:<id> 引用时, 说明它已安装: 用 \
+         custom_app_manager 的 get 查详情、run 启动; 不要重复创建已存在的应用。\n",
+    );
+    block.push_str(&entries.join("\n"));
+    Some(block)
+}
+
 /// Split `"provider:model"` notation. Returns `(provider, model)` where
 /// provider falls back to `config.provider` and finally `"openai"`.
 pub fn extract_provider_and_model<'a>(
@@ -926,6 +986,13 @@ fn build_context_layer(
 
     if let Some(context_prompt) = context_files_prompt(config) {
         builder = builder.with_context_files(&context_prompt);
+    }
+
+    // Custom-apps index: tiny per-app line so the LLM knows what's
+    // installed without a list() round-trip. Cheap enough to live in
+    // every turn; details fetched on demand via `custom_app_manager get`.
+    if let Some(apps_index) = custom_apps_index_prompt(config) {
+        builder = builder.with_block(&apps_index);
     }
 
     let rendered = builder.build().to_string();
