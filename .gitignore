@@ -83,7 +83,8 @@ hermix-stderr.log
 hermix-stdout.log
 backend_stderr.txt
 backend_stdout.txt
-data/
+# 只忽略仓库根的运行时 data/ (gitignore 无锚定会误伤 src/**/data/ 源码目录)
+/data/
 cache/
 logs/
 webview-cache/
