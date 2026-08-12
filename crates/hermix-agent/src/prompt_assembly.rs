@@ -857,6 +857,22 @@ fn build_stable_layer(
         }
     }
 
+    // Operating Principles: forced task-workflow protocol so goals,
+    // progress and conclusions survive across turns/sessions. Lives in
+    // the stable (cached) layer because it is static guidance.
+    builder = builder.with_block(
+        r#"## 工作任务规范 (Operating Principles)
+任何实质性任务（>=2 步）必须严格遵守工作流，确保目标不丢、进度可查、结果可溯：
+1. 分析对象：明确要处理的目标与边界。
+2. 分析需求：厘清用户真正想要的结果与约束。
+3. 制定目标：用 task_create 建立目标树（标题=目标，描述含验收标准），多步任务拆子任务。
+4. 记录目标：任务第一步用 daily_memory 写入 goals 段，固化当日目标。
+5. 执行计划：按目标树落实，每完成检查点用 daily_memory 的 progress 段更新进度。
+6. 验证校验：完成后用工具/测试验证，把验证结论记入 progress。
+7. 收尾总结：结束用 daily_memory 的 conclusions 段记录成果、决策与待办。
+硬性要求：目标存在于 task_tracker（跨回合持久）与当日 daily_memory；任何>1步的任务都必须有 task 条目与进度更新；会话开始已自动创建当日 daily_memory 骨架，你只需填内容；目标达成即停止，不要为看起来在干活而重复工具调用。"#,
+    );
+
     let mut rendered = builder.build().to_string();
 
     // ★ Protocol-completeness: inline the five required section markers

@@ -21,6 +21,7 @@ pub mod code_execution;
 pub mod cronjob;
 pub mod cua;
 pub mod custom_app_manager;
+pub mod daily_memory;
 pub mod delegation;
 pub mod get_subagent_result;
 pub mod disk_cleanup;
@@ -198,6 +199,7 @@ pub fn register_all(
     aliases::register(registry);
     // P1.3: memory tool with FileMemoryBackend.
     memory::register(registry);
+    daily_memory::register(registry);
     // P1.3: skills tools (skills_list / skill_view / skill_manage).
     skills::register(registry, skill_provider);
     // slack::register(registry); // Untracked, broken - removed until fixed

@@ -587,6 +587,18 @@ impl LocalAgentService {
             .map(str::to_string)
             .or_else(|| cfg.model.clone());
         if let Some(m) = chosen {
+            // P1: 显式 provider 与 model 无前缀时补全为 "provider:model"。
+            // model 已含冒号前缀时前缀更具体, 忽略 provider (冲突时前缀赢)。
+            let provider = overrides
+                .provider
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if let Some(p) = provider {
+                if !m.contains(':') {
+                    return Ok(format!("{p}:{m}"));
+                }
+            }
             return Ok(m);
         }
         fallback_fn().ok_or_else(|| {
@@ -798,6 +810,16 @@ impl LocalAgentService {
         //safety net: bind every backend to the session
         // even if the adapter forgot to. Idempotent.
         router.initialize_all(session_id, &hh_owned);
+
+        // Ensure today's daily-memory skeleton exists so the
+        // operating-principles workflow has a row to append to even
+        // before the agent's first write.
+        if let Ok(store) = hermix_tools::tools::daily_memory::DailyMemoryStore::open() {
+            if let Err(e) = store.ensure_today() {
+                tracing::warn!(target: "hermix.agent", "daily_memory ensure_today failed: {e}");
+            }
+        }
+
         let backend_count = router.backend_count();
         tracing::info!(
             target: "hermix.agent",
