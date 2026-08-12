@@ -787,9 +787,8 @@ interface ChatViewProps {
    * wsSendRaw、approvalResolversRef 等）都集中在 App.tsx，ChatView
    * 拿不到（避免 React Context 引入不必要的渲染范围）。
    *
-   * 2026-08-12 截图根因：之前 setSelectedModelAndPersist 只调 store +
-   * PATCH，根本不重置 in-flight 脏状态，导致切模型后新轮请求带错的
-   * streamingSessionId/approval → 后端 400 → "模型不可用或参数错误"。
+   * 只改 store + PATCH 而不重置 in-flight 脏状态，切模型后新轮请求会
+   * 带错 streamingSessionId/approval → 后端 400 → "模型不可用或参数错误"。
    */
   onSwitchModel?: (newId: string) => void;
   /** Absolute path used to anchor relative paths the LLM mentions */
@@ -2498,7 +2497,7 @@ interface ComposerProps {
   onStop?: () => void;
   /**
    * 由 ChatView 透传——切换模型前父组件会先 reset in-flight 状态。
-   * （2026-08-12 截图根因修复契约：见 ChatViewProps.onSwitchModel 说明）
+   * （见 ChatViewProps.onSwitchModel 说明）
    */
   onSwitchModel?: (newId: string) => void;
   permissionLevel: PermissionLevel;
@@ -3018,10 +3017,9 @@ function Composer(p: ComposerProps) {
                                   <button
                                     key={m.id}
                                     onClick={() => {
-                                      // 2026-08-12 截图根因修复：先通知父组件
-                                      // 重置 in-flight 状态（cancel stream +
-                                      // 拒审批 + 清 streamError），再写 store。
-                                      // 父组件未传 prop 时保持旧路径（不重置）。
+                                      // 先通知父组件重置 in-flight 状态
+                                      // （cancel stream + 拒审批 + 清 streamError），
+                                      // 再写 store。父组件未传 prop 时保持旧路径。
                                       p.onSwitchModel?.(m.id);
                                       p.setSelectedModel(m.id);
                                       setModelOpen(false);

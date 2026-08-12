@@ -1,7 +1,7 @@
 /**
  * chatStateReset unit tests — covers the model-switch atomic reset path.
  *
- * 这些断言是 2026-08-12 截图 bug 修复契约：
+ * 行为契约：
  * - 切模型 → cancelStream 必须先调（重置 in-flight 流）。
  * - approvalResolversRef 必须 forEach denied + clear（防卡死）。
  * - 所有 refs 在调用后必须空（幂等清干净）。

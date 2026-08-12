@@ -40,7 +40,7 @@ import { storage, STORAGE_KEYS, KNOWN_KEYS, sessionKey } from "./utils/storageCo
 // `api.createSession(title, project)` — that way the server records
 // it on `sessions.workspace` from the start, and a desktop restart
 // restores the same Sidebar bucket instead of dumping the row into
-// "未分组" (bug 2026-07-12).
+// "未分组"（draft workspace 未随 session 持久化的回归）。
 function readDraftWorkspace(): string | null {
   try {
     return storage.getItem(STORAGE_KEYS.draftWorkspace);
@@ -2577,10 +2577,9 @@ return {
   /**
    * 切换模型/Provider 时原子重置 in-flight 状态。
    *
-   * 2026-08-12 截图根因：之前 ChatView 切模型只调 `setSelectedModel +
-   * PATCH sessions.model`，不重置 `streamingSessionId / approvalResolvers /
-   * streamError / runningTool` 等脏状态 → 新一轮 send 后端按错模型请
-   * 求 → 400 → "模型不可用或参数错误" + "对话因后端错误中断"。
+   * 若只调 `setSelectedModel + PATCH sessions.model` 而不重置
+   * `streamingSessionId / approvalResolvers / streamError / runningTool`
+   * 等脏状态 → 新一轮 send 后端按错模型请求 → 400。
    *
    * 本回调不写 store：调用顺序由 ChatView 保证（先 onSwitchModel 再
    * 写 store）。session.model 的持久化也由 ChatView 内的
@@ -2643,10 +2642,10 @@ return {
       const queuedAttachments = next.images || next.attachedFilePaths
         ? { images: next.images, attachedFilePaths: next.attachedFilePaths }
         : undefined;
-      // 2026-08-12 截图根因修复之 Phase C：drain 必须传当前 selectedModel 作为
-      // overrides.model，否则后端按 config.yaml 默认模型请求。activeSession.model
-      // 由 Phase B 的 setSelectedModelAndPersist PATCH 同步写入（commit 8e4e2b6），
-      // 用户在 busy 期间切了模型的话，drain 用新模型。
+      // drain 必须传当前 selectedModel 作为 overrides.model，否则后端按
+      // config.yaml 默认模型请求。activeSession.model 由
+      // setSelectedModelAndPersist PATCH 同步写入——用户在 busy 期间切了
+      // 模型的话，drain 用新模型。
       // 守 ChatComposer 同款 guard（line ~1843）：必须形如 "provider:model" 且非
       // "unknown" sentinel 才注入；否则让 backend 回落到其 configured default 而不报 400。
       const drainedModel = activeSession?.model;

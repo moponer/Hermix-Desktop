@@ -854,7 +854,7 @@ pub async fn cua_ui_invoke(name: String) -> Result<CuaCommandResponse, String> {
 }
 
 // ===========================================================================
-// 14) cua_ocr_recognize — REMOVED 2026-07-25
+// 14) cua_ocr_recognize — REMOVED
 //
 // The local Windows.Media.Ocr engine had <30% accuracy for Chinese documents.
 // The tool was removed; all image analysis goes through delegate_task →

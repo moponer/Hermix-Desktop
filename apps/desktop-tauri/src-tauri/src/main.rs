@@ -1,9 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
-// v33 (2026-07-06): unconditionally hide the console in *every*
-// profile (debug + release). The previous `cfg_attr(not(debug_assertions), ...)`
-// only kicked in for release builds, so `cargo tauri dev` still
-// flashed a black cmd window on every startup. Debug builds stay
-// debug-fast — the linker /SUBSYSTEM flag is purely cosmetic.
+// 无条件在所有 profile (debug + release) 隐藏 console。之前
+// `cfg_attr(not(debug_assertions), ...)` 只在 release 生效，debug 启动
+// 仍会闪黑 cmd 窗口。Debug 构建保持 fast — linker /SUBSYSTEM flag 纯装饰。
 #![windows_subsystem = "windows"]
 
 fn main() {

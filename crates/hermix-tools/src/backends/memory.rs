@@ -1622,7 +1622,7 @@ mod tests {
 
     // ---- 'No entry matched' error must list available
     // entries so the LLM can self-correct without flying blind.
-    // Regression: 用户截图 显示 LLM 看到 "No entry
+    // 之前 LLM 看到 "No entry
     // matched '比如行驶证、营运证进行重命名'" 后没拿到可用列表，
     // 反复猜 old_text 失败 → 放弃任务。---- // #[tokio::test]
     async fn no_match_replace_lists_available_entries() {

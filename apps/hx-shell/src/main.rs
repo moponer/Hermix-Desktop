@@ -1008,7 +1008,7 @@ fn main() -> wry::Result<()> {
             Err(e) => { hx_log(&format!("Icon::from_rgba failed: {e:?}")); None }
         }
     });
-    // 2026-08-05 主人反馈: 自定义应用窗口启动在屏幕左侧/左上角, 不居中。
+    // 自定义应用窗口启动在屏幕左侧/左上角, 不居中。
     // 根因: tao WindowBuilder 未设置位置, Windows 默认 (0,0)。
     // 解法: 计算主显示器中心, 创建窗口时直接居中 (tao 0.35 API):
     //   - MonitorHandle: size() -> PhysicalSize<u32>, position() -> PhysicalPosition<i32>,

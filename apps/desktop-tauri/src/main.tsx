@@ -19,11 +19,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 );
 
 // Remove the splash screen only after the backend health check passes.
-// 2026-08-04 重构判断逻辑：不再依赖 Tauri 端 reqwest 探测 emit 的
-// `hermix:server-ready` 事件（该事件在此环境实测经常不触发/晚到，导致
-// 后端已就绪仍弹"启动超时"误报）。改为**前端自己 fetch /health**——
-// 浏览器 fetch 走 WebView2 网络栈，与 curl 行为一致，后端 listening 即 200，
-// 判定可靠。若 fetch 失败则继续轮询直到 20s，仍失败才降级提示（非红框）。
+// 不依赖 Tauri 端 reqwest 探测 emit 的 `hermix:server-ready` 事件（该事件
+// 实测经常不触发/晚到，导致后端已就绪仍弹"启动超时"误报）。改为**前端
+// 自己 fetch /health**——浏览器 fetch 走 WebView2 网络栈，与 curl 行为一致，
+// 后端 listening 即 200，判定可靠。若 fetch 失败则继续轮询直到 20s，仍失败
+// 才降级提示（非红框）。
 const HEALTH_URL = "http://127.0.0.1:3000/health";
 const HEALTH_TIMEOUT_MS = 20_000;
 const HEALTH_POLL_MS = 500;

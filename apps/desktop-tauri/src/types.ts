@@ -43,7 +43,7 @@ export interface ApprovalMessageMeta {
    *  wire and `ApprovalRecord::expires_at` in SQLite.
    *
    *  `undefined` / `null` for rows persisted before the
-   *  countdown feature shipped (2026-06-14) — the front-end
+   *  countdown feature shipped — the front-end
    *  falls back to a 60s default in that case.
    *
    *  Why we persist this instead of re-deriving on reload: a

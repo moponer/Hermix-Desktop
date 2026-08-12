@@ -46,7 +46,7 @@ fn copy_workspace_sidecar(manifest_dir: &Path, profile: &str) {
 
 /// `officecli` sidecar — 项目级扩展资源二进制 (externalBin).
 ///
-/// 2026-07-06 决策: 之前 build.rs 跨盘符找源 (D:\HermixDesktop\, repo\release\ 等),
+/// 约束: 之前 build.rs 跨盘符找源 (D:\HermixDesktop\, repo\release\ 等),
 /// 违反"项目内自包含"原则. 现在 officecli.exe 是项目资产, 由维护者手动
 /// `cp` 到 `src-tauri/binaries/officecli-x86_64-pc-windows-msvc.exe`,
 /// Tauri externalBin 直接读取该路径打包. build.rs 只做存在性 + 大小合理性校验,
@@ -80,7 +80,7 @@ fn assert_officecli_present(manifest_dir: &Path) {
     };
 
     if meta.len() < OFFICECLI_MIN_BYTES {
-        // 不 panic —— 只警告, 让 stub placeholder 启动也能 build (主人刻意留这个口子)
+        // 不 panic —— 只警告, 让 stub placeholder 启动也能 build (刻意留的口子)
         println!(
             "cargo:warning=officecli sidecar at {} is suspiciously small ({} bytes, expected > {}). \
              Likely a stub placeholder — replace with the real binary before shipping.",
@@ -92,7 +92,7 @@ fn assert_officecli_present(manifest_dir: &Path) {
 }
 
 fn main() {
-    // 2026-07-06: sidecar 处理必须先于 tauri_build::build(),
+    // sidecar 处理必须先于 tauri_build::build(),
     // 因为 tauri_build 会校验 binaries/{name}-{triple}.exe 已存在.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let profile = env::var("PROFILE").expect("CARGO sets PROFILE for build scripts");

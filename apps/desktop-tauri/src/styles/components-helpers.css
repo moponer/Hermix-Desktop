@@ -632,7 +632,7 @@
 .dark .tw-msg-result-peek {
   color: var(--color-text-muted);
 }
-/* 2026-08-05 主人反馈: 工具调用展开后跟正文一样, 没有层次感.
+/* 工具调用展开后跟正文一样, 没有层次感.
    解法: 输出区用 --color-bg-code (独立背景) + 左 border (rail),
    形成"代码/终端面板"感, 跟 chat 气泡/思考区明显分层. 主题色自动适配
    (每个主题都有专属 --color-bg-code + --color-border-subtle). */
@@ -1267,7 +1267,7 @@ opacity: 0.7;
   gap: 16px;
 }
 
-/* App Card — 主人不喜欢边框线 (2026-08-05 反馈)
+/* App Card — 不用边框线
    bg 与视图背景拉开层级 (zinc #1c1c20 vs 父视图 #0f0f12 #18181b 系列)
    靠 box-shadow 双层浮起来 + hover 时阴影进一步抬升 + 微微上浮 */
 .custom-app-card {

@@ -6,7 +6,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
-    // 2026-07-14: enable @testing-library/jest-dom matchers
+    // enable @testing-library/jest-dom matchers
     // (`toBeInTheDocument` etc.) so React component tests can use
     // them. Without this, every test that touches the DOM would
     // error with "Invalid Chai property".

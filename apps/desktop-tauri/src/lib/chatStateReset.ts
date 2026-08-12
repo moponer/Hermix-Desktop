@@ -2,15 +2,13 @@
 //
 // 原子重置 ChatView 的"对话中"状态，专门给模型/Provider 切换路径调用。
 //
-// 背景：主人在下拉里选新模型时，原本只有
-// `ChatView.tsx:1204-1212 setSelectedModelAndPersist` 改两件事
-// （`selectedModel` store + `updateSessionMetadata` PATCH），完全不重置：
+// 背景：切换模型只改 `selectedModel` store + PATCH 是不够的，必须同时
+// 重置本组件持有之外的 in-flight 状态，否则脏状态会带到下一轮：
 //   - 上家在跑的 streamingSessionId / streaming
 //   - 在途审批（approvalResolversRef / timers）
 //   - streamError / streamPhase / runningTool / subAgents / acui
 //   - 队列里的 messageQueue（drain 时还不带 overrides，后端按错模型）
-// 这些脏状态会带到下一轮，新轮 send 时后端以错模型请求 → 400 →
-// "模型不可用或参数错误" + "对话因后端错误中断"（截图根因）。
+// 这些脏状态会让新轮 send 以错误模型请求后端 → 400。
 //
 // 设计：纯函数 + 副作用封装。`cancelStream` 复用 useStreamChat.cancel，
 // 其余 setter/refs 由 App.tsx 已持有的引用直接传入。
@@ -81,9 +79,8 @@ export interface ChatStateResetDeps {
  *
  * 不动：
  * - `selectedModel` —— 调用者切完模型后才轮到它（顺序保证）。
- * - `messageQueue` —— 队列里的待发消息由 Phase C 修复（drain 时带
- *   overrides），不在本函数范围。
- * - 后端 `sessions.model` —— 已由 setSelectedModelAndPersist 同步 PATCH。
+ * - `messageQueue` —— 队列里的待发消息在 drain 时带 overrides，不在本函数范围。
+ * - 后端 `sessions.model` —— 由 setSelectedModelAndPersist 同步 PATCH。
  */
 export function resetChatStateForModelSwitch(deps: ChatStateResetDeps): void {
   // 1) cancel 进行中的流。

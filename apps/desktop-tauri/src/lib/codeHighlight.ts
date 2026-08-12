@@ -212,7 +212,7 @@ export function toRefractorLang(lang: string): string | null {
 // unified refractor path stays visually consistent with the old
 // Prism output.
 //
-// 2026-08-05 主人反馈: token 对比度不够, 关键字/字符串/函数辨识度提升:
+// Token 对比度增强策略（关键字/字符串/函数辨识度）:
 //   - keyword 加粗 (fontWeight: 600) — 关键字醒目区分于标识符
 //   - boolean/number/constant 加粗 — 字面量一眼可见
 //   - function 加粗 — 调用点立刻识别
@@ -255,7 +255,7 @@ const ONE_DARK: Record<string, React.CSSProperties> = {
 // Light-mode counterpart to ONE_DARK. Without this, light-theme code
 // blocks used dark tokens on a light background — readable but with
 // noticeably worse contrast than dark-mode.
-// 2026-08-05 同 ONE_DARK 增强策略: keyword/function/boolean 加粗,
+// 同 ONE_DARK 增强策略: keyword/function/boolean 加粗,
 // comment 调亮 + italic (浅色背景上中灰易消, 用暖灰 +9 步).
 const ONE_LIGHT: Record<string, React.CSSProperties> = {
   comment: { color: "#a0a1a7", fontStyle: "italic" },

@@ -584,7 +584,7 @@
   text-decoration: underline;
 }
 
-/* ── Memory update block (2026-07-14) ── */
+/* ── Memory update block ── */
 /* Surfaces what the agent remembered this turn. Palette is strictly
    gray/zinc + amber/green/red action tints — no blue/indigo/violet. */
 .memory-update-block {
@@ -1707,7 +1707,7 @@
    left accent bar (.approval-accent) is gone — state is carried by
    the tinted wash + status pill instead. */
 /* ================================================================
-   Approval card — redone (2026-08-07):
+   Approval card — redone:
    * Two-zone layout: risk-tinted title bar (header) + body.
    * Command text is never truncated — full command shown verbatim
      with a copy button (legacy `.approval-desc` clipped with ellipsis,
@@ -1843,7 +1843,7 @@
 }
 
 /* ================================================================
-   Approval card v2 (2026-08-07) — `.tw-msg` family integration.
+   Approval card v2 — `.tw-msg` family integration.
    The card lives inside the existing `.tw-msg` / `.tw-msg-row` /
    `.tw-msg-body` classes (same treatment as read_file / grep
    tool events), so this block only adds the bits those classes

@@ -1,5 +1,5 @@
 /**
- * CompactionStatusBanner tests — 2026-07-14.
+ * CompactionStatusBanner tests.
  *
  * Locks the 5-state UI so future refactors of the banner can't silently
  * drop a state. Each test renders with a different `CompactionState` and
@@ -8,7 +8,7 @@
  * appears when both `usedText` and `thresholdText` are populated.
  *
  * Why this matters: it reconnects the `compaction_status` WS event
- * that has been a Day-1 placeholder since 2026-06-29. Once it actually
+ * that has been a Day-1 placeholder. Once it actually
  * fires, the banner transitions through closed → pressure → fallback
  * → open during long conversations, and a silent state-drop would leave
  * the user staring at a stale banner.
@@ -101,7 +101,7 @@ describe("CompactionStatusBanner", () => {
   // so the user sees "正在准备压缩" / "正在压缩中" / "压缩完成" /
   // "压缩失败" transitions instead of a single static warning card
   // jumping straight to the post-attempt result.
-  describe("phase overrides (2026-07-22)", () => {
+  describe("phase overrides", () => {
     function renderWithPhase(
       phase: import("./CompactionStatusBanner").CompactionPhase,
       overrides: Partial<CompactionStatus> = {},

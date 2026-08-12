@@ -45,7 +45,6 @@ pub enum HandoffKind {
     /// next user message still routes to `__leader__`. This is a known
     /// limitation, not a bug; a full takeover would require recording the
     /// controller on the room and routing subsequent dispatches to it.
-    /// See REVIEW_REPORT_2026-07-18.md .
     Transfer,
     /// A bounded delegation — the target answers one question, then control
     /// returns to the leader. (Agents-as-tools pattern.)
