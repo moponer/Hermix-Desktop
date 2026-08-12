@@ -2643,7 +2643,18 @@ return {
       const queuedAttachments = next.images || next.attachedFilePaths
         ? { images: next.images, attachedFilePaths: next.attachedFilePaths }
         : undefined;
-      handleSendMessage(next.text, undefined, undefined, queuedAttachments).catch((_cause) => {
+      // 2026-08-12 截图根因修复之 Phase C：drain 必须传当前 selectedModel 作为
+      // overrides.model，否则后端按 config.yaml 默认模型请求。activeSession.model
+      // 由 Phase B 的 setSelectedModelAndPersist PATCH 同步写入（commit 8e4e2b6），
+      // 用户在 busy 期间切了模型的话，drain 用新模型。
+      // 守 ChatComposer 同款 guard（line ~1843）：必须形如 "provider:model" 且非
+      // "unknown" sentinel 才注入；否则让 backend 回落到其 configured default 而不报 400。
+      const drainedModel = activeSession?.model;
+      const drainedOverrides: import("./hooks/useStreamChat").ChatOverrides | undefined =
+        drainedModel && drainedModel.includes(":") && drainedModel !== "unknown"
+          ? { model: drainedModel }
+          : undefined;
+      handleSendMessage(next.text, undefined, drainedOverrides, queuedAttachments).catch((_cause) => {
         diagLog("[diag] queue drain: handleSendMessage failed, re-enqueueing", { next: next.text, cause: _cause instanceof Error ? _cause.message : String(_cause) });
         // Limit retries: track per-message so a permanently failing
         // backend doesn't spin forever.
