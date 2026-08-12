@@ -20,6 +20,7 @@ import { useResizable } from "./hooks/useResizable";
 import { useWorkspaceRoot } from "./hooks/useWorkspaceRoot";
 import { useArtifacts } from "./hooks/useArtifacts";
 import { diagLog, nextDiagId } from "./lib/diag";
+import { resetChatStateForModelSwitch, type RefLike } from "./lib/chatStateReset";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastContainer } from "./components/ToastContainer";
 import { useAcuiState, type AcuiDecisionBus } from "./acui";
@@ -2573,6 +2574,55 @@ return {
     [streaming, handleSendMessage],
   );
 
+  /**
+   * 切换模型/Provider 时原子重置 in-flight 状态。
+   *
+   * 2026-08-12 截图根因：之前 ChatView 切模型只调 `setSelectedModel +
+   * PATCH sessions.model`，不重置 `streamingSessionId / approvalResolvers /
+   * streamError / runningTool` 等脏状态 → 新一轮 send 后端按错模型请
+   * 求 → 400 → "模型不可用或参数错误" + "对话因后端错误中断"。
+   *
+   * 本回调不写 store：调用顺序由 ChatView 保证（先 onSwitchModel 再
+   * 写 store）。session.model 的持久化也由 ChatView 内的
+   * `setSelectedModelAndPersist` 走 PATCH。
+   *
+   * 必须放在所有 reset deps（clearStreamError / setStreamPhase /
+   * approvalResolversRef / acui 等）声明之后——否则 TDZ 报错。
+   */
+  const handleSwitchModel = useCallback(
+    (_newId: string) => {
+      resetChatStateForModelSwitch({
+        cancelStream,
+        wsSendRaw,
+        clearStreamError,
+        setStreamPhase,
+        setRunningToolCount,
+        setSubAgents: setSubAgents as unknown as (
+          updater: (prev: Record<string, unknown>) => Record<string, unknown>,
+        ) => void,
+        approvalResolversRef: approvalResolversRef as unknown as RefLike<
+          Map<string, (decision: unknown) => void>
+        >,
+        approvalRetryTimersRef,
+        approvalTimeoutTimersRef,
+        pendingApprovalSessionsRef,
+        clarifyResolversRef,
+        runningToolRef,
+        currentAssistantIdRef,
+        acuiReset: acui.reset,
+      });
+    },
+    [
+      cancelStream,
+      wsSendRaw,
+      clearStreamError,
+      setStreamPhase,
+      setRunningToolCount,
+      setSubAgents,
+      acui.reset,
+    ],
+  );
+
   // Auto-send queued messages when streaming completes.
   // Lives here (after `handleSendMessage` is declared) because the
   // effect captures it in its closure and TSC's lexical analysis
@@ -2749,6 +2799,7 @@ return {
               onUndo={handleUndo}
               onRestore={handleRestore}
               onStop={cancelStream}
+              onSwitchModel={handleSwitchModel}
               isStreaming={isStreamingActiveSession}
               streamingPhase={streamPhase ?? (isStreamingActiveSession ? "streaming" : null)}
               streamingStatus={streamingStatus}
