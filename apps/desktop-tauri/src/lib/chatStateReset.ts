@@ -15,11 +15,18 @@
 // 设计：纯函数 + 副作用封装。`cancelStream` 复用 useStreamChat.cancel，
 // 其余 setter/refs 由 App.tsx 已持有的引用直接传入。
 
-import type { MutableRefObject } from "react";
 import type { StreamPhase } from "../hooks/useStreamChat";
 
 /** useStreamChat 暴露的 ws 发送原语（cancel / send 内部也用它）。 */
 export type WsSendRaw = (payload: string) => boolean;
+
+/**
+ * 一个 plain ref-like 容器（`{ current: T }`）—— 接受 MutableRefObject
+ * （useRef 的初值形式）或 RefObject（nullable 形式），传入方无需 cast。
+ */
+export interface RefLike<T> {
+  current: T;
+}
 
 /**
  * 模型/Provider 切换的 ChatView 状态重置依赖。
@@ -38,21 +45,21 @@ export interface ChatStateResetDeps {
     updater: (prev: Record<string, unknown>) => Record<string, unknown>,
   ) => void;
   /** 同步 refs（imperatively cleared）。 */
-  approvalResolversRef: MutableRefObject<
+  approvalResolversRef: RefLike<
     Map<string, (decision: unknown) => void>
   >;
-  approvalRetryTimersRef: MutableRefObject<
+  approvalRetryTimersRef: RefLike<
     Map<string, ReturnType<typeof setInterval>>
   >;
-  approvalTimeoutTimersRef: MutableRefObject<
+  approvalTimeoutTimersRef: RefLike<
     Map<string, ReturnType<typeof setTimeout>>
   >;
-  pendingApprovalSessionsRef: MutableRefObject<Map<string, string>>;
-  clarifyResolversRef: MutableRefObject<
+  pendingApprovalSessionsRef: RefLike<Map<string, string>>;
+  clarifyResolversRef: RefLike<
     Map<string, Array<(answer: string) => void>>
   >;
-  runningToolRef: MutableRefObject<Map<string, string>>;
-  currentAssistantIdRef: MutableRefObject<string | null>;
+  runningToolRef: RefLike<Map<string, string>>;
+  currentAssistantIdRef: RefLike<string | null>;
   /** ACUI 卡片栈重置。 */
   acuiReset: () => void;
 }
