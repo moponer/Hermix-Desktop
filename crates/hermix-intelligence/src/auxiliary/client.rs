@@ -309,6 +309,13 @@ impl AuxiliaryClientBuilder {
         self
     }
 
+    /// Move the candidate with the given label to the front of the chain.
+    /// No-op if the label is not present.
+    pub fn promote(mut self, label: &str) -> Self {
+        self.chain.promote(label);
+        self
+    }
+
     pub fn config(mut self, config: AuxiliaryConfig) -> Self {
         self.config = config;
         self

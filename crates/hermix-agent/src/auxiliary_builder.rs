@@ -273,6 +273,27 @@ fn build_auxiliary_client_inner(
         }
     }
 
+    // 主 model 的 provider 提到链首: 压缩摘要默认跟随主对话模型
+    // (config.yaml `model:`), 若主 provider 是链尾的 custom-* 等动态
+    // provider, 前序固定候选带 key 时会拿主 model id 去试 → 400 →
+    // 非重试错误短路 → 压缩失败 ("LLM summary generation failed")。
+    // promote 把主 provider 的候选挪到最前, 首个尝试即正确 provider;
+    // 主 provider 不在链中时 promote 是 no-op, 由后续候选兜底。
+    if let Some(gw) = gateway {
+        if let Some(model) = gw.model.as_deref() {
+            let provider_name = crate::agent_builder::parse_model_string(model).0;
+            // 链内候选 label 与 provider 名的别名映射:
+            // openai 候选的 label 是 "custom" (candidate.rs label()),
+            // moonshot 与 kimi 同端点 (agent_builder.rs build_provider), label 是 "kimi"。
+            let label = match provider_name {
+                "openai" => "custom",
+                "moonshot" => "kimi",
+                other => other,
+            };
+            builder = builder.promote(label);
+        }
+    }
+
     let client = builder.build();
     (client, summary)
 }
@@ -310,6 +331,8 @@ fn register_direct_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hermix_config::GatewayConfig;
+    use std::collections::HashMap;
 
     const KEYS: &[&str] = &[
         "OPENROUTER_API_KEY",
@@ -323,19 +346,25 @@ mod tests {
         "GEMINI_API_KEY",
     ];
 
+    // env 是进程全局的: 所有改 env 的测试必须串行 (并行 worker 会互相
+    // 污染)。EnvyGuard 持锁跨整个测试生命周期。
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Save current env, then clear; restored when the guard drops.
     struct EnvGuard {
+        _env_lock: std::sync::MutexGuard<'static, ()>,
         previous: Vec<(&'static str, Option<String>)>,
     }
 
     impl EnvGuard {
         fn clear() -> Self {
+            let _env_lock = ENV_LOCK.lock().unwrap();
             let mut previous = Vec::new();
             for k in KEYS {
                 previous.push((*k, std::env::var(k).ok()));
                 std::env::remove_var(k);
             }
-            Self { previous }
+            Self { _env_lock, previous }
         }
     }
 
@@ -386,5 +415,93 @@ mod tests {
                 vec!["openrouter", "custom", "anthropic", "zai"]
             );
         }
+    }
+
+    /// Scenario 4: 主 model 的 provider 在链尾时被 promote 到链首。
+    /// 覆盖 custom-* 动态 provider 作为主模型时, 前序固定候选 (openai 等)
+    /// 有 key 也不会抢先拿主 model id 去试的修复 (D 类回归)。
+    #[test]
+    fn config_gateway_model_promotes_matching_provider_to_front() {
+        let _g = EnvGuard::clear();
+
+        let mut providers = HashMap::new();
+        providers.insert(
+            "openai".to_string(),
+            hermix_config::LlmProviderConfig {
+                api_key: Some("sk-openai".into()),
+                base_url: Some("https://api.openai.com/v1".into()),
+                ..Default::default()
+            },
+        );
+        providers.insert(
+            "custom-agnes".to_string(),
+            hermix_config::LlmProviderConfig {
+                api_key: Some("sk-agnes".into()),
+                base_url: Some("https://api.agnes.ai/v1".into()),
+                ..Default::default()
+            },
+        );
+        let mut gateway = GatewayConfig::default();
+        gateway.model = Some("custom-agnes:agnes-2.5-flash".into());
+        gateway.llm_providers = providers;
+
+        let (client, _) =
+            build_auxiliary_client_with_config(AuxiliaryConfig::default(), &gateway);
+        let labels = client.chain_labels();
+        assert_eq!(labels[0], "custom-agnes", "主 provider 必须提到链首, got {labels:?}");
+    }
+
+    /// Scenario 5: openai 主 model 的 label 别名映射 (链中 openai 候选 label 是 "custom")。
+    #[test]
+    fn config_gateway_model_openai_maps_to_custom_label() {
+        let _g = EnvGuard::clear();
+
+        let mut providers = HashMap::new();
+        providers.insert(
+            "openai".to_string(),
+            hermix_config::LlmProviderConfig {
+                api_key: Some("sk-openai".into()),
+                base_url: Some("https://api.openai.com/v1".into()),
+                ..Default::default()
+            },
+        );
+        providers.insert(
+            "anthropic".to_string(),
+            hermix_config::LlmProviderConfig {
+                api_key: Some("sk-anthropic".into()),
+                ..Default::default()
+            },
+        );
+        let mut gateway = GatewayConfig::default();
+        gateway.model = Some("openai:gpt-4o".into());
+        gateway.llm_providers = providers;
+
+        let (client, _) =
+            build_auxiliary_client_with_config(AuxiliaryConfig::default(), &gateway);
+        let labels = client.chain_labels();
+        assert_eq!(labels[0], "custom", "openai 主 model 应映射到 custom label, got {labels:?}");
+    }
+
+    /// Scenario 6: 主 provider 不在链中 (无 key) 时 promote 是 no-op, 链序不变。
+    #[test]
+    fn config_gateway_model_absent_provider_is_noop() {
+        let _g = EnvGuard::clear();
+
+        let mut providers = HashMap::new();
+        providers.insert(
+            "openai".to_string(),
+            hermix_config::LlmProviderConfig {
+                api_key: Some("sk-openai".into()),
+                ..Default::default()
+            },
+        );
+        let mut gateway = GatewayConfig::default();
+        // 主 model 的 provider "deepseek" 没有任何 key → 链里没有该候选。
+        gateway.model = Some("deepseek:deepseek-chat".into());
+        gateway.llm_providers = providers;
+
+        let (client, _) =
+            build_auxiliary_client_with_config(AuxiliaryConfig::default(), &gateway);
+        assert_eq!(client.chain_labels(), vec!["custom"]);
     }
 }
