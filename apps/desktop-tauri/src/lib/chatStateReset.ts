@@ -87,7 +87,7 @@ export function resetChatStateForModelSwitch(deps: ChatStateResetDeps): void {
   deps.setStreamPhase(null);
   deps.runningToolRef.current.clear();
   deps.setRunningToolCount(0);
-  deps.setSubAgents({});
+  deps.setSubAgents(() => ({}));
   deps.currentAssistantIdRef.current = null;
   deps.acuiReset();
 

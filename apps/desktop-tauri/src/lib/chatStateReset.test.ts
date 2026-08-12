@@ -90,7 +90,7 @@ describe("resetChatStateForModelSwitch", () => {
     expect(deps.clearStreamError).toHaveBeenCalledTimes(1);
     expect(deps.setStreamPhase).toHaveBeenCalledWith(null);
     expect(deps.setRunningToolCount).toHaveBeenCalledWith(0);
-    expect(deps.setSubAgents).toHaveBeenCalledWith({});
+    expect(deps.setSubAgents).toHaveBeenCalledWith(expect.any(Function));
     expect(deps.acuiReset).toHaveBeenCalledTimes(1);
   });
 
@@ -139,11 +139,11 @@ describe("resetChatStateForModelSwitch", () => {
     const deps = makeDeps({ pendingClarifies: 2 });
     let resolved = 0;
     deps.clarifyResolversRef.current.forEach((arr) =>
-      arr.forEach((r) => {
-        r.__testResolve = ((r as unknown as { __testResolve?: () => void })?.__testResolve) ?? (() => {}).bind(null);
+      arr.forEach(() => {
         resolved++;
       }),
     );
+    expect(resolved).toBe(2);
     resetChatStateForModelSwitch(deps);
     expect(deps.clarifyResolversRef.current.size).toBe(0);
   });
