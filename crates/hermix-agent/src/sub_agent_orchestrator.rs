@@ -674,6 +674,14 @@ impl SubAgentOrchestrator {
         } else {
             child_tool_registry
         };
+        // Pre-extract owned values from `&self`/`&req`/`&sub_agent_id` before
+        // the spawned future. `tokio::spawn` requires `'static`, so the async
+        // block must not capture these borrows — cloning them into owned locals
+        // here keeps the borrow lifetimes out of the spawned task.
+        let emitter_for_cb = self.cfg.chunk_emitter.clone();
+        let task_for_cb = req.task.clone();
+        let role_for_cb = req.role;
+        let id_for_cb = sub_agent_id.to_string();
         let join = tokio::spawn(async move {
             // Live step log: the child's tool calls / thinking are
             // surfaced as one-line entries so the frontend "子代理" panel
@@ -681,10 +689,7 @@ impl SubAgentOrchestrator {
             // The closure clones what it needs from `self.cfg` (emitter)
             // and shares `recent_steps` with the outer scope.
             let steps_for_cb = recent_steps.clone();
-            let emitter_for_cb = self.cfg.chunk_emitter.clone();
-            let task_for_cb = req.task.clone();
-            let role_for_cb = req.role;
-            let id_for_cb = sub_agent_id.to_string();
+            let steps_for_cb_thinking = recent_steps.clone();
             let callbacks = crate::agent_helpers::AgentCallbacks {
                 on_tool_start: Some(Box::new(move |_tool_call_id, tool, args| {
                     let step = tool_step_label(tool, args);
@@ -722,7 +727,7 @@ impl SubAgentOrchestrator {
                     }
                 })),
                 on_thinking: Some(Box::new(move |_text| {
-                    if let Ok(mut v) = steps_for_cb.lock() {
+                    if let Ok(mut v) = steps_for_cb_thinking.lock() {
                         let last = v.last().map(|s| s.as_str());
                         // De-duplicate consecutive thinking rows so the log
                         // doesn't fill with "正在思考…" spam between tools.
