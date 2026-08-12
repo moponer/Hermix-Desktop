@@ -3288,6 +3288,66 @@ mod override_tests {
         );
     }
 
+    #[test]
+    fn compute_effective_model_merges_explicit_provider_into_bare_model() {
+        // P1: 前端显式 provider + 无前缀 model → 补全 "provider:model"。
+        let cfg = GatewayConfig {
+            model: Some("openai:gpt-4o".to_string()),
+            ..make_minimal_cfg()
+        };
+        let overrides = AgentOverrides {
+            model: Some("my-model-x".to_string()),
+            provider: Some("custom-agnes".to_string()),
+            ..Default::default()
+        };
+        let got = LocalAgentService::compute_effective_model(&overrides, &cfg, || None);
+        assert!(
+            matches!(got.as_ref(), Ok(m) if m == "custom-agnes:my-model-x"),
+            "expected provider:model merge, got {:?}",
+            got
+        );
+    }
+
+    #[test]
+    fn compute_effective_model_keeps_model_prefix_over_provider() {
+        // P1: model 已含前缀时前缀更具体, 忽略 provider (冲突时前缀赢)。
+        let cfg = GatewayConfig {
+            model: Some("openai:gpt-4o".to_string()),
+            ..make_minimal_cfg()
+        };
+        let overrides = AgentOverrides {
+            model: Some("anthropic:claude-3-5-sonnet".to_string()),
+            provider: Some("custom-agnes".to_string()),
+            ..Default::default()
+        };
+        let got = LocalAgentService::compute_effective_model(&overrides, &cfg, || None);
+        assert!(
+            matches!(got.as_ref(), Ok(m) if m == "anthropic:claude-3-5-sonnet"),
+            "model prefix must win, got {:?}",
+            got
+        );
+    }
+
+    #[test]
+    fn compute_effective_model_ignores_blank_provider() {
+        // P1: provider 空串/空白 → 视为未提供, 不污染 model。
+        let cfg = GatewayConfig {
+            model: Some("openai:gpt-4o".to_string()),
+            ..make_minimal_cfg()
+        };
+        let overrides = AgentOverrides {
+            model: Some("my-model".to_string()),
+            provider: Some("   ".to_string()),
+            ..Default::default()
+        };
+        let got = LocalAgentService::compute_effective_model(&overrides, &cfg, || None);
+        assert!(
+            matches!(got.as_ref(), Ok(m) if m == "my-model"),
+            "blank provider must be ignored, got {:?}",
+            got
+        );
+    }
+
     /// Build a `GatewayConfig` with only the fields we care about for
     /// `compute_effective_model` set; everything else left as the
     /// `Default` impl (which gives empty provider maps, empty
@@ -3326,6 +3386,7 @@ mod override_tests {
         let base = AgentConfig::default();
         let overrides = AgentOverrides {
             model: None,
+            provider: None,
             personality: None,
             system_prompt: Some("You are a senior Rust developer.".to_string()),
             tools: None,
@@ -3357,6 +3418,7 @@ mod override_tests {
         let base = AgentConfig::default();
         let overrides = AgentOverrides {
             model: None,
+            provider: None,
             personality: None,
             system_prompt: None,
             tools: Some(vec!["read_file".to_string(), "list_dir".to_string()]),

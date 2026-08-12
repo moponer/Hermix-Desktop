@@ -313,6 +313,11 @@ pub struct AgentImage {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct AgentOverrides {
     pub model: Option<String>,
+    /// 显式 provider 名 (如 "openai" / "custom-agnes")。model 已含
+    /// "provider:model" 前缀时忽略本字段 (前缀更具体); 仅当 model 无
+    /// 前缀时用于补全。避免前端每次都要拼前缀。
+    #[serde(default)]
+    pub provider: Option<String>,
     pub personality: Option<String>,
     /// Fully replace the system prompt for this turn. The agent uses this
     /// verbatim in the prompt assembly, after the SOUL/personality blocks.
@@ -414,6 +419,7 @@ impl std::fmt::Debug for AgentOverrides {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentOverrides")
             .field("model", &self.model)
+            .field("provider", &self.provider)
             .field("personality", &self.personality)
             .field("system_prompt", &self.system_prompt)
             .field("tools", &self.tools)
@@ -448,6 +454,7 @@ impl PartialEq for AgentOverrides {
         // equality (two differently-constructed callbacks represent the same
         // request from the bus's perspective).
         self.model == other.model
+            && self.provider == other.provider
             && self.personality == other.personality
             && self.system_prompt == other.system_prompt
             && self.tools == other.tools
