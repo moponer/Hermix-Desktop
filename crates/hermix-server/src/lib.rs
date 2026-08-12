@@ -3495,6 +3495,7 @@ async fn send_message(
     // Build AgentOverrides from request
     let overrides = hermix_core::traits::AgentOverrides {
         model: req.model.clone(),
+        provider: req.provider.clone(),
         personality: req.personality.clone(),
         system_prompt: req.system_prompt.clone(),
         tools: req.tools.clone(),
@@ -3916,6 +3917,7 @@ async fn handle_ws(mut socket: WebSocket, state: HttpServerState, session_id: St
                 // Build AgentOverrides from request
                 let overrides = hermix_core::traits::AgentOverrides {
                     model: request.model.clone(),
+                    provider: request.provider.clone(),
                     personality: request.personality.clone(),
                     system_prompt: request.system_prompt.clone(),
                     tools: request.tools.clone(),
@@ -4164,6 +4166,7 @@ async fn handle_ws_stream_send(
                 content: String::new(),
                 finish_reason: Some("deduped".to_string()),
                 outcome: Some("completed".to_string()),
+                error: None,
             },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {
@@ -4207,6 +4210,7 @@ async fn handle_ws_stream_send(
                 content: String::new(),
                 finish_reason: Some("deduped".to_string()),
                 outcome: Some("completed".to_string()),
+                error: None,
             },
         };
         if let Ok(json) = serde_json::to_string(&envelope) {
@@ -4346,6 +4350,7 @@ async fn handle_ws_stream_send(
     // Build AgentOverrides from request
     let overrides = hermix_core::traits::AgentOverrides {
         model: request.model.clone(),
+        provider: request.provider.clone(),
         personality: request.personality.clone(),
         system_prompt: request.system_prompt.clone(),
         tools: request.tools.clone(),
