@@ -578,6 +578,13 @@ pub trait AgentService: Send + Sync {
     /// reloads empty on restart). Default is a no-op for services
     /// that don't track active tasks.
     fn interrupt_all(&self) {}
+
+    /// Fire-and-forget cold-start warmup for a specific model (e.g. when
+    /// the UI switches the active model away from the configured default).
+    /// Primes the provider's HTTP keep-alive pool so the first chat on
+    /// that model doesn't pay the 30–60s cold-start cost. Default is a
+    /// no-op for remote / mocked services.
+    fn warm_up_provider(&self, _model: &str) {}
 }
 
 // ---------------------------------------------------------------------------

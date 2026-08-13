@@ -2062,6 +2062,7 @@ pub fn router(state: HttpServerState) -> Router {
         .route("/v1/ws/{session_id}", get(ws_upgrade))
         .route("/v1/ws-stream/{session_id}", get(ws_stream_upgrade))
         .route("/v1/ws-groupchat/{room_id}", get(ws_groupchat_upgrade))
+        .route("/v1/llm/warmup", post(warm_up_provider_handler))
         // Expert catalog (driven by the desktop client's bundled built-ins).
         .route("/v1/experts", get(list_experts).post(register_expert))
         .route("/v1/experts/{id}", get(get_expert))
@@ -3871,6 +3872,23 @@ async fn exec_command(
         accepted: true,
         output: reply.text,
     }))
+}
+
+/// POST /v1/llm/warmup — UI 切换模型时触发对应 provider 预热。
+/// 立即返回，实际 1-token 探测在 agent service 内 spawn 执行。
+async fn warm_up_provider_handler(
+    State(state): State<HttpServerState>,
+    Json(req): Json<WarmUpProviderRequest>,
+) -> StatusCode {
+    if !req.model.is_empty() && req.model != "unknown" {
+        state.agent_service.warm_up_provider(&req.model);
+    }
+    StatusCode::OK
+}
+
+#[derive(Deserialize)]
+struct WarmUpProviderRequest {
+    model: String,
 }
 
 async fn ws_upgrade(

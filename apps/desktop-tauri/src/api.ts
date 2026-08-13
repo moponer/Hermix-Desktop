@@ -733,6 +733,20 @@ export const sendMessage = async (id: string, content: string): Promise<ChatMess
 
 export const sendMessageStream = (id: string, content: string) => sendMessage(id, content);
 
+/** 切换模型时预热对应 provider，消除首请求冷启动延迟。
+ *  fire-and-forget，失败静默（不影响 UI）。 */
+export const warmUpProvider = async (model: string): Promise<void> => {
+  try {
+    await fetchJSON("/v1/llm/warmup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+  } catch {
+    // 预热失败不阻塞 UI；后端在首次真实对话时仍会自行建立连接。
+  }
+};
+
 // ── WebSocket Streaming ────────────────────────────
 
 export function resolveWebSocketUrl(sessionId: string): string {

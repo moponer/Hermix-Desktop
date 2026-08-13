@@ -379,7 +379,7 @@ import {
 import { useExpertCutoff } from "../hooks/useExpertCutoff";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { pickDirectory } from "../desktopBridge";
-import { getAvailableTools, updateSessionMetadata, apiUrl, getModelList, saveModelList, type ToolDescriptor } from "../api";
+import { getAvailableTools, updateSessionMetadata, apiUrl, getModelList, saveModelList, warmUpProvider, type ToolDescriptor } from "../api";
 import type { Session } from "../types";
 import type { ChatOverrides } from "../hooks/useStreamChat";
 const mascotUrl = "/mascot-256.png";
@@ -1222,6 +1222,8 @@ const { models, byProvider, selectedModel, setSelectedModel, currentDisplay, def
 const setSelectedModelAndPersist = useCallback(
   (id: string) => {
     setSelectedModel(id);
+    // 切换模型时预热对应 provider，消除首请求冷启动延迟。
+    warmUpProvider(id).catch(() => {});
     if (sessionId) {
       updateSessionMetadata(sessionId, { model: id }).catch((e) => { console.warn("[ChatView] sync model failed:", e); });
     }

@@ -649,22 +649,25 @@ impl LocalAgentService {
     /// restart handlers) because `tokio::spawn` resolves the
     /// current runtime handle lazily.
     pub fn warm_up_default_provider(&self) {
+        let model = self
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .model
+            .clone();
+        match model {
+            Some(m) => self.spawn_warmup(m),
+            None => tracing::debug!("LLM warmup skipped: no model configured"),
+        }
+    }
+
+    // 预热指定模型的 provider：1-token fire-and-forget 探测，建立 HTTP
+    // keep-alive 池，消除切换模型后的首请求冷启动。被默认预热与
+    // AgentService::warm_up_provider（UI 切换模型）共用。
+    fn spawn_warmup(&self, model: String) {
         let cfg_arc = self.config.clone();
         tokio::spawn(async move {
-            let model = {
-                let guard = cfg_arc.lock().unwrap();
-                guard.model.clone()
-            };
-            let model = match model {
-                Some(m) => m,
-                None => {
-                    tracing::debug!("LLM warmup skipped: no model configured");
-                    return;
-                }
-            };
-            // Snapshot the config under the lock so we can hand the
-            // provider builder a fully-owned value.
-            let cfg = cfg_arc.lock().unwrap().clone();
+            let cfg = cfg_arc.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let started = std::time::Instant::now();
             let provider = match build_provider(&cfg, &model) {
                 Ok(p) => p,
@@ -1393,6 +1396,17 @@ impl AgentService for LocalAgentService {
         // We call it by method resolution — Rust picks the inherent
         // method over the trait default.
         LocalAgentService::interrupt_all(self);
+    }
+
+    /// Delegate to the inherent `spawn_warmup` so the server can warm a
+    /// specific provider through `Arc<dyn AgentService>` when the UI
+    /// switches the active model.
+    fn warm_up_provider(&self, model: &str) {
+        let m = model.trim().to_string();
+        if m.is_empty() || m == "unknown" {
+            return;
+        }
+        self.spawn_warmup(m);
     }
 
     // TODO(L8): send_message and send_message_stream share ~300 lines of
