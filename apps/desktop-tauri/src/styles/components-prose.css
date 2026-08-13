@@ -376,22 +376,21 @@
    `wait-for-input` deliberately stays avatar-aligned (margin-left
    32px) and does NOT use this class.
 
-   Width matches the message stream column so these trailing blocks
-   sit on the same horizontal lane as the conversation. The parent
-   `msg-stream-list` already provides horizontal padding; 100% width
-   lets the block fill that lane without a separate narrow cap. */
+   不再与头像对齐、也不在整行居中，而是缩进到正文起始位置（头像
+   22px + gap 10px = 32px），宽度同步减去 32px，使左、右两边都落
+   在文本列内，视觉上与气泡正文同列。 */
 .footer-block {
-  width: 100%;
-  max-width: 720px;
-  margin-left: auto;
-  margin-right: auto;
+  width: calc(100% - 32px);
+  max-width: 688px;
+  margin-left: 32px;
+  margin-right: 0;
   box-sizing: border-box;
 }
 @media (min-width: 1024px) {
-  .footer-block { max-width: 800px; }
+  .footer-block { max-width: 768px; }
 }
 @media (min-width: 1280px) {
-  .footer-block { max-width: 920px; }
+  .footer-block { max-width: 888px; }
 }
 .file-change-block {
   padding: 6px 10px;
