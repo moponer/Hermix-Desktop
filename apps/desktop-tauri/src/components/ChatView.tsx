@@ -841,6 +841,9 @@ interface ChatViewProps {
   streamError?: { message: string; detail?: string } | null;
   /** Reset the stream error in the parent after the user has seen it. */
   onClearStreamError?: () => void;
+  /** Retry the most recent user message when a stream-level error
+   *  (e.g. provider 529 overload) interrupted the assistant turn. */
+  onRetryLastMessage?: () => void;
   /**
    * Notifies the parent to close the right pane when entering the welcome
    * state (`!session || session.messages.length === 0`). Fires only on the
@@ -941,10 +944,12 @@ function StreamErrorCard({
   message,
   detail,
   onDismiss,
+  onRetry,
 }: {
   message: string;
   detail?: string;
   onDismiss?: () => void;
+  onRetry?: () => void;
 }) {
   return (
     <div className="stream-error-card" role="alert">
@@ -959,6 +964,15 @@ function StreamErrorCard({
             <summary>技术详情</summary>
             <pre>{detail.trim()}</pre>
           </details>
+        )}
+        {onRetry && (
+          <button
+            type="button"
+            className="stream-error-card__retry"
+            onClick={onRetry}
+          >
+            重试
+          </button>
         )}
       </div>
       <button
@@ -1002,6 +1016,7 @@ export function ChatView({
   onRetryLoad,
   streamError,
   onClearStreamError,
+  onRetryLastMessage,
   prefetchIntent,
   acuiState,
   acuiBus,
@@ -2094,6 +2109,7 @@ const clearPendingImages = useCallback(() => {
                 message={streamError.message}
                 detail={streamError.detail}
                 onDismiss={onClearStreamError}
+                onRetry={onRetryLastMessage}
               />
             )}
           </div>
@@ -2401,6 +2417,7 @@ const clearPendingImages = useCallback(() => {
               message={streamError.message}
               detail={streamError.detail}
               onDismiss={onClearStreamError}
+              onRetry={onRetryLastMessage}
             />
           )}
 

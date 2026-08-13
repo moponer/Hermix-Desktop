@@ -1654,14 +1654,12 @@ export function useStreamChat(activeSessionId: string | null) {
                   // `event.error` (mirrors `AgentResult.last_error`); the
                   // `done.error` field replaced the old "技术详情 blind"
                   // behaviour where the user only saw a generic banner.
-                  settle(
-                    "",
-                    "对话因后端错误中断（已保留已生成的部分内容，请稍后重试）",
-                    undefined,
-                    "error",
-                    rawError,
-                    true,
-                  );
+                  // When `rawError` is present we pass it as the primary
+                  // message so `localizeStreamError` in App.tsx can classify
+                  // it (e.g. 529 overloaded -> "AI 服务过载..."); fall back
+                  // to a generic prompt only when the server omitted details.
+                  const errMsg = rawError ?? "对话因后端错误中断（已保留已生成的部分内容，请稍后重试）";
+                  settle("", errMsg, undefined, "error", rawError, true);
                   return;
                 }
                 // M3 may send a `done` with empty `evtContent` (the

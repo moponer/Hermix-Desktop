@@ -5330,10 +5330,15 @@ async fn handle_ws_stream_send(
                 // turn. A user-initiated interrupt (`interrupted`) or
                 // any other reason still uses the normal `Done` event.
                 if reply.finish_reason.as_deref() == Some("error") {
-                    let code = "backend_error".to_string();
-                    let message =
-                        "对话因后端错误中断。已保留已生成的部分内容，请稍后重试。"
-                            .to_string();
+                    // Classify the raw backend error so the frontend
+                    // shows a specific, actionable message instead of a
+                    // generic "backend error" banner. `last_error` carries
+                    // the provider's raw response (e.g. MiniMax 529
+                    // overloaded_error), which `user_facing_agent_error`
+                    // turns into (code, message) pairs like
+                    // ("provider_overloaded", "AI 服务过载: ...").
+                    let raw_error = reply.last_error.clone().unwrap_or_default();
+                    let (code, message) = user_facing_agent_error(&raw_error);
                     if let Err(e) = tx
                         .send(WsEnvelope {
                             version: 1,
@@ -5342,7 +5347,7 @@ async fn handle_ws_stream_send(
                             event: StreamEvent::Error {
                                 code,
                                 message: redact_sensitive(&message),
-                                detail: reply.last_error.clone(),
+                                detail: Some(raw_error),
                             },
                         })
                         .await
@@ -5441,7 +5446,7 @@ async fn handle_ws_stream_send(
                     error = %e,
                     "agent task failed; classifying for user-facing message"
                 );
-                let (code, message) = user_facing_agent_error(&e);
+                let (code, message) = user_facing_agent_error(&e.to_string());
                 if let Err(send_err) = tx
                     .send(WsEnvelope {
                         version: 1,
@@ -7477,7 +7482,7 @@ fn redact_sensitive(input: &str) -> String {
 /// which provider, what the API returned) instead of a generic
 /// one-size-fits-all banner. Everything else falls back to
 /// `e.to_string()` so we never lose diagnostic detail.
-fn user_facing_agent_error(e: &AgentError) -> (String, String) {
+fn user_facing_agent_error(e: &str) -> (String, String) {
     let s = e.to_string();
     let lower = s.to_lowercase();
 

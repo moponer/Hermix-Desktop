@@ -1696,8 +1696,17 @@ streamPhaseRef.current = null;
             // extracts a clean Chinese hint like "API key 无效" or
             // "网络异常", giving the user a categorisable failure
             // instead of an undifferentiated banner.
-            const rawForFriendly = detail ?? err;
-            const friendly = localizeStreamError(rawForFriendly);
+            //
+            // When the backend already sent a structured `Error` event,
+            // `err` is the pre-localized Chinese message (e.g. "AI 服务
+            // 过载: ...") and `detail` is the raw English provider
+            // response. Re-localizing `detail` would overwrite the
+            // friendly message, so we only run `localizeStreamError`
+            // when `err` still looks like a raw provider/transport
+            // error string.
+            const rawForFriendly = err || detail || "";
+            const looksRaw = /API error|LLM API error|unknown status code|overloaded|rate limit|timeout|connection refused|unauthorized|forbidden|401|403|429|5\d{2}/i.test(rawForFriendly);
+            const friendly = looksRaw ? localizeStreamError(detail ?? err) : rawForFriendly;
             const errText = `⚠️ ${friendly}`;
             setStreamPhase(null);
             setSessions((prev) => prev.map((s) => {
@@ -2574,6 +2583,23 @@ return {
     [streaming, handleSendMessage],
   );
 
+  const retryLastMessage = useCallback(async () => {
+    // Re-send the last user turn so the user can recover from a
+    // stream-level error (e.g. provider 529 overloaded) without
+    // retyping. handleSendMessage() clears the prior stream error
+    // itself, but we clear it first so the banner disappears instantly.
+    const lastUser = [...(activeSession?.messages ?? [])]
+      .reverse()
+      .find((m) => m.role === "user");
+    if (!lastUser || !lastUser.content?.trim()) return;
+    clearStreamError();
+    try {
+      await handleSendMessage(lastUser.content);
+    } catch {
+      // handleSendMessage surfaces its own failure via onError.
+    }
+  }, [activeSession, handleSendMessage, clearStreamError]);
+
   /**
    * 切换模型/Provider 时原子重置 in-flight 状态。
    *
@@ -2846,6 +2872,7 @@ contextUsage={contextUsage}
               }}
               streamError={streamError}
               onClearStreamError={clearStreamError}
+              onRetryLastMessage={retryLastMessage}
               prefetchIntent={prefetchIntent}
               rightOpen={rightOpen}
               onToggleRight={handleToggleRight}
