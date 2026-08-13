@@ -1636,7 +1636,14 @@ export function useStreamChat(activeSessionId: string | null) {
                 // refactor or an older server build). Route it to the
                 // error path so the user sees a red banner + "出错了"
                 // instead of a misleading "completed" with partial content.
-                if (isFailedOutcome || reason === "error") {
+                // `done.error` carries the raw backend error (LLM 401/402/429,
+                // 5xx, transport error) — mirrors `AgentResult.last_error`.
+                // Render it whenever present, independent of the
+                // `outcome`/`finish_reason` sentinels, so a backend-flagged
+                // failure is never silently collapsed into "completed".
+                const rawError: string | undefined =
+                  data?.error || data?.event?.error;
+                if (isFailedOutcome || reason === "error" || !!rawError) {
                   // Backend failure / unfinished turn: keep the session
                   // alive (don't close the WS) so the user can retry or a
                   // pending approval can still resolve. Surface a red
@@ -1647,8 +1654,6 @@ export function useStreamChat(activeSessionId: string | null) {
                   // `event.error` (mirrors `AgentResult.last_error`); the
                   // `done.error` field replaced the old "技术详情 blind"
                   // behaviour where the user only saw a generic banner.
-                  const rawError: string | undefined =
-                    data?.error || data?.event?.error;
                   settle(
                     "",
                     "对话因后端错误中断（已保留已生成的部分内容，请稍后重试）",
