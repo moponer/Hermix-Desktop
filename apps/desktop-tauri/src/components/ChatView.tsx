@@ -1046,6 +1046,10 @@ contextUsage = null,
   // hasUserScrolledUpRef so we don't re-render on every scroll tick.
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const showScrollToBottomRef = useRef(false);
+  // Gate for the auto-scroll rAF loop. Expanded from `isStreaming`
+  // to any agent-driven dynamic state so the viewport pins to the
+  // bottom while tools run, approvals wait, or sub-agents report.
+  const [isAgentActiveState, setIsAgentActiveState] = useState(false);
   // (Bug #5): the previous `isNearBottom` callback lived
   // here, but with the scrollIntoView → scrollTop rewrite the value
   // is now read directly inside `handleContainerScroll`. Threshold:
@@ -1443,10 +1447,11 @@ const clearPendingImages = useCallback(() => {
   const scrollPendingRef = useRef(false);
   const [forceScrollSeq, setForceScrollSeq] = useState(0);
   const lastObservedForceSeqRef = useRef(0);
+  const lastScrollHeightRef = useRef(0);
 
   useEffect(() => {
     scrollPendingRef.current = true;
-  }, [session?.messages]);
+  }, [session?.messages, pendingToolsCount, postStreamActivity]);
 
   // Single scroll primitive. `force=true` ignores the sticky guard
   // (used for user-initiated events). Otherwise, sticky-bottom
@@ -1465,17 +1470,25 @@ const clearPendingImages = useCallback(() => {
   );
 
   useEffect(() => {
-    if (!isStreaming) return;
+    if (!isAgentActiveState) {
+      lastScrollHeightRef.current = scrollContainerRef.current?.scrollHeight ?? 0;
+      return;
+    }
     let raf = 0;
     const tick = () => {
-      // force-scroll takes priority over the dirty flag so user-initiated
-      // events land immediately even when no streaming chunk has arrived.
-      if (forceScrollSeq !== lastObservedForceSeqRef.current) {
-        lastObservedForceSeqRef.current = forceScrollSeq;
-        scrollToBottom(true);
-      } else if (scrollPendingRef.current) {
-        scrollPendingRef.current = false;
-        scrollToBottom(false);
+      const el = scrollContainerRef.current;
+      if (el) {
+        const heightGrew = el.scrollHeight > lastScrollHeightRef.current;
+        lastScrollHeightRef.current = el.scrollHeight;
+        // force-scroll takes priority over the dirty flag so user-initiated
+        // events land immediately even when no streaming chunk has arrived.
+        if (forceScrollSeq !== lastObservedForceSeqRef.current) {
+          lastObservedForceSeqRef.current = forceScrollSeq;
+          scrollToBottom(true);
+        } else if (scrollPendingRef.current || heightGrew) {
+          scrollPendingRef.current = false;
+          scrollToBottom(false);
+        }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -1483,7 +1496,7 @@ const clearPendingImages = useCallback(() => {
     return () => {
       cancelAnimationFrame(raf);
     };
-  }, [isStreaming, scrollToBottom, forceScrollSeq]);
+  }, [isAgentActiveState, scrollToBottom, forceScrollSeq]);
 
   // Restore-conversation auto-scroll.
   // On initial mount / F5 reload / session switch, the recovered
@@ -1636,6 +1649,25 @@ const clearPendingImages = useCallback(() => {
     for (let i = lastUserIdx; i < msgs.length; i++) s.add(msgs[i].id);
     return s;
   }, [session?.messages, pendingToolsCount, hasPendingApproval, streamingAssistantId]);
+
+  // Keep the auto-scroll rAF loop alive during any agent-driven
+  // dynamic state, not just `isStreaming`. Tool results, approval
+  // cards, and sub-agent updates all grow the message stream and
+  // must pin the viewport to the bottom unless the user scrolled up.
+  useEffect(() => {
+    const hasActiveSubAgent = Object.values(subAgents ?? {}).some(
+      (sa) => sa.phase === "spawned" || sa.phase === "started",
+    );
+    setIsAgentActiveState(
+      isStreaming ||
+        pendingToolsCount > 0 ||
+        hasPendingApproval ||
+        postStreamActivity ||
+        !!streamingAssistantId ||
+        hasActiveSubAgent,
+    );
+  }, [isStreaming, pendingToolsCount, hasPendingApproval, postStreamActivity, streamingAssistantId, subAgents]);
+
   // it only recomputes when the messages array or streaming state
   // actually changes. Previously this ran on every render — including
   // every streaming chunk — even though the intermediate values
@@ -2322,24 +2354,29 @@ const clearPendingImages = useCallback(() => {
 
         {/* Scroll-to-bottom shortcut: appears when the user has scrolled
             up to read history, letting them jump back to the latest message
-            with one click. Positioned relative to the scroll viewport so it
-            stays fixed over the content while scrolling. */}
+            with one click. The button is anchored to the same max-width
+            column as the message stream so it stays visually aligned with
+            the conversation instead of floating at the viewport edge. */}
         {showScrollToBottom && (
-          <button
-            type="button"
-            onClick={() => scrollToBottom(true)}
-            className="absolute right-6 bottom-5 z-20 flex items-center justify-center w-9 h-9 rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95"
-            style={{
-              background: "var(--color-bg-elevated)",
-              color: "var(--color-text-primary)",
-              border: "1px solid var(--color-border-subtle)",
-              boxShadow: "0 4px 14px rgba(0,0,0,0.25)",
-            }}
-            title="滚动到底部"
-            aria-label="滚动到底部"
-          >
-            <ArrowDown size={18} />
-          </button>
+          <div className="absolute left-0 right-0 bottom-5 z-20 pointer-events-none">
+            <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto px-3 sm:px-4 relative">
+              <button
+                type="button"
+                onClick={() => scrollToBottom(true)}
+                className="absolute right-6 bottom-0 flex items-center justify-center w-9 h-9 rounded-full shadow-lg transition-transform hover:scale-105 active:scale-95 pointer-events-auto"
+                style={{
+                  background: "var(--color-bg-elevated)",
+                  color: "var(--color-text-primary)",
+                  border: "1px solid var(--color-border-subtle)",
+                  boxShadow: "0 4px 14px rgba(0,0,0,0.25)",
+                }}
+                title="滚动到底部"
+                aria-label="滚动到底部"
+              >
+                <ArrowDown size={18} />
+              </button>
+            </div>
+          </div>
         )}
       </div>
 

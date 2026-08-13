@@ -376,15 +376,22 @@
    `wait-for-input` deliberately stays avatar-aligned (margin-left
    32px) and does NOT use this class.
 
-   The 560px cap matches the typical chat column at desktop sizes;
-   on narrower viewports (mobile / split-pane) it gracefully
-   shrinks to `100% - 32px` so the block never touches the edge. */
+   Width matches the message stream column so these trailing blocks
+   sit on the same horizontal lane as the conversation. The parent
+   `msg-stream-list` already provides horizontal padding; 100% width
+   lets the block fill that lane without a separate narrow cap. */
 .footer-block {
   width: 100%;
-  max-width: min(560px, calc(100% - 32px));
+  max-width: 720px;
   margin-left: auto;
   margin-right: auto;
   box-sizing: border-box;
+}
+@media (min-width: 1024px) {
+  .footer-block { max-width: 800px; }
+}
+@media (min-width: 1280px) {
+  .footer-block { max-width: 920px; }
 }
 .file-change-block {
   padding: 6px 10px;
@@ -1721,11 +1728,10 @@
   display: flex;
   flex-direction: column;
   margin: 4px auto 12px;
-  /* Width lives on `.footer-block` (560px / parent-32px) — shared
-   * with file-change-block and sub-agent-panel so the three
-   * assistant-message-trailing blocks sit on the same horizontal
-   * lane. Was previously `min(460px, calc(100% - 32px))` which
-   * visually diverged from the broader blocks. */
+  /* Width lives on `.footer-block` (matches the message stream
+   * column: 720px / 800px / 920px) — shared with file-change-block
+   * and sub-agent-panel so the three assistant-message-trailing
+   * blocks sit on the same horizontal lane as the conversation. */
   align-self: center;
   border-radius: var(--radius-lg, 12px);
   border: 1px solid var(--color-border-primary, #e4e4e7);
