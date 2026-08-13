@@ -9,6 +9,7 @@ import {
   computeBottomScrollTop,
   scrollToBottomWithSettle,
 } from "../utils/chatScroll";
+import { resolveSessionSelectedModel } from "../utils/sessionModel";
 import type { ChatMessage, TimelineStep, QueuedMessage, QueuedImage, SubAgentState } from "../types";
 import type { CompressMethod } from "../utils/imageCompressor";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
@@ -658,7 +659,7 @@ function useModelSelector() {
     return found ? found.display : (selectedModel || "未配置，请先配置模型");
   }, [models, selectedModel]);
 
-  return { models, byProvider, availableExtras, selectedModel, setSelectedModel, currentDisplay };
+  return { models, byProvider, availableExtras, selectedModel, setSelectedModel, currentDisplay, defaultModel };
 }
 
 // ── ModelStatusBar — top-of-chat status strip ─────────
@@ -1215,7 +1216,7 @@ contextUsage = null,
     addWorkspace("", workspace);
   }, [workspace, workspaces, addWorkspace]);
 
-const { models, byProvider, selectedModel, setSelectedModel, currentDisplay } = useModelSelector();
+const { models, byProvider, selectedModel, setSelectedModel, currentDisplay, defaultModel } = useModelSelector();
 
 // 包装 setSelectedModel：用户切换模型后也持久化到后端 session。
 const setSelectedModelAndPersist = useCallback(
@@ -1251,14 +1252,14 @@ useEffect(() => {
   // model). Adopting that value silently forces an invalid provider
   // selection, so we only restore a real `provider:model` id and let the
   // computed default win otherwise.
-  if (session.model && session.model.includes(":") && session.model !== "unknown") {
-    setSelectedModel(session.model);
-  }
+  // 会话切换时按会话自身模型或当前默认模型重算选中项，避免沿用
+  // 上一个会话残留的 selectedModel 导致模型串台。
+  setSelectedModel(resolveSessionSelectedModel(session.model, defaultModel));
 // 同时监听 session.workspace 字段本身变化（user 在其他 tab 选了目录 →
 // 后端 PATCH 改了 session.workspace → 但 React state 不会自动更新），
 // 把后端最新值拉回前端 state。否则会出现"后端显示绑了目录，但前端
 // 渲染没绑、handleSubmit 也不传 overrides.workspace"的撕裂。
-}, [session?.id, session?.workspace, session?.expert_id, session?.model, setWorkspaceRaw, setExpert, setSelectedModel]);
+}, [session?.id, session?.workspace, session?.expert_id, session?.model, defaultModel, setWorkspaceRaw, setExpert, setSelectedModel]);
 
 const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
 const [filePaths, setFilePaths] = useState<string[]>([]);
