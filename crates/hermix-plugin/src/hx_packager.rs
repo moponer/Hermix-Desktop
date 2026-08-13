@@ -112,7 +112,7 @@ impl HxShellPackager {
 
     /// 解析 Hermix 内置工具路径（esbuild.exe / React UMD），支持
     /// HERMIX_HOME/loader/ 与 current_exe 旁 resources/loader/ 两种布局。
-    fn resolve_loader_file(rel: &str) -> PathBuf {
+    pub(crate) fn resolve_loader_file(rel: &str) -> PathBuf {
         let home = hermix_config::paths::hermix_home();
         let cands = [
             Some(home.join("loader").join(rel)),

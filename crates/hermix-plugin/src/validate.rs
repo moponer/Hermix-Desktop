@@ -16,7 +16,9 @@
 //!
 //! 设计: 纯同步、零 panic、无外部依赖。
 
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 /// 单条校验问题。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -27,6 +29,15 @@ pub struct ValidationIssue {
     pub code: String,
     /// 人类可读描述。
     pub message: String,
+    /// 出错行 (1-based, 相对被校验文件)。JS/TS 语法错误时填充, 便于 agent 精准定位。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// 出错列 (1-based)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub col: Option<u32>,
+    /// 出错点附近代码上下文 (esbuild 提供的片段), 同样为了 agent 免读全文即可 patch。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
 }
 
 /// 应用校验报告。
@@ -43,6 +54,9 @@ fn issue(level: &str, code: &str, message: impl Into<String>) -> ValidationIssue
         level: level.to_string(),
         code: code.to_string(),
         message: message.into(),
+        line: None,
+        col: None,
+        snippet: None,
     }
 }
 
@@ -254,14 +268,12 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
         }
     }
 
-    // ── L1.5: JS/TS 括号匹配预检 ──
+    // ── L1.5: JS/TS 语法校验 (内置 esbuild 真 parser, 缺失时退回手写括号匹配) ──
+    // esbuild 报的行/列精确到括号, agent 拿到即可精准 patch, 不必再读 28KB 全文。
     if !tsx_code.is_empty() {
-        check_js_brackets(&tsx_code, &mut issues);
+        check_js_with_esbuild(&tsx_code, "tsx", "src/main.tsx", 0, &mut issues);
     } else if html.contains("<script") {
-        let js_code = extract_js_from_html(&html);
-        if !js_code.is_empty() {
-            check_js_brackets(&js_code, &mut issues);
-        }
+        check_js_in_html(&html, &mut issues);
     }
 
     // ── L2: 权限一致性 (在 HTML + TSX 中检查) ──
@@ -415,26 +427,201 @@ fn detect_emoji(s: &str) -> Option<String> {
     None
 }
 
-/// 从 HTML 中提取 <script> 标签内的 JS 代码。
-fn extract_js_from_html(html: &str) -> String {
-    let mut js_parts = Vec::new();
+/// 逐段抽取 HTML 中的 `<script>` 内容, 用 esbuild 真 parser 校验,
+/// 并把 esbuild 报的行号映射回 HTML 文件行号 (script 起始行 + 偏移)。
+fn check_js_in_html(html: &str, issues: &mut Vec<ValidationIssue>) {
     let mut pos = 0;
-    while let Some(start) = html[pos..].find("<script") {
-        let after_tag = pos + start;
-        // 找到 > 结束标签
-        if let Some(tag_end) = html[after_tag..].find('>') {
-            let js_start = after_tag + tag_end + 1;
-            if let Some(end) = html[js_start..].find("</script>") {
-                js_parts.push(html[js_start..js_start + end].to_string());
-                pos = js_start + end + 9; // skip </script>
-            } else {
-                break; // 未闭合, 前面已经报错了
+    let mut idx = 0usize;
+    while let Some(open) = html[pos..].find("<script") {
+        let abs_open = pos + open;
+        // 找到 <script ...> 的 '>' 结束标签
+        let tag_end = match html[abs_open..].find('>') {
+            Some(t) => t,
+            None => break,
+        };
+        let js_start = abs_open + tag_end + 1;
+        // 该 script 块在原始 HTML 中的起始行 (1-based)
+        let html_start_line = html[..js_start].matches('\n').count() as u32 + 1;
+        let end = match html[js_start..].find("</script>") {
+            Some(e) => e,
+            None => break,
+        };
+        let js = &html[js_start..js_start + end];
+        idx += 1;
+        if !js.trim().is_empty() {
+            check_js_with_esbuild(
+                js,
+                "js",
+                &format!("index.html <script#{idx}>"),
+                html_start_line,
+                issues,
+            );
+        }
+        pos = js_start + end + 9; // 跳过 </script>
+    }
+}
+
+/// 用内置 esbuild 做真 JS/TS 语法校验 (替代手写括号匹配)。
+///
+/// `source_label` 用于报错展示; `html_line_offset` 是代码段在原始 HTML 中的
+/// 起始行, esbuild 报的行号需加上此偏移才能映射回 HTML 文件行 (TSX 模式传 0)。
+/// esbuild 不可用时退回手写 `check_js_brackets` 兜底, 保证校验永不硬失败。
+fn check_js_with_esbuild(
+    code: &str,
+    loader: &str,
+    source_label: &str,
+    html_line_offset: u32,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    match run_esbuild_check(code, loader, source_label) {
+        Some((stderr, success)) => {
+            if success {
+                return; // esbuild 确认无语法错误
             }
-        } else {
-            break;
+            let parsed = parse_esbuild_errors(&stderr);
+            if parsed.is_empty() {
+                // esbuild 报了错但解析不出结构 (极端情况) → 退回手写检查兜底
+                check_js_brackets(code, issues);
+            } else {
+                for (line, col, msg, snippet) in parsed {
+                    let html_line = if html_line_offset > 0 {
+                        html_line_offset + line.saturating_sub(1)
+                    } else {
+                        line
+                    };
+                    let loc = if html_line_offset > 0 {
+                        format!("{source_label} 第 {html_line} 行第 {col} 列 (HTML 文件)")
+                    } else {
+                        format!("{source_label} 第 {line} 行第 {col} 列")
+                    };
+                    let mut message = format!("JS/TS 语法错误: {loc}: {msg}");
+                    if !snippet.is_empty() {
+                        message.push_str(&format!("\n  代码: {snippet}"));
+                    }
+                    issues.push(ValidationIssue {
+                        level: "error".to_string(),
+                        code: "js".to_string(),
+                        message,
+                        line: Some(html_line),
+                        col: Some(col),
+                        snippet: if snippet.is_empty() {
+                            None
+                        } else {
+                            Some(snippet)
+                        },
+                    });
+                }
+            }
+        }
+        None => {
+            // esbuild 不可用 → 手写兜底
+            check_js_brackets(code, issues);
         }
     }
-    js_parts.join("\n")
+}
+
+/// 调内置 esbuild (stdin transform 模式) 校验单段 JS/TS 语法。
+/// 返回 (stderr 文本, esbuild 是否退出成功); esbuild 缺失返回 None。
+fn run_esbuild_check(code: &str, loader: &str, sourcefile: &str) -> Option<(String, bool)> {
+    let esbuild = crate::hx_packager::HxShellPackager::resolve_loader_file("esbuild.exe");
+    if !esbuild.exists() {
+        return None;
+    }
+    let mut child = Command::new(&esbuild)
+        .arg(format!("--loader={loader}"))
+        .arg("--format=esm")
+        .arg(format!("--sourcefile={sourcefile}"))
+        .arg("--log-level=verbose")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    {
+        let mut stdin = child.stdin.take()?;
+        let _ = stdin.write_all(code.as_bytes());
+        // stdin 离开作用域 drop → EOF, esbuild 开始解析
+    }
+    let out = child.wait_with_output().ok()?;
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    Some((stderr, out.status.success()))
+}
+
+/// 解析 esbuild 的 stderr, 抽出每条错误的 (行, 列, 消息, 代码片段)。
+///
+/// esbuild 单错误格式 (transform 模式):
+/// ```text
+/// X [ERROR] Expected ")" but found ";"
+///
+///     index.html#script1:1:14:
+///       1 │ const x = (1+2;
+///         │               ^
+///         ╵               )
+/// ```
+fn parse_esbuild_errors(stderr: &str) -> Vec<(u32, u32, String, String)> {
+    let mut out: Vec<(u32, u32, String, String)> = Vec::new();
+    let mut cur_msg: Option<String> = None;
+    let mut cur_line: Option<u32> = None;
+    let mut cur_col: Option<u32> = None;
+    let mut cur_snippet: Option<String> = None;
+
+    let flush = |out: &mut Vec<(u32, u32, String, String)>,
+                     cur_msg: &mut Option<String>,
+                     cur_line: &mut Option<u32>,
+                     cur_col: &mut Option<u32>,
+                     cur_snippet: &mut Option<String>| {
+        if let (Some(msg), Some(l), Some(c), Some(snip)) =
+            (cur_msg.take(), cur_line.take(), cur_col.take(), cur_snippet.take())
+        {
+            out.push((l, c, msg, snip));
+        }
+    };
+
+    for raw in stderr.lines() {
+        let line = raw.trim_end();
+        // 错误消息行
+        if let Some(m) = line.trim().strip_prefix("X [ERROR] ") {
+            flush(
+                &mut out,
+                &mut cur_msg,
+                &mut cur_line,
+                &mut cur_col,
+                &mut cur_snippet,
+            );
+            cur_msg = Some(m.to_string());
+            continue;
+        }
+        if cur_msg.is_some() {
+            // 位置行: "    index.html#script1:1:14:"
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed.strip_suffix(':') {
+                if let Some((a, b)) = rest.rsplit_once(':') {
+                    if let Some((_, l)) = a.rsplit_once(':') {
+                        if let (Ok(lineno), Ok(colno)) = (l.parse::<u32>(), b.parse::<u32>()) {
+                            cur_line = Some(lineno);
+                            cur_col = Some(colno);
+                        }
+                    }
+                }
+            }
+            // 代码片段行: "      1 │ const x = (1+2;"
+            if cur_line.is_some() {
+                if let Some(idx) = line.find('│') {
+                    if cur_snippet.is_none() {
+                        cur_snippet = Some(line[idx + '│'.len_utf8()..].trim_start().to_string());
+                    }
+                }
+            }
+        }
+    }
+    flush(
+        &mut out,
+        &mut cur_msg,
+        &mut cur_line,
+        &mut cur_col,
+        &mut cur_snippet,
+    );
+    out
 }
 
 /// 基本 JS 括号匹配检查。
@@ -851,5 +1038,73 @@ async function run() {
         let apis = extract_hx_apis(html);
         assert!(apis.contains(&"hx.readFile".to_string()), "应检测到 readFile: {apis:?}");
         assert!(apis.contains(&"hx.exec".to_string()), "应检测到 exec: {apis:?}");
+    }
+
+    #[test]
+    fn parse_esbuild_errors_extracts_line_col_snippet() {
+        // 模拟 esbuild transform 模式的真实 stderr 格式
+        let stderr = "\
+X [ERROR] Expected \")\" but found \";\"
+
+    index.html#script1:1:14:
+      1 │ const x = (1+2;
+        │               ^
+        ╵               )";
+        let parsed = parse_esbuild_errors(stderr);
+        assert_eq!(parsed.len(), 1, "应解析出 1 条错误");
+        let (line, col, msg, snippet) = &parsed[0];
+        assert_eq!(*line, 1);
+        assert_eq!(*col, 14);
+        assert!(msg.contains("Expected"), "消息应含 Expected: {msg}");
+        assert!(
+            snippet.contains("const x = (1+2;"),
+            "片段应含出错代码: {snippet}"
+        );
+    }
+
+    // 端到端验证 esbuild 真 parser 路径能报出精确 HTML 行号。
+    // 仅在仓库内置 esbuild.exe 存在时校验行号; 否则退回手写兜底 (仍有 js 问题)。
+    #[test]
+    fn validate_reports_precise_js_location_via_esbuild() {
+        let repo_esbuild = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps/desktop-tauri/src-tauri/resources/loader/esbuild.exe");
+        let has_esbuild = repo_esbuild.exists();
+
+        let tmp = std::env::temp_dir().join(format!("va_esbuild_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("loader")).unwrap();
+        if has_esbuild {
+            std::fs::copy(&repo_esbuild, tmp.join("loader").join("esbuild.exe")).unwrap();
+        }
+        // 指向临时 HERMIX_HOME, 让 resolve_loader_file 找到 esbuild
+        std::env::set_var("HERMIX_HOME", &tmp);
+
+        let app = tmp.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join("manifest.json"), r#"{"name":"t","id":"t"}"#).unwrap();
+        // <script> 在第4行, 其内 JS 第1行(HTML第5行)有语法错: 缺 ')'
+        std::fs::write(
+            app.join("index.html"),
+            "<!DOCTYPE html>\n<html>\n<body>\n<script>\nconst x = (1+2;\n</script>\n</body>\n</html>\n",
+        )
+        .unwrap();
+
+        let r = validate_custom_app(&app);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let js_issue = r.issues.iter().find(|i| i.code == "js");
+        assert!(js_issue.is_some(), "应报告 js 语法错误, issues={:?}", r.issues);
+        let issue = js_issue.unwrap();
+        if has_esbuild {
+            assert_eq!(
+                issue.line,
+                Some(5),
+                "esbuild 路径: 错误应在 HTML 第5行, 实际={:?} msg={}",
+                issue.line,
+                issue.message
+            );
+            assert!(issue.col.is_some(), "应有精确列号");
+            assert!(issue.snippet.is_some(), "应有代码片段");
+        }
     }
 }
