@@ -535,24 +535,18 @@ impl TickLoop {
 
     /// Check LLM provider connectivity via a lightweight probe.
     /// Tries two probes in order:
-    /// 1. `GET {base}/models` — OpenAI-compatible metadata endpoint, exposed
-    /// by virtually every modern provider (openai, agnes, deepseek,
-    /// openrouter, siliconflow, qwen, zhipu, volcengine, moonshot, nous,
-    /// ollama, vllm, localai, …). Some providers reject this probe with
-    /// 404 even when the server is healthy.
-    /// 2. `HEAD {base}` — fallback for providers whose root responds
-    /// differently (anthropic, github copilot, custom proxies).
-    /// Returns `Pass` when:
-    /// - No URL configured (nothing to check), or
-    /// - Any probe returns a 2xx/3xx.
-    /// Returns `Warn` when:
-    /// - All probes return non-success (server reachable but health unclear),
-    /// - Network error (DNS / TCP / TLS), or
-    /// - HTTP client build failure.
-    /// The probe deliberately omits credentials — we're verifying *transport*,
-    /// not auth. A valid-but-revoked API key will still produce `Pass`, which
-    /// is the correct semantics for a connectivity probe (the auth check
-    /// happens on the first real chat completion).
+    /// 连通性探针仅验证 transport 层，不验证 auth。
+    /// 1. `GET {base}/models` — OpenAI 系元数据端点；多数 provider 对此端点
+    ///    要求认证，无凭证探针会收到 401/403，这是预期而非故障。
+    /// 2. `HEAD {base}` — 根路径响应不同的 provider 的回退探测。
+    /// 返回 `Pass` 的情况：
+    /// - 未配置 URL（无对象可查），或
+    /// - 任一探针返回 2xx/3xx，或
+    /// - 服务器返回任意 HTTP 状态码（含 401/403/404/5xx）——收到响应即证明
+    ///   transport 可达；auth 与真实可用性在首次对话时校验。
+    /// 仅当探针命中网络层错误（DNS/TCP/TLS/timeout，即完全连不上）才返回
+    /// `Warn`。任何 4xx/5xx 都不计入连通性失败，避免对"要求认证的 /models
+    /// 端点"误报 "LLM connectivity check failed"。
     async fn check_llm_connectivity(&self) -> CheckStatus {
         // 1) Resolve the URL to probe.
         let (url, provider_name): (Option<String>, Option<String>) = match &self.cfg.llm_provider_url {
@@ -620,7 +614,10 @@ impl TickLoop {
         ];
 
         let mut last_detail: Option<String> = None;
-        let mut all_404 = true;
+        // 收到任意 HTTP 响应（含 401/403/404/5xx）即说明 transport 连通；
+        // 仅网络层错误（DNS/TCP/TLS/timeout）才表示 provider 不可达。
+        let mut server_reached = false;
+        let mut transport_failed = false;
         for (method, suffix, probe_url) in &probes {
             let req = match *method {
                 "GET"  => client.get(probe_url),
@@ -633,32 +630,31 @@ impl TickLoop {
                     if status.is_success() || status.is_redirection() {
                         return CheckStatus::Pass;
                     }
+                    server_reached = true;
                     last_detail = Some(format!("{method} {suffix} → HTTP {status}"));
-                    if status.as_u16() != 404 {
-                        all_404 = false;
-                    }
-                    // Only fall through to the next probe if /models specifically
-                    // returned 404. Other 4xx/5xx are terminal — the server is
-                    // reachable but the provider is misconfigured or down.
-                    if !(status.as_u16() == 404 && *method == "GET") {
+                    // 401/403/404 = 服务器可达但端点不存在/需要认证，对连通性
+                    // 探针而言等同于"transport 通"，非故障（auth 在首次对话校验）。
+                    // 仅 GET /models 命中 401/403/404 时回退到 HEAD /。
+                    if !(*method == "GET" && Self::endpoint_auth_mismatch(status.as_u16())) {
                         break;
                     }
                 }
                 Err(e) => {
                     last_detail = Some(format!("{method} {suffix} → {e}"));
-                    all_404 = false;
-                    // Network errors (DNS/TCP/TLS) are terminal — retrying won't
-                    // help on a different path.
+                    transport_failed = true;
                     break;
                 }
             }
         }
 
-        // If both probes returned 404, the server IS reachable (it responded)
-        // but doesn't expose the expected endpoints. This is normal for many
-        // providers (MiniMax, Kimi, etc.) — treat as Pass, not Warn.
-        if all_404 {
-            tracing::debug!(target: "hermix.runtime", "LLM connectivity check: all probes returned 404 (server reachable, endpoints not supported)");
+        // 收到 HTTP 响应（即使 401/403/404/5xx）即 transport 连通；网络层
+        // 错误（Err）才表示不可达。任何 4xx/5xx 都不应被误报为连通性失败。
+        if server_reached && !transport_failed {
+            tracing::debug!(
+                target: "hermix.runtime",
+                "LLM connectivity check: server reachable (probe responses are 401/403/404, not transport failures): {}",
+                last_detail.as_deref().unwrap_or("")
+            );
             return CheckStatus::Pass;
         }
 
@@ -666,6 +662,12 @@ impl TickLoop {
             "LLM provider probe failed (last: {})",
             last_detail.unwrap_or_else(|| "no probe attempted".to_string())
         ))
+    }
+
+    /// GET /models 命中这些状态码时回退到 HEAD / 探针：401/403 = 需要认证，
+    /// 404 = 端点不存在。三者都表示"服务器可达但探针方式不匹配"，非故障。
+    fn endpoint_auth_mismatch(code: u16) -> bool {
+        matches!(code, 401 | 403 | 404)
     }
 
     /// Check memory usage — warn if process RSS exceeds 80% of system memory.
@@ -1088,5 +1090,18 @@ mod tests {
         let status = tick.check_llm_connectivity().await;
         assert_eq!(status, CheckStatus::Pass,
             "NO_PROBE_PROVIDER should skip probe and return Pass");
+    }
+
+    #[test]
+    fn endpoint_auth_mismatch_classification() {
+        // 401/403/404 触发回退探针，视为端点/认证不匹配（非连通性故障）。
+        assert!(TickLoop::endpoint_auth_mismatch(401));
+        assert!(TickLoop::endpoint_auth_mismatch(403));
+        assert!(TickLoop::endpoint_auth_mismatch(404));
+        // 其他状态码不归入此类别：429/5xx 收到响应仍判可达，但不再回退探针。
+        assert!(!TickLoop::endpoint_auth_mismatch(400));
+        assert!(!TickLoop::endpoint_auth_mismatch(429));
+        assert!(!TickLoop::endpoint_auth_mismatch(500));
+        assert!(!TickLoop::endpoint_auth_mismatch(200));
     }
 }
