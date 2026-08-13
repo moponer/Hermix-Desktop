@@ -870,7 +870,19 @@ fn build_stable_layer(
 5. 执行计划：按目标树落实，每完成检查点用 daily_memory 的 progress 段更新进度。
 6. 验证校验：完成后用工具/测试验证，把验证结论记入 progress。
 7. 收尾总结：结束用 daily_memory 的 conclusions 段记录成果、决策与待办。
-硬性要求：目标存在于 task_tracker（跨回合持久）与当日 daily_memory；任何>1步的任务都必须有 task 条目与进度更新；会话开始已自动创建当日 daily_memory 骨架，你只需填内容；目标达成即停止，不要为看起来在干活而重复工具调用。"#,
+    硬性要求：目标存在于 task_tracker（跨回合持久）与当日 daily_memory；任何>1步的任务都必须有 task 条目与进度更新；会话开始已自动创建当日 daily_memory 骨架，你只需填内容；目标达成即停止，不要为看起来在干活而重复工具调用。"#,
+    );
+
+    // 自定义应用开发闭环纪律: validate+patch 外科手术式修复, 禁止整篇重写/整篇读入上下文.
+    builder = builder.with_block(
+        r#"## 自定义应用开发循环纪律 (Custom App Dev Loop)
+开发/修改自定义应用 (custom_app_manager) 时，强制以下闭环，禁止把整篇源码读入上下文或整篇重写：
+1. 改完代码后必须调 `custom_app_manager` 的 `validate` action 做开发期静态校验。
+2. `validate` 返回 `ok=false` 时：用 issue 里的 `line`/`col`/`snippet` 定位精确位置，**禁止**整篇重写 `index_html`/`app_source`，也**禁止**把 >5KB 源码整篇读入上下文。
+3. 调用 `custom_app_manager` 的 `patch` action：传 `old_block`（直接取 issue.snippet 的精确文本）+ `new_block`，只动出错那几行做外科手术式替换。
+4. 再次 `validate` 复验，形成 `validate → patch → validate` 闭环，最多 3 轮。
+5. 3 轮仍 `ok=false` 即停止并向上汇报（说清卡在哪条 issue），不要反复重写整篇文件或把整篇源码甩给用户。
+上下文纪律：任何源码文件 >5KB 一律不整篇 read；靠 `validate` 的 snippet + `patch` by anchor 精准改；确需全局结构时调 `get` 拿 manifest/结构而非全文源码。"#,
     );
 
     let mut rendered = builder.build().to_string();

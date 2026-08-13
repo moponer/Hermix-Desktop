@@ -12,6 +12,8 @@
 //! - `run`: Launch the app in dev/test mode (single-file html via hx-shell --html)
 //! - `validate`: Static validation (manifest + HTML + hx API + permissions + frontend quality)
 //! - `smoke`: Runtime smoke test (launch + capture errors)
+//! - `patch`: Surgical text replace in an installed app's source (index.html / src/main.tsx / src/<path>),
+//!   used to fix validate-reported errors without rewriting the whole file or reading it into context.
 //!
 //! Architecture: App = self-contained index.html + manifest.json.
 //! Uses hx-shell runtime (wry/WebView2, ~1.2MB single-file exe).
@@ -364,6 +366,123 @@ impl CustomAppManagerHandler {
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
 
+    /// 手术式补丁: 在已安装应用的源码文件里按精确文本替换, 不重写整篇、不读全文.
+    /// 配合 `validate` 的 `line/col/snippet` 使用 —— 把 snippet 当 `old_block`,
+    /// 只动出错那几行, 然后再次 `validate` 复验, 形成 validate→patch→validate 闭环.
+    /// `target`: index_html=index.html, app_source=src/main.tsx, source_file=src/<path>.
+    async fn patch(&self, params: &Value) -> Result<String, ToolError> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
+
+        let target = params
+            .get("target")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                ToolError::InvalidParams("缺少 'target' 参数 (index_html|app_source|source_file)".into())
+            })?;
+
+        let old_block = params
+            .get("old_block")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                ToolError::InvalidParams("缺少 'old_block' 参数 (要替换的精确文本, 建议直接取 validate 的 snippet)".into())
+            })?;
+        if old_block.is_empty() {
+            return Err(ToolError::InvalidParams("old_block 不能为空".into()));
+        }
+
+        let new_block = params
+            .get("new_block")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'new_block' 参数 (替换后的文本)".into()))?;
+
+        let occurrence = params
+            .get("occurrence")
+            .and_then(|v| v.as_str())
+            .unwrap_or("first");
+        let replace_all = occurrence == "all";
+
+        let app_dir = self.manager.plugins_dir().join(id);
+        if !app_dir.exists() {
+            return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
+        }
+
+        let file_path = match target {
+            "index_html" => app_dir.join("index.html"),
+            "app_source" => app_dir.join("src").join("main.tsx"),
+            "source_file" => {
+                let p = params
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        ToolError::InvalidParams(
+                            "target=source_file 时必须提供 'path' (相对 src/ 的路径, 如 components/Header.tsx)".into(),
+                        )
+                    })?;
+                // 防目录穿越: 禁止 .. 与绝对路径
+                if p.contains("..") || p.starts_with('/') || p.starts_with('\\') {
+                    return Err(ToolError::InvalidParams("path 非法: 禁止 '..' 或绝对路径".into()));
+                }
+                app_dir.join("src").join(p)
+            }
+            other => {
+                return Err(ToolError::InvalidParams(format!(
+                    "未知 target: '{other}' (index_html|app_source|source_file)"
+                )))
+            }
+        };
+
+        if !file_path.exists() {
+            return Err(ToolError::NotFound(format!(
+                "目标文件不存在: {} (target={target})",
+                file_path.display()
+            )));
+        }
+
+        let content = std::fs::read_to_string(&file_path).map_err(|e| {
+            ToolError::ExecutionFailed(format!("读取 {} 失败: {e}", file_path.display()))
+        })?;
+
+        let count = if replace_all {
+            content.matches(old_block).count()
+        } else if content.contains(old_block) {
+            1
+        } else {
+            0
+        };
+
+        if count == 0 {
+            return Err(ToolError::InvalidParams(format!(
+                "在 {} 中未找到 old_block。请用 validate 返回的 snippet 作为 old_block 的精确文本;\n\
+                 可用 custom_app_manager get 看源码, 或指定 occurrence=\"all\"。\n\
+                 old_block 前 48 字符预览: {:?}",
+                file_path.display(),
+                &old_block.chars().take(48).collect::<String>()
+            )));
+        }
+
+        let new_content = if replace_all {
+            content.replace(old_block, new_block)
+        } else {
+            content.replacen(old_block, new_block, 1)
+        };
+
+        std::fs::write(&file_path, &new_content).map_err(|e| {
+            ToolError::ExecutionFailed(format!("写入 {} 失败: {e}", file_path.display()))
+        })?;
+
+        let result = json!({
+            "success": true,
+            "message": format!("已对 {target} 做 {count} 处手术式替换"),
+            "file": file_path.display().to_string(),
+            "replacements": count,
+            "next": "调用 custom_app_manager validate action 复验",
+        });
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+    }
+
     /// 运行时冒烟测试: 先刷新打包产物, 再启动 hx-shell exe 并捕获错误.
     /// 通过 `run_smoke_test_async` 在 blocking 线程上启动 exe、检查进程存活.
     async fn smoke(&self, params: &Value) -> Result<String, ToolError> {
@@ -417,8 +536,9 @@ impl ToolHandler for CustomAppManagerHandler {
             "run" => self.run(&params).await,
             "validate" => self.validate(&params).await,
             "smoke" => self.smoke(&params).await,
+            "patch" => self.patch(&params).await,
             other => Err(ToolError::InvalidParams(format!(
-                "未知操作: '{other}'。可用: create, update, list, get, delete, package, run, validate, smoke"
+                "未知操作: '{other}'。可用: create, update, list, get, delete, package, run, validate, smoke, patch"
             ))),
         }
     }
@@ -431,7 +551,7 @@ impl ToolHandler for CustomAppManagerHandler {
             json!({
                 "type": "string",
                 "description": "要执行的操作",
-                "enum": ["create", "update", "list", "get", "delete", "package", "run", "validate", "smoke"]
+                "enum": ["create", "update", "list", "get", "delete", "package", "run", "validate", "smoke", "patch"]
             }),
         );
 
@@ -519,6 +639,48 @@ impl ToolHandler for CustomAppManagerHandler {
             }),
         );
 
+        props.insert(
+            "target".into(),
+            json!({
+                "type": "string",
+                "description": "patch action 专用: 要修补的源码文件。index_html=index.html; app_source=src/main.tsx; source_file=src/<path> (需配合 path 参数)。",
+                "enum": ["index_html", "app_source", "source_file"]
+            }),
+        );
+
+        props.insert(
+            "path".into(),
+            json!({
+                "type": "string",
+                "description": "patch action 专用: target=source_file 时, 要修补的文件相对 src/ 的路径 (如 components/Header.tsx)。禁止 '..' 与绝对路径。"
+            }),
+        );
+
+        props.insert(
+            "old_block".into(),
+            json!({
+                "type": "string",
+                "description": "patch action 专用: 文件中要被替换的精确连续文本。建议直接取 validate 返回 issue 的 snippet, 保证逐字符匹配。为空或找不到都会报错。"
+            }),
+        );
+
+        props.insert(
+            "new_block".into(),
+            json!({
+                "type": "string",
+                "description": "patch action 专用: 替换后的新文本 (替掉 old_block)。"
+            }),
+        );
+
+        props.insert(
+            "occurrence".into(),
+            json!({
+                "type": "string",
+                "description": "patch action 专用: 替换范围。first=只替换第一处 (默认); all=替换全部匹配。",
+                "enum": ["first", "all"]
+            }),
+        );
+
         tool_schema(
             "custom_app_manager",
             "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行(测试版dev模式)、开发期校验(validate)、运行时冒烟测试(smoke)。基于 hx-shell 运行时 (wry/WebView2, ~1.2MB)。\n\n**何时用本工具**:
@@ -591,5 +753,82 @@ mod tests {
         // Attempting to parse "not valid json" as a Value should fail
         let result = serde_json::from_str::<serde_json::Value>(manifest_val.as_str().unwrap());
         assert!(result.is_err(), "invalid JSON should fail to parse");
+    }
+
+    /// patch (app_source): 手术式替换 src/main.tsx 中精确文本, 不碰其他内容.
+    #[test]
+    fn patch_app_source_replaces_precise_block() {
+        let tmp = std::env::temp_dir().join(format!("cam_patch_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("patch-app").join("src")).unwrap();
+        let mgr = std::sync::Arc::new(hermix_plugin::PluginManager::new(tmp.clone()));
+        let handler = CustomAppManagerHandler::new(mgr);
+
+        let main = tmp.join("patch-app").join("src").join("main.tsx");
+        std::fs::write(&main, "const a = 'OLD';\nconst b = 'keep';\n").unwrap();
+
+        let res = futures::executor::block_on(handler.patch(&json!({
+            "action": "patch",
+            "id": "patch-app",
+            "target": "app_source",
+            "old_block": "'OLD'",
+            "new_block": "'NEW'",
+        })));
+        assert!(res.is_ok(), "patch 应成功: {:?}", res.err());
+
+        let after = std::fs::read_to_string(&main).unwrap();
+        assert!(after.contains("'NEW'"), "应替换 OLD→NEW: {after}");
+        assert!(!after.contains("'OLD'"), "不应残留 OLD: {after}");
+        assert!(after.contains("'keep'"), "其他行不应被动: {after}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// patch: old_block 在文件中不存在 → 报错, 不写文件.
+    #[test]
+    fn patch_old_block_not_found_errors() {
+        let tmp = std::env::temp_dir().join(format!("cam_patchnf_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("patch-nf").join("src")).unwrap();
+        let mgr = std::sync::Arc::new(hermix_plugin::PluginManager::new(tmp.clone()));
+        let handler = CustomAppManagerHandler::new(mgr);
+
+        let main = tmp.join("patch-nf").join("src").join("main.tsx");
+        std::fs::write(&main, "const a = 'X';\n").unwrap();
+
+        let res = futures::executor::block_on(handler.patch(&json!({
+            "action": "patch",
+            "id": "patch-nf",
+            "target": "app_source",
+            "old_block": "NONEXISTENT_SUBSTRING",
+            "new_block": "Y",
+        })));
+        assert!(res.is_err(), "找不到 old_block 应报错");
+
+        // 文件内容未被改动
+        let after = std::fs::read_to_string(&main).unwrap();
+        assert_eq!(after, "const a = 'X';\n", "报错时不应改动文件");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// patch (source_file): 拒绝 '..' / 绝对路径, 防目录穿越.
+    #[test]
+    fn patch_path_traversal_rejected() {
+        let tmp = std::env::temp_dir().join(format!("cam_patchtrav_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("patch-trav").join("src")).unwrap();
+        let mgr = std::sync::Arc::new(hermix_plugin::PluginManager::new(tmp.clone()));
+        let handler = CustomAppManagerHandler::new(mgr);
+        std::fs::write(tmp.join("patch-trav").join("src").join("main.tsx"), "x").unwrap();
+
+        let res = futures::executor::block_on(handler.patch(&json!({
+            "action": "patch",
+            "id": "patch-trav",
+            "target": "source_file",
+            "path": "../escape.tsx",
+            "old_block": "x",
+            "new_block": "y",
+        })));
+        assert!(res.is_err(), "目录穿越应被拒绝");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
