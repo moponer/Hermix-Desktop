@@ -1975,7 +1975,10 @@
   background: transparent;
   transition: none;
   overflow: visible;
-  padding-left: 30px;
+  /* 与 components-prose.css 对齐：不额外缩进，工具卡与对话文本
+     完全同宽同列（左缘右缘都齐）。原 30px 缩进会让工具卡比文本
+     右窄 30px、视觉不对齐。 */
+  padding-left: 0;
 }
 .tw-msg:hover { border: 0; box-shadow: none; }
 .tw-msg--run, .tw-msg--err, .tw-msg--ok { border: 0; background: transparent; position: static; }
@@ -2033,9 +2036,29 @@
   flex-shrink: 0;
   margin-right: 6px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.10);
+  /* tile 背景跟随主题灰系（slate 中性调），浅色/深色自动切换，
+     不再硬编码饱和色。浅色=深 slate 14% 透明底，深色=亮 slate 14%
+     透明底，图标用对应对比色，浅色系清晰可读。 */
+  background: var(--color-accent-soft);
+}
+/* tile 内图标跟随主题色：浅色深 slate / 深色亮 slate，浅色系清晰可见。
+   不再强制白色（白图标在浅透明 tile 上会糊）。 */
+.tw-msg-icon-tile .tw-msg-icon-svg {
+  color: var(--color-accent) !important;
+}
+/* 状态区分沿用主题语义色，不引入额外彩色：
+   - run：稍强背景表示活跃
+   - err：红色语义（错误），图标同步变红 */
+.tw-msg-row[data-state="run"] .tw-msg-icon-tile {
+  background: var(--color-accent-soft-strong);
+}
+.tw-msg-row[data-state="err"] .tw-msg-icon-tile {
+  background: var(--color-error-soft);
+}
+.tw-msg-row[data-state="err"] .tw-msg-icon-tile .tw-msg-icon-svg {
+  color: var(--color-error) !important;
 }
 .tw-msg-icon-svg {
-  color: #ffffff !important;
   display: block;
 }
 

@@ -438,6 +438,23 @@
   /* 折叠内容是 process 步骤的有序流 */
 }
 
+/* 工具执行区块:始终可见,与思考折叠块视觉分离。
+   浅色/深色主题都走 theme token,不硬编码蓝紫。 */
+.tl-tool-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tl-tool-step-label {
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
+  margin-top: 2px;
+}
+
 /* ── 5a-0b-old. Reasoning Block (legacy) — kept for back-compat ── */
 .tl-reasoning {
   /* gap 由父 .tl-iteration 管理，这里无需额外 margin */

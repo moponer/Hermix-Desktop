@@ -477,13 +477,24 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
             <Play size={14} /> 运行
           </button>
           {is_packaged ? (
-            <button
-              className="app-detail-btn app-detail-btn--secondary"
-              onClick={handleOpenDist}
-              title="打开打包后的应用目录"
-            >
-              <FolderOpen size={14} /> 打开目录
-            </button>
+            <>
+              <button
+                className="app-detail-btn app-detail-btn--secondary"
+                onClick={handlePackage}
+                disabled={packaging}
+                title="重新打包为可分发到其他电脑的独立 EXE"
+              >
+                <RefreshCw size={14} />
+                {packaging ? "打包中..." : "重新打包"}
+              </button>
+              <button
+                className="app-detail-btn app-detail-btn--secondary"
+                onClick={handleOpenDist}
+                title="打开打包后的应用目录"
+              >
+                <FolderOpen size={14} /> 打开目录
+              </button>
+            </>
           ) : (
             <button
               className="app-detail-btn app-detail-btn--secondary"

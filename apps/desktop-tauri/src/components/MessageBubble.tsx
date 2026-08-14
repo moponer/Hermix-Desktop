@@ -345,7 +345,6 @@ function ToolGroupCard({
   const stats = extractLineStats(toolName, args);
   const isPathLike = isPathArg(toolName, args, output);
   const primaryPath = isPathLike ? (output || args) : null;
-  const cat = classifyTool(toolName);
 
   const resultPeek = useMemo(() => {
     if (isError) {
@@ -380,7 +379,7 @@ function ToolGroupCard({
         data-tool-kind={toolKind(toolName)}
         data-state={isError ? "err" : isRunning ? "run" : "ok"}
       >
-        <span className="tw-msg-icon-tile" style={{ background: cat.bg }}>
+        <span className="tw-msg-icon-tile">
           <Icon size={11} className="tw-msg-icon-svg" />
         </span>
         <span className="tw-msg-verb">{verb}</span>
@@ -546,18 +545,28 @@ function ProcessTimeline({
       ? (durationPart ? `已完成 ${totalTools} 个工具 ${durationPart}` : `已完成 ${totalTools} 个工具`)
       : (durationPart ? `已完成 ${durationPart}` : "已完成"));
 
+  // Reasoning and tool steps are kept as siblings, never nested. Tools
+  // render as an always-visible "工具执行" block (they are actions, not
+  // thinking) while reasoning stays in its own collapsible block. This
+  // keeps each tool call's chronological position and makes the
+  // thinking/acting split explicit — fixing the "工具全跑思考里了" report
+  // without losing the interleaved order the user expects.
+  const reasoningSteps = steps.filter((s) => s.kind === "reasoning");
+  const firstToolIdx = steps.findIndex((s) => s.kind === "tools");
+
   return (
     <div className="tl-process-timeline">
-      {/* Fold header: ONLY visible when the turn has settled.
+      {/* Reasoning fold header — only visible once the turn has settled.
           During streaming the content flows inline so the user
           perceives a single continuous narrative, not a stack
-          of chips. */}
+          of chips. The header toggles *reasoning* visibility only;
+          tool cards below are always shown. */}
       {!isStreaming && hasProcessContent && (
         <button
           onClick={() => setUserOverride((v) => v ?? true ? false : true)}
           className="reasoning-header tl-process-header"
           aria-expanded={expanded}
-          title={settledLabel}
+          title={reasoningSteps.length > 0 ? "思考过程（点击展开/收起）" : settledLabel}
         >
           {expanded ? (
             <ChevronDown size={12} className="reasoning-chevron reasoning-chevron-open" />
@@ -565,7 +574,9 @@ function ProcessTimeline({
             <ChevronRight size={12} className="reasoning-chevron" />
           )}
           <CheckCircle2 size={11} className="tl-process-check" />
-          <span className="reasoning-label">思考与工具</span>
+          <span className="reasoning-label">
+            {reasoningSteps.length > 0 ? "思考" : settledLabel}
+          </span>
         </button>
       )}
       {/* Chronological render:
@@ -575,9 +586,7 @@ function ProcessTimeline({
             ToolGroupCard per call — so the user can follow the
             agent's actions in chronological order, interleaved
             with the text it emitted before/after each tool call.
-            ToolGroupCard itself stays collapsed by default (its
-            expand chevron is the only fold), so a turn with many
-            tools doesn't blow up vertical space.
+            They are NOT part of the reasoning fold.
           - reasoning stays collapsed by default (settled+closed)
             and only expands live / on user toggle, because LLM
             thinking can be long. */}
@@ -598,25 +607,26 @@ function ProcessTimeline({
               </div>
             );
           }
-          // Reasoning is the only thing that still respects the
-          // `expanded` fold — long thinking blocks would otherwise
-          // dominate the message body. Tool calls are rendered
-          // inline regardless of fold state so the user can see
-          // them in chronological order alongside the surrounding
-          // text.
+          // Reasoning respects the `expanded` fold — long thinking
+          // blocks would otherwise dominate the message body. Tool
+          // calls render regardless of fold state (see below).
           if (step.kind === "reasoning") {
-            if (!expanded) return null;
+            if (!expanded && !isStreaming) return null;
             return <ReasoningBlock key={`ps-${i}`} content={step.content} />;
           }
           if (step.kind === "tools" && stepGroups[i]) {
             const groups = stepGroups[i]!;
             if (groups.length === 0) return null;
             return (
-              <ToolTimelineSection
-                key={`ps-${i}`}
-                groups={groups}
-                onPathClick={onPathClick}
-              />
+              <div key={`ps-${i}`} className="tl-tool-step">
+                {i === firstToolIdx && (
+                  <div className="tl-tool-step-label">工具执行</div>
+                )}
+                <ToolTimelineSection
+                  groups={groups}
+                  onPathClick={onPathClick}
+                />
+              </div>
             );
           }
           return null;
@@ -1185,7 +1195,6 @@ function MemoryRecallBlock({ recalls }: { recalls: MemoryRecallEntry[] }) {
 interface ToolCategory {
   keywords: string[];
   verb: string;
-  bg: string;
   kind: "shell" | "read" | "write" | "edit" | "delete" | "search-web" | "search-file" | "list" | "fetch" | "parse" | "image" | "code" | "git" | "build" | "test" | "install" | "deploy" | "db" | "desktop" | "reason" | "delegate" | "ask" | "clipboard" | "network" | "other";
 }
 
@@ -1193,139 +1202,116 @@ const TOOL_CATEGORIES: ToolCategory[] = [
   {
     keywords: ["terminal", "bash", "shell", "exec", "execute_command", "run_command", "run_script", "cmd", "powershell", "pwsh"],
     verb: "执行命令",
-    bg: "#22c55e",
     kind: "shell",
   },
   {
     keywords: ["read_file", "read_pdf", "read_xls", "read_xlsx", "read_docx", "read_doc", "read_pptx", "read_image", "view_file", "cat", "open_file", "preview", "inspect"],
     verb: "读取文件",
-    bg: "#14b8a6",
     kind: "read",
   },
   {
     keywords: ["write_file", "create_file", "save_file", "add_file", "new_file", "output_file", "append_file"],
     verb: "写入文件",
-    bg: "#14b8a6",
     kind: "write",
   },
   {
     keywords: ["edit_file", "edit", "patch", "update_file", "modify_file", "rewrite", "replace", "change_file"],
     verb: "编辑文件",
-    bg: "#14b8a6",
     kind: "edit",
   },
   {
     keywords: ["delete_file", "remove_file", "unlink", "rm_file"],
     verb: "删除文件",
-    bg: "#ef4444",
     kind: "delete",
   },
   {
     keywords: ["file_operation", "file_op", "move_file", "rename_file", "copy_file"],
     verb: "操作文件",
-    bg: "#14b8a6",
     kind: "edit",
   },
   {
     keywords: ["search_web", "web_search", "google", "bing", "duckduckgo", "search_internet", "search_query"],
     verb: "搜索网络",
-    bg: "#0d9488",
     kind: "search-web",
   },
   {
     keywords: ["search_files", "file_search", "file_query", "grep", "find_file", "locate", "search", "search_directory"],
     verb: "搜索文件",
-    bg: "#0d9488",
     kind: "search-file",
   },
   {
     keywords: ["list_files", "list_dir", "list_directory", "ls", "dir", "tree", "walk", "readdir", "glob"],
     verb: "查看目录",
-    bg: "#14b8a6",
     kind: "list",
   },
   {
     keywords: ["browser", "web_fetch", "fetch_url", "fetch_page", "http_get", "http_request", "curl", "wget", "download", "webpage"],
     verb: "获取网页",
-    bg: "#06b6d4",
     kind: "fetch",
   },
   {
     keywords: ["network", "ping", "dns", "socket", "traceroute", "nslookup"],
     verb: "网络诊断",
-    bg: "#06b6d4",
     kind: "network",
   },
   {
     keywords: ["parse_pdf", "extract_pdf", "pdf_to_text", "pdf_parse", "read_pdf"],
     verb: "解析 PDF",
-    bg: "#14b8a6",
     kind: "parse",
   },
   {
     keywords: ["image_edit", "edit_image", "resize_image", "convert_image", "process_image", "image_process"],
     verb: "处理图片",
-    bg: "#22c55e",
     kind: "image",
   },
   {
     keywords: ["code", "generate_code", "create_code", "write_code", "implement"],
     verb: "生成代码",
-    bg: "#f97316",
     kind: "code",
   },
   {
     keywords: ["python", "py_run", "run_python", "node_run", "run_node", "run_js", "run_script", "script"],
     verb: "运行代码",
-    bg: "#22c55e",
     kind: "shell",
   },
   {
     keywords: ["git", "commit", "push", "pull", "branch", "merge", "clone", "checkout", "diff", "log", "status", "stash", "rebase", "fetch"],
     verb: "Git 操作",
-    bg: "#f97316",
     kind: "git",
   },
   {
     keywords: ["build", "compile", "cargo", "npm_run", "pnpm_run", "yarn_run", "make", "cmake", "gradle", "mvn", "webpack", "vite", "tsc"],
     verb: "构建项目",
-    bg: "#f97316",
     kind: "build",
   },
   {
     keywords: ["test", "pytest", "jest", "vitest", "mocha", "spec", "run_test", "unit_test"],
     verb: "运行测试",
-    bg: "#22c55e",
     kind: "test",
   },
   {
     keywords: ["install", "add_package", "add_dep", "npm_install", "pnpm_add", "pip_install", "cargo_add"],
     verb: "安装依赖",
-    bg: "#22c55e",
     kind: "install",
   },
   {
     keywords: ["deploy", "publish", "release", "upload", "ship", "rollout"],
     verb: "部署发布",
-    bg: "#f97316",
     kind: "deploy",
   },
   {
     keywords: ["sql", "database", "db", "sqlite", "postgres", "mongo", "select", "insert_query", "update_db", "query_db", "db_query"],
     verb: "操作数据库",
-    bg: "#06b6d4",
     kind: "db",
   },
   {
     keywords: ["computer_use", "desktop", "screenshot", "mouse", "keyboard", "gui"],
     verb: "操作桌面",
-    bg: "#6b7280",
     kind: "desktop",
   },
   {
     keywords: ["think", "reason", "reflect", "analyze", "plan_task", "plan"],
     verb: "正在思考",
-    bg: "#94a3b8",
     kind: "reason",
   },
   //    MUST come before "询问用户" — "delegate_task" contains
@@ -1334,7 +1320,6 @@ const TOOL_CATEGORIES: ToolCategory[] = [
   {
     keywords: ["delegate_task", "delegate", "sub_agent", "subagent", "spawn_agent", "fan_out", "get_subagent_result", "get_sub_agent_result"],
     verb: "委派子agent",
-    bg: "#ec4899",
     kind: "delegate",
   },
   //    NOTE: "ask" keyword is broad — it matches any tool name
@@ -1344,25 +1329,21 @@ const TOOL_CATEGORIES: ToolCategory[] = [
   {
     keywords: ["ask_user", "ask", "question", "confirm", "clarify"],
     verb: "询问用户",
-    bg: "#eab308",
     kind: "ask",
   },
   {
     keywords: ["clipboard", "paste", "copy_to_clipboard", "read_clipboard"],
     verb: "读取剪贴板",
-    bg: "#6b7280",
     kind: "clipboard",
   },
   {
     keywords: ["lint", "format", "prettier", "eslint", "check", "validate", "audit"],
     verb: "代码检查",
-    bg: "#6b7280",
     kind: "other",
   },
   {
     keywords: [],  // empty array = catch-all, never matches by keyword
     verb: "调用工具",
-    bg: "#6b7280",
     kind: "other",
   },
 ];
@@ -1843,10 +1824,6 @@ function ToolMessageCard({
     [meta.tool, meta.output],
   );
 
-  // Colored tile background for the icon
-  const cat = classifyTool(meta.tool);
-  const iconBg = cat.bg;
-
   return (
     <div className="tw-msg h-enter chat-tool-call chat-tool-call--tool">
       <button
@@ -1856,13 +1833,7 @@ function ToolMessageCard({
         data-tool-kind={toolKind(meta.tool)}
         data-state={isError ? "err" : isRunning ? "run" : "ok"}
       >
-        {/* Colored icon tile — matches the FileTypeIcon style:
-            a small rounded square with a brand-colored background
-            and a white lucide icon. */}
-        <span
-          className="tw-msg-icon-tile"
-          style={{ background: iconBg }}
-        >
+        <span className="tw-msg-icon-tile">
           <Icon size={11} className="tw-msg-icon-svg" />
         </span>
 

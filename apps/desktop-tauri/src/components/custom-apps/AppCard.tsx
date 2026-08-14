@@ -16,7 +16,7 @@ import {
   FolderOpen,
   Play,
   Trash2,
-  Eye,
+  RefreshCw,
   Music,
   Music2,
   Music3,
@@ -281,14 +281,6 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
 
       <div className="custom-app-card__actions">
         <button
-          className="custom-app-card__btn custom-app-card__btn--view"
-          onClick={onView}
-          title="查看详情"
-        >
-          <Eye size={14} />
-          详情
-        </button>
-        <button
           className="custom-app-card__btn custom-app-card__btn--run"
           onClick={onRun}
           title="运行（自动编译并启动，用于本地测试）"
@@ -297,14 +289,25 @@ export function AppCard({ app, onView, onPackage, onOpenDist, onRun, onDelete, p
           运行
         </button>
         {app.is_packaged ? (
-          <button
-            className="custom-app-card__btn custom-app-card__btn--secondary"
-            onClick={onOpenDist}
-            title="打开打包后的应用目录"
-          >
-            <FolderOpen size={14} />
-            打开目录
-          </button>
+          <>
+            <button
+              className="custom-app-card__btn custom-app-card__btn--package"
+              onClick={onPackage}
+              disabled={packaging}
+              title="重新打包为可分发到其他电脑的独立 EXE"
+            >
+              <RefreshCw size={14} />
+              {packaging ? "打包中..." : "打包"}
+            </button>
+            <button
+              className="custom-app-card__btn custom-app-card__btn--secondary"
+              onClick={onOpenDist}
+              title="打开打包后的应用目录"
+            >
+              <FolderOpen size={14} />
+              打开目录
+            </button>
+          </>
         ) : (
           <button
             className="custom-app-card__btn custom-app-card__btn--package"
