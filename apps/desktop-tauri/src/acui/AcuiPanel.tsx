@@ -40,6 +40,14 @@ export interface AcuiPanelProps {
   decide?: AcuiDecisionBus;
   className?: string;
   defaultCollapsed?: boolean;
+  /**
+   * Stream-completion flag — `false` while the parent turn is
+   * still streaming so the `tool_event` ACUI keeps stranded groups
+   * in `"running"` instead of flashing "失败 / 执行已中断" before
+   * a slow tool's real `tool_complete` arrives. Defaults to `true`
+   * for settled/reload callers.
+   */
+  streamComplete?: boolean;
 }
 
 interface GroupedCards {
@@ -145,7 +153,7 @@ function deriveAwakeningSummary(state: AcuiState): AwakeningSummary | null {
   return summary;
 }
 
-export function AcuiPanel({ state, registry, decide, className, defaultCollapsed = false }: AcuiPanelProps) {
+export function AcuiPanel({ state, registry, decide, className, defaultCollapsed = false, streamComplete = true }: AcuiPanelProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const toggleCollapsed = useCallback(() => setCollapsed((v) => !v), []);
 
@@ -155,7 +163,7 @@ export function AcuiPanel({ state, registry, decide, className, defaultCollapsed
   const totalCards = state.cards.length;
   if (totalCards === 0) return null;
 
-  const buckets = renderAcuiCards({ state, registry, decide });
+  const buckets = renderAcuiCards({ state, registry, decide, streamComplete });
   // Detail section = `before` + `replace` + `after`, in that order.
   // Cards that target a specific position are placed at their
   // requested anchor; the panel itself doesn't splice into the chat
@@ -187,6 +195,7 @@ export function AcuiPanel({ state, registry, decide, className, defaultCollapsed
                 show={c}
                 registry={registry}
                 decide={decide}
+                streamComplete={streamComplete}
                 outcome={
                   // Look up outcome via the same path the renderer uses,
                   // so resolved footers render consistently.
@@ -246,21 +255,26 @@ function HeaderCard({
   show,
   registry,
   decide,
+  streamComplete,
 }: {
   show: AcuiShow;
   registry?: AcuiRegistry;
   decide?: AcuiDecisionBus;
   outcome?: unknown;
+  streamComplete?: boolean;
 }) {
   // Single-card render: use the same renderer but with a synthetic
   // 1-card state, so registry resolution / fallback / decide bus
-  // behave identically.
+  // behave identically. Forward `streamComplete` so a stale or
+  // test-time preview still respects the live-stream rules on
+  // long-running tools.
   const synthetic: AcuiState = { cards: [show], decisions: [] };
   const buckets = renderAcuiCards({
     state: synthetic,
     registry,
     decide,
     lookupOutcome: () => ({ resolved: false }),
+    streamComplete,
   });
   const node =
     buckets.before[0] ?? buckets.after[0] ?? buckets.replace[0] ?? null;

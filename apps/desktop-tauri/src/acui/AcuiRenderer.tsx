@@ -47,6 +47,15 @@ export interface AcuiRendererProps {
    *  `lookupAcuiOutcome(state, id)`. Useful for tests that want to
    *  inject a fixed decision log without wiring useAcuiState. */
   lookupOutcome?: (cardId: string) => AcuiOutcome;
+  /**
+   * Stream-completion flag — defaults to `true` so callers that
+   * don't know about it (tests, settled renders) keep the legacy
+   * behaviour of marking stranded groups as failed. Pass `false`
+   * from `<AcuiPanel>` while a turn is still streaming so the
+   * `tool_event` ACUI doesn't flash a false "失败 / 执行已中断"
+   * before the slow tool's real `tool_complete` arrives.
+   */
+  streamComplete?: boolean;
 }
 
 export function renderAcuiCards({
@@ -54,6 +63,7 @@ export function renderAcuiCards({
   registry,
   decide,
   lookupOutcome,
+  streamComplete = true,
 }: AcuiRendererProps): AcuiRenderBuckets {
   const r = registry ?? AcuiRegistry.defaults();
   const outcomeOf =
@@ -69,6 +79,7 @@ export function renderAcuiCards({
         show={show}
         decide={decide}
         outcome={outcome}
+        streamComplete={streamComplete}
       />
     );
     switch (show.position) {

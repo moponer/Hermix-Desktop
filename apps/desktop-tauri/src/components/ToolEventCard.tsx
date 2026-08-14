@@ -15,6 +15,20 @@ import {
 
 interface ToolEventCardProps {
   events: ExecutionTimelineEvent[];
+  /**
+   * Mirrors `groupTimeline`'s `streamComplete` opt (see
+   * `messageParser.ts`). Defaults to `true` so legacy callers
+   * (reloads, post-settle renders) keep the historical behaviour
+   * of promoting stranded groups to `"error"`. When `false` —
+   * the live-stream case — a group that received `tool_start` but
+   * never `tool_complete` stays in `"running"` state. Without
+   * this flag, a `delegate_task` or any other slow tool would
+   * flash "失败 / 执行已中断" the moment the orchestrator emits
+   * its first `tool_start`, before the matching `tool_complete`
+   * arrives — the user would see the badge flutter
+   * 失败 → 已完成 as the late complete lands.
+   */
+  streamComplete?: boolean;
 }
 
 interface ToolGroup {
@@ -139,10 +153,25 @@ function isBrowserCompletionMarker(tool: string, content?: string): boolean {
  *    rows that previously stuck on "运行中" forever after a session
  *    reload (the live WS is gone, the process is gone, the user only
  *    sees a stale "执行中" badge and a stray "terminal 运行中" sub-row).
+ *  - `streamComplete` (default `true`): while the live WS is still
+ *    feeding events, any tool that opened (`tool_start`) but never
+ *    received `tool_complete` is left in `"running"` — its close
+ *    event is simply on its way. Forcing these to `"error"` mid-stream
+ *    is what produced the "上来就提示失败，等会又说已完成" status
+ *    flutter for long-running tools like `delegate_task`. On the
+ *    settled path (default `true`, used by reload/refresh) stranded
+ *    groups still surface as `"error"` with an "执行已中断" note
+ *    so genuine WS / process drops don't masquerade as an
+ *    eternal spinner. Mirrors the same opt in `groupTimeline` so
+ *    the two renderers stay in lock-step.
  *  - `file_change` is metadata, not a tool run — dropped (rendered
  *    separately by `FileChangeBlock` in MessageBubble).
  */
-function groupEvents(events: ExecutionTimelineEvent[]): ToolGroup[] {
+export function groupEvents(
+  events: ExecutionTimelineEvent[],
+  opts?: { streamComplete?: boolean },
+): ToolGroup[] {
+  const streamComplete = opts?.streamComplete ?? true;
   const groups: ToolGroup[] = [];
   const active = new Map<string, number>(); // tool name → group index
 
@@ -207,27 +236,33 @@ function groupEvents(events: ExecutionTimelineEvent[]): ToolGroup[] {
       active.delete(tool);
     }
   }
-  // Stranded pass — same idea as the inline `groupTimeline`. Any
-  // group that opened but never received a close event is read as
-  // "interrupted" on reload, not "still running". Otherwise the
-  // badge would stay green-and-spinning forever for any tool that
-  // was in-flight when the session was last closed.
-  for (const idx of active.values()) {
-    const grp = groups[idx];
-    if (grp && grp.status === "running") {
-      // FIX: Do not automatically mark as error when there
-      // is stdout output. Some tools stream data without a formal close
-      // event (e.g., OCR/image reading that stops due to LLM API error).
-      // If the tool produced output, treat it as done rather than interrupted.
-      const hasOutput = grp.events.some(
-        (e: { type?: string; content?: string }) => e.type === "tool_stdout" && e.content && e.content.trim().length > 0,
-      );
-      if (hasOutput) {
-        grp.status = "done";
-        grp.endedAt = grp.startedAt;
-      } else {
-        grp.status = "error";
-        if (!grp.statusNote) grp.statusNote = "执行已中断（无完成事件）";
+  // Stranded pass — runs only once the parent turn has settled
+  // (`streamComplete === true`). During live streaming we leave
+  // `tool_start`-without-`tool_complete` groups in `"running"` so
+  // the renderer keeps showing the "运行中" badge / spinner — the
+  // matching `tool_complete` is on its way. Forcing these to
+  // `"error"` mid-stream is what produced the
+  // 失败 → 已完成 status flutter on long-running tools like
+  // `delegate_task`. On settled (legacy / reload) the strand
+  // promotion still runs so a process that genuinely dropped
+  // without a `tool_complete` doesn't masquerade as an eternal
+  // spinner. Mirrors `groupTimeline`'s stranded-pass opt exactly.
+  if (streamComplete) {
+    for (const idx of active.values()) {
+      const grp = groups[idx];
+      if (grp && grp.status === "running") {
+        // FIX: 有 stdout 输出的工具保持 running 状态 + "执行中，等待
+        // 工具完成"备注。无输出才标 error + "执行已中断"。这样 ACUI
+        // 时间线跟 messageParser 的 stranded pass 行为一致。
+        const hasOutput = grp.events.some(
+          (e: { type?: string; content?: string }) => e.type === "tool_stdout" && e.content && e.content.trim().length > 0,
+        );
+        if (hasOutput) {
+          if (!grp.statusNote) grp.statusNote = "执行中，等待工具完成";
+        } else {
+          grp.status = "error";
+          if (!grp.statusNote) grp.statusNote = "执行已中断";
+        }
       }
     }
   }
@@ -500,8 +535,11 @@ function coalesceAdjacent(groups: ToolGroup[]): ToolGroup[] {
 /** Compact, WorkBuddy-style one-row-per-tool card. Mirrors the visual
  *  treatment of `ToolMessageCard` in MessageBubble.tsx so the ACUI
  *  timeline and the inline `role: "tool"` cards look identical. */
-export function ToolEventCard({ events }: ToolEventCardProps) {
-  const grouped = useMemo(() => groupEvents(events), [events]);
+export function ToolEventCard({ events, streamComplete = true }: ToolEventCardProps) {
+  const grouped = useMemo(
+    () => groupEvents(events, { streamComplete }),
+    [events, streamComplete],
+  );
   const groups = useMemo(() => coalesceAdjacent(grouped), [grouped]);
   if (groups.length === 0) return null;
 

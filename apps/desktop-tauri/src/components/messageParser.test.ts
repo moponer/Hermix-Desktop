@@ -5,6 +5,7 @@ import {
   groupTimeline,
   parseContent,
 } from "./messageParser";
+import { groupEvents } from "./ToolEventCard";
 import type { ExecutionTimelineEvent } from "../types";
 
 function memEvent(over: Partial<ExecutionTimelineEvent>): ExecutionTimelineEvent {
@@ -233,5 +234,63 @@ describe("groupTimeline stranded-pass (FIX)", () => {
     const groups = groupTimeline(events, { streamComplete: false });
     expect(groups).toHaveLength(1);
     expect(groups[0].status).toBe("done");
+  });
+});
+
+describe("groupEvents stranded-pass (FIX, mirrors groupTimeline)", () => {
+  // ACUI tool timeline renders via `groupEvents` (not `groupTimeline`).
+  // The bug surface was: a `delegate_task` tool_start landed before its
+  // real `tool_complete` arrived, and the ACUI row immediately flashed
+  // "失败 / 执行已中断" — then flipped to "已完成" when the late
+  // complete landed. Same fix as `groupTimeline`: skip the stranded
+  // pass while the parent turn is still streaming.
+  it("keeps stranded delegate_task groups as `running` while the turn is still streaming", () => {
+    const events = [toolEvent({ type: "tool_start", tool: "delegate_task" })];
+    const groups = groupEvents(events, { streamComplete: false });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe("running");
+    expect(groups[0].statusNote ?? "").not.toMatch(/执行已中断/);
+  });
+
+  it("promotes stranded groups to `error` once the turn has settled (default)", () => {
+    // Reload / settled view: the live WS is gone, so a stranded
+    // group is genuinely interrupted and should surface as
+    // "执行已中断" — keeps the historical reload behaviour intact.
+    const events = [toolEvent({ type: "tool_start", tool: "read_file" })];
+    const groups = groupEvents(events);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe("error");
+    expect(groups[0].statusNote).toBe("执行已中断");
+  });
+
+  it("uses streamComplete=true when called without opts (backward compat)", () => {
+    const events = [toolEvent({ type: "tool_start", tool: "read_file" })];
+    const groups = groupEvents(events);
+    // No opt → defaults to true → stranded pass runs → error.
+    expect(groups[0].status).toBe("error");
+  });
+
+  it("does not touch a group that already received tool_complete, even during streaming", () => {
+    const ts = new Date().toISOString();
+    const events = [
+      toolEvent({ type: "tool_start", tool: "read_file", created_at: ts }),
+      toolEvent({ type: "tool_complete", tool: "read_file", created_at: ts }),
+    ];
+    const groups = groupEvents(events, { streamComplete: false });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].status).toBe("done");
+  });
+
+  it("keeps a streaming delegate_task running even if it has produced no stdout yet", () => {
+    // The pre-fix code only kept stranded groups running if they had
+    // already streamed stdout. delegate_task in particular emits
+    // nothing on stdout (it just spawns a sub-agent), so this
+    // sub-case was the most common source of the false-failure
+    // flash. The streamComplete=false path now skips the stranded
+    // pass entirely — no stdout / no output is fine while the WS
+    // is alive.
+    const events = [toolEvent({ type: "tool_start", tool: "delegate_task" })];
+    const groups = groupEvents(events, { streamComplete: false });
+    expect(groups[0].status).toBe("running");
   });
 });

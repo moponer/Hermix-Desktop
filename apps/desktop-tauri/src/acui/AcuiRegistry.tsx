@@ -63,6 +63,17 @@ export type AcuiComponentProps = {
    *  but the underlying prop is no longer authoritative. Currently a
    *  no-op hint for components to display a "stale" state. */
   stale?: boolean;
+  /**
+   * Stream-completion flag forwarded from `<AcuiPanel>` /
+   * `renderAcuiCards`. Mirrors `groupTimeline`'s `streamComplete`
+   * opt. Defaults to `true` so test previews and post-settle renders
+   * keep the legacy behaviour (stranded groups → `"error" +
+   * "执行已中断"`). Live-stream callers pass `false` so the
+   * `tool_event` ACUI doesn't promote a long-running tool to
+   * "失败 / 执行已中断" before its real `tool_complete` arrives —
+   * the source of the 失败 → 已完成 badge flutter on `delegate_task`.
+   */
+  streamComplete?: boolean;
 };
 
 export type AcuiComponent = ComponentType<AcuiComponentProps>;
@@ -186,13 +197,13 @@ const ClarifyAcui: AcuiComponent = ({ show, decide, outcome }) => {
   );
 };
 
-const ToolEventAcui: AcuiComponent = ({ show }) => {
+const ToolEventAcui: AcuiComponent = ({ show, streamComplete }) => {
   const events =
     (show.props as { events?: ExecutionTimelineEvent[] }).events ?? [];
   if (events.length === 0) return null;
   return (
     <div data-acui-kind="tool_event">
-      <ToolEventCard events={events} />
+      <ToolEventCard events={events} streamComplete={streamComplete} />
     </div>
   );
 };
