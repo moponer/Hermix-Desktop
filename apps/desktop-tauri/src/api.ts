@@ -400,17 +400,6 @@ export interface TodoItem {
   group_title?: string | null;
 }
 
-/**
- * @deprecated since — the TodoPanel that consumed this
- * was replaced by per-message TodoListCard components fed by WS.
- * Front-end callers vanished with the panel. The HTTP endpoint is
- * kept server-side for legacy CLI / script users; the UI no longer
- * polls it.
- */
-export async function listTodos(): Promise<{ todos: TodoItem[]; total: number }> {
-  return fetchJSON(`/v1/todos`);
-}
-
 export async function patchTodo(
   id: string,
   patch: { status?: string; title?: string; priority?: string },

@@ -17,7 +17,6 @@
 
 pub mod manifest;
 pub mod scanner;
-pub mod loader_packager; // legacy (unused, kept for compile stability)
 pub mod icon_library;
 pub mod validate;
 pub use validate::validate_custom_app;
@@ -26,7 +25,6 @@ pub use smoke::{run_smoke_test, run_smoke_test_async, SmokeError, SmokeReport};
 pub mod api;
 pub mod hx_packager;
 pub use hx_packager::{HxShellPackager, PackageMode, HxPackError};
-pub mod node_setup; // 保留：loader_packager.rs 依赖（neu build 路径的 env 检查）
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -522,7 +520,15 @@ impl PluginManager {
             ));
         }
 
-        let result = self.packager.package(&entry.dir, &entry.manifest.id, mode)
+        // 打包是同步阻塞流程 (esbuild 编译 + PE 资源嵌入 + 可选 signtool 签名),
+        // 必须 offload 到 blocking 线程, 否则会卡住调用方所在的 async worker,
+        // 导致外层 60s 超时无法抢占, 整个 agent loop 永久冻结.
+        let packager = self.packager.clone();
+        let dir = entry.dir.clone();
+        let app_id = entry.manifest.id.clone();
+        let result = tokio::task::spawn_blocking(move || packager.package(&dir, &app_id, mode))
+            .await
+            .map_err(|e| PluginError::PackagingFailed(format!("打包任务崩溃: {e}")))?
             .map_err(|e| PluginError::PackagingFailed(e.to_string()))?;
         Ok(result)
     }
@@ -572,8 +578,14 @@ impl PluginManager {
                 "app missing index.html, cannot run".into(),
             ));
         }
-        self.packager
-            .run_dev(&entry.dir, &entry.manifest.id)
+        // run_dev 同步 spawn hx-shell 子进程, 必须 offload 到 blocking 线程,
+        // 否则会卡住调用方 async worker, 使外层 60s 超时无法抢占.
+        let packager = self.packager.clone();
+        let dir = entry.dir.clone();
+        let app_id = entry.manifest.id.clone();
+        tokio::task::spawn_blocking(move || packager.run_dev(&dir, &app_id))
+            .await
+            .map_err(|e| PluginError::ExecutionFailed(format!("启动测试版任务崩溃: {e}")))?
             .map_err(|e| PluginError::ExecutionFailed(format!("启动测试版失败: {e}")))?;
         Ok(())
     }

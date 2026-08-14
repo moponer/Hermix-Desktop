@@ -1114,6 +1114,7 @@ mod tests {
                 content: "ok".into(),
                 finish_reason: None,
                 outcome: Some("completed".into()),
+                error: None,
             },
         };
         let value = serde_json::to_value(envelope).expect("serialize envelope");

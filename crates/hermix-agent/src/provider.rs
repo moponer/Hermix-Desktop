@@ -2396,6 +2396,7 @@ fn parse_openai_response(json: &Value) -> Result<LlmResponse, AgentError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hermix_core::types::ContentPart;
 
     #[test]
     fn test_parse_openai_response_basic() {
@@ -3150,7 +3151,7 @@ mod tests {
         let vision = Message {
             role: MessageRole::User,
             content: None,
-            content_parts: Some(vec![hermix_core::ContentPart::Text {
+            content_parts: Some(vec![ContentPart::Text {
                 text: "describe".into(),
             }]),
             ..Default::default()
