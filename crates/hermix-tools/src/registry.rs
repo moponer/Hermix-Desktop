@@ -7,13 +7,11 @@
 //! - Dispatch with error catching that always returns JSON
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use hermix_core::{traits::{RiskLevel, PermissionMode}, truncate_chars, ToolHandler, ToolSchema};
-use indexmap::IndexMap;
 use serde_json::Value;
-use tracing::{instrument, warn};
+use tracing::instrument;
 
 use crate::SessionStamper;
 use crate::approval::TerminalApprovalContext;
@@ -24,62 +22,13 @@ use crate::context::{ContextAware, ToolCallContext};
 // ---------------------------------------------------------------------------
 
 /// A registered tool with its handler, metadata, and availability check.
-pub struct ToolEntry {
-    /// Unique tool name (e.g. "web_search", "terminal").
-    pub name: String,
-    /// Which toolset this tool belongs to (e.g. "web", "terminal").
-    pub toolset: String,
-    /// OpenAI-format tool schema.
-    pub schema: ToolSchema,
-    /// Handler that executes the tool logic.
-    pub handler: Arc<dyn ToolHandler>,
-    /// Optional session stamper for tools that need to broadcast
-    /// per-session events (currently only `todo`). When `None`,
-    /// the tool is session-agnostic. See
-    /// `tools::session_stamper::SessionStamper`.
-    pub session_stamper: Option<Arc<dyn SessionStamper>>,
-    /// Optional context-aware handler for tools that need per-session
-    /// state at dispatch time (terminal, todo, code_execution).
-    /// When `None`, the tool is session-agnostic and dispatches via
-    /// the standard `ToolHandler::execute` path. See
-    /// `context::ContextAware`.
-    pub context_aware: Option<Arc<dyn ContextAware>>,
-    /// Availability check — returns true if the tool can be used right now.
-    pub check_fn: Arc<dyn Fn() -> bool + Send + Sync>,
-    /// Environment dependencies required for this tool (e.g. "EXA_API_KEY").
-    pub env_deps: Vec<String>,
-    /// Whether this tool performs async I/O.
-    pub is_async: bool,
-    /// Human-readable description.
-    pub description: String,
-    /// Emoji icon for display.
-    pub emoji: String,
-    /// Per-tool max result size override (characters).
-    pub max_result_size_chars: Option<usize>,
-    /// Risk classification used by the pre-execution approval hook.
-    /// Defaults to [`RiskLevel::Caution`] for backwards compatibility —
-    /// unknown / newly-added tools get a confirmation prompt rather than
-    /// being silently allowed.
-    pub risk_level: RiskLevel,
-    /// Permission level for this tool (inspired by claw-code design).
-    /// Determines what operations the tool is allowed to perform.
-    pub permission_mode: PermissionMode,
-    /// Whether this tool requires sequential execution (interactive tools
-    /// like `clarify`, `delegate_task` must not run in parallel with others).
-    /// Set via `ToolRegistry::register_with_risk` and consumed by
-    /// `dispatch_tools` to partition calls into parallel vs sequential groups.
-    pub is_interactive: bool,
-    /// Runtime enable/disable flag, mutated by
-    /// [`ToolRegistry::set_toolset_enabled`]. Distinct from
-    /// [`Self::check_fn`]: `check_fn` reflects *capability* (env vars
-    /// present, browser driver up, etc.), `is_enabled` reflects
-    /// *user choice* (the operator toggled this toolset off in
-    /// Settings). Both must be true for a tool to be visible to the
-    /// LLM and dispatchable. Lock-free: a single `AtomicBool` per
-    /// entry, mutated by the Settings UI on a separate task and
-    /// read on every dispatch hot path.
-    pub is_enabled: Arc<AtomicBool>,
-}
+
+pub mod entry;
+pub use entry::{ToolEntry, ToolEntryInfo};
+
+pub mod validation;
+pub mod schema;
+
 
 /// Run an async `ToolHandler::execute` call from a synchronous context
 /// (e.g. the agent_loop `JoinSet` worker thread that just pulled a
@@ -371,71 +320,6 @@ impl ToolRegistry {
         );
     }
 
-    /// Same as [`Self::register_with_risk`] but also accepts a [`PermissionMode`]
-    /// for fine-grained access control (inspired by claw-code design).
-    pub fn register_with_permission(
-        &self,
-        name: impl Into<String>,
-        toolset: impl Into<String>,
-        schema: ToolSchema,
-        handler: Arc<dyn ToolHandler>,
-        check_fn: Arc<dyn Fn() -> bool + Send + Sync>,
-        env_deps: Vec<String>,
-        is_async: bool,
-        description: impl Into<String>,
-        emoji: impl Into<String>,
-        max_result_size_chars: Option<usize>,
-        risk_level: RiskLevel,
-        permission_mode: PermissionMode,
-        override_existing: bool,
-    ) {
-        let name = name.into();
-        let mut inner = self.inner.write().expect("registry rwlock not poisoned");
-        if inner.tools.contains_key(&name) {
-            if !override_existing {
-                tracing::error!(
-                    tool = %name,
-                    "Tool '{}' already registered; refusing to overwrite without override flag. \
-                     Built-in shadow registration rejected to prevent plugin handler \
-                     collisions. If you really want to replace the existing entry, call \
-                     register_with_risk(..., override_existing=true).",
-                    name
-                );
-                return;
-            }
-            warn!("Tool '{}' already registered; overwriting (override=true)", name);
-        }
-        // New entries default to enabled. The Settings UI can flip
-        // this later via `set_toolset_enabled` without re-registering.
-        // We intentionally do NOT honour the caller's `check_fn` for
-        // the runtime-disable dimension — `check_fn` stays as
-        // capability (env vars, browser driver) and `is_enabled` is
-        // its own axis. Both are AND-ed in `get_definitions` /
-        // `is_available` below.
-        let is_enabled = Arc::new(AtomicBool::new(true));
-        inner.tools.insert(
-            name.clone(),
-            ToolEntry {
-                name: name.clone(),
-                toolset: toolset.into(),
-                schema,
-                handler,
-                check_fn,
-                env_deps,
-                is_async,
-                description: description.into(),
-                emoji: emoji.into(),
-                max_result_size_chars,
-                risk_level,
-                permission_mode,
-                is_interactive: false,
-                is_enabled,
-                session_stamper: None,
-                context_aware: None,
-            },
-        );
-    }
-
     /// Attach a [`ContextAware`] impl to an already-registered tool.
     /// Follows the same opt-in pattern as `set_session_stamper`:
     /// registration flows through `register_with_risk` which has no
@@ -515,225 +399,6 @@ impl ToolRegistry {
         if let Some(entry) = inner.tools.get_mut(name) {
             entry.schema = new_schema;
         }
-    }
-
-    /// Coerce `params` into the JSON types declared by `schema`.
-    /// Background (P1.2.2, Plan v2): LLM providers sometimes hand us
-    /// a `String` like `"42"` for a field whose schema is `integer`,
-    /// or a `"true"` string for a boolean. The naïve fix would be to
-    /// have every handler validate + cast, but that leaks the LLM's
-    /// permissive JSON typing into every tool. Instead we do it once
-    /// here, on the dispatch path, before the handler is called.
-    /// Scope of coercions (intentionally small — keep it boring):
-    /// - `string` ↔ `number` / `integer` (when the string parses cleanly)
-    /// - `string` → `boolean` (`"true"` / `"false"`, case-insensitive)
-    /// - `string` → `array` (when the string is valid JSON array)
-    /// - `array` ↔ `object` is **not** auto-coerced — that's a
-    /// semantic mismatch the LLM should be told about.
-    /// - Missing fields declared as `required` in the schema are
-    /// **not** filled in here (that's the caller's job — coercing
-    /// is a narrow type fixup, not a defaults injector).
-    /// Returns the coerced `Value`. The original is consumed.
-    pub fn coerce_args(schema: &ToolSchema, params: Value) -> Value {
-        let mut out = params;
-        if let Some(properties) = schema.parameters.properties.as_ref() {
-            Self::coerce_object(properties, &mut out);
-        }
-        out
-    }
-
-    fn coerce_object(properties: &IndexMap<String, Value>, value: &mut Value) {
-        // Only coerce inside an object; other top-level types (string
-        // command, number, etc.) are tool-defined and we trust them.
-        if let Value::Object(map) = value {
-            for (key, prop_schema) in properties {
-                if let Some(field) = map.get_mut(key) {
-                    Self::coerce_field(prop_schema, field);
-                }
-            }
-        }
-    }
-
-    fn coerce_field(prop_schema: &Value, field: &mut Value) {
-        // A field schema may be:
-        // {"type": "string"}                     → simple
-        // {"type": ["string", "null"]}           → nullable union
-        // {"$ref": "..."}                        → we don't resolve refs
-        // {}                                     → permissive
-        // We extract the type (or types) and try the matching
-        // coercion. On failure we leave the original in place —
-        // letting the handler decide whether to fail.
-        let declared = Self::declared_types(prop_schema);
-        if declared.is_empty() {
-            return;
-        }
-
-        for target in &declared {
-            if Self::try_coerce(field, target) {
-                return;
-            }
-        }
-    }
-
-    fn declared_types(prop_schema: &Value) -> Vec<String> {
-        match prop_schema.get("type") {
-            Some(Value::String(s)) => vec![s.clone()],
-            Some(Value::Array(arr)) => arr
-                .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
-
-    /// Try to coerce `field` in place to `target` JSON type. Returns
-    /// `true` on success (the value was modified), `false` if no
-    /// coercion was possible.
-    fn try_coerce(field: &mut Value, target: &str) -> bool {
-        match (field.clone(), target) {
-            // string → integer / number
-            (Value::String(s), "integer") => {
-                if let Ok(n) = s.parse::<i64>() {
-                    *field = Value::Number(n.into());
-                    return true;
-                }
-                false
-            }
-            (Value::String(s), "number") => {
-                if let Ok(n) = s.parse::<f64>() {
-                    if let Some(num) = serde_json::Number::from_f64(n) {
-                        *field = Value::Number(num);
-                        return true;
-                    }
-                }
-                false
-            }
-            // string → boolean
-            (Value::String(s), "boolean") => match s.trim().to_ascii_lowercase().as_str() {
-                "true" => {
-                    *field = Value::Bool(true);
-                    true
-                }
-                "false" => {
-                    *field = Value::Bool(false);
-                    true
-                }
-                _ => false,
-            },
-            // string → array / object (when the string parses as JSON)
-            (Value::String(s), "array") | (Value::String(s), "object") => {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&s) {
-                    let parsed_is_object_or_array =
-                        matches!(&parsed, Value::Array(_) | Value::Object(_));
-                    let matches_target = matches!(
-                        (target, &parsed),
-                        ("array", Value::Array(_)) | ("object", Value::Object(_))
-                    );
-                    if parsed_is_object_or_array && matches_target {
-                        *field = parsed;
-                        return true;
-                    }
-                }
-                false
-            }
-            _ => false,
-        }
-    }
-
-    /// Enable or disable every tool whose `toolset` field matches
-    /// `toolset`. Returns the number of entries flipped. Used by:
-    /// 1. `register_builtin_tools` at startup to apply the
-    /// `enabled_toolsets` startup filter (now re-implemented as
-    /// "register all, then disable some" so toggling back on
-    /// works without a re-register).
-    /// 2. The Settings UI's `PUT /api/tools/toolsets/enabled`
-    /// handler to flip user choices at runtime.
-    /// Lock-then-iterate under the same inner mutex that
-    /// `get_definitions` / `is_available` hold, so dispatch
-    /// observers see a consistent snapshot (either all-flip or
-    /// none-flip, no half-applied state). The actual atomic
-    /// stores use `Release` ordering; readers use `Acquire`.
-    pub fn set_toolset_enabled(&self, toolset: &str, enabled: bool) -> usize {
-        let inner = self.inner.read().expect("registry rwlock not poisoned");
-        let mut count = 0;
-        for entry in inner.tools.values() {
-            if entry.toolset == toolset {
-                entry.is_enabled.store(enabled, Ordering::Release);
-                count += 1;
-            }
-        }
-        count
-    }
-
-    /// Return the [`RiskLevel`] of a registered tool, or `None` if no such
-    /// tool exists. The pre-execution approval hook uses this to decide
-    /// whether to prompt the user.
-    pub fn risk_level(&self, name: &str) -> Option<RiskLevel> {
-        let inner = self.inner.read().expect("registry rwlock not poisoned");
-        inner.tools.get(name).map(|e| e.risk_level)
-    }
-
-    /// Deregister a tool by name.
-    /// Returns `true` if the tool was present and removed.
-    pub fn deregister(&self, name: &str) -> bool {
-        let mut inner = self.inner.write().expect("registry rwlock not poisoned");
-        inner.tools.remove(name).is_some()
-    }
-
-    /// Get tool definitions for all tools whose `check_fn` returns true
-    /// **and** whose `is_enabled` flag is set.
-    /// Both gates are required: a tool that is capability-OK (env
-    /// vars present) but user-disabled will be hidden from the LLM;
-    /// a tool that is capability-broken (missing env) will also be
-    /// hidden even if user-enabled. This is used to build the tool
-    /// list sent to the LLM.
-    pub fn get_definitions(&self) -> Vec<ToolSchema> {
-        let inner = self.inner.read().expect("registry rwlock not poisoned");
-        inner
-            .tools
-            .values()
-            .filter(|entry| {
-                (entry.check_fn)() && entry.is_enabled.load(Ordering::Acquire)
-            })
-            .map(|entry| entry.schema.clone())
-            .collect()
-    }
-
-    /// Generate a markdown reference file listing all registered tools.
-    /// The LLM can `read_file` it on demand instead of bloating the prompt.
-    pub fn write_tools_reference(&self, path: &std::path::Path) -> Result<(), String> {
-        let inner = self.inner.read().map_err(|e| format!("lock: {e}"))?;
-        let mut md = String::from("# Tool Reference\n\n");
-        md.push_str("Read this file when you need a tool's parameters.\n\n");
-
-        let mut tools: Vec<&ToolEntry> = inner.tools.values().filter(|e| e.is_enabled.load(Ordering::Acquire)).collect();
-        tools.sort_by(|a, b| a.schema.name.cmp(&b.schema.name));
-
-        for entry in &tools {
-            let s = &entry.schema;
-            md.push_str(&format!("## {}\n", s.name));
-            md.push_str(&format!("- Toolset: {} | Risk: {:?}\n", entry.toolset, entry.risk_level));
-            let desc = s.description.trim();
-            if !desc.is_empty() {
-                md.push_str(&format!("- {}\n", desc));
-            }
-            if let Some(props) = &s.parameters.properties {
-                let required = s.parameters.required.as_deref().unwrap_or_default();
-                for (pname, pinfo) in props {
-                    let ptype = pinfo.get("type").and_then(|v| v.as_str()).unwrap_or("any");
-                    let pdesc = pinfo.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                    let req = if required.contains(pname) { " *" } else { "" };
-                    if !pdesc.is_empty() {
-                        md.push_str(&format!("  - `{}`: `{}`{} — {}\n", pname, ptype, req, pdesc));
-                    } else {
-                        md.push_str(&format!("  - `{}`: `{}`{}\n", pname, ptype, req));
-                    }
-                }
-            }
-            md.push('\n');
-        }
-        std::fs::write(path, &md).map_err(|e| format!("write failed: {e}"))?;
-        Ok(())
     }
 
     /// Dispatch a tool call by name, catching all errors.
@@ -969,86 +634,6 @@ impl ToolRegistry {
         }
     }
 
-    /// Get a reference to a tool entry by name.
-    /// Note: This returns a cloned `Arc<ToolEntry>` because we cannot return
-    /// a reference to data behind a Mutex lock. Returns `None` if not found.
-    pub fn get_tool(&self, name: &str) -> Option<ToolEntryInfo> {
-        let inner = self.inner.read().expect("registry rwlock not poisoned");
-        inner.tools.get(name).map(|e| ToolEntryInfo {
-            name: e.name.clone(),
-            toolset: e.toolset.clone(),
-            description: e.description.clone(),
-            emoji: e.emoji.clone(),
-            is_async: e.is_async,
-            is_enabled: e.is_enabled.load(Ordering::Acquire),
-            env_deps: e.env_deps.clone(),
-            max_result_size_chars: e.max_result_size_chars,
-        })
-    }
-
-    /// List all registered tool entries.
-    pub fn list_tools(&self) -> Vec<ToolEntryInfo> {
-        let inner = self.inner.read().expect("registry rwlock not poisoned");
-        inner
-            .tools
-            .values()
-            .map(|e| ToolEntryInfo {
-                name: e.name.clone(),
-                toolset: e.toolset.clone(),
-                description: e.description.clone(),
-                emoji: e.emoji.clone(),
-                is_async: e.is_async,
-                is_enabled: e.is_enabled.load(Ordering::Acquire),
-                env_deps: e.env_deps.clone(),
-                max_result_size_chars: e.max_result_size_chars,
-            })
-            .collect()
-    }
-
-    /// List distinct toolset names.
-    pub fn list_toolsets(&self) -> Vec<String> {
-        let inner = self.inner.read().expect("registry rwlock not poisoned");
-        let mut sets: Vec<String> = inner.tools.values().map(|e| e.toolset.clone()).collect();
-        sets.sort();
-        sets.dedup();
-        sets
-    }
-
-    /// Catalog — lightweight tool directory for agent startup.
-    /// Returns only enabled+available tools, ~50 bytes per entry.
-    pub fn catalog(&self) -> Vec<hermix_core::ToolCatalogEntry> {
-        let inner = self.inner.read().expect("registry rwlock not poisoned");
-        inner.tools.values()
-            .filter(|e| e.is_enabled.load(Ordering::Acquire) && (e.check_fn)())
-            .map(|e| hermix_core::ToolCatalogEntry {
-                name: e.name.clone(),
-                one_line: truncate_one_line(&e.description),
-                risk_level: format!("{:?}", e.risk_level).to_lowercase(),
-                tags: vec![e.toolset.clone()],
-            })
-            .collect()
-    }
-
-    /// Look up the full schema for a single tool, so the agent can
-    /// call `get_tool_details("name")` after browsing the catalog.
-    pub fn get_tool_schema(&self, name: &str) -> Option<ToolSchema> {
-        let inner = self.inner.read().expect("registry rwlock not poisoned");
-        inner.tools.get(name)
-            .filter(|e| e.is_enabled.load(Ordering::Acquire) && (e.check_fn)())
-            .map(|e| e.schema.clone())
-    }
-
-    /// Check whether a tool is available (exists, `check_fn` passes,
-    /// **and** `is_enabled` is set). See [`Self::get_definitions`]
-    /// for the rationale on the double gate.
-    pub fn is_available(&self, name: &str) -> bool {
-        let inner = self.inner.read().expect("registry rwlock not poisoned");
-        match inner.tools.get(name) {
-            Some(e) => (e.check_fn)() && e.is_enabled.load(Ordering::Acquire),
-            None => false,
-        }
-    }
-
     /// Stamp the active session onto a tool whose handler impls
     /// `SessionStamper`. Returns `true` if the tool exists AND
     /// implements the trait; `false` otherwise. The trait lookup is
@@ -1135,21 +720,6 @@ impl ToolRegistry {
         stamper.build_snapshot_json(session_id).await
     }
 
-    /// Format an error as JSON: `{"error": "msg"}`.
-    pub fn tool_error(msg: &str) -> String {
-        serde_json::json!({ "error": msg }).to_string()
-    }
-
-    /// Format a tool result. If the result looks like JSON, pass it through;
-    /// otherwise wrap it as `{"result": "..."}`.
-    pub fn tool_result(data: &str) -> String {
-        if data.starts_with('{') || data.starts_with('[') {
-            // Assume already JSON-ish, pass through
-            data.to_string()
-        } else {
-            serde_json::json!({ "result": data }).to_string()
-        }
-    }
 }
 
 impl Default for ToolRegistry {
@@ -1159,17 +729,7 @@ impl Default for ToolRegistry {
 }
 
 /// Simplified info about a tool entry (no handler, for inspection).
-#[derive(Debug, Clone)]
-pub struct ToolEntryInfo {
-    pub name: String,
-    pub toolset: String,
-    pub description: String,
-    pub emoji: String,
-    pub is_async: bool,
-    pub is_enabled: bool,
-    pub env_deps: Vec<String>,
-    pub max_result_size_chars: Option<usize>,
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -1651,13 +1211,3 @@ fn coeff_u64(v: &serde_json::Value, key: &str) -> Option<u64> {
 // P1.2.4 — update_schema tests (Plan v2)
 // -----------------------------------------------------------------------
 // (added inside `tests` module above to share `EchoHandler`)
-
-/// Trim a description to ~50 chars for the one-line catalog entry.
-fn truncate_one_line(desc: &str) -> String {
-    let first_line = desc.lines().next().unwrap_or(desc);
-    if first_line.len() <= 50 {
-        first_line.to_string()
-    } else {
-        format!("{}…", &first_line[..first_line.floor_char_boundary(47)])
-    }
-}
