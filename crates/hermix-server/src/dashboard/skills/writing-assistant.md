@@ -55,3 +55,11 @@ tags: ["productivity", "builtin", "writing"]
 ## 参考
 -  Strunk & White《The Elements of Style》
 - 各团队 README / 风格指南
+
+## 代码样例
+
+```text
+原文：这个功能它其实是可以帮助用户去更好地去管理他们的时间的。
+改写：本功能帮用户更高效地管理时间。
+原则：删虚词、主谓宾收紧、一句一意
+```

@@ -53,3 +53,14 @@ DevOps 是开发和运维的协作实践，目标是快速、可靠地交付软�
 - Docker / Kubernetes 官方文档
 - CNCF 技术雷达
 
+## 代码样例
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: cargo test --workspace
+      - run: pnpm tsc --noEmit   # 编译+类型检查走 CI，本地只跑快路径
+```
+

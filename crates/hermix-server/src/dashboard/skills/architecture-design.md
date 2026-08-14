@@ -60,3 +60,13 @@ tags: ["software-development", "builtin"]
 - 《领域驱动设计》（Eric Evans）
 - 《设计数据密集型应用》（Martin Kleppmann）
 
+## 代码样例
+
+```text
+ui/
+  components/   # 纯展示，无副作用
+  features/     # 业务用例（组合 components+services）
+  services/     # 外部 IO / 状态编排
+依赖方向单向：features -> services -> components，禁止反向
+```
+

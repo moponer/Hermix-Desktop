@@ -69,3 +69,15 @@ tags: ["software-development", "builtin"]
 - PostgreSQL / MySQL 官方文档
 - Redis 官方最佳实践
 
+## 代码样例
+
+```sql
+CREATE TABLE orders (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     BIGINT NOT NULL REFERENCES users(id),
+  amount      NUMERIC(12,2) NOT NULL CHECK (amount >= 0),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_orders_user ON orders(user_id);
+```
+

@@ -66,3 +66,11 @@ API 设计是系统间通信的关键，需要考虑易用性、性能、安全�
 - Google API Design Guide
 - REST API 设计最佳实践（Microsoft / AWS）
 
+## 代码样例
+
+```http
+GET /api/v1/users/{id}
+Authorization: Bearer <token>
+200 OK {"id":1,"name":"..."}  # 用名词复数作资源、状态码表语义、版本前缀 /v1
+```
+
