@@ -324,6 +324,31 @@ fn decode_png_to_rgba(png: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 // 内置绑定（JSON-RPC over WebView2 postMessage）
 // ------------------------------------------------------------------
 
+// 应用基准目录：writeFile/readFile 等相对路径文件操作解析到此目录，而非
+// 进程 cwd。由主程序 spawn 时通过 --app-dir 显式传入应用目录，兜底为
+// --html 父目录 / 当前 exe 父目录。目的：彻底隔离自定义应用对主项目
+// 源码目录的写入——否则状态文件会落到 src-tauri/，被 Tauri 文件监听捕获
+// 后重建主窗口，导致在途 IPC 回调失联（"Couldn't find callback id"）。
+static APP_BASE_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> =
+    std::sync::OnceLock::new();
+
+fn app_base_dir() -> Option<&'static std::path::Path> {
+    APP_BASE_DIR.get().and_then(|o| o.as_deref())
+}
+
+/// 应用层路径 → 绝对路径：绝对路径原样返回；相对路径解析到应用基准目录
+/// （APP_BASE_DIR），无法获取基准目录时退回 cwd（保证旧打包产物不崩）。
+fn resolve_app_path(path: &str) -> std::path::PathBuf {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    if let Some(base) = app_base_dir() {
+        return base.join(p);
+    }
+    p.to_path_buf()
+}
+
 /// writeFile(path, content) — 数组形式参数
 fn hx_write_file(args: &serde_json::Value) -> serde_json::Value {
     let path = args.get(0).and_then(|v| v.as_str()).unwrap_or("");
@@ -331,7 +356,7 @@ fn hx_write_file(args: &serde_json::Value) -> serde_json::Value {
     if path.is_empty() {
         return serde_json::json!({"ok": false, "err": "empty path"});
     }
-    match std::fs::write(path, content) {
+    match std::fs::write(resolve_app_path(path), content) {
         Ok(()) => serde_json::json!({"ok": true}),
         Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
     }
@@ -343,7 +368,7 @@ fn hx_read_file(args: &serde_json::Value) -> serde_json::Value {
     if path.is_empty() {
         return serde_json::json!({"ok": false, "err": "empty path"});
     }
-    match std::fs::read_to_string(path) {
+    match std::fs::read_to_string(resolve_app_path(path)) {
         Ok(content) => serde_json::json!({"ok": true, "data": content}),
         Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
     }
@@ -355,7 +380,7 @@ fn hx_read_file_bytes(args: &serde_json::Value) -> serde_json::Value {
     if path.is_empty() {
         return serde_json::json!({"ok": false, "err": "empty path"});
     }
-    match std::fs::read(path) {
+    match std::fs::read(resolve_app_path(path)) {
         Ok(bytes) => serde_json::json!({"ok": true, "data": base64_encode(&bytes)}),
         Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
     }
@@ -369,7 +394,7 @@ fn hx_write_file_bytes(args: &serde_json::Value) -> serde_json::Value {
         return serde_json::json!({"ok": false, "err": "empty path"});
     }
     match base64_decode(b64) {
-        Some(bytes) => match std::fs::write(path, &bytes) {
+        Some(bytes) => match std::fs::write(resolve_app_path(path), &bytes) {
             Ok(()) => serde_json::json!({"ok": true}),
             Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
         },
@@ -790,7 +815,7 @@ fn hx_shell_temp_file(args: &serde_json::Value) -> serde_json::Value {
 fn hx_shell_fs_write(args: &serde_json::Value) -> serde_json::Value {
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
-    match std::fs::write(path, content) {
+    match std::fs::write(resolve_app_path(path), content) {
         Ok(()) => serde_json::json!({"ok": true}),
         Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
     }
@@ -801,7 +826,8 @@ fn hx_shell_fs_delete(args: &serde_json::Value) -> serde_json::Value {
     if path.is_empty() {
         return serde_json::json!({"ok": false, "err": "empty path"});
     }
-    let r = std::fs::remove_file(path).or_else(|_| std::fs::remove_dir_all(path));
+    let r = std::fs::remove_file(resolve_app_path(path))
+        .or_else(|_| std::fs::remove_dir_all(resolve_app_path(path)));
     match r {
         Ok(()) => serde_json::json!({"ok": true}),
         Err(e) => serde_json::json!({"ok": false, "err": e.to_string()}),
@@ -968,6 +994,28 @@ fn main() -> wry::Result<()> {
         .iter()
         .position(|a| a == "--html")
         .and_then(|i| args.get(i + 1).cloned());
+
+    // 应用基准目录：优先 --app-dir（主程序 spawn 时显式传入应用目录），
+    // 兜底 --html 父目录 / 当前 exe 父目录。相对路径文件操作解析到此目录，
+    // 不再依赖进程 cwd（tauri dev 时父 cwd 是 src-tauri/）。
+    let app_dir_arg: Option<String> = args
+        .iter()
+        .position(|a| a == "--app-dir")
+        .and_then(|i| args.get(i + 1).cloned());
+    let base_dir: Option<std::path::PathBuf> = app_dir_arg
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            html_arg
+                .as_ref()
+                .and_then(|h| std::path::Path::new(h).parent().map(|p| p.to_path_buf()))
+        })
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+        })
+        .filter(|p| !p.as_os_str().is_empty());
+    let _ = APP_BASE_DIR.set(base_dir);
 
     // Panic hook：GUI 子系统下没有 stderr，用 MessageBox 显示崩溃信息
     std::panic::set_hook(Box::new(|info| {

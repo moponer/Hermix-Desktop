@@ -356,9 +356,15 @@ impl HxShellPackager {
         std::fs::create_dir_all(&dist_dir)?;
         let html_path = dist_dir.join(format!("{id}.dev.html"));
         std::fs::write(&html_path, &html)?;
+        // 子进程 cwd 锁定到应用目录（与 run_plugin 一致），避免继承
+        // tauri dev 的 src-tauri/ 工作目录。同时显式传 --app-dir，让
+        // hx-shell 把相对路径写入解析到应用目录，彻底隔离主项目。
         let child = std::process::Command::new(&self.shell_path)
             .arg("--html")
             .arg(&html_path)
+            .arg("--app-dir")
+            .arg(app_dir)
+            .current_dir(app_dir)
             .spawn()
             .map_err(|e| HxPackError::LaunchFailed(e.to_string()))?;
         drop(child);

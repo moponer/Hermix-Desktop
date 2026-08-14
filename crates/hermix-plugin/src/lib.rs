@@ -544,7 +544,15 @@ impl PluginManager {
                 exe_path.display()
             )));
         }
+        // 子进程 cwd 锁定到应用目录，绝不可继承父进程（tauri dev 时
+        // 父 cwd 是 src-tauri/）。否则应用用 hx.writeFile 写相对路径
+        // 状态文件会落到主项目源码目录，被 Tauri 文件监听捕获 → 重建
+        // 主窗口 → 在途 IPC 回调失联（"Couldn't find callback id"）。
+        // --app-dir 让 hx-shell 把相对路径写入解析到应用目录。
         let child = std::process::Command::new(&exe_path)
+            .arg("--app-dir")
+            .arg(&entry.dir)
+            .current_dir(&entry.dir)
             .spawn()
             .map_err(|e| PluginError::ExecutionFailed(format!("launch app failed: {e}")))?;
         // 窗口居中由 hx-shell 内部完成，spawn 侧不做额外处理。
