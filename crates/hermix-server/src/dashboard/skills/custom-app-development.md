@@ -1,6 +1,6 @@
 ---
 name: custom-app-development
-version: 13
+version: 14
 description: >
   自定义应用开发助手。当用户要求创建/开发一个桌面应用、桌面工具、独立程序、
   窗口应用、软件、小软件、打包成 EXE 的程序时使用。通过 custom_app_manager 工具
@@ -91,6 +91,12 @@ HERMIX_HOME/custom-apps/<id>/
     WebView2Loader.dll  ← wry 运行时依赖
     <id>.dev.html    ← 测试版（run action 用 hx-shell --html 直接加载，不落单 exe）
 ```
+
+> **⚠️ 禁止手改 `dist/` 目录下的任何文件（核心纪律，违反视为不合格）**
+> `dist/` 是**纯构建产物**，`<id>.dev.html` 与 `<id>.exe` 都由 `build_final_payload()` 每次从 `index.html` + `src/main.tsx` 源码**重新构建并覆盖**——两者同源同构，但 `dist/` 本身永远不是源。
+> - **改 UI / HTML 必须改源码**：TS/React 模式改 `app_source`（→`src/main.tsx`）+ `source_files`（→`src/<path>`）；纯 HTML 模式改 `index_html`（→`index.html`）。`index.html` 壳里的 `<script src="/js/app.js"></script>` 占位会被自动替换为内联的 React + 编译产物，不用管。
+> - **改完必须重新 `run`（重构建 dev.html）或 `package`（重嵌 exe）才生效**。直接手改 `dist/<id>.dev.html` 是无效劳动——下一次 `run`/`package` 立刻被覆盖。
+> - 小修用 `patch` action（target=`app_source`/`index_html`/`source_file`），同样是源码层，不碰 `dist/`。
 
 ## manifest 权限声明（必填，否则 validate L2 硬卡）
 
@@ -517,7 +523,7 @@ audioElement.src = window.hx.fileUrl('C:\\Music\\song1.mp3');
 5. 写代码（`index_html` 自包含 或 `app_source` TSX + `source_files?`）——**严格按「设计阶段」产出的 token、「前端默认标准」与「自检清单」生成界面**，禁 CDN / 禁 emoji / 禁 input-file / 必带标题栏 / 必含主题切换入口。
 6. **先 `custom_app_manager.list` 查重**：若已存在同类应用（按名称/描述/功能判断，如"本地音乐"和"音乐播放器"是同一个东西）→ 直接 `update` 它迭代；否则 `custom_app_manager.create({manifest, index_html, app_source?, source_files?})`。
 7. **`validate` 循环到 ok=true**（L0 manifest + L1 HTML/JS + L2 权限 + L3 前端质量）。每轮失败按 issues 的 message 修复，再 validate，直到 `ok=true`。**不得带着 error 交付**。
-8. **`run` 测试版即时预览**：`run` 用 dev 模式（`hx-shell --html` 加载 `dist/<id>.dev.html`），不落单 exe，即时看到效果。如需确认运行时无报错，调 `smoke`（先 `package` 再启动 exe 抓 stderr）。
+8. **`run` 测试版即时预览**：`run` 用 dev 模式（`hx-shell --html` 加载 `dist/<id>.dev.html`），不落单 exe，即时看到效果。如需确认运行时无报错，调 `smoke`（先 `package` 再启动 exe 抓 stderr）。**注意：改源码后必须重新 `run` 才会重构建 dev.html，直接改 `dist/` 无效——见上方「应用模型」警告。**
 9. **代码审查与验证闸门（强制，见下方「代码审查与验证机制」章节）**：按 `code-review.md` 的审查清单过一遍；核对「前端默认标准 / 自检清单」全部命中；跑 `smoke` 确认无运行时报错与控制台错误；确认所有提示文案友好、错误提示具体。**任一项不过，不交付**。
 10. **交付说明（必须告诉用户）**：
    - **去哪运行**：开发期用 `run` action 启动测试版（hx-shell 内部加载 `dist/<id>.dev.html`，无需手动碰文件）；正式交付用 `package` 出 `dist/<id>.exe` 双击即跑。**严禁让用户用浏览器直接打开 `.html` 文件**——那样 `window.hx.*` 全部不可用，应用必报错。
