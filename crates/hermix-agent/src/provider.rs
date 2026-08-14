@@ -732,25 +732,30 @@ impl GenericProvider {
         for msg in &messages {
             let mut api_msg = serde_json::to_value(msg).unwrap_or_else(|_| serde_json::json!({}));
 
-            // MiniMax M3 (and possibly other strict API providers)
-            // reject assistant messages whose `content` is `null` or
-            // missing when `tool_calls` are present. Normalize null →
-            // "" here so that both freshly-constructed and
-            // persisted-then-reloaded messages pass validation.
+            // Guarantee every message carries a non-null `content` field.
+            // Strict OpenAI-compatible gateways (Agnes, MiniMax-M3) reject
+            // ANY message whose `content` is missing or null — not just
+            // assistant messages that also carry `tool_calls`. A persisted
+            // history can hold a message with no text and no tool_calls
+            // (e.g. a partial assistant turn left behind after the previous
+            // provider's stream was aborted at its quota/limit), which the
+            // `skip_serializing_if` on `Message::content` drops entirely
+            // from the JSON. Default it to "" so the request validates on
+            // every provider. Messages that legitimately use a multimodal
+            // `content_parts` array are left untouched — the block below
+            // rewrites those into `content`.
             if let Some(obj) = api_msg.as_object_mut() {
-                let has_tool_calls = obj
-                    .get("tool_calls")
+                let has_content_parts = obj
+                    .get("content_parts")
                     .and_then(|v| v.as_array())
                     .map(|a| !a.is_empty())
                     .unwrap_or(false);
-                if has_tool_calls {
-                    let content_null_or_missing = obj
-                        .get("content")
-                        .map(|v| v.is_null())
-                        .unwrap_or(true);
-                    if content_null_or_missing {
-                        obj.insert("content".to_string(), Value::String(String::new()));
-                    }
+                let content_is_string = obj
+                    .get("content")
+                    .map(|v| v.is_string())
+                    .unwrap_or(false);
+                if !has_content_parts && !content_is_string {
+                    obj.insert("content".to_string(), Value::String(String::new()));
                 }
             }
 
@@ -3087,5 +3092,73 @@ mod tests {
                 .unwrap_or(false),
             "merged content includes tail assistant text"
         );
+    }
+
+    #[test]
+    fn strict_api_guarantees_content_field_on_contentless_messages() {
+        // Regression: a persisted history can hold a message with no text
+        // and no tool_calls (e.g. a partial assistant turn left behind after
+        // the previous provider's stream was aborted at its limit). Because
+        // `Message::content` uses skip_serializing_if, such a message would
+        // be sent without a `content` field and strict OpenAI-compatible
+        // gateways (Agnes, MiniMax-M3) reject it with HTTP 400
+        // `messages[N]: missing field content`. sanitize must inject "".
+        let empty_assistant = Message {
+            role: MessageRole::Assistant,
+            content: None,
+            ..Default::default()
+        };
+        let empty_user = Message {
+            role: MessageRole::User,
+            content: None,
+            ..Default::default()
+        };
+        let populated = plain_assistant("real content");
+
+        let out = GenericProvider::sanitize_messages_for_strict_api(
+            &[empty_assistant, empty_user, populated],
+            true,
+        );
+        let arr = out.as_array().expect("array of api messages");
+        assert_eq!(arr.len(), 3);
+
+        // empty assistant → content must be a string "" (not null/missing)
+        let a_content = arr[0]
+            .get("content")
+            .expect("assistant content present");
+        assert!(a_content.is_string(), "assistant content must be a string");
+        assert_eq!(a_content.as_str(), Some(""));
+        assert!(arr[0].get("content_parts").is_none(), "no content_parts key");
+
+        // empty user → same guarantee
+        let u_content = arr[1].get("content").expect("user content present");
+        assert!(u_content.is_string());
+        assert_eq!(u_content.as_str(), Some(""));
+
+        // populated message → content preserved verbatim
+        assert_eq!(
+            arr[2].get("content").and_then(|c| c.as_str()),
+            Some("real content")
+        );
+    }
+
+    #[test]
+    fn strict_api_preserves_multimodal_content_parts() {
+        // A vision message carries `content_parts` (array); sanitize must
+        // rewrite it into `content` and drop the `content_parts` key — it
+        // must NOT be forced to an empty string.
+        let vision = Message {
+            role: MessageRole::User,
+            content: None,
+            content_parts: Some(vec![hermix_core::ContentPart::Text {
+                text: "describe".into(),
+            }]),
+            ..Default::default()
+        };
+        let out = GenericProvider::sanitize_messages_for_strict_api(&[vision], true);
+        let arr = out.as_array().expect("array of api messages");
+        let c = arr[0].get("content").expect("content present");
+        assert!(c.is_array(), "content_parts must become a content array");
+        assert_eq!(arr[0].get("content_parts"), None, "content_parts key removed");
     }
 }
