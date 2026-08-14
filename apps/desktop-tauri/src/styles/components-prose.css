@@ -1747,12 +1747,15 @@
 .approval-card {
   display: flex;
   flex-direction: column;
-  margin: 4px auto 12px;
+  /* Horizontal alignment delegated to `.footer-block`
+   * (margin-left: 32px, margin-right: 0) so this card sits on the
+   * same lane as `.sub-agent-panel` and `.file-change-block`. */
+  margin-top: 4px;
+  margin-bottom: 12px;
   /* Width lives on `.footer-block` (matches the message stream
    * column: 720px / 800px / 920px) — shared with file-change-block
    * and sub-agent-panel so the three assistant-message-trailing
    * blocks sit on the same horizontal lane as the conversation. */
-  align-self: center;
   border-radius: var(--radius-lg, 12px);
   border: 1px solid var(--color-border-primary, #e4e4e7);
   background: var(--color-bg-secondary, #fafafa);
