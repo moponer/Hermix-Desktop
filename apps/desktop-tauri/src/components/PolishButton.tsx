@@ -1,12 +1,13 @@
 // src/components/PolishButton.tsx
 // 位置：语音按钮右侧。
-// 行为：点击后调 polishChat() API，**覆盖**当前 inputValue。
+// 行为：点击后调 polishChat() API，**覆盖**当前 inputValue；再次点击可撤销。
 // 上下文策略：润色前的原文只活在 React state 里，发送时被 state 覆写，
 // 因此**润色前原文自然不计入对话上下文**——零额外字段。
 
-import { useState, useCallback } from "react";
-import { Sparkles, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Sparkles, Loader2, RotateCcw } from "lucide-react";
 import { polishChat } from "../api/polish";
+import { toastError } from "../hooks/useToast";
 import type { ChatPolishInput } from "../prompts/polish.chat";
 
 interface PolishButtonProps {
@@ -30,14 +31,28 @@ export function PolishButton({
   disabled,
 }: PolishButtonProps) {
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [lastOriginal, setLastOriginal] = useState<string | null>(null);
+  const [lastPolished, setLastPolished] = useState<string | null>(null);
 
-  const canPolish = !loading && !disabled && draft.trim().length > 0;
+  // 当前输入框里的内容就是最近一次润色结果，显示撤销态；
+  // 用户一旦手动编辑，draft !== lastPolished，撤销态自动消失。
+  const showingPolished = lastPolished !== null && draft === lastPolished && lastOriginal !== null;
+
+  const canAct = !loading && !disabled && draft.trim().length > 0;
 
   const handleClick = useCallback(async () => {
-    if (!canPolish) return;
+    if (loading) return;
+
+    if (showingPolished && lastOriginal !== null) {
+      onResult(lastOriginal);
+      setLastOriginal(null);
+      setLastPolished(null);
+      return;
+    }
+
+    if (!draft.trim()) return;
+
     setLoading(true);
-    setError(null);
     try {
       const payload: ChatPolishInput = {
         draft,
@@ -47,24 +62,52 @@ export function PolishButton({
         },
       };
       const polished = await polishChat(payload);
-      // 重要：直接覆盖，**不弹窗、不显示 diff、不保留原草稿**
+      setLastOriginal(draft);
+      setLastPolished(polished);
       onResult(polished);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "润色失败");
+      const msg = e instanceof Error ? e.message : "润色失败";
+      toastError(msg);
     } finally {
       setLoading(false);
     }
-  }, [canPolish, draft, recentTurns, hasAttachments, onResult]);
+  }, [loading, showingPolished, lastOriginal, draft, recentTurns, hasAttachments, onResult]);
+
+  // 快捷键：textarea 聚焦时按 Ctrl+/ 或 ⌘+/ 触发润色/撤销。
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "/") return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const active = document.activeElement;
+      if (!active || active.tagName !== "TEXTAREA") return;
+      e.preventDefault();
+      handleClick();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [handleClick]);
+
+  const title = loading
+    ? "润色中…"
+    : showingPolished
+    ? "还原原文"
+    : "润色输入内容 (Ctrl+/ / ⌘+/)";
 
   return (
     <button
       type="button"
       onClick={handleClick}
-      disabled={!canPolish}
-      title={error ?? "润色输入内容"}
+      disabled={!canAct}
+      title={title}
       className="flex items-center justify-center w-8 h-8 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
     >
-      {loading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+      {loading ? (
+        <Loader2 size={14} className="animate-spin" />
+      ) : showingPolished ? (
+        <RotateCcw size={14} />
+      ) : (
+        <Sparkles size={14} />
+      )}
     </button>
   );
 }

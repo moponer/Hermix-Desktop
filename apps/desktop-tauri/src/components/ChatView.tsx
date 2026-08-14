@@ -2252,6 +2252,7 @@ const clearPendingImages = useCallback(() => {
               keepOriginalImage={keepOriginalImage}
               setKeepOriginalImage={setKeepOriginalImage}
               placeholder="Hermix帮你做事 — 写作、规划、分析、学习、开发..."
+              session={session}
             />
 
             {/* Stream error card — same component as the
@@ -2658,6 +2659,7 @@ the banner is a no-op. Day 2 will plumb the WS event. */}
             keepOriginalImage={keepOriginalImage}
             setKeepOriginalImage={setKeepOriginalImage}
             placeholder="输入消息..."
+            session={session}
             messageQueue={messageQueue}
             onAddToQueue={onAddToQueue}
             onClearQueue={onClearQueue}
@@ -2726,6 +2728,8 @@ interface ComposerProps {
   onRemoveFromQueue?: (idx: number) => void;
   onEditQueueItem?: (idx: number, newText: string) => void;
   onSendFromQueue?: (idx: number) => void;
+  /** 当前会话，用于给润色提供最近对话上下文 */
+  session?: Session | null;
 }
 
 function Composer(p: ComposerProps) {
@@ -2761,6 +2765,19 @@ function Composer(p: ComposerProps) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // 给润色按钮提供最近 1-2 轮对话上下文，只取用户/助理文本，每条截断 200 字。
+  const recentTurns = useMemo(() => {
+    const msgs = p.session?.messages ?? [];
+    const turns = msgs
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-2)
+      .map((m) => `${m.role === "user" ? "用户" : "助理"}：${m.content.slice(0, 200)}`)
+      .join("\n");
+    return turns || undefined;
+  }, [p.session?.messages]);
+
+  const hasAttachments = (p.pendingImages?.length ?? 0) > 0;
 
   return (
     <div
@@ -3265,6 +3282,8 @@ function Composer(p: ComposerProps) {
           <PolishButton
             draft={p.input}
             onResult={(polished) => p.setInput(polished)}
+            recentTurns={recentTurns}
+            hasAttachments={hasAttachments}
             disabled={p.sending || p.isStreaming}
           />
 
