@@ -8,6 +8,7 @@ import { ToastContainer } from "./components/ToastContainer";
 import "./styles/globals.css";
 import "./styles/inline-thinking-dot.css";
 import "./styles/inline-approval-card.css";
+import "./styles/components.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
