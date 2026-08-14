@@ -79,6 +79,24 @@ Key crates:
 
 4. **delegate_task is the universal fan-out tool** — it is NOT image-specific. The `attachments` field is just one (image) data path; `task` + `context` paths + sub-agent reading files itself cover everything else. Architecture: see `docs/ARCHITECTURE_REFACTOR_PLAN.md §7` for L1/L2/L3 batch scaling plan.
 
+## Code simplification discipline (六步决策阶梯, 2026-08-15 起常设)
+
+所有在本项目落地的代码（Rust / TS / 配置 / skill）默认走六步决策阶梯，**质量、安全、统一为前提，不可妥协**：
+
+1. **YAGNI** — 不需要就跳过，一句话说明即可。
+2. **标准库** — 优先用语言/运行时自带能力，不引依赖。
+3. **原生平台** — 浏览器/OS/DB 原生特性优先于库（`<input type="date">` > 日期库；CSS > JS；DB 约束 > 应用代码）。
+4. **现有依赖** — 已安装的 crate/npm 包优先；不为几行逻辑加新依赖。
+5. **单行代码** — 能一行解决的绝不写多行。
+6. **最小实现** — 只有走到这步才写"能跑的最小代码"。
+
+**不可削减项**：信任边界校验、防数据丢失的错误处理、安全措施、无障碍基础、用户明确要求的功能。注释从简，只写功能/技术根因，杜绝过度工程与"为以后预留"的脚手架。参考 WorkBuddy `ponytail` skill（上游 DietrichGebert/ponytail）的七级阶梯，二者等价。
+
+**量化目标**：
+- 长期把全项目源码总量控制在 **10 万行以内**（当前基线 ≈14 万行，含 node_modules/target 已排除）。
+- `scripts/ci-gate.sh` 增加单文件 **> 2500 行即告警**，防止上帝文件复发。
+- 拆分/重写时优先砍重复（平行复制的平台/provider/工具）与搬测试到独立文件，而非单纯切文件。
+
 ## Gotchas
 
 - `.cargo/config.toml` hardcodes MSVC linker path — don't override

@@ -122,6 +122,27 @@ else
 fi
 echo ""
 
+#-----------------------------------------------------------------------
+# 7. Advisory: single-file line-count guard (soft gate)
+#    Flags god-file regressions: any .rs/.ts/.tsx source file exceeding
+#    2500 lines is a smell (review for extractable modules). Pure
+#    warning — does not fail the gate, so incremental splits aren't
+#    blocked, but surfaces drift back toward god files.
+#    See AGENTS.md "Code simplification discipline" for the 100k-line goal.
+#-----------------------------------------------------------------------
+echo "=== [7/7] advisory: source files > 2500 lines ==="
+over_limit=$(find crates apps/desktop-tauri/src -type f \( -name '*.rs' -o -name '*.ts' -o -name '*.tsx' \) \
+  -exec wc -l {} + 2>/dev/null | awk '$1 > 2500 {print}' | sort -rn)
+if [ -n "$over_limit" ]; then
+  echo "  ADVISORY: the following files exceed 2500 lines (candidate god files):"
+  echo "$over_limit" | while read -r n f; do echo "    $n  $f"; done
+  echo ""
+  echo "  Consider extracting leaf modules / moving #[cfg(test)] out (see code-analysis-report)."
+else
+  echo "  (none over 2500 lines — clean)"
+fi
+echo ""
+
 echo "============================================"
 echo "  CI Gate complete"
 echo "============================================"
