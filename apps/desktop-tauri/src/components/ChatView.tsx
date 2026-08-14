@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback, memo } from "react";
+import { useStreamChatContext } from "../context/StreamChatContext";
 import {
   PanelRight,
   Lock,
@@ -13,7 +14,6 @@ import { resolveSessionSelectedModel } from "../utils/sessionModel";
 import type { ChatMessage, TimelineStep, QueuedMessage, QueuedImage, SubAgentState } from "../types";
 import type { CompressMethod } from "../utils/imageCompressor";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
-import type { CompactionStatus } from "./CompactionStatusBanner";
 
 // pendingImages 数据结构。
 // - file: 浏览器 File 句柄（几 KB），不存 base64（8MB+）
@@ -771,7 +771,6 @@ interface ChatViewProps {
    * `App.tsx` is updated to drop the `streamingText=""` literal.
    */
   streamingText?: string;
-  isStreaming: boolean;
   environmentLabel?: string;
   isSandbox?: boolean;
   branch?: string;
@@ -786,8 +785,6 @@ interface ChatViewProps {
   onOpenComputer?: () => void;
   onUndo?: () => void;
   onRestore?: () => void;
-  /** 停止当前流式生成 */
-  onStop?: () => void;
   /**
    * 切换模型/Provider 时由父组件（App.tsx）触发；父组件应先
    * reset all in-flight 状态（cancel stream + 拒审批 + 清 streamError 等）。
@@ -889,33 +886,11 @@ interface ChatViewProps {
    *  "正在生成…" → "响应较慢…" → "已完成" (or "超时")
    *  instead of the old binary isStreaming boolean. */
   streamingPhase?: StreamPhase | null;
-  /** Transient status text from backend (e.g. "Still waiting for the model…"). */
-  streamingStatus?: string | null;
-/** Compaction pipeline status from backend's `compaction_status` WS event. */
-compactionStatus?: CompactionStatus | null;
-/** Called when the user dismisses the compaction status UI (banner + inline). */
-onDismissCompaction?: () => void;
-/** Context window usage from backend's `context_usage` WS event. */
-contextUsage?: { usedTokens: number; maxTokens: number; thresholdTokens: number; percent: number } | null;
-/** per-turn token usage snapshot from the backend's
- *  `usage_update` WS event. Drives the live cache-hit chip next
- *  to the context-usage bar. */
-usageSnapshot?: {
-  promptTokens: number;
-  completionTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  reasoningTokens: number;
-} | null;
   /** Number of `role="tool"` messages currently in `running` state
    *  in the active session. Drives the post-stream "执行工具中…"
    *  indicator so the user doesn't see a blank gap between the
    *  LLM settling (`done`) and the next agent-loop turn beginning. */
   pendingToolsCount?: number;
-  /** Timestamp (ms) of the most recent agent activity event. Used to
-   *  keep the bottom "working" indicator alive during silent gaps where
-   *  tools/file changes are in flight but the LLM is not streaming text. */
-  lastActivityAt?: number | null;
   /** Message queue for mid-stream input */
   messageQueue?: QueuedMessage[];
   /** Add a message to the queue */
@@ -1158,13 +1133,11 @@ export function ChatView({
   onConsumePrefill,
   streamingText: _legacyStreamingText,
   streamingPhase,
-  isStreaming,
   onOpenExperts,
   onOpenSettings,
   onOpenComputer,
   onUndo,
   onRestore,
-  onStop,
   onSwitchModel,
   workspaceRoot,
   onWorkspaceChange,
@@ -1193,14 +1166,12 @@ export function ChatView({
   pendingFileAttachment,
   onConsumeFileAttachment,
   pendingToolsCount = 0,
-  streamingStatus,
-  lastActivityAt,
-  compactionStatus = null,
-  onDismissCompaction,
-contextUsage = null,
-  usageSnapshot = null,
   onEnterWelcome,
 }: ChatViewProps) {
+  const stream = useStreamChatContext();
+  // 流状态直接来自 App 顶层的 StreamChatContext（WebSocket 拥有者）。
+  // ChatView 卸载只暂停渲染，连接与在途流继续，切回即接着收。
+  const isStreaming = stream.streamingSessionId === session?.id;
   const [input, setInput] = useState("");
   // 自定义应用列表：供 @app 提及弹层与发送时的 id 解析共用。
   const { apps: customApps } = useCustomApps();
@@ -1213,11 +1184,11 @@ contextUsage = null,
   // card reappears for the next run.
   const [inlineCompactionDismissed, setInlineCompactionDismissed] = useState(false);
   useEffect(() => {
-    const phase = compactionStatus?.phase;
+    const phase = stream.compactionStatus?.phase;
     if (phase === "starting" || phase === "in_progress_fast" || phase === "in_progress_llm") {
       setInlineCompactionDismissed(false);
     }
-  }, [compactionStatus?.phase]);
+  }, [stream.compactionStatus?.phase]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // ref to the scrollable message container for
   // user-scroll detection. Only auto-scroll if the user is near
@@ -2277,7 +2248,7 @@ const clearPendingImages = useCallback(() => {
               onOpenComputer={onOpenComputer}
               onUndo={onUndo}
               onRestore={onRestore}
-              onStop={onStop}
+              onStop={stream.cancel}
               pendingImages={pendingImages}
               isProcessingFiles={isProcessingFiles}
               onRemoveImage={removePendingImage}
@@ -2355,7 +2326,7 @@ const clearPendingImages = useCallback(() => {
                   key={msg.id}
                   text={streamingMsg.content}
                   phase={streamingPhase}
-                  statusText={streamingStatus}
+                  statusText={stream.streamingStatus}
                   showHeader={showStreamHeader}
                   reasoningContent={streamingMsg.reasoningContent}
                   executionTimeline={streamingMsg.execution_timeline}
@@ -2407,11 +2378,11 @@ const clearPendingImages = useCallback(() => {
               Surfaces the live compression attempt INSIDE the message
               stream (not just the composer-above banner) so the user
               sees the "正在压缩上下文" action where the conversation
-              actually lives. Pure front-end state (compactionStatus) —
+              actually lives. Pure front-end state (stream.compactionStatus) —
               never persisted. Shows only while an attempt is in flight;
               auto-hides on complete/failed (or when dismissed). */}
           {(() => {
-            const phase = compactionStatus?.phase;
+            const phase = stream.compactionStatus?.phase;
             const active =
               phase === "starting" ||
               phase === "in_progress_fast" ||
@@ -2420,7 +2391,7 @@ const clearPendingImages = useCallback(() => {
             return (
               <div className="compaction-inline-card">
                 <CompactionStatusBanner
-                  status={compactionStatus}
+                  status={stream.compactionStatus}
                   onDismiss={() => setInlineCompactionDismissed(true)}
                 />
               </div>
@@ -2479,7 +2450,7 @@ const clearPendingImages = useCallback(() => {
               key="streaming-fallback"
               text=""
               phase={streamingPhase}
-              statusText={streamingStatus}
+              statusText={stream.streamingStatus}
               showHeader
             />
           )}
@@ -2518,8 +2489,8 @@ const clearPendingImages = useCallback(() => {
           {(() => {
             const recentActivityWindowMs = 4000;
             const hasRecentActivity =
-              typeof lastActivityAt === "number" &&
-              Date.now() - lastActivityAt < recentActivityWindowMs;
+              typeof stream.lastActivityAt === "number" &&
+              Date.now() - stream.lastActivityAt < recentActivityWindowMs;
             const busy =
               isStreaming ||
               sending ||
@@ -2621,22 +2592,22 @@ const clearPendingImages = useCallback(() => {
 the composer so it stays in view while the user types.
 Today the prop is always null (no backend wiring yet) so
 the banner is a no-op. Day 2 will plumb the WS event. */}
-<CompactionStatusBanner status={compactionStatus} onDismiss={onDismissCompaction} />
+<CompactionStatusBanner status={stream.compactionStatus} onDismiss={() => stream.setCompactionStatus(null)} />
 
 {/* Context usage indicator — compact badge (not a full-width bar).
     Shows a colored dot + percentage; hover reveals exact token counts.
     Turns amber at ≥85%, red at ≥95%. */}
-{contextUsage && contextUsage.maxTokens > 0 ? (
+{stream.contextUsage && stream.contextUsage.maxTokens > 0 ? (
   <div className="mb-1.5 flex justify-end px-1">
     {(() => {
       const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);
-      const pct = Math.min(100, (contextUsage.usedTokens / contextUsage.maxTokens) * 100);
+      const pct = Math.min(100, (stream.contextUsage.usedTokens / stream.contextUsage.maxTokens) * 100);
       const dotColor = pct >= 95 ? "bg-rose-500" : pct >= 85 ? "bg-amber-500" : "bg-emerald-500";
       const textColor = pct >= 95 ? "text-rose-600 dark:text-rose-400" : pct >= 85 ? "text-amber-600 dark:text-amber-400" : "text-text-secondary";
       let cacheInfo = "";
-      if (usageSnapshot) {
-        const cacheRead = usageSnapshot.cacheReadTokens;
-        const uncached = usageSnapshot.promptTokens;
+      if (stream.usageSnapshot) {
+        const cacheRead = stream.usageSnapshot.cacheReadTokens;
+        const uncached = stream.usageSnapshot.promptTokens;
         const total = cacheRead + uncached;
         if (total > 0) {
           const rate = Math.round((cacheRead / total) * 100);
@@ -2646,7 +2617,7 @@ the banner is a no-op. Day 2 will plumb the WS event. */}
       return (
         <span
           className={`inline-flex items-center gap-1.5 tabular-nums text-[11px] ${textColor} cursor-default`}
-          title={`${fmt(contextUsage.usedTokens)} / ${fmt(contextUsage.maxTokens)} tokens (${Math.round(pct)}%)${cacheInfo}`}
+          title={`${fmt(stream.contextUsage.usedTokens)} / ${fmt(stream.contextUsage.maxTokens)} tokens (${Math.round(pct)}%)${cacheInfo}`}
         >
           <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
           {Math.round(pct)}%
@@ -2686,7 +2657,7 @@ the banner is a no-op. Day 2 will plumb the WS event. */}
             onOpenComputer={onOpenComputer}
             onUndo={onUndo}
             onRestore={onRestore}
-            onStop={onStop}
+            onStop={stream.cancel}
             pendingImages={pendingImages}
             isProcessingFiles={isProcessingFiles}
             onRemoveImage={removePendingImage}

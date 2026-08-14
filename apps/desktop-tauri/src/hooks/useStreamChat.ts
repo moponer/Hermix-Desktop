@@ -1870,3 +1870,5 @@ export function useStreamChat(activeSessionId: string | null) {
 
   return { send, streaming: streamingSessionId !== null, streamingSessionId, streamingStatus, lastActivityAt, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, cancel, wsSendRaw };
 }
+
+export type StreamChatApi = ReturnType<typeof useStreamChat>;

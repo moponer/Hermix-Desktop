@@ -14,6 +14,7 @@ import { CustomAppsView } from "./components/CustomAppsView";
 import { RightSidebar, PreviewPanel, type RightTab } from "./components/RightSidebar";
 import { TitleBar } from "./components/TitleBar";
 import { useStreamChat } from "./hooks/useStreamChat";
+import { StreamChatContext } from "./context/StreamChatContext";
 import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import type { SubAgentState, SubAgentEventPayload } from "./types";
 import { useResizable } from "./hooks/useResizable";
@@ -602,7 +603,10 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     max: RIGHT_MAX,
     side: "right",
   });
-  const { streaming, streamingSessionId, streamingStatus, lastActivityAt, compactionStatus, setCompactionStatus, contextUsage, setContextUsage, usageSnapshot, setUsageSnapshot, send: sendStream, cancel: cancelStream, wsSendRaw } = useStreamChat(activeSessionId);
+  const streamChatApi = useStreamChat(activeSessionId);
+  // 仅保留 App 自身（标题栏/指示器/审批流）需要的字段；流状态展示已
+  // 改由 ChatView 通过 StreamChatContext 直接读，不再逐层透传。
+  const { streaming, streamingSessionId, setContextUsage, setUsageSnapshot, send: sendStream, cancel: cancelStream, wsSendRaw } = streamChatApi;
 
   // Session message eviction — clear the *previous* session's
   // messages array (keeping message_count) when switching away. This solves
@@ -2822,6 +2826,7 @@ return {
   }, [activeSessionId]);
 
   return (
+    <StreamChatContext.Provider value={streamChatApi}>
     <div className="app-shell">
       <TitleBar
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
@@ -2933,16 +2938,8 @@ return {
               onOpenComputer={openComputer}
               onUndo={handleUndo}
               onRestore={handleRestore}
-              onStop={cancelStream}
               onSwitchModel={handleSwitchModel}
-              isStreaming={isStreamingActiveSession}
               streamingPhase={streamPhase ?? (isStreamingActiveSession ? "streaming" : null)}
-              streamingStatus={streamingStatus}
-              lastActivityAt={lastActivityAt}
-              compactionStatus={compactionStatus}
-              onDismissCompaction={() => setCompactionStatus(null)}
-contextUsage={contextUsage}
-              usageSnapshot={usageSnapshot}
               pendingToolsCount={pendingToolsCount}
               environmentLabel="本地Hermix"
               isSandbox={false}
@@ -3047,6 +3044,7 @@ contextUsage={contextUsage}
       <ToastContainer />
       <ImageLightbox />
     </div>
+    </StreamChatContext.Provider>
   );
 }
 
