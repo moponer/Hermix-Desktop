@@ -365,6 +365,8 @@ function updateToolStepStdout(
 
 export default function App() {
   const [page, setPageRaw] = useState<NavPage>("chat");
+  // 「自定义应用」页「创建新应用」按钮跳转时注入的预填指令（一次性消费）。
+  const [pendingPrefill, setPendingPrefill] = useState<string | null>(null);
   // 视口自适应面板最小宽度 — 窗口缩小时缩小主列/左列最小宽
   const [mainMinWidth, setMainMinWidth] = useState(() => computeMainMinWidth(window.innerWidth));
   const [leftMin, setLeftMin] = useState(() => computeLeftMin(window.innerWidth));
@@ -1074,6 +1076,13 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     setActiveSessionId(null);
     setPage("chat");
   }, [clearStreamError, setActiveSessionId]);
+
+  // 从「自定义应用」页「创建新应用」按钮触发：进入新对话并预填创建指令。
+  const startCreateAppFlow = useCallback(() => {
+    setPendingPrefill("@app 创建新应用 应用要求：");
+    setActiveSessionId(null);
+    setPage("chat");
+  }, [setActiveSessionId, setPage]);
 
   const handleSelectSession = useCallback(async (id: string) => {
     // Do NOT cancel the active stream when switching sessions.
@@ -2903,6 +2912,8 @@ return {
               session={activeSession}
               onSendMessage={handleSendMessage}
               onNewChat={handleNewChat}
+              pendingPrefill={pendingPrefill}
+              onConsumePrefill={() => setPendingPrefill(null)}
               // inline todo cards in the message stream.
               // App owns the groups store; ChatView renders one card per
               // group right after the originating assistant message.
@@ -2977,7 +2988,7 @@ contextUsage={contextUsage}
           {page === "groupchat" && <GroupChatView initialRoomId={selectedRoomId} />}
           {page === "experts" && <AgentsView initialTab="builtin" />}
           {page === "analytics" && <AnalyticsView />}
-{page === "customapps" && <CustomAppsView />}
+{page === "customapps" && <CustomAppsView onStartCreateApp={startCreateAppFlow} />}
           {page === "settings" && <SettingsView />}
         </main>
         </ErrorBoundary>        {/* Right sidebar — grid column 3; 0px when closed (collapsed), full

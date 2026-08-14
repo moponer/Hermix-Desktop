@@ -1,7 +1,7 @@
 // CustomAppsView — the main view for browsing and managing custom apps
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { RefreshCw, Search, Boxes } from "lucide-react";
+import { RefreshCw, Search, Boxes, Plus } from "lucide-react";
 import type { CustomAppSummary } from "../lib/customAppApi";
 import {
   listCustomApps,
@@ -23,7 +23,7 @@ const AUTO_REFRESH_INTERVAL_MS = 5_000;
  *  user can still click the refresh button to re-probe manually. */
 const MAX_CONSECUTIVE_FAILURES = 3;
 
-export function CustomAppsView() {
+export function CustomAppsView({ onStartCreateApp }: { onStartCreateApp?: () => void }) {
   const safeSetTimeout = useSafeTimeout();
   const [apps, setApps] = useState<CustomAppSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -154,6 +154,20 @@ export function CustomAppsView() {
             <Boxes size={24} />
             自定义应用
           </h1>
+          <button
+            onClick={onStartCreateApp}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors hover:opacity-90"
+            style={{
+              marginLeft: "auto",
+              marginRight: 8,
+              background: "var(--color-accent, #b8860b)",
+              color: "#fff",
+            }}
+            title="创建新应用"
+          >
+            <Plus size={16} />
+            创建新应用
+          </button>
           <button
             className="custom-apps-view__refresh"
             onClick={() => loadApps()}

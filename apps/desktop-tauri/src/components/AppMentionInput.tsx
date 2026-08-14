@@ -1,0 +1,269 @@
+// AppMentionInput — chat textarea with @app custom-app mentions.
+//
+// Architecture: a transparent <textarea> sits on top of a backdrop <div> that
+// renders the same text with "@app <name>" segments coloured dark blue. The
+// textarea owns input/caret; the backdrop owns colour. When the user types
+// "@app" an inline card lists the installed custom apps; picking one inserts a
+// resolved "@app <name> " token. No extra deps, no contentEditable.
+
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Plus } from "lucide-react";
+import type { CustomAppSummary } from "../lib/customAppApi";
+import {
+  MENTION_COLOR,
+  applyMention,
+  detectActiveMention,
+  splitMentions,
+  type ActiveMention,
+} from "../lib/appMention";
+
+// 虚拟"创建新应用"快捷项 — 始终作为 @app 面板的第一项。
+// 选中后插入 "@app 创建新应用 应用要求："，引导用户描述需求，
+// agent 收到后按 custom-app-development 规范走创建流程（需求梳理→方案规划→开发→验证）。
+const CREATE_NEW_APP_ID = "__create_new_app__";
+const CREATE_NEW_APP_ITEM: CustomAppSummary = {
+  id: CREATE_NEW_APP_ID,
+  name: "创建新应用 应用要求：",
+  version: "1.0.0",
+  description: "让 AI 从零开发一个新的桌面应用",
+  icon: "sparkles",
+  icon_file: null,
+  category: "developer",
+  author: "Hermix",
+  is_packaged: false,
+  dist_path: null,
+};
+
+interface Props {
+  value: string;
+  onChange: (v: string) => void;
+  /** Parent's keydown handler (Enter → submit). We intercept when the popup is open. */
+  onKeyDown: (e: React.KeyboardEvent) => void;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  apps: CustomAppSummary[];
+  disabled?: boolean;
+  isStreaming?: boolean;
+  placeholder?: string;
+  onFilesAttach?: (files: File[]) => void;
+}
+
+function AppMentionInputImpl({
+  value,
+  onChange,
+  onKeyDown,
+  textareaRef,
+  apps,
+  disabled,
+  isStreaming,
+  placeholder,
+  onFilesAttach,
+}: Props) {
+  const [active, setActive] = useState<ActiveMention | null>(null);
+  const [selIdx, setSelIdx] = useState(0);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const pendingCaret = useRef<number | null>(null);
+  const blurTimer = useRef<number | null>(null);
+
+  const filtered = useMemo(() => {
+    const q = (active?.query ?? "").trim().toLowerCase();
+    if (!q) return apps;
+    return apps.filter((a) => a.name.toLowerCase().includes(q));
+  }, [apps, active]);
+
+  // 列表首项恒为虚拟"创建新应用"快捷项，其余为已安装应用。
+  const items = useMemo(() => [CREATE_NEW_APP_ITEM, ...filtered], [filtered]);
+
+  useEffect(() => {
+    if (pendingCaret.current != null && textareaRef.current) {
+      const pos = pendingCaret.current;
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(pos, pos);
+      pendingCaret.current = null;
+    }
+  }, [value, textareaRef]);
+
+  const selectApp = (app: CustomAppSummary) => {
+    if (!active) return;
+    const { text, caret } = applyMention(value, active, app.name);
+    pendingCaret.current = caret;
+    onChange(text);
+    setActive(null);
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const v = e.target.value;
+    const caret = e.target.selectionStart ?? v.length;
+    onChange(v);
+    setActive(detectActiveMention(v, caret));
+    setSelIdx(0);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (active && items.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelIdx((i) => (i + 1) % items.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelIdx((i) => (i - 1 + items.length) % items.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        selectApp(items[selIdx]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setActive(null);
+        return;
+      }
+    }
+    onKeyDown(e);
+  };
+
+  const handleScroll = () => {
+    if (backdropRef.current && textareaRef.current) {
+      backdropRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (files.length > 0) {
+      e.preventDefault();
+      onFilesAttach?.(files);
+    }
+  };
+
+  const handleFocus = () => {
+    if (blurTimer.current) {
+      clearTimeout(blurTimer.current);
+      blurTimer.current = null;
+    }
+  };
+  const handleBlur = () => {
+    blurTimer.current = window.setTimeout(() => setActive(null), 120);
+  };
+
+  const backdropText = value.endsWith("\n") ? value + " " : value;
+  const segments = splitMentions(backdropText);
+
+  return (
+    <div className="relative">
+      {/* Highlight backdrop — mirrors the textarea's box & font metrics. */}
+      <div
+        ref={backdropRef}
+        aria-hidden
+        className="absolute inset-0 pointer-events-none overflow-hidden whitespace-pre-wrap break-words px-4 pt-3.5 pb-1.5"
+        style={{
+          fontSize: "var(--font-size-body)",
+          lineHeight: 1.5,
+          color: "var(--color-text-primary)",
+          boxSizing: "border-box",
+        }}
+      >
+        {segments.map((seg, i) =>
+          seg.mention ? (
+            <span key={i} style={{ color: MENTION_COLOR }}>
+              {seg.text}
+            </span>
+          ) : (
+            <span key={i}>{seg.text}</span>
+          ),
+        )}
+        {value.length === 0 && (
+          <span className="text-text-muted">{placeholder}</span>
+        )}
+      </div>
+
+      {/* Real textarea — transparent text, visible caret. */}
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        onScroll={handleScroll}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        disabled={disabled}
+        placeholder={isStreaming ? "输入消息加入队列..." : placeholder}
+        data-no-border
+        className="relative z-[1] w-full bg-transparent resize-none outline-none px-4 pt-3.5 pb-1.5 min-h-[72px]"
+        style={{
+          fontSize: "var(--font-size-body)",
+          lineHeight: 1.5,
+          border: "none",
+          borderRadius: 0,
+          boxShadow: "none",
+          background: "transparent",
+          color: "transparent",
+          caretColor: "var(--color-text-primary)",
+        }}
+        rows={3}
+      />
+
+      {/* @app mention card */}
+      {active && (
+        <div
+          className="absolute bottom-full left-0 mb-2 z-20 rounded-xl overflow-hidden"
+          style={{
+            width: 320,
+            maxWidth: "calc(100% - 1rem)",
+            maxHeight: 260,
+            background: "var(--color-bg-elevated)",
+            border: "1px solid var(--color-border-primary)",
+            boxShadow: "var(--shadow-pop)",
+          }}
+        >
+          <div
+            className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide"
+            style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border-primary)" }}
+          >
+            自定义应用 · {apps.length}
+          </div>
+          <div className="overflow-y-auto" style={{ maxHeight: 212 }}>
+            {items.map((app, i) => {
+              const isCreate = app.id === CREATE_NEW_APP_ID;
+              return (
+                <button
+                  key={app.id}
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onMouseEnter={() => setSelIdx(i)}
+                  onClick={() => selectApp(app)}
+                  className="w-full text-left px-3 py-2 flex flex-col gap-0.5 transition-colors"
+                  style={{
+                    background: i === selIdx ? "var(--color-bg-hover)" : "transparent",
+                    ...(isCreate ? { borderBottom: "1px solid var(--color-border-primary)" } : {}),
+                  }}
+                >
+                  <span
+                    className="flex items-center gap-1.5 text-[13px] font-medium"
+                    style={{ color: isCreate ? "var(--color-accent, #b8860b)" : "var(--color-text-primary)" }}
+                  >
+                    {isCreate && <Plus size={13} />}
+                    {isCreate ? "创建新应用" : app.name}
+                  </span>
+                  {app.description && (
+                    <span
+                      className="text-[12px] truncate"
+                      style={{ color: "var(--color-text-muted)" }}
+                    >
+                      {app.description}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export const AppMentionInput = memo(AppMentionInputImpl);

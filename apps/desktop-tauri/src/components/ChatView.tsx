@@ -386,6 +386,10 @@ const mascotUrl = "/mascot-256.png";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 import { useCurrentModel, MODEL_CONFIG_CHANGED_EVENT } from "../hooks/useCurrentModel";
 import { ProviderIcon } from "./ProviderIcon";
+import { useCustomApps } from "../hooks/useCustomApps";
+import { buildAppPrefix } from "../lib/appMention";
+import type { CustomAppSummary } from "../lib/customAppApi";
+import { AppMentionInput } from "./AppMentionInput";
 
 const BUILTIN_PROVIDER_IDS = new Set([
   "minimax", "openai", "deepseek", "dashscope", "kimi",
@@ -724,6 +728,10 @@ interface ChatViewProps {
   session: Session | null;
   onSendMessage: (content: string, projectId?: string, overrides?: ChatOverrides, attachments?: { images?: QueuedImage[]; attachedFilePaths?: string[] }) => Promise<void>;
   onNewChat?: () => void;
+  /** 从「自定义应用」页「创建新应用」按钮注入的预填指令（一次性消费）。 */
+  pendingPrefill?: string | null;
+  /** 消费完 pendingPrefill 后由父组件清空。 */
+  onConsumePrefill?: () => void;
   /**
    * inline todo cards in the message stream. App.tsx
    * owns the groups store; ChatView renders one card per plan right
@@ -1146,6 +1154,8 @@ export function ChatView({
   session,
   onSendMessage,
   onNewChat,
+  pendingPrefill,
+  onConsumePrefill,
   streamingText: _legacyStreamingText,
   streamingPhase,
   isStreaming,
@@ -1192,6 +1202,8 @@ contextUsage = null,
   onEnterWelcome,
 }: ChatViewProps) {
   const [input, setInput] = useState("");
+  // 自定义应用列表：供 @app 提及弹层与发送时的 id 解析共用。
+  const { apps: customApps } = useCustomApps();
   const [sending, setSending] = useState(false);
   // in-conversation-flow compaction progress card.
   // Local dismiss flag so closing the inline card during an active
@@ -1279,6 +1291,24 @@ contextUsage = null,
     return () => clearTimeout(t);
   }, [postStreamActivity, pendingToolsCount]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // 从「自定义应用」页「创建新应用」按钮跳转到新对话时，注入预填指令：
+  // 填入 "@app 创建新应用 应用要求："，聚焦并把光标移到末尾，随后通知父组件清空。
+  useEffect(() => {
+    if (!pendingPrefill) return;
+    setInput(pendingPrefill);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.focus();
+        const len = ta.value.length;
+        ta.setSelectionRange(len, len);
+      }
+    });
+    onConsumePrefill?.();
+    // 仅依赖 pendingPrefill：消费后父组件将其置 null，effect 重跑时 if 守卫跳过，不循环。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPrefill]);
 
   // ── Expert / permission / workspace / skills state ─────────────────
   const sessionId = session?.id ?? null;
@@ -1964,6 +1994,9 @@ const clearPendingImages = useCallback(() => {
 
   const handleSubmit = async () => {
     const trimmed = input.trim();
+    // @app 提及：把 "@app 名称" 解析成自定义应用 id，并在正文前方附加
+    // 目标应用头，让 LLM 明确用户要调整/优化的具体应用；无提及则原样发送。
+    const finalText = buildAppPrefix(trimmed, customApps);
     // 允许纯图片/纯文件发送（无文字也能发送），但压缩进行中阻止发送。
     // 防止竞态：压缩未完成→pendingImages 为空→发送→清空→压缩完成→图片残留。
     if (!trimmed && pendingImages.length === 0 && filePaths.length === 0) return;
@@ -2029,7 +2062,7 @@ const clearPendingImages = useCallback(() => {
       // revoking their blob URLs — they travel on the queued message
       // and render in the user bubble after the drain.
       onAddToQueue?.({
-        text: trimmed,
+        text: finalText,
         images: attachedImages.length > 0 ? attachedImages : undefined,
         attachedFilePaths: attachedPaths.length > 0 ? attachedPaths : undefined,
       });
@@ -2099,7 +2132,7 @@ const clearPendingImages = useCallback(() => {
       // bytes and the in-bubble `ChatMessage.images` from a single
       // source. (Previously the bytes were built here and the bubble
       // never received the preview, so images were sent but invisible.)
-      await onSendMessage(trimmed, undefined, overrides, attachments);
+      await onSendMessage(finalText, undefined, overrides, attachments);
     } finally {
       setSending(false);
       // clearPendingImages / setFilePaths 已在 setInput("") 之后立即调用，
@@ -2219,7 +2252,7 @@ const clearPendingImages = useCallback(() => {
 
           <div className="w-full">
             <Composer
-              input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit}
+              input={input} setInput={setInput} handleKeyDown={handleKeyDown} handleSubmit={handleSubmit} customApps={customApps}
               textareaRef={textareaRef} sending={sending} isStreaming={false}
               activeWorkspace={activeWorkspace} workspaces={workspaces} workspaceLocked={workspaceLocked}
               onSelectWorkspace={(p) => setWorkspace(p)}
@@ -2284,7 +2317,8 @@ const clearPendingImages = useCallback(() => {
       {/* Todo cards are spliced inline next to their originating
         assistant message (see `streamRow` useMemo above), instead of a
         separate strip at the top of the stream. */}
-      <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="relative flex-1 overflow-y-auto px-3 sm:px-4 py-5 min-h-0">
+      <div className="relative flex-1 min-h-0">
+        <div ref={scrollContainerRef} onScroll={handleContainerScroll} className="absolute inset-0 overflow-y-auto px-3 sm:px-4 py-5">
         <div className="msg-stream-list max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto space-y-5">
           {streamRow.map((row, idx) => {
             if (row.kind === "todo") {
@@ -2526,12 +2560,13 @@ const clearPendingImages = useCallback(() => {
 
           <div ref={messagesEndRef} />
         </div>
+        </div>
 
         {/* Scroll-to-bottom shortcut: appears when the user has scrolled
             up to read history, letting them jump back to the latest message
-            with one click. The button is anchored to the same max-width
-            column as the message stream so it stays visually aligned with
-            the conversation instead of floating at the viewport edge. */}
+            with one click. Moved OUT of the scroll container and anchored as
+            a sibling overlay so it stays pinned to the visible bottom of the
+            chat area instead of scrolling away with the message stream. */}
         {showScrollToBottom && (
           <div className="absolute left-0 right-0 bottom-5 z-20 pointer-events-none">
             <div className="max-w-[720px] lg:max-w-[800px] xl:max-w-[920px] mx-auto px-3 sm:px-4 relative">
@@ -2730,6 +2765,8 @@ interface ComposerProps {
   onSendFromQueue?: (idx: number) => void;
   /** 当前会话，用于给润色提供最近对话上下文 */
   session?: Session | null;
+  /** 自定义应用列表，供 @app 提及弹层与发送 id 解析使用 */
+  customApps?: CustomAppSummary[];
 }
 
 function Composer(p: ComposerProps) {
@@ -2930,34 +2967,18 @@ function Composer(p: ComposerProps) {
         />
       )}
 
-      {/* Textarea — sit on the gray container, no own border/background. */}
-      <textarea
-        ref={p.textareaRef}
+      {/* Textarea — sit on the gray container, no own border/background.
+        * AppMentionInput overlays a dark-blue highlight layer for @app mentions
+        * and shows the custom-app picker when "@app" is typed. */}
+      <AppMentionInput
         value={p.input}
-        onChange={(e) => p.setInput(e.target.value)}
+        onChange={p.setInput}
         onKeyDown={p.handleKeyDown}
-        onPaste={(e) => {
-          // 粘贴上传：从剪贴板提取任意文件（图片 + 文档等）。
-          // handleFilesAttach 内部按 MIME 拆成图片预览 / 文件路径附件，
-          // 因此这里不再过滤 image/，让用户能粘贴任意文档进输入框。
-          const files = Array.from(e.clipboardData?.files ?? []);
-          if (files.length > 0) {
-            e.preventDefault();
-            p.onFilesAttach?.(files);
-          }
-        }}
-        placeholder={p.isStreaming ? "输入消息加入队列..." : p.placeholder}
-        data-no-border
-        className="w-full bg-transparent text-text-primary placeholder-text-muted resize-none outline-none px-4 pt-3.5 pb-1.5 min-h-[72px]"
-        style={{
-          fontSize: "var(--font-size-body)",
-          lineHeight: 1.5,
-          border: "none",
-          borderRadius: 0,
-          boxShadow: "none",
-          background: "transparent",
-        }}
-        rows={3}
+        textareaRef={p.textareaRef}
+        apps={p.customApps ?? []}
+        isStreaming={p.isStreaming}
+        placeholder={p.placeholder}
+        onFilesAttach={p.onFilesAttach}
       />
 
       {/* Tool chips row + actions row.
