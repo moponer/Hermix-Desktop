@@ -268,7 +268,7 @@ interface StreamCallbacks {
    * error (e.g. an LLM 400 "invalid function arguments…") so the UI can
    * show it as a collapsible "技术详情" subtext instead of dropping it.
    */
-  onError?: (error: string, detail?: string) => void;
+  onError?: (error: string, detail?: string, kind?: string) => void;
   /**
    * Live reasoning text from the LLM (`<think>...</think>` block),
    * stripped from the user-visible content by `ThinkBlockParser` and
@@ -439,6 +439,7 @@ export function useStreamChat(activeSessionId: string | null) {
         phaseHint?: StreamPhase,
         detail?: string,
         keepSessionAlive?: boolean,
+        kind?: string,
       ) => void)
     | null
   >(null);
@@ -743,6 +744,7 @@ export function useStreamChat(activeSessionId: string | null) {
           phaseHint?: StreamPhase,
           detail?: string,
           keepSessionAlive?: boolean,
+          kind?: string,
         ) => {
           if (doneRef.current) return;
           // Guard against stale WS event handlers. If a new
@@ -796,7 +798,7 @@ export function useStreamChat(activeSessionId: string | null) {
           const cleanText = text.replace(/\n?\[(?:activity|status):[^\]]*\]\s*/g, "");
 
           if (err) {
-            callbacks.onError?.(err, detail);
+            callbacks.onError?.(err, detail, kind);
             // `pendingRejectRef` holds the raw `reject` (no mutex wrap).
             // Fall back to the local `reject` if the ref has already
             // been nulled (e.g. on a second settle call).
@@ -1659,7 +1661,16 @@ export function useStreamChat(activeSessionId: string | null) {
                   // it (e.g. 529 overloaded -> "AI 服务过载..."); fall back
                   // to a generic prompt only when the server omitted details.
                   const errMsg = rawError ?? "对话因后端错误中断（已保留已生成的部分内容，请稍后重试）";
-                  settle("", errMsg, undefined, "error", rawError, true);
+                  // Surface the backend's coarse classification as `kind`
+                  // when it shipped one (`provider_overloaded`,
+                  // `quota_exhausted`, …). Falls back to `agent_error` so
+                  // the UI always has a category to render instead of
+                  // "对话因后端错误中断".
+                  const errKind =
+                    (typeof data?.code === "string" && data.code) ||
+                    (typeof data?.event?.code === "string" && data.event.code) ||
+                    (rawError ? "agent_error" : undefined);
+                  settle("", errMsg, undefined, "error", rawError, true, errKind);
                   return;
                 }
                 // M3 may send a `done` with empty `evtContent` (the
@@ -1699,7 +1710,8 @@ export function useStreamChat(activeSessionId: string | null) {
               if (evtType === "error") {
                 const errMsg = data?.message || data?.event?.message || "Stream error";
                 const errDetail = data?.detail || data?.event?.detail;
-                settle("", errMsg, undefined, "error", errDetail);
+                const errKind = data?.code || data?.event?.code;
+                settle("", errMsg, undefined, "error", errDetail, undefined, errKind);
                 return;
               }
 

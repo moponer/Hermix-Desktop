@@ -352,7 +352,7 @@ function shouldShowAssistantHeader(idx: number, messages: ReadonlyArray<{ role?:
   return effectivePrev === null || effectivePrev.role === "user";
 }
 
-import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, ArrowUp, Check, AlertTriangle } from "lucide-react";
+import { Send, Square, FolderOpen, ChevronDown, ChevronRight, Sparkles, ShieldCheck, Image, X, ArrowUp, Check, AlertTriangle, KeyRound, WifiOff, Clock, Coins, ServerCrash, Copy, CheckCheck } from "lucide-react";
 import { PrefetchIntentChip } from "./MessageBubble";
 import { VoiceButton } from "./VoiceButton";
 import { VisionButton } from "./VisionButton";
@@ -838,7 +838,7 @@ interface ChatViewProps {
    * localized summary; `detail` (optional) is the raw, un-localized
    * backend error shown as a collapsible "技术详情" subtext.
    */
-  streamError?: { message: string; detail?: string } | null;
+  streamError?: { message: string; detail?: string; kind?: ErrorKind } | null;
   /** Reset the stream error in the parent after the user has seen it. */
   onClearStreamError?: () => void;
   /** Retry the most recent user message when a stream-level error
@@ -932,61 +932,215 @@ usageSnapshot?: {
  * StreamErrorCard — the error surface shown when a send fails
  * (backend 400/5xx, transport error, WS reject, etc.).
  *
- * Design: a soft warning-tinted card (amber, never blue/purple per the
- * project's no-blue-violet rule) with an icon tile, a friendly Chinese
- * title + message as the **primary** text, and — when the backend
- * supplied a raw error — a collapsible "技术详情" subtext holding the
- * original English provider error. The raw text stays folded by default
- * so the main UI reads cleanly in Chinese while the real cause is one
- * click away for debugging.
+ * The card has three layers:
+ *   1. A short category-aware title ("Provider 暂时过载" vs
+ *      "API key 失效" vs "网络中断") picked from `kind` so the
+ *      user can tell at a glance whether to retry, switch keys, or
+ *      check their connection.
+ *   2. A one-line friendly message that's the canonical Chinese
+ *      localisation from `App.localizeStreamError`.
+ *   3. A footer with the retry button (primary action) and a
+ *      collapsible "技术详情" holding the raw provider error for
+ *      debugging — folded by default so the main UI reads cleanly.
+ *
+ * Visual: a quiet, warm-leaning amber card (never blue/purple per
+ * the no-blue-violet rule) with a 2px top accent rail, an inline
+ * icon, hairline borders, and a small "code" chip with the error
+ * category — refined rather than loud, so it sits in a chat
+ * without dominating the conversation.
  */
 function StreamErrorCard({
   message,
   detail,
+  kind,
   onDismiss,
   onRetry,
 }: {
   message: string;
   detail?: string;
+  /**
+   * Coarse-grained category used to pick the icon, title, and
+   * tip. Defaults to "unknown" if the parent didn't supply one so
+   * the component is safe to render in isolation.
+   */
+  kind?: ErrorKind;
   onDismiss?: () => void;
   onRetry?: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const meta = ERROR_META[kind ?? "unknown"];
+
+  const copyDetail = useCallback(() => {
+    if (!detail) return;
+    const blob = `[${meta.code}] ${message}\n\n${detail}`;
+    if (typeof navigator !== "undefined" && navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(blob).then(
+        () => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1400);
+        },
+        () => {},
+      );
+    }
+  }, [detail, message, meta.code]);
+
   return (
-    <div className="stream-error-card" role="alert">
-      <span className="stream-error-card__icon" aria-hidden="true">
-        <AlertTriangle size={16} />
-      </span>
-      <div className="stream-error-card__body">
-        <div className="stream-error-card__title">发送失败</div>
+    <div className={`stream-error-card stream-error-card--${meta.tone}`} role="alert">
+      <div className="stream-error-card__rail" aria-hidden="true" />
+      <div className="stream-error-card__main">
+        <div className="stream-error-card__head">
+          <span className="stream-error-card__icon" aria-hidden="true">
+            <meta.Icon size={15} strokeWidth={2} />
+          </span>
+          <span className="stream-error-card__title">{meta.title}</span>
+          <span className="stream-error-card__chip" title={meta.tip}>{meta.code}</span>
+          <span className="stream-error-card__spacer" />
+          <button
+            type="button"
+            className="stream-error-card__dismiss"
+            onClick={() => onDismiss?.()}
+            title="关闭"
+            aria-label="关闭错误提示"
+          >
+            <X size={14} strokeWidth={2} />
+          </button>
+        </div>
         <div className="stream-error-card__message">{message}</div>
+        <div className="stream-error-card__tip">{meta.tip}</div>
         {detail && detail.trim().length > 0 && (
-          <details className="stream-error-card__detail">
-            <summary>技术详情</summary>
+          <details
+            className="stream-error-card__detail"
+            open={expanded}
+            onToggle={(e) => setExpanded((e.target as HTMLDetailsElement).open)}
+          >
+            <summary>
+              <ChevronDown
+                size={12}
+                strokeWidth={2}
+                className={`stream-error-card__chev ${expanded ? "is-open" : ""}`}
+              />
+              技术详情
+            </summary>
             <pre>{detail.trim()}</pre>
           </details>
         )}
-        {onRetry && (
-          <button
-            type="button"
-            className="stream-error-card__retry"
-            onClick={onRetry}
-          >
-            重试
-          </button>
+        {(onRetry || detail) && (
+          <div className="stream-error-card__actions">
+            {onRetry && (
+              <button
+                type="button"
+                className="stream-error-card__btn stream-error-card__btn--primary"
+                onClick={onRetry}
+              >
+                重试上一条
+              </button>
+            )}
+            {detail && (
+              <button
+                type="button"
+                className="stream-error-card__btn stream-error-card__btn--ghost"
+                onClick={copyDetail}
+                title="复制原始错误"
+              >
+                {copied ? (
+                  <>
+                    <CheckCheck size={12} strokeWidth={2} />
+                    <span>已复制</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={12} strokeWidth={2} />
+                    <span>复制错误码</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
         )}
       </div>
-      <button
-        type="button"
-        className="stream-error-card__dismiss"
-        onClick={() => onDismiss?.()}
-        title="关闭"
-        aria-label="关闭错误提示"
-      >
-        <X size={14} />
-      </button>
     </div>
   );
 }
+
+/** Stream error taxonomy — mirrors `App.classifyStreamErrorKind`. */
+type ErrorKind =
+  | "overloaded"
+  | "quota"
+  | "auth"
+  | "network"
+  | "timeout"
+  | "bad_request"
+  | "unknown";
+
+type ErrorTone = "amber" | "amber-strong" | "amber-soft";
+
+/**
+ * Static metadata per error category. Kept out of the component so
+ * the same map drives the title, icon, hint, and code chip — the
+ * UI never has to recompute labels at render time.
+ */
+const ERROR_META: Record<ErrorKind, ErrorMetaEntry> = {
+  overloaded: {
+    title: "Provider 暂时过载",
+    code: "OVERLOADED",
+    tip: "建议稍等片刻后重试；若反复出现可尝试切换其他模型。",
+    tone: "amber",
+    Icon: ServerCrash,
+  },
+  quota: {
+    title: "用量已达上限",
+    code: "QUOTA",
+    tip: "当前账户配额或 RPM 已满，请稍后再试或在设置中更换 key。",
+    tone: "amber-strong",
+    Icon: Coins,
+  },
+  auth: {
+    title: "API key 失效",
+    code: "AUTH",
+    tip: "请前往「设置 → API Keys」检查密钥是否正确或重新填写。",
+    tone: "amber-strong",
+    Icon: KeyRound,
+  },
+  network: {
+    title: "网络中断",
+    code: "NETWORK",
+    tip: "本地网络或后端进程不通，请检查连接后重试。",
+    tone: "amber-soft",
+    Icon: WifiOff,
+  },
+  timeout: {
+    title: "请求超时",
+    code: "TIMEOUT",
+    tip: "生成时间过长被中止，建议简化输入或换模型后重试。",
+    tone: "amber-soft",
+    Icon: Clock,
+  },
+  bad_request: {
+    title: "请求无效",
+    code: "BAD_REQUEST",
+    tip: "可能是模型名或参数错误，请在输入框左侧切换模型后重试。",
+    tone: "amber-strong",
+    Icon: AlertTriangle,
+  },
+  unknown: {
+    title: "发送失败",
+    code: "ERROR",
+    tip: "请稍后重试；如反复出现可打开技术详情对照日志。",
+    tone: "amber",
+    Icon: AlertTriangle,
+  },
+};
+
+/** Per-category metadata alias to keep `ERROR_META`'s signature readable. */
+type ErrorMetaEntry = {
+  title: string;
+  code: string;
+  tip: string;
+  tone: ErrorTone;
+  Icon: typeof AlertTriangle;
+};
 
 export function ChatView({
   session,
@@ -2108,6 +2262,7 @@ const clearPendingImages = useCallback(() => {
               <StreamErrorCard
                 message={streamError.message}
                 detail={streamError.detail}
+                kind={streamError.kind}
                 onDismiss={onClearStreamError}
                 onRetry={onRetryLastMessage}
               />
@@ -2406,7 +2561,11 @@ const clearPendingImages = useCallback(() => {
               out of view mid-stream. Renders nothing when no cards
               are active. */}
           {acuiState && acuiState.cards.length > 0 && (
-            <AcuiPanel state={acuiState} decide={acuiBus} />
+            <AcuiPanel
+              state={acuiState}
+              decide={acuiBus}
+              streamComplete={!isStreaming}
+            />
           )}
 
           {/* Stream error card — shown above the input until dismissed
@@ -2416,6 +2575,7 @@ const clearPendingImages = useCallback(() => {
             <StreamErrorCard
               message={streamError.message}
               detail={streamError.detail}
+              kind={streamError.kind}
               onDismiss={onClearStreamError}
               onRetry={onRetryLastMessage}
             />

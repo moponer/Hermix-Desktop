@@ -49,7 +49,25 @@ function readDraftWorkspace(): string | null {
   }
 }
 
-const LEFT_KEY = STORAGE_KEYS.sidebarWidth;/**
+const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
+
+/**
+ * Coarse-grained error category used by the stream error card to
+ * pick an icon, title, and short hint. Mirrors the backend's
+ * `user_facing_agent_error` `code` field; the frontend infers a
+ * category when the backend omitted one (e.g. raw transport errors
+ * landing in `done.error` or the WS onclose path).
+ */
+type StreamErrorKind =
+  | "overloaded"
+  | "quota"
+  | "auth"
+  | "network"
+  | "timeout"
+  | "bad_request"
+  | "unknown";
+
+/**
  * Map known English backend error strings to Chinese for a better
  * desktop user experience. Falls through to English for anything
  * unrecognised.
@@ -98,20 +116,20 @@ function localizeStreamError(err: string): string {
     return "无法连接到后端服务，请确认 hermix 进程是否正常运行。";
   }
   // Timeout
-  if (/(timeout|timed\s*out)/i.test(extracted)) {
+  if (/(timeout|timed\s*out|stream_overall_timeout|turn_transition_stall|no_first_chunk)/i.test(extracted)) {
     return "请求超时，请检查网络连接或稍后重试。";
   }
   // auth / token / 401 / 403
   if (/(401|403|unauthorized|forbidden|invalid\s+(api\s*)?key|auth\s+failed)/i.test(extracted)) {
     return "API 密钥认证失败，请检查 Settings → API Keys 中的密钥是否正确。";
   }
-  // Rate limit
-  if (/(rate\s*limit|429|too\s+many\s+requests)/i.test(extracted)) {
-    return extracted;
+  // Rate limit / quota
+  if (/(rate\s*limit|429|too\s+many\s+requests|quota|usage\s+limit|用量上限|token\s+plan)/i.test(extracted)) {
+    return "用量已达上限或触发限流，请稍后重试或检查账户配额。";
   }
-  // Provider overloaded / service unavailable (529 / 503)
-  if (/(529|overloaded|负载较高|service\s+unavailable|503)/i.test(extracted)) {
-    return extracted;
+  // Provider overloaded / service unavailable (529 / 503 / 5xx)
+  if (/(529|overloaded|负载较高|service\s+unavailable|503|server\s+error)/i.test(extracted)) {
+    return "AI 服务暂时过载，请稍后重试。";
   }
   // 400 / bad request — model not found (common MiniMax error)
   if (/(400|bad\s+request|unknown\s+model|invalid\s+model|model.*not\s+found)/i.test(extracted)) {
@@ -138,6 +156,59 @@ function localizeStreamError(err: string): string {
   // Fallback: return the extracted message (already normalized)
   return extracted || err;
 }
+
+/**
+ * Coarse-grained classifier for stream errors. Pairs with
+ * `localizeStreamError` — both are pure functions on the error
+ * string so the StreamErrorCard can render a category-specific
+ * title and icon without leaning on the backend's `code` field.
+ */
+function classifyStreamErrorKind(err: string): StreamErrorKind {
+  const e = err || "";
+  if (/(529|overloaded|负载较高|service\s+unavailable|503|server\s+error|api\s*error\s*5\d{2})/i.test(e)) {
+    return "overloaded";
+  }
+  if (/(429|too\s+many|rate\s*limit|rate_limit|quota|usage\s+limit|用量上限|token\s+plan)/i.test(e)) {
+    return "quota";
+  }
+  if (/(401|403|unauthorized|forbidden|invalid\s+(api\s*)?key|auth\s+failed|no\s+api\s+key|api[\s_]*key.*not)/i.test(e)) {
+    return "auth";
+  }
+  if (/(timeout|timed\s*out|stream_overall_timeout|turn_transition_stall|no_first_chunk)/i.test(e)) {
+    return "timeout";
+  }
+  if (/(connection\s+refused|unreachable|ECONNREFUSED|network\s+error|Failed\s+to\s+fetch|NetworkError|HTTP\s+request\s+failed|websocket|connection\s+closed|econn|reset\s+by\s+peer)/i.test(e)) {
+    return "network";
+  }
+  if (/(400|bad\s+request|unknown\s+model|invalid\s+model|model.*not\s+found|invalid\s+request)/i.test(e)) {
+    return "bad_request";
+  }
+  return "unknown";
+}
+
+/**
+ * The backend's `user_facing_agent_error` emits its own `code`
+ * taxonomy (`provider_overloaded`, `quota_exhausted`, `auth_error`,
+ * `agent_error`). Translate those into the StreamErrorCard's
+ * `StreamErrorKind` so the UI stays decoupled from the wire format.
+ * When the backend omitted a code, fall back to local pattern
+ * matching on the human-readable message.
+ */
+function normalizeStreamErrorKind(
+  code: string | undefined,
+  fallbackText: string,
+): StreamErrorKind {
+  if (!code) return classifyStreamErrorKind(fallbackText);
+  const k = code.toLowerCase();
+  if (k === "provider_overloaded" || k === "overloaded") return "overloaded";
+  if (k === "quota_exhausted" || k === "quota" || k === "rate_limit") return "quota";
+  if (k === "auth_error" || k === "auth" || k === "unauthorized") return "auth";
+  if (k === "timeout") return "timeout";
+  if (k === "network" || k === "transport") return "network";
+  if (k === "bad_request" || k === "invalid_request") return "bad_request";
+  return classifyStreamErrorKind(fallbackText);
+}
+
 const RIGHT_KEY = STORAGE_KEYS.rightWidth;
 const RIGHT_OPEN_KEY = STORAGE_KEYS.rightOpen;
 const ACTIVE_SESSION_KEY = STORAGE_KEYS.activeSession;
@@ -616,7 +687,11 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
    *  friendly, localized summary; `detail` (optional) is the raw,
    *  un-localized backend error shown as a collapsible "技术详情"
    *  subtext so English provider errors don't pollute the main UI. */
-  const [streamError, setStreamError] = useState<{ message: string; detail?: string } | null>(null);
+  const [streamError, setStreamError] = useState<{
+    message: string;
+    detail?: string;
+    kind?: StreamErrorKind;
+  } | null>(null);
   const clearStreamError = useCallback(() => setStreamError(null), []);
 
   /**
@@ -1673,7 +1748,7 @@ streamPhaseRef.current = null;
             }
           },
           onChunk: appendChunk,
-          onError: (err, detail) => {
+          onError: (err, detail, code) => {
             // The error frame arrives immediately (no API key,
             // config error, etc.) — React may batch the
             // setStreamingSessionId(sessionId)+null into one render
@@ -1708,6 +1783,15 @@ streamPhaseRef.current = null;
             const looksRaw = /API error|LLM API error|unknown status code|overloaded|rate limit|timeout|connection refused|unauthorized|forbidden|401|403|429|5\d{2}/i.test(rawForFriendly);
             const friendly = looksRaw ? localizeStreamError(detail ?? err) : rawForFriendly;
             const errText = `⚠️ ${friendly}`;
+            // Promote the (possibly coarse) `code` shipped by the
+            // backend's `user_facing_agent_error` into the
+            // StreamErrorCard's category taxonomy. When the backend
+            // didn't classify (transport-only errors, WS onclose
+            // paths, raw provider rejects) fall back to local
+            // pattern matching on the human-readable strings so the
+            // user always sees a meaningful category instead of
+            // "对话因后端错误中断".
+            const kind = normalizeStreamErrorKind(code, rawForFriendly);
             setStreamPhase(null);
             setSessions((prev) => prev.map((s) => {
               if (s.id !== sessionId) return s;
@@ -1726,7 +1810,7 @@ streamPhaseRef.current = null;
               // Keep the friendly localized message as the primary
               // text; stash the raw backend error as `detail` so the
               // error card can show it as a collapsible "技术详情".
-              setStreamError({ message: friendly, detail });
+              setStreamError({ message: friendly, detail, kind });
             }
             // Clear live sub-agent panel on error — the stream is
             // dead, no more sub-agent events will arrive, and
@@ -2528,7 +2612,11 @@ return {
       // placeholder was filtered out (e.g. the WS rejected the
       // handshake before any chunk landed).
       if (sessionId === activeSessionId) {
-        setStreamError({ message: localizeStreamError(e instanceof Error ? e.message : String(e)) });
+        const eMsg = e instanceof Error ? e.message : String(e);
+        setStreamError({
+          message: localizeStreamError(eMsg),
+          kind: classifyStreamErrorKind(eMsg),
+        });
       }
     }
   }, [activeSessionId, sessions, sendStream]);
