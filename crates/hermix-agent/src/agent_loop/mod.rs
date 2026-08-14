@@ -2045,10 +2045,19 @@ always_include: vec![
         &self,
         ctx: &mut ContextManager,
     ) -> Result<Option<Message>, AgentError> {
+        // 用与主循环 D-step 相同的路由解析取模型名（run_loop.rs:284），
+        // 否则会回退到 config.model 的原始字符串（如小写
+        // `minimax:minimax-m3`），而 provider 只认解析后的
+        // `minimax:MiniMax-M3`，导致 summary 调用 400 后静默丢总结。
+        let active_model = self
+            .resolve_smart_runtime_route(ctx.get_messages())
+            .map(|r| r.model)
+            .unwrap_or_else(|| self.config.model.clone());
         crate::session_lifecycle::handle_max_iterations(
             &self.config,
             &self.llm_provider,
             ctx,
+            &active_model,
         )
         .await
     }

@@ -612,6 +612,7 @@ pub async fn handle_max_iterations(
     config: &AgentConfig,
     llm_provider: &Arc<dyn LlmProvider>,
     ctx: &mut ContextManager,
+    active_model: &str,
 ) -> Result<Option<Message>, AgentError> {
     ctx.add_message(Message::system(
         "[SYSTEM] Maximum conversation turns reached. Please provide a brief summary of \
@@ -623,7 +624,7 @@ pub async fn handle_max_iterations(
             &[],
             config.max_tokens,
             config.temperature,
-            Some(config.model.as_str()),
+            Some(active_model),
             extra_body_for_api_mode(config, &config.api_mode).as_ref(),
         )
         .await

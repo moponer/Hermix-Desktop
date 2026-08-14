@@ -67,9 +67,18 @@ apps/desktop-tauri/src-tauri/.cargo/*
 
 # Release directory (build outputs)
 /release/**
+# 散落到 apps/ 下的 release 是错误位置（统一产物在仓库根 /release/target）
+apps/release/
 
 # Staging directories (cargo/npm artifacts)
 **/*-staging/
+
+# 验证草稿巨目录（cargo/前端校验产物，绝不可提交）
+_verify_hx/
+_verify_target/
+
+# 本地 npm 配置（可能含凭证，不随源码提交）
+apps/desktop-tauri/.npmrc
 
 # Mobile/web app dev
 apps/mobile-app/.expo/

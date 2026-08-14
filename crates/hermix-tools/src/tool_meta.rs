@@ -345,6 +345,10 @@ pub const DEFAULT_RESIDENT_TOOLS: &[&str] = &[
     "task_get",
     // Session
     "session_search",
+    // Custom app management — resident so the LLM can manage custom apps
+    // (install/list/configure) without first discovering the tool through
+    // the tool_search bridge. Custom apps are part of the core workflow.
+    "custom_app_manager",
     // Browser (core set)
     "browser_navigate",
     "browser_snapshot",

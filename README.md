@@ -188,19 +188,27 @@
 
 > **直接跑 cargo 命令即可**，无需 source 任何环境脚本。链接器（`rust-lld.exe` + 显式 LIBPATH）已配置在 `.cargo/config.toml`，不依赖 `LIB` 环境变量。本机 Rust 装在 `C:\Program Files\Rust stable MSVC 1.92`。
 >
-> 产物位置：`.cargo/config.toml` 与 `src-tauri/.cargo/config.toml` 均**不配置** target-dir —— 历史教训：相对路径会按 cargo 当前 cwd 解析，tauri build 在 src-tauri 跑时曾上溯 4 级把产物写到仓库外 `<repo-parent>\release\target`（已废弃）。默认产物全在仓库内（见下），如需统一位置（如 CI 打包）用环境变量 `CARGO_TARGET_DIR` 覆盖。
+> 产物位置：`.cargo/config.toml` 与 `src-tauri/.cargo/config.toml` 均**不配置** target-dir（铁律）。项目约定**统一产物到仓库根 `<仓库根>/release/target/`**：`npm run dev` / `npm run build` 脚本已自动 `set CARGO_TARGET_DIR=..\..\release\target`（含 hx-shell 壳），前后端 + Tauri 应用 + NSIS 安装包全部落入该目录。⚠️ **裸跑 `cargo tauri dev/build`（不走 npm）必须先手动 `set CARGO_TARGET_DIR=..\..\release\target`**，否则 cargo 会在 `src-tauri/target/` 或仓库根 `target/` 新建散目录（已废弃）。
 
 ### 产物位置
 
-默认（仓库内，gitignore 已覆盖，不会污染 git）：
+项目约定统一（推荐，npm 脚本自动设好 `CARGO_TARGET_DIR=..\..\release\target`）：
 
 ```
-纯 cargo（仓库根跑）     → <仓库根>/target/
-src-tauri 内跑 cargo     → apps/desktop-tauri/src-tauri/target/
+<仓库根>/release/target/
+├── debug/      # dev：hermix.exe（后端 sidecar）+ tauri 应用
+├── release/    # build：hermix.exe + hermix-desktop.exe + hx-shell.exe + NSIS bundle
+└── （所有 workspace crate 的中间产物）
 ```
 
-设了 `CARGO_TARGET_DIR` 后统一（可选项，各环境自己决定）：
-`<该路径>/release/` 下是 CLI + 桌面 exe + NSIS bundle 三合一。
+hx-shell 壳（独立 workspace）经 npm 脚本同样落入此处；由 `package.json` 的 `_:sync-shell`
+（→ `src-tauri/resources/loader`，装包资源）与 `_:sync-shell-runtime`（→ `~/.hermix/loader`，
+运行时）在 build/dev 期同步最新 `hx-shell.exe`（注：`build.rs` 因编译时机限制无法自同步，已弃用）。
+
+⚠️ 以下旧目录已废弃（不要再产生，会偏离统一约定并散落）：
+- `<仓库根>/target/`（仓库根裸跑 cargo 的默认位置）
+- `apps/desktop-tauri/src-tauri/target/`（tauri 裸跑的默认位置）
+- `apps/hx-shell/target/`（旧 993M 独立目录，已删除 + 去掉 `config.toml` 硬编码 target-dir）
 
 ### 编译命令
 
@@ -225,7 +233,7 @@ cd apps/desktop-tauri && cargo tauri build --no-bundle
 cd apps/desktop-tauri && cargo tauri build
 ```
 
-产物落 `apps/desktop-tauri/src-tauri/target/release/`：
+产物落 `<仓库根>/release/target/release/`：
 
 ```
 ├── hermix-desktop.exe                    # 裸 exe（内嵌前端 + spawn sidecar）
@@ -235,7 +243,7 @@ cd apps/desktop-tauri && cargo tauri build
 
 `--no-bundle` 只跳过打包步骤（适合本地跑，快几分钟）；完整 `cargo tauri build` 额外产 NSIS 安装包（压缩 + 安装向导 + 快捷方式 + 卸载注册，分发给别人用）。两者 exe 代码完全一致。
 
-**Windows MSVC 构建**：源码编译需要 MSVC 环境。链接器用 `rust-lld.exe`（`.cargo/config.toml` 已配 + 显式 LIBPATH，不依赖 `LIB` 环境变量），产物位置默认仓库内 `target/`，可被 `CARGO_TARGET_DIR` 覆盖。
+**Windows MSVC 构建**：源码编译需要 MSVC 环境。链接器用 `rust-lld.exe`（`.cargo/config.toml` 已配 + 显式 LIBPATH，不依赖 `LIB` 环境变量），产物统一落在 `<仓库根>/release/target/`（由 npm 脚本的 `CARGO_TARGET_DIR` 控制；裸跑须手动设）。
 
 ---
 

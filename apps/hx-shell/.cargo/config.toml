@@ -1,6 +1,8 @@
 [build]
-# 独立 target 目录，避免与 hermix workspace 的 release/target 冲突
-target-dir = "target"
+# 不配置 target-dir：统一产物位置由 CARGO_TARGET_DIR 环境变量决定
+# （npm run build/dev 已设 CARGO_TARGET_DIR=../../release，hx-shell 与
+#  hermix-server/tauri 共用 release/target，避免多产物目录分裂）。
+# 手动 `cd apps/hx-shell && cargo build` 不设 env 时退回默认 apps/hx-shell/target。
 
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld.exe"

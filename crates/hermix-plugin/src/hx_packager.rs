@@ -240,8 +240,9 @@ impl HxShellPackager {
         Ok((html_vec, icon_bytes))
     }
 
-    /// 打包 app 目录 → dist/<id>.exe（单文件）+ WebView2Loader.dll
-    /// `mode` 参数保留接口兼容（Sidecar/NeuBuild 结果相同）。
+    /// 打包 app 目录 → dist/<id>.exe（单文件分发）。
+    /// WebView2Loader 在 MSVC 下由 webview2-com-sys 静态链接进 shell exe，
+    /// 运行时无需外部 dll，故 dist 只产出这一个 exe。`mode` 参数保留接口兼容。
     pub fn package(&self, app_dir: &Path, id: &str, _mode: PackageMode) -> Result<PathBuf, HxPackError> {
         self.ensure_shell_deployed();
         let shell = std::fs::read(&self.shell_path).map_err(|_| {
@@ -273,10 +274,10 @@ impl HxShellPackager {
             std::fs::write(&exe_path, out)?;
         }
 
-        if self.loader_dll_path.exists() {
-            let dst = dist_dir.join("WebView2Loader.dll");
-            let _ = std::fs::copy(&self.loader_dll_path, dst);
-        }
+        // 单文件分发：dist 只产出 <id>.exe 一个文件。
+        // WebView2Loader 在 MSVC 构建下由 webview2-com-sys 静态链接进
+        // shell exe（link kind = "static"），运行时不需要兄弟 dll；
+        // 不复制 loader_dll_path，避免 dist 出现第二个文件。
 
         // ── 第二层: 把同一个图标嵌入 dist exe 的 Windows 资源表 ──
         //
@@ -396,36 +397,59 @@ fn sign_exe_if_configured(exe_path: &Path) {
         .unwrap_or_else(|_| "http://timestamp.digicert.com".to_string());
     let signtool = std::env::var("HERMIX_SIGNTOOL").unwrap_or_else(|_| "signtool".to_string());
 
-    let status = std::process::Command::new(&signtool)
-        .args([
-            "sign",
-            "/fd",
-            "SHA256",
-            "/tr",
-            &timestamp,
-            "/td",
-            "SHA256",
-            "/f",
-            &pfx,
-            "/p",
-            &password,
-            &exe_path.to_string_lossy(),
-        ])
-        .status();
+    // signtool 连外部 RFC3161 时间戳服务器(http://timestamp.digicert.com),
+    // 服务器不可达时会**永久挂起**且 signtool 自身无内部超时。
+    // 若在当前线程同步 .status() 阻塞, 会冻结调用方所在的 async worker,
+    // 导致外层 60s 超时无法抢占、整个 agent loop 卡死。
+    // 因此必须在独立线程跑 + 30s 超时, 超时则跳过签名、绝不阻塞主流程。
+    let exe = exe_path.to_path_buf();
+    let exe_for_thread = exe.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<std::process::ExitStatus, String>>();
+    let _sign_thread = std::thread::spawn(move || {
+        let r = std::process::Command::new(&signtool)
+            .args([
+                "sign",
+                "/fd",
+                "SHA256",
+                "/tr",
+                &timestamp,
+                "/td",
+                "SHA256",
+                "/f",
+                &pfx,
+                "/p",
+                &password,
+                &exe_for_thread.to_string_lossy(),
+            ])
+            .status();
+        let _ = tx.send(r.map_err(|e| e.to_string()));
+    });
 
-    match status {
-        Ok(s) if s.success() => {
-            tracing::info!("代码签名成功: {}", exe_path.display());
+    match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+        Ok(Ok(s)) if s.success() => {
+            tracing::info!("代码签名成功: {}", exe.display());
         }
-        Ok(s) => {
+        Ok(Ok(s)) => {
             tracing::warn!(
                 "signtool 退出码 {s}（签名失败，exe 未签名）: {}",
-                exe_path.display()
+                exe.display()
             );
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::warn!(
                 "无法启动 signtool（请确保 signtool 在 PATH 或设 HERMIX_SIGNTOOL）: {e}；exe 未签名"
+            );
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            tracing::warn!(
+                "signtool 30s 超时（时间戳服务器可能不可达），跳过签名以避免阻塞主流程: {}",
+                exe.display()
+            );
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            tracing::warn!(
+                "signtool 信道断开（签名线程异常退出），跳过签名: {}",
+                exe.display()
             );
         }
     }
