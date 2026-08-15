@@ -3,18 +3,24 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/Sidebar";
 import { ChatView } from "./components/ChatView";
 import { ImageLightbox } from "./components/ImageLightbox";
-import { AutomationView } from "./components/AutomationView";
-import { SettingsView } from "./components/SettingsView";
-import { SearchView } from "./components/SearchView";
-import { PluginsView } from "./components/PluginsView";
-import { AgentsView } from "./components/AgentsView";
-import { GroupChatView } from "./components/GroupChatView";
-import { AnalyticsView } from "./components/AnalyticsView";
-import { CustomAppsView } from "./components/CustomAppsView";
-import { RightSidebar, PreviewPanel, type RightTab } from "./components/RightSidebar";
+import { RightSidebar, type RightTab } from "./components/RightSidebar";
 import { TitleBar } from "./components/TitleBar";
 import { useStreamChat } from "./hooks/useStreamChat";
-import { StreamChatContext } from "./context/StreamChatContext";
+import { AppProviders } from "./app/AppProviders";
+import { renderRoutes, type RouteContext } from "./app/routes";
+import { ArtifactPreviewModal } from "./app/ArtifactPreviewModal";
+import { useAppBootstrap } from "./app/useAppBootstrap";
+import {
+  readDraftWorkspace,
+  localizeStreamError,
+  classifyStreamErrorKind,
+  normalizeStreamErrorKind,
+  type StreamErrorKind,
+  appendReasoningStep,
+  appendTextStep,
+  appendToolStep,
+  updateToolStepStdout,
+} from "./app/streamEvents";
 import type { StreamPhase, TodoSnapshotItem } from "./hooks/useStreamChat";
 import type { SubAgentState, SubAgentEventPayload } from "./types";
 import { useResizable } from "./hooks/useResizable";
@@ -29,186 +35,13 @@ import type { Artifact } from "./utils/artifacts";
 import { classifyArtifactKind } from "./utils/artifacts";
 import * as api from "./api";
 import { registerBuiltinsToBackend } from "./data/builtinExperts";
-import type { NavPage, Session, ChatMessage, ApprovalDecision, TimelineStep, ExecutionTimelineEvent, QueuedMessage, QueuedImage, ChatMessageImage } from "./types";
+import type { NavPage, Session, ChatMessage, ApprovalDecision, QueuedMessage, QueuedImage, ChatMessageImage } from "./types";
 // expandTimelineToMessages and detectToolError imports removed —
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
-import { storage, STORAGE_KEYS, KNOWN_KEYS, sessionKey } from "./utils/storageCompat";
-
-// Welcome-state draft workspace. Read at App-level so
-// both `handleNewChat` (新建对话 button) and `handleSendMessage`
-// (first send in an empty session) can pass it to
-// `api.createSession(title, project)` — that way the server records
-// it on `sessions.workspace` from the start, and a desktop restart
-// restores the same Sidebar bucket instead of dumping the row into
-// "未分组"（draft workspace 未随 session 持久化的回归）。
-function readDraftWorkspace(): string | null {
-  try {
-    return storage.getItem(STORAGE_KEYS.draftWorkspace);
-  } catch {
-    return null;
-  }
-}
+import { storage, STORAGE_KEYS, sessionKey } from "./utils/storageCompat";
 
 const LEFT_KEY = STORAGE_KEYS.sidebarWidth;
-
-/**
- * Coarse-grained error category used by the stream error card to
- * pick an icon, title, and short hint. Mirrors the backend's
- * `user_facing_agent_error` `code` field; the frontend infers a
- * category when the backend omitted one (e.g. raw transport errors
- * landing in `done.error` or the WS onclose path).
- */
-type StreamErrorKind =
-  | "overloaded"
-  | "quota"
-  | "auth"
-  | "network"
-  | "timeout"
-  | "bad_request"
-  | "unknown";
-
-/**
- * Map known English backend error strings to Chinese for a better
- * desktop user experience. Falls through to English for anything
- * unrecognised.
- */
-function localizeStreamError(err: string): string {
-  // Normalize: strip redundant wrappers ("LLM API error:" repeated, etc.)
-  const normalized = err
-    .replace(/^LLM\s+API\s+error:\s*/gi, "")
-    .replace(/^LLM\s+API\s+error:\s*/gi, "")
-    .replace(/^API\s+error:\s*/gi, "")
-    .trim();
-
-  // Try to extract a human-readable message from JSON error bodies
-  // e.g. {"error":{"message":"unknown model..."}} or {"type":"error","error":{...}}
-  let extracted = normalized;
-  try {
-    const parsed = JSON.parse(normalized);
-    const msg =
-      parsed?.error?.message ??
-      parsed?.error?.error?.message ??
-      parsed?.message ??
-      null;
-    if (msg && typeof msg === "string") {
-      extracted = msg;
-    }
-  } catch {
-    // not JSON — keep normalized as-is
-  }
-
-  // No API key configured for provider
-  if (
-    /no\s+api\s+key/i.test(extracted) ||
-    /api[\s_]*key[\s:]*(not\s+found|missing|empty|not\s+configured)/i.test(extracted)
-  ) {
-    return "LLM API 密钥未配置。请前往「设置 → API Keys」添加 API 密钥后重试。";
-  }
-  // LLM provider URL not configured
-  if (
-    /no\s+llm_provider_url/i.test(extracted) ||
-    /provider.*url.*not\s+configured/i.test(extracted)
-  ) {
-    return "LLM 服务地址未配置。请检查 Settings → API Keys 中的服务地址配置。";
-  }
-  // Connection refused / unreachable
-  if (/(refused|unreachable|connection\s+refused|ECONNREFUSED)/i.test(extracted)) {
-    return "无法连接到后端服务，请确认 hermix 进程是否正常运行。";
-  }
-  // Timeout
-  if (/(timeout|timed\s*out|stream_overall_timeout|turn_transition_stall|no_first_chunk)/i.test(extracted)) {
-    return "请求超时，请检查网络连接或稍后重试。";
-  }
-  // auth / token / 401 / 403
-  if (/(401|403|unauthorized|forbidden|invalid\s+(api\s*)?key|auth\s+failed)/i.test(extracted)) {
-    return "API 密钥认证失败，请检查 Settings → API Keys 中的密钥是否正确。";
-  }
-  // Rate limit / quota
-  if (/(rate\s*limit|429|too\s+many\s+requests|quota|usage\s+limit|用量上限|token\s+plan)/i.test(extracted)) {
-    return "用量已达上限或触发限流，请稍后重试或检查账户配额。";
-  }
-  // Provider overloaded / service unavailable (529 / 503 / 5xx)
-  if (/(529|overloaded|负载较高|service\s+unavailable|503|server\s+error)/i.test(extracted)) {
-    return "AI 服务暂时过载，请稍后重试。";
-  }
-  // 400 / bad request — model not found (common MiniMax error)
-  if (/(400|bad\s+request|unknown\s+model|invalid\s+model|model.*not\s+found)/i.test(extracted)) {
-    // Extract the model name if present
-    const modelMatch = extracted.match(/model\s+['"]?([^\s'"]+)['"]?/i);
-    const modelName = modelMatch ? modelMatch[1] : null;
-    return modelName
-      ? `模型「${modelName}」不可用，请在输入框左侧切换模型后重试。`
-      : "模型不可用或参数错误，请检查模型配置后重试。";
-  }
-  // WebSocket / connection lost
-  if (/WebSocket\s*error/i.test(extracted)) {
-    return "连接异常（WebSocket 错误），请检查网络后重新发送消息。";
-  }
-  if (/Connection\s*closed/i.test(extracted)) {
-    return "连接已断开，请重新发送消息。";
-  }
-  // Browser fetch / HTTP request failures often contain the provider URL,
-  // which is not useful in the composer and makes the banner look like a
-  // raw log line. Reduce these to a short actionable message.
-  if (/(HTTP\s+request\s+failed|Failed\s+to\s+fetch|NetworkError|network\s+error|error\s+sending\s+request)/i.test(extracted)) {
-    return "网络请求失败，请检查网络连接或稍后重试。";
-  }
-  // Fallback: return the extracted message (already normalized)
-  return extracted || err;
-}
-
-/**
- * Coarse-grained classifier for stream errors. Pairs with
- * `localizeStreamError` — both are pure functions on the error
- * string so the StreamErrorCard can render a category-specific
- * title and icon without leaning on the backend's `code` field.
- */
-function classifyStreamErrorKind(err: string): StreamErrorKind {
-  const e = err || "";
-  if (/(529|overloaded|负载较高|service\s+unavailable|503|server\s+error|api\s*error\s*5\d{2})/i.test(e)) {
-    return "overloaded";
-  }
-  if (/(429|too\s+many|rate\s*limit|rate_limit|quota|usage\s+limit|用量上限|token\s+plan)/i.test(e)) {
-    return "quota";
-  }
-  if (/(401|403|unauthorized|forbidden|invalid\s+(api\s*)?key|auth\s+failed|no\s+api\s+key|api[\s_]*key.*not)/i.test(e)) {
-    return "auth";
-  }
-  if (/(timeout|timed\s*out|stream_overall_timeout|turn_transition_stall|no_first_chunk)/i.test(e)) {
-    return "timeout";
-  }
-  if (/(connection\s+refused|unreachable|ECONNREFUSED|network\s+error|Failed\s+to\s+fetch|NetworkError|HTTP\s+request\s+failed|websocket|connection\s+closed|econn|reset\s+by\s+peer)/i.test(e)) {
-    return "network";
-  }
-  if (/(400|bad\s+request|unknown\s+model|invalid\s+model|model.*not\s+found|invalid\s+request)/i.test(e)) {
-    return "bad_request";
-  }
-  return "unknown";
-}
-
-/**
- * The backend's `user_facing_agent_error` emits its own `code`
- * taxonomy (`provider_overloaded`, `quota_exhausted`, `auth_error`,
- * `agent_error`). Translate those into the StreamErrorCard's
- * `StreamErrorKind` so the UI stays decoupled from the wire format.
- * When the backend omitted a code, fall back to local pattern
- * matching on the human-readable message.
- */
-function normalizeStreamErrorKind(
-  code: string | undefined,
-  fallbackText: string,
-): StreamErrorKind {
-  if (!code) return classifyStreamErrorKind(fallbackText);
-  const k = code.toLowerCase();
-  if (k === "provider_overloaded" || k === "overloaded") return "overloaded";
-  if (k === "quota_exhausted" || k === "quota" || k === "rate_limit") return "quota";
-  if (k === "auth_error" || k === "auth" || k === "unauthorized") return "auth";
-  if (k === "timeout") return "timeout";
-  if (k === "network" || k === "transport") return "network";
-  if (k === "bad_request" || k === "invalid_request") return "bad_request";
-  return classifyStreamErrorKind(fallbackText);
-}
 
 const RIGHT_KEY = STORAGE_KEYS.rightWidth;
 const RIGHT_OPEN_KEY = STORAGE_KEYS.rightOpen;
@@ -262,107 +95,6 @@ function computeLeftMin(vw: number): number {
 // 这样 setup 时窗口已确定，能拿到实际视口宽度。
 // eslint-disable-next-line prefer-const
 // (上面保留 computeMainMinWidth / computeLeftMin 供 typing 引用)
-
-// ── Unified timeline step helpers ─────────────────────────────────
-// These functions maintain the `unified_steps` array on the streaming
-// assistant message. They track phase transitions (reasoning → tools →
-// text) so that multi-iteration agent loops display each step in
-// chronological order instead of a fixed 3-section layout.
-
-/**
- * Append reasoning text to the last reasoning step, or push a new one.
- *
- * When the LLM (e.g. MiniMax M3) sends `reasoning_content`
- * and `content` in the same SSE chunk, the server forwards them as
- * separate `StreamEvent::Thinking` and `StreamEvent::Text` events.
- * The text event creates a "text" step that breaks reasoning accumulation,
- * causing a single thinking process to render as multiple "已深度思考"
- * blocks. Fix: scan backwards past "text" steps to find the last
- * "reasoning" step. If found, append to it so all reasoning stays in
- * one collapsible block. Only "text" steps are skipped — "tools" or
- * other step types mark a real phase boundary and trigger a new block.
- */
-function appendReasoningStep(steps: TimelineStep[] | undefined, content: string): TimelineStep[] {
-  const arr = steps ? [...steps] : [];
-  const last = arr[arr.length - 1];
-  if (last && last.kind === "reasoning") {
-    arr[arr.length - 1] = { kind: "reasoning", content: last.content + content };
-    return arr;
-  }
-  // Scan backwards past "text" steps to find the last "reasoning" step.
-  // This prevents interleaved text events from splitting the reasoning.
-  for (let i = arr.length - 1; i >= 0; i--) {
-    if (arr[i].kind === "reasoning") {
-      arr[i] = { kind: "reasoning", content: (arr[i] as { content: string }).content + content };
-      return arr;
-    }
-    // Non-text step (e.g. "tools") marks a real phase boundary — stop.
-    if (arr[i].kind !== "text") {
-      break;
-    }
-  }
-  arr.push({ kind: "reasoning", content });
-  return arr;
-}
-
-/** Append text to the last text step, or push a new one. */
-function appendTextStep(steps: TimelineStep[] | undefined, content: string): TimelineStep[] {
-  const arr = steps ? [...steps] : [];
-  const last = arr[arr.length - 1];
-  if (last && last.kind === "text") {
-    arr[arr.length - 1] = { kind: "text", content: last.content + content };
-  } else {
-    arr.push({ kind: "text", content });
-  }
-  return arr;
-}
-
-/** Append a tool event to the last tools step, or push a new one. */
-function appendToolStep(steps: TimelineStep[] | undefined, event: ExecutionTimelineEvent): TimelineStep[] {
-  const arr = steps ? [...steps] : [];
-  const last = arr[arr.length - 1];
-  if (last && last.kind === "tools") {
-    arr[arr.length - 1] = { kind: "tools", events: [...last.events, event] };
-  } else {
-    arr.push({ kind: "tools", events: [event] });
-  }
-  return arr;
-}
-
-/**
- * Update (or create) a `tool_stdout` event in the last tools step,
- * mirroring the same logic that `onToolChunk` applies to
- * `execution_timeline`. This keeps the unified_steps in sync so the
- * rendered tool cards show live stdout.
- */
-function updateToolStepStdout(
-  steps: TimelineStep[] | undefined,
-  toolCallId: string,
-  content: string,
-): TimelineStep[] {
-  const arr = steps ? [...steps] : [];
-  const lastIdx = arr.length - 1;
-  if (lastIdx < 0 || arr[lastIdx].kind !== "tools") return arr;
-  const events = [...arr[lastIdx].events];
-  let found = false;
-  for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i].type === "tool_stdout" && events[i].tool_call_id === toolCallId) {
-      events[i] = { ...events[i], content: (events[i].content ?? "") + content };
-      found = true;
-      break;
-    }
-  }
-  if (!found) {
-    events.push({
-      type: "tool_stdout",
-      tool_call_id: toolCallId,
-      content,
-      created_at: new Date().toISOString(),
-    });
-  }
-  arr[lastIdx] = { kind: "tools", events };
-  return arr;
-}
 
 export default function App() {
   const [page, setPageRaw] = useState<NavPage>("chat");
@@ -428,76 +160,6 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // 窗口高度自适应屏幕 — Tauri 默认 860px 高，在 768p 屏幕（1366×768 笔记本）
-  // 上窗口底部 92px 落到屏幕外。启动时若窗口高度超出屏幕可用高度则缩到刚好适配。
-  // 注意：outerSize 返回物理像素，需除以 scaleFactor 换算逻辑像素再跟 screen.availHeight 比较。
-  // 同时避开 Windows 任务栏/系统栏占用（availHeight < screen.height）。
-  // 不阻塞启动流程 — 失败也不影响 app 正常运行。
-  useEffect(() => {
-    const fit = async () => {
-      try {
-        const outer = await appWindow.outerSize();
-        const factor = await appWindow.scaleFactor();
-        const logicalH = Math.max(1, Math.round(outer.height / factor));
-        // 用 screen.availHeight 而不是 screen.height，避开任务栏/系统栏高度。
-        // 额外留 40px 底边距让用户能托动窗口边缘。
-        const maxH = window.screen.availHeight - 40;
-        if (logicalH > maxH) {
-          await appWindow.setSize(new LogicalSize(DEFAULT_WINDOW_WIDTH, maxH));
-        }
-      } catch {
-        // best-effort: 启动流程不因窗口适配失败而阻塞
-      }
-    };
-    fit();
-  }, []);
-  // One-shot: copy any `hermes.*` localStorage entries forward to
-  // `hermix.*` so users on a pre-rename install keep their settings.
-  // Idempotent: gated by `hermix.compat.migrated` flag inside the helper.
-  useEffect(() => {
-    // Iterate the canonical registry so newly added STORAGE_KEYS are
-    // auto-migrated. Draft keys are intentionally cleared below,
-    // not migrated, to avoid cross-restart residue in the welcome UI.
-    storage.migrateLegacyKeys(KNOWN_KEYS);
-
-    // 欢迎界面（无 session）用的 draft 槽位（hermix.desktop.draft.*）不持久化，
-    // 否则上次的选择会跨重启残留。每次启动清除，让用户在新会话从头选择。
-    try { storage.removeItem(STORAGE_KEYS.draftExpertId); } catch {}
-    try { storage.removeItem(STORAGE_KEYS.draftWorkspace); } catch {}
-
-    // 启动诊断：把所有 hermix.* key 打到 console，便于在 devtools 直接看 localStorage
-    // 实际状态 — 区分"数据没写"还是"数据写了没读"。**仅在 dev build 跑**
-    // （import.meta.env.DEV）：生产构建时 Vite 直接 dead-code-eliminate，不影响产物。
-    // 可读 localStorage 失败时静默，避免控制台噪音。
-    if (import.meta.env.DEV) {
-      try {
-        const dump: Record<string, string> = {};
-        for (let i = 0; i < window.localStorage.length; i++) {
-          const k = window.localStorage.key(i);
-          if (k && k.startsWith("hermix.")) {
-            const v = window.localStorage.getItem(k) ?? "";
-            dump[k] = v.length > 200 ? v.slice(0, 200) + `…(${v.length} chars)` : v;
-          }
-        }
-        console.info("[hermix-boot] localStorage dump:", dump);
-        // Also expose a console helper so the user can re-dump at any time
-        // after interacting with Settings (without a hard reload).
-        (window as unknown as { __hermixDumpLs?: () => void }).__hermixDumpLs = () => {
-          const out: Record<string, string> = {};
-          for (let i = 0; i < window.localStorage.length; i++) {
-            const k = window.localStorage.key(i);
-            if (k && k.startsWith("hermix.")) {
-              const v = window.localStorage.getItem(k) ?? "";
-              out[k] = v.length > 200 ? v.slice(0, 200) + `…(${v.length} chars)` : v;
-            }
-          }
-          console.info("[hermix-ls] dump:", out);
-          return out;
-        };
-      } catch {}
-    }
-  }, []);
-
   const [activeSessionId, setActiveSessionIdRaw] = useState<string | null>(() => {
     try { return storage.getItem(ACTIVE_SESSION_KEY); } catch { return null; }
   });
@@ -545,6 +207,10 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const THREE_COL_MIN_VIEWPORT = 1140;
   const DEFAULT_WINDOW_WIDTH = 1280;
   const appWindow = getCurrentWindow();
+
+  // 启动引导：窗口高度适配 + 旧版 localStorage key 迁移 + dev 诊断 dump。
+  // 具体副作用已抽到 ./app/useAppBootstrap，此处仅组合调用。
+  useAppBootstrap(DEFAULT_WINDOW_WIDTH);
 
   // 切换右栏：视口 < 三列临界时，先 await 把窗口扩到能装下三列，再 setRightOpen(true)；
   // resize 路径仍由 viewport-aware effect 处理（装不下就关右栏）。
@@ -2825,8 +2491,84 @@ return {
     } catch {}
   }, [activeSessionId]);
 
+  // 路由上下文：chat 页面 props 复杂，预先渲染为 chatNode 元素传入路由表，
+  // 其余页面由 ./app/routes 的 renderRoutes 按 page 分发。
+  const chatViewNode = (
+    <ChatView
+      session={activeSession}
+      onSendMessage={handleSendMessage}
+      onNewChat={handleNewChat}
+      pendingPrefill={pendingPrefill}
+      onConsumePrefill={() => setPendingPrefill(null)}
+      // inline todo cards in the message stream.
+      // App owns the groups store; ChatView renders one card per
+      // group right after the originating assistant message.
+      todoGroups={todoGroups}
+      subAgents={subAgents}
+      onTodoPatch={async (id, patch) => {
+        try {
+          await api.patchTodo(id, patch);
+        } catch (e) {
+          console.error('[App] patchTodo failed', e);
+          throw e;
+        }
+      }}
+      justPatchedTodoRef={justPatchedTodoRef}
+      onOpenExperts={() => setPage("experts")}
+      onOpenSettings={() => setPage("settings")}
+      onOpenComputer={openComputer}
+      onUndo={handleUndo}
+      onRestore={handleRestore}
+      onSwitchModel={handleSwitchModel}
+      streamingPhase={streamPhase ?? (isStreamingActiveSession ? "streaming" : null)}
+      pendingToolsCount={pendingToolsCount}
+      environmentLabel="本地Hermix"
+      isSandbox={false}
+      branch="main"
+      workspaceRoot={workspaceRoot}
+      onWorkspaceChange={onWorkspaceChange}
+      onApproveApproval={handleApproveApproval}
+      onDenyApproval={handleDenyApproval}
+      onAnswerClarify={handleAnswerClarify}
+      acuiState={acui.state}
+      acuiBus={acuiBus}
+      acuiStats={acui.stats}
+      messageQueue={messageQueue}
+      onAddToQueue={(msg) => setMessageQueue(prev => prev.some((m) => m.text === msg.text) ? prev : [...prev, msg])}
+      onClearQueue={() => setMessageQueue([])}
+      onRemoveFromQueue={removeFromQueue}
+      onEditQueueItem={editQueueItem}
+      onSendFromQueue={sendFromQueue}
+      messageLoadError={
+        activeSessionId ? messageLoadErrors.get(activeSessionId) ?? null : null
+      }
+      onRetryLoad={() => {
+        if (activeSessionId) {
+          void handleSelectSession(activeSessionId);
+        }
+      }}
+      streamError={streamError}
+      onClearStreamError={clearStreamError}
+      onRetryLastMessage={retryLastMessage}
+      prefetchIntent={prefetchIntent}
+      rightOpen={rightOpen}
+      onToggleRight={handleToggleRight}
+      onEnterWelcome={handleEnterWelcome}
+      onPathClick={handlePathClick}
+      pendingFileAttachment={pendingFileAttachment}
+      onConsumeFileAttachment={() => setPendingFileAttachment(null)}
+    />
+  );
+  const routesCtx: RouteContext = {
+    sessions,
+    handleSelectSession,
+    selectedRoomId,
+    startCreateAppFlow,
+    chatNode: chatViewNode,
+  };
+
   return (
-    <StreamChatContext.Provider value={streamChatApi}>
+    <AppProviders value={streamChatApi}>
     <div className="app-shell">
       <TitleBar
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
@@ -2912,81 +2654,7 @@ return {
             it auto-collapses to two columns at 1140px. */}
         <ErrorBoundary name="主内容区">
         <main className="pane pane-main min-w-0 flex-1">
-          {page === "chat" && (
-            <ChatView
-              session={activeSession}
-              onSendMessage={handleSendMessage}
-              onNewChat={handleNewChat}
-              pendingPrefill={pendingPrefill}
-              onConsumePrefill={() => setPendingPrefill(null)}
-              // inline todo cards in the message stream.
-              // App owns the groups store; ChatView renders one card per
-              // group right after the originating assistant message.
-              todoGroups={todoGroups}
-              subAgents={subAgents}
-              onTodoPatch={async (id, patch) => {
-                try {
-                  await api.patchTodo(id, patch);
-                } catch (e) {
-                  console.error('[App] patchTodo failed', e);
-                  throw e;
-                }
-              }}
-              justPatchedTodoRef={justPatchedTodoRef}
-              onOpenExperts={() => setPage("experts")}
-              onOpenSettings={() => setPage("settings")}
-              onOpenComputer={openComputer}
-              onUndo={handleUndo}
-              onRestore={handleRestore}
-              onSwitchModel={handleSwitchModel}
-              streamingPhase={streamPhase ?? (isStreamingActiveSession ? "streaming" : null)}
-              pendingToolsCount={pendingToolsCount}
-              environmentLabel="本地Hermix"
-              isSandbox={false}
-              branch="main"
-              workspaceRoot={workspaceRoot}
-              onWorkspaceChange={onWorkspaceChange}
-              onApproveApproval={handleApproveApproval}
-              onDenyApproval={handleDenyApproval}
-              onAnswerClarify={handleAnswerClarify}
-              acuiState={acui.state}
-              acuiBus={acuiBus}
-              acuiStats={acui.stats}
-              messageQueue={messageQueue}
-              onAddToQueue={(msg) => setMessageQueue(prev => prev.some((m) => m.text === msg.text) ? prev : [...prev, msg])}
-              onClearQueue={() => setMessageQueue([])}
-              onRemoveFromQueue={removeFromQueue}
-              onEditQueueItem={editQueueItem}
-              onSendFromQueue={sendFromQueue}
-              messageLoadError={
-                activeSessionId ? messageLoadErrors.get(activeSessionId) ?? null : null
-              }
-              onRetryLoad={() => {
-                if (activeSessionId) {
-                  void handleSelectSession(activeSessionId);
-                }
-              }}
-              streamError={streamError}
-              onClearStreamError={clearStreamError}
-              onRetryLastMessage={retryLastMessage}
-              prefetchIntent={prefetchIntent}
-              rightOpen={rightOpen}
-              onToggleRight={handleToggleRight}
-              onEnterWelcome={handleEnterWelcome}
-              onPathClick={handlePathClick}
-              pendingFileAttachment={pendingFileAttachment}
-              onConsumeFileAttachment={() => setPendingFileAttachment(null)}
-            />
-          )}
-          {page === "search" && <SearchView sessions={sessions} onSelectSession={handleSelectSession} />}
-          {page === "plugins" && <PluginsView />}
-          {page === "automation" && <AutomationView />}
-          {page === "agents" && <AgentsView />}
-          {page === "groupchat" && <GroupChatView initialRoomId={selectedRoomId} />}
-          {page === "experts" && <AgentsView initialTab="builtin" />}
-          {page === "analytics" && <AnalyticsView />}
-{page === "customapps" && <CustomAppsView onStartCreateApp={startCreateAppFlow} />}
-          {page === "settings" && <SettingsView />}
+          {renderRoutes(page, routesCtx)}
         </main>
         </ErrorBoundary>        {/* Right sidebar — grid column 3; 0px when closed (collapsed), full
             width when open. Grid ensures main content (column 2, 1fr) is
@@ -3044,96 +2712,6 @@ return {
       <ToastContainer />
       <ImageLightbox />
     </div>
-    </StreamChatContext.Provider>
-  );
-}
-
-/**
- * Full-window modal that displays an artifact's content.
- *
- * Mounted at the App root so it overlays everything — sidebar,
- * right sidebar, titlebar — with a backdrop click + ESC + close
- * button for dismissal. Keeps the preview pane **completely
- * independent** of the artifact sidebar: closing the modal does
- * not touch the sidebar's state, and the sidebar's state does not
- * leak into the modal.
- */
-function ArtifactPreviewModal({
-  artifact,
-  workspaceRoot,
-  onClose,
-}: {
-  artifact: Artifact;
-  workspaceRoot?: string | null;
-  onClose: () => void;
-}) {
-  // ESC closes the modal. Effect attaches the listener only while
-  // the modal is mounted; cleanup removes it on unmount so we don't
-  // leak handlers when the user navigates to other views.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      className="fixed inset-0 z-[60] flex items-stretch justify-center"
-      // Backdrop click closes the modal. We deliberately use a
-      // direct `onClick` (not a stopPropagation wrapper) — child
-      // clicks bubble up through the panel but we check `e.target
-      // === e.currentTarget` so panel-internal clicks don't
-      // accidentally close it.
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      // Two-layer backdrop: a 65% black scrim for contrast + a soft
-      // 2px blur of the underlying app, so the dialog reads as a
-      // genuine "floating" surface rather than a hard pop. The blur
-      // is small on purpose — the desktop UI behind is the user's
-      // own chat, over-blurring it would feel like the app froze.
-      style={{
-        background: "var(--color-overlay-scrim)",
-        backdropFilter: "blur(2px)",
-        WebkitBackdropFilter: "blur(2px)",
-      }}
-    >
-      <div
-        // Modal box — premium frame:
-        // • width: 1100px cap (92vw on narrow screens)
-        // • height: 88vh so the desktop titlebar is still visible
-        // for drag/resize affordance
-        // • 16px radius (xl) + 1px border + 2px outline (subtle
-        // light-mode highlight) + heavy shadow
-        // • background uses theme bg-primary (auto light/dark)
-        // • outline gives the panel a hairline highlight that
-        // survives any bg color, so light mode reads "lifted off"
-        // not "floating void"
-        className="flex flex-col shadow-2xl
-                   w-[min(1100px,92vw)] h-[88vh] mt-[5vh] mb-[5vh]
-                   rounded-2xl overflow-hidden
-                   border border-[color:var(--color-border-subtle)]
-                   outline outline-2 outline-[color:color-mix(in_srgb,var(--color-text-primary)_6%,transparent)]
-                   outline-offset-[-2px]
-                   animate-[artifact-modal-in_240ms_ease-out]"
-        style={{
-          background: "var(--color-bg-primary)",
-          color: "var(--color-text-primary)",
-          boxShadow:
-            "var(--shadow-modal)",
-        }}
-      >
-        <PreviewPanel
-          artifact={artifact}
-          workspaceRoot={workspaceRoot}
-          onBack={onClose}
-        />
-      </div>
-    </div>
+    </AppProviders>
   );
 }
