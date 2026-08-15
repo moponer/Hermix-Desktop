@@ -76,6 +76,7 @@ apps/release/
 # 验证草稿巨目录（cargo/前端校验产物，绝不可提交）
 _verify_hx/
 _verify_target/
+target_verify*/
 
 # 本地 npm 配置（可能含凭证，不随源码提交）
 apps/desktop-tauri/.npmrc
