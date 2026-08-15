@@ -1160,6 +1160,7 @@ mod tests {
 
     #[test]
     fn update_schema_replaces_existing_tool_schema() {
+        use indexmap::IndexMap;
         let registry = ToolRegistry::new();
         let handler = Arc::new(EchoHandler);
         registry.register(
