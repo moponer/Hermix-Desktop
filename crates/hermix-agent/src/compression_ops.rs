@@ -789,9 +789,6 @@ mod spawn_streaming_tests {
                 last_summary: std::sync::OnceLock::new(),
             }
         }
-        fn call_count(&self) -> u64 {
-            self.call_count.load(Ordering::SeqCst)
-        }
     }
 
     #[async_trait]
@@ -1026,7 +1023,7 @@ mod spawn_streaming_tests {
     /// This is the critical merge correctness invariant.
     #[tokio::test]
     async fn apply_outcome_preserves_new_messages_after_snapshot() {
-        let snapshot = vec![
+        let _snapshot = vec![
             Message::user("a"),
             Message::assistant("b"),
             Message::user("c"),

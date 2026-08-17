@@ -1,4 +1,5 @@
     use super::*;
+use hermix_core::types::ContentPart;
     use hermix_core::{FunctionCall, ToolCall};
     use hermix_intelligence::auxiliary::{AuxiliarySource, ProviderCandidate};
 
@@ -1672,3 +1673,4 @@
         // strip_flush_sentinels itself behaves the same way — sanity.
         let cleaned = strip_flush_sentinels(messages);
         assert!(cleaned.iter().any(|m| m.role == MessageRole::Assistant));
+}

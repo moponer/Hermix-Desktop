@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use super::*;
     use hermix_core::JsonSchema;
     use crate::cost_guard::{WarnEffect, estimate_usage_cost_usd};
     use crate::smart_model_routing::TurnRouteSignature;
@@ -3719,8 +3723,4 @@ let u = UsageStats {
             .expect("pre-tool assistant must carry tool_calls");
         assert_eq!(tcs.len(), 1);
         assert_eq!(tcs[0].function.name, "list_files");
-    }
 }
-
-/// Lightweight stub provider for `resolve_pre_dispatch` tests. Implements the
-/// minimum `LlmProvider` surface so we can construct an `AgentLoop` without

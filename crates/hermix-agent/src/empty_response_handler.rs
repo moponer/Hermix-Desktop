@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn work_state_answered_when_visible_text_no_tools() {
-        let m = make_assistant_msg(Some("Here's the answer."));
+        let _m = make_assistant_msg(Some("Here's the answer."));
         assert_eq!(
             WorkState::classify(true, false),
             WorkState::Answered
