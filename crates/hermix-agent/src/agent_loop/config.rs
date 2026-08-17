@@ -1,8 +1,6 @@
 //! AgentLoop construction, builders, ACUI emit, tool routing, steer, session notes.
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use serde_json::Value;
 
 use super::*;
 

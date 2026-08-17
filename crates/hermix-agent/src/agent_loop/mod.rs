@@ -6,7 +6,6 @@
 //! 3. Append results to conversation history
 //! 4. Repeat until the model finishes naturally or the turn budget is exceeded
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

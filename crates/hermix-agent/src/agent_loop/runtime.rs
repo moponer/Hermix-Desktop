@@ -1,8 +1,6 @@
 //! Post-compression slot refresh and status emission.
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
-use serde_json::Value;
 
 use super::*;
 

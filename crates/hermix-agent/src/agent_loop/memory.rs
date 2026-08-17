@@ -1,6 +1,4 @@
 //! Focus/memory bridging and tool-error accounting.
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
