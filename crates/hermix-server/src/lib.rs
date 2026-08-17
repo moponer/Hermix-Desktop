@@ -146,6 +146,7 @@ pub mod state;
 pub use state::{ClarifyBroadcast, HttpServerState};
 pub mod errors;
 pub use errors::HttpError;
+pub mod voice;
 
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
@@ -314,15 +315,15 @@ pub fn router(state: HttpServerState) -> Router {
         // Dashboard management API
         .merge(dashboard::router())
         //TickLoop toggle
-        .route("/v1/tickloop", get(get_tickloop_status).post(toggle_tickloop))
+        .route("/v1/tickloop", get(voice::get_tickloop_status).post(voice::toggle_tickloop))
         // L3: Voice bridge — HTTP-friendly STT/TTS endpoints.
         // Both routes are stateless: the bridge builds a default
         // `VoicePipeline` per request so concurrent calls don't share
         // config state. The `voice_mode` tool (LLM-invoked) is the
         // proper way to drive a long-lived pipeline with custom
         // STT/TTS providers.
-        .route("/v1/voice/transcribe", post(voice_transcribe))
-        .route("/v1/voice/synthesize", post(voice_synthesize))
+        .route("/v1/voice/transcribe", post(voice::voice_transcribe))
+        .route("/v1/voice/synthesize", post(voice::voice_synthesize))
         // Orchestration Engine Task CRUD endpoints.
         .route("/v1/tasks", get(list_tasks).post(create_task))
         .route(
@@ -5868,133 +5869,6 @@ fn convert_wire_images(
 /// and return transcribed text. Body shape matches
 /// `hermix_voice::TranscribeRequest`; response matches
 /// `hermix_voice::TranscribeResponse`.
-async fn voice_transcribe(
-    Json(req): Json<hermix_voice::TranscribeRequest>,
-) -> Result<Json<hermix_voice::TranscribeResponse>, HttpError> {
-    let pipeline = hermix_voice::default_pipeline();
-    let resp = hermix_voice::transcribe_pcm(&req, Some(&pipeline))
-        .await
-        .map_err(voice_bridge_err_to_http)?;
-    Ok(Json(resp))
-}
-
-/// `POST /v1/voice/synthesize` — accept text + provider/voice/format
-/// and return synthesized audio bytes. Currently a structured
-/// placeholder; the actual network call to the upstream TTS provider
-/// is performed by `tts_streaming` once a `PcmSink` is wired in.
-async fn voice_synthesize(
-    Json(req): Json<hermix_voice::SynthesizeRequest>,
-) -> Result<Json<hermix_voice::SynthesizeResponse>, HttpError> {
-    let resp = hermix_voice::synthesize_text(&req, None)
-        .await
-        .map_err(voice_bridge_err_to_http)?;
-    Ok(Json(resp))
-}
-
-/// Convert `hermix_voice::VoiceBridgeError` to an `HttpError` with a
-/// stable 4xx/5xx mapping.
-fn voice_bridge_err_to_http(e: hermix_voice::VoiceBridgeError) -> HttpError {
-    use hermix_voice::VoiceBridgeError as V;
-    let status = match &e {
-        V::Base64(_) | V::InvalidSampleRate(_) | V::EmptyAudio | V::Internal(_) => {
-            StatusCode::BAD_REQUEST
-        }
-        V::EmptySynthesis | V::Tool(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    HttpError {
-        status,
-        message: e.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod voice_handler_tests {
-    use super::*;
-
-    #[test]
-    fn base64_err_maps_to_400() {
-        let e = hermix_voice::VoiceBridgeError::Base64("bad".into());
-        let h = voice_bridge_err_to_http(e);
-        assert_eq!(h.status, StatusCode::BAD_REQUEST);
-        assert!(h.message.contains("bad"));
-    }
-
-    #[test]
-    fn invalid_sample_rate_maps_to_400() {
-        let e = hermix_voice::VoiceBridgeError::InvalidSampleRate(0);
-        let h = voice_bridge_err_to_http(e);
-        assert_eq!(h.status, StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn empty_synthesis_maps_to_500() {
-        let e = hermix_voice::VoiceBridgeError::EmptySynthesis;
-        let h = voice_bridge_err_to_http(e);
-        assert_eq!(h.status, StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[test]
-    fn empty_audio_maps_to_400() {
-        let e = hermix_voice::VoiceBridgeError::EmptyAudio;
-        let h = voice_bridge_err_to_http(e);
-        assert_eq!(h.status, StatusCode::BAD_REQUEST);
-    }
-}
-
-//TickLoop API
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize)]
-struct TickLoopStatus {
-    running: bool,
-    phase: String,
-}
-
-/// `GET /v1/tickloop` — return current TickLoop status.
-async fn get_tickloop_status(State(state): State<HttpServerState>) -> Json<TickLoopStatus> {
-    let running = state.tickloop_manager.is_running().await;
-    Json(TickLoopStatus {
-        running,
-        phase: if running {
-            "active".to_string()
-        } else {
-            "stopped".to_string()
-        },
-    })
-}
-
-#[derive(Debug, Deserialize)]
-struct TickLoopToggle {
-    enabled: bool,
-}
-
-/// `POST /v1/tickloop` — enable or disable the TickLoop at runtime.
-async fn toggle_tickloop(
-    State(state): State<HttpServerState>,
-    Json(body): Json<TickLoopToggle>,
-) -> Result<Json<TickLoopStatus>, HttpError> {
-    if body.enabled {
-        state.tickloop_manager
-            .start(Some(Arc::new(state.consciousness_tracker.clone())))
-            .await;
-    } else {
-        state.tickloop_manager.stop().await;
-    }
-    Ok(Json(TickLoopStatus {
-        running: body.enabled,
-        phase: if body.enabled { "active".to_string() } else { "stopped".to_string() },
-    }))
-}
-
-/// Resolve an LLM provider name and base URL for the runtime TickLoop SelfCheck
-/// connectivity probe.
-/// Priority:
-/// 1. `config.model`'s `provider` segment → look up that provider in `llm_providers`
-/// and return its `base_url` (if set) + provider name.
-/// 2. The first provider in `llm_providers` that has an `api_key` set → provider name,
-/// and its `base_url` (if set).
-/// Returns `Some((name, base_url_or_none))` so the runtime can infer a default URL
-/// even when `base_url` is not explicitly configured.
 pub(crate) fn extract_llm_probe_url(config: &GatewayConfig) -> Option<(String, Option<String>)> {
     // 1) Try the active model string ("provider:model")
     if let Some(ref model_str) = config.model {
@@ -7127,6 +7001,7 @@ async fn trigger_automation_endpoint(
         }
     }
 }
+
 
 
 
