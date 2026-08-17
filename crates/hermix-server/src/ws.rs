@@ -119,7 +119,7 @@ pub(crate) fn dedup_key(session_id: &str, text: &str) -> String {
 
 /// Dedup window. Anything within this many seconds of a prior
 /// identical (session_id, text) send is rejected.
-const DEDUP_WINDOW_SECS: u64 = 30;
+pub(crate) const DEDUP_WINDOW_SECS: u64 = 30;
 /// Map GC horizon. Entries older than this are evicted on every
 /// insert so the map stays bounded.
 const DEDUP_GC_SECS: u64 = 60;

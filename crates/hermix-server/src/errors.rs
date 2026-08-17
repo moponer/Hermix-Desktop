@@ -5,6 +5,7 @@ use axum::response::{IntoResponse, Json, Response};
 
 use hermix_core::AgentError;
 
+#[derive(Debug)]
 pub struct HttpError {
     pub status: StatusCode,
     pub message: String,

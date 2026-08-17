@@ -302,7 +302,6 @@ pub async fn get_app_icon(
 
 #[cfg(test)]
 mod wiring_tests {
-    use super::*;
 
     /// Wiring sanity check : after `HttpServerState::build`,
     /// `custom_app_manager` must be `Some(...)`, otherwise the

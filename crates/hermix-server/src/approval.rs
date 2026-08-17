@@ -738,36 +738,36 @@ mod approval_registry_tests {
     #[test]
     fn dedup_first_send_is_fresh() {
         let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
-        assert_eq!(check_recent_send(&state, "sess-A", "你好"), None);
+        assert_eq!(ws::check_recent_send(&state, "sess-A", "你好"), None);
     }
 
     #[test]
     fn dedup_identical_send_within_window_is_rejected() {
         let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
-        assert_eq!(check_recent_send(&state, "sess-A", "你好"), None);
+        assert_eq!(ws::check_recent_send(&state, "sess-A", "你好"), None);
         // Second identical send within 10s → rejected with elapsed
         // (could be 0s if the clock hasn't ticked, or 1s, etc.
         // what matters is Some()).
-        let elapsed = check_recent_send(&state, "sess-A", "你好");
+        let elapsed = ws::check_recent_send(&state, "sess-A", "你好");
         assert!(elapsed.is_some(), "duplicate must be rejected");
-        assert!(elapsed.unwrap() < DEDUP_WINDOW_SECS);
+        assert!(elapsed.unwrap() < ws::DEDUP_WINDOW_SECS);
     }
 
     #[test]
     fn dedup_different_content_within_window_is_accepted() {
         let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
-        assert_eq!(check_recent_send(&state, "sess-A", "你好"), None);
+        assert_eq!(ws::check_recent_send(&state, "sess-A", "你好"), None);
         // Different text → fresh, no dedup.
-        assert_eq!(check_recent_send(&state, "sess-A", "hello"), None);
+        assert_eq!(ws::check_recent_send(&state, "sess-A", "hello"), None);
     }
 
     #[test]
     fn dedup_different_sessions_are_independent() {
         let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
-        assert_eq!(check_recent_send(&state, "sess-A", "你好"), None);
+        assert_eq!(ws::check_recent_send(&state, "sess-A", "你好"), None);
         // Same content, different session → fresh (different
         // dedup key namespace).
-        assert_eq!(check_recent_send(&state, "sess-B", "你好"), None);
+        assert_eq!(ws::check_recent_send(&state, "sess-B", "你好"), None);
     }
 
     #[test]
@@ -778,8 +778,8 @@ mod approval_registry_tests {
         // process the key IS stable (the contract the dedup map
         // relies on). Across processes, dedup is a defense-in-
         // depth, not a correctness requirement.
-        let k1 = dedup_key("sess-A", "你好");
-        let k2 = dedup_key("sess-A", "你好");
+        let k1 = ws::dedup_key("sess-A", "你好");
+        let k2 = ws::dedup_key("sess-A", "你好");
         assert_eq!(k1, k2);
     }
 
@@ -794,7 +794,7 @@ mod approval_registry_tests {
         let mut fresh = 0;
         let mut deduped = 0;
         for _ in 0..9 {
-            if check_recent_send(&state, "sess-A", "你好").is_none() {
+            if ws::check_recent_send(&state, "sess-A", "你好").is_none() {
                 fresh += 1;
             } else {
                 deduped += 1;
@@ -819,14 +819,14 @@ mod approval_registry_tests {
         let state = test_state(tempfile::tempdir().unwrap().path().to_path_buf());
 
         // 1st "你好" is fresh
-        assert_eq!(check_recent_send(&state, "sess-A", "你好"), None);
+        assert_eq!(ws::check_recent_send(&state, "sess-A", "你好"), None);
         // Next 4 "你好" are all deduped (within 10s window)
         for i in 0..4 {
-            let elapsed = check_recent_send(&state, "sess-A", "你好");
+            let elapsed = ws::check_recent_send(&state, "sess-A", "你好");
             assert!(elapsed.is_some(), "iteration {i} should be deduped");
         }
         // Legit different content MUST succeed
-        assert_eq!(check_recent_send(&state, "sess-A", "在吗?"), None);
+        assert_eq!(ws::check_recent_send(&state, "sess-A", "在吗?"), None);
 
         // Map should hold exactly 2 entries (one per content key)
         let map_size = state.recent_sends.lock().unwrap_or_else(|e| e.into_inner()).len();
@@ -856,7 +856,7 @@ mod approval_registry_tests {
             let deduped = Arc::clone(&deduped);
             handles.push(thread::spawn(move || {
                 for _ in 0..5 {
-                    if check_recent_send(&state, "sess-A", "你好").is_none() {
+                    if ws::check_recent_send(&state, "sess-A", "你好").is_none() {
                         fresh.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     } else {
                         deduped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

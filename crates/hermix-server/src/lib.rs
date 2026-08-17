@@ -739,7 +739,7 @@ mod delete_session_fts_recovery_tests {
     #[test]
     fn delete_session_recovers_from_corrupt_fts() {
         let (_dir, db) = seed_db_with_fts_corrupted();
-        let conn = open_sessions_db_for_read(&db).expect("open");
+        let conn = routes::open_sessions_db_for_read(&db).expect("open");
 
         // The DELETE itself should trigger the malformed error path
         // and our helper should rebuild the FTS index + retry.
@@ -749,12 +749,12 @@ mod delete_session_fts_recovery_tests {
         let tx = conn.unchecked_transaction().unwrap();
         let res = tx.execute("DELETE FROM messages WHERE session_id = 'fts-test'", []);
         assert!(res.is_err(), "expected malformed error");
-        assert!(is_malformed_error(&res.unwrap_err()));
+        assert!(routes::is_malformed_error(&res.unwrap_err()));
         let _ = tx.rollback();
 
         // Rebuild and retry — this is exactly what delete_session
         // does on the recovery path.
-        rebuild_messages_fts(&conn).expect("rebuild");
+        routes::rebuild_messages_fts(&conn).expect("rebuild");
         let tx2 = conn.unchecked_transaction().unwrap();
         tx2.execute("DELETE FROM messages WHERE session_id = 'fts-test'", []).unwrap();
         tx2.execute("DELETE FROM sessions WHERE id = 'fts-test'", []).unwrap();
@@ -770,7 +770,7 @@ mod delete_session_fts_recovery_tests {
             rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
             Some("no such table: foo".to_string()),
         );
-        assert!(!is_malformed_error(&err));
+        assert!(!routes::is_malformed_error(&err));
     }
 }
 
@@ -949,7 +949,7 @@ mod delete_session_wal_regression_tests {
         // matters is the helper below forces WAL regardless.
         let _raw = Connection::open(&db).unwrap();
 
-        let conn = open_sessions_db_for_read(&db).unwrap();
+        let conn = routes::open_sessions_db_for_read(&db).unwrap();
         let mode: String = conn
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .unwrap();
@@ -975,7 +975,7 @@ mod delete_session_wal_regression_tests {
         // the query_map iterator).
         let dir = tempdir().unwrap();
         let db = dir.path().join("does-not-exist.db");
-        let conn = open_sessions_db_for_read(&db).expect("missing db should auto-create");
+        let conn = routes::open_sessions_db_for_read(&db).expect("missing db should auto-create");
         let mode: String = conn
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .unwrap();
