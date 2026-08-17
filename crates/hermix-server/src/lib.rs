@@ -144,6 +144,8 @@ pub use approval::ApprovalRegistry;
 
 pub mod state;
 pub use state::{ClarifyBroadcast, HttpServerState};
+pub mod errors;
+pub use errors::HttpError;
 
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
@@ -5984,37 +5986,6 @@ async fn toggle_tickloop(
     }))
 }
 
-#[derive(Debug)]
-pub struct HttpError {
-    pub status: StatusCode,
-    pub message: String,
-}
-
-impl From<AgentError> for HttpError {
-    fn from(value: AgentError) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: value.to_string(),
-        }
-    }
-}
-
-impl std::fmt::Display for HttpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.status, self.message)
-    }
-}
-
-impl IntoResponse for HttpError {
-    fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(serde_json::json!({ "error": self.message })),
-        )
-            .into_response()
-    }
-}
-
 /// Resolve an LLM provider name and base URL for the runtime TickLoop SelfCheck
 /// connectivity probe.
 /// Priority:
@@ -7156,5 +7127,6 @@ async fn trigger_automation_endpoint(
         }
     }
 }
+
 
 

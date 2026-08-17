@@ -6,7 +6,6 @@ use std::sync::atomic::AtomicBool;
 
 use hermix_config::GatewayConfig;
 use hermix_core::AgentError;
-use hermix_skills::SkillStore;
 use hermix_tools::ToolRegistry;
 
 use super::*;
