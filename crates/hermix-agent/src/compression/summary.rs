@@ -1,17 +1,12 @@
 //! Summary generation: budget, serialize, prompt build, LLM summary, cooldown.
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
 
 use hermix_core::{
-    AgentError, CompressionEngine, CompressionEngineMetrics, CompressionEngineSnapshot,
-    CompressionEngineState, LlmProvider, Message, MessageRole,
+    Message, MessageRole,
 };
-use hermix_core::traits::CoreContextEngine;
-use hermix_core::types::ContentPart;
 use hermix_intelligence::auxiliary::{
-    AuxiliaryClient, AuxiliaryError, AuxiliaryRequest, AuxiliaryTask,
+    AuxiliaryRequest, AuxiliaryTask,
 };
 
 use super::*;

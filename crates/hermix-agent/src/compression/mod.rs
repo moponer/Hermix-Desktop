@@ -26,9 +26,8 @@ use hermix_core::{
     CompressionEngineState, LlmProvider, Message, MessageRole,
 };
 use hermix_core::traits::CoreContextEngine;
-use hermix_core::types::ContentPart;
 use hermix_intelligence::auxiliary::{
-    AuxiliaryClient, AuxiliaryError, AuxiliaryRequest, AuxiliaryTask,
+    AuxiliaryClient, AuxiliaryError,
 };
 
 // ---------------------------------------------------------------------------

@@ -1,10 +1,8 @@
 //! DB connection, WAL setup, migrations, and version stamping.
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use chrono::Utc;
-use hermix_core::{AgentError, Message, MessageRole};
+use hermix_core::AgentError;
 use rusqlite::OptionalExtension;
-use serde::{Deserialize, Serialize};
 
 use super::*;
 

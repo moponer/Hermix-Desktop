@@ -8,9 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
 use hermix_core::{AgentError, Message, MessageRole};
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------

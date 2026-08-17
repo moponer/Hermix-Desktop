@@ -65,7 +65,6 @@ use async_trait::async_trait;
 use chrono::Utc;
 use parking_lot::Mutex;
 use rusqlite::Connection;
-use uuid::Uuid;
 
 use crate::focus_stack::{FocusConclusion, FocusFrame};
 use crate::memory_layer::{MemoryHit, MemoryLayer, MemoryQuery, Result, SystemPromptBlock};
