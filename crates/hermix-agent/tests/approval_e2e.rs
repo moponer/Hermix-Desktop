@@ -300,7 +300,7 @@ async fn approval_chain_approved_tool_runs_and_loop_completes() {
     });
 
     // -- 2. Tool registry with one Dangerous tool. --
-    let mut tool_registry = ToolRegistry::new();
+    let tool_registry = ToolRegistry::new();
     tool_registry.register_with_risk(
         "dangerous_echo",
         "test",

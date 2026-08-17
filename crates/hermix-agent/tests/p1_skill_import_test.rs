@@ -253,7 +253,7 @@ fn p1_orchestrator_skips_duplicate_names_deterministically() {
     let matches: Vec<_> = orch
         .get_commands()
         .iter()
-        .filter(|(k, v)| v.name == "shared")
+        .filter(|(_k, v)| v.name == "shared")
         .collect();
     assert_eq!(
         matches.len(),
