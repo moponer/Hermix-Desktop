@@ -487,6 +487,7 @@ impl MemoryLayer for EmbeddedMemoryBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     // ------------------------------------------------------------------
     //: CJK bigram preprocessor unit tests
