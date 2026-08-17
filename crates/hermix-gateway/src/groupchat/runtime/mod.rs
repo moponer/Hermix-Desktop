@@ -19,33 +19,18 @@
 //!   feeding [`SchedulerEvent::AuditVerdict`] back into the scheduler.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use chrono::Utc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
-use tokio_util::sync::CancellationToken;
 
-use super::agent_contract::{HandoffDirective, LeaderDecision};
 use super::bus::{RoomBus, SharedMessageBus};
-use super::dispatcher::StreamDelta;
-use super::discussion::{
-    ActiveDiscussion, DiscussionConfig, DiscussionEngine, DiscussionEventPublisher,
-};
-use super::handoff::{resolve_handoff, HandoffKind};
-use super::leader::LeaderOrchestrator;
+use super::discussion::{ActiveDiscussion, DiscussionEventPublisher};
 use super::manager::GroupChatManager;
-use super::meta::parse_meta;
-use super::persistence::{AgentRole, AgentRoomProfile, MessageType};
-use super::scheduler::{
-    RoomSchedulerState, SchedulerAction, SchedulerEvent, SubtaskSpec, TaskScheduler,
-};
-use super::task_types::{ReviewResult, TaskPhase, TokenBudget, ViolationLevel, ViolationRecord, YanluoConfig};
-use super::yanluo::{
-    AuditContext, AuditEngine, AuditTrail, ToolCallRecord,
-};
+use super::scheduler::{RoomSchedulerState, TaskScheduler};
+use super::task_types::{TaskPhase, TokenBudget, YanluoConfig};
+use super::yanluo::{AuditEngine, AuditTrail};
 
 /// Outbound WS envelope sent to one client (or broadcast to all clients
 /// in a room). Decoupled from `hermix_transport::StreamEvent` so the
@@ -369,6 +354,8 @@ pub(crate) fn phase_label(phase: &TaskPhase) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::groupchat::dispatcher::StreamDelta;
+    use crate::groupchat::scheduler::SchedulerEvent;
     use crate::groupchat::dispatcher::AgentDispatcher;
     use crate::groupchat::in_memory::InMemoryRoomPersistence;
     use parking_lot::Mutex as PlMutex;
