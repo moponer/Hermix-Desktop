@@ -755,6 +755,14 @@ impl GenericProvider {
                     .map(|v| v.is_string())
                     .unwrap_or(false);
                 if !has_content_parts && !content_is_string {
+                    // 严格网关（Agnes 实测）只拒 user 角色 content=""（HTTP 400
+                    // `message content cannot be empty`）；assistant/system/tool
+                    // 空串均接受（200）。空 user 消息无价值且必 400 → 丢弃；
+                    // 其余角色注入 "" 保留，维持消息流与 tool 配对语义。
+                    let role = obj.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                    if role == "user" {
+                        continue;
+                    }
                     obj.insert("content".to_string(), Value::String(String::new()));
                 }
             }
@@ -3121,32 +3129,54 @@ mod tests {
             content: None,
             ..Default::default()
         };
-        let populated = plain_assistant("real content");
+        let populated = user_msg("real content");
 
         let out = GenericProvider::sanitize_messages_for_strict_api(
             &[empty_assistant, empty_user, populated],
             true,
         );
         let arr = out.as_array().expect("array of api messages");
-        assert_eq!(arr.len(), 3);
-
-        // empty assistant → content must be a string "" (not null/missing)
-        let a_content = arr[0]
-            .get("content")
-            .expect("assistant content present");
-        assert!(a_content.is_string(), "assistant content must be a string");
-        assert_eq!(a_content.as_str(), Some(""));
-        assert!(arr[0].get("content_parts").is_none(), "no content_parts key");
-
-        // empty user → same guarantee
-        let u_content = arr[1].get("content").expect("user content present");
-        assert!(u_content.is_string());
-        assert_eq!(u_content.as_str(), Some(""));
-
-        // populated message → content preserved verbatim
+        // Agnes (verified in vivo) rejects user content="" with HTTP 400
+        // `message content cannot be empty`, but accepts empty-string
+        // assistant/system/tool messages (200). So the empty user is
+        // dropped; the empty assistant survives with content "".
+        assert_eq!(arr.len(), 2, "empty user dropped, empty assistant + populated survive");
+        let roles: Vec<_> = arr
+            .iter()
+            .filter_map(|m| m.get("role").and_then(|r| r.as_str()))
+            .collect();
+        assert_eq!(roles, vec!["assistant", "user"], "no merge (distinct roles)");
         assert_eq!(
-            arr[2].get("content").and_then(|c| c.as_str()),
+            arr[0].get("content").and_then(|c| c.as_str()),
+            Some(""),
+            "empty assistant keeps content as empty string"
+        );
+        assert_eq!(
+            arr[1].get("content").and_then(|c| c.as_str()),
             Some("real content")
+        );
+    }
+
+    #[test]
+    fn strict_api_keeps_toolcall_only_assistant() {
+        // An assistant message with only tool_calls (no text) is valid under
+        // the OpenAI spec and Agnes accepts content="" (verified 200 in vivo).
+        // sanitize must preserve the tool_calls and keep content as "" —
+        // provided the tool_use has its matching tool_result (Pass 1 strips
+        // unanswered tool_uses, so a lone toolcall assistant becomes empty).
+        let tc = assistant_with_calls(&[("c1", "read_file")]);
+        let tr = tool_result("c1", "ok");
+        let out = GenericProvider::sanitize_messages_for_strict_api(&[tc, tr], true);
+        let arr = out.as_array().expect("array of api messages");
+        assert_eq!(arr.len(), 2, "toolcall assistant + its tool result survive");
+        assert!(
+            arr[0].get("tool_calls").is_some(),
+            "tool_calls must be preserved"
+        );
+        assert_eq!(
+            arr[0].get("content").and_then(|c| c.as_str()),
+            Some(""),
+            "toolcall-only assistant keeps content as empty string"
         );
     }
 
