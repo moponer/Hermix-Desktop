@@ -504,6 +504,93 @@ pub enum ErrorClass {
     Fatal,
 }
 
+/// Redact a provider error body before embedding it into a log string.
+///
+/// Some providers (Agnes / OpenAI-compatible gateways) echo the *entire
+/// request* — system prompt + conversation history — back inside the error
+/// response body. Embedding that verbatim into `AgentError::LlmApi(...)`
+/// leaks the prompt to stdout and the frontend error card. We keep only the
+/// provider's own error code/message and drop the echoed request, so
+/// downstream classifiers (`classify_error`, `extract_provider_message`)
+/// still work while the prompt stays private.
+pub fn redact_body_for_log(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "<no body>".to_string();
+    }
+    // Provider responses are usually JSON: extract just the error object.
+    if let Some(json_start) = trimmed.find('{') {
+        let json_part = &trimmed[json_start..];
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_part) {
+            let err_obj = v.get("error");
+            let msg = err_obj
+                .and_then(|e| e.get("message").and_then(|m| m.as_str()))
+                .or_else(|| v.get("message").and_then(|m| m.as_str()))
+                .unwrap_or("");
+            let code = err_obj
+                .and_then(|e| e.get("type").and_then(|t| t.as_str()))
+                .or_else(|| err_obj.and_then(|e| e.get("code").and_then(|c| c.as_str())))
+                .unwrap_or("");
+            if !msg.is_empty() {
+                return strip_prompt_mirror(msg);
+            }
+            if !code.is_empty() {
+                return code.to_string();
+            }
+            // JSON present but no recognizable error field → it is a request
+            // mirror; drop it entirely.
+            return format!("[request/response body redacted, json_len={}]", trimmed.len());
+        }
+    }
+    // Plain text or unparsable JSON → still strip any echoed request/prompt
+    // mirror (Agnes-style error bodies are often `OpenAIException - {…}` with
+    // a Debug-formatted request array that is NOT valid JSON, so the parse
+    // above fails and the raw body must be redacted here), then cap length.
+    let stripped = strip_prompt_mirror(trimmed);
+    if stripped.len() > 600 {
+        return format!(
+            "{}...[body truncated, len={}]",
+            &stripped[..600],
+            trimmed.len()
+        );
+    }
+    stripped
+}
+
+/// Truncate any echoed request/prompt content inside an error message.
+/// Providers nest the offending request (`role`/`content`/`system` fields)
+/// inside the error `message`; keep the diagnostic prefix, drop the mirror.
+/// Cut at the first marker that opens the embedded request mirror — do NOT
+/// look back, or the lookback window eats the diagnostic text that sits
+/// just before the mirror (e.g. "Validation error: message content cannot
+/// be empty [{"value": …]").
+fn strip_prompt_mirror(s: &str) -> String {
+    const MARKERS: &[&str] = &[
+        "[{\"value\"",      // Agnes/OpenAI debug request mirror
+        "Array [Object",   // alt mirror form
+        "{\"role\"",       // request mirror with quoted role
+        "[Object",         // mirror object start
+        "role: String",    // Rust Debug request mirror
+        "content: String", // Rust Debug request mirror
+        "\"system\"",      // system prompt inside mirror
+        "\"You are",       // LLM identity inside mirror
+        "You are ",        // LLM identity (unquoted)
+    ];
+    let mut cut = s.len();
+    for m in MARKERS {
+        if let Some(pos) = s.find(m) {
+            if pos < cut {
+                cut = pos;
+            }
+        }
+    }
+    if cut == s.len() {
+        s.to_string()
+    } else {
+        format!("{}…[prompt redacted]", &s[..cut])
+    }
+}
+
 pub fn classify_error(err: &str) -> ErrorClass {
     let lower = err.to_lowercase();
 
@@ -724,6 +811,35 @@ mod tests {
             classify_tool_error("upstream rate limit hit"),
             ToolErrorClass::RateLimited
         );
+    }
+
+    #[test]
+    fn redact_body_drops_prompt_mirror_in_nested_message() {
+        // Agnes-style error: provider echoes the request (system prompt)
+        // inside the nested error `message`.
+        let body = r#"{"error":{"message":"***.RateLimitError: RateLimitError: OpenAIException - {\"error\":{\"message\":\"messages: Validation error: message content cannot be empty [{\"value\": Array [Object {role: String(\"system\"), content: String(\"You are Agnes-2.0-Flash, a language model developed by Sapiens AI. Behavior:\")}]}]"}}"}}"#;
+        let out = redact_body_for_log(body);
+        assert!(!out.contains("You are Agnes"), "system prompt leaked: {out}");
+        assert!(!out.contains("language model"), "system prompt leaked: {out}");
+        // Diagnostic prefix must survive.
+        assert!(out.contains("Validation error: message content cannot be empty"));
+        assert!(out.contains("RateLimitError"));
+        assert!(out.contains("[prompt redacted]"));
+    }
+
+    #[test]
+    fn redact_body_keeps_short_plain_error() {
+        let out = redact_body_for_log("overloaded_error: server busy");
+        assert_eq!(out, "overloaded_error: server busy");
+    }
+
+    #[test]
+    fn redact_body_redacts_non_error_json() {
+        // A request mirror with no error field → fully redacted.
+        let body = r#"{"messages":[{"role":"system","content":"secret system prompt"}],"model":"x"}"#;
+        let out = redact_body_for_log(body);
+        assert!(!out.contains("secret system prompt"));
+        assert!(out.contains("redacted"));
     }
 
     #[test]

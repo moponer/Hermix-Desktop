@@ -973,7 +973,7 @@ impl LlmProvider for GenericProvider {
                 .await
                 .unwrap_or_else(|_| "<no body>".to_string());
             return Err(AgentError::LlmApi(format!(
-                "API error {status}: {body_text}"
+                "API error {status}: {}", crate::agent_helpers::redact_body_for_log(&body_text)
             )));
         }
 
@@ -1053,7 +1053,7 @@ impl LlmProvider for GenericProvider {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let body_text = resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
-                yield Err(AgentError::LlmApi(format!("API error {status}: {body_text}")));
+                yield Err(AgentError::LlmApi(format!("API error {status}: {}", crate::agent_helpers::redact_body_for_log(&body_text))));
                 return;
             }
 
@@ -1628,7 +1628,7 @@ impl LlmProvider for AnthropicProvider {
                 .await
                 .unwrap_or_else(|_| "<no body>".to_string());
             return Err(AgentError::LlmApi(format!(
-                "API error {status}: {body_text}"
+                "API error {status}: {}", crate::agent_helpers::redact_body_for_log(&body_text)
             )));
         }
 
@@ -1701,7 +1701,7 @@ impl LlmProvider for AnthropicProvider {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let body_text = resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
-                yield Err(AgentError::LlmApi(format!("API error {status}: {body_text}")));
+                yield Err(AgentError::LlmApi(format!("API error {status}: {}", crate::agent_helpers::redact_body_for_log(&body_text))));
                 return;
             }
 
@@ -2060,7 +2060,7 @@ impl LlmProvider for OpenRouterProvider {
                 .await
                 .unwrap_or_else(|_| "<no body>".to_string());
             return Err(AgentError::LlmApi(format!(
-                "API error {status}: {body_text}"
+                "API error {status}: {}", crate::agent_helpers::redact_body_for_log(&body_text)
             )));
         }
 
