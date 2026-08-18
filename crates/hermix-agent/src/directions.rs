@@ -205,7 +205,8 @@ const THINKING_DISCIPLINE_GUIDANCE: &str = "# Output format\n\
 Structure every reply as two parts:\n\
 1. `<think>...</think>` — internal reasoning (private, user sees it as a collapsible section).\n\
 2. Your reply, starting on the next line after `</think>`.\n\n\
-**Always close `</think>` before any visible text.** Forgetting this breaks the renderer — the user sees nothing. If you have nothing to reason about, emit `<think></think>`. Use only `<think>...</think>`, never `<thinking>`.";
+**Always close `</think>` before any visible text.** Forgetting this breaks the renderer — the user sees nothing. If you have nothing to reason about, emit `<think></think>`. Use only `<think>...</think>`, never `<thinking>`.\n\n\
+Write your visible reply in clean, structured Markdown: use `##`/`###` headings to separate topics, `-`/`1.` lists for steps and enumerations, `**bold**` for key terms, and fenced code blocks (```lang) for commands or code. Substantive answers (multi-step, comparisons, causes/conclusions, or anything beyond a one-liner) must be organized this way so the reader can scan it fast — do not dump a wall of plain prose.";
 
 /// Safety instruction: do not generate or guess URLs.
 const URL_SAFETY_GUIDANCE: &str = "\
@@ -394,7 +395,7 @@ pub fn collect_directions(
         dirs.push(SystemDir::new(
             "format.short",
             DirRoute::Subsequent,
-            "## 语气与格式\n用自然语言聊,像真人对话一样有温度、有干劲,不端着。短而有力——把事说清楚就行,别注水也别为了「简短」把必要内容省了。复杂主题才上 markdown 结构化;日常交流直接说人话。信息密度要高,不啰嗦但绝不漏掉关键点。",
+            "## 语气与格式\n用自然语言聊,像真人对话一样有温度、有干劲,不端着。但**最终回答必须用结构化 Markdown 呈现**:凡涉及多步骤、对比、原因/结论、或任何超过三句话的实质内容,使用标题(## / ###)、有序/无序列表、加粗关键词、代码块(```lang)与表格组织层次,让重点一目了然。极简单行回复(如一次性命令确认)可直接说人话。信息密度要高,不啰嗦但绝不漏掉关键点。",
         ));
     }
     // Thinking discipline.
