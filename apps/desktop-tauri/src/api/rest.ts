@@ -520,6 +520,29 @@ export const sendMessage = async (id: string, content: string): Promise<ChatMess
   };
 };
 
+/** 持久化前端构建的 unified_steps 时间线到最近一条 assistant 消息。
+ *  流结束后 fire-and-forget，失败静默（不影响 UI / 不阻塞对话）。
+ *  后端把它写进 messages.unified_steps 列，reload 时原样回传，
+ *  使前端 resolveSteps 走真实内联顺序而非 buildFallbackSteps 的
+ *  固定 reasoning→tools→text 顺序（工具不再被归到末尾）。 */
+export const saveUnifiedSteps = async (
+  id: string,
+  steps: unknown[]
+): Promise<void> => {
+  try {
+    await fetchJSON(
+      `/v1/sessions/${encodeURIComponent(id)}/messages/unified_steps`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unified_steps: steps }),
+      }
+    );
+  } catch {
+    // 持久化失败不影响对话：reload 时走 buildFallbackSteps 兜底。
+  }
+};
+
 /** 切换模型时预热对应 provider，消除首请求冷启动延迟。
  *  fire-and-forget，失败静默（不影响 UI）。 */
 export const warmUpProvider = async (model: string): Promise<void> => {

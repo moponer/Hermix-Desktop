@@ -1184,6 +1184,18 @@ streamPhaseRef.current = null;
       ...(userImages && userImages.length ? { images: userImages } : {}),
     };
     const assistantId = `reply-${Date.now()}`;
+    // 上一个 assistant 消息的流已结束，先把它的 unified_steps 持久化，
+    // 否则多轮 agent loop 中中间轮的 inline 内联顺序会在 reload 时回退成
+    // buildFallbackSteps 的固定 reasoning→tools→text（工具被归到末尾）。
+    const prevAssistantId = currentAssistantIdRef.current;
+    if (prevAssistantId) {
+      const prevMsg = sessionsRef.current
+        .find((s) => s.id === sessionId)
+        ?.messages.find((m) => m.id === prevAssistantId);
+      if (prevMsg?.unified_steps && prevMsg.unified_steps.length > 0) {
+        void api.saveUnifiedSteps(sessionId, prevMsg.unified_steps);
+      }
+    }
     currentAssistantIdRef.current = assistantId;
 
     // Persist the auto-generated title to the backend fire-and-forget, so
@@ -2131,6 +2143,16 @@ return {
                 }
                 return { ...s, messages: msgs };
               }));
+            }
+            // 持久化最终 assistant 消息的 unified_steps（前端构建的内联时间线）。
+            // reload 时 resolveSteps 会优先用它在真实顺序渲染，工具不再被归到末尾。
+            if (assistantIdAtDone) {
+              const finalMsg = sessionsRef.current
+                .find((s) => s.id === sessionId)
+                ?.messages.find((m) => m.id === assistantIdAtDone);
+              if (finalMsg?.unified_steps && finalMsg.unified_steps.length > 0) {
+                void api.saveUnifiedSteps(sessionId, finalMsg.unified_steps);
+              }
             }
             // Removed the 500ms re-fetch that replaced the
             // entire messages array with server-persisted data.
