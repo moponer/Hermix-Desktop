@@ -1998,10 +1998,11 @@
    error. Done state has no bar (success stays quiet). */
 /* Header row — compact single-line, 30px min-height. */
 .tw-msg-row {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  width: 100%;
-  padding: 4px 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 4px;
   border: 0;
   background: transparent;
   text-align: left;
@@ -2009,16 +2010,17 @@
   cursor: pointer;
   min-height: 0;
   border-radius: var(--radius-md);
-  transition: background var(--duration-fast) ease;
+  transition: color var(--duration-fast) ease;
+  color: var(--color-text-secondary);
 }
-.tw-msg-row:hover { background: var(--color-bg-hover); }
-.tw-msg-row[data-open="true"] {
-  background: var(--color-bg-tertiary);
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+.tw-msg-row:hover,
+.tw-msg-row[data-open="true"],
+.tw-msg-row:focus-visible {
+  background: transparent;
+  color: var(--color-text-primary);
 }
 .tw-msg-row[data-open="true"] + .tw-msg-body {
-  background: var(--color-bg-tertiary);
+  background: transparent;
   border-top: none;
 }
 
@@ -2985,7 +2987,7 @@
   background: var(--color-chat-assistant-bg, #ffffff);
 }
 .chat-tool-call--tool {
-  background: var(--color-chat-tool-bg, #fafafa);
+  background: transparent;
   margin-left: 32px;
   padding-left: 0;
 }
@@ -3036,10 +3038,13 @@
 
 /* ── Tool event cards (tw-msg) ── */
 .dark .tw-msg-row {
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
 }
-.dark .tw-msg-row:hover {
-  background: var(--color-bg-hover);
+.dark .tw-msg-row:hover,
+.dark .tw-msg-row[data-open="true"],
+.dark .tw-msg-row:focus-visible {
+  background: transparent;
+  color: var(--color-text-primary);
 }
 .dark .tw-msg-main {
   color: var(--color-text-primary);

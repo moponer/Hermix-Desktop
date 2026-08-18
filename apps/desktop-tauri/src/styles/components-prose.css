@@ -1355,28 +1355,28 @@
    error. Done state has no bar (success stays quiet). */
 /* Header row — compact single-line, 30px min-height. */
 .tw-msg-row {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  width: 100%;
-  padding: 4px 0;
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px 4px;
   border: 0;
   background: transparent;
   text-align: left;
   line-height: 1.4;
   cursor: pointer;
   min-height: 0;
-  border-radius: 0;
+  border-radius: var(--radius-md);
   transition: color var(--duration-fast) ease;
+  color: var(--color-text-secondary);
 }
 .tw-msg-row:hover,
 .tw-msg-row[data-open="true"],
 .tw-msg-row:focus-visible {
   background: transparent;
-}
-.tw-msg-row:focus-visible {
-  outline: none;
   color: var(--color-text-primary);
 }
+.tw-msg-row:focus-visible { outline: none; }
 .tw-msg-row[data-open="true"] + .tw-msg-body {
   background: transparent;
   border-top: none;
