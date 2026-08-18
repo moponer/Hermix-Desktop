@@ -121,12 +121,10 @@ export function ToolGroupCard({
             </span>
           )}
           <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
-            {isRunning && !group.endedAt ? (
+            {isRunning ? (
               <><Loader2 size={11} className="animate-spin shrink-0" />运行中</>
             ) : isError ? (
               <><AlertCircle size={11} className="shrink-0" />失败</>
-            ) : isRunning ? (
-              <><AlertTriangle size={11} className="shrink-0" />已中断</>
             ) : (
               <><Check size={11} className="shrink-0" />已完成</>
             )}
@@ -202,16 +200,19 @@ export function ProcessTimeline({
   // header count in sync with what the user sees when expanded.
   // During streaming the parent re-renders 30-50×/s (rAF batches), so the
   // memo avoids re-running `groupTimeline` when `steps`/streaming are unchanged.
-  // While the live WS is still feeding events (`isStreaming`), ask
-  // `groupTimeline` to NOT flip stranded groups to `"error"` — a tool that
-  // later succeeds would otherwise flash "执行中断". Only when the turn
-  // settles do we promote stranded groups to "error" so reloads still
-  // surface genuine interruptions.
+  // While the live turn is active (streaming text, a tool is still
+  // executing, or the UI is paused for approval), do NOT flip stranded
+  // groups to `"error"`. A long-running tool whose `tool_complete` has not
+  // arrived yet would otherwise flash "执行已中断 / 失败" the moment the
+  // LLM text stream settles. Only when the turn is truly idle do we promote
+  // genuinely stranded groups to "error" so reloads still surface real
+  // interruptions.
+  const streamComplete = !(isStreaming || hasRunningTool || keepOpen);
   const stepGroups = useMemo(
     () =>
       steps.map((s) =>
         s.kind === "tools"
-          ? groupTimeline(s.events, { streamComplete: !isStreaming })
+          ? groupTimeline(s.events, { streamComplete })
           : null,
       ),
     // `steps` is a new array on every render during streaming
@@ -810,7 +811,7 @@ export function ToolMessageCard({
             }
             return (
               <span className={`tw-msg-state tw-msg-state--${isError ? "err" : isRunning ? "run" : "done"}`}>
-                {isRunning && !meta.completedAt ? (
+                {isRunning ? (
                   <>
                     <Loader2 size={11} className="animate-spin shrink-0" />
                     运行中
@@ -819,11 +820,6 @@ export function ToolMessageCard({
                   <>
                     <AlertCircle size={11} className="shrink-0" />
                     失败
-                  </>
-                ) : isRunning ? (
-                  <>
-                    <AlertTriangle size={11} className="shrink-0" />
-                    已中断
                   </>
                 ) : (
                   <>

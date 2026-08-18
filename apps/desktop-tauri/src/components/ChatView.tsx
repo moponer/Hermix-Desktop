@@ -815,7 +815,10 @@ export function ChatView({
             <AcuiPanel
               state={acuiState}
               decide={acuiBus}
-              streamComplete={!isStreaming}
+              // ACUI 面板（右侧工具时间线）与聊天区共享同一条规则：
+              // 只要文本流或任一工具仍在运行，未完成组就保持 "运行中"，
+              // 避免长工具在 LLM 输出流结束后被误判为 "执行已中断"。
+              streamComplete={!isStreaming && pendingToolsCount === 0}
             />
           )}
 
