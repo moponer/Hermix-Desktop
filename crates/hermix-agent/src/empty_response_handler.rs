@@ -468,12 +468,16 @@ mod tests {
     }
 
     #[test]
-    fn stopped_silently_finalizes_immediately() {
-        // LLM went silent after tools — old code would nudge up to 3 times.
-        // New code trusts the stop signal. reasoning_content is the fallback.
+    fn stopped_silently_gets_single_post_tool_summarize_nudge() {
+        // LLM went silent after tools — implementation nudges once for a
+        // concluding reply (content left to the LLM); a second silent stop
+        // is respected via MAX_POST_TOOL_SUMMARIZE cap.
         let m = make_assistant_msg(None);
         let out = decide_empty_response(base_input(&m));
-        assert_eq!(out.action, EmptyResponseAction::Finalize);
+        assert!(matches!(
+            out.action,
+            EmptyResponseAction::ContinueWithSystemNudge(_)
+        ));
         assert_eq!(out.work_state, WorkState::StoppedSilently);
     }
 
@@ -514,11 +518,15 @@ mod tests {
     #[test]
     fn empty_stop_does_not_retry_when_history_has_tools() {
         // With tool history, silence is StoppedSilently (trust), not EmptyStop.
+        // Implementation issues one post-tool-summarize nudge (not a retry).
         let m = make_assistant_msg(None);
         let input = base_input(&m); // history_includes_tool = true
         let out = decide_empty_response(input);
         assert_eq!(out.work_state, WorkState::StoppedSilently);
-        assert_eq!(out.action, EmptyResponseAction::Finalize);
+        assert!(matches!(
+            out.action,
+            EmptyResponseAction::ContinueWithSystemNudge(_)
+        ));
     }
 
     // ===== Codex ack continuation tests =====

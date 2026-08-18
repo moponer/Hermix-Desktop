@@ -3072,18 +3072,17 @@ mod tests {
             .map(|(i, _)| i)
             .collect();
         assert_eq!(assistant_idxs.len(), 2, "two assistant messages remain");
-        // The second assistant carries both call_b tool_call and merged
-        // "final" content.
+        // Pass 1 strips *unanswered* tool_uses (call_a AND call_b) —
+        // strict providers 400 on tool_uses left without a matching
+        // tool_result. The merged assistant is plain text only, carrying
+        // the tail assistant's "final" content.
         let merged = &arr[assistant_idxs[1]];
         let tcs = merged
             .get("tool_calls")
-            .and_then(|t| t.as_array())
-            .expect("merged assistant keeps tool_calls");
-        assert_eq!(tcs.len(), 1);
-        assert_eq!(
-            tcs[0].get("id").and_then(|v| v.as_str()),
-            Some("call_b"),
-            "only call_b survives (call_a's result was dropped)"
+            .and_then(|t| t.as_array());
+        assert!(
+            tcs.map(|a| a.is_empty()).unwrap_or(true),
+            "unanswered tool_uses must be stripped from the merged assistant"
         );
         assert!(
             merged
