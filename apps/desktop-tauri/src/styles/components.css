@@ -1136,6 +1136,7 @@
   font-size: var(--font-size-body);
   line-height: 1.68;
   color: var(--color-text-primary);
+  width: fit-content;
   max-width: 80%;
   transition: background var(--duration-fast) ease;
 }
