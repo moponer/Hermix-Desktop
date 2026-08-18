@@ -109,6 +109,16 @@ pub struct ProtocolMessage {
     /// persisted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_timeline: Option<Vec<ExecutionTimelineEvent>>,
+    /// Frontend-built chronological reasoning/tools/text timeline for
+    /// this assistant turn, persisted verbatim by the server and
+    /// echoed back on reload so the desktop client restores the exact
+    /// inline interleaving (tools shown where they happened) instead
+    /// of the fixed `buildFallbackSteps` reasoning→tools→text order.
+    /// Mirrors `Message::unified_steps`. `None` when the client didn't
+    /// persist one (older turns) — the client then rebuilds via the
+    /// fallback path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unified_steps: Option<Vec<serde_json::Value>>,
     /// wall-clock ISO-8601 timestamp read from
     /// `messages.created_at`. The desktop client uses this to
     /// render the per-message relative time ("3 天前") instead of

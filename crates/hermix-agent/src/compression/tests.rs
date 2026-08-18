@@ -95,6 +95,7 @@ use hermix_core::types::ContentPart;
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -110,6 +111,7 @@ use hermix_core::types::ContentPart;
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -131,6 +133,7 @@ use hermix_core::types::ContentPart;
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -176,6 +179,7 @@ use hermix_core::types::ContentPart;
                     reasoning_content: None,
                     cache_control: None,
                     execution_timeline: None,
+                    unified_steps: None,
                     ephemeral: false,
                 },
                 finish_reason: Some("stop".into()),

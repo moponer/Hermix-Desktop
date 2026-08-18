@@ -41,6 +41,7 @@ fn user_msg(content: &str) -> Message {
         reasoning_content: None,
         cache_control: None,
         execution_timeline: None,
+        unified_steps: None,
         ephemeral: false,
     }
 }

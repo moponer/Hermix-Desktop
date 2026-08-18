@@ -265,6 +265,14 @@ pub fn router(state: HttpServerState) -> Router {
             "/v1/sessions/{session_id}/messages",
             get(routes::get_session_messages).post(routes::send_message),
         )
+        // Persist the frontend-built `unified_steps` timeline for the
+        // most recent assistant turn (sent by the desktop client right
+        // after a stream completes). Keeps inline tool interleaving
+        // across session reloads.
+        .route(
+            "/v1/sessions/{session_id}/messages/unified_steps",
+            post(routes::save_session_unified_steps),
+        )
         // archive refs surface for the chat UI.
         // `GET /v1/sessions/{id}/archive-refs` returns the per-session
         // JSONL index written by `archive_context_section`. Empty

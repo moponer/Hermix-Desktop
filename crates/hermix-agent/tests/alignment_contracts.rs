@@ -61,6 +61,7 @@ fn strip_budget_tool_message_matches_python_fixture() {
         reasoning_content: None,
         cache_control: None,
         execution_timeline: None,
+        unified_steps: None,
         ephemeral: false,
     }];
     python_alignment::strip_budget_warnings_from_messages(&mut messages);

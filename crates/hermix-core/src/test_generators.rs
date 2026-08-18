@@ -99,6 +99,7 @@ pub fn arb_message() -> impl Strategy<Value = Message> {
                     reasoning_content,
                     cache_control,
                     execution_timeline: None,
+                    unified_steps: None,
                     ephemeral: false,
                 }
             },

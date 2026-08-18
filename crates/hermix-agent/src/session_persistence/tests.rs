@@ -442,6 +442,7 @@
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                unified_steps: None,
                 ephemeral: false,
             },
             Message {
@@ -454,6 +455,7 @@
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                unified_steps: None,
                 ephemeral: false,
             },
         ];
@@ -529,6 +531,7 @@
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                unified_steps: None,
                 ephemeral: false,
             },
         ];

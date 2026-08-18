@@ -84,6 +84,7 @@ impl ContextCompressor {
                                 reasoning_content: None,
                                 cache_control: None,
                                 execution_timeline: None,
+                                unified_steps: None,
                                 ephemeral: false,
                             });
                         }
@@ -543,6 +544,7 @@ impl ContextCompressor {
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                unified_steps: None,
                 ephemeral: false,
             });
         }

@@ -172,6 +172,19 @@ pub struct Message {
     /// know whether a tool call was running, succeeded or failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_timeline: Option<Vec<ExecutionTimelineEvent>>,
+    /// Frontend-built chronological reasoning/tools/text timeline for
+    /// this assistant turn (`unified_steps`). The desktop client assembles
+    /// it live from the WS stream (reasoning chunk → text chunk → tool
+    /// event → …) so the inline cards show tools *where they happened*
+    /// in the conversation flow, not grouped at the end. We persist it
+    /// verbatim (JSON array of `{kind, ...}` step objects) so a session
+    /// reload restores the exact same interleaving via
+    /// `resolveSteps(message.unified_steps)` instead of falling back to
+    /// the fixed reasoning→tools→text `buildFallbackSteps` order.
+    /// `None` for non-assistant roles and for messages saved before this
+    /// column existed (older clients simply rebuild via the fallback).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unified_steps: Option<Vec<serde_json::Value>>,
     /// ephemeral messages exist only in the
     /// in-memory context — they are **never** persisted to the DB.
     /// Used for replay-path `tool_result` messages that satisfy the
@@ -238,6 +251,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -254,6 +268,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -270,6 +285,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -286,6 +302,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -315,6 +332,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -337,6 +355,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -360,6 +379,7 @@ impl Message {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }

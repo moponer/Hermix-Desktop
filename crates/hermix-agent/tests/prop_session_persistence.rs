@@ -61,6 +61,7 @@ proptest! {
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                unified_steps: None,
                 ephemeral: false,
             }];
             sp.persist_session(sid, &msg, Some("openai:gpt-4o"), Some("test"), None, None, None, None, None)

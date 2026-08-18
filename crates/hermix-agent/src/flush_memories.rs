@@ -88,6 +88,7 @@ pub fn build_flush_sentinel() -> Message {
         reasoning_content: None,
         cache_control: None,
         execution_timeline: None,
+        unified_steps: None,
         ephemeral: true,
     }
 }
@@ -143,6 +144,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -158,6 +160,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -173,6 +176,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }

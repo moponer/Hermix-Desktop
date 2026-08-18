@@ -238,6 +238,7 @@ impl CodexProvider {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         };
 
@@ -517,6 +518,7 @@ mod tests {
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                unified_steps: None,
                 ephemeral: false,
             },
             Message::tool_result("call_1", "file contents", Some("read_file")),

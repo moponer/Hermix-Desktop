@@ -1553,6 +1553,7 @@ impl AnthropicProvider {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         };
 
@@ -2371,6 +2372,7 @@ fn parse_openai_response(json: &Value) -> Result<LlmResponse, AgentError> {
         reasoning_content,
         cache_control: None,
         execution_timeline: None,
+        unified_steps: None,
         ephemeral: false,
     };
 
@@ -2587,6 +2589,7 @@ mod tests {
                 reasoning_content: None,
                 cache_control: None,
                 execution_timeline: None,
+                unified_steps: None,
                 ephemeral: false,
             },
             Message::tool_result("tc_1", "file contents here", Some("read_file")),
@@ -2755,6 +2758,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -2770,6 +2774,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -2785,6 +2790,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }
@@ -2899,6 +2905,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         };
         empty_assistant.tool_calls = None;
@@ -2998,6 +3005,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }
     }

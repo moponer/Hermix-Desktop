@@ -26,6 +26,40 @@ impl SessionPersistence {
         messages: &[Message],
         now: &str,
     ) -> Result<usize, AgentError> {
+        // Capture the existing `unified_steps` blobs (in row id order)
+        // BEFORE the DELETE below. `flush_messages` does a full
+        // DELETE+INSERT, so without this carry-forward any value the
+        // desktop client persisted via the `…/messages/unified_steps`
+        // endpoint would be wiped on the very next turn's flush and the
+        // inline tool interleaving would be lost on reload. We re-apply
+        // the captured value to the same ordinal message during the
+        // re-insert. Guard: only carry forward when the captured count
+        // exactly matches the number of rows we're about to (re)insert,
+        // otherwise skip — better to drop the cached timeline than to
+        // misalign it onto the wrong message (e.g. after a compression
+        // reorder).
+        let carry_unified_steps: Vec<Option<String>> = conn
+            .prepare(
+                "SELECT unified_steps FROM messages \
+                 WHERE session_id = ?1 AND active = 1 AND role != 'system' \
+                 ORDER BY id ASC",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map(rusqlite::params![session_id], |row| {
+                    let v: Option<String> = row.get(0)?;
+                    Ok(v)
+                })
+                .map(|rows| rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+            })
+            .unwrap_or_default();
+        // Count how many rows this flush will actually (re)insert so we
+        // can compare against `carry_unified_steps.len()` below.
+        let persistable_count = messages
+            .iter()
+            .filter(|m| !m.ephemeral && !matches!(m.role, MessageRole::System))
+            .count();
+        let use_carry = carry_unified_steps.len() == persistable_count;
+
         conn.execute(
             "DELETE FROM messages WHERE session_id = ?1",
             rusqlite::params![session_id],
@@ -34,12 +68,13 @@ impl SessionPersistence {
 
         let mut stmt = conn
             .prepare(
-                "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, name, created_at, execution_timeline, reasoning_content)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, name, created_at, execution_timeline, reasoning_content, unified_steps)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )
             .map_err(|e| AgentError::Io(format!("Failed to prepare insert: {e}")))?;
 
         let mut inserted: usize = 0;
+        let mut carry_idx: usize = 0;
         for msg in messages {
             // ephemeral messages (e.g. replay-path
             // tool_result) exist only in the in-memory context and
@@ -66,6 +101,22 @@ impl SessionPersistence {
                 .execution_timeline
                 .as_ref()
                 .map(|tl| serde_json::to_string(tl).unwrap_or_default());
+            // Re-flush safety: prefer the `unified_steps` we captured
+            // from the DB before the DELETE above so a client-persisted
+            // timeline survives the next turn's flush. Fall back to
+            // whatever the in-memory message carries (normally `None`
+            // for backend-built messages).
+            let carried = if use_carry {
+                carry_unified_steps.get(carry_idx).cloned().flatten()
+            } else {
+                None
+            };
+            carry_idx += 1;
+            let unified_steps_json = carried.or_else(|| {
+                msg.unified_steps
+                    .as_ref()
+                    .map(|us| serde_json::to_string(us).unwrap_or_default())
+            });
 
             let safe_content = msg
                 .content
@@ -85,12 +136,43 @@ impl SessionPersistence {
                 now,
                 timeline_json.as_deref(),
                 msg.reasoning_content.as_deref(),
+                unified_steps_json.as_deref(),
             ])
             .map_err(|e| AgentError::Io(format!("Failed to insert message: {e}")))?;
             inserted += 1;
         }
 
         Ok(inserted)
+    }
+
+    /// Persist the desktop client's frontend-built `unified_steps`
+    /// timeline onto the most recent assistant message of a session.
+    ///
+    /// The agent loop never produces `unified_steps` (it's assembled
+    /// live in the desktop client from the WS stream), so it isn't
+    /// part of the in-memory `Message` the loop flushes. The client
+    /// calls this right after a turn's stream completes, shipping the
+    /// exact chronological reasoning/tools/text steps it rendered. We
+    /// attach them to the latest assistant row so a reload restores the
+    /// same inline tool interleaving (instead of the fixed
+    /// `buildFallbackSteps` order). `flush_messages`' carry-forward
+    /// keeps this value alive across the next turn's DELETE+INSERT.
+    pub fn update_latest_assistant_unified_steps(
+        &self,
+        session_id: &str,
+        unified_steps_json: &str,
+    ) -> Result<(), AgentError> {
+        self.ensure_db()?;
+        let conn = open_with_wal(&self.db_path)?;
+        conn.execute(
+            "UPDATE messages SET unified_steps = ?1 \
+             WHERE session_id = ?2 AND role = 'assistant' AND active = 1 \
+               AND id = (SELECT MAX(id) FROM messages \
+                         WHERE session_id = ?2 AND role = 'assistant' AND active = 1)",
+            rusqlite::params![unified_steps_json, session_id],
+        )
+        .map_err(|e| AgentError::Io(format!("Failed to update unified_steps: {e}")))?;
+        Ok(())
     }
 
     /// Save a human-readable session log as markdown.
@@ -287,7 +369,7 @@ impl SessionPersistence {
                 // prompt (AGENTS.md + skills, ~23k chars) out of the
                 // returned timeline — it's rebuilt per-turn by
                 // `agent_loop`, never re-shown to the user.
-                "SELECT role, content, tool_call_id, tool_calls, name, execution_timeline, reasoning_content
+                "SELECT role, content, tool_call_id, tool_calls, name, execution_timeline, reasoning_content, unified_steps
                  FROM messages
                  WHERE session_id = ?1 AND active = 1
                    AND role != 'approval' AND role != 'system'
@@ -304,6 +386,7 @@ impl SessionPersistence {
                 let db_name: Option<String> = row.get(4)?;
                 let timeline_json: Option<String> = row.get(5)?;
                 let reasoning_content: Option<String> = row.get(6)?;
+                let unified_steps_json: Option<String> = row.get(7)?;
 
                 let role = match role_str.as_str() {
                     "system" => MessageRole::System,
@@ -315,6 +398,7 @@ impl SessionPersistence {
 
                 let tool_calls = tool_calls_json.and_then(|json| serde_json::from_str(&json).ok());
                 let execution_timeline = timeline_json.and_then(|json| serde_json::from_str(&json).ok());
+                let unified_steps = unified_steps_json.and_then(|json| serde_json::from_str(&json).ok());
 
                 Ok(Message {
                     role,
@@ -326,6 +410,7 @@ impl SessionPersistence {
                     reasoning_content,
                     cache_control: None,
                     execution_timeline,
+                    unified_steps,
                     ephemeral: false,
                 })
             })
@@ -707,7 +792,7 @@ impl SessionPersistence {
                 // Pre-existing rows from before that filter are
                 // excluded here so a reloaded session never paints the
                 // 23k-char system prompt into the chat timeline.
-                "SELECT role, content, tool_call_id, tool_calls, extra, name, execution_timeline, reasoning_content
+                "SELECT role, content, tool_call_id, tool_calls, extra, name, execution_timeline, reasoning_content, unified_steps
                  FROM messages
                  WHERE session_id = ?1 AND active = 1 AND role != 'system'
                  ORDER BY id ASC",
@@ -724,6 +809,7 @@ impl SessionPersistence {
                 let db_name: Option<String> = row.get(5)?;
                 let timeline_json: Option<String> = row.get(6)?;
                 let reasoning_content: Option<String> = row.get(7)?;
+                let unified_steps_json: Option<String> = row.get(8)?;
 
                 let tool_calls = tool_calls_json.and_then(|json| serde_json::from_str(&json).ok());
 
@@ -751,6 +837,7 @@ impl SessionPersistence {
                         _ => return Err(rusqlite::Error::InvalidQuery),
                     };
                     let execution_timeline = timeline_json.and_then(|json| serde_json::from_str(&json).ok());
+                    let unified_steps = unified_steps_json.and_then(|json| serde_json::from_str(&json).ok());
                     Ok(SessionEntry::Message(Message {
                         role,
                         content,
@@ -761,6 +848,7 @@ impl SessionPersistence {
                         reasoning_content,
                         cache_control: None,
                         execution_timeline,
+                        unified_steps,
                         ephemeral: false,
                     }))
                 }

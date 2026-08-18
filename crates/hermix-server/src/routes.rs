@@ -1011,6 +1011,7 @@ pub(crate) async fn get_session_messages(
                             extra: None,
                             reasoning_content: m.reasoning_content.clone(),
                             execution_timeline,
+                            unified_steps: m.unified_steps.clone(),
                             created_at: ts,
                             compressed: Some(true),
                         })
@@ -1031,6 +1032,7 @@ pub(crate) async fn get_session_messages(
                             extra: Some(serde_json::to_value(&record).unwrap_or(serde_json::Value::Null)),
                             reasoning_content: None,
                             execution_timeline: None,
+                            unified_steps: None,
                             created_at: ts,
                             compressed: Some(true),
                         })
@@ -1126,6 +1128,7 @@ pub(crate) async fn get_session_messages(
                     extra: None,
                     reasoning_content: m.reasoning_content.clone(),
                     execution_timeline,
+                    unified_steps: m.unified_steps.clone(),
                     created_at: ts,
                     compressed: None,
                 }
@@ -1156,6 +1159,8 @@ pub(crate) async fn get_session_messages(
                     // Approval rows are not associated with any
                     // assistant turn's tool calls, so no timeline.
                     execution_timeline: None,
+                    // Approvals carry no reasoning/tools timeline.
+                    unified_steps: None,
                     created_at: ts,
                     compressed: None,
                 }
@@ -1202,6 +1207,33 @@ pub(crate) async fn get_session_messages(
         messages: all_messages,
         context_usage,
     }))
+}
+
+/// Request body for [`save_session_unified_steps`].
+/// `unified_steps` is the frontend-built chronological
+/// reasoning/tools/text timeline (array of `{kind, ...}` step objects).
+#[derive(serde::Deserialize)]
+pub(crate) struct UnifiedStepsBody {
+    unified_steps: serde_json::Value,
+}
+
+/// Persist the desktop client's frontend-built `unified_steps` timeline
+/// for the just-completed assistant turn. The agent loop can't produce
+/// this (it's assembled live in the client from the WS stream), so the
+/// client ships it here after the stream finishes. See
+/// `SessionPersistence::update_latest_assistant_unified_steps` for the
+/// DB write and the re-flush carry-forward that keeps it alive.
+pub(crate) async fn save_session_unified_steps(
+    Path(session_id): Path<String>,
+    State(state): State<HttpServerState>,
+    Json(body): Json<UnifiedStepsBody>,
+) -> Result<StatusCode, HttpError> {
+    let json = serde_json::to_string(&body.unified_steps).unwrap_or_default();
+    state
+        .session_persistence
+        .update_latest_assistant_unified_steps(&session_id, &json)
+        .map_err(HttpError::from)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn send_message(

@@ -21,6 +21,7 @@ fn system(text: impl Into<String>) -> Message {
         reasoning_content: None,
         cache_control: None,
         execution_timeline: None,
+        unified_steps: None,
         ephemeral: false,
     }
 }
@@ -36,6 +37,7 @@ fn user(text: impl Into<String>) -> Message {
         reasoning_content: None,
         cache_control: None,
         execution_timeline: None,
+        unified_steps: None,
         ephemeral: false,
     }
 }

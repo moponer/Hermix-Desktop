@@ -187,6 +187,22 @@ impl SessionPersistence {
                 )));
             }
         }
+        // Migration: unified_steps (frontend-built chronological
+        // reasoning/tools/text timeline). Without it, a session reload
+        // can't restore the inline tool interleaving the user saw
+        // mid-stream and falls back to the fixed reasoning→tools→text
+        // order (tools grouped at the end). Serialized as a JSON TEXT
+        // blob (array of {kind,...} step objects) — the server stores
+        // it verbatim and the client feeds it straight into
+        // `resolveSteps`. Idempotent via "duplicate column" detection.
+        if let Err(e) = conn.execute("ALTER TABLE messages ADD COLUMN unified_steps TEXT", []) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column") && !msg.contains("no such table") {
+                return Err(AgentError::Io(format!(
+                    "Failed to migrate messages.unified_steps: {e}"
+                )));
+            }
+        }
 
         // -----------------------------------------------------------------
         // schema-version migration bookkeeping. This table is
@@ -241,6 +257,12 @@ impl SessionPersistence {
         // idempotent via "duplicate column name" detection — defense
         // in depth).
         stamp_migration(&conn, 7, "token_usage_cache_reasoning_columns", None)?;
+        // unified_steps (frontend-built reasoning/tools/text timeline).
+        // The ALTER TABLE lives just above the schema-version bookkeeping
+        // block; this stamp records the migration as applied so a
+        // re-open doesn't re-fire it (the ALTER is also idempotent via
+        // "duplicate column" detection — defense in depth).
+        stamp_migration(&conn, 8, "messages_unified_steps", None)?;
 
     /// Record a migration as applied (idempotent). When `marker_sql` is
     /// `Some`, the marker SQL is also executed so future upgrades can
@@ -339,6 +361,7 @@ impl SessionPersistence {
                 extra TEXT,
                 execution_timeline TEXT,
                 reasoning_content TEXT,
+                unified_steps TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
 

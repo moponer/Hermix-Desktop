@@ -559,6 +559,7 @@ mod tests {
             reasoning_content: None,
             cache_control: None,
             execution_timeline: None,
+            unified_steps: None,
             ephemeral: false,
         }];
         strip_budget_warnings_from_messages(&mut messages);
