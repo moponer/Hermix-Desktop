@@ -692,30 +692,26 @@
 }
 
 /* ── Stream error banner ─────────────────────────────────────────
-   Quiet, refined alert above the composer. Reflowed into three
-   layers: a head row (icon + title + code chip + dismiss), a
-   one-line message, and a tip + action row. The rail on the left
-   is 2px and tone-shifts with `kind` (amber, amber-strong,
-   amber-soft) so provider/quota/auth errors read with slightly
-   more weight than network/timeout, while staying inside the
-   project's no-blue-violet palette. */
+   Quiet, Linear/Vercel-style alert above the composer. A single
+   thin accent rail on the left whose WIDTH expresses severity
+   (2px soft / 3px normal / 4px strong); body background stays
+   neutral so the message stays legible. The Bootstrap-era code
+   chip, primary-color "重试" button, and 4-layer stack have been
+   collapsed into one row of icon + title + dismiss. */
 .stream-error-card {
-  --sec-bg: color-mix(in srgb, var(--color-warning) 6%, var(--color-bg-secondary));
-  --sec-border: color-mix(in srgb, var(--color-warning) 22%, var(--color-border-primary));
-  --sec-rail: color-mix(in srgb, var(--color-warning) 68%, transparent);
-  --sec-icon: color-mix(in srgb, var(--color-warning) 92%, var(--color-text-primary));
-  --sec-chip-bg: color-mix(in srgb, var(--color-warning) 14%, var(--color-bg-tertiary));
-  --sec-chip-fg: color-mix(in srgb, var(--color-warning) 70%, var(--color-text-primary));
+  --sec-bg:     color-mix(in srgb, var(--color-bg-secondary) 88%, transparent);
+  --sec-border: color-mix(in srgb, var(--color-warning) 14%, var(--color-border-primary));
+  --sec-rail:   color-mix(in srgb, var(--color-warning) 60%, transparent);
   display: flex;
   align-items: stretch;
   gap: 0;
   position: relative;
   width: 100%;
-  margin: 12px 0 10px;
+  margin: 10px 0 8px;
   padding: 0;
   border: 1px solid var(--sec-border);
   border-left: none;
-  border-radius: calc(var(--radius-md, 8px) + 2px);
+  border-radius: var(--radius-md, 8px);
   background: var(--sec-bg);
   color: var(--color-text-secondary);
   font-size: 13px;
@@ -723,35 +719,31 @@
   overflow: hidden;
 }
 .stream-error-card--amber-strong {
-  --sec-bg: color-mix(in srgb, var(--color-warning) 9%, var(--color-bg-secondary));
-  --sec-border: color-mix(in srgb, var(--color-warning) 32%, var(--color-border-primary));
-  --sec-rail: color-mix(in srgb, var(--color-warning) 84%, transparent);
-  --sec-chip-bg: color-mix(in srgb, var(--color-warning) 18%, var(--color-bg-tertiary));
-  --sec-chip-fg: color-mix(in srgb, var(--color-warning) 82%, var(--color-text-primary));
+  --sec-border: color-mix(in srgb, var(--color-warning) 18%, var(--color-border-primary));
+  --sec-rail:   color-mix(in srgb, var(--color-warning) 78%, transparent);
 }
 .stream-error-card--amber-soft {
-  --sec-bg: color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-secondary));
-  --sec-border: color-mix(in srgb, var(--color-warning) 16%, var(--color-border-primary));
-  --sec-rail: color-mix(in srgb, var(--color-warning) 50%, transparent);
-  --sec-chip-bg: color-mix(in srgb, var(--color-warning) 10%, var(--color-bg-tertiary));
-  --sec-chip-fg: color-mix(in srgb, var(--color-warning) 56%, var(--color-text-primary));
+  --sec-border: color-mix(in srgb, var(--color-warning) 8%, var(--color-border-primary));
+  --sec-rail:   color-mix(in srgb, var(--color-warning) 36%, transparent);
 }
 .stream-error-card__rail {
-  flex: 0 0 2px;
+  flex: 0 0 3px;
   background: var(--sec-rail);
 }
+.stream-error-card--amber-strong .stream-error-card__rail { flex-basis: 4px; }
+.stream-error-card--amber-soft   .stream-error-card__rail { flex-basis: 2px; }
 .stream-error-card__main {
   display: flex;
   flex: 1;
   min-width: 0;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px 11px 14px;
+  gap: 5px;
+  padding: 9px 12px 10px 13px;
 }
 .stream-error-card__head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
 }
 .stream-error-card__icon {
@@ -759,15 +751,15 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  color: var(--sec-icon);
+  width: 16px;
+  height: 16px;
+  color: var(--sec-rail);
 }
 .stream-error-card__title {
   flex: 1;
   min-width: 0;
   color: var(--color-text-primary);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   line-height: 1.3;
   letter-spacing: 0;
@@ -775,31 +767,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.stream-error-card__chip {
-  flex: 0 0 auto;
-  padding: 1px 7px;
-  border-radius: calc(var(--radius-sm, 4px) + 1px);
-  background: var(--sec-chip-bg);
-  color: var(--sec-chip-fg);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  line-height: 1.6;
-  text-transform: uppercase;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
-  white-space: nowrap;
-}
-.stream-error-card__spacer {
-  flex: 0 1 8px;
-  min-width: 4px;
-}
 .stream-error-card__dismiss {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm, 4px);
@@ -829,9 +803,9 @@
   letter-spacing: 0.01em;
 }
 .stream-error-card__detail {
-  margin: 4px 0 0;
+  margin: 3px 0 0;
   border-top: 1px dashed color-mix(in srgb, var(--color-warning) 14%, transparent);
-  padding-top: 6px;
+  padding-top: 5px;
 }
 .stream-error-card__detail > summary {
   display: inline-flex;
@@ -855,9 +829,9 @@
   transform: rotate(180deg);
 }
 .stream-error-card__detail > pre {
-  margin: 6px 0 0;
-  padding: 8px 10px;
-  max-height: 180px;
+  margin: 5px 0 0;
+  padding: 7px 9px;
+  max-height: 160px;
   overflow: auto;
   border-radius: var(--radius-sm, 4px);
   background: color-mix(in srgb, var(--color-warning) 4%, var(--color-bg-primary));
@@ -871,46 +845,42 @@
 .stream-error-card__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 .stream-error-card__btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 11px;
-  border: 1px solid transparent;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 16%, var(--color-border-primary));
   border-radius: var(--radius-sm, 4px);
-  font-size: 12px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 11.5px;
   font-weight: 500;
-  line-height: 1.2;
+  line-height: 1.3;
   cursor: pointer;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+.stream-error-card__btn:hover {
+  background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+  border-color: color-mix(in srgb, var(--color-warning) 26%, var(--color-border-primary));
 }
 .stream-error-card__btn:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-warning) 28%, transparent);
-}
-.stream-error-card__btn--primary {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  border-color: var(--color-border-strong);
-}
-.stream-error-card__btn--primary:hover {
-  background: var(--color-bg-hover);
-  border-color: color-mix(in srgb, var(--color-warning) 32%, var(--color-border-strong));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-warning) 24%, transparent);
 }
 .stream-error-card__btn--ghost {
-  background: transparent;
   color: var(--color-text-faint);
   border-color: transparent;
-  padding: 5px 9px;
+  padding: 3px 7px;
 }
 .stream-error-card__btn--ghost:hover {
   background: color-mix(in srgb, var(--color-warning) 8%, transparent);
   color: var(--color-text-primary);
+  border-color: transparent;
 }
 
 
@@ -1373,7 +1343,8 @@
 .tw-msg-row:hover,
 .tw-msg-row[data-open="true"],
 .tw-msg-row:focus-visible {
-  background: transparent;
+  /* v7 层次: hover/focus 高亮 (与 components.css 同名规则同步) */
+  background: var(--color-bg-hover);
   color: var(--color-text-primary);
 }
 .tw-msg-row:focus-visible { outline: none; }
@@ -1826,32 +1797,58 @@
    * same lane as `.sub-agent-panel` and `.file-change-block`. */
   margin-top: 4px;
   margin-bottom: 12px;
-  /* Width lives on `.footer-block` (matches the message stream
-   * column: 720px / 800px / 920px) — shared with file-change-block
-   * and sub-agent-panel so the three assistant-message-trailing
-   * blocks sit on the same horizontal lane as the conversation. */
-  border-radius: var(--radius-lg, 12px);
-  border: 1px solid var(--color-border-primary, #e4e4e7);
+  /* 容器底色: --color-bg-secondary 跟对话区 (--color-bg-primary)
+     拉开 1 档 (light: fafafa vs ffffff, dark: 2c2c2c vs 1f1f1f),
+     形成"卡片作为容器"的存在感. 这是层次基础, 不是装饰.
+     命令块 (--color-bg-tertiary) 再深 1 档, 形成容器→命令块的
+     2 层视觉分组. 风险色只上 reason 行小色块, 不染整卡. */
+  border-radius: 8px;
+  border: 0;
   background: var(--color-bg-secondary, #fafafa);
   overflow: hidden;
   /* Collapse animation: when `.is-resolved` is added, the card
      smoothly shrinks from the full-card layout to the one-line
      summary row below. */
-  transition: max-height 320ms cubic-bezier(0.4, 0, 0.2, 1),
-              padding 320ms ease,
-              border-color 200ms ease;
+  transition: max-height 320ms cubic-bezier(0.4, 0, 0.2, 1);
   max-height: 720px; /* generous ceiling; collapsed state shrinks to 48px */
   padding: 0;
 }
 .approval-card.is-resolved {
   max-height: 48px;
-  /* keep the same border + bg so the row reads as a related artifact */
-}
-.dark .approval-card {
-  border-color: var(--color-border-primary, #3a3a40);
-  background: var(--color-bg-secondary, #232328);
 }
 .approval-card.is-done { opacity: 0.92; }
+
+/* ── 标题栏 (approval-head) — 卡片顶部一行"栏" ──
+   工具名 + reason 文字 (LLM 解释的意图). 主人要求"reason 行做标题栏",
+   移除右侧"等待你的决定"状态文本(状态信息由风险色 + 按钮隐性传达).
+   风险时整栏染浅红/浅橙, 满足"层次" + "不分割"双诉求. */
+.approval-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  border-radius: 8px 8px 0 0;
+  background: var(--color-bg-tertiary, #ededee);
+  color: var(--color-text-secondary);
+}
+.approval-head-tool {
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+.approval-head-reason {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Full-card layout (pending state). Wrapper carries opacity +
    max-height transitions so the visible swap is animated, not a flash. */
@@ -1992,28 +1989,15 @@
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
-  background: var(--color-bg-tertiary, #ededee);
-  border-radius: 6px;
-  padding: 7px 10px;
-  color: var(--color-text-primary);
-}
-.dark .approval-cmd { background: var(--color-bg-tertiary, #2e2e34); }
-.approval-copy {
-  flex-shrink: 0;
-  margin-top: 1px;
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  border: 0.5px solid var(--color-border-tertiary, rgba(128,128,128,0.15));
+  /* 命令块: 跟容器同色,靠 monospace font + 左侧 2px 细线表达"代码区"
+     语义;不再独立铺色块,跟 reason/按钮保持视觉连贯 */
   background: transparent;
-  color: var(--color-text-tertiary, #999);
-  cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease;
-}
-.approval-copy:hover {
+  border-left: 2px solid var(--color-border-subtle, #ececef);
+  border-radius: 0;
+  padding: 4px 0 4px 10px;
   color: var(--color-text-primary);
-  border-color: var(--color-border-secondary, rgba(128,128,128,0.3));
 }
+.dark .approval-cmd { border-left-color: var(--color-border-subtle, #2c2c32); }
 
 .approval-reason-row {
   display: flex;
@@ -2065,6 +2049,23 @@
 .dark .approval-reason { background: var(--color-bg-tertiary, #2e2e34); }
 .approval-reason svg { flex-shrink: 0; margin-top: 3px; color: var(--color-text-tertiary); }
 
+/* Risk tint — 风险色集中在标题栏(.approval-head)上, is-danger 红 /
+   is-warn 橙, reason/命令/按钮不染色. 标题栏是整卡唯一的色层,
+   body 保持中性 — 满足"上面做成标题栏" + "不分割"双诉求.
+   注意主题适配: dark 模式略加深. */
+.approval-card.is-danger .approval-head {
+  background: rgba(198, 40, 40, 0.10);
+}
+.approval-card.is-warn .approval-head {
+  background: rgba(217, 119, 6, 0.10);
+}
+.dark .approval-card.is-danger .approval-head {
+  background: rgba(198, 40, 40, 0.14);
+}
+.dark .approval-card.is-warn .approval-head {
+  background: rgba(217, 119, 6, 0.14);
+}
+
 /* Command block — full text, no ellipsis, with copy button */
 .approval-cmd-bar {
   display: flex;
@@ -2081,29 +2082,17 @@
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
-  background: var(--color-bg-tertiary, #ededee);
-  border-radius: 8px;
-  padding: 9px 11px;
+  /* 命令块: 跟容器同色,靠 monospace font + 左侧 2px 细线表达"代码区"
+     语义;不再独立铺色块,跟 reason/按钮保持视觉连贯.
+     [注意: 1979 行还有一份相同选择器, 这是更晚定义的,会覆盖前者] */
+  background: transparent;
+  border-left: 2px solid var(--color-border-subtle, #ececef);
+  border-radius: 0;
+  padding: 4px 0 4px 10px;
   color: var(--color-text-primary);
   /* never truncate — legacy bug clipped dangerous commands at ellipsis */
 }
-.dark .approval-cmd { background: var(--color-bg-tertiary, #2e2e34); }
-.approval-copy {
-  flex-shrink: 0;
-  margin-top: 1px;
-  font-size: 11px;
-  padding: 3px 9px;
-  border-radius: 6px;
-  border: 0.5px solid var(--color-border-tertiary, rgba(128,128,128,0.15));
-  background: transparent;
-  color: var(--color-text-tertiary, #999);
-  cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease;
-}
-.approval-copy:hover {
-  color: var(--color-text-primary);
-  border-color: var(--color-border-secondary, rgba(128,128,128,0.3));
-}
+.dark .approval-cmd { border-left-color: var(--color-border-subtle, #2c2c32); }
 
 .approval-note {
   margin: 0;
@@ -2326,22 +2315,12 @@
               0 0 0 3px color-mix(in srgb, var(--color-success, #16a34a) 15%, transparent);
 }
 
-/* ── Decision-state — NEUTRAL surface, color lives in the pill ──
-   The whole-card colored wash (old 7-9% red/green tint) read as a
-   cheap "stamped box" and the red wash in particular looked nasty.
-   So the card surface stays neutral (the elevated base from
-   `.approval-card`); the decision is signalled by the colored status
-   pill (`.approval-decision`) + the tinted icon badge only. All three
-   decided states share the same neutral surface for consistency. */
+/* ── Decision-state — FLAT, color lives in the pill ──
+   卡片无背景; 决策色走 .approval-summary 系列里的 icon + badge. */
 .approval-card--ok,
 .approval-card--deny,
 .approval-card--expired {
-  background: var(--color-bg-secondary, #fafafa);
-}
-.dark .approval-card--ok,
-.dark .approval-card--deny,
-.dark .approval-card--expired {
-  background: var(--color-bg-secondary, #232328);
+  background: transparent;
 }
 
 /* ── Resolved footer text — spacing only, NO divider line ──

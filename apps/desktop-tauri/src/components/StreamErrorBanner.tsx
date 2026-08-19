@@ -11,7 +11,11 @@ export type ErrorKind =
   | "bad_request"
   | "unknown";
 
-type ErrorTone = "amber" | "amber-strong" | "amber-soft";
+// Severity is expressed by the left rail width (2px/3px/4px) and
+// by the rail opacity mix, NOT by the body background — Linear /
+// Vercel alert pattern: a thin accent rail says everything about
+// importance, the body stays neutral so the message stays legible.
+type ErrorTone = "amber-soft" | "amber" | "amber-strong";
 
 type ErrorMetaEntry = {
   title: string;
@@ -23,8 +27,8 @@ type ErrorMetaEntry = {
 
 /**
  * Static metadata per error category. Kept out of the component so
- * the same map drives the title, icon, hint, and code chip — the
- * UI never has to recompute labels at render time.
+ * the same map drives the title, icon, and hint — the UI never has
+ * to recompute labels at render time.
  */
 const ERROR_META: Record<ErrorKind, ErrorMetaEntry> = {
   overloaded: {
@@ -81,6 +85,12 @@ const ERROR_META: Record<ErrorKind, ErrorMetaEntry> = {
 /**
  * StreamErrorCard — the error surface shown when a send fails
  * (backend 400/5xx, transport error, WS reject, etc.).
+ *
+ * Linear / Vercel style: a thin accent rail on the left, single
+ * row of icon + title, one-line message below, and a collapsible
+ * "技术详情" panel only when there's a raw backend error to show.
+ * The previous Bootstrap-style chip + primary-color "重试" button
+ * have been removed in favor of a ghost button.
  */
 export function StreamErrorCard({
   message,
@@ -120,11 +130,9 @@ export function StreamErrorCard({
       <div className="stream-error-card__main">
         <div className="stream-error-card__head">
           <span className="stream-error-card__icon" aria-hidden="true">
-            <meta.Icon size={15} strokeWidth={2} />
+            <meta.Icon size={14} strokeWidth={2} />
           </span>
           <span className="stream-error-card__title">{meta.title}</span>
-          <span className="stream-error-card__chip" title={meta.tip}>{meta.code}</span>
-          <span className="stream-error-card__spacer" />
           <button
             type="button"
             className="stream-error-card__dismiss"
@@ -132,7 +140,7 @@ export function StreamErrorCard({
             title="关闭"
             aria-label="关闭错误提示"
           >
-            <X size={14} strokeWidth={2} />
+            <X size={13} strokeWidth={2} />
           </button>
         </div>
         <div className="stream-error-card__message">{message}</div>
@@ -145,7 +153,7 @@ export function StreamErrorCard({
           >
             <summary>
               <ChevronDown
-                size={12}
+                size={11}
                 strokeWidth={2}
                 className={`stream-error-card__chev ${expanded ? "is-open" : ""}`}
               />
@@ -159,7 +167,7 @@ export function StreamErrorCard({
             {onRetry && (
               <button
                 type="button"
-                className="stream-error-card__btn stream-error-card__btn--primary"
+                className="stream-error-card__btn"
                 onClick={onRetry}
               >
                 重试上一条
@@ -174,12 +182,12 @@ export function StreamErrorCard({
               >
                 {copied ? (
                   <>
-                    <CheckCheck size={12} strokeWidth={2} />
+                    <CheckCheck size={11} strokeWidth={2} />
                     <span>已复制</span>
                   </>
                 ) : (
                   <>
-                    <Copy size={12} strokeWidth={2} />
+                    <Copy size={11} strokeWidth={2} />
                     <span>复制错误码</span>
                   </>
                 )}

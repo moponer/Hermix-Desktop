@@ -26,11 +26,24 @@ function emit() {
   listeners.forEach((fn) => fn(snapshot));
 }
 
+/**
+ * Per-variant default auto-dismiss duration. Errors stay on screen
+ * longer (5s) because they demand attention; success disappears
+ * quickly (2.5s) so it doesn't pile up during fast delete / rename
+ * bursts. Pass an explicit `duration` to override.
+ */
+const DEFAULT_DURATION_MS: Record<ToastItem["variant"], number> = {
+  success: 2500,
+  info:    3000,
+  warning: 4000,
+  error:   5000,
+};
+
 /** Push a toast. Non-React code can call this directly. */
 export function toast(
   message: string,
   variant: ToastItem["variant"] = "info",
-  duration = 4000,
+  duration: number = DEFAULT_DURATION_MS[variant],
 ): void {
   const item: ToastItem = { id: nextId++, message, variant, duration };
   toasts = [...toasts, item];
@@ -49,6 +62,17 @@ export const toastSuccess = (msg: string) => toast(msg, "success");
 /** Remove a toast by id */
 export function dismissToast(id: number): void {
   toasts = toasts.filter((t) => t.id !== id);
+  emit();
+}
+
+/** Test-only: wipe the singleton toast stack and reset id counter.
+ *  Without this, toasts pushed in one test bleed into the next. */
+export function __resetToastsForTest(): void {
+  // Drop any pending auto-dismiss timers by clearing the array.
+  // The original timers will fire against ids that no longer exist
+  // — dismissToast is a no-op filter, so this is safe.
+  toasts = [];
+  nextId = 1;
   emit();
 }
 
