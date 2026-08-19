@@ -525,7 +525,13 @@ pub(crate) fn rebuild_messages_fts(conn: &rusqlite::Connection) -> Result<(), St
 /// case.
 pub(crate) fn open_sessions_db_for_read(path: &std::path::Path) -> Result<rusqlite::Connection, String> {
     let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
-    conn.busy_timeout(std::time::Duration::from_millis(5000))
+    // 500ms (was 5000): a DELETE in flight holds the WAL writer lock for
+    // 1-3s on a multi-MB sessions.db; with the old 5s window, the very
+    // next SELECT (sidebar click, session switch) hit busy_timeout and
+    // stalled the front-end for seconds. 500ms lets the lock resolve
+    // fast in normal cases and bounds worst-case latency to half a
+    // second — the SELECT then retries on its own.
+    conn.busy_timeout(std::time::Duration::from_millis(500))
         .map_err(|e| e.to_string())?;
     if let Err(e) = conn.execute_batch("PRAGMA journal_mode = WAL;") {
         tracing::warn!(
@@ -665,7 +671,9 @@ pub(crate) async fn delete_session(
             );
             return;
         };
-        let _ = conn.busy_timeout(std::time::Duration::from_millis(5000));
+        // 500ms matches open_sessions_db_for_read so a concurrent
+        // memory.db write doesn't stall the purge past half a second.
+        let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
         let _ = conn.execute_batch("PRAGMA journal_mode = WAL;");
         let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
 
@@ -783,7 +791,12 @@ pub(crate) async fn delete_session(
                     status: StatusCode::INTERNAL_SERVER_ERROR,
                     message: e.to_string(),
                 })?;
-                let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+                // No WAL TRUNCATE here: TRUNCATE blocks the writer's
+                // WAL header (1-3s on a multi-MB DB) and would starve
+                // any concurrent SELECT behind busy_timeout. The next
+                // open_sessions_db_for_read already runs PASSIVE before
+                // its first read — that's enough for the post-delete
+                // path.
                 // same success-path logging/cleanup as the
                 // happy path below (see cleanup_session_dir + tracing::info).
                 //: side effects run fire-and-forget on the
@@ -841,10 +854,13 @@ pub(crate) async fn delete_session(
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: e.to_string(),
     })?;
-    // Truncate the WAL after commit so the on-disk `sessions.db` is
-    // fully consistent — next opener (or a future restart) won't have
-    // to replay a half-checkpointed WAL.
-    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    // No WAL TRUNCATE here either (same reasoning as the retry path
+    // above): the open_sessions_db_for_read used by every SELECT
+    // caller runs PASSIVE before its first read, which is enough to
+    // keep the on-disk `sessions.db` consistent for the next opener.
+    // A synchronous TRUNCATE here would block the axum worker on the
+    // writer's WAL header (1-3s on a multi-MB DB) and starve the very
+    // next click the user makes.
 
     // surface the deletion in backend logs. Previously the
     // happy path was completely silent, so operators/owners had no way
@@ -1640,5 +1656,47 @@ pub(crate) async fn warm_up_provider_handler(
 #[derive(Deserialize)]
 pub(crate) struct WarmUpProviderRequest {
     model: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Regression guard: open_sessions_db_for_read must bound
+    /// busy_timeout at 500ms (not 5000ms) so a concurrent DELETE
+    /// can't stall the next SELECT on the WAL writer lock. The old
+    /// 5s window turned "switch sessions" into "click 3-5 times
+    /// before it opens".
+    #[test]
+    fn open_sessions_db_for_read_bounds_busy_timeout_at_500ms() {
+        let mut tmp = tempfile_helpers::temp_db_path("sessions_busy_to");
+        tmp.set_extension("db");
+        let _ = std::fs::File::create(&tmp).unwrap().write_all(b"").unwrap();
+
+        let conn = open_sessions_db_for_read(&tmp).expect("open ok");
+        let busy_ms: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .expect("PRAGMA readable");
+        assert!(
+            busy_ms <= 500,
+            "busy_timeout must be ≤ 500ms, got {busy_ms}"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    mod tempfile_helpers {
+        use std::path::PathBuf;
+
+        pub(super) fn temp_db_path(label: &str) -> PathBuf {
+            let mut p = std::env::temp_dir();
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            p.push(format!("hermix_routes_{label}_{stamp}.tmp"));
+            p
+        }
+    }
 }
 
