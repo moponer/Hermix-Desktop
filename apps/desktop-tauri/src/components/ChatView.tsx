@@ -5,7 +5,7 @@ import { resolveSessionSelectedModel } from "../utils/sessionModel";
 import type { ChatMessage, QueuedMessage, QueuedImage, SubAgentState, Session } from "../types";
 import type { ChatOverrides, StreamPhase, TodoSnapshotItem } from "../hooks/useStreamChat";
 import { CompactionStatusBanner } from "./CompactionStatusBanner";
-import { mergeConsecutiveAssistantMessages, isRowRenderable, shouldShowAssistantHeader } from "./chatUtils";
+import { mergeConsecutiveAssistantMessages, isRowRenderable, shouldShowAssistantHeader, mergeLegacyToolMessages } from "./chatUtils";
 import type { PendingImage } from "./chatUtils";
 import type { AcuiState } from "../acui/types";
 import type { AcuiDecisionBus } from "../acui/AcuiRegistry";
@@ -115,7 +115,7 @@ interface ChatViewProps {
   messageLoadError?: string | null;
   onRetryLoad?: () => void;
   streamError?: { message: string; detail?: string; kind?: ErrorKind } | null;
-  onClearStreamError?: () => void;
+  onClearStreamError?: (sid: string | null) => void;
   onRetryLastMessage?: () => void;
   onEnterWelcome?: () => void;
   acuiState?: AcuiState;
@@ -478,7 +478,10 @@ export function ChatView({
     const nonStreamingRaw = streamingAssistantId
       ? session?.messages.filter((m) => m.id !== streamingAssistantId) ?? []
       : session?.messages ?? [];
-    const visibleNonStreaming = nonStreamingRaw.filter(isRowRenderable);
+    // Merge legacy role: "tool" messages into preceding assistant's
+    // execution_timeline so they render inline instead of as separate rows.
+    const mergedTools = mergeLegacyToolMessages(nonStreamingRaw);
+    const visibleNonStreaming = mergedTools.filter(isRowRenderable);
     const restMsgs = mergeConsecutiveAssistantMessages(visibleNonStreaming);
     if (!streamingAssistantId || !streamingMsg) return restMsgs;
     const rawIdx = session?.messages.findIndex((m) => m.id === streamingAssistantId) ?? -1;
@@ -571,7 +574,7 @@ export function ChatView({
         : undefined;
     setForceScrollSeq((s) => s + 1);
     messageListRef.current?.scrollToBottom(true);
-    onClearStreamError?.();
+    onClearStreamError?.(sessionId);
     setInput("");
     clearPendingImages();
     setFilePaths([]);
@@ -759,7 +762,7 @@ export function ChatView({
                 message={streamError.message}
                 detail={streamError.detail}
                 kind={streamError.kind}
-                onDismiss={onClearStreamError}
+                onDismiss={() => onClearStreamError?.(sessionId)}
                 onRetry={onRetryLastMessage}
               />
             )}
@@ -827,7 +830,7 @@ export function ChatView({
               message={streamError.message}
               detail={streamError.detail}
               kind={streamError.kind}
-              onDismiss={onClearStreamError}
+              onDismiss={() => onClearStreamError?.(sessionId)}
               onRetry={onRetryLastMessage}
             />
           )}

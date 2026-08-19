@@ -35,7 +35,7 @@ import type { Artifact } from "./utils/artifacts";
 import { classifyArtifactKind } from "./utils/artifacts";
 import * as api from "./api";
 import { registerBuiltinsToBackend } from "./data/builtinExperts";
-import type { NavPage, Session, ChatMessage, ApprovalDecision, QueuedMessage, QueuedImage, ChatMessageImage } from "./types";
+import type { NavPage, Session, ChatMessage, ApprovalDecision, QueuedMessage, QueuedImage, ChatMessageImage, ApprovalMessageMeta, TimelineStep } from "./types";
 // expandTimelineToMessages and detectToolError imports removed —
 // tools are now tracked in the assistant's execution_timeline, not expanded
 // into separate role:tool messages.
@@ -355,16 +355,48 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
    * the chat just sits there silent (which is what the previous
    * version did).
    */
-  /** Stream-level error surfaced to the chat. `message` is the
-   *  friendly, localized summary; `detail` (optional) is the raw,
-   *  un-localized backend error shown as a collapsible "技术详情"
-   *  subtext so English provider errors don't pollute the main UI. */
-  const [streamError, setStreamError] = useState<{
+  /** Stream-level error surfaced to the chat, scoped per session.
+   *  `message` is the friendly, localized summary; `detail` (optional)
+   *  is the raw, un-localized backend error shown as a collapsible
+   *  "技术详情" subtext so English provider errors don't pollute the
+   *  main UI. Scoping by `sessionId` is what stops an error from
+   *  one conversation from bleeding into the welcome screen or
+   *  another conversation — without this, switching sessions
+   *  displays a stale error from a previous failed send. */
+  const [streamErrors, setStreamErrors] = useState<Map<string, {
     message: string;
     detail?: string;
     kind?: StreamErrorKind;
-  } | null>(null);
-  const clearStreamError = useCallback(() => setStreamError(null), []);
+  }>>(() => new Map());
+  // Sentinel key under which we stash errors that happen on the
+  // welcome screen (activeSessionId is null, e.g. createSession
+  // failed before any session was created). Without this slot,
+  // first-send failures on the welcome screen would have nowhere
+  // to land and the user would see nothing.
+  const WELCOME_KEY = "__welcome__";
+  const setStreamError = useCallback(
+    (sessionId: string | null, err: { message: string; detail?: string; kind?: StreamErrorKind }) => {
+      const key = sessionId ?? WELCOME_KEY;
+      setStreamErrors((prev) => {
+        const next = new Map(prev);
+        next.set(key, err);
+        return next;
+      });
+    },
+    [],
+  );
+  const clearStreamError = useCallback(
+    (sessionId: string | null) => {
+      const key = sessionId ?? WELCOME_KEY;
+      setStreamErrors((prev) => {
+        if (!prev.has(key)) return prev;
+        const next = new Map(prev);
+        next.delete(key);
+        return next;
+      });
+    },
+    [],
+  );
 
   /**
    * Per-session message-load errors. Cleared on success, set on any
@@ -736,7 +768,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const handleNewChat = useCallback(async () => {
     // Do NOT cancel the active stream when creating a new chat.
     // The stream on the previous session should continue in the background.
-    try { clearStreamError(); } catch (e) { console.warn("[App] clearStreamError failed:", e); }
+    try { clearStreamError(activeSessionId); } catch (e) { console.warn("[App] clearStreamError failed:", e); }
 
     // New behavior (2026-07-30): "新建对话" only enters the welcome screen.
     // We do NOT create a server session or add a sidebar entry yet.
@@ -745,7 +777,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     // and can render a meaningful title.
     setActiveSessionId(null);
     setPage("chat");
-  }, [clearStreamError, setActiveSessionId]);
+  }, [clearStreamError, activeSessionId, setActiveSessionId]);
 
   // 从「自定义应用」页「创建新应用」按钮触发：进入新对话并预填创建指令。
   const startCreateAppFlow = useCallback(() => {
@@ -763,7 +795,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     // indicator and phase chip to whichever session is actually streaming.
     // The Sidebar pulse dot also uses streamingSessionId so the user can
     // see that the old session is still working even after switching away.
-    try { clearStreamError(); } catch (e) { console.warn("[App] clearStreamError failed:", e); }
+    try { clearStreamError(activeSessionId); } catch (e) { console.warn("[App] clearStreamError failed:", e); }
     // Clear the phase chip — it belongs to the old session. If the
     // active stream is on the new session, onPhaseChange will
     // re-set it immediately; otherwise we dont want a stale chip.
@@ -779,7 +811,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     // between two concurrent fetches overwriting each other's results.
     // 若会话已有内存中的消息（如刚结束的流式对话），effect 跳过 fetch
     // 直接复用内存 state。
-  }, [clearStreamError, setActiveSessionId, setPage]);
+  }, [clearStreamError, activeSessionId, setActiveSessionId, setPage]);
 
   const handleDeleteSession = useCallback(async (id: string) => {
     // the previous implementation called `api.deleteSession`
@@ -831,6 +863,37 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
       requestId: string,
       decision: Exclude<ApprovalDecision, null>,
     ): ApprovalDecision | null => {
+      // Helper: flip a single assistant message's
+      // `kind: "approval_request"` step to the given decision. Used
+      // in both the live (resolver present) and stale (resolver gone)
+      // branches below.
+      const stampDecision = (s: Session, decision: ApprovalDecision): Session => ({
+        ...s,
+        messages: s.messages.map((m) => {
+          const steps = m.unified_steps;
+          if (!steps || steps.length === 0) return m;
+          let touched = false;
+          const next = steps.map((step): TimelineStep => {
+            if (step.kind !== "approval_request") return step;
+            if (step.meta.requestId !== requestId) return step;
+            if (step.meta.decision) {
+              // Already decided (stale click path); leave as-is.
+              return step;
+            }
+            touched = true;
+            return {
+              ...step,
+              meta: {
+                ...step.meta,
+                decision,
+                decidedAt: new Date().toISOString(),
+              },
+            };
+          });
+          return touched ? { ...m, unified_steps: next } : m;
+        }),
+      });
+
       const resolver = approvalResolversRef.current.get(requestId);
       if (resolver) {
         resolver(decision);
@@ -849,26 +912,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
           clearTimeout(timeoutTimer);
           approvalTimeoutTimersRef.current.delete(requestId);
         }
-        setSessions((prev) =>
-          prev.map((s) => ({
-            ...s,
-            messages: s.messages.map((m) => {
-              if (m.role !== "approval" || m.approval?.requestId !== requestId) return m;
-              return {
-                ...m,
-                approval: {
-                  ...(m.approval ?? {
-                    requestId,
-                    tool: "tool",
-                    riskLevel: "caution",
-                  }),
-                  decision,
-                  decidedAt: new Date().toISOString(),
-                },
-              };
-            }),
-          })),
-        );
+        setSessions((prev) => prev.map((s) => stampDecision(s, decision)));
         return decision;
       }
       // Stale click — the resolver is already gone. The
@@ -878,27 +922,7 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
       // their click did not register, and can re-prompt.
       // Skip the downgrade if the card already has a real
       // decision from a previous live click.
-      setSessions((prev) =>
-        prev.map((s) => ({
-          ...s,
-          messages: s.messages.map((m) => {
-            if (m.role !== "approval" || m.approval?.requestId !== requestId) return m;
-            if (m.approval?.decision) return m;
-            return {
-              ...m,
-              approval: {
-                ...(m.approval ?? {
-                  requestId,
-                  tool: "tool",
-                  riskLevel: "caution",
-                }),
-                decision: "expired" as ApprovalDecision,
-                decidedAt: new Date().toISOString(),
-              },
-            };
-          }),
-        })),
-      );
+      setSessions((prev) => prev.map((s) => stampDecision(s, "expired")));
       return null;
     },
     [],
@@ -1109,12 +1133,13 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     const __diagTs = performance.now().toFixed(1);
     diagLog(`[diag #${__diagId} @${__diagTs}ms] handleSendMessage ENTER`, { content, streamingSessionId, queueLen: messageQueue.length });
     // Note: console.trace removed (was just stack; the 1-line call above is enough).
-    // Clear any previous stream error — the user is starting a new turn,
-    // so the old error is stale.  If this turn also fails the error
-    // will be re-set by the onError callback.
-    setStreamError(null);
     let sessionId = activeSessionId;
     if (sessionId && !sessions.some((s) => s.id === sessionId)) { sessionId = null; setActiveSessionId(null); }
+    // Clear any previous stream error for the *current* session — the
+    // user is starting a new turn, so the old error is stale. If this
+    // turn also fails the error will be re-set by the onError callback
+    // (or the createSession catch below for the welcome path).
+    clearStreamError(sessionId);
     if (!sessionId) {
       // createSession() calls the HTTP server; if the sidecar isn't
       // running (or hermix.exe failed to spawn — see sidecar.rs
@@ -1131,7 +1156,10 @@ const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
         session = await api.createSession(title, draftWs ?? undefined);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        setStreamError({
+        // No sessionId yet (createSession failed before one was minted) —
+        // we route the error to the welcome-screen sentinel so the user
+        // sees it in the empty conversation, not in some other session.
+        setStreamError(null, {
           message:
             `后端服务未启动或不可达 (${msg})。` +
             `请检查 hermix.exe 是否在 target/debug/ 下、端口 3000 是否被占用。`,
@@ -1290,7 +1318,7 @@ streamPhaseRef.current = null;
       args: unknown;
       riskLevel?: string;
       /** Wall-clock deadline (Unix ms) from the server. Persisted
-       *  into the approval message and fed to `<InlineApprovalCard>`
+       *  into the approval meta and fed to `<InlineApprovalCard>`
        *  so it can render a live "剩余 4m 32s" countdown against
        *  the *original* server-side deadline (not a fresh
        *  re-derivation, which would briefly lie across a reload). */
@@ -1304,49 +1332,68 @@ streamPhaseRef.current = null;
       // turn. We deliberately do NOT create a new assistant placeholder
       // here (that was the old behavior, and it produced a fresh
       // avatar + divider for every approval — 10 approvals = 10 new
-      // conversation segments). The card lives in the message stream
-      // right after the frozen assistant bubble; when the agent
-      // resumes and streams follow-up text, `appendChunk` keeps
-      // writing to the SAME `currentAssistantIdRef.current`
-      // (preserved below), so the user sees one assistant bubble
-      // with all approval cards beneath it — the correct shape.
-      const previousAssistantId = currentAssistantIdRef.current;
+      // conversation segments).
+      //
+      // Sequence-of-flow path (2026-08-18 refactor): the card is
+      // rendered inline as a `kind: "approval_request"` step inside
+      // the assistant's `unified_steps`, at the chronological
+      // position of its `tool_call_id` (right after `tool_start`,
+      // before `tool_complete`). `resolveApproval()` mutates the
+      // same step's `meta.decision`/`decidedAt` to flip the card
+      // to its resolved one-line summary.
+      //
       // NOTE: do NOT advance `currentAssistantIdRef` here — the
       // resumed LLM stream must target the same assistant.
-
-      const approvalMsg: ChatMessage = {
-        id: `approval-${req.requestId}`,
-        role: "approval",
-        content: "",
-        timestamp: new Date().toISOString(),
-        approval: {
-          requestId: req.requestId,
-          tool: req.tool,
-          args: req.args,
-          riskLevel: req.riskLevel,
-          reason: req.reason ?? null,
-          decision: null,
-          decidedAt: null,
-          // Persist the server-emitted deadline so a page reload
-          // re-renders the countdown against the *original*
-          // server-side timeout (not a fresh `Date.now()+5min`
-          // re-derivation, which would briefly lie — the back-end
-          // may have already auto-denied while the page was
-          // reloading). See the comment on
-          // `ApprovalMessageMeta::expiresAt` in `types.ts`.
-          expiresAt: req.expiresAt ?? null,
-          linkedAssistantId: previousAssistantId,
-        },
+      const previousAssistantId = currentAssistantIdRef.current;
+      const meta: ApprovalMessageMeta = {
+        requestId: req.requestId,
+        tool: req.tool,
+        args: req.args,
+        riskLevel: req.riskLevel,
+        decision: null,
+        decidedAt: null,
+        reason: req.reason ?? null,
+        // Persist the server-emitted deadline so a page reload
+        // re-renders the countdown against the *original*
+        // server-side timeout (not a fresh `Date.now()+5min`
+        // re-derivation, which would briefly lie — the back-end
+        // may have already auto-denied while the page was
+        // reloading). See `ApprovalMessageMeta::expiresAt` in
+        // `types.ts`.
+        expiresAt: req.expiresAt ?? null,
+        linkedAssistantId: previousAssistantId,
       };
-      // No new assistant placeholder — see comment at top of fn.
-
+      const step: TimelineStep = {
+        kind: "approval_request",
+        meta,
+        toolCallId: req.requestId,
+        createdAt: new Date().toISOString(),
+      };
+      // Push the approval meta as a `kind: "approval_request"`
+      // step into the assistant's existing `unified_steps`. Legacy
+      // sessions persisted as a standalone `role: "approval"`
+      // message keep their rendering through
+      // `MessageBubble`'s backward-compat branch; new approvals
+      // never create that standalone message.
       setSessions((prev) => prev.map((s) => {
         if (s.id !== sessionId) return s;
-        // Insert just the approval message; the next assistant text
-        // resumes on the existing `previousAssistantId` bubble.
+        const messages = s.messages.map((m) => {
+          if (m.id !== previousAssistantId) return m;
+          const existing = m.unified_steps ?? [];
+          // De-dup — both live re-emits and accidental double-fires
+          // fall through: appending another pending step for the
+          // same requestId would double the rendered card.
+          if (existing.some(
+            (x) => x.kind === "approval_request" && x.meta.requestId === req.requestId,
+          )) return m;
+          return {
+            ...m,
+            unified_steps: [...existing, step],
+          };
+        });
         return {
           ...s,
-          messages: [...s.messages, approvalMsg],
+          messages,
           updated_at: new Date().toISOString(),
         };
       }));
@@ -1501,7 +1548,7 @@ streamPhaseRef.current = null;
               // Keep the friendly localized message as the primary
               // text; stash the raw backend error as `detail` so the
               // error card can show it as a collapsible "技术详情".
-              setStreamError({ message: friendly, detail, kind });
+              setStreamError(sessionId, { message: friendly, detail, kind });
             }
             // Clear live sub-agent panel on error — the stream is
             // dead, no more sub-agent events will arrive, and
@@ -2314,7 +2361,7 @@ return {
       // handshake before any chunk landed).
       if (sessionId === activeSessionId) {
         const eMsg = e instanceof Error ? e.message : String(e);
-        setStreamError({
+        setStreamError(sessionId, {
           message: localizeStreamError(eMsg),
           kind: classifyStreamErrorKind(eMsg),
         });
@@ -2381,7 +2428,7 @@ return {
       .reverse()
       .find((m) => m.role === "user");
     if (!lastUser || !lastUser.content?.trim()) return;
-    clearStreamError();
+    clearStreamError(activeSession?.id ?? null);
     try {
       await handleSendMessage(lastUser.content);
     } catch {
@@ -2408,7 +2455,10 @@ return {
       resetChatStateForModelSwitch({
         cancelStream,
         wsSendRaw,
-        clearStreamError,
+        // chatStateReset was written for the legacy global streamError;
+        // scope the clear to the active session so a model switch
+        // mid-error doesn't leave another conversation's banner up.
+        clearStreamError: () => clearStreamError(activeSessionId),
         setStreamPhase,
         setRunningToolCount,
         setSubAgents: setSubAgents as unknown as (
@@ -2430,6 +2480,7 @@ return {
       cancelStream,
       wsSendRaw,
       clearStreamError,
+      activeSessionId,
       setStreamPhase,
       setRunningToolCount,
       setSubAgents,
@@ -2515,6 +2566,18 @@ return {
 
   // 路由上下文：chat 页面 props 复杂，预先渲染为 chatNode 元素传入路由表，
   // 其余页面由 ./app/routes 的 renderRoutes 按 page 分发。
+
+  // Derive the error to render from the per-session Map:
+  // - when a session is active, show *its* error (or the welcome
+  //   sentinel fallback so createSession failures aren't lost);
+  // - when on the welcome screen, show the welcome sentinel.
+  // The Map itself is the source of truth — `setStreamError` /
+  // `clearStreamError` are scoped per-session, and only this view
+  // projection knows which entry should be visible.
+  const streamErrorForView = activeSessionId
+    ? (streamErrors.get(activeSessionId) ?? streamErrors.get(WELCOME_KEY) ?? null)
+    : (streamErrors.get(WELCOME_KEY) ?? null);
+
   const chatViewNode = (
     <ChatView
       session={activeSession}
@@ -2569,7 +2632,7 @@ return {
           void handleSelectSession(activeSessionId);
         }
       }}
-      streamError={streamError}
+      streamError={streamErrorForView}
       onClearStreamError={clearStreamError}
       onRetryLastMessage={retryLastMessage}
       prefetchIntent={prefetchIntent}
