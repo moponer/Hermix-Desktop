@@ -425,13 +425,13 @@ export function ModelTab() {
       <div className="flex flex-1 min-h-0">
       {/* 左侧：供应商列表 */}
       <div className="w-56 border-r border-border-primary bg-bg-primary overflow-y-auto shrink-0">
-        <div className="p-3">
+        <div className="p-2">
           <div className="text-[11px] text-text-muted uppercase tracking-wider mb-2 px-2">供应商</div>
           {PROVIDERS.map((p) => {
             const isActive = selectedProvider?.id === p.id;
             const connected = activeKeys[p.id];
             return (
-              <button key={p.id} onClick={() => selectProvider(p)} className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-left text-sm ${isActive ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-bg-tertiary hover:text-text-primary"}`}>
+              <button key={p.id} onClick={() => selectProvider(p)} className={`w-full flex items-center gap-2 px-2 py-2.5 rounded-lg text-left text-sm ${isActive ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-bg-tertiary hover:text-text-primary"}`}>
                 <ProviderIcon providerId={p.id} size={18} title={p.name} />
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-xs truncate">{p.name}</div>
@@ -446,7 +446,7 @@ export function ModelTab() {
           <div className="mt-3 pt-3 border-t border-border-primary px-2">
             <button
               onClick={() => setSelectedProvider({ id: "_custom", name: "自定义", baseUrl: "", keyEnvVar: "", description: "兼容 OpenAI API 的任意服务" })}
-              className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-left text-sm ${selectedProvider?.id === "_custom" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-bg-tertiary hover:text-text-primary"}`}
+              className={`w-full flex items-center gap-2 px-2 py-2.5 rounded-lg text-left text-sm ${selectedProvider?.id === "_custom" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-bg-tertiary hover:text-text-primary"}`}
             >
               <ProviderIcon providerId="custom" size={18} title="自定义" />
               <div className="flex-1 min-w-0">
