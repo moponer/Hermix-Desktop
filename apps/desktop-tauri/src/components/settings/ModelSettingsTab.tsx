@@ -529,8 +529,10 @@ export function ModelTab() {
                       const ctx = config.modelContexts?.[fullId];
                       return (
                         <div key={modelId} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
-                          <button onClick={() => toggleModel(selectedProvider.id, modelId)} className={`w-4 h-4 rounded border flex items-center justify-center ${isEnabled ? "bg-accent border-accent text-accent-on-text" : "border-border-secondary hover:border-accent"}`}>
-                            {isEnabled && <Check size={10} />}
+                          <button onClick={() => toggleModel(selectedProvider.id, modelId)} className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-bg-card border-border-secondary hover:border-accent"}`}>
+                            {isEnabled
+                              ? <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M1.5 4.5l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                              : null}
                           </button>
                           <span className={`flex-1 font-mono min-w-0 truncate ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
                           {isEnabled && (

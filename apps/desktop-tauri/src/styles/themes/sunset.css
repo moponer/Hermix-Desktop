@@ -1,24 +1,24 @@
 /*
- * Warm Sun Hope Theme (暖阳希望) v2 — 修复配色过黄/过饱和
+ * Warm Sun Hope Theme (暖阳希望) v3 — 减少白色，统一暖米色阶
  *
  * 设计目标：
  *   · 整体是暖调但不过分黄（基底是偏灰的暖米，不是纯奶黄）
- *   · 白色卡片保持纯白浮在微灰暖底上，层次清晰
+ *   · 取消纯白卡片，所有表面统一用暖米色阶，层次靠明度差而非白色 vs 米色
  *   · Accent 用低饱和蜂蜜金（非饱和橙）
  *   · 文字用暖深棕（非纯黑），层次分明
  *   · 禁止饱和蓝紫；金色/棕褐色系保留
  */
 :root[data-theme="sunset"] {
-  /* ── Surfaces — 暖米色阶（从最浅到最深）── */
+  /* ── Surfaces — 暖米色阶（从最浅到最深），全去掉纯白 ── */
   --color-bg-app:          #e8e2d8;       /* page canvas: 灰暖米（非纯黄） */
-  --color-bg-primary:      #ffffff;       /* 主卡片：纯白浮起 */
+  --color-bg-primary:      #ede6da;       /* 主卡片：偏暖米，统一色调 */
   --color-bg-secondary:    #f3ede3;       /* alt surface：偏灰暖米 */
   --color-bg-tertiary:     #e5ddd0;       /* controls/chips/inline code */
-  --color-bg-hover:        #f0ebe1;       /* hover over white（微亮） */
+  --color-bg-hover:        #f0ebe1;       /* hover over warm base */
   --color-bg-active:       #e2dacd;       /* active/selected */
-  --color-bg-card:         #ffffff;       /* card = primary（统一入口） */
-  --color-bg-card-hover:   #f7f3ec;
-  --color-bg-elevated:     #ffffff;       /* popovers/modals：纯白 */
+  --color-bg-card:         #ede6da;       /* card = primary（统一入口） */
+  --color-bg-card-hover:   #f5efe4;
+  --color-bg-elevated:     #f3ede3;       /* popovers/modals：浅暖米非纯白 */
 
   /* Code block：独立微灰暖底 */
   --color-bg-code:        #e0d8cc;

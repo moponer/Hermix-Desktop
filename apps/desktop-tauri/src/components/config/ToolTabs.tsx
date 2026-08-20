@@ -798,16 +798,24 @@ function ConnectorRow({
       <div className="flex items-center gap-1.5 shrink-0">
         <button
           onClick={() => onToggle(!server.enabled)}
-          className={`h-7 w-11 rounded-full ${
-            server.enabled ? "bg-accent" : "bg-bg-tertiary"
+          className={`relative h-7 w-11 rounded-full transition-colors ${
+            server.enabled ? "bg-accent" : "bg-bg-tertiary border border-border-secondary"
           }`}
           title={server.enabled ? "停用" : "启用"}
+          aria-label={server.enabled ? "停用" : "启用"}
         >
           <span
-            className={`block w-5 h-5 rounded-full bg-bg-card shadow transition-transform ${
-              server.enabled ? "translate-x-5" : "translate-x-1"
+            className={`absolute top-0.5 flex items-center justify-center rounded-full shadow transition-all duration-150 ${
+              server.enabled
+                ? "left-[22px] w-6 h-6 bg-white text-accent"
+                : "left-0.5 w-6 h-6 bg-bg-card text-text-muted"
             }`}
-          />
+          >
+            {server.enabled
+              ? <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              : <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            }
+          </span>
         </button>
         <button
           onClick={onRemove}
@@ -1055,10 +1063,17 @@ function ToolsetCard({
           } ${saving ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
         >
           <span
-            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-bg-card shadow transition-transform ${
-              enabled ? "translate-x-5" : "translate-x-1"
+            className={`absolute top-[3px] flex items-center justify-center rounded-full shadow transition-all duration-150 ${
+              enabled
+                ? "left-[19px] w-4 h-4 bg-white text-accent"
+                : "left-[3px] w-4 h-4 bg-bg-card text-text-muted"
             }`}
-          />
+          >
+            {enabled
+              ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            }
+          </span>
         </button>
         <span
           className={`text-[10px] uppercase tracking-wider ${

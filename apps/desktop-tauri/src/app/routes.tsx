@@ -4,7 +4,6 @@
 import type { ReactNode } from "react";
 import type { NavPage, Session } from "../types";
 import { SearchView } from "../components/SearchView";
-import { SystemConfigPanel } from "../components/SystemConfigPanel";
 import { AutomationView } from "../components/AutomationView";
 import { AgentsView } from "../components/AgentsView";
 import { GroupChatView } from "../components/GroupChatView";
@@ -28,8 +27,6 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       return ctx.chatNode;
     case "search":
       return <SearchView sessions={ctx.sessions} onSelectSession={ctx.handleSelectSession} />;
-    case "systemconfig":
-      return <SystemConfigPanel />;
     case "automation":
       return <AutomationView />;
     case "agents":

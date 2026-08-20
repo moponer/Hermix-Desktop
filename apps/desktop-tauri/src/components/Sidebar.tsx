@@ -27,6 +27,7 @@ import { EditProfileDialog } from "./EditProfileDialog";
 interface SidebarProps {
   page: NavPage;
   onPageChange: (page: NavPage) => void;
+  onOpenSettings?: () => void;
   sessions: Session[];
   activeSessionId: string | null;
   /** Session ID that currently has an active WS stream (model working). */
@@ -66,6 +67,7 @@ const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
 export function Sidebar({
   page,
   onPageChange,
+  onOpenSettings,
   sessions,
   activeSessionId,
   streamingSessionId,
@@ -637,8 +639,8 @@ export function Sidebar({
         {/* 系统配置 —— 集成 工具 / 模型 / 后端 / 高级 */}
         <button
           type="button"
-          onClick={() => onPageChange("systemconfig")}
-          className={clsx("nav-item", page === "systemconfig" && "nav-item-active")}
+          onClick={() => onOpenSettings?.()}
+          className="nav-item"
           title="系统配置"
           aria-label="系统配置"
         >
@@ -665,7 +667,7 @@ export function Sidebar({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              onPageChange("systemconfig");
+              onOpenSettings?.();
             }}
             className="user-card-action"
             title="设置"

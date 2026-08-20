@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Cpu,
   Boxes,
@@ -8,12 +9,17 @@ import {
   Sparkles,
   Network,
   Image as ImageIcon,
+  X,
 } from "lucide-react";
 import { ModelTab } from "./settings/ModelSettingsTab";
 import { BackendTab } from "./settings/BackendSettingsTab";
 import { AdvancedTab } from "./settings/AdvancedSettingsTab";
 import { PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab } from "./config/ToolTabs";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
+
+interface SystemConfigPanelProps {
+  onClose: () => void;
+}
 
 type CategoryId = "model" | "tools" | "backend" | "advanced";
 type ToolTabId = "plugins" | "skills" | "connectors" | "toolsets";
@@ -38,102 +44,142 @@ const MODEL_TABS: { id: ModelTabId; label: string; icon: React.ElementType }[] =
   { id: "image", label: "图像", icon: ImageIcon },
 ];
 
-export function SystemConfigPanel() {
+export function SystemConfigPanel({ onClose }: SystemConfigPanelProps) {
   const [cat, setCat] = useState<CategoryId>("tools");
   const [toolTab, setToolTab] = useState<ToolTabId>("connectors");
   const [modelTab, setModelTab] = useState<ModelTabId>("model");
   const [query, setQuery] = useState("");
+  const panelRef = useRef<HTMLDivElement>(null);
 
-  return (
-    <div className="flex-1 flex min-h-0 overflow-hidden">
-      {/* Left nav */}
-      <nav className="w-[220px] shrink-0 border-r border-border-primary bg-bg-secondary px-3 py-4 flex flex-col gap-1">
-        <div className="px-2 pb-3 mb-1 border-b border-border-primary">
-          <div className="text-sm font-semibold text-text-primary">系统配置</div>
-          <div className="text-[11px] text-text-muted mt-0.5">模型、工具、后端与高级选项</div>
-        </div>
-        {CATEGORIES.map(({ id, label, hint, icon: Icon }) => (
+  // ESC closes
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  // Lock body scroll
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = ""; };
+  }, []);
+
+  const handleBackdropClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) onClose();
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center"
+      style={{ background: "var(--color-overlay-scrim)" }}
+      onMouseDown={handleBackdropClick}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="系统配置"
+        className="flex flex-col rounded-xl border border-border-primary shadow-modal overflow-hidden"
+        style={{ width: "min(96vw, 1100px)", height: "min(90vh, 780px)", background: "var(--color-bg-app)" }}
+      >
+        {/* Header */}
+        <div className="flex items-center gap-3 px-5 py-3 border-b border-border-primary bg-bg-secondary shrink-0">
+          <span className="text-sm font-semibold text-text-primary">系统配置</span>
+          <span className="text-[11px] text-text-muted">模型 · 工具 · 后端 · 高级选项</span>
           <button
-            key={id}
-            onClick={() => setCat(id)}
-            className={clsxNav(cat === id)}
+            onClick={onClose}
+            className="ml-auto h-7 w-7 rounded-md flex items-center justify-center text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
+            title="关闭 (Esc)"
+            aria-label="关闭"
           >
-            <Icon size={16} className="shrink-0" />
-            <span className="flex-1 min-w-0">
-              <span className="block text-[13px] leading-tight truncate">{label}</span>
-              <span className="block text-[10.5px] text-text-muted leading-tight truncate">{hint}</span>
-            </span>
+            <X size={15} />
           </button>
-        ))}
-      </nav>
+        </div>
 
-      {/* Right detail */}
-      <div className="flex-1 min-w-0 flex flex-col">
-        {cat === "model" && (
-          <SubTabs tabs={MODEL_TABS} active={modelTab} onSelect={setModelTab} />
-        )}
-        {cat === "tools" && (
-          <SubTabs tabs={TOOL_TABS} active={toolTab} onSelect={setToolTab} />
-        )}
+        {/* Body */}
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          {/* Left nav */}
+          <nav className="w-[200px] shrink-0 border-r border-border-primary bg-bg-secondary px-2 py-3 flex flex-col gap-0.5">
+            {CATEGORIES.map(({ id, label, hint, icon: Icon }) => (
+              <button
+                key={id}
+                onClick={() => { setCat(id); if (id === "model") setModelTab("model"); if (id === "tools") setToolTab("connectors"); }}
+                className={clsxNav(cat === id)}
+              >
+                <Icon size={15} className="shrink-0 opacity-70" />
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[13px] leading-tight truncate font-medium">{label}</span>
+                  <span className="block text-[10.5px] text-text-muted leading-tight truncate">{hint}</span>
+                </span>
+              </button>
+            ))}
+          </nav>
 
-        <div className="flex-1 overflow-y-auto min-h-0">
-          {cat === "model" && modelTab === "model" && (
-            <Padded><ModelTab /></Padded>
-          )}
-          {cat === "model" && modelTab === "image" && (
-            <Padded><ImageSettingsCard /></Padded>
-          )}
-          {cat === "tools" && (
-            <div className="px-8 py-6 min-h-0">
-              <div className="max-w-5xl mx-auto">
-                {toolTab === "plugins" && <PluginsTab query={query} onQuery={setQuery} />}
-                {toolTab === "skills" && <SkillsTab query={query} onQuery={setQuery} />}
-                {toolTab === "connectors" && <ConnectorsTab query={query} onQuery={setQuery} />}
-                {toolTab === "toolsets" && <ToolsetsTab query={query} onQuery={setQuery} />}
+          {/* Right detail */}
+          <div className="flex-1 min-w-0 flex flex-col bg-bg-app">
+            {(cat === "model" || cat === "tools") && (
+              <div className="flex items-center gap-1 px-4 py-2 border-b border-border-primary bg-bg-secondary shrink-0 overflow-x-auto">
+                {cat === "model" && MODEL_TABS.map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setModelTab(id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] transition-colors whitespace-nowrap ${
+                      modelTab === id
+                        ? "bg-bg-tertiary text-text-primary font-medium"
+                        : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
+                    }`}
+                  >
+                    <Icon size={13} />
+                    {label}
+                  </button>
+                ))}
+                {cat === "tools" && TOOL_TABS.map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setToolTab(id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] transition-colors whitespace-nowrap ${
+                      toolTab === id
+                        ? "bg-bg-tertiary text-text-primary font-medium"
+                        : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
+                    }`}
+                  >
+                    <Icon size={13} />
+                    {label}
+                  </button>
+                ))}
               </div>
+            )}
+
+            <div className="flex-1 overflow-y-auto min-h-0">
+              {cat === "model" && modelTab === "model" && <Padded><ModelTab /></Padded>}
+              {cat === "model" && modelTab === "image" && <Padded><ImageSettingsCard /></Padded>}
+              {cat === "tools" && (
+                <div className="px-6 py-5 min-h-0">
+                  <div className="max-w-4xl mx-auto">
+                    {toolTab === "plugins" && <PluginsTab query={query} onQuery={setQuery} />}
+                    {toolTab === "skills" && <SkillsTab query={query} onQuery={setQuery} />}
+                    {toolTab === "connectors" && <ConnectorsTab query={query} onQuery={setQuery} />}
+                    {toolTab === "toolsets" && <ToolsetsTab query={query} onQuery={setQuery} />}
+                  </div>
+                </div>
+              )}
+              {cat === "backend" && <Padded><BackendTab /></Padded>}
+              {cat === "advanced" && <Padded><AdvancedTab /></Padded>}
             </div>
-          )}
-          {cat === "backend" && <Padded><BackendTab /></Padded>}
-          {cat === "advanced" && <Padded><AdvancedTab /></Padded>}
+          </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
 function Padded({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-8 py-6 min-h-0">
-      <div className="max-w-3xl mx-auto">{children}</div>
-    </div>
-  );
-}
-
-function SubTabs<T extends string>({
-  tabs,
-  active,
-  onSelect,
-}: {
-  tabs: { id: T; label: string; icon: React.ElementType }[];
-  active: T;
-  onSelect: (id: T) => void;
-}) {
-  return (
-    <div className="flex items-center gap-1 px-8 py-3 border-b border-border-primary">
-      {tabs.map(({ id, label, icon: Icon }) => (
-        <button
-          key={id}
-          onClick={() => onSelect(id)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors ${
-            active === id
-              ? "bg-bg-tertiary text-text-primary font-medium"
-              : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
-          }`}
-        >
-          <Icon size={14} />
-          {label}
-        </button>
-      ))}
+    <div className="px-6 py-5 min-h-0">
+      <div className="max-w-2xl mx-auto">{children}</div>
     </div>
   );
 }
@@ -180,28 +226,13 @@ function ImageSettingsCard() {
         <p className="text-sm text-text-muted mt-1">配置图片生成能力。当前为本地偏好设置，待图片生成功能接入后自动生效。</p>
       </div>
 
-      <div className="rounded-xl border border-border-primary bg-bg-card p-4 space-y-4">
+      <div className="rounded-lg border border-border-primary bg-bg-card p-4 space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm text-text-primary">启用图片生成</div>
             <div className="text-[11.5px] text-text-muted mt-0.5">开启后，对话中可调用图片生成技能。</div>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={cfg.enabled}
-            aria-label={cfg.enabled ? "关闭图片生成" : "启用图片生成"}
-            onClick={() => update({ enabled: !cfg.enabled })}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-              cfg.enabled ? "bg-accent" : "bg-bg-tertiary"
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-bg-card shadow transition-transform ${
-                cfg.enabled ? "translate-x-6" : "translate-x-1"
-              }`}
-            />
-          </button>
+          <ToggleSwitch enabled={cfg.enabled} onToggle={() => update({ enabled: !cfg.enabled })} />
         </div>
 
         <div>
@@ -210,11 +241,40 @@ function ImageSettingsCard() {
             value={cfg.model}
             onChange={(e) => update({ model: e.target.value })}
             placeholder="例如 agnes-image-2.0"
-            className="mt-1 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-sm text-text-primary border border-border-secondary outline-none"
+            className="mt-1 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-sm text-text-primary border border-border-secondary outline-none focus:border-accent transition-colors"
           />
           <p className="mt-1 text-[11px] text-text-muted">默认留空时由后端决定使用的图片模型。</p>
         </div>
       </div>
     </div>
+  );
+}
+
+/** 启用/禁用开关：带明确 on/off 图标语义 */
+function ToggleSwitch({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      aria-label={enabled ? "关闭" : "启用"}
+      onClick={onToggle}
+      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors border ${
+        enabled
+          ? "bg-accent border-accent"
+          : "bg-bg-tertiary border-border-secondary"
+      }`}
+    >
+      <span
+        className={`inline-flex items-center justify-center w-5 h-5 rounded-full shadow transition-transform ${
+          enabled ? "translate-x-5 bg-white text-accent" : "translate-x-1 bg-bg-card text-text-muted"
+        }`}
+      >
+        {enabled
+          ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+        }
+      </span>
+    </button>
   );
 }

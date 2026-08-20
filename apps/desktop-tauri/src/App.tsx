@@ -9,6 +9,7 @@ import { useStreamChat } from "./hooks/useStreamChat";
 import { AppProviders } from "./app/AppProviders";
 import { renderRoutes, type RouteContext } from "./app/routes";
 import { ArtifactPreviewModal } from "./app/ArtifactPreviewModal";
+import { SystemConfigPanel } from "./components/SystemConfigPanel";
 import { useAppBootstrap } from "./app/useAppBootstrap";
 import {
   readDraftWorkspace,
@@ -98,6 +99,8 @@ function computeLeftMin(vw: number): number {
 
 export default function App() {
   const [page, setPageRaw] = useState<NavPage>("chat");
+  // 系统配置弹窗（非路由跳转）
+  const [showConfigModal, setShowConfigModal] = useState(false);
   // 「自定义应用」页「创建新应用」按钮跳转时注入的预填指令（一次性消费）。
   const [pendingPrefill, setPendingPrefill] = useState<string | null>(null);
   // 视口自适应面板最小宽度 — 窗口缩小时缩小主列/左列最小宽
@@ -2600,7 +2603,7 @@ return {
       }}
       justPatchedTodoRef={justPatchedTodoRef}
       onOpenExperts={() => setPage("experts")}
-      onOpenSettings={() => setPage("systemconfig")}
+      onOpenSettings={() => setShowConfigModal(true)}
       onOpenComputer={openComputer}
       onUndo={handleUndo}
       onRestore={handleRestore}
@@ -2710,6 +2713,7 @@ return {
           <Sidebar
             page={page}
             onPageChange={setPage}
+            onOpenSettings={() => setShowConfigModal(true)}
             sessions={sessions}
             activeSessionId={activeSessionId}
             streamingSessionId={streamingSessionId}
@@ -2796,6 +2800,7 @@ return {
       )}
       <ToastContainer />
       <ImageLightbox />
+      {showConfigModal && <SystemConfigPanel onClose={() => setShowConfigModal(false)} />}
     </div>
     </AppProviders>
   );
