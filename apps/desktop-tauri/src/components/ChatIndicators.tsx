@@ -44,7 +44,11 @@ export function AgentActivityIndicator({
     label = "正在回复…";
     state = "replying";
   } else if (runningTools) {
-    label = `正在执行 ${pendingToolsCount} 个工具…`;
+    // 明示"并行 N 个"——已完成的工具不计入此数（用户 2026-08-19
+    // 反馈：底部显示"2 个"与顶部 3 个 tool card 视觉混淆，
+    // 因为 1 个已完成 + 2 个仍运行 = 3 张卡，但 running 计数为 2）。
+    // 改为"并行"提示用户"这是当前仍在并行跑的，"
+    label = `正在并行执行 ${pendingToolsCount} 个工具…`;
     state = "tools";
   } else {
     label = "正在分析结果…";
