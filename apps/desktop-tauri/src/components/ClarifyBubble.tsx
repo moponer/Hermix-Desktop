@@ -1,6 +1,6 @@
 // Clarify card (role="clarify") + its composer — extracted from MessageBubble.tsx.
 import { useState } from "react";
-import { HelpCircle, Check, AlertCircle } from "lucide-react";
+import { HelpCircle, AlertCircle } from "lucide-react";
 import { formatRelativeTime } from "../utils/time";
 import type { ChatMessage, ClarifyMessageMeta } from "../types";
 export function ClarifyCard({
@@ -22,6 +22,8 @@ export function ClarifyCard({
     );
   }
   const answered = meta.answer != null && meta.answer !== "";
+  // 已答复的询问卡直接消失，不留"已答复"占位（与审批卡一致）。
+  if (answered) return null;
 
   return (
     <div className="flex gap-2.5 h-enter items-start">
@@ -54,22 +56,10 @@ export function ClarifyCard({
             </div>
           </div>
 
-          {answered ? (
-            <div className="msg-channel" data-channel="clarify-answer">
-              <div className="channel-label">
-                <Check size={11} className="text-success" />
-                您的回答
-              </div>
-              <div className="text-[12.5px] text-text-secondary whitespace-pre-wrap break-words">
-                {meta.answer}
-              </div>
-            </div>
-          ) : (
-            <ClarifyComposer
-              meta={meta}
-              onSubmit={(answer) => onAnswer?.(meta.requestId, answer)}
-            />
-          )}
+          <ClarifyComposer
+            meta={meta}
+            onSubmit={(answer) => onAnswer?.(meta.requestId, answer)}
+          />
         </div>
       </div>
     </div>
@@ -96,12 +86,8 @@ export function ClarifyComposer({
               key={`choice-${c}-${i}`}
               type="button"
               onClick={() => onSubmit(c)}
-              className="px-2.5 py-1 rounded-md text-[12px] transition-colors"
-              style={{
-                background: "var(--color-bg-tertiary)",
-                color: "var(--color-text-primary)",
-                border: "1px solid var(--color-border-primary)",
-              }}
+              className="approval-btn approval-btn-secondary"
+              style={{ height: 26, padding: "0 10px", fontSize: 11.5 }}
             >
               {c}
             </button>

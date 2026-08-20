@@ -186,12 +186,14 @@ const ClarifyAcui: AcuiComponent = ({ show, decide, outcome }) => {
   const onAnswer = (requestId: string, answer: string) =>
     decide?.answer?.(requestId, answer);
 
+  // 已答复的询问卡直接消失，不留占位（与历史 clarify 消息 + 审批卡一致）。
+  if (resolved) return null;
+
   return (
-    <div data-acui-kind="clarify" data-stale={resolved == null ? undefined : "answered"}>
+    <div data-acui-kind="clarify">
       <InlineClarifyCard
         request={shape}
         onAnswer={onAnswer}
-        resolved={resolved}
       />
     </div>
   );

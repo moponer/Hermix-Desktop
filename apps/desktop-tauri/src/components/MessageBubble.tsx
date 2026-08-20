@@ -113,6 +113,10 @@ export function MessageBubble({
     );
   }
   if (message.role === "clarify") {
+    // 已答复的询问卡直接消失，不留"已答复"占位（与审批卡一致）。
+    if (message.clarify?.answer) {
+      return null;
+    }
     return (
       <ClarifyCard
         message={message}
@@ -138,6 +142,8 @@ export function MessageBubble({
       keepOpen={keepOpen}
       hasRunningTool={hasRunningTool}
       expertCutoffAt={expertCutoffAt}
+      onApproveApproval={onApproveApproval}
+      onDenyApproval={onDenyApproval}
     />
   );
 }
