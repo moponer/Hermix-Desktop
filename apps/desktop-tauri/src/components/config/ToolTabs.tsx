@@ -323,17 +323,26 @@ function SkillCard({ skill, catLabel, onToggle }: {
           <button
             onClick={(e) => { e.stopPropagation(); requestToggle(); }}
             disabled={toggling}
-            className={`w-7 h-7 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+            className={`relative h-6 w-10 rounded-full transition-colors shrink-0 ${
               skill.enabled
-                ? "bg-accent border-accent text-white"
-                : "bg-bg-card border-border-secondary text-text-muted hover:border-accent hover:text-accent"
-            } disabled:opacity-50`}
+                ? "bg-accent"
+                : "bg-bg-tertiary border border-border-secondary"
+            } ${toggling ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
             title={skill.enabled ? "禁用" : "启用"}
+            aria-label={skill.enabled ? "禁用" : "启用"}
           >
-            {skill.enabled
-              ? <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              : <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2v8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
-            }
+            <span
+              className={`absolute top-[3px] flex items-center justify-center rounded-full shadow transition-all duration-150 ${
+                skill.enabled
+                  ? "left-[23px] w-5 h-5 bg-white text-accent"
+                  : "left-[3px] w-5 h-5 bg-bg-card text-text-muted"
+              }`}
+            >
+              {skill.enabled
+                ? <span className="text-[10px] font-semibold leading-none">启</span>
+                : <span className="text-[10px] font-semibold leading-none">停</span>
+              }
+            </span>
           </button>
         </div>
       </div>
@@ -1222,17 +1231,26 @@ function PluginCard({
       <button
         onClick={onToggle}
         disabled={saving || disabled}
-        className={`w-7 h-7 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+        className={`relative h-6 w-10 rounded-full transition-colors shrink-0 ${
           enabled
-            ? "bg-accent border-accent text-white"
-            : "bg-bg-card border-border-secondary text-text-muted hover:border-accent hover:text-accent"
-        } disabled:opacity-50`}
-        title={disabled ? "只读" : enabled ? "禁用" : "启用"}
+            ? "bg-accent"
+            : "bg-bg-tertiary border border-border-secondary"
+        } ${saving ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
+        title={enabled ? "禁用" : "启用"}
+        aria-label={enabled ? "禁用" : "启用"}
       >
-        {enabled
-          ? <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          : <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2v8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
-        }
+        <span
+          className={`absolute top-[3px] flex items-center justify-center rounded-full shadow transition-all duration-150 ${
+            enabled
+              ? "left-[23px] w-5 h-5 bg-white text-accent"
+              : "left-[3px] w-5 h-5 bg-bg-card text-text-muted"
+          }`}
+        >
+          {enabled
+            ? <span className="text-[10px] font-semibold leading-none">启</span>
+            : <span className="text-[10px] font-semibold leading-none">停</span>
+          }
+        </span>
       </button>
     </div>
   );
