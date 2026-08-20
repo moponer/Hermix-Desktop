@@ -34,6 +34,7 @@ import {
   openCustomAppDist,
 } from "../../lib/customAppApi";
 import { formatCategory, formatPermission, permHint } from "./labels";
+import { resolveAppIconEl } from "./iconResolver";
 
 interface AppDetailModalProps {
   appId: string;
@@ -173,18 +174,11 @@ export function AppDetailModal({ appId, onClose, onChanged }: AppDetailModalProp
       <div className="modal-content modal-content--wide app-detail-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-header__title">
-            {manifest.icon ? (
-              <span className="modal-header__icon">{manifest.icon}</span>
-            ) : manifest.icon_file ? (
-              <img
-                className="modal-header__icon-img"
-                src={`/api/custom-apps/${encodeURIComponent(appId)}/icon`}
-                alt={manifest.name}
-                draggable={false}
-              />
-            ) : (
-              <span className="modal-header__icon">📦</span>
-            )}
+            {resolveAppIconEl(manifest, {
+              spanClassName: "modal-header__icon",
+              imgClassName: "modal-header__icon-img",
+              size: 24,
+            })}
             <h2>{manifest.name}</h2>
             <span className="modal-header__version">v{manifest.version}</span>
             {is_packaged && <span className="modal-header__badge modal-header__badge--success">已打包</span>}

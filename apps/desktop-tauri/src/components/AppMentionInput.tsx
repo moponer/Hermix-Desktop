@@ -28,6 +28,7 @@ const CREATE_NEW_APP_ITEM: CustomAppSummary = {
   description: "让 AI 从零开发一个新的桌面应用",
   icon: "sparkles",
   icon_file: null,
+  tile_color: null,
   category: "developer",
   author: "Hermix",
   is_packaged: false,

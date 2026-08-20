@@ -207,6 +207,16 @@ pub fn generate_icon_resources(
         pngs.push((s, png));
     }
 
+    Ok(assemble_ico_resources(pngs))
+}
+
+/// 由多尺寸 PNG 装配 ICO 文件字节 + RT_GROUP_ICON 资源 (GRPICONDIR)。
+/// `pngs`: (size, png_bytes)，顺序与 `ICO_SIZES` 一致。供所有图标生成路径复用，
+/// 避免 `generate_icon_resources` / `generate_ico_resources_from_png` /
+/// `generate_tiled_icon_resources` 三处重复同一段二进制布局逻辑。
+fn assemble_ico_resources(
+    pngs: Vec<(u32, Vec<u8>)>,
+) -> (Vec<u8> /*group*/, Vec<(u16, Vec<u8>)> /*icons*/, Vec<u8> /*ico*/) {
     // ── 构造 ICO 文件 (PNG 直接嵌入, 现代 Windows 支持) ──
     let mut ico: Vec<u8> = Vec::new();
     ico.extend_from_slice(&[0, 0]); // reserved
@@ -249,7 +259,50 @@ pub fn generate_icon_resources(
         icon_entries.push((id, png.clone()));
     }
 
-    Ok((group, icon_entries, ico))
+    (group, icon_entries, ico)
+}
+
+/// 按 glyph_key 选内置字形；空字符串或未知 key 时按 category 回退（再回退 grid）。
+/// glyph_key 大小写不敏感（内部转小写后与 `GLYPHS` 比对）。
+fn resolve_glyph(glyph_key: &str, category: &str) -> &'static str {
+    let key = glyph_key.to_ascii_lowercase();
+    if !key.is_empty() {
+        if let Some((_, g)) = GLYPHS.iter().find(|(k, _)| *k == key.as_str()) {
+            return g;
+        }
+    }
+    glyph_for_category(category)
+}
+
+/// 生成单个尺寸、带 `tile_color` 圆角背景 + 白色字形的 PNG（边长 `size`）。
+/// 用于窗口标题栏 PNG（hx-shell `read_self_icon`）。结果与前端 `tile_color`
+/// 方块同源：背景 = manifest 指定的纯色，前景 = 白色字形（无渐变）。
+pub fn generate_tiled_icon_png(
+    tile_color: &str,
+    glyph_key: &str,
+    category: &str,
+    size: u32,
+) -> Result<Vec<u8>, String> {
+    let inner = resolve_glyph(glyph_key, category);
+    let svg = build_svg(inner, tile_color, size);
+    render_svg_to_png(&svg)
+}
+
+/// 生成带 `tile_color` 圆角背景 + 白色字形的多尺寸任务栏 ICO 资源 (16/32/48/256)。
+/// 与 `generate_icon_resources` 同输出格式，直接喂 `patch_exe_icon` 即可。
+/// 当用户显式配置 `tile_color` 时调用，覆盖默认 hash 调色板路径。
+pub fn generate_tiled_icon_resources(
+    tile_color: &str,
+    glyph_key: &str,
+    category: &str,
+) -> Result<(Vec<u8> /*group*/, Vec<(u16, Vec<u8>)> /*icons*/, Vec<u8> /*ico*/), String> {
+    let inner = resolve_glyph(glyph_key, category);
+    let mut pngs: Vec<(u32, Vec<u8>)> = Vec::new();
+    for &s in ICO_SIZES {
+        let svg = build_svg(inner, tile_color, s);
+        pngs.push((s, render_svg_to_png(&svg)?));
+    }
+    Ok(assemble_ico_resources(pngs))
 }
 
 /// `RT_GROUP_ICON` 在 windows-sys 0.52 未导出 (它是 MAKEINTRESOURCE(14))。
@@ -490,47 +543,7 @@ pub fn generate_ico_resources_from_png(
         pngs.push((target_size, buf.into_inner()));
     }
 
-    // ── 构造 ICO 文件字节 (PNG 直接内嵌) ──
-    let mut ico: Vec<u8> = Vec::new();
-    ico.extend_from_slice(&[0, 0]); // reserved
-    ico.extend_from_slice(&[1, 0]); // type = icon
-    ico.extend_from_slice(&[(pngs.len() as u8), 0]); // count
-    let mut image_offset: u32 = 6 + (pngs.len() as u32) * 16;
-    for (size, png) in &pngs {
-        let w = if *size >= 256 { 0u8 } else { *size as u8 };
-        ico.push(w);
-        ico.push(w);
-        ico.push(0); // color count
-        ico.push(0); // reserved
-        ico.extend_from_slice(&[1, 0]); // planes
-        ico.extend_from_slice(&[32, 0]); // bit count
-        ico.extend_from_slice(&(png.len() as u32).to_le_bytes());
-        ico.extend_from_slice(&image_offset.to_le_bytes());
-        image_offset += png.len() as u32;
-        ico.extend_from_slice(png);
-    }
-
-    // ── 构造 RT_GROUP_ICON (GRPICONDIR, 14 字节/条目, 用 id 替换 offset) ──
-    let mut group: Vec<u8> = Vec::new();
-    group.extend_from_slice(&[0, 0]);
-    group.extend_from_slice(&[1, 0]);
-    group.extend_from_slice(&[(pngs.len() as u8), 0]);
-    let mut icon_entries: Vec<(u16, Vec<u8>)> = Vec::new();
-    for (i, (size, png)) in pngs.iter().enumerate() {
-        let id = (i + 1) as u16;
-        let w = if *size >= 256 { 0u8 } else { *size as u8 };
-        group.push(w);
-        group.push(w);
-        group.push(0);
-        group.push(0);
-        group.extend_from_slice(&[1, 0]); // planes
-        group.extend_from_slice(&[32, 0]); // bit count
-        group.extend_from_slice(&(png.len() as u32).to_le_bytes());
-        group.extend_from_slice(&id.to_le_bytes()); // id (替换 ICO 中的 offset)
-        icon_entries.push((id, png.clone()));
-    }
-
-    Ok((group, icon_entries, ico))
+    Ok(assemble_ico_resources(pngs))
 }
 
 /// 便捷封装: 读 `manifest.icon_file` (PNG) → 打 exe 资源补丁。
@@ -583,5 +596,27 @@ mod tests {
         // 完全无法识别的分类 → 兜底 grid, 但仍能生成有效 PNG
         let png = generate_icon_png("App", "zzz-unknown", "totally-unknown-cat").unwrap();
         assert_eq!(&png[0..4], &[0x89, 0x50, 0x4E, 0x47]);
+    }
+
+    #[test]
+    fn tiled_icon_png_and_ico() {
+        // 自定义 tile_color → 单 PNG 有效, 多尺寸 ICO 头合法
+        let png = generate_tiled_icon_png("#1ABC9C", "music", "audio", 256).unwrap();
+        assert_eq!(&png[0..4], &[0x89, 0x50, 0x4E, 0x47]);
+        let (group, icons, ico) =
+            generate_tiled_icon_resources("#1ABC9C", "music", "audio").unwrap();
+        assert_eq!(&ico[0..2], &[0, 0]);
+        assert_eq!(&ico[2..4], &[1, 0]);
+        assert_eq!(ico[4] as usize, ICO_SIZES.len());
+        assert_eq!(group.len(), 6 + 14 * icons.len());
+        assert_eq!(icons.len(), ICO_SIZES.len());
+    }
+
+    #[test]
+    fn tiled_glyph_fallback_by_category() {
+        // 未知 glyph key → 回退到 category 映射, 仍生成合法 ICO
+        let (_g, icons, _i) =
+            generate_tiled_icon_resources("#FF6B6B", "not-a-glyph", "file-tools").unwrap();
+        assert_eq!(icons.len(), ICO_SIZES.len());
     }
 }

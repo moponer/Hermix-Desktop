@@ -235,7 +235,15 @@ impl HxShellPackager {
 
         // icon_bytes 是 (bytes, is_svg) — 塞尾部 payload 时 SVG/PNG 都行
         // (hx-shell read_self_icon 双格式解析), 直接取 bytes.
-        let icon_bytes = resolved_icon.map(|(b, _is_svg)| b);
+        //
+        // tile_color 优先: 若用户配置了 tile_color 且图标是字形类（非 emoji、
+        // 非自备 PNG），则生成「纯色圆角块 + 白色字形」PNG 作为标题栏图标，
+        // 与列表/详情卡片、任务栏三处视觉一致。否则沿用既有 resolver 结果。
+        let tiled = resolve_tile(app_dir)
+            .and_then(|(tc, gk, cat)| {
+                crate::icon_library::generate_tiled_icon_png(&tc, &gk, &cat, 256).ok()
+            });
+        let icon_bytes = tiled.or_else(|| resolved_icon.map(|(b, _is_svg)| b));
 
         Ok((html_vec, icon_bytes))
     }
@@ -300,38 +308,57 @@ impl HxShellPackager {
         {
             use crate::icon_library;
 
-            // 统一图标源 (同 build_final_payload): PNG 或 SVG
-            let icon_bytes = resolve_app_icon(app_dir);
-            if let Some((bytes, is_svg)) = icon_bytes {
-                // SVG → PNG (任务栏需要位图): 用 256 主尺寸 (ICO 内部再缩放)
-                let png = if is_svg {
-                    icon_library::render_svg_bytes_to_sized_png(&bytes, 256)
-                        .map_err(|e| {
-                            tracing::warn!("SVG→PNG 失败 (任务栏用 hx-shell 默认): {e}");
-                        })
-                        .ok()
-                } else {
-                    Some(bytes)
-                };
-                if let Some(png) = png {
-                    if let Err(e) = icon_library::patch_exe_icon_from_png(&exe_path, &png) {
-                        tracing::warn!(
-                            "为 {} 打 exe 图标资源补丁失败 (任务栏图标用 hx-shell 默认, 不影响运行): {}",
-                            exe_path.display(),
-                            e
-                        );
+            // tile_color 优先: 用户显式配置了 tile_color 且图标是字形类 → 生成
+            // 「纯色圆角块 + 白色字形」多尺寸 ICO 打入 exe 资源表,
+            // 与前端卡片、窗口标题栏三处视觉一致。
+            if let Some((tc, gk, cat)) = resolve_tile(app_dir) {
+                match icon_library::generate_tiled_icon_resources(&tc, &gk, &cat) {
+                    Ok((group, icons, _ico)) => {
+                        if let Err(e) = icon_library::patch_exe_icon(&exe_path, &group, &icons) {
+                            tracing::warn!(
+                                "tile_color 图标嵌入失败 (任务栏用 hx-shell 默认, 不影响运行): {}",
+                                e
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("tile_color 图标生成失败 (回退默认): {e}");
                     }
                 }
             } else {
-                // 兜底: 没有任何用户图标时, 用内置 category 图标库自动生成, 至少比 hx-shell
-                //       默认♬ 更"应用专属"(每个应用根据 id 哈希得到确定性颜色 + 分类字形)
-                let manifest_name = id.to_string();
-                let category = read_icon_category(app_dir).unwrap_or_else(|| "other".to_string());
-                if let Ok((group, icons, _ico)) =
-                    icon_library::generate_icon_resources(&manifest_name, id, &category)
-                {
-                    if let Err(e) = icon_library::patch_exe_icon(&exe_path, &group, &icons) {
-                        tracing::warn!("自动生成图标嵌入失败 (不影响运行): {e}");
+                // 统一图标源 (同 build_final_payload): PNG 或 SVG
+                let icon_bytes = resolve_app_icon(app_dir);
+                if let Some((bytes, is_svg)) = icon_bytes {
+                    // SVG → PNG (任务栏需要位图): 用 256 主尺寸 (ICO 内部再缩放)
+                    let png = if is_svg {
+                        icon_library::render_svg_bytes_to_sized_png(&bytes, 256)
+                            .map_err(|e| {
+                                tracing::warn!("SVG→PNG 失败 (任务栏用 hx-shell 默认): {e}");
+                            })
+                            .ok()
+                    } else {
+                        Some(bytes)
+                    };
+                    if let Some(png) = png {
+                        if let Err(e) = icon_library::patch_exe_icon_from_png(&exe_path, &png) {
+                            tracing::warn!(
+                                "为 {} 打 exe 图标资源补丁失败 (任务栏图标用 hx-shell 默认, 不影响运行): {}",
+                                exe_path.display(),
+                                e
+                            );
+                        }
+                    }
+                } else {
+                    // 兜底: 没有任何用户图标时, 用内置 category 图标库自动生成, 至少比 hx-shell
+                    //       默认♬ 更"应用专属"(每个应用根据 id 哈希得到确定性颜色 + 分类字形)
+                    let manifest_name = id.to_string();
+                    let category = read_icon_category(app_dir).unwrap_or_else(|| "other".to_string());
+                    if let Ok((group, icons, _ico)) =
+                        icon_library::generate_icon_resources(&manifest_name, id, &category)
+                    {
+                        if let Err(e) = icon_library::patch_exe_icon(&exe_path, &group, &icons) {
+                            tracing::warn!("自动生成图标嵌入失败 (不影响运行): {e}");
+                        }
                     }
                 }
             }
@@ -479,6 +506,68 @@ fn resolve_app_icon(app_dir: &Path) -> Option<(Vec<u8>, bool)> {
         return Some((svg, true));
     }
     None
+}
+
+/// 读 `manifest.json` 的 `tile_color` 字段（如 "#1ABC9C"）。
+/// 未设 / 空 / 不合法（未过 `validate_tile_color`）→ None。
+fn read_tile_color(app_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(app_dir.join("manifest.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let raw = v.get("tile_color").and_then(|x| x.as_str())?.trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    crate::manifest::validate_tile_color(&raw).ok()?;
+    Some(raw)
+}
+
+/// 读 `manifest.json` 的 `icon` 字段原始值（图标库名 / emoji / 空）。
+fn read_icon_field(app_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(app_dir.join("manifest.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("icon").and_then(|x| x.as_str()).map(|s| s.to_string())
+}
+
+/// 与前端 `iconResolver.isEmoji` 同规则：单字符 emoji / 符号 → true。
+/// 用于决定 tile 背景是否跳过（emoji 自身有色彩，叠方块变花，与前端一致）。
+fn is_emoji(s: &str) -> bool {
+    if s.is_empty() || s.chars().count() > 4 {
+        return false;
+    }
+    for ch in s.chars() {
+        let cp = ch as u32;
+        if cp > 0x2bff {
+            return true;
+        }
+        if (0x2600..=0x27bf).contains(&cp) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 解析 tile_color 是否应应用到打包图标，与前端 `resolveAppIconEl` 行为对齐：
+/// - tile_color 未设 / 非法 → None
+/// - `icon` 是 emoji → None（前端裸 emoji 不加背景）
+/// - `icon_file` / `icon_data` 存在（用户自备 PNG logo）→ None（不叠加背景）
+/// - 其它（icon 是内置库名 / 无 icon 走 category）→ Some((tile_color, glyph_key, category))
+///
+/// glyph_key 直接取 `icon` 字段原值（大小写在 icon_library 内转小写比对 GLYPHS）；
+/// 若不是 GLYPHS key，icon_library 会按 category 回退到对应字形，最终仍有合法图标。
+fn resolve_tile(app_dir: &Path) -> Option<(String, String, String)> {
+    let tile = read_tile_color(app_dir)?;
+    if let Some(icon) = read_icon_field(app_dir) {
+        if is_emoji(&icon) {
+            return None;
+        }
+    }
+    // 用户自备 PNG → 不叠背景（与前端 icon_file 跳过 bg 一致）
+    if read_icon_file_png(app_dir).is_some() || read_icon_data(app_dir).is_some() {
+        return None;
+    }
+    let glyph_key = read_icon_field(app_dir).unwrap_or_default();
+    let category = read_icon_category(app_dir).unwrap_or_default();
+    Some((tile, glyph_key, category))
 }
 
 /// 读 `manifest.json` 的 `icon_file` 字段（如 "icon.png"），应用目录下查找 → 读 PNG bytes。

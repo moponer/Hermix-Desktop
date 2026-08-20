@@ -135,4 +135,5 @@ $('save').onclick=async()=>{const r=await window.hx.writeFile('output.txt',$('in
 - 同目录 `code-review.md`：交付前审查清单（无低级错误/死代码/权限一致/离线可用/设计落实）
 - 同目录 `frontend-architecture.md`：前端质量基线（布局层级/控件尺寸/响应式）
 - 图标库：内置 2007 个 Lucide SVG，清单见 `apps/desktop-tauri/src-tauri/resources/icons/`（文件名去 `.svg` 即 `manifest.icon` 名，如 `music`/`settings`/`folder`）
+- **`tile_color`（可选）**：`#RRGGBB` 或 `#RRGGBBAA`，给列表卡片/详情头部/窗口标题栏/打包 exe 任务栏图标加一个**纯色圆角背景块 + 白色字形**（无渐变）。三处同源（`iconResolver` + `icon_library::generate_tiled_icon_*`），视觉一致。规则：`icon_file`/`icon_data`（用户自备 PNG logo）或 `icon` 为 emoji 时**跳过**背景（与前端逻辑一致）；非法值被 `validate_tile_color` 拒绝。不填则列表/详情回退灰底，exe 走 hash 调色板兜底。
 - hx-shell API 真相源：`window.hx.getInfo()`（运行时返回完整可用 API 清单，本文档可能滞后）

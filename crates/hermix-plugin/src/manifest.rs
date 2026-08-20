@@ -34,6 +34,14 @@ pub struct PluginManifest {
     /// the default shell icon. Supported formats: PNG (recommended), ICO.
     #[serde(default)]
     pub icon_file: Option<String>,
+    /// Tile background color for the app icon container, used in:
+    ///   - dashboard list / detail view (CSS background on the icon container)
+    ///   - packaged EXE taskbar / shell icon (composited over a rounded square)
+    /// Format: `#RRGGBB` or `#RRGGBBAA` (case-insensitive). `None` (default)
+    /// falls back to the neutral gray container for in-app views and to the
+    /// raw lucide SVG (no background) for the packaged EXE.
+    #[serde(default)]
+    pub tile_color: Option<String>,
     /// Category for grouping (e.g., "file-tools", "media", "productivity").
     #[serde(default = "default_category")]
     pub category: String,
@@ -190,8 +198,35 @@ impl PluginManifest {
         if self.window_config.width == 0 || self.window_config.height == 0 {
             return Err("window dimensions must be positive".into());
         }
+        if let Some(color) = &self.tile_color {
+            validate_tile_color(color)?;
+        }
         Ok(())
     }
+}
+
+/// Validate the `tile_color` field of a manifest: `#RRGGBB` or `#RRGGBBAA`.
+/// Case-insensitive. Rejects anything else (including named CSS colors,
+/// `rgb(...)`, missing `#`, or 3-digit shorthand) to keep the contract
+/// explicit — both the front-end CSS and the EXE-icon compositor expect a
+/// fixed-width hex string.
+pub fn validate_tile_color(color: &str) -> Result<(), String> {
+    let trimmed = color.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() != 7 && bytes.len() != 9 {
+        return Err(format!(
+            "tile_color must be #RRGGBB or #RRGGBBAA, got: {color:?}"
+        ));
+    }
+    if bytes[0] != b'#' {
+        return Err(format!("tile_color must start with '#', got: {color:?}"));
+    }
+    if !bytes[1..].iter().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!(
+            "tile_color contains non-hex digits: {color:?}"
+        ));
+    }
+    Ok(())
 }
 
 /// Map Hermix permission names to Neutralinojs nativeAllowList patterns.

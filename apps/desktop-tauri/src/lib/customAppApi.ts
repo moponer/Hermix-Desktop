@@ -14,6 +14,15 @@ export interface CustomAppManifest {
   icon: string;
   /** Custom icon file name (e.g. "icon.png"). */
   icon_file?: string;
+  /**
+   * Tile background color for the app icon container, used in:
+   *   - dashboard list / detail view (CSS background on the icon container)
+   *   - packaged EXE taskbar / shell icon (composited over a rounded square)
+   * Format: `#RRGGBB` or `#RRGGBBAA` (case-insensitive). `undefined` falls
+   * back to the neutral gray container for in-app views and to the raw
+   * lucide SVG (no background) for the packaged EXE.
+   */
+  tile_color?: string;
   category: string;
   tags: string[];
   window_config: {
@@ -33,6 +42,8 @@ export interface CustomAppSummary {
   icon: string;
   /** Null if no custom icon. */
   icon_file: string | null;
+  /** Null if no tile color set (falls back to neutral gray / transparent). */
+  tile_color: string | null;
   category: string;
   author: string;
   is_packaged: boolean;

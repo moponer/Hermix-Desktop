@@ -90,6 +90,10 @@ pub struct AppSummary {
     /// Custom icon file name (e.g. "icon.png") — null if no custom icon.
     #[serde(default)]
     pub icon_file: Option<String>,
+    /// Tile background color (e.g. "#FF6B6B") — null falls back to neutral
+    /// gray for in-app views and to a transparent icon for the packaged EXE.
+    #[serde(default)]
+    pub tile_color: Option<String>,
     pub category: String,
     pub author: String,
     pub is_packaged: bool,
@@ -126,6 +130,7 @@ impl From<&crate::PluginEntry> for AppSummary {
             description: entry.manifest.description.clone(),
             icon: entry.manifest.icon.clone(),
             icon_file: entry.manifest.icon_file.clone(),
+            tile_color: entry.manifest.tile_color.clone(),
             category: entry.manifest.category.clone(),
             author: entry.manifest.author.clone(),
             is_packaged,
