@@ -15,6 +15,7 @@ import { ModelTab } from "./settings/ModelSettingsTab";
 import { BackendTab } from "./settings/BackendSettingsTab";
 import { AdvancedTab } from "./settings/AdvancedSettingsTab";
 import { PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab } from "./config/ToolTabs";
+import { ToggleSwitch } from "./ToggleSwitch";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
 
 interface SystemConfigPanelProps {
@@ -247,34 +248,5 @@ function ImageSettingsCard() {
         </div>
       </div>
     </div>
-  );
-}
-
-/** 启用/禁用开关：带明确 on/off 图标语义 */
-function ToggleSwitch({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={enabled}
-      aria-label={enabled ? "关闭" : "启用"}
-      onClick={onToggle}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors border ${
-        enabled
-          ? "bg-accent border-accent"
-          : "bg-bg-tertiary border-border-secondary"
-      }`}
-    >
-      <span
-        className={`inline-flex items-center justify-center w-5 h-5 rounded-full shadow transition-transform ${
-          enabled ? "translate-x-5 bg-white text-accent" : "translate-x-1 bg-bg-card text-text-muted"
-        }`}
-      >
-        {enabled
-          ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-        }
-      </span>
-    </button>
   );
 }

@@ -856,8 +856,10 @@ export function CustomProviderSection({
                   const ctx = config.modelContexts?.[fullId];
                   return (
                     <div key={`${providerId}-${modelId}`} className={`flex items-center gap-1.5 px-2 py-1 rounded text-[11px] ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
-                      <button onClick={() => toggleModel(providerId, modelId)} className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${isEnabled ? "bg-accent border-accent text-accent-on-text" : "border-border-secondary hover:border-accent"}`}>
-                        {isEnabled && <Check size={9} />}
+                      <button onClick={() => toggleModel(providerId, modelId)} className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors ${isEnabled ? "bg-accent border-accent" : "bg-bg-card border-border-secondary hover:border-accent"}`}>
+                        {isEnabled
+                          ? <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1.5 4l2 2 3-3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                          : null}
                       </button>
                       <span className={`flex-1 min-w-0 truncate font-mono ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
                       {isEnabled && (

@@ -325,7 +325,7 @@ function SkillCard({ skill, catLabel, onToggle }: {
             disabled={toggling}
             className={`relative h-6 w-10 rounded-full transition-colors shrink-0 ${
               skill.enabled
-                ? "bg-accent"
+                ? "bg-success"
                 : "bg-bg-tertiary border border-border-secondary"
             } ${toggling ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
             title={skill.enabled ? "禁用" : "启用"}
@@ -334,13 +334,13 @@ function SkillCard({ skill, catLabel, onToggle }: {
             <span
               className={`absolute top-[3px] flex items-center justify-center rounded-full shadow transition-all duration-150 ${
                 skill.enabled
-                  ? "left-[23px] w-5 h-5 bg-white text-accent"
+                  ? "left-[23px] w-5 h-5 bg-white text-success"
                   : "left-[3px] w-5 h-5 bg-bg-card text-text-muted"
               }`}
             >
               {skill.enabled
-                ? <span className="text-[10px] font-semibold leading-none">启</span>
-                : <span className="text-[10px] font-semibold leading-none">停</span>
+                ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
               }
             </span>
           </button>
@@ -811,7 +811,7 @@ function ConnectorRow({
         <button
           onClick={() => onToggle(!server.enabled)}
           className={`relative h-7 w-11 rounded-full transition-colors ${
-            server.enabled ? "bg-accent" : "bg-bg-tertiary border border-border-secondary"
+            server.enabled ? "bg-success" : "bg-bg-tertiary border border-border-secondary"
           }`}
           title={server.enabled ? "停用" : "启用"}
           aria-label={server.enabled ? "停用" : "启用"}
@@ -819,7 +819,7 @@ function ConnectorRow({
           <span
             className={`absolute top-0.5 flex items-center justify-center rounded-full shadow transition-all duration-150 ${
               server.enabled
-                ? "left-[22px] w-6 h-6 bg-white text-accent"
+                ? "left-[22px] w-6 h-6 bg-white text-success"
                 : "left-0.5 w-6 h-6 bg-bg-card text-text-muted"
             }`}
           >
@@ -1233,7 +1233,7 @@ function PluginCard({
         disabled={saving || disabled}
         className={`relative h-6 w-10 rounded-full transition-colors shrink-0 ${
           enabled
-            ? "bg-accent"
+            ? "bg-success"
             : "bg-bg-tertiary border border-border-secondary"
         } ${saving ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
         title={enabled ? "禁用" : "启用"}
@@ -1242,13 +1242,13 @@ function PluginCard({
         <span
           className={`absolute top-[3px] flex items-center justify-center rounded-full shadow transition-all duration-150 ${
             enabled
-              ? "left-[23px] w-5 h-5 bg-white text-accent"
+              ? "left-[23px] w-5 h-5 bg-white text-success"
               : "left-[3px] w-5 h-5 bg-bg-card text-text-muted"
           }`}
         >
           {enabled
-            ? <span className="text-[10px] font-semibold leading-none">启</span>
-            : <span className="text-[10px] font-semibold leading-none">停</span>
+            ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            : <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
           }
         </span>
       </button>
