@@ -54,6 +54,67 @@ pub fn test_state_with_home(home: impl AsRef<Path>) -> HttpServerState {
     build_state_with_home(home)
 }
 
+/// Minimal `HttpServerState` for unit-level tests that touch only
+/// the WS-grace helpers (`ws_grace::schedule_grace_disconnect`,
+/// `take_completed_replay`, …) and don't need a real on-disk home,
+/// agent service, or any I/O paths. Avoids creating a tempdir so the
+/// suite doesn't litter `%TEMP%` when the test only inspects in-
+/// memory registries.
+pub fn empty_state() -> HttpServerState {
+    use hermix_tools::ClarifyDispatcher;
+    use hermix_tools::ToolRegistry;
+
+    let config = Arc::new(GatewayConfig::default());
+    let tool_registry = Arc::new(ToolRegistry::new());
+    // Use an in-memory placeholder path; tests in this module never
+    // touch the filesystem through it. `SessionPersistence::new`
+    // only stores the path string — it doesn't open the DB until
+    // the first call site that needs it.
+    let home = std::path::PathBuf::from("::mem::ws_grace::tests::empty_state");
+    let session_persistence = Arc::new(SessionPersistence::new(&home));
+    let clarify_dispatcher = ClarifyDispatcher::new();
+    let (clarify_broadcast, _) = tokio::sync::broadcast::channel::<crate::ClarifyBroadcast>(64);
+    let agent_service: Arc<dyn AgentService> = Arc::new(NullAgentService);
+    let metrics = crate::metrics::MetricsCollector::new(&home);
+
+    HttpServerState {
+        config,
+        tool_registry,
+        hermix_home: home,
+        session_persistence,
+        cron_scheduler: None,
+        skill_store: None,
+        runtime_gateway_running: None,
+        agent_service,
+        approval_registry: Default::default(),
+        clarify_dispatcher,
+        clarify_broadcast,
+        expert_registry: hermix_skills::ExpertRegistry::new(),
+        automation_scheduler: None,
+        user_allowlist: Arc::new(std::sync::Mutex::new(None)),
+        session_bypass: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        consciousness_tracker: hermix_agent::ConsciousnessTracker::new(),
+        tickloop_manager: Default::default(),
+        groupchat_mgr: Arc::new(hermix_gateway::groupchat::GroupChatManager::new(
+            Arc::new(hermix_gateway::groupchat::in_memory::InMemoryRoomPersistence::new()),
+        )),
+        active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        mcp_manager: hermix_mcp::ArcMcpManager::new(Arc::new(ToolRegistry::new())),
+        task_engine: None,
+        recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        active_handles: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        pending_grace: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        completed_keys: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        todo_event_tx: None,
+        orchestration_bus: crate::OrchestrationEventBus::new(),
+        metrics,
+        task_service: None,
+        automation_service: None,
+        automation_engine_scheduler: None,
+        custom_app_manager: None,
+    }
+}
+
 fn build_state_with_home(home: PathBuf) -> HttpServerState {
     use hermix_tools::ClarifyDispatcher;
 
@@ -99,6 +160,8 @@ fn build_state_with_home(home: PathBuf) -> HttpServerState {
         // mirror production `active_handles` registry so
         // tests compile against the expanded `HttpServerState`.
         active_handles: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        pending_grace: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        completed_keys: Arc::new(std::sync::Mutex::new(HashMap::new())),
         // Todo event bus. Test fixtures don't exercise
         // the WS forwarder, so None is fine.
         todo_event_tx: None,

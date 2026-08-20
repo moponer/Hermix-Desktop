@@ -590,6 +590,8 @@ mod approval_registry_tests {
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             active_handles: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            pending_grace: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            completed_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             todo_event_tx: None,
             orchestration_bus: OrchestrationEventBus::new(),
             metrics,

@@ -138,6 +138,20 @@ const DEDUP_GC_SECS: u64 = 60;
 /// observed idle-timeout (60s for NAT) and well above the per-send
 /// overhead (~5µs).
 const WS_HEARTBEAT_INTERVAL_SECS: u64 = 15;
+/// 断连宽限期（秒）。检测到 WS 断开（瞬时抖动或真断连）后，不立即
+/// 软杀 agent loop，而是延迟 `DISCONNECT_GRACE_SECS` 秒再通知。
+/// 宽限期内 agent 继续运行——其事件虽发不出去，但对话已持久化到 DB，
+/// 最终状态不丢；前端若在宽限期内重连并重发同一 session，新 send 通过
+/// stale_handles 接管正在盲跑的旧 task，任务无缝恢复，无需用户手动发消息。
+/// 这是"任务执行中突然停止"的根因修复：把瞬时网络抖动从"立即杀任务"
+/// 降级为"延迟确认 + 允许恢复"。
+const DISCONNECT_GRACE_SECS: u64 = 90;
+/// 转发循环单次发送失败的重试次数。HMR / 网络瞬时抖动会让某次
+/// `socket.send` 偶发失败——若直接断开转发循环，agent loop 会因前端
+/// 收不到事件而"跑着跑着突然停"。真死连接 send 会快速连续失败，重试
+/// 不会挂起；瞬时抖动重试一次多半恢复，循环继续把事件推给前端。
+const WS_SEND_RETRY_MAX: u32 = 3;
+const WS_SEND_RETRY_DELAY_MS: u64 = 50;
 
 /// Check whether `(session_id, text)` was sent recently. Returns
 /// `Some(elapsed_secs)` if a duplicate was found within the dedup
@@ -282,6 +296,11 @@ pub(crate) async fn handle_ws_stream_send(
         handle.abort();
         state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
         state.recent_sends.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+        // Cancel the soft-disconnect's pending grace timer for this key.
+        // Otherwise it fires later and `remove`s the NEW handle we're about
+        // to insert for this reconnect — orphaning the reconnect's agent and
+        // letting a 2nd retry spawn a duplicate task for the same prompt.
+        ws_grace::abort_pending_grace(&state.pending_grace, &active_key);
         // Fall through: the `active_sessions` insert below re-takes the
         // lock for THIS send.
     } else if let Some(elapsed) = check_recent_send(&state, session_id, &request.text) {
@@ -300,6 +319,37 @@ pub(crate) async fn handle_ws_stream_send(
             event: StreamEvent::Done {
                 content: String::new(),
                 finish_reason: Some("deduped".to_string()),
+                outcome: Some("completed".to_string()),
+                error: None,
+            },
+        };
+        if let Ok(json) = serde_json::to_string(&envelope) {
+            let _ = sender.send(WsMessage::Text(json.into())).await;
+        }
+        return;
+    }
+
+    // Item 2: if this exact (session, text) already COMPLETED and we still
+    // hold its final content, the client's `Done` frame was almost certainly
+    // lost on the prior disconnect (agent finished but nobody was listening).
+    // Serve a synthetic Done (carrying the answer) instead of spawning a fresh
+    // agent — re-running would double-execute non-idempotent tools and make
+    // the task appear to "run again". The reconnect's `Connected` → resend is
+    // exactly the scenario that previously triggered this.
+    let replay_content = ws_grace::take_completed_replay(&state.completed_keys, &active_key);
+    if let Some(content) = replay_content {
+        tracing::info!(
+            session = %session_id,
+            text_len = request.text.len(),
+            "completed-key replay: serving synthetic Done, skipping re-run"
+        );
+        let envelope = WsEnvelope {
+            version: 1,
+            request_id: request.request_id.clone().or_else(|| Some(trace_id.to_string())),
+            trace_id: trace_id.to_string(),
+            event: StreamEvent::Done {
+                content: content.clone(),
+                finish_reason: Some("completed".to_string()),
                 outcome: Some("completed".to_string()),
                 error: None,
             },
@@ -354,7 +404,13 @@ pub(crate) async fn handle_ws_stream_send(
         return;
     }
 
-    // Create a bounded queue to avoid unbounded memory usage under slow clients.
+    // Bounded queue to cap memory under slow clients. The `try_send`
+    // drops here are acceptable for high-volume text/thinking (the
+    // next chunk catches up). The CRITICAL tool lifecycle events
+    // (tool_start/tool_stdout/tool_complete) bypass this cap via a
+    // fire-and-forget spawn + `send().await` (see the `delta.extra`
+    // fall-through below) so they are never silently dropped — that
+    // drop is what stranded the running-tool UI as "中断".
     let queue_cap = env_compat("HERMIX_WS_STREAM_BUFFER", "HERMES_WS_STREAM_BUFFER")
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|v| *v > 0)
@@ -1281,7 +1337,30 @@ pub(crate) async fn handle_ws_stream_send(
                             return;
                         },
                     };
-                    let _ = tx_clone.try_send(envelope);
+                    // CRITICAL: tool lifecycle + agent events here must
+                    // NEVER be silently dropped — a dropped
+                    // `tool_complete` strands the frontend running-tool
+                    // UI as "中断". The bounded channel's `try_send`
+                    // would drop on Full, so instead spawn a task that
+                    // owns a sender clone and awaits `send()`: it parks
+                    // until the recv loop drains (real backpressure is
+                    // the socket write in the recv loop), guaranteeing
+                    // delivery. `on_chunk` is a sync closure, hence the
+                    // spawn; the send is FIFO-ordered on the channel,
+                    // and per-tool start<->complete ordering holds
+                    // because they are temporally separated by the
+                    // tool's own execution.
+                    let tx_spawn = tx_clone.clone();
+                    let evt = event_type.to_string();
+                    tokio::spawn(async move {
+                        if let Err(e) = tx_spawn.send(envelope).await {
+                            tracing::warn!(
+                                error = %e,
+                                event = %evt,
+                                "ws tool/agent event dropped: client receiver closed"
+                            );
+                        }
+                    });
                 }
             }
         }
@@ -1340,6 +1419,7 @@ pub(crate) async fn handle_ws_stream_send(
     // path inside the agent task's catch_unwind recovery.
     let hermix_home_clone = state.hermix_home.clone();
     let session_persistence_clone = state.session_persistence.clone();
+    let completed_keys_clone = state.completed_keys.clone();
 
     //Clone trace_id for the heartbeat arm before the spawn
     // moves trace_id_owned into the agent task closure.
@@ -1439,6 +1519,14 @@ pub(crate) async fn handle_ws_stream_send(
                 // by `persist_session_with_compression` before we get
                 // here, so the row exists regardless.
                 let done_content = redact_sensitive(&cleaned);
+                // Item 2: record the final answer for this (session, text) so a
+                // later reconnect that lost the `Done` frame can short-circuit
+                // to a synthetic Done instead of re-running the task.
+                let task_completed =
+                    reply.finish_reason.as_deref() != Some("error") && !reply.interrupted;
+                if task_completed {
+                    ws_grace::record_completed(&completed_keys_clone, &active_key_clone, done_content.clone());
+                }
                 let done_finish_reason = reply.finish_reason.clone();
                 // A backend LLM/transport failure is surfaced as a
                 // structured `Error` event so the frontend shows a red
@@ -1614,6 +1702,9 @@ pub(crate) async fn handle_ws_stream_send(
     // hangs without sending a terminal `Done` event. This runs
     // synchronously right after `tokio::spawn`, before the task body
     // executes, so the cleanup `remove` below always finds the entry.
+    // A fresh agent is starting for this key — invalidate any prior
+    // "completed" shortcut so a deliberate re-run supersedes it.
+    ws_grace::invalidate_completed(&state.completed_keys, &active_key);
     state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).insert(active_key.clone(), agent_handle);
 
     // Forward channel events to WebSocket
@@ -1663,40 +1754,64 @@ pub(crate) async fn handle_ws_stream_send(
     // (master: 跑着就停了) needs that disambiguation. Track which
     // arm we exited through and surface it on the EXITED line.
     let exit_branch: &'static str;
+
+    // 优雅断连：延迟软杀 agent loop。实现细节见
+    // `ws_grace::schedule_grace_disconnect`：立即释放 active_sessions
+    // （让前端重连的 send 不被 is_duplicate 卡死），grace 后才 notify
+    // + 清理 active_handles。exit_branch / was_client_disconnect /
+    // ws_disconnected 由调用方在调用前赋值（AtomicBool 是 Copy，闭包
+    // 内 store 会写副本而非原值；exit_branch 是 &'static str，闭包内
+    // 改写会与循环后读取冲突），模块函数只负责"延期清理"。
+    let schedule_grace_disconnect = || {
+        ws_grace::schedule_grace_disconnect(
+            &state.active_sessions,
+            &state.active_handles,
+            &state.pending_grace,
+            &active_key,
+            shutdown_notify.clone(),
+            DISCONNECT_GRACE_SECS,
+        );
+    };
     loop {
         tokio::select! {
             biased;
             ev = rx.recv() => {
                 match ev {
                     Some(event_json) => {
-                        if sender
-                            .send(WsMessage::Text(
-                                serde_json::to_string(&event_json)
-                                    .unwrap_or_default()
-                                    .into(),
+                        // Phase2：单次发送失败先重试，避免一次抖动就断开
+                        // 转发循环。真死连接 send 会快速连续失败，重试不会
+                        // 挂起；瞬时抖动重试后多半恢复，事件继续推给前端。
+                        let mut send_ok = false;
+                        for _attempt in 0..WS_SEND_RETRY_MAX {
+                            if sender
+                                .send(WsMessage::Text(
+                                    serde_json::to_string(&event_json)
+                                        .unwrap_or_default()
+                                        .into(),
+                                ))
+                                .await
+                                .is_ok()
+                            {
+                                send_ok = true;
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                WS_SEND_RETRY_DELAY_MS,
                             ))
-                            .await
-                            .is_err()
-                        {
+                            .await;
+                        }
+                        if !send_ok {
                             exit_branch = "rx_send_fail";
                             was_client_disconnect = true;
                             ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                            // (type-B root-cause): soft-drain
-                            // instead of hard-abort. Notify the agent
-                            // task so any in-flight approval wait wakes
-                            // up as `ChannelClosed` (via
-                            // `tool_dispatch::resolve_pre_dispatch`'s
-                            // `tokio::select!`); the agent then writes
-                            // the denial note, falls into the next LLM
-                            // call, and `stream_first_chunk_timeout_secs=30s`
-                            // brings the turn to a clean Done. The
-                            // JoinHandle stays in `active_handles` until
-                            // the agent task self-removes it (line 4721
-                            // area) — `active_sessions` is freed
-                            // immediately so the user can retry.
-                            shutdown_notify.notify_one();
-                            state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
-                            state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                            // (type-B root-cause): 重试耗尽仍失败，不再硬杀
+                            // agent loop。交给 schedule_grace_disconnect
+                            // 延期清理——立即释放 active_sessions（前端
+                            // 重连的 send 走 takeover 路径 abort 旧
+                            // 任务），grace 秒后才 notify 软杀 + 清理
+                            // active_handles。瞬时 WS 抖动不再让任务
+                            // "跑着跑着突然停"。
+                            schedule_grace_disconnect();
                             break;
                         }
                     }
@@ -1731,14 +1846,9 @@ pub(crate) async fn handle_ws_stream_send(
                     exit_branch = "heartbeat_ping_fail";
                     was_client_disconnect = true;
                     ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                    // (type-B root-cause): same soft-drain
-                    // pattern as the rx.send-fail arm above. The
-                    // heartbeat ping failed → the WS path is dead even
-                    // though we can't yet read a close frame, so we
-                    // must let the agent task know.
-                    shutdown_notify.notify_one();
-                    state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
-                    state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                    // (type-B root-cause): 心跳 ping 失败同样走 grace
+                    // 延期清理，不硬杀正在跑的任务。
+                    schedule_grace_disconnect();
                     break;
                 }
                 // Application-level heartbeat — resets the client's
@@ -1757,9 +1867,7 @@ pub(crate) async fn handle_ws_stream_send(
                     exit_branch = "heartbeat_text_fail";
                     was_client_disconnect = true;
                     ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                    shutdown_notify.notify_one();
-                    state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
-                    state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                    schedule_grace_disconnect();
                     break;
                 }
             }
@@ -1930,9 +2038,7 @@ pub(crate) async fn handle_ws_stream_send(
                         exit_branch = "ws_close_frame";
                         was_client_disconnect = true;
                         ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                        shutdown_notify.notify_one();
-                        state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
-                        state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                        schedule_grace_disconnect();
                         break;
                     }
                     Some(Ok(_)) => {
@@ -1947,9 +2053,7 @@ pub(crate) async fn handle_ws_stream_send(
                         exit_branch = "ws_read_err";
                         was_client_disconnect = true;
                         ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                        shutdown_notify.notify_one();
-                        state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
-                        state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                        schedule_grace_disconnect();
                         break;
                     }
                     None => {
@@ -1957,9 +2061,7 @@ pub(crate) async fn handle_ws_stream_send(
                         // Stream ended (socket closed)
                         was_client_disconnect = true;
                         ws_disconnected.store(true, std::sync::atomic::Ordering::SeqCst);
-                        shutdown_notify.notify_one();
-                        state.active_handles.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
-                        state.active_sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&active_key);
+                        schedule_grace_disconnect();
                         break;
                     }
                 }
@@ -2051,6 +2153,9 @@ pub(crate) async fn handle_ws_groupchat(
     //
     // Modified: when RoomCompleted is received, we send GroupChatDone
     // before breaking so the frontend knows to close the WS.
+    // Bounded queue (group-chat chunks/thinking tolerate occasional
+    // drops — the stream catches up). Socket write in the recv loop
+    // back-pressures.
     let (tx, mut rx) = mpsc::channel::<WsEnvelope>(128);
     let room_id_for_done = room_id.clone();
     let broadcast_rx: tokio::sync::broadcast::Receiver<

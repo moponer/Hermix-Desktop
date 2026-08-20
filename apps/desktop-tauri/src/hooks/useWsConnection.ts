@@ -49,11 +49,21 @@ export function createConnector(
         // Stale WS guard.
         if (ctx.activeSendIdRef.current !== ctx.mySendId) return;
         if (!ctx.doneRef.current) {
-          // Once we've received any content (text, thinking, tools,
-          // file/memory/todo/sub-agent events), we MUST NOT retry — the agent
-          // loop is already running server-side and a fresh WS would trigger a
-          // second `send_message_stream` call for the same content.
+          // 流式进行中（已收到内容/已发给后端）断连：自动重连续跑而非
+          // settle("partial") 卡住。后端 takeover 会 abort 仍在 grace
+          // 宽限期内盲跑的旧 agent，新 send 从持久化历史续跑；重连耗尽才
+          // 保留 partial。
           if (ctx.hasAnyStreamEvent || ctx.hasContent) {
+            if (ctx.sentToServerRef.current && ctx.retryCount < MAX_RETRIES) {
+              ctx.retryCount++;
+              const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
+              const __sendDiagId3 = nextDiagId();
+              diagLog(`[diag #${__sendDiagId3}] onerror (mid-stream) → reconnect ${ctx.retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
+              ctx.updatePhase("reconnecting");
+              ctx.wsRef.current = null;
+              setTimeout(connect, delay);
+              return;
+            }
             ctx.settle(ctx.fullText, undefined, undefined, "partial");
             return;
           }
@@ -83,12 +93,21 @@ export function createConnector(
         // fires, a new `send()` may have already started.
         if (ctx.activeSendIdRef.current !== ctx.mySendId) return;
         if (!ctx.doneRef.current) {
-          if (ctx.hasAnyStreamEvent) {
-            // Any non-status event arrived — preserve whatever we have as a
-            // partial result instead of treating it as a connection error.
-            ctx.settle(ctx.fullText, undefined, undefined, "partial");
-          } else if (ctx.hasContent) {
-            // Fallback for text-only streams.
+          if (ctx.hasAnyStreamEvent || ctx.hasContent) {
+            // 流式进行中（已收到内容/已发给后端）断连：自动重连续跑，
+            // 不再 settle("partial") 卡住让用户手动发消息。后端 takeover
+            // 会 abort 仍在 grace 宽限期内盲跑的旧 agent，新 send 从
+            // 持久化历史续跑；重连次数耗尽才保留 partial。
+            if (ctx.sentToServerRef.current && ctx.retryCount < MAX_RETRIES) {
+              ctx.retryCount++;
+              const delay = RETRY_DELAYS_MS[Math.min(ctx.retryCount - 1, RETRY_DELAYS_MS.length - 1)];
+              const __sendDiagId4 = nextDiagId();
+              diagLog(`[diag #${__sendDiagId4}] onclose (mid-stream) → reconnect ${ctx.retryCount}/${MAX_RETRIES}, delay=${delay}ms`);
+              ctx.updatePhase("reconnecting");
+              ctx.wsRef.current = null;
+              setTimeout(connect, delay);
+              return;
+            }
             ctx.settle(ctx.fullText, undefined, undefined, "partial");
           } else {
             // same hardening as onerror — if the message was already sent,

@@ -85,6 +85,18 @@ pub struct HttpServerState {
     /// stale task, free the lock, and let the new send take over —
     /// instead of silently dropping the retry as a "duplicate".
     pub active_handles: Arc<std::sync::Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>>,
+    /// Per-(session,text) pending grace timers from a soft-disconnect. When
+    /// the client reconnects and takes over the same key, we abort the
+    /// pending timer so it doesn't later `remove` the NEW handle the
+    /// reconnect just inserted (which would orphan the reconnect's agent
+    /// and let a 2nd retry spawn a duplicate task for the same prompt).
+    pub pending_grace: Arc<std::sync::Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>>,
+    /// Per-(session,text) final assistant content for a COMPLETED stream.
+    /// Lets a reconnect that lost its `Done` frame short-circuit to a
+    /// synthetic Done (with the answer) instead of re-running the whole
+    /// task — which would double-execute non-idempotent tools. Cleared
+    /// when a fresh agent starts for that key.
+    pub completed_keys: Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
     /// H3 — agent "consciousness stream" tracker. The
     /// desktop UI subscribes to this over WebSocket and renders the
     /// samples as a full-screen ECG visualization. Cheap to clone
@@ -544,6 +556,8 @@ impl HttpServerState {
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             active_handles: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            pending_grace: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            completed_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             // Todo event bus — created lazily below in `build()` after
             // we know the runtime config. Initialised to None here so
             // the early struct literal doesn't need to await anything.
@@ -764,6 +778,8 @@ impl HttpServerState {
             recent_sends: Arc::new(std::sync::Mutex::new(HashMap::new())),
             active_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             active_handles: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            pending_grace: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            completed_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             todo_event_tx: Some(todo_event_tx.clone()), // injected after register_builtin_tools below
             orchestration_bus: OrchestrationEventBus::new(),
             metrics,

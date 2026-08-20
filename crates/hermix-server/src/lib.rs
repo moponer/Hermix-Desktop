@@ -147,6 +147,7 @@ pub mod errors;
 pub use errors::HttpError;
 pub mod voice;
 pub mod ws;
+pub mod ws_grace;
 pub mod util;
 pub(crate) use util::*;
 pub mod routes;
