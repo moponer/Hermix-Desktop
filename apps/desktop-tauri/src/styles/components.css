@@ -1753,10 +1753,14 @@
 .tw-msg-output {
   position: relative;
   margin-top: 4px;
-  padding: 8px 30px 8px 12px;
-  background: transparent;  /* v6: 与父容器 (chat-assistant) 同底, 不再"贴" */
-  border: 0;
-  border-radius: 5px;
+  padding: 9px 30px 9px 12px;
+  /* v7 层次: 终端块从 transparent 改成 code 区底色 + 边框, 比气泡
+     (#1c1c20 dark / #ffffff light) 深一档, 制造"内嵌代码块"层次.
+     L0 bubble → L1 卡片 hairline → L2 terminal 形成可视深度, 折叠头
+     默认 transparent 保持紧凑, hover 态再叠 highlight. 无蓝紫. */
+  background: var(--color-bg-code);
+  border: 1px solid var(--color-bg-code-border);
+  border-radius: 6px;
   max-height: 320px;
   overflow: auto;
   /* 字体策略:
@@ -2016,7 +2020,9 @@
 .tw-msg-row:hover,
 .tw-msg-row[data-open="true"],
 .tw-msg-row:focus-visible {
-  background: transparent;
+  /* v7 层次: hover/focus 状态轻微高亮, 让鼠标移到哪一行有视觉反馈,
+     与展开的 .tw-msg-output (L2 canvas) 拉开 L1 档 */
+  background: var(--color-bg-hover);
   color: var(--color-text-primary);
 }
 .tw-msg-row[data-open="true"] + .tw-msg-body {
@@ -2433,150 +2439,14 @@
    v5: 容器只用于真正的"动作 / 边界"——权限请求就是动作边界。
    仅靠底色 (浅蓝) 区分——无边框、无圆角阴影。
    ─────────────────────────────────────────────────────────────── */
-.approval-card {
-  display: flex;
-  align-items: stretch;
-  margin: 3px 0;
-  border-radius: var(--radius-md);
-  border: 0;  /* v5: 无边框 */
-  background: var(--color-bg-card);
-  overflow: hidden;
-  transition: background 200ms ease;
-}
-.approval-card:hover {
-  background: var(--color-bg-hover);
-}
+/* Approval card — 旧版 row 布局已弃用. column 布局 + flat 样式
+   全部走 components-prose.css 的 .approval-card 系列.
+   这里仅保留风险/决策状态色, 用于 prose 主样式之外的兜底/覆盖. */
 
-/* Left accent — 3px bar, color follows risk/decision state */
-.approval-accent {
-  display: none;
-}
 
-/* Inner content wrapper */
-.approval-inner {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 10px;
-}
+/* Decision-state card tints — 已弃用. 新设计走 prose.css 的
+   .approval-card--ok/--deny/--expired (transparent, flat). */
 
-/* Header row: icon + body + actions on one line */
-.approval-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 24px;
-}
-
-/* Icon badge — 22×22 rounded square, status-tinted */
-.approval-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  flex-shrink: 0;
-}
-
-/* Body: tool name + description */
-.approval-body {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.approval-tool {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  white-space: nowrap;
-  letter-spacing: -0.01em;
-}
-
-.approval-desc {
-  font-size: 11.5px;
-  color: var(--color-text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Right-side: decision badge or action buttons */
-.approval-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  margin-left: 4px;
-}
-
-/* Decision state text (after user responds) */
-.approval-decision {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  padding: 2px 10px;
-  border-radius: 999px;
-}
-.approval-decision.is-ok {
-  color: var(--color-success);
-  background: color-mix(in srgb, var(--color-success) 10%, transparent);
-}
-.approval-decision.is-err {
-  color: var(--color-error);
-  background: color-mix(in srgb, var(--color-error) 10%, transparent);
-}
-
-/* Action buttons (pending state) — v5: 无边框。
-   默认透明 + 灰文字；主操 info 蓝；hover 才出底色。 */
-.approval-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 3px 12px;
-  border-radius: 7px;
-  font-size: 11.5px;
-  font-weight: 500;
-  line-height: 1;
-  border: 0;  /* v5: 无边框 */
-  cursor: pointer;
-  transition:
-    background 150ms ease,
-    opacity 150ms ease,
-    transform 150ms ease;
-  user-select: none;
-}
-.approval-btn:active {
-  transform: scale(0.96);
-}
-.approval-btn--deny {
-  background: transparent;
-  color: var(--color-text-muted);
-}
-.approval-btn--deny:hover {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-}
-.approval-btn--ok {
-  background: transparent;        /* v5: 默认透明 */
-  color: var(--color-info);       /* v5: 主操蓝文字 */
-}
-.approval-btn--ok:hover {
-  background: color-mix(in srgb, var(--color-info) 12%, transparent);
-}
-
-/* Decision-state card tints — v5: 仅靠底色，无边框 */
-.approval-card--ok {
-  /* 已批准 → 浅绿底色，无边框 */
-  background: color-mix(in srgb, var(--color-success) 10%, var(--color-bg-card));
-}
-.approval-card--deny {
-  /* 已拒绝 → 浅红底色，无边框 */
-  background: color-mix(in srgb, var(--color-error) 10%, var(--color-bg-card));
-}
 
 /* ── Thinking dots (processing gap) ───────────────────────────────
    Three animated dots with staggered delay. Inline flow, sits at
@@ -2988,8 +2858,16 @@
 }
 .chat-tool-call--tool {
   background: transparent;
-  margin-left: 32px;
+  margin-left: 0;
   padding-left: 0;
+  /* v8: 移除 1px inset hairline, 主反馈"多余/老气".
+     与正文左缘齐平(0),工具卡与文本流同列,不再额外缩进 32px.
+     原 32px = avatar(22) + gap(10),意图让工具卡跳到 avatar 右侧列,
+     实际让用户感觉工具卡缩进,违背"与文本输出左侧一致"诉求.
+     层次感仍保留: hover/[data-open] 给 var(--color-bg-hover),
+     深色主题另叠 --color-chat-tool-bg. 终端块 L2 (.tw-msg-output)
+     仍有 bg+border, 折叠头不再加 chrome 干扰阅读. */
+  border-radius: inherit;
 }
 
 /* ── 5b. 工具状态徽章贴末尾 (inline-flex, vertical-align, ml-8px) ──
@@ -3043,7 +2921,8 @@
 .dark .tw-msg-row:hover,
 .dark .tw-msg-row[data-open="true"],
 .dark .tw-msg-row:focus-visible {
-  background: transparent;
+  /* v7 层次: 与 .tw-msg-row:hover 默认值同步 */
+  background: var(--color-bg-hover);
   color: var(--color-text-primary);
 }
 .dark .tw-msg-main {
@@ -3053,7 +2932,10 @@
   color: var(--color-text-muted);
 }
 .dark .tw-msg-output {
-  background: transparent;  /* v6: 与父容器 (chat-assistant #1c1c20) 同底 */
+  /* v7: dark 主题覆盖 — 用 canvas 色 (#0f0f12) 拉层次, 比 #1c1c20 卡片
+     深 13/255, 明显内嵌. light 主题走 --color-bg-code (#ededee). */
+  background: var(--color-bg-app);
+  border-color: var(--color-bg-code-border);
   color: var(--color-text-primary);
 }
 .dark .tw-msg-output-text {
@@ -3195,14 +3077,8 @@
   color: var(--color-text-primary);
 }
 
-/* ── Approval card ── */
-/* light/dark 都是 var(--color-bg-card) 切换, 但 hover/border 需要单独保 */
-.dark .approval-card {
-  background: var(--color-bg-card);
-}
-.dark .approval-card:hover {
-  background: var(--color-bg-card-hover);
-}
+/* Approval card dark 兜底已弃用 (旧 .approval-card 走 row + bg-card).
+   新 flat 卡片无背景无边框, 不需要 dark 覆盖. */
 
 /* ── Prefetch chip ── */
 .dark .prefetch-chip {

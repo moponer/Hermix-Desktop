@@ -446,15 +446,6 @@
   gap: 4px;
 }
 
-.tl-tool-step-label {
-  font-size: 11px;
-  line-height: 1.4;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--color-text-faint);
-  margin-top: 2px;
-}
-
 /* ── 5a-0b-old. Reasoning Block (legacy) — kept for back-compat ── */
 .tl-reasoning {
   /* gap 由父 .tl-iteration 管理，这里无需额外 margin */
@@ -641,7 +632,8 @@
 .dark .tw-msg-row:hover,
 .dark .tw-msg-row[data-open="true"],
 .dark .tw-msg-row:focus-visible {
-  background: transparent;
+  /* v7 层次: 与 components.css 同名 dark override 同步 (transparent → hover bg) */
+  background: var(--color-bg-hover);
 }
 .dark .tw-msg-main {
   color: var(--color-text-primary);

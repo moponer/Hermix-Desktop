@@ -1,27 +1,33 @@
-// Approval card (role="approval") — extracted from MessageBubble.tsx.
+// Approval card rendered for `role="approval"` legacy messages AND
+// for the inline `kind: "approval_request"` timeline step emitted
+// from the assistant's `unified_steps` (the new chronological path
+// — see `types.ts::TimelineStep`).
 import { AlertCircle, Check, Clock, X } from "lucide-react";
-import type { ChatMessage } from "../types";
+import type { ApprovalMessageMeta, ChatMessage } from "../types";
 import { describeToolArgs } from "./bubbleUtils";
-export function ApprovalCard({
-  message,
-  workspaceRoot: _workspaceRoot,
-  onApprove,
-  onDeny,
-}: {
-  message: ChatMessage;
-  workspaceRoot?: string | null;
+
+/**
+ * Bottom-of-card actions. Pending state shows "拒绝 / 允许";
+ * resolved state is rendered as a one-line summary below the body.
+ */
+export interface ApprovalRequestViewProps {
+  meta: ApprovalMessageMeta;
   onApprove?: (requestId: string) => void;
   onDeny?: (requestId: string) => void;
-}) {
-  const meta = message.approval;
-  if (!meta) {
-    return (
-      <div className="h-enter flex items-center gap-2 text-[12px] text-text-faint italic px-2 py-1.5">
-        <AlertCircle size={12} />
-        <span>权限请求数据缺失</span>
-      </div>
-    );
-  }
+}
+
+/**
+ * Pure renderer: takes an `ApprovalMessageMeta` directly. Used by
+ * `ApprovalCard` (legacy `role: "approval"` path) and by
+ * `ToolCallBubble::ProcessTimeline` for the inline `kind:
+ * "approval_request"` timeline step. Drives both the pending
+ * "拒绝 / 允许" form and the resolved 1-line summary.
+ */
+export function ApprovalRequestView({
+  meta,
+  onApprove,
+  onDeny,
+}: ApprovalRequestViewProps) {
   const isPending = !meta.decision;
   const approved = meta.decision === "approved";
   const isExpired = meta.decision === "expired";
@@ -30,11 +36,6 @@ export function ApprovalCard({
   // LLM-supplied intent: prefer explicit `meta.reason` (server-stored
   // terminal field), fall back to common LLM habits of writing
   // `reason` / `purpose` / `intent` / `note` inside the tool's args.
-  // We display whichever exists so the user sees the actual "why"
-  // (e.g. "为新建的 sub-app 创建 manifest") instead of a generic
-  // shell-exec boilerplate. Backend schema (ApprovalMessageMeta) does
-  // NOT carry reason yet — when the agent-server learns to surface it,
-  // the existing `meta.reason` branch wins and args fallback is unused.
   const argsIntent = (() => {
     if (!meta.args || typeof meta.args !== "object" || Array.isArray(meta.args)) return null;
     const a = meta.args as Record<string, unknown>;
@@ -59,34 +60,25 @@ export function ApprovalCard({
       ? "is-warn"
       : "";
 
-  const copyCommand = () => {
-    const text = meta.args && typeof meta.args === "object"
-      ? ((meta.args as Record<string, unknown>).command as string | undefined) ?? desc
-      : desc;
-    if (typeof navigator !== "undefined" && navigator.clipboard && text) {
-      navigator.clipboard.writeText(text).catch(() => {});
-    }
-  };
-
   return (
     <div className={`approval-card footer-block h-enter ${riskClass} ${cardStateClass}${decided ? " is-resolved" : ""}`}>
+      {/* 标题栏 — [工具名] + reason(LLM 解释的意图).
+          主人要求"reason 行做标题栏, 移除等待你的决定".
+          only pending + 有 reason 时显示; 否则跳过此节. */}
+      {isPending && (
+        <div className="approval-head">
+          <span className="approval-head-tool">{meta.tool}</span>
+          {intent && <span className="approval-head-reason">{intent}</span>}
+        </div>
+      )}
+
       {/* Body */}
       <div className="approval-body">
-        {/* LLM-supplied rationale (terminal schema `reason`, or args
-            fallback for `reason`/`purpose`/`intent`/`note`/`rationale`). */}
-        {intent ? (
-          <div className="approval-reason">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-            <span>{intent}</span>
-          </div>
-        ) : null}
+        {/* reason 上移到标题栏后, body 不再重复渲染 */}
 
         {/* Command (full text, never truncated) */}
         <div className="approval-cmd-bar">
           <pre className="approval-cmd">{desc}</pre>
-          <button type="button" className="approval-copy" onClick={copyCommand} title="复制完整内容">
-            复制
-          </button>
         </div>
 
         {/* Generic risk note — only when no intent is available; if
@@ -144,5 +136,37 @@ export function ApprovalCard({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Legacy wrapper for the standalone `role: "approval"` chat message.
+ * New approvals push an inline `kind: "approval_request"` step into
+ * the assistant's `unified_steps` (rendered via `ApprovalRequestView`
+ * inside `<ProcessTimeline>`), so this card is only seen for older
+ * sessions persisted before that migration.
+ */
+export function ApprovalCard({
+  message,
+  workspaceRoot: _workspaceRoot,
+  onApprove,
+  onDeny,
+}: {
+  message: ChatMessage;
+  workspaceRoot?: string | null;
+  onApprove?: (requestId: string) => void;
+  onDeny?: (requestId: string) => void;
+}) {
+  const meta = message.approval;
+  if (!meta) {
+    return (
+      <div className="h-enter flex items-center gap-2 text-[12px] text-text-faint italic px-2 py-1.5">
+        <AlertCircle size={12} />
+        <span>权限请求数据缺失</span>
+      </div>
+    );
+  }
+  return (
+    <ApprovalRequestView meta={meta} onApprove={onApprove} onDeny={onDeny} />
   );
 }

@@ -66,10 +66,21 @@ export function UserMessage({ message }: { message: ChatMessage }) {
 }
 export function AssistantMessage({
   message, workspaceRoot: _workspaceRoot, showHeader = true, onPathClick, isStreaming, keepOpen = false, hasRunningTool: hasRunningToolProp, expertCutoffAt: _expertCutoffAt,
+  onApproveApproval,
+  onDenyApproval,
 }: {
   message: ChatMessage;
   workspaceRoot?: string | null;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
+  /**
+   * Approval decision handlers. The new path forwards them down to
+   * `<UnifiedTimelineRenderer>` so an inline `kind: "approval_request"`
+   * step inside this assistant's `unified_steps` can wire its
+   * 拒绝 / 允许 buttons. Without these the inline card is rendered
+   * read-only — clicking does nothing.
+   */
+  onApproveApproval?: (requestId: string) => void;
+  onDenyApproval?: (requestId: string) => void;
   /**
    * Whether to render the avatar + name + time + model + stop chip.
    * The copy action is rendered below the message body, even though
@@ -209,6 +220,8 @@ export function AssistantMessage({
           toolCalls={toolCalls}
           hasRunningTool={hasRunningTool}
           durationMs={message.durationMs}
+          onApproveApproval={onApproveApproval}
+          onDenyApproval={onDenyApproval}
         />
 
         {/* Backend badge (outside card so it reads as meta, not part of answer) */}

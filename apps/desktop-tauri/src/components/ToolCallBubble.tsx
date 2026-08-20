@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { MarkdownBody } from "./MarkdownBody";
 import type { ChatMessage, TimelineStep } from "../types";
+import { ApprovalRequestView } from "./ApprovalBubble";
 import {
   parseContent, groupTimeline,
   type FileChangeEntry, type MemoryUpdateEntry, type MemoryRecallEntry,
@@ -156,6 +157,8 @@ export function ProcessTimeline({
   hasRunningTool,
   durationMs,
   onPathClick,
+  onApproveApproval,
+  onDenyApproval,
 }: {
   steps: TimelineStep[];
   isStreaming?: boolean;
@@ -172,6 +175,11 @@ export function ProcessTimeline({
    *  "已完成" without a duration. Live streams always have it. */
   durationMs?: number;
   onPathClick?: (path: string, e: React.MouseEvent) => void;
+  /** Forwarded to inline `kind: "approval_request"` step rendering
+   *  (`<ApprovalRequestView>`). Without these the 拒绝 / 允许
+   *  buttons are dead. */
+  onApproveApproval?: (requestId: string) => void;
+  onDenyApproval?: (requestId: string) => void;
 }) {
   // Streaming → always expanded (no fold UI shown at all).
   // Paused (keepOpen) → also expanded: the agent is awaiting approval /
@@ -225,40 +233,73 @@ export function ProcessTimeline({
 
   if (steps.length === 0) return null;
 
-  // Whether this turn has any reasoning/tool scaffolding. Pure-text
-  // turns render with no fold header (text flows as plain prose).
+  // Whether this turn has any reasoning/tool/approval-process scaffolding.
+  // Pure-text turns render with no fold header (text flows as plain
+  // prose). The fold header now wraps everything non-text — reasoning,
+  // tool cards, AND resolved approvals — so the final reply text stays
+  // scannable while the agent's internal process collapses behind one
+  // tap (Claude Code style).
   const hasProcessContent = steps.some(
-    (s) => s.kind === "reasoning" || s.kind === "tools",
+    (s) =>
+      s.kind === "reasoning" ||
+      s.kind === "tools" ||
+      (s.kind === "approval_request" && s.meta.decision !== null),
   );
 
   const totalTools = stepGroups.reduce(
     (acc, groups) => acc + (groups ? groups.length : 0),
     0,
   );
+  const reasoningSteps = steps.filter((s) => s.kind === "reasoning");
+  const resolvedApprovals = steps.filter(
+    (s) => s.kind === "approval_request" && s.meta.decision !== null,
+  ).length;
 
   // Header label: only used when settled (isStreaming=false). Live
   // renders no header — the content flows inline like prose.
-  // "已完成"                    ← no timing data
-  // "已完成 7s"                 ← < 1 minute
-  // "已完成 1m 23s"             ← ≥ 1 minute (s always shown, never 0-padded)
-  // "已完成 5 个工具 7s"        ← when tools ran (count + duration)
+  // Aggregate "思考 + 工具 + 审批" into one tight chip:
+  // "已完成 5 个工具 7s"     ← tools only
+  // "已完成 7s"               ← pure reasoning/text
+  // "思考 3s · 5 个工具"      ← both (compact form)
   const durationPart = formatDuration(durationMs);
+  const thinkSec = reasoningSteps.length > 0
+    ? formatDuration(durationMs)
+    : null;
   // 失败信息不再拼进顶头文案（避免刺眼的"N 失败"banner），
   // 由折叠头的 AlertTriangle 图标低调表示即可。
   const settledLabel = keepOpen
     ? (totalTools > 0 ? `处理中 ${totalTools} 个工具` : "处理中")
-    : (totalTools > 0
-      ? (durationPart ? `已完成 ${totalTools} 个工具 ${durationPart}` : `已完成 ${totalTools} 个工具`)
-      : (durationPart ? `已完成 ${durationPart}` : "已完成"));
+    : (() => {
+      // Multi-source aggregate: pick the most informative combo.
+      const parts: string[] = [];
+      if (totalTools > 0) {
+        parts.push(
+          durationPart
+            ? `已完成 ${totalTools} 个工具 ${durationPart}`
+            : `已完成 ${totalTools} 个工具`,
+        );
+      } else if (durationPart) {
+        parts.push(`已完成 ${durationPart}`);
+      } else if (resolvedApprovals > 0) {
+        parts.push("已完成");
+      } else {
+        parts.push("已完成");
+      }
+      if (reasoningSteps.length > 0 && thinkSec) {
+        parts.push(`思考 ${thinkSec}`);
+      }
+      if (resolvedApprovals > 0 && totalTools === 0 && !durationPart) {
+        parts.push(`${resolvedApprovals} 个审批`);
+      }
+      return parts.join(" · ");
+    })();
 
-  // Reasoning and tool steps are kept as siblings, never nested. Tools
-  // render as an always-visible "工具执行" block (they are actions, not
-  // thinking) while reasoning stays in its own collapsible block. This
-  // keeps each tool call's chronological position and makes the
-  // thinking/acting split explicit — fixing the "工具全跑思考里了" report
-  // without losing the interleaved order the user expects.
-  const reasoningSteps = steps.filter((s) => s.kind === "reasoning");
-  const firstToolIdx = steps.findIndex((s) => s.kind === "tools");
+  // Reasoning and tool steps are kept as siblings, never nested. They
+  // share the same fold header (2026-08-18 refactor) — both collapse
+  // behind one tap when the turn settles. Text steps stay outside
+  // the fold so the final reply is always scannable.
+  // (No extra `reasoningSteps` derivation here — already computed
+  // above for `settledLabel`.)
 
   return (
     <div className="tl-process-timeline">
@@ -323,14 +364,47 @@ export function ProcessTimeline({
           if (step.kind === "tools" && stepGroups[i]) {
             const groups = stepGroups[i]!;
             if (groups.length === 0) return null;
+            // Process timeline (2026-08-18 refactor): tools are
+            // siblings of reasoning under the same fold header —
+            // matches Claude Code's single fold for "thinking +
+            // acting", so the final reply stays scannable while the
+            // internal process (every `ToolGroupCard` + every
+            // `ReasoningBlock`) collapses behind one tap.
+            if (!expanded && !isStreaming) return null;
             return (
               <div key={`ps-${i}`} className="tl-tool-step">
-                {i === firstToolIdx && (
-                  <div className="tl-tool-step-label">工具执行</div>
-                )}
                 <ToolTimelineSection
                   groups={groups}
                   onPathClick={onPathClick}
+                />
+              </div>
+            );
+          }
+          // Inline permission card — pushed into the assistant's
+          // `unified_steps` by `App.tsx::onApprovalRequest` so the
+          // card sits at the chronological position of its tool
+          // call (right after `tool_start`, before `tool_complete`).
+          // Rendered with the same `ApprovalRequestView` as the
+          // legacy `role: "approval"` path so the visual contract
+          // is identical.
+          //
+          // Pending approvals (`meta.decision === null`) are
+          // *outside* the fold: hiding them behind a chevron
+          // makes the user miss the click — they're the active
+          // "waiting" surface. Resolved approvals collapse with
+          // everything else.
+          if (step.kind === "approval_request") {
+            if (!isStreaming && step.meta.decision === null) {
+              // Pending — always visible.
+            } else if (!expanded && !isStreaming) {
+              return null;
+            }
+            return (
+              <div key={`ps-${i}`} className="tl-approval-step">
+                <ApprovalRequestView
+                  meta={step.meta}
+                  onApprove={onApproveApproval}
+                  onDeny={onDenyApproval}
                 />
               </div>
             );
@@ -372,6 +446,8 @@ export function UnifiedTimelineRenderer({
   toolCalls,
   hasRunningTool,
   durationMs,
+  onApproveApproval,
+  onDenyApproval,
 }: {
   steps: TimelineStep[];
   isStreaming?: boolean;
@@ -387,6 +463,10 @@ export function UnifiedTimelineRenderer({
   hasRunningTool: boolean;
   /** Forwarded to ProcessTimeline for the "已完成 10s" header chip. */
   durationMs?: number;
+  /** Forwarded to ProcessTimeline for the inline
+   *  `kind: "approval_request"` step's 拒绝 / 允许 buttons. */
+  onApproveApproval?: (requestId: string) => void;
+  onDenyApproval?: (requestId: string) => void;
 }) {
   const hasTools = toolCalls.length > 0;
   const hasAnyToolStep = steps.some((s) => s.kind === "tools");
@@ -424,6 +504,8 @@ export function UnifiedTimelineRenderer({
         hasRunningTool={hasRunningTool}
         durationMs={durationMs}
         onPathClick={onPathClick}
+        onApproveApproval={onApproveApproval}
+        onDenyApproval={onDenyApproval}
       />
 
       {/* Trailing meta blocks — file changes / memory updates /

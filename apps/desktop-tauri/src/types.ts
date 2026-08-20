@@ -302,13 +302,31 @@ export interface ToolCall {
 }
 
 export interface ExecutionTimelineEvent {
-  type: "tool_start" | "tool_stdout" | "tool_complete" | "status" | "file_change" | "section_gate" | "reasoning" | "text" | "memory_update" | "memory_recall";
+  type: "tool_start" | "tool_stdout" | "tool_complete" | "status" | "file_change" | "section_gate" | "reasoning" | "text" | "memory_update" | "memory_recall" | "approval_request";
   tool?: string;
   content?: string;
   arguments?: string;
   chunk_index?: number;
   chunk_total?: number;
   created_at: string;
+  /** approval_request-only fields — front-end uses these to render
+   *  the inline permission card directly from a tool timeline, so the
+   *  card sits where the tool call happened in chronological order
+   *  instead of as a detached standalone message at the bottom of
+   *  the turn. New approvals push this event into the active
+   *  assistant's `execution_timeline`; legacy `role: "approval"`
+   *  rows persisted before this change still render through the
+   *  backward-compat path in `MessageBubble` and are migrated
+   *  one-shot by `mergeApprovalsIntoAssistantTimeline` in
+   *  `chatUtils.ts` on session reload. */
+  approval_request_id?: string;
+  approval_tool?: string;
+  approval_args?: unknown;
+  approval_risk_level?: string;
+  approval_reason?: string | null;
+  approval_expires_at?: number | null;
+  approval_decision?: "approved" | "denied" | "expired" | null;
+  approval_decided_at?: string | null;
   /** Stable WS `tool_call_id` for tool_* events. Used by callers that
    *  need to correlate streamed chunks with their parent invocation
    *  (e.g. timeline parsers that want to group stdout by call). */
@@ -405,7 +423,19 @@ export interface SubAgentEventPayload {
 export type TimelineStep =
   | { kind: "reasoning"; content: string }
   | { kind: "tools"; events: ExecutionTimelineEvent[] }
-  | { kind: "text"; content: string };
+  | { kind: "text"; content: string }
+  /**
+   * Inline permission card — pushed into the assistant's
+   * `unified_steps` so the card lives at the chronological position
+   * of its tool call (right after `tool_start`, before
+   * `tool_complete`), not at the bottom of the turn. The card meta
+   * is the same `ApprovalMessageMeta` that the legacy
+   * `role: "approval"` message used to carry, so the rendering
+   * component (`ApprovalRequestView`) is shared. `toolCallId` lets
+   * the render path link the approval card back to its tool entry
+   * when the user wants to inspect call metadata.
+   */
+  | { kind: "approval_request"; meta: ApprovalMessageMeta; toolCallId: string; createdAt: string };
 
 /** (C3 marker protocol): wire-mirror of the backend's
  *  `SectionGateReport`. Field names match the `serde(rename=...)`

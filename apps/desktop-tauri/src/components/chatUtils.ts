@@ -1,4 +1,4 @@
-import type { ChatMessage, TimelineStep } from "../types";
+import type { ChatMessage, TimelineStep, ExecutionTimelineEvent } from "../types";
 import type { CompressMethod } from "../utils/imageCompressor";
 
 // pendingImages 数据结构。
@@ -220,6 +220,62 @@ export function shouldShowAssistantHeader(idx: number, messages: ReadonlyArray<{
   }
   const effectivePrev = prevIdx >= 0 ? messages[prevIdx] : null;
   return effectivePrev === null || effectivePrev.role === "user";
+}
+
+/**
+ * Merge legacy `role: "tool"` messages into the preceding assistant's
+ * `execution_timeline`. This handles sessions created by older codepaths
+ * that emitted separate tool rows — the frontend now expects all tool
+ * events to live inside the assistant message's timeline.
+ */
+export function mergeLegacyToolMessages(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const m of messages) {
+    if (m.role !== "tool" || !m.tool) {
+      out.push(m);
+      continue;
+    }
+    // Merge into last assistant message
+    const lastAssistant = [...out].reverse().find((msg) => msg.role === "assistant");
+    if (!lastAssistant) {
+      // No preceding assistant — keep as-is (shouldn't happen)
+      out.push(m);
+      continue;
+    }
+    // Replace the last assistant with an enriched copy
+    out.pop();
+    const timeline: ExecutionTimelineEvent[] = [...(lastAssistant.execution_timeline ?? [])];
+    // Map tool meta to timeline events
+    const tc = m.tool;
+    const callId = tc.toolCallId ?? `legacy-${m.timestamp}`;
+    // Add tool_start if not present
+    const hasStart = timeline.some((e) => e.type === "tool_start" && e.tool_call_id === callId);
+    if (!hasStart) {
+      timeline.push({
+        type: "tool_start",
+        tool: tc.tool,
+        arguments: tc.args as string | undefined,
+        tool_call_id: callId,
+        created_at: m.timestamp,
+      });
+    }
+    // Add tool_complete if not present
+    const hasComplete = timeline.some((e) => e.type === "tool_complete" && e.tool_call_id === callId);
+    if (!hasComplete) {
+      timeline.push({
+        type: "tool_complete",
+        tool: tc.tool,
+        content: tc.output ?? "",
+        tool_call_id: callId,
+        created_at: m.timestamp,
+      });
+    }
+    out.push({
+      ...lastAssistant,
+      execution_timeline: timeline,
+    });
+  }
+  return out;
 }
 
 /**
