@@ -310,7 +310,7 @@ export function ProcessTimeline({
           tool cards below are always shown. */}
       {!isStreaming && hasProcessContent && (
         <button
-          onClick={() => setUserOverride((v) => v ?? true ? false : true)}
+          onClick={() => setUserOverride((v) => !v)}
           className="reasoning-header tl-process-header"
           aria-expanded={expanded}
           title={reasoningSteps.length > 0 ? "思考过程（点击展开/收起）" : settledLabel}
