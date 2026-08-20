@@ -17,6 +17,7 @@ import remarkBreaks from "remark-breaks";
 import { Check, Copy, X } from "lucide-react";
 import { useSafeTimeout } from "../hooks/useSafeTimeout";
 import { highlightToReact, readIsDark } from "../lib/codeHighlight";
+import { autoCloseUnbalancedFences } from "../lib/markdownFence";
 
 /* ── Path linkification ──────────────────────────────────────── */
 
@@ -355,6 +356,9 @@ export interface MarkdownBodyProps {
 export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
   const handlePathClick = onPathClick ?? (() => {});
   const isDark = readIsDark();
+  // Close unbalanced ``` fences BEFORE handing to react-markdown so an
+  // unclosed LLM stream doesn't swallow the rest of the message as code.
+  const safeContent = useMemo(() => autoCloseUnbalancedFences(content), [content]);
   return (
     <div className="prose max-w-none">
       <ReactMarkdown
@@ -387,7 +391,7 @@ export function MarkdownBody({ content, onPathClick }: MarkdownBodyProps) {
           },
         }}
       >
-        {content}
+        {safeContent}
       </ReactMarkdown>
     </div>
   );
