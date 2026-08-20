@@ -206,7 +206,14 @@ Structure every reply as two parts:\n\
 1. `<think>...</think>` — internal reasoning (private, user sees it as a collapsible section).\n\
 2. Your reply, starting on the next line after `</think>`.\n\n\
 **Always close `</think>` before any visible text.** Forgetting this breaks the renderer — the user sees nothing. If you have nothing to reason about, emit `<think></think>`. Use only `<think>...</think>`, never `<thinking>`.\n\n\
-Write your visible reply in clean, structured Markdown: use `##`/`###` headings to separate topics, `-`/`1.` lists for steps and enumerations, `**bold**` for key terms, and fenced code blocks (```lang) for commands or code. Substantive answers (multi-step, comparisons, causes/conclusions, or anything beyond a one-liner) must be organized this way so the reader can scan it fast — do not dump a wall of plain prose.";
+Write your visible reply in clean, structured Markdown: use `##`/`###` headings to separate topics, `-`/`1.` lists for steps and enumerations, `**bold**` for key terms, and fenced code blocks (```lang) for commands or code. Substantive answers (multi-step, comparisons, causes/conclusions, or anything beyond a one-liner) must be organized this way so the reader can scan it fast — do not dump a wall of plain prose.\n\n\
+## 报告必须分节(钉死,无法绕过)\n\
+凡是包含多步骤操作、改动多个文件、跨工具组合、阅读/解释代码、错误排查、调研对比等**实质报告**,不论字数多少,**一律用 # / ## / ### Markdown 标题分节**,严禁堆一整段纯文本。\n\
+- **长报告(>300 字 或 >3 个步骤)** — 必须至少 1 个 ## 二级标题 + 至少 2 个 ### 三级标题分节(例如:`## 改动概览` → `## 关键文件` → `## 验证步骤`)\n\
+- **多步任务(任何超过 2 步的操作)** — 用有序列表(`1. ` `2. ` `3. `)+ ### 二级标题收尾\n\
+- **对比 / 选项 / 优缺点** — 一律表格(`| ... | ... |`)分列,不准用\"优点:... 缺点:...\"长句堆\n\
+- **极简单行回复**(< 60 字,如一次性命令确认、单个数字回答)可直接说人话,但**只要涉及\"做了什么、改了什么、解释了什么\" → 必须分节**\n\
+例外仅限:用户明确问\"一句话回我\"\"只要结论\"——否则一律分节。";
 
 /// Safety instruction: do not generate or guess URLs.
 const URL_SAFETY_GUIDANCE: &str = "\
@@ -395,7 +402,14 @@ pub fn collect_directions(
         dirs.push(SystemDir::new(
             "format.short",
             DirRoute::Subsequent,
-            "## 语气与格式\n用自然语言聊,像真人对话一样有温度、有干劲,不端着。但**最终回答必须用结构化 Markdown 呈现**:凡涉及多步骤、对比、原因/结论、或任何超过三句话的实质内容,使用标题(## / ###)、有序/无序列表、加粗关键词、代码块(```lang)与表格组织层次,让重点一目了然。极简单行回复(如一次性命令确认)可直接说人话。信息密度要高,不啰嗦但绝不漏掉关键点。",
+            "## 语气与格式\n用自然语言聊,像真人对话一样有温度、有干劲,不端着。但**最终回答必须用结构化 Markdown 呈现**:凡涉及多步骤、对比、原因/结论、或任何超过三句话的实质内容,使用标题(## / ###)、有序/无序列表、加粗关键词、代码块(```lang)与表格组织层次,让重点一目了然。极简单行回复(如一次性命令确认)可直接说人话。信息密度要高,不啰嗦但绝不漏掉关键点。\n\n\
+            ## 报告必须分节(钉死,无法绕过)\n\
+            凡是包含多步骤操作、改动多个文件、跨工具组合、阅读/解释代码、错误排查等**实质报告**,不论字数多少,**一律用 # / ## / ### Markdown 标题分节**,严禁堆一整段纯文本。\n\
+            - **长报告(>300 字 或 >3 个步骤)** — 必须至少 1 个 ## 二级标题 + 至少 2 个 ### 三级标题分节(例如:`## 改动概览` → `## 关键文件` → `## 验证步骤`)\n\
+            - **多步任务(任何超过 2 步的操作)** — 用有序列表(`1. ` `2. ` `3. `)+ ### 二级标题收尾\n\
+            - **对比 / 选项 / 优缺点** — 一律表格(`| ... | ... |`)分列,不准用\"优点:... 缺点:...\"长句堆\n\
+            - **极简单行回复**(< 60 字,如一次性命令确认、单个数字回答)可直接说人话,但**只要涉及\"做了什么、改了什么、解释了什么\" → 必须分节**\n\
+            例外仅限:用户明确问\"一句话回我\"\"只要结论\"——否则一律分节。",
         ));
     }
     // Thinking discipline.

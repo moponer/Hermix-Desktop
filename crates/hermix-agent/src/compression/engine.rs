@@ -410,7 +410,16 @@ impl ContextCompressor {
 
         //determine boundaries.
         let compress_start = self.align_boundary_forward(&messages, self.config.protect_first_n);
-        let compress_end = self.find_tail_cut_by_tokens(&messages, compress_start, None);
+        let mut compress_end = self.find_tail_cut_by_tokens(&messages, compress_start, None);
+        // Policy: the last assigned task instruction must never be
+        // summarised away. If it falls inside the middle slice that
+        // would be condensed, pull the tail boundary back so it stays
+        // verbatim in the protected tail (it is recent and task-critical).
+        if let Some(task_idx) = crate::compression_pipeline::last_task_instruction_index(&messages) {
+            if task_idx < compress_end {
+                compress_end = task_idx;
+            }
+        }
         if compress_start >= compress_end {
             return messages;
         }

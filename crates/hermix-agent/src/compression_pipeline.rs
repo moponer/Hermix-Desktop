@@ -138,6 +138,33 @@ fn msg_content_lowercase(msg: &Message) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Task-instruction preservation
+// ---------------------------------------------------------------------------
+
+/// Index of the most recent substantive user task instruction.
+///
+/// Scans backward from the end for the last `User` message whose
+/// content is non-empty and is not a dedup/flush marker. This is the
+/// "last assigned task" the context-compression policy must never
+/// drop — see the task-preservation requirement: compression must keep
+/// the most recent task instruction and prioritise task goals / pending
+/// todos over other history. Returns `None` when the conversation has
+/// no usable user turn (e.g. only system + tool messages).
+pub fn last_task_instruction_index(messages: &[Message]) -> Option<usize> {
+    for i in (0..messages.len()).rev() {
+        if messages[i].role != MessageRole::User {
+            continue;
+        }
+        let content = messages[i].content.as_deref().unwrap_or("").trim();
+        if content.is_empty() || content.starts_with("[ALREADY EXECUTED]") {
+            continue;
+        }
+        return Some(i);
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Pass 0: adjacent user-text dedup
 // ---------------------------------------------------------------------------
 
@@ -1199,5 +1226,39 @@ mod tests {
         r.compression_ratio = 0.5;
         r.estimated_quality_loss = 0.05;
         assert!(!r.is_concerning());
+    }
+
+    #[test]
+    fn last_task_instruction_index_picks_most_recent_user() {
+        // system + an old user task + assistant + tool + a newer user task
+        let msgs = vec![
+            m_system("sys"),
+            m_user("FIRST TASK: do X"),
+            m_assistant("ok"),
+            m_tool("c1", "result"),
+            m_user("SECOND TASK: do Y"),
+            m_assistant("on it"),
+        ];
+        assert_eq!(
+            last_task_instruction_index(&msgs),
+            Some(4),
+            "must return the most recent substantive user message"
+        );
+    }
+
+    #[test]
+    fn last_task_instruction_index_skips_markers_and_empty() {
+        let msgs = vec![
+            m_user("[ALREADY EXECUTED] [Duplicate user message]"),
+            m_user("   "),
+            m_user("REAL TASK: do Z"),
+        ];
+        assert_eq!(last_task_instruction_index(&msgs), Some(2));
+    }
+
+    #[test]
+    fn last_task_instruction_index_none_when_no_user() {
+        let msgs = vec![m_system("sys"), m_assistant("hi"), m_tool("c", "r")];
+        assert_eq!(last_task_instruction_index(&msgs), None);
     }
 }

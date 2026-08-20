@@ -151,7 +151,7 @@ pub struct ContextManager {
     /// legitimate headroom to emit its output.
     output_reserve_tokens: usize,
     /// Pressure ratio (0.0–1.0) at which auto-compression / warnings fire.
-    /// Defaults to [`CONTEXT_PRESSURE_TRIGGER_RATIO`] (0.50). Overridden
+    /// Defaults to [`CONTEXT_PRESSURE_TRIGGER_RATIO`] (0.90). Overridden
     /// by `compaction.pressure_threshold_percent` in config.yaml.
     pressure_ratio: f64,
     /// running sum of [`estimate_tokens`] for every message
@@ -276,7 +276,7 @@ impl ContextManager {
     /// Override the per-instance pressure ratio (0.0–1.0).
     /// Controls when auto-compression and context-pressure warnings fire:
     /// `threshold = (max_context - output_reserve) * ratio`.
-    /// Defaults to [`CONTEXT_PRESSURE_TRIGGER_RATIO`] (0.50). The runtime
+    /// Defaults to [`CONTEXT_PRESSURE_TRIGGER_RATIO`] (0.90). The runtime
     /// value is forwarded from `compaction.pressure_threshold_percent` in
     /// config.yaml via `AgentConfig.context_pressure_ratio`.
     pub fn with_pressure_ratio(mut self, ratio: f64) -> Self {
@@ -398,7 +398,20 @@ impl ContextManager {
                 break;
             }
         }
-        let cutoff = first_kept_from_tail;
+        let mut cutoff = first_kept_from_tail;
+        // Policy: the most recent user task instruction must never be
+        // truncated away, even if the tail-token budget would otherwise
+        // stop just after it. Extend the kept tail backward to include it
+        // verbatim. (Compression prioritises task goals / pending todos
+        // over strict budget adherence — the LLM summary path handles the
+        // rest.)
+        if let Some(task_idx) =
+            crate::compression_pipeline::last_task_instruction_index(&self.messages)
+        {
+            if task_idx < cutoff {
+                cutoff = task_idx;
+            }
+        }
         if cutoff <= system_end {
             // Nothing left to drop — keep the system messages and the
             // last 2 turns as required.
@@ -2077,6 +2090,34 @@ let ctx = RouteContext {
         let last = cm.get_messages().last().unwrap();
         assert_eq!(last.role, MessageRole::User);
         assert!(cm.total_tokens() <= 500);
+    }
+
+    #[test]
+    fn test_truncate_keeps_last_task_instruction() {
+        // Regression: a large last user task instruction sitting just before
+        // the tail-token budget boundary must NOT be truncated away — the
+        // compression policy prioritises the most recent task over strict
+        // budget adherence.
+        let mut cm = ContextManager::new(10_000_000);
+        cm.add_message(Message::system("sys"));
+        for i in 0..30 {
+            cm.add_message(Message::assistant(format!("filler turn {i} with some content")));
+        }
+        cm.add_message(Message::user(
+            "BIG TASK: implement feature X with constraints A B C and paths /a /b",
+        ));
+        cm.add_message(Message::assistant("acknowledged"));
+        let budget = BudgetConfig {
+            max_result_size_chars: 100_000,
+            max_aggregate_chars: 30, // far smaller than the task instruction
+        };
+        cm.truncate_to_budget(&budget);
+        let kept = cm.get_messages();
+        assert!(
+            kept.iter().any(|m| m.role == MessageRole::User
+                && m.content.as_deref().unwrap_or("").contains("BIG TASK")),
+            "last task instruction must survive truncation even under a tiny budget"
+        );
     }
 
     #[test]

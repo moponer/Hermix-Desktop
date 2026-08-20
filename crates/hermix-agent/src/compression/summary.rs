@@ -72,6 +72,20 @@ impl ContextCompressor {
     }
 
     pub(crate) fn build_summary_prompt(&self, content_block: &str, summary_budget: u64) -> String {
+        // Shared preservation rules — the compression policy must keep the
+        // most recent task instruction and prioritise task goals / pending
+        // todos over other history. Injected into both the create and update
+        // branches so the model never silently drops a key requirement.
+        const PRESERVE_RULES: &str = "\
+CRITICAL PRESERVATION RULES (apply before condensing anything):\n\
+• PRESERVE THE LAST TASK INSTRUCTION: the most recent user-assigned task/request must survive this summary. \
+Reproduce its core requirements, acceptance criteria, file paths, and constraints VERBATIM or in near-verbatim detail — \
+never paraphrase them into vague bullets that lose the actual ask.\n\
+• PRIORITISE TASK GOALS AND PENDING TODOS: keep the '## Goal' and '## Progress → In Progress' / '## Next Steps' \
+sections COMPLETE. When you must shorten, drop greetings, redundant commentary, and duplicate tool output FIRST — \
+never sacrifice a task requirement, goal, or pending todo item to save space.\n\
+• A pending task list must never be silently truncated, merged, or reordered away.\n\n";
+
         if let Some(prev) = self.previous_summary.as_ref() {
             format!(
                 "You are updating a context compaction summary. A previous compaction produced the summary below. \
@@ -79,6 +93,7 @@ New conversation turns have occurred since then and need to be incorporated.\n\n
 PREVIOUS SUMMARY:\n{prev}\n\nNEW TURNS TO INCORPORATE:\n{content_block}\n\n\
 Update the summary using this exact structure. PRESERVE all existing information that is still relevant. \
 ADD new progress. Move items from \"In Progress\" to \"Done\" when completed. Remove information only if it is clearly obsolete.\n\n\
+{PRESERVE_RULES}\
 {COMPACTION_TEMPLATE}\n\n\
 Target ~{summary_budget} tokens. Be specific — include file paths, command outputs, error messages, and concrete values rather than vague descriptions.\n\n\
 Write only the summary body. Do not include any preamble or prefix."
@@ -86,7 +101,8 @@ Write only the summary body. Do not include any preamble or prefix."
         } else {
             format!(
                 "Create a structured handoff summary for a later assistant that will continue this conversation after earlier turns are compacted.\n\n\
-TURNS TO SUMMARIZE:\n{content_block}\n\nUse this exact structure:\n\n{COMPACTION_TEMPLATE}\n\n\
+TURNS TO SUMMARIZE:\n{content_block}\n\nUse this exact structure:\n\n{PRESERVE_RULES}\
+{COMPACTION_TEMPLATE}\n\n\
 Target ~{summary_budget} tokens. Be specific — include file paths, command outputs, error messages, and concrete values rather than vague descriptions. \
 The goal is to prevent the next assistant from repeating work or losing important details.\n\n\
 Write only the summary body. Do not include any preamble or prefix."
