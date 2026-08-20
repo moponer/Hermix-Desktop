@@ -4,13 +4,12 @@
 import type { ReactNode } from "react";
 import type { NavPage, Session } from "../types";
 import { SearchView } from "../components/SearchView";
-import { PluginsView } from "../components/PluginsView";
+import { SystemConfigPanel } from "../components/SystemConfigPanel";
 import { AutomationView } from "../components/AutomationView";
 import { AgentsView } from "../components/AgentsView";
 import { GroupChatView } from "../components/GroupChatView";
 import { AnalyticsView } from "../components/AnalyticsView";
 import { CustomAppsView } from "../components/CustomAppsView";
-import { SettingsView } from "../components/SettingsView";
 
 /** 渲染各非 chat 页面所需的 App 级依赖。chat 页面 props 复杂，
  *  由 App 预先渲染为 `chatNode` 元素传入，保持逻辑零改写。 */
@@ -29,8 +28,8 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       return ctx.chatNode;
     case "search":
       return <SearchView sessions={ctx.sessions} onSelectSession={ctx.handleSelectSession} />;
-    case "plugins":
-      return <PluginsView />;
+    case "systemconfig":
+      return <SystemConfigPanel />;
     case "automation":
       return <AutomationView />;
     case "agents":
@@ -43,8 +42,6 @@ export function renderRoutes(page: NavPage, ctx: RouteContext): ReactNode {
       return <AnalyticsView />;
     case "customapps":
       return <CustomAppsView onStartCreateApp={ctx.startCreateAppFlow} />;
-    case "settings":
-      return <SettingsView />;
     default:
       return null;
   }

@@ -1,20 +1,17 @@
 /**
  * Avatar components for the groupchat module.
  *
- * Extracted from GroupChatView.tsx.
+ * All colors derive from theme tokens (accent / bg surfaces / text levels)
+ * so they adapt correctly across default, sunset, dark, etc.
  */
 
 import { memo } from "react";
 import { Crown } from "lucide-react";
 import { clsx } from "clsx";
 import type { AgentPersona } from "../agents/types";
-import { agentHue, agentTone } from "./types";
+import { agentTone } from "./types";
 
-/* ── Member avatar ──
- * Renders an emoji glyph or first-letter initial over a stable
- * per-agent color. Used standalone (30px) in chat and stacked (20px)
- * in room-list chips.
- */
+/* ── Member avatar ── */
 export function AgentAvatar({
   agent,
   size = 32,
@@ -32,12 +29,12 @@ export function AgentAvatar({
     <div
       className={clsx(
         "rounded-full flex items-center justify-center shrink-0 font-semibold select-none",
-        ringed && "ring-[1.5px] ring-white/80 dark:ring-zinc-800/80",
+        ringed && "ring-[1.5px] ring-bg-primary",
       )}
       style={{
         width: size,
         height: size,
-        background: `hsl(${agentHue(agent.id)}, 55%, 55%, 0.35)`,
+        background: tone.bg,
         color: tone.text,
         fontSize: isEmoji ? size * 0.55 : size * 0.42,
         lineHeight: 1,
@@ -50,10 +47,7 @@ export function AgentAvatar({
 }
 
 /* ── Leader Avatar ──
- * Visual identity for the built-in 项目总管. Distinct from
- * member avatars: Crown glyph, amber (gold) tinted palette, fixed
- * z-index boost so it always sits at the front of the pile.
- */
+ * Crown glyph; uses theme accent color instead of hardcoded gold. */
 export function LeaderAvatar({
   size = 30,
   ringed = false,
@@ -65,16 +59,16 @@ export function LeaderAvatar({
     <div
       className={clsx(
         "rounded-full flex items-center justify-center shrink-0 font-semibold select-none",
-        ringed && "ring-[1.5px] ring-white/80 dark:ring-zinc-800/80",
+        ringed && "ring-[1.5px] ring-bg-primary",
       )}
       style={{
         width: size,
         height: size,
-        background: "hsla(43, 96%, 56%, 0.35)",
-        color: "hsl(33, 90%, 38%)",
+        background: "var(--color-accent-soft)",
+        color: "var(--color-accent)",
         fontSize: size * 0.55,
         lineHeight: 1,
-        boxShadow: "inset 0 0 0 1px hsla(43, 96%, 50%, 0.55)",
+        boxShadow: "inset 0 0 0 1px var(--color-accent-soft-strong)",
       }}
       title="项目总管（系统内置）"
     >
@@ -83,11 +77,7 @@ export function LeaderAvatar({
   );
 }
 
-/* ── Stacked avatar pile (max 3 + overflow) ──
- * Used in room-list rows to summarize who's in the room without
- * dumping a wall of emoji names. Overlap is achieved with negative
- * margin + z-index so the leftmost avatar sits on top.
- */
+/* ── Stacked avatar pile (max 3 + overflow) ── */
 export const AgentStack = memo(function AgentStack({
   agents,
   max = 3,

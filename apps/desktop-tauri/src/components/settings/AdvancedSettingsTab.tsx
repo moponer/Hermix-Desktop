@@ -140,7 +140,7 @@ export function AdvancedTab() {
       {/* Save Button */}
       <button
         onClick={handleSave}
-        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:opacity-90 transition-opacity"
+        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-accent-on-text text-sm font-medium hover:opacity-90 transition-opacity"
       >
         {saved ? <><Check size={14} /> 已保存</> : <><Save size={14} /> 保存设置</>}
       </button>

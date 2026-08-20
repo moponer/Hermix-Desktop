@@ -41,6 +41,16 @@ impl PluginScanner {
                 continue;  // Skip the root plugins dir itself
             }
 
+            // Skip hidden directories (e.g. `.proposals` design drafts) — they
+            // are not plugins and would otherwise be reported as invalid.
+            if dir_path
+                .file_name()
+                .map(|n| n.to_string_lossy().starts_with('.'))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
             match self.load_plugin(dir_path) {
                 Ok(plugin) => {
                     tracing::debug!("loaded plugin: {}", plugin.manifest.id);

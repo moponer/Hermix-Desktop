@@ -1,0 +1,220 @@
+import { useCallback, useState } from "react";
+import {
+  Cpu,
+  Boxes,
+  Server,
+  SlidersHorizontal,
+  Plug,
+  Sparkles,
+  Network,
+  Image as ImageIcon,
+} from "lucide-react";
+import { ModelTab } from "./settings/ModelSettingsTab";
+import { BackendTab } from "./settings/BackendSettingsTab";
+import { AdvancedTab } from "./settings/AdvancedSettingsTab";
+import { PluginsTab, SkillsTab, ConnectorsTab, ToolsetsTab } from "./config/ToolTabs";
+import { storage, STORAGE_KEYS } from "../utils/storageCompat";
+
+type CategoryId = "model" | "tools" | "backend" | "advanced";
+type ToolTabId = "plugins" | "skills" | "connectors" | "toolsets";
+type ModelTabId = "model" | "image";
+
+const CATEGORIES: { id: CategoryId; label: string; hint: string; icon: React.ElementType }[] = [
+  { id: "model", label: "模型", hint: "配置大模型与图片生成", icon: Cpu },
+  { id: "tools", label: "工具", hint: "插件、技能、连接器与工具集", icon: Boxes },
+  { id: "backend", label: "后端", hint: "本地后端服务与健康", icon: Server },
+  { id: "advanced", label: "高级", hint: "高级选项与实验功能", icon: SlidersHorizontal },
+];
+
+const TOOL_TABS: { id: ToolTabId; label: string; icon: React.ElementType }[] = [
+  { id: "plugins", label: "插件", icon: Plug },
+  { id: "skills", label: "技能", icon: Sparkles },
+  { id: "connectors", label: "连接器", icon: Network },
+  { id: "toolsets", label: "工具集", icon: Boxes },
+];
+
+const MODEL_TABS: { id: ModelTabId; label: string; icon: React.ElementType }[] = [
+  { id: "model", label: "模型配置", icon: Cpu },
+  { id: "image", label: "图像", icon: ImageIcon },
+];
+
+export function SystemConfigPanel() {
+  const [cat, setCat] = useState<CategoryId>("tools");
+  const [toolTab, setToolTab] = useState<ToolTabId>("connectors");
+  const [modelTab, setModelTab] = useState<ModelTabId>("model");
+  const [query, setQuery] = useState("");
+
+  return (
+    <div className="flex-1 flex min-h-0 overflow-hidden">
+      {/* Left nav */}
+      <nav className="w-[220px] shrink-0 border-r border-border-primary bg-bg-secondary px-3 py-4 flex flex-col gap-1">
+        <div className="px-2 pb-3 mb-1 border-b border-border-primary">
+          <div className="text-sm font-semibold text-text-primary">系统配置</div>
+          <div className="text-[11px] text-text-muted mt-0.5">模型、工具、后端与高级选项</div>
+        </div>
+        {CATEGORIES.map(({ id, label, hint, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setCat(id)}
+            className={clsxNav(cat === id)}
+          >
+            <Icon size={16} className="shrink-0" />
+            <span className="flex-1 min-w-0">
+              <span className="block text-[13px] leading-tight truncate">{label}</span>
+              <span className="block text-[10.5px] text-text-muted leading-tight truncate">{hint}</span>
+            </span>
+          </button>
+        ))}
+      </nav>
+
+      {/* Right detail */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {cat === "model" && (
+          <SubTabs tabs={MODEL_TABS} active={modelTab} onSelect={setModelTab} />
+        )}
+        {cat === "tools" && (
+          <SubTabs tabs={TOOL_TABS} active={toolTab} onSelect={setToolTab} />
+        )}
+
+        <div className="flex-1 overflow-y-auto min-h-0">
+          {cat === "model" && modelTab === "model" && (
+            <Padded><ModelTab /></Padded>
+          )}
+          {cat === "model" && modelTab === "image" && (
+            <Padded><ImageSettingsCard /></Padded>
+          )}
+          {cat === "tools" && (
+            <div className="px-8 py-6 min-h-0">
+              <div className="max-w-5xl mx-auto">
+                {toolTab === "plugins" && <PluginsTab query={query} onQuery={setQuery} />}
+                {toolTab === "skills" && <SkillsTab query={query} onQuery={setQuery} />}
+                {toolTab === "connectors" && <ConnectorsTab query={query} onQuery={setQuery} />}
+                {toolTab === "toolsets" && <ToolsetsTab query={query} onQuery={setQuery} />}
+              </div>
+            </div>
+          )}
+          {cat === "backend" && <Padded><BackendTab /></Padded>}
+          {cat === "advanced" && <Padded><AdvancedTab /></Padded>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Padded({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-8 py-6 min-h-0">
+      <div className="max-w-3xl mx-auto">{children}</div>
+    </div>
+  );
+}
+
+function SubTabs<T extends string>({
+  tabs,
+  active,
+  onSelect,
+}: {
+  tabs: { id: T; label: string; icon: React.ElementType }[];
+  active: T;
+  onSelect: (id: T) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1 px-8 py-3 border-b border-border-primary">
+      {tabs.map(({ id, label, icon: Icon }) => (
+        <button
+          key={id}
+          onClick={() => onSelect(id)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors ${
+            active === id
+              ? "bg-bg-tertiary text-text-primary font-medium"
+              : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
+          }`}
+        >
+          <Icon size={14} />
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function clsxNav(active: boolean): string {
+  return [
+    "flex items-center gap-2.5 w-full px-2.5 py-2 rounded-lg text-left transition-colors",
+    active
+      ? "bg-bg-active text-accent"
+      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary",
+  ].join(" ");
+}
+
+// ── 图像：本地图片生成偏好（前端持久化，作为图片能力接入前的集中配置入口） ──
+
+interface ImageConfig {
+  enabled: boolean;
+  model: string;
+}
+
+function loadImageConfig(): ImageConfig {
+  try {
+    const raw = storage.getItem(STORAGE_KEYS.imageConfig);
+    if (raw) return { enabled: false, model: "", ...(JSON.parse(raw) as Partial<ImageConfig>) };
+  } catch { /* ignore */ }
+  return { enabled: false, model: "" };
+}
+
+function ImageSettingsCard() {
+  const [cfg, setCfg] = useState<ImageConfig>(loadImageConfig);
+
+  const update = useCallback((next: Partial<ImageConfig>) => {
+    setCfg((prev) => {
+      const merged = { ...prev, ...next };
+      storage.setItem(STORAGE_KEYS.imageConfig, JSON.stringify(merged));
+      return merged;
+    });
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-base font-medium text-text-primary">图像</h2>
+        <p className="text-sm text-text-muted mt-1">配置图片生成能力。当前为本地偏好设置，待图片生成功能接入后自动生效。</p>
+      </div>
+
+      <div className="rounded-xl border border-border-primary bg-bg-card p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm text-text-primary">启用图片生成</div>
+            <div className="text-[11.5px] text-text-muted mt-0.5">开启后，对话中可调用图片生成技能。</div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={cfg.enabled}
+            aria-label={cfg.enabled ? "关闭图片生成" : "启用图片生成"}
+            onClick={() => update({ enabled: !cfg.enabled })}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              cfg.enabled ? "bg-accent" : "bg-bg-tertiary"
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-bg-card shadow transition-transform ${
+                cfg.enabled ? "translate-x-6" : "translate-x-1"
+              }`}
+            />
+          </button>
+        </div>
+
+        <div>
+          <label className="text-[12px] text-text-secondary">图片模型</label>
+          <input
+            value={cfg.model}
+            onChange={(e) => update({ model: e.target.value })}
+            placeholder="例如 agnes-image-2.0"
+            className="mt-1 w-full px-3 py-2 rounded-lg bg-bg-tertiary text-sm text-text-primary border border-border-secondary outline-none"
+          />
+          <p className="mt-1 text-[11px] text-text-muted">默认留空时由后端决定使用的图片模型。</p>
+        </div>
+      </div>
+    </div>
+  );
+}

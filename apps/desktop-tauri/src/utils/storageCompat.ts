@@ -144,6 +144,10 @@ export const STORAGE_KEYS = {
   archivedSessions:  "hermix.desktop.archived.sessions",
   archivedWorkspaces:"hermix.desktop.archived.workspaces",
   archivedRooms:     "hermix.desktop.archived.rooms",
+  // 本地用户档案（无登录体系，纯本机可编辑）：{displayName, avatarDataUrl, handle}
+  userProfile: "hermix.user.profile",
+  // 图片生成本地偏好（前端持久化，图片生成能力接入前作为集中配置入口）
+  imageConfig: "hermix.config.image",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

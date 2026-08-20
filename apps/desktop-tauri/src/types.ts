@@ -535,7 +535,7 @@ export interface PluginSettings {
   tool_code_exec: boolean;
 }
 
-export type NavPage = "chat" | "search" | "plugins" | "automation" | "settings" | "agents" | "groupchat" | "experts" | "analytics" | "customapps";
+export type NavPage = "chat" | "search" | "systemconfig" | "automation" | "agents" | "groupchat" | "experts" | "analytics" | "customapps";
 // ↑ "experts" is kept for backward compat — it's now an alias of "agents"
 // with initialTab="builtin". Sidebar no longer exposes it directly.
 

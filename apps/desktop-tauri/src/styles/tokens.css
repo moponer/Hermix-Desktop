@@ -46,20 +46,20 @@
   --color-text-faint: #a1a1aa;
   --color-text-on-code: #3a3a3c;
 
-  /* ── Accent (Cool Slate 偏蓝灰) ── */
-  --color-accent: #475569;
-  --color-accent-hover: #334155;
-  --color-accent-soft: rgba(71, 85, 105, 0.14);
-  --color-accent-soft-strong: rgba(71, 85, 105, 0.20);
+  /* ── Accent (中性 zinc 灰, 禁蓝紫) ── */
+  --color-accent: #3f3f46;
+  --color-accent-hover: #27272a;
+  --color-accent-soft: rgba(63, 63, 70, 0.12);
+  --color-accent-soft-strong: rgba(63, 63, 70, 0.20);
   --color-accent-on-text: #ffffff;
 
-  /* ── Link (slate, neutral per no-blue law; prose hyperlinks) ── */
-  --color-link: #475569;
-  --color-link-hover: #334155;
+  /* ── Link (中性 zinc 灰, 禁蓝紫) ── */
+  --color-link: #3f3f46;
+  --color-link-hover: #27272a;
 
-  /* ── Link-soft: 中性 slate（更淡，用于文件变更、引用等不抢重心的场景） ── */
-  --color-link-soft: #64748b;
-  --color-link-soft-hover: #475569;
+  /* ── Link-soft: 中性 zinc（更淡，用于文件变更、引用等不抢重心的场景） ── */
+  --color-link-soft: #71717a;
+  --color-link-soft-hover: #3f3f46;
 
   /* ── Semantic (必要且无蓝紫) ── */
   --color-success: #16a34a;
@@ -152,19 +152,19 @@
   --color-text-faint: #76767e;        /* was #52525b — much brighter, section headers/meta now readable */
   --color-text-on-code: #e0e0e6;      /* was #d4d4d8 — brighter code text on dark bg */
 
-  --color-accent: #cbd5e1;
-  --color-accent-hover: #e2e8f0;
-  --color-accent-soft: rgba(203, 213, 225, 0.14);
-  --color-accent-soft-strong: rgba(203, 213, 225, 0.22);
+  --color-accent: #d4d4d8;
+  --color-accent-hover: #e4e4e7;
+  --color-accent-soft: rgba(212, 212, 216, 0.12);
+  --color-accent-soft-strong: rgba(212, 212, 216, 0.22);
   --color-accent-on-text: #0f172a;
 
-  /* ── Link (dark mode) ── 设计铁律禁蓝: 用 slate 中性色代替蓝链 */
-  --color-link: #94a3b8;
-  --color-link-hover: #cbd5e1;
+  /* ── Link (暗模式) ── 设计铁律禁蓝: 用中性 zinc 灰 */
+  --color-link: #d4d4d8;
+  --color-link-hover: #e4e4e7;
 
-  /* ── Link-soft: 暗模式下中性 slate（文件变更等辅助场景，禁蓝） ── */
-  --color-link-soft: #94a3b8;        /* was #64748b — same as --color-link, now readable */
-  --color-link-soft-hover: #cbd5e1;  /* was #94a3b8 — same as --color-link-hover */
+  /* ── Link-soft: 暗模式下中性 zinc 灰（文件变更等辅助场景，禁蓝） ── */
+  --color-link-soft: #9b9ba4;        /* 中性灰, 同 text-muted */
+  --color-link-soft-hover: #d4d4d8;  /* 同 text-secondary */
 
   --color-success: #22c55e;
   --color-success-soft: rgba(34, 197, 94, 0.12);

@@ -78,7 +78,7 @@ export function BrowserTab() {
           />
           <button
             onClick={handleNavigate}
-            className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:opacity-90 transition-opacity"
+            className="px-3 py-1.5 rounded-lg bg-accent text-accent-on-text text-xs font-medium hover:opacity-90 transition-opacity"
           >
             前往
           </button>

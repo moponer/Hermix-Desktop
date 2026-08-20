@@ -29,10 +29,10 @@
   --color-text-faint:     #76767e;
   --color-text-on-code:   #e0e0e6;
 
-  --color-accent:            #cbd5e1;
-  --color-accent-hover:      #e2e8f0;
-  --color-accent-soft:       rgba(203, 213, 225, 0.14);
-  --color-accent-soft-strong: rgba(203, 213, 225, 0.22);
+  --color-accent:            #d4d4d8;
+  --color-accent-hover:      #e4e4e7;
+  --color-accent-soft:       rgba(212, 212, 216, 0.12);
+  --color-accent-soft-strong: rgba(212, 212, 216, 0.22);
   --color-accent-on-text:    #0f172a;
 
   --color-overlay-scrim:     rgba(0, 0, 0, 0.72);

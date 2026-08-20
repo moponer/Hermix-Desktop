@@ -92,9 +92,8 @@ export interface AgentTone {
 }
 
 // Allowed accent hues only — NO blue/indigo/violet/purple (they clash with
-// the message-bubble palette). amber / gold / emerald / teal / rose / magenta
-// / red (195 cyan dropped → 168 teal).
-const AGENT_HUE_PALETTE = [28, 43, 150, 175, 168, 340, 320, 0];
+// the message-bubble palette). warm oranges, golds, emeralds, teals, roses.
+const AGENT_HUE_PALETTE = [28, 43, 35, 168, 340, 320, 15, 0];
 
 /** Derive a stable accent hue from an agent id, drawn from a fixed palette so
  *  no agent ever renders in a banned blue/violet hue. */

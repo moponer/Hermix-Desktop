@@ -63,8 +63,8 @@ export function StreamingAgentRow({
             <span
               className="text-[12px] uppercase tracking-wider px-1 py-px rounded font-semibold"
               style={{
-                background: "hsla(43, 96%, 56%, 0.18)",
-                color: "hsl(33, 90%, 38%)",
+                background: "var(--color-accent-soft)",
+                color: "var(--color-accent)",
               }}
             >
               总管

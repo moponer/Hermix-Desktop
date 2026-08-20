@@ -1,8 +1,8 @@
 import {
-  MessageSquarePlus, Search, Sparkles, Clock, Settings,
-  User, ChevronDown, ChevronRight,
-  MessageSquare, Bot, Users, Plus, FolderOpen,
-  BarChart3, Boxes, MoreHorizontal, Loader2,
+  MessageSquarePlus, Search, Settings,
+  ChevronDown, ChevronRight,
+  MessageSquare, Users, Plus, FolderOpen,
+  Boxes, MoreHorizontal, Loader2,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
   Wrench,
@@ -20,6 +20,9 @@ import { storage, sessionKey } from "../utils/storageCompat";
 import { formatRelativeTime } from "../utils/time";
 import * as api from "../api";
 import { toastSuccess, toastError } from "../hooks/useToast";
+import { useUserProfile } from "../hooks/useUserProfile";
+import { UserAvatar } from "./UserAvatar";
+import { EditProfileDialog } from "./EditProfileDialog";
 
 interface SidebarProps {
   page: NavPage;
@@ -36,9 +39,6 @@ interface SidebarProps {
   /** Create a blank chat with this workspace already selected. */
   onNewChatInWorkspace?: (workspacePath: string) => void;
 }
-
-const USER = { email: "Messao@hermix" };
-
 
 /* ── Group Chat Room types (API-backed) ── */
 
@@ -59,14 +59,7 @@ const NAV_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
   { icon: Boxes,    label: "应用",    page: "customapps" },
 ];
 
-/* ── Toolbox items — 扩展/专家/自动化/统计，移入工具箱下拉 ── */
-
-const TOOLBOX_ITEMS: { icon: React.ElementType; label: string; page: NavPage }[] = [
-  { icon: Sparkles, label: "扩展",    page: "plugins" },
-  { icon: Bot,      label: "专家",    page: "agents" },
-  { icon: Clock,    label: "自动化",  page: "automation" },
-  { icon: BarChart3, label: "统计",   page: "analytics" },
-];
+// 已移除：工具箱整合进系统配置面板，保留旧名称便于搜索残留引用。
 
 /* ── Main Sidebar ── */
 
@@ -85,6 +78,9 @@ export function Sidebar({
   const { workspaces, add: addWorkspace, remove: removeWorkspace, rename: renameWorkspace } = useWorkspaces();
   const pinnedArchived = usePinnedArchived();
   const { isPinned, isArchived, togglePin, toggleArchive } = pinnedArchived;
+
+  const { profile, setProfile } = useUserProfile();
+  const [editOpen, setEditOpen] = useState(false);
 
   // Sort: pinned first, then archived last, otherwise keep original order.
   // React.useMemo on the array is enough; the hook already re-renders us
@@ -159,24 +155,7 @@ export function Sidebar({
   const [chatsCollapsed, setChatsCollapsed] = useState(false);
   const [spacesCollapsed, setSpacesCollapsed] = useState(false);
 
-  // Toolbox dropdown — click to toggle, click-outside / Esc to close.
-  // Hover does NOT close (only click-outside and Esc), matching the
-  // useSidebarMenu pattern used by row-level three-dots menus.
-  const [toolboxOpen, setToolboxOpen] = useState(false);
-  const toolboxRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!toolboxOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (toolboxRef.current && !toolboxRef.current.contains(e.target as Node)) setToolboxOpen(false);
-    };
-    const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") setToolboxOpen(false); };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onEsc);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onEsc);
-    };
-  }, [toolboxOpen]);
+  // SystemConfig 已由 系统配置 按钮直接跳转，无需 popup 状态。
 
   const toggleWsCollapsed = (id: string) => {
     setCollapsedWs((prev) => {
@@ -655,54 +634,55 @@ export function Sidebar({
       {/* Bottom: status + toolbox + user + settings */}
       <div className="px-3 pb-3 pt-2 stack-v" style={{ gap: 8, flexShrink: 0 }}>
         <BackendStatus />
-        {/* Toolbox dropdown — 扩展/专家/自动化/统计 */}
-        <div ref={toolboxRef} className="relative">
-          <button
-            type="button"
-            onClick={() => setToolboxOpen(v => !v)}
-            className={clsx("nav-item", toolboxOpen && "nav-item-active")}
-            title="工具箱"
-            aria-label="工具箱"
-            aria-expanded={toolboxOpen}
-          >
-            <Wrench size={16} />
-            <span>工具箱</span>
-            <ChevronDown size={12} className={clsx("ml-auto transition-transform", toolboxOpen && "rotate-180")} />
-          </button>
-          {toolboxOpen && (
-            <div className="absolute bottom-full left-0 right-0 mb-1 min-w-[160px] rounded-lg border border-border-primary bg-bg-elevated shadow-pop py-1 z-[1000]">
-              {TOOLBOX_ITEMS.map(({ icon: Icon, label, page: p }) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => { onPageChange(p); setToolboxOpen(false); }}
-                  className={clsx(
-                    "flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] text-left transition-colors",
-                    page === p ? "text-accent" : "text-text-primary hover:bg-bg-hover",
-                  )}
-                >
-                  <Icon size={14} />
-                  <span>{label}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="user-card">
-          <div className="user-card-avatar">
-            <User size={13} />
-          </div>
-          <span className="user-card-name" title={USER.email}>
-            {USER.email}
+        {/* 系统配置 —— 集成 工具 / 模型 / 后端 / 高级 */}
+        <button
+          type="button"
+          onClick={() => onPageChange("systemconfig")}
+          className={clsx("nav-item", page === "systemconfig" && "nav-item-active")}
+          title="系统配置"
+          aria-label="系统配置"
+        >
+          <Wrench size={16} />
+          <span>系统配置</span>
+        </button>
+        <div
+          className="user-card"
+          role="button"
+          tabIndex={0}
+          style={{ cursor: "pointer" }}
+          onClick={() => setEditOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setEditOpen(true);
+            }
+          }}
+        >
+          <UserAvatar name={profile.displayName} avatarDataUrl={profile.avatarDataUrl} size={28} />
+          <span className="user-card-name" title={profile.displayName}>
+            {profile.displayName}
           </span>
           <button
-            onClick={() => onPageChange("settings")}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPageChange("systemconfig");
+            }}
             className="user-card-action"
             title="设置"
           >
             <Settings size={13} />
           </button>
         </div>
+        {editOpen && (
+          <EditProfileDialog
+            current={profile}
+            onSave={(next) => {
+              setProfile(next);
+              setEditOpen(false);
+            }}
+            onClose={() => setEditOpen(false)}
+          />
+        )}
       </div>
       <DeleteConfirmDialog
         state={confirmState}
@@ -902,7 +882,7 @@ function RenameDialog({
             disabled={!canConfirm}
             className={clsx(
               "flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12.5px] font-bold",
-              "text-white transition-opacity",
+              "text-accent-on-text transition-opacity",
               canConfirm ? "hover:opacity-90" : "opacity-50 cursor-not-allowed",
             )}
             style={{ background: "var(--color-accent)" }}

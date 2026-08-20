@@ -2600,7 +2600,7 @@ return {
       }}
       justPatchedTodoRef={justPatchedTodoRef}
       onOpenExperts={() => setPage("experts")}
-      onOpenSettings={() => setPage("settings")}
+      onOpenSettings={() => setPage("systemconfig")}
       onOpenComputer={openComputer}
       onUndo={handleUndo}
       onRestore={handleRestore}

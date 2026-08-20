@@ -507,7 +507,7 @@ export function ModelTab() {
                   <button
                     onClick={fetchModels}
                     disabled={loading || !keyInput.trim()}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-accent hover:bg-accent-hover text-white disabled:opacity-40"
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-accent hover:bg-accent-hover text-accent-on-text disabled:opacity-40"
                   >
                     {loading ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
                     {loading ? "获取中" : "获取模型"}
@@ -529,7 +529,7 @@ export function ModelTab() {
                       const ctx = config.modelContexts?.[fullId];
                       return (
                         <div key={modelId} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
-                          <button onClick={() => toggleModel(selectedProvider.id, modelId)} className={`w-4 h-4 rounded border flex items-center justify-center ${isEnabled ? "bg-accent border-accent text-white" : "border-border-secondary hover:border-accent"}`}>
+                          <button onClick={() => toggleModel(selectedProvider.id, modelId)} className={`w-4 h-4 rounded border flex items-center justify-center ${isEnabled ? "bg-accent border-accent text-accent-on-text" : "border-border-secondary hover:border-accent"}`}>
                             {isEnabled && <Check size={10} />}
                           </button>
                           <span className={`flex-1 font-mono min-w-0 truncate ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
@@ -557,7 +557,7 @@ export function ModelTab() {
                                   <option key={o.value} value={o.value}>{o.label}</option>
                                 ))}
                               </select>
-                              <button onClick={() => setDefault(fullId)} className={`px-2 py-0.5 rounded text-[10px] ${isDefault ? "bg-accent text-white" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
+                              <button onClick={() => setDefault(fullId)} className={`px-2 py-0.5 rounded text-[10px] ${isDefault ? "bg-accent text-accent-on-text" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
                                 {isDefault ? "默认" : "设为默认"}
                               </button>
                             </>
@@ -854,7 +854,7 @@ export function CustomProviderSection({
                   const ctx = config.modelContexts?.[fullId];
                   return (
                     <div key={`${providerId}-${modelId}`} className={`flex items-center gap-1.5 px-2 py-1 rounded text-[11px] ${isDefault ? "bg-accent/10 border border-accent/30" : "hover:bg-bg-tertiary"}`}>
-                      <button onClick={() => toggleModel(providerId, modelId)} className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${isEnabled ? "bg-accent border-accent text-white" : "border-border-secondary hover:border-accent"}`}>
+                      <button onClick={() => toggleModel(providerId, modelId)} className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${isEnabled ? "bg-accent border-accent text-accent-on-text" : "border-border-secondary hover:border-accent"}`}>
                         {isEnabled && <Check size={9} />}
                       </button>
                       <span className={`flex-1 min-w-0 truncate font-mono ${isEnabled ? "text-text-primary" : "text-text-muted"}`}>{modelId}</span>
@@ -882,7 +882,7 @@ export function CustomProviderSection({
                               <option key={o.value} value={o.value}>{o.label}</option>
                             ))}
                           </select>
-                          <button onClick={() => setDefault(fullId)} className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] ${isDefault ? "bg-accent text-white" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
+                          <button onClick={() => setDefault(fullId)} className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] ${isDefault ? "bg-accent text-accent-on-text" : "border border-border-secondary text-text-muted hover:border-accent hover:text-accent"}`}>
                             {isDefault ? "默认" : "设为默认"}
                           </button>
                         </>
@@ -965,7 +965,7 @@ export function CustomProviderSection({
             <button
               onClick={handleFetchModels}
               disabled={fetching || saving || !apiUrl.trim() || !apiKey.trim()}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-accent hover:bg-accent-hover text-white disabled:opacity-40"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm bg-accent hover:bg-accent-hover text-accent-on-text disabled:opacity-40"
             >
               {fetching ? <RefreshCw size={14} className="animate-spin" /> : saving ? "保存中..." : <Check size={14} />}
               {fetching ? "获取中" : saving ? "保存中..." : "获取模型"}
@@ -977,7 +977,7 @@ export function CustomProviderSection({
         <button
           onClick={handleSave}
           disabled={saving || (!editingId && !apiKey.trim())}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm disabled:opacity-40"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-accent-on-text text-sm disabled:opacity-40"
         >
           <Save size={14} /> {saving ? "保存中..." : editingId ? "更新配置" : "保存配置"}
         </button>

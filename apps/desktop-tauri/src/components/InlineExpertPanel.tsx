@@ -214,12 +214,12 @@ function CategoryTab({
       className={clsx(
         "flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] whitespace-nowrap transition-colors",
         active
-          ? "bg-accent text-white"
+          ? "bg-accent text-accent-on-text"
           : "bg-bg-tertiary text-text-muted hover:text-text-primary",
       )}
     >
       {label}
-      <span className={clsx("text-[9.5px]", active ? "text-white/70" : "text-text-faint")}>
+      <span className={clsx("text-[9.5px]", active ? "text-accent-on-text/70" : "text-text-faint")}>
         {count}
       </span>
     </button>

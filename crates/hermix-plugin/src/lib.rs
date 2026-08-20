@@ -25,10 +25,15 @@ pub use smoke::{run_smoke_test, run_smoke_test_async, SmokeError, SmokeReport};
 pub mod api;
 pub mod hx_packager;
 pub use hx_packager::{HxShellPackager, PackageMode, HxPackError};
+pub mod docs;
+pub use docs::{init_docs, check_docs_consistency, DocsReport};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+
+use serde_json::json;
+use serde_json::Value;
 
 /// Generate an HTML shell for TypeScript/React apps.
 ///
@@ -376,6 +381,13 @@ impl PluginManager {
             manifest.clone()
         };
 
+        // 文档管理: 强制 4 个 md (设计方案/开发计划/更新迭代/README).
+        // create 后立即初始化, 已存在不覆盖 (允许用户手动编辑后保留).
+        // 兼容旧调用方未传 proposal 的情况: 用最小骨架生成空 docs.
+        if let Err(e) = init_docs(&plugin_dir, &json!({}), &final_manifest) {
+            tracing::warn!("init_docs 失败 (非致命): {e}");
+        }
+
         let entry = PluginEntry {
             manifest: final_manifest,
             index_html: index_html_path,
@@ -598,6 +610,42 @@ impl PluginManager {
     /// Get a reference to the packager.
     pub fn packager(&self) -> &Arc<HxShellPackager> {
         &self.packager
+    }
+
+    /// Directory for design proposals (ephemeral, not installed apps).
+    /// Stored as `<plugins_dir>/.proposals/<id>.json`. The dot prefix keeps
+    /// the scanner from mistaking it for a plugin directory.
+    fn proposals_dir(&self) -> PathBuf {
+        self.plugins_dir.join(".proposals")
+    }
+
+    /// Persist a design proposal (arbitrary JSON) for an app id as `pending`.
+    pub fn save_proposal(&self, id: &str, proposal: &Value) -> Result<PathBuf, PluginError> {
+        let dir = self.proposals_dir();
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{id}.json"));
+        std::fs::write(&path, serde_json::to_string_pretty(proposal)?)?;
+        Ok(path)
+    }
+
+    /// Load a saved design proposal, or `None` if absent.
+    pub fn load_proposal(&self, id: &str) -> Option<Value> {
+        let path = self.proposals_dir().join(format!("{id}.json"));
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+    }
+
+    /// Mark a pending proposal as `approved`. Errors if no proposal exists.
+    pub fn approve_proposal(&self, id: &str) -> Result<Value, PluginError> {
+        let mut proposal = self.load_proposal(id).ok_or_else(|| {
+            PluginError::NotFound(format!(
+                "未找到应用 '{id}' 的设计方案，请先调用 propose 输出结构化方案"
+            ))
+        })?;
+        proposal["status"] = json!("approved");
+        self.save_proposal(id, &proposal)?;
+        Ok(proposal)
     }
 }
 

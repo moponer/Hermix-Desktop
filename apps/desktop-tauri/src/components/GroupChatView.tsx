@@ -268,10 +268,6 @@ activeTask: room.active_task ?? null,
     setCreateRoomError((prev) => (prev ? null : prev));
   }, []);
 
-  const handleNewRoomStyleChange = useCallback((v: string) => {
-    setNewRoomStyle(v);
-  }, []);
-
   const handleDeleteRoom = useCallback(async (id: string) => {
     if (!window.confirm("确认解散该会话？这将清空全部聊天内容和产物，此操作不可撤销。"))
       return;
@@ -373,7 +369,9 @@ toastError("删除聊天室失败");
 
   return (
     <>
-      <div className="h-full flex overflow-hidden bg-bg-secondary gap-3 p-3">
+      {/* Full-height flex: left sidebar (RoomList) + right chat panel */}
+      <div className="h-full flex overflow-hidden" style={{ background: "var(--color-bg-app)" }}>
+        {/* ── Left sidebar ── */}
         <RoomList
           rooms={rooms}
           agents={agents}
@@ -382,26 +380,20 @@ toastError("删除聊天室失败");
           roomSearch={roomSearch}
           showNewRoom={showNewRoom}
           newRoomName={newRoomName}
-          newRoomStyle={newRoomStyle}
           createRoomError={createRoomError}
           creatingRoom={creatingRoom}
           onSelectRoom={setActiveRoomId}
           onDeleteRoom={handleDeleteRoom}
           onToggleNewRoom={setShowNewRoom}
           onNewRoomNameChange={handleNewRoomNameChange}
-          onNewRoomStyleChange={handleNewRoomStyleChange}
           onCreateRoom={handleCreateRoom}
           onRoomSearchChange={setRoomSearch}
         />
 
-        {/* Chat area — single card container: header + messages + input share the same background */}
+        {/* ── Right chat panel ── */}
         <div
           className="flex-1 flex flex-col min-w-0 overflow-hidden"
-          style={{
-            background: "var(--color-bg-primary)",
-            border: "1px solid var(--color-border-subtle)",
-            borderRadius: 12,
-          }}
+          style={{ background: "var(--color-bg-primary)" }}
         >
           {activeRoom && roomTone ? (
             <>
@@ -419,7 +411,7 @@ toastError("删除聊天室失败");
               />
 
               {/* Divider between header and messages */}
-              <div className="mx-6 border-t" style={{ borderColor: "var(--color-border-subtle)" }} />
+              <div className="border-t" style={{ borderColor: "var(--color-border-subtle)" }} />
 
               <MessageList
                 messages={roomMessages}
@@ -436,8 +428,11 @@ toastError("删除聊天室失败");
                 modelOverrides={activeRoom.memberModels}
               />
 
-              {/* Input — flush with container, only top divider separates it from messages */}
-              <div className="px-6 border-t" style={{ borderColor: "var(--color-border-subtle)" }}>
+              {/* Input area — bottom border + subtle bg lift */}
+              <div
+                className="px-5 py-3 border-t"
+                style={{ borderColor: "var(--color-border-subtle)", background: "var(--color-bg-secondary)" }}
+              >
                 <ChatComposerInput
                   ref={composerRef}
                   onSend={handleSendMessage}
@@ -450,20 +445,15 @@ toastError("删除聊天室失败");
                   }
                 />
                 {loading && (
-                  <div className="flex items-center gap-1.5 pb-2 text-[12px] text-text-muted">
+                  <div className="flex items-center gap-1.5 mt-2 text-[12px] text-text-muted">
                     <span className="flex gap-0.5">
-                      <span
-                        className="w-1 h-1 rounded-full bg-text-muted animate-bounce"
-                        style={{ animationDelay: "0ms" }}
-                      />
-                      <span
-                        className="w-1 h-1 rounded-full bg-text-muted animate-bounce"
-                        style={{ animationDelay: "150ms" }}
-                      />
-                      <span
-                        className="w-1 h-1 rounded-full bg-text-muted animate-bounce"
-                        style={{ animationDelay: "300ms" }}
-                      />
+                      {[0, 150, 300].map((d) => (
+                        <span
+                          key={d}
+                          className="w-1 h-1 rounded-full bg-text-muted animate-bounce"
+                          style={{ animationDelay: `${d}ms` }}
+                        />
+                      ))}
                     </span>
                     <span>成员们正在讨论…</span>
                   </div>
@@ -472,12 +462,13 @@ toastError("删除聊天室失败");
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center">
-              <div className="empty">
-                <div className="empty-icon">
-                  <Users size={24} />
+              <div className="text-center">
+                <div className="inline-flex items-center justify-center mb-3 rounded-full"
+                  style={{ width: 56, height: 56, background: "var(--color-accent-soft)" }}>
+                  <Users size={24} style={{ color: "var(--color-accent)" }} />
                 </div>
-                <p className="empty-title">选择或创建房间</p>
-                <p className="empty-desc">在左侧创建房间并邀请成员开始协作</p>
+                <p className="text-[15px] font-semibold text-text-primary mb-1">选择或创建房间</p>
+                <p className="text-[12px] text-text-muted">在左侧创建房间并邀请成员开始协作</p>
               </div>
             </div>
           )}

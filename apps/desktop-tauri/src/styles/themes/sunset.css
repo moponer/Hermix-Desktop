@@ -1,55 +1,89 @@
 /*
- * Warm Sun Hope Theme (暖阳希望)
- * 暖色调亮色主题：晨光般的暖底色 + 蜂蜜金强调色。
- * 基底 = 暖奶白（非纯白，带金色底调），文字 = 暖深棕（非纯黑）。
- * 背景为顶部散发淡金辉光的径向渐变，如晨阳从上方洒落。
+ * Warm Sun Hope Theme (暖阳希望) v2 — 修复配色过黄/过饱和
  *
- * NOTE: 非 @layer — 非层级化样式优先级高于 @theme 层级，
- * 确保 data-theme 变量覆盖 tokens.css 的 @theme 默认值。
+ * 设计目标：
+ *   · 整体是暖调但不过分黄（基底是偏灰的暖米，不是纯奶黄）
+ *   · 白色卡片保持纯白浮在微灰暖底上，层次清晰
+ *   · Accent 用低饱和蜂蜜金（非饱和橙）
+ *   · 文字用暖深棕（非纯黑），层次分明
+ *   · 禁止饱和蓝紫；金色/棕褐色系保留
  */
 :root[data-theme="sunset"] {
-  --color-bg-app:         #f0e6d4;
-  --color-bg-primary:     #fffdf8;
-  --color-bg-secondary:   #f5ede0;
-  --color-bg-tertiary:    #ede2d0;
-  --color-bg-hover:       #ece2cf;
-  --color-bg-active:      #e8dcc8;
-  --color-bg-card:        #fffdf8;
-  --color-bg-elevated:    #fffefb;
-  --color-bg-code:        #ede2d0;        /* 比卡片 #fffdf8 深 2 档 (暖奶咖): 代码区独立 */
-  --color-bg-code-header: #f5ede0;        /* 比 code 浅 1 档: header 浮起 */
-  --color-bg-code-border: #ddd0bc;
+  /* ── Surfaces — 暖米色阶（从最浅到最深）── */
+  --color-bg-app:          #e8e2d8;       /* page canvas: 灰暖米（非纯黄） */
+  --color-bg-primary:      #ffffff;       /* 主卡片：纯白浮起 */
+  --color-bg-secondary:    #f3ede3;       /* alt surface：偏灰暖米 */
+  --color-bg-tertiary:     #e5ddd0;       /* controls/chips/inline code */
+  --color-bg-hover:        #f0ebe1;       /* hover over white（微亮） */
+  --color-bg-active:       #e2dacd;       /* active/selected */
+  --color-bg-card:         #ffffff;       /* card = primary（统一入口） */
+  --color-bg-card-hover:   #f7f3ec;
+  --color-bg-elevated:     #ffffff;       /* popovers/modals：纯白 */
 
+  /* Code block：独立微灰暖底 */
+  --color-bg-code:        #e0d8cc;
+  --color-bg-code-header: #ece6db;
+  --color-bg-code-border: #ccc4b8;
+
+  /* Chat surfaces */
   --color-chat-assistant-bg: var(--color-bg-primary);
   --color-chat-tool-bg:     var(--color-bg-secondary);
 
-  --color-border-primary:   #ddd0bc;
-  --color-border-secondary: #c9b89c;
-  --color-border-subtle:    #e8ddc8;
+  /* ── Borders ── */
+  --color-border-primary:   #d4c9b8;       /* 暖灰棕主分隔 */
+  --color-border-secondary: #c4b8a5;       /* input outline */
+  --color-border-subtle:    #e4ddd2;
 
-  --color-text-primary:   #3d2e1f;
-  --color-text-secondary: #5a4530;
-  --color-text-tertiary:  #75593e;
-  --color-text-muted:     #8a6f50;
-  --color-text-faint:     #b0977a;
-  --color-text-on-code:   #4a3825;
+  /* ── Text (暖深棕，层次分明) ── */
+  --color-text-primary:   #2a1f14;       /* body: 深棕（非纯黑） */
+  --color-text-secondary: #543f2b;
+  --color-text-tertiary:  #725741;
+  --color-text-muted:     #866d52;
+  --color-text-faint:     #a68f72;
+  --color-text-on-code:   #352616;
 
-  --color-accent:            #b8702a;
-  --color-accent-hover:      #9d5e1e;
-  --color-accent-soft:       rgba(184, 112, 42, 0.14);
-  --color-accent-soft-strong: rgba(184, 112, 42, 0.24);
+  /* ── Accent — 低饱和蜂蜜金（非饱和橙）── */
+  --color-accent:            #a87230;     /* 蜂蜜金（原 #b8702a 饱和） */
+  --color-accent-hover:      #946124;
+  --color-accent-soft:       rgba(168, 114, 48, 0.12);
+  --color-accent-soft-strong: rgba(168, 114, 48, 0.20);
   --color-accent-on-text:    #ffffff;
 
-  --color-overlay-scrim:     rgba(60, 45, 25, 0.40);
-  --color-modal-outline:     rgba(60, 45, 25, 0.06);
+  /* ── Link ── */
+  --color-link: #a87230;
+  --color-link-hover: #946124;
+  --color-link-soft: #866d52;
+  --color-link-soft-hover: #a87230;
 
-  /* 晨阳辉光：顶部散发淡金径向渐变，向下渐隐为暖奶白 */
-  --theme-bg-app: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 800' preserveAspectRatio='xMidYMid slice'%3E%3Cdefs%3E%3CradialGradient id='g' cx='50%25' cy='0%25' r='95%25'%3E%3Cstop offset='0%25' stop-color='%23ffe9c0' stop-opacity='0.85'/%3E%3Cstop offset='35%25' stop-color='%23f5e6cc' stop-opacity='0.35'/%3E%3Cstop offset='100%25' stop-color='%23f0e6d4' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='1200' height='800' fill='%23f0e6d4'/%3E%3Crect width='1200' height='800' fill='url(%23g)'/%3E%3C/svg%3E");
+  /* ── Semantic ── */
+  --color-success: #4a7c3a;
+  --color-success-soft: rgba(74, 124, 58, 0.14);
+  --color-error: #b5423b;
+  --color-error-soft: rgba(181, 66, 59, 0.14);
+  --color-warning: #c27a28;
+  --color-warning-soft: rgba(194, 122, 40, 0.16);
+  --color-text-warning: #c27a28;
+  --color-info: #8b6f4e;
+  --color-info-soft: rgba(139, 111, 78, 0.14);
 
-  --theme-bg-sidebar:  var(--color-bg-secondary);
-  /* 标题栏：暖金奶油，明显区别于纯白，呼应暖阳主题（原值 var(--color-bg-elevated)=#fffefb 接近纯白） */
-  --theme-bg-titlebar: #f8eed6;
-  /* 对话区底色：暖奶咖，明显区别于纯白（原被 ChatView 的 var(--color-bg-primary)=#fffdf8 盖成白）。
-     其他主题未在 themes/*.css 定义此变量，ChatView 回退到 var(--color-bg-primary)，无回归。 */
-  --theme-bg-chat:     #f4e8d2;
+  /* ── Buttons ── */
+  --color-btn-primary-bg: #a87230;
+  --color-btn-primary-text: #ffffff;
+  --color-btn-primary-hover: #946124;
+  --color-btn-secondary-bg: #e8e0d4;
+  --color-btn-secondary-text: #543f2b;
+  --color-btn-secondary-hover: #ddd4c6;
+  --color-btn-ghost-bg: transparent;
+  --color-btn-ghost-text: #725741;
+  --color-btn-ghost-hover: rgba(168, 114, 48, 0.08);
+
+  /* ── Overlay ── */
+  --color-overlay-scrim:   rgba(42, 31, 20, 0.38);
+  --color-modal-outline:   rgba(42, 31, 20, 0.06);
+
+  /* ── Theme vars ── */
+  --theme-bg-app:          var(--color-bg-app);
+  --theme-bg-sidebar:      var(--color-bg-secondary);
+  --theme-bg-titlebar:     #ede6da;
+  --theme-bg-chat:         var(--color-bg-primary);
 }

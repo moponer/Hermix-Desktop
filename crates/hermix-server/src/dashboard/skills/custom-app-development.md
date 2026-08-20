@@ -1,13 +1,12 @@
 ---
 name: custom-app-development
-version: 15
+version: 16
 description: >
   自定义应用开发助手。当用户要求创建/开发一个桌面应用、桌面工具、独立程序、窗口应用、软件、小软件，
   或"打包成 exe"时使用；也用于**用户报告已安装自定义应用报错/打不开/崩溃**的修复场景。
-  通过 custom_app_manager 工具创建、更新、打包、运行(dev)、校验、冒烟用户自定义桌面应用。
+  通过 custom_app_manager 工具创建、更新、打包、运行(dev)、校验、冒烟、文档管理(read_doc/update_doc/log_iteration/search_iterations)用户自定义桌面应用。
   基于 hx-shell 运行时（wry/WebView2，单文件 exe），LLM 写前端（TS/React/纯 HTML），Hermix 打包成单文件 exe 分发。
-  用户电脑零工具链。务必在以下场景使用：用户说"做个应用/开发一个工具/写个小软件/打包成 exe"，
-  或描述需独立窗口运行的功能，或报告"XXX 应用报错/打不开/加载失败 (os error 3)"。
+  用户电脑零工具链。每个应用在 docs/ 下强制 4 个 md 作为源码的一部分。
 tags:
   - custom-app
   - desktop
@@ -24,6 +23,7 @@ tags:
   - 自定义应用
   - 桌面应用
   - 软件开发
+  - docs-management
 ---
 
 # Custom App Development（基于 hx-shell）
@@ -39,27 +39,101 @@ tags:
 ## Core Concepts
 
 - **运行时 = hx-shell**：`wry 0.55.1` + WebView2，单文件 exe ≈1MB，用户电脑零工具链（无 Node/Rust）。打包 = 把 HTML/JS 作为 PE 资源节(RT_RCDATA)嵌入 hx-shell.exe，WebView2 即跑，**无尾部注入、无结构型 Defender 误报**。
-- **应用模型** `HERMIX_HOME/custom-apps/<id>/`：`manifest.json` + `index.html`（纯 HTML 模式）或 `src/main.tsx`（TS/React 模式，Vite 构建成单文件 index.html）+ `dist/<id>.exe`（打包产物）。`dist/` 是纯构建产物，**禁止手改**。
-- **manifest 权限**：必须含 `permissions` 数组，validate L2 做"权限一致性"卡——HTML/TSX 用到的每个 `hx.*` API 都要有对应权限，否则 `ok=false`。有效值：`fs-read`/`fs-write`/`exec`/`dialog`/`app`/`clipboard`/`net`（最简全声明含 `app` 因 getInfo 强制）。
-- **两种模式**：纯 HTML（`index_html`）/ Vue·React·TS（`app_source`+`index_html`）。Vite 必须 `inlineDynamicImports:true` + 超大 `assetsInlineLimit` 以单文件输出。
+- **应用模型** `HERMIX_HOME/custom-apps/<id>/`：
+  ```
+  <id>/
+  ├── manifest.json       # 应用清单
+  ├── index.html          # 纯 HTML 模式入口
+  │   (或)
+  ├── src/main.tsx        # TS/React 模式入口
+  │   src/components/...  # 额外组件
+  ├── docs/               # ★ 4 个 md 强制 (源码一部分, 与代码同源)
+  │   ├── 设计方案.md       # propose 输出
+  │   ├── 开发计划进度.md   # agent 维护 checkbox
+  │   ├── 更新迭代.md       # append-only, 每条【问题/根因/修复/验证】4 节
+  │   └── README.md         # 用户视角
+  └── dist/                # 构建产物, 禁止手改
+      ├── <id>.dev.html    # run 测试版
+      └── <id>.exe          # package 单文件
+  ```
+- **manifest 权限**：必须含 `permissions` 数组，validate L2 做"权限一致性"卡——HTML/TSX 用到的每个 `hx.*` API 都要有对应权限，否则 `ok=false`。有效值：`fs-read`/`fs-write`/`exec`/`dialog`/`app`/`clipboard`/`net`。
+- **两种模式**：纯 HTML（`index_html`）/ Vue·React·TS（`app_source`+`index_html`）。
 - **绑定 API**：`window.hx.*` 经 WebView2 原生桥 `postMessage`→Rust `ipc_handler`，**无 CORS 限制**。所有方法返回 `{ok,data?,err?}`。
-- **三道强制闸门**：①设计阶段（先出明暗两套配色+布局基线，用户确认再写码）②技术选型与复用检索（先搜 OSS，GitHub 不可达切 Gitee/GitCode）③代码审查与验证（对照 code-review.md + 跑 smoke）。
+- **三道强制闸门**：①设计阶段（propose→approve→create 硬约束）②复用检索（先搜 OSS）③代码审查与验证（validate→smoke + 对照 code-review.md）。
+
+### ★ 设计闸门 = 工具级硬约束
+
+新建应用必须先 `custom_app_manager` **`propose`** 输出结构化设计方案 → 展示给用户 → 用户确认后 **`approve`** → 才能 **`create`**。**没有 `approve` 过的方案，`create` 直接拒绝**（返回"缺少已批准的设计方案"）。已安装应用的 `update` 迭代不受此闸门限制。
+
+### ★ 文档管理 = 源码的一部分（强制）
+
+每个应用必须自带 4 个 md 作为源码的一部分，落盘到 `<custom-apps>/<id>/docs/`：
+
+| 文件 | 角色 | 谁写 | 写入方式 |
+|---|---|---|---|
+| `设计方案.md` | propose 输出的结构化方案 + 用户确认状态 | agent | propose / approve / create 时自动渲染 |
+| `开发计划进度.md` | 阶段任务 checkbox + 下一步行动 | agent | update 时 `plan_note` 自动 append, 或 update_doc |
+| `更新迭代.md` | append-only 历史, 每条【问题/根因/修复/验证】4 节 | agent | log_iteration / update 自动 append |
+| `README.md` | 用户视角快速上手 | agent | update_doc |
+
+**强制流程**：
+1. **新建**：`list` 查重 → `propose` → 用户确认 → `approve` → `create` (自动 init 4 个 md)
+2. **迭代/修复**：
+   - ① **`search_iterations`** query=<关键词> 查 历史 bug, **避免重复触发**
+   - ② **`read_doc`** 设计方案.md + 开发计划进度.md 了解规划
+   - ③ `update` 或 `patch` 改代码 (**改代码类 update 必须带 `iteration_note`** {问题/根因/修复/验证}, 工具自动 append 到 更新迭代.md)
+   - ④ `validate` 复验 (含 L4 文档一致性: 4 个 md 齐全 + 更新迭代每条 4 节)
+   - ⑤ `run` 测试版预览
+   - ⑥ `update_doc` 把 plan_note/新状态 同步到 开发计划进度.md
+3. **打包**：`package` (sidecar)
+4. **交付**：`update_doc` 补全 README.md 给用户看
+
+**注意**：
+- `设计方案.md` 不允许直接 `update_doc`（强制走 propose/approve 流程）
+- 改代码类 `update` 必须带 `iteration_note`（**工具拒绝**缺它的 update）
+- 修 bug 前必须 `search_iterations`（避免重复触发老 fix）
+
+### 设计提案模板（`propose` 的 `proposal` 必含以下章节，缺一不可）
+
+- **① 名称**：app 名称、id（字母数字-_）、category、icon（emoji 或 SVG 名或 tile_color）
+- **② 功能**：功能范围、核心用例、数据存哪（hx 写文件的路径/目录约定）、是否需要联网
+- **③ 界面布局**：明暗两套配色 token（浅色优先、中性灰、禁蓝紫）、整体布局基线、V7 无边框壳必须自实现标题栏（拖动 + 最小化/最大化/关闭）
+- **④ 交互效果**：主要交互流、涉及哪些 `hx.*` API（getInfo/readFile/writeFile/exec/openDialog/win.* 等）、关键反馈/状态文案
+- **⑤ 自定义应用专属（必须拍板）**：
+  - 运行模式：纯 HTML（`index_html`）还是 TS/React（`app_source`）
+  - `manifest.permissions`：声明用到的权限（fs-read/fs-write/exec/dialog/app/clipboard/net），须与所用 hx API 一致（validate L2 校验）
+  - 窗口配置：`window_config` 的 width/height/resizable/title
+  - 主题约束：浅色优先、禁高饱和蓝紫、禁 emoji（界面/按钮/manifest icon）
+  - 禁止项自查：禁 `<input type=file>`（用 openDialog/saveDialog）、禁 CDN 外链、禁 Tauri/Node API、禁 `fetch('app://')`
+  - 复用来源：是否复用 OSS（项目/版本/License）
 
 ## Practical Guidance
 
-**agent 开发流（一次性到位交付）**：
+### agent 开发流（一次性到位交付）
+
 1. 识别为自定义应用 → 想清数据存哪/用哪些 `hx.*` API（先 `getInfo()` 取可用清单）/功能气质定配色
-2. **设计阶段闸门**：按功能设计明暗两套 token + 布局基线，发设计稿等用户确认；未确认禁写码
-3. **复用检索闸门**：能力点先搜 GitHub（MIT/Apache/BSD），不可达切 Gitee/GitCode；记录 项目/版本/License/嵌入方式；无合适才自研
-4. 写 `manifest.json`（`long_description` 必填：功能/使用/更新/分发方法）
-5. 写码（`index_html` 或 `app_source` TSX），严格按设计 token + 前端默认标准（浅色/中性灰/禁蓝紫/禁 emoji/禁 CDN/必带标题栏/必含主题切换）
-6. **先 `custom_app_manager.list` 查重** → 已有同类用 `update` 迭代，否则 `create`
-7. `validate` 循环到 `ok=true`（L0 manifest/L1 HTML/L2 权限/L3 前端质量），不得带 error 交付
-8. `run` 测试版即时预览（`hx-shell --html` 加载 dev.html）；要确认无报错调 `smoke`
+2. **`list`** 查重：已有同类应用就 `update` 迭代，否则走下面新建流
+3. **设计闸门（工具强制）**：调 `custom_app_manager` **`propose`** 输出 ① 名称 ② 功能 ③ 界面布局 ④ 交互效果 ⑤ 自定义应用专属 → 把方案展示给用户 → 等用户确认 → 调 **`approve`** 标记 approved → 之后 **`create`** 才放行（缺 approved 方案 create 会拒）。create 后 docs/ 4 个 md 自动生成。
+4. **复用检索闸门**：能力点先搜 GitHub（MIT/Apache/BSD），不可达切 Gitee/GitCode；记录 项目/版本/License/嵌入方式；无合适才自研
+5. **写码**（`index_html` 或 `app_source` TSX），严格按设计 token + 前端默认标准（浅色/中性灰/禁蓝紫/禁 emoji/禁 CDN/必带标题栏/必含主题切换）
+6. `validate` 循环到 `ok=true`（L0 manifest/L1 HTML/L2 权限/L3 前端质量/L4 文档一致性），不得带 error 交付
+7. **`run`** 测试版即时预览（`hx-shell --html` 加载 dev.html）；要确认无报错调 `smoke`
+8. **更新文档**：每次改动后 → `update_doc` 把状态写进 开发计划进度.md；bug 修复后 → `log_iteration` 把【问题/根因/修复/验证】追加到 更新迭代.md；交付前 → `update_doc` README.md 给最终用户看
 9. **代码审查闸门**：对照 code-review.md + frontend-architecture.md，跑 smoke 确认无运行时/控制台报错，提示友好
 10. 交付说明：去哪运行（run 测试版 / package 出 exe）、如何打包、如何回来 `update` 继续
 
-**关键 `hx.*` API（常用）**：
+### 修复/迭代流程（强制顺序）
+
+1. **`action=search_iterations` query=<关键词>** 查 更新迭代.md 历史 → 命中则看清楚上次怎么修的, 避免重复触发
+2. **`action=read_doc` doc=设计方案 / doc=开发计划进度** 了解当前规划
+3. **`action=update`** 改代码, 必须带 `iteration_note={问题, 根因, 修复, 验证}` → 工具自动 append 到 更新迭代.md
+   - 或 **`action=patch`** 做手术式小修 → 改完再调 log_iteration 补记录
+4. **`action=update_doc` doc=开发计划进度** 用 checkbox 推进度; 或 `update` 时带 `plan_note=...` 让工具自动 append
+5. **`action=validate`** 复验 (含 L4 文档一致性)
+6. **`action=run`** 测试版预览
+
+### 关键 `hx.*` API（常用）
+
 | API | 权限 | 说明 |
 |---|---|---|
 | `getInfo()` | app | 取运行时可用 API 清单（强制第一步） |
@@ -111,29 +185,34 @@ $('save').onclick=async()=>{const r=await window.hx.writeFile('output.txt',$('in
 
 ## Gotchas
 
-- **【致命】禁止 `<input type=file>`/`webkitdirectory`/手输路径选文件**：触发 WebView2"上传"确认弹窗，与桌面定位不搭。永远用 `openDialog`/`saveDialog` 弹 Windows 原生框。
-- **【致命】禁止 `fetch('app://...')`**：CORS 拒绝。一律 `window.hx.*`（走 `chrome.webview.postMessage`）。
-- **【致命】不要用 Tauri API**（`convertFileSrc`/`shell_*`）**或 Node API**（`path`/`fs`/`child_process`）：hx-shell 里不存在，只有 `window.hx.*`。
+- **【致命】禁止 `<input type=file>`/`webkitdirectory`/手输路径选文件**：触发 WebView2"上传"确认弹窗。永远用 `openDialog`/`saveDialog`。
+- **【致命】禁止 `fetch('app://...')`**：CORS 拒绝。一律 `window.hx.*`。
+- **【致命】不要用 Tauri API**（`convertFileSrc`/`shell_*`）**或 Node API**（`path`/`fs`/`child_process`）：hx-shell 里不存在。
 - **【致命】禁止 CDN 外链**（unpkg/jsdelivr）：Vue/React/图标全部内联或 Vite 打包内联，离线可用。
 - **【致命】禁止 emoji**（界面/按钮/状态/manifest icon）：图标用内联 SVG（lucide 风格 24×24 `stroke=currentColor`）。
-- **【致命】查/改应用只走 `custom_app_manager`**：绝不自己拼 `C:/Users/*/hermix/custom-apps` 等路径去 `ls`/`read_file`（HERMIX_HOME 运行时解析，硬猜必错）。
-- **【致命】create 前必须 `list` 查重**：同类应用（如"本地音乐"="音乐播放器"）已存在就 `update`，绝不再建第二个。
-- **【致命】V7 壳无原生标题栏**：`decorations:false`，HTML 顶部必须自实现标题栏（拖动区+最小化/最大化/关闭），否则用户无法移动/关闭。
-- **禁止手改 `dist/`**：`dist/<id>.exe` 与 `<id>.dev.html` 每次 `run`/`package` 从源码重建覆盖，改源码后必须重新 `run`/`package`。
-- **默认浅色**：不要上来写深色；墨绿 `#4b7a5e` 仅作未做功能化配色时的回退，禁止所有应用统一用它；中性灰优先，禁高饱和蓝紫。
+- **【致命】查/改应用只走 `custom_app_manager`**：绝不自己拼 `C:/Users/*/hermix/custom-apps` 等路径。
+- **【致命】create 前必须 `list` 查重**：同类应用已存在就 `update`，绝不再建第二个。
+- **【致命】V7 壳无原生标题栏**：`decorations:false`，HTML 顶部必须自实现标题栏，否则用户无法移动/关闭。
+- **【致命】改代码类 update 必须带 `iteration_note`**：工具拒绝缺它的 update。
+- **【致命】修 bug 前必须 `search_iterations`**：避免重复触发历史 fix。
+- **【致命】设计方案.md 不允许 update_doc**：改方案必须重新 propose + approve。
+- **禁止手改 `dist/`**：`dist/<id>.exe` 与 `<id>.dev.html` 每次 `run`/`package` 从源码重建覆盖。
+- **默认浅色**：不要上来写深色；墨绿 `#4b7a5e` 仅作未做功能化配色时的回退，禁止所有应用统一用它。
 - **二进制用 `fileUrl`**：`readFile` 只读文本，MP3/图片/视频用 `hx.fileUrl(path)` 生成 URL。
 
 ## Integration
 
-- **唯一入口工具 `custom_app_manager`**：`list`/`get`/`create`/`update`/`package`/`run`/`validate`/`smoke`/`delete`。所有查/改/打包/运行都走它，落盘到 `hermix_home()/custom-apps/<id>/`（数据目录，与安装位置/源码无关）。
-- **`@app` 快捷入口**：聊天 `@app 创建新应用` → 输入框预填 `@app 创建新应用 应用要求：<需求>`，直接进需求梳理，不要当成查已有应用。
-- **三闸门协同**：设计阶段 → 复用检索 → 代码审查，三者都过才交付；审查方法论见同目录 `code-review.md`，前端质量基线见 `frontend-architecture.md`。
+- **唯一入口工具 `custom_app_manager`**：所有查/改/打包/运行/文档管理都走它。落盘到 `hermix_home()/custom-apps/<id>/`。
+- **完整 action 列表**：`propose`(出方案) / `approve`(确认) / `create`(落地) / `update`(改代码, 强制带 iteration_note) / `list` / `get` / `delete` / `package` / `run`(测试版) / `validate`(含 L4 文档一致性) / `smoke`(运行时) / `patch`(手术式替换) / `read_doc` / `update_doc`(方案除外) / `log_iteration` / `search_iterations`。
+- **`@app` 快捷入口**：聊天 `@app 创建新应用` → 输入框预填 `@app 创建新应用 应用要求：<需求>`。
+- **三闸门协同**：设计阶段 → 复用检索 → 代码审查；本文档已升级为文档管理强制机制（4 个 md 与代码同源）。
 - **与对话流关系**：本 skill 在用户提"应用/工具/软件"诉求或报告已装应用报错时自动加载；运行时若 `getInfo()` 返回 API 与本文不符，以 `getInfo()` 为准（本文档可能滞后）。
 
 ## References
 
 - 同目录 `code-review.md`：交付前审查清单（无低级错误/死代码/权限一致/离线可用/设计落实）
 - 同目录 `frontend-architecture.md`：前端质量基线（布局层级/控件尺寸/响应式）
+- 同目录 `code-craftsmanship.md`：通用代码精炼标准（YAGNI/标准库/原生平台/现有依赖/单行/最小实现 + 不重复造轮子），适用于 hermix 与 workbuddy
 - 图标库：内置 2007 个 Lucide SVG，清单见 `apps/desktop-tauri/src-tauri/resources/icons/`（文件名去 `.svg` 即 `manifest.icon` 名，如 `music`/`settings`/`folder`）
-- **`tile_color`（可选）**：`#RRGGBB` 或 `#RRGGBBAA`，给列表卡片/详情头部/窗口标题栏/打包 exe 任务栏图标加一个**纯色圆角背景块 + 白色字形**（无渐变）。三处同源（`iconResolver` + `icon_library::generate_tiled_icon_*`），视觉一致。规则：`icon_file`/`icon_data`（用户自备 PNG logo）或 `icon` 为 emoji 时**跳过**背景（与前端逻辑一致）；非法值被 `validate_tile_color` 拒绝。不填则列表/详情回退灰底，exe 走 hash 调色板兜底。
+- **`tile_color`（可选）**：`#RRGGBB` 或 `#RRGGBBAA`，给列表卡片/详情头部/窗口标题栏/打包 exe 任务栏图标加一个**纯色圆角背景块 + 白色字形**（无渐变）。规则：`icon_file`/`icon_data` 或 `icon` 为 emoji 时**跳过**背景；非法值被 `validate_tile_color` 拒绝。
 - hx-shell API 真相源：`window.hx.getInfo()`（运行时返回完整可用 API 清单，本文档可能滞后）

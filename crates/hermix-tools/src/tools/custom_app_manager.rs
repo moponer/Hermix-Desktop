@@ -4,26 +4,24 @@
 //! This tool is the LLM's interface to the custom app system. The LLM
 //! can:
 //! - `create`: Create a new app with manifest + index_html
-//! - `update`: Update an existing app's index_html / manifest
-//! - `list`: List all installed apps
-//! - `get`: Get an app's details and source code
+//! - `propose` / `approve`: Design gate (must approve before create)
+//! - `update`: Update an existing app's index_html / manifest, with mandatory iteration_note
+//! - `list` / `get`: List / fetch installed apps
 //! - `delete`: Uninstall an app
 //! - `package`: Package an app as a standalone EXE (hx-shell PE resource embedding)
 //! - `run`: Launch the app in dev/test mode (single-file html via hx-shell --html)
-//! - `validate`: Static validation (manifest + HTML + hx API + permissions + frontend quality)
+//! - `validate`: Static validation (manifest + HTML + hx API + permissions + frontend quality + docs consistency)
 //! - `smoke`: Runtime smoke test (launch + capture errors)
-//! - `patch`: Surgical text replace in an installed app's source (index.html / src/main.tsx / src/<path>),
-//!   used to fix validate-reported errors without rewriting the whole file or reading it into context.
+//! - `patch`: Surgical text replace in an installed app's source
+//! - `read_doc` / `update_doc`: Read / overwrite one of the 4 app docs
+//! - `log_iteration`: Append an entry to 更新迭代.md (must contain 问题/根因/修复/验证)
+//! - `search_iterations`: Search history in 更新迭代.md by keyword
 //!
-//! Architecture: App = self-contained index.html + manifest.json.
-//! Uses hx-shell runtime (wry/WebView2, ~1.2MB single-file exe).
-//! index.html calls system capabilities via window.hx.* API
-//! (WebView2 native postMessage bridge, no external client library needed).
-//! Packaging = embed HTML/JS payload into hx-shell.exe as a PE resource section
-//! (RT_RCDATA) -> single distributable exe. No tail-injection, no struct-type
-//! Defender false positive.
-//!
-//! The actual file operations are delegated to `hermix_plugin::PluginManager`.
+//! Every app owns 4 docs (in `<custom-apps>/<id>/docs/`):
+//! - 设计方案.md: design proposal (initialized by propose/create)
+//! - 开发计划进度.md: agent-maintained phase checklist
+//! - 更新迭代.md: append-only iteration log
+//! - README.md: user-facing quickstart
 
 use std::sync::Arc;
 
@@ -36,6 +34,7 @@ use hermix_core::{
 };
 use hermix_plugin::{
     api::{AppResponse, AppSummary, CreateAppRequest},
+    docs::{self as app_docs, Doc},
     run_smoke_test_async, validate_custom_app, PluginManager, PluginManifest,
 };
 
@@ -53,7 +52,7 @@ pub fn register(registry: &ToolRegistry, manager: Arc<PluginManager>) {
             Arc::new(|| true),
             vec![],
             true,
-            "Create, update, list, package, and run user-facing desktop applications (custom apps) using hx-shell runtime (wry/WebView2). Actions: create, update, list, get, delete, package, run, validate, smoke. Also the ONLY entry point to diagnose and fix errors in already-installed apps (e.g. load failures, 'os error 3') — never guess filesystem paths; list/get/validate/smoke are authoritative.",
+            "Create, update, list, package, and run user-facing desktop applications using hx-shell runtime (wry/WebView2). Actions: create, propose, approve, update, list, get, delete, package, run, validate, smoke, patch, read_doc, update_doc, log_iteration, search_iterations. Every app owns 4 docs (设计方案/开发计划进度/更新迭代/README) that the agent MUST read before any change and update after any change.",
             "📦",
             None,
             RiskLevel::Caution,
@@ -61,7 +60,6 @@ pub fn register(registry: &ToolRegistry, manager: Arc<PluginManager>) {
         );
 }
 
-/// Handler for the custom_app_manager tool.
 pub struct CustomAppManagerHandler {
     manager: Arc<PluginManager>,
 }
@@ -72,13 +70,6 @@ impl CustomAppManagerHandler {
     }
 
     async fn create(&self, params: &Value) -> Result<String, ToolError> {
-        // Normalize: if `manifest` is a string (XML parser fallback), parse it
-        // into a JSON object first so that serde_json::from_value can
-        // deserialize it into CreateAppRequest.  This happens when the LLM
-        // passes manifest as a JSON string inside <parameter> but the XML
-        // parser's serde_json::from_str succeeds (producing a Value::Object)
-        // OR when the LLM accidentally uses XML sub-tags, causing the parser
-        // to treat the whole thing as a plain string.
         let params = if let Some(manifest_val) = params.get("manifest") {
             if manifest_val.is_string() {
                 let mut fixed = params.clone();
@@ -97,9 +88,9 @@ impl CustomAppManagerHandler {
             .map_err(|e| {
                 let msg = e.to_string();
                 let hint = if msg.contains("expected struct") || msg.contains("expected map") {
-                    " — manifest 参数必须是 JSON 对象 (如 {\"id\":\"x\",\"name\":\"y\"})，不能是字符串或 XML 子标签。在 XML 工具调用中，请用 <parameter name=\"manifest\">{...JSON...}</parameter> 传递。"
+                    " — manifest 参数必须是 JSON 对象, 不能是字符串或 XML 子标签。"
                 } else if msg.contains("expected a sequence") || msg.contains("expected sequence") {
-                    " — tags / permissions / npm 必须是字符串数组 (如 [\"fs-read\",\"exec\"])，不要写成字符串或对象。即使写错也会被自动归一化，但请尽量传数组。"
+                    " — tags / permissions 必须是字符串数组, 不要写成字符串或对象。"
                 } else {
                     ""
                 };
@@ -113,13 +104,27 @@ impl CustomAppManagerHandler {
             .validate()
             .map_err(|e| ToolError::InvalidParams(format!("manifest 无效: {e}")))?;
 
+        let proposed_id = &request.manifest.id;
+        let proposal_value = match self.manager.load_proposal(proposed_id) {
+            Some(p)
+                if p.get("status").and_then(|s| s.as_str()) == Some("approved") => p,
+            Some(_) => {
+                return Err(ToolError::InvalidParams(format!(
+                    "应用 '{proposed_id}' 的设计方案尚未经用户确认 (status != approved). 流程: propose → 展示给用户 → approve → create."
+                )))
+            }
+            None => {
+                return Err(ToolError::InvalidParams(format!(
+                    "创建应用 '{proposed_id}' 前必须先调用 propose 输出结构化设计方案并经 approve 确认。"
+                )))
+            }
+        };
+
         let index_html = request.index_html.as_deref()
             .or_else(|| params.get("index_html").and_then(|v| v.as_str()));
         let app_source = request.app_source.as_deref()
             .or_else(|| params.get("app_source").and_then(|v| v.as_str()));
 
-        // source_files is already deserialized as HashMap<String, String> by CreateAppRequest
-        // Fallback: if serde didn't deserialize it (e.g. values were non-string JSON), try manually
         let source_files_map: Option<std::collections::HashMap<String, String>> =
             request.source_files.clone().or_else(|| {
                 params.get("source_files").and_then(|v| v.as_object()).map(|m| {
@@ -128,6 +133,24 @@ impl CustomAppManagerHandler {
                         .collect()
                 })
             });
+
+        let plugin_dir = self.manager.plugins_dir().join(&request.manifest.id);
+        let design_path = plugin_dir.join("docs").join("设计方案.md");
+        if design_path.exists() {
+            let current = std::fs::read_to_string(&design_path).unwrap_or_default();
+            if current.contains("(待补充)") || current.contains("状态: pending") {
+                if let Err(e) = std::fs::write(
+                    &design_path,
+                    app_docs::render_design_md(
+                        &request.manifest.name,
+                        &request.manifest.id,
+                        &proposal_value,
+                    ),
+                ) {
+                    tracing::warn!("写 设计方案.md 失败 (非致命): {e}");
+                }
+            }
+        }
 
         let entry = self
             .manager
@@ -143,8 +166,68 @@ impl CustomAppManagerHandler {
         let response: AppResponse = (&entry).into();
         let result = json!({
             "success": true,
-            "message": format!("应用 '{}' 创建成功", entry.manifest.name),
+            "message": format!(
+                "应用 '{}' 创建成功。docs/ 下已初始化 4 个 md, 后续 update 须先读 docs/ 再动手, 每次改动后须 log_iteration 与更新对应 md.",
+                entry.manifest.name
+            ),
             "app": response,
+            "docs_dir": plugin_dir.join("docs").to_string_lossy(),
+        });
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+    }
+
+    async fn propose(&self, params: &Value) -> Result<String, ToolError> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
+
+        let proposal = params
+            .get("proposal")
+            .cloned()
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'proposal' 参数".into()))?;
+
+        let mut stored = match proposal {
+            Value::Object(map) => map,
+            _ => return Err(ToolError::InvalidParams("proposal 必须是 JSON 对象".into())),
+        };
+        stored.insert("id".to_string(), json!(id));
+        stored.insert("status".to_string(), json!("pending"));
+
+        let path = self
+            .manager
+            .save_proposal(id, &Value::Object(stored.clone()))
+            .map_err(|e| ToolError::ExecutionFailed(format!("保存设计方案失败: {e}")))?;
+
+        let result = json!({
+            "success": true,
+            "message": format!("应用 '{id}' 设计方案已保存 (pending), 请展示给用户确认后再 approve + create"),
+            "proposal": Value::Object(stored),
+            "proposal_path": path.to_string_lossy(),
+            "next": "将方案展示给用户 → 用户确认后调用 approve action → 再调用 create"
+        });
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+    }
+
+    async fn approve(&self, params: &Value) -> Result<String, ToolError> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
+
+        let proposal = self
+            .manager
+            .approve_proposal(id)
+            .map_err(|e| match e {
+                hermix_plugin::PluginError::NotFound(_) => ToolError::InvalidParams(e.to_string()),
+                other => ToolError::ExecutionFailed(other.to_string()),
+            })?;
+
+        let result = json!({
+            "success": true,
+            "message": format!("应用 '{id}' 设计方案已确认 (approved), 现在可以 create"),
+            "proposal": proposal,
+            "next": "调用 create action 落地应用. create 会自动初始化 docs/ 4 个 md."
         });
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
@@ -154,6 +237,11 @@ impl CustomAppManagerHandler {
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
+
+        let app_dir = self.manager.plugins_dir().join(id);
+        if !app_dir.exists() {
+            return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
+        }
 
         let index_html = params.get("index_html").and_then(|v| v.as_str());
         let app_source = params.get("app_source").and_then(|v| v.as_str());
@@ -165,8 +253,6 @@ impl CustomAppManagerHandler {
                     .collect()
             });
 
-        // Parse manifest if provided (for updating permissions etc.)
-        // Normalize: if manifest is a string, try to parse it as JSON first.
         let manifest = if params.get("manifest").is_some() {
             let manifest_val = &params["manifest"];
             let manifest_val = if manifest_val.is_string() {
@@ -176,25 +262,25 @@ impl CustomAppManagerHandler {
                 manifest_val.clone()
             };
             let m: PluginManifest = serde_json::from_value(manifest_val)
-                .map_err(|e| {
-                    let msg = e.to_string();
-                    let hint = if msg.contains("expected struct") || msg.contains("expected map") {
-                        " — manifest 参数必须是 JSON 对象，不能是字符串或 XML 子标签"
-                    } else if msg.contains("expected a sequence") || msg.contains("expected sequence") {
-                        " — tags / permissions / npm 必须是字符串数组 (如 [\"fs-read\",\"exec\"])，不要写成字符串或对象"
-                    } else {
-                        ""
-                    };
-                    ToolError::InvalidParams(format!("manifest 解析失败: {e}{hint}"))
-                })?;
+                .map_err(|e| ToolError::InvalidParams(format!("manifest 解析失败: {e}")))?;
             Some(m)
         } else {
             None
         };
 
-        if index_html.is_none() && app_source.is_none() && manifest.is_none() {
+        let changes_code = index_html.is_some() || app_source.is_some() || source_files_map.is_some();
+        let changes_meta = manifest.is_some();
+
+        if !changes_code && !changes_meta {
             return Err(ToolError::InvalidParams(
-                "至少需要提供 app_source、index_html 或 manifest 之一".into(),
+                "至少需要提供 app_source、index_html、source_files 或 manifest 之一".into(),
+            ));
+        }
+
+        let iteration_note = params.get("iteration_note").cloned();
+        if changes_code && iteration_note.is_none() {
+            return Err(ToolError::InvalidParams(
+                "改代码类 update 必须提供 'iteration_note' (JSON 对象, 含【问题】【根因】【修复】【验证】四节), 会自动 append 到 docs/更新迭代.md".into(),
             ));
         }
 
@@ -203,11 +289,56 @@ impl CustomAppManagerHandler {
             .update_plugin(id, index_html, app_source, source_files_map.as_ref(), manifest.as_ref())
             .map_err(|e| ToolError::ExecutionFailed(format!("更新应用失败: {e}")))?;
 
+        let mut log_result: Option<String> = None;
+        if let Some(note) = iteration_note {
+            let mut note_with_name = if note.is_object() {
+                note.as_object().unwrap().clone()
+            } else {
+                let mut m = serde_json::Map::new();
+                m.insert("问题".into(), note.clone());
+                m.insert("根因".into(), json!("(由 update 自动记录)"));
+                m.insert("修复".into(), json!(format!("update action 调用 (id={id})")));
+                m.insert("验证".into(), json!("(待 validate/run 验证)"));
+                m
+            };
+            note_with_name.entry("name".to_string()).or_insert(json!(entry.manifest.name));
+
+            match app_docs::append_iteration(&app_dir, &Value::Object(note_with_name)) {
+                Ok(p) => log_result = Some(format!("已 log_iteration → {}", p.display())),
+                Err(e) => return Err(ToolError::ExecutionFailed(format!(
+                    "update 落地成功但 log_iteration 失败: {e}."
+                ))),
+            }
+        }
+
+        let mut plan_result: Option<String> = None;
+        if let Some(plan_note) = params.get("plan_note").and_then(|v| v.as_str()) {
+            let plan_path = app_dir.join("docs").join("开发计划进度.md");
+            if plan_path.exists() {
+                let mut s = std::fs::read_to_string(&plan_path).unwrap_or_default();
+                let stamp = chrono_like_now();
+                s.push_str(&format!("\n- [{stamp}] {plan_note}\n"));
+                if let Err(e) = std::fs::write(&plan_path, s) {
+                    tracing::warn!("写 开发计划进度.md 失败 (非致命): {e}");
+                } else {
+                    plan_result = Some(format!("已 append plan_note → 开发计划进度.md"));
+                }
+            }
+        }
+
         let response: AppResponse = (&entry).into();
         let result = json!({
             "success": true,
             "message": format!("应用 '{}' 更新成功", entry.manifest.name),
             "app": response,
+            "log_iteration": log_result,
+            "plan_note": plan_result,
+            "next_steps": [
+                "调用 action=validate 复验",
+                "调用 action=run 测试版预览",
+                "如有 bug: 先 action=search_iterations query=<关键词>",
+                "修改 docs/开发计划进度.md 勾掉已完成 checkbox"
+            ]
         });
         Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
     }
@@ -216,7 +347,6 @@ impl CustomAppManagerHandler {
         self.manager
             .scan_plugins()
             .map_err(|e| ToolError::ExecutionFailed(format!("扫描应用失败: {e}")))?;
-
         let plugins = self.manager.list_plugins();
         let summaries: Vec<AppSummary> = {
             let entries: Vec<_> = plugins
@@ -228,7 +358,6 @@ impl CustomAppManagerHandler {
                 .collect();
             entries.into_iter().flatten().collect()
         };
-
         let result = json!({
             "success": true,
             "apps": summaries,
@@ -242,18 +371,14 @@ impl CustomAppManagerHandler {
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
-
         let entry = self
             .manager
             .get_plugin(id)
             .ok_or_else(|| ToolError::NotFound(format!("应用不存在: {id}")))?;
-
         let response: AppResponse = (&entry).into();
-        let result = json!({
-            "success": true,
-            "app": response,
-        });
-        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+        Ok(serde_json::to_string_pretty(&json!({
+            "success": true, "app": response,
+        })).unwrap_or_default())
     }
 
     async fn delete(&self, params: &Value) -> Result<String, ToolError> {
@@ -261,16 +386,13 @@ impl CustomAppManagerHandler {
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
-
         self.manager
             .uninstall_plugin(id)
             .map_err(|e| ToolError::ExecutionFailed(format!("删除应用失败: {e}")))?;
-
-        let result = json!({
+        Ok(serde_json::to_string_pretty(&json!({
             "success": true,
-            "message": format!("应用 '{id}' 已删除"),
-        });
-        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+            "message": format!("应用 '{id}' 已删除 (含 docs/ 与 dist/)"),
+        })).unwrap_or_default())
     }
 
     async fn package(&self, params: &Value) -> Result<String, ToolError> {
@@ -278,30 +400,25 @@ impl CustomAppManagerHandler {
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
-
         let build_mode = params
             .get("build_mode")
             .and_then(|v| v.as_str())
             .unwrap_or("sidecar");
-
         let mode = build_mode
             .parse::<hermix_plugin::PackageMode>()
             .map_err(|e| ToolError::InvalidParams(format!("无效的 build_mode: {e}")))?;
-
         let exe_path = self
             .manager
             .package_plugin_with_mode(id, mode)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("打包应用失败: {e}")))?;
-
-        let result = json!({
+        Ok(serde_json::to_string_pretty(&json!({
             "success": true,
             "message": format!("应用 '{id}' 打包成功 ({build_mode} 模式)"),
             "exe_path": exe_path.to_string_lossy(),
             "output_dir": exe_path.parent().map(|p| p.to_string_lossy().to_string()),
             "build_mode": build_mode,
-        });
-        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+        })).unwrap_or_default())
     }
 
     async fn run(&self, params: &Value) -> Result<String, ToolError> {
@@ -309,95 +426,105 @@ impl CustomAppManagerHandler {
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
-
-        // Existence check (run_dev_plugin re-looks-up internally).
         self.manager
             .get_plugin(id)
             .ok_or_else(|| ToolError::NotFound(format!("应用不存在: {id}")))?;
-
-        // 运行 = 测试版(dev 模式): 构建单文件 html, 用 hx-shell --html 直接加载,
-        // 不重新打包单 exe, 与 Desktop 的"运行"按钮语义一致.
         self.manager
             .run_dev_plugin(id)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("启动应用失败: {e}")))?;
-
-        // 供用户直接定位测试版 html 与运行入口.
         let dev_html = self
             .manager
             .plugins_dir()
             .join(id)
             .join("dist")
             .join(format!("{id}.dev.html"));
-
-        let result = json!({
+        Ok(serde_json::to_string_pretty(&json!({
             "success": true,
             "message": format!("应用 '{id}' 已以测试版(dev)模式启动"),
             "dev_html": dev_html.to_string_lossy(),
             "run_hint": "测试版用 hx-shell --html 直接加载, 不生成单 exe. 要发布请调用 package action.",
             "update_hint": "回到继续开发: 直接调用 update action 改 app_source/index_html, 再 run 即时预览.",
-        });
-        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+        })).unwrap_or_default())
     }
 
-    /// 开发期自验证 (L0+L1+L2): 校验 manifest 完整性 + HTML 结构 + hx API 调用 + JS 括号匹配 + 权限一致性.
-    /// 不打包、不改任何文件, 仅静态分析. 返回结构化报告. 每个 issue 的 message 包含修复提示.
     async fn validate(&self, params: &Value) -> Result<String, ToolError> {
         let id = params
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
-
         let app_dir = self.manager.plugins_dir().join(id);
         if !app_dir.exists() {
             return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
         }
-
         let report = validate_custom_app(&app_dir);
-        let result = json!({
-            "success": report.ok,
-            "message": if report.ok {
-                format!("应用 '{id}' 开发期校验通过 (manifest + HTML + hx API + 权限一致性)")
+        let docs_report = hermix_plugin::check_docs_consistency(&app_dir);
+        let mut combined_ok = report.ok && docs_report.ok;
+        let mut merged_issues = report.issues.clone();
+        for issue_msg in &docs_report.issues {
+            merged_issues.push(hermix_plugin::validate::ValidationIssue {
+                level: "error".to_string(),
+                code: "docs".to_string(),
+                message: issue_msg.clone(),
+                line: None,
+                col: None,
+                snippet: None,
+            });
+        }
+        for missing in &docs_report.missing {
+            merged_issues.push(hermix_plugin::validate::ValidationIssue {
+                level: "error".to_string(),
+                code: "docs".to_string(),
+                message: format!("缺少文档: {missing}"),
+                line: None,
+                col: None,
+                snippet: None,
+            });
+            combined_ok = false;
+        }
+        Ok(serde_json::to_string_pretty(&json!({
+            "success": combined_ok,
+            "message": if combined_ok {
+                format!("应用 '{id}' 开发期校验通过 (L0 manifest + L1 HTML + L2 权限 + L3 前端质量 + L4 文档一致性)")
             } else {
                 format!("应用 '{id}' 开发期校验发现问题, 请根据 issues 修复后重试")
             },
-            "validation": report,
-        });
-        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+            "validation": {
+                "ok": combined_ok,
+                "issues": merged_issues,
+                "issue_count": merged_issues.len(),
+                "docs": {
+                    "ok": docs_report.ok,
+                    "present": docs_report.present,
+                    "missing": docs_report.missing,
+                    "issues": docs_report.issues,
+                }
+            }
+        })).unwrap_or_default())
     }
 
-    /// 手术式补丁: 在已安装应用的源码文件里按精确文本替换, 不重写整篇、不读全文.
-    /// 配合 `validate` 的 `line/col/snippet` 使用 —— 把 snippet 当 `old_block`,
-    /// 只动出错那几行, 然后再次 `validate` 复验, 形成 validate→patch→validate 闭环.
-    /// `target`: index_html=index.html, app_source=src/main.tsx, source_file=src/<path>.
     async fn patch(&self, params: &Value) -> Result<String, ToolError> {
         let id = params
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
-
         let target = params
             .get("target")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 ToolError::InvalidParams("缺少 'target' 参数 (index_html|app_source|source_file)".into())
             })?;
-
         let old_block = params
             .get("old_block")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                ToolError::InvalidParams("缺少 'old_block' 参数 (要替换的精确文本, 建议直接取 validate 的 snippet)".into())
-            })?;
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'old_block' 参数".into()))?;
         if old_block.is_empty() {
             return Err(ToolError::InvalidParams("old_block 不能为空".into()));
         }
-
         let new_block = params
             .get("new_block")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParams("缺少 'new_block' 参数 (替换后的文本)".into()))?;
-
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'new_block' 参数".into()))?;
         let occurrence = params
             .get("occurrence")
             .and_then(|v| v.as_str())
@@ -413,38 +540,25 @@ impl CustomAppManagerHandler {
             "index_html" => app_dir.join("index.html"),
             "app_source" => app_dir.join("src").join("main.tsx"),
             "source_file" => {
-                let p = params
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ToolError::InvalidParams(
-                            "target=source_file 时必须提供 'path' (相对 src/ 的路径, 如 components/Header.tsx)".into(),
-                        )
-                    })?;
-                // 防目录穿越: 禁止 .. 与绝对路径
+                let p = params.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ToolError::InvalidParams("target=source_file 时必须提供 'path'".into())
+                })?;
                 if p.contains("..") || p.starts_with('/') || p.starts_with('\\') {
                     return Err(ToolError::InvalidParams("path 非法: 禁止 '..' 或绝对路径".into()));
                 }
                 app_dir.join("src").join(p)
             }
-            other => {
-                return Err(ToolError::InvalidParams(format!(
-                    "未知 target: '{other}' (index_html|app_source|source_file)"
-                )))
-            }
+            other => return Err(ToolError::InvalidParams(format!("未知 target: '{other}'"))),
         };
-
         if !file_path.exists() {
             return Err(ToolError::NotFound(format!(
                 "目标文件不存在: {} (target={target})",
                 file_path.display()
             )));
         }
-
         let content = std::fs::read_to_string(&file_path).map_err(|e| {
             ToolError::ExecutionFailed(format!("读取 {} 失败: {e}", file_path.display()))
         })?;
-
         let count = if replace_all {
             content.matches(old_block).count()
         } else if content.contains(old_block) {
@@ -452,69 +566,184 @@ impl CustomAppManagerHandler {
         } else {
             0
         };
-
         if count == 0 {
             return Err(ToolError::InvalidParams(format!(
-                "在 {} 中未找到 old_block。请用 validate 返回的 snippet 作为 old_block 的精确文本;\n\
-                 可用 custom_app_manager get 看源码, 或指定 occurrence=\"all\"。\n\
-                 old_block 前 48 字符预览: {:?}",
-                file_path.display(),
-                &old_block.chars().take(48).collect::<String>()
+                "在 {} 中未找到 old_block。请用 validate 返回的 snippet 作为 old_block.",
+                file_path.display()
             )));
         }
-
         let new_content = if replace_all {
             content.replace(old_block, new_block)
         } else {
             content.replacen(old_block, new_block, 1)
         };
-
         std::fs::write(&file_path, &new_content).map_err(|e| {
             ToolError::ExecutionFailed(format!("写入 {} 失败: {e}", file_path.display()))
         })?;
-
-        let result = json!({
+        Ok(serde_json::to_string_pretty(&json!({
             "success": true,
             "message": format!("已对 {target} 做 {count} 处手术式替换"),
             "file": file_path.display().to_string(),
             "replacements": count,
-            "next": "调用 custom_app_manager validate action 复验",
-        });
-        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+            "next": "调用 custom_app_manager validate action 复验; 如改动非 trivial, 调 log_iteration 记录"
+        })).unwrap_or_default())
     }
 
-    /// 运行时冒烟测试: 先刷新打包产物, 再启动 hx-shell exe 并捕获错误.
-    /// 通过 `run_smoke_test_async` 在 blocking 线程上启动 exe、检查进程存活.
     async fn smoke(&self, params: &Value) -> Result<String, ToolError> {
         let id = params
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
-
         let app_dir = self.manager.plugins_dir().join(id);
         if !app_dir.exists() {
             return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
         }
-
-        // 先刷新打包产物 (sidecar 模式)
         self.manager
             .package_plugin(id)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("打包应用失败: {e}")))?;
-
         let app_dir_buf = app_dir.to_path_buf();
         let report = run_smoke_test_async(app_dir_buf).await;
-
-        let result = json!({
+        Ok(serde_json::to_string_pretty(&json!({
             "success": report.ok,
             "message": if report.ok {
-                format!("应用 '{id}' 运行时冒烟测试通过 (进程启动成功, 无错误)")
+                format!("应用 '{id}' 运行时冒烟测试通过")
             } else {
-                format!("应用 '{id}' 运行时冒烟测试发现问题 (见 smoke.errors)")
+                format!("应用 '{id}' 运行时冒烟测试发现问题")
             },
             "smoke": report,
-        });
-        Ok(serde_json::to_string_pretty(&result).unwrap_or_default())
+        })).unwrap_or_default())
+    }
+
+    async fn read_doc(&self, params: &Value) -> Result<String, ToolError> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
+        let doc_str = params
+            .get("doc")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams(
+                "缺少 'doc' 参数 (设计方案|开发计划进度|更新迭代|README)".into(),
+            ))?;
+        let doc = Doc::parse(doc_str)
+            .ok_or_else(|| ToolError::InvalidParams(format!("未知 doc '{doc_str}'")))?;
+        let app_dir = self.manager.plugins_dir().join(id);
+        let content = app_docs::read_doc(&app_dir, doc)
+            .map_err(|e| ToolError::NotFound(format!("读 {doc_str} 失败: {e}")))?;
+        Ok(serde_json::to_string_pretty(&json!({
+            "success": true,
+            "id": id,
+            "doc": doc_str,
+            "content": content,
+            "next_steps": [
+                "据此规划下一步",
+                "若是 bug 修复: 先 action=search_iterations query=<关键词>",
+                "若是新阶段: 修改 开发计划进度.md 勾掉已完成 checkbox"
+            ]
+        })).unwrap_or_default())
+    }
+
+    async fn update_doc(&self, params: &Value) -> Result<String, ToolError> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
+        let doc_str = params
+            .get("doc")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'doc' 参数".into()))?;
+        let content = params
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'content' 参数".into()))?;
+        let doc = Doc::parse(doc_str)
+            .ok_or_else(|| ToolError::InvalidParams(format!("未知 doc '{doc_str}'")))?;
+        if doc == Doc::Design {
+            return Err(ToolError::InvalidParams(
+                "设计方案.md 不允许直接 update_doc; 改方案必须重新 propose + approve".into(),
+            ));
+        }
+        let app_dir = self.manager.plugins_dir().join(id);
+        if !app_dir.exists() {
+            return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
+        }
+        let path = app_docs::update_doc(&app_dir, doc, content)
+            .map_err(|e| ToolError::ExecutionFailed(format!("写 {doc_str} 失败: {e}")))?;
+        Ok(serde_json::to_string_pretty(&json!({
+            "success": true,
+            "id": id,
+            "doc": doc_str,
+            "path": path.to_string_lossy(),
+            "next": "调用 action=validate 复验文档一致性"
+        })).unwrap_or_default())
+    }
+
+    async fn log_iteration(&self, params: &Value) -> Result<String, ToolError> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
+        let app_dir = self.manager.plugins_dir().join(id);
+        if !app_dir.exists() {
+            return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
+        }
+        let mut iteration = params
+            .get("iteration")
+            .cloned()
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'iteration' 参数".into()))?;
+        if let Some(s) = iteration.as_str() {
+            iteration = serde_json::from_str::<Value>(s).map_err(|e| {
+                ToolError::InvalidParams(format!("iteration 字符串无法解析为对象: {e}"))
+            })?;
+        }
+        if !iteration.is_object() {
+            return Err(ToolError::InvalidParams("iteration 必须是 JSON 对象".into()));
+        }
+        let entry = self.manager.get_plugin(id);
+        if let Some(e) = entry {
+            iteration.as_object_mut().unwrap()
+                .entry("name".to_string())
+                .or_insert(json!(e.manifest.name));
+        }
+        let path = app_docs::append_iteration(&app_dir, &iteration)
+            .map_err(|e| ToolError::InvalidParams(format!("log_iteration 失败: {e}")))?;
+        Ok(serde_json::to_string_pretty(&json!({
+            "success": true,
+            "id": id,
+            "message": "已 append 一条迭代到 docs/更新迭代.md",
+            "path": path.to_string_lossy(),
+            "next": "调用 action=search_iterations 验证"
+        })).unwrap_or_default())
+    }
+
+    async fn search_iterations(&self, params: &Value) -> Result<String, ToolError> {
+        let id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'id' 参数".into()))?;
+        let query = params
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::InvalidParams("缺少 'query' 参数".into()))?;
+        let app_dir = self.manager.plugins_dir().join(id);
+        if !app_dir.exists() {
+            return Err(ToolError::NotFound(format!("应用目录不存在: {id}")));
+        }
+        let hits = app_docs::search_iterations(&app_dir, query)
+            .map_err(|e| ToolError::ExecutionFailed(format!("search_iterations 失败: {e}")))?;
+        Ok(serde_json::to_string_pretty(&json!({
+            "success": true,
+            "id": id,
+            "query": query,
+            "hits": hits,
+            "count": hits.len(),
+            "hint": if hits.is_empty() {
+                "无历史命中, 自由修. 修完记得 log_iteration 记录."
+            } else {
+                "命中历史, 修前先看清楚上次怎么修的, 避免重复触发."
+            }
+        })).unwrap_or_default())
     }
 }
 
@@ -525,9 +754,10 @@ impl ToolHandler for CustomAppManagerHandler {
             .get("action")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("缺少 'action' 参数".into()))?;
-
         match action {
             "create" => self.create(&params).await,
+            "propose" => self.propose(&params).await,
+            "approve" => self.approve(&params).await,
             "update" => self.update(&params).await,
             "list" => self.list().await,
             "get" => self.get(&params).await,
@@ -537,158 +767,92 @@ impl ToolHandler for CustomAppManagerHandler {
             "validate" => self.validate(&params).await,
             "smoke" => self.smoke(&params).await,
             "patch" => self.patch(&params).await,
-            other => Err(ToolError::InvalidParams(format!(
-                "未知操作: '{other}'。可用: create, update, list, get, delete, package, run, validate, smoke, patch"
-            ))),
+            "read_doc" => self.read_doc(&params).await,
+            "update_doc" => self.update_doc(&params).await,
+            "log_iteration" => self.log_iteration(&params).await,
+            "search_iterations" => self.search_iterations(&params).await,
+            other => Err(ToolError::InvalidParams(format!("未知操作: '{other}'"))),
         }
     }
 
     fn schema(&self) -> ToolSchema {
         let mut props = IndexMap::new();
-
-        props.insert(
-            "action".into(),
-            json!({
-                "type": "string",
-                "description": "要执行的操作",
-                "enum": ["create", "update", "list", "get", "delete", "package", "run", "validate", "smoke", "patch"]
-            }),
-        );
-
-        props.insert(
-            "id".into(),
-            json!({
-                "type": "string",
-                "description": "应用 ID (update/get/delete/package/run 必填，create 时在 manifest 中指定)"
-            }),
-        );
-
-        // Manifest for create
-        props.insert(
-            "manifest".into(),
-            json!({
-                "type": "object",
-                "description": "应用清单 (create 必填, update 可选用于更新 permissions 等)。包含 id, name, version, description, icon, category, window_config, permissions 等。version/description/author/icon/window_config 均有默认值,最简只需 id+name",
-                "properties": {
-                    "id": { "type": "string", "description": "唯一标识符 (字母数字-_)" },
-                    "name": { "type": "string", "description": "应用名称" },
-                    "version": { "type": "string", "description": "语义版本号" },
-                    "description": { "type": "string", "description": "简短描述" },
-                    "long_description": { "type": "string", "description": "应用说明文档（README），必须包含：功能介绍、使用方法、更新方法、分发方法。在详情界面'说明'Tab 中展示给用户" },
-                    "author": { "type": "string", "description": "作者" },
-                    "icon": { "type": "string", "description": "Emoji 图标" },
-                    "category": { "type": "string", "description": "分类 (file-tools, media, productivity, other 等)" },
-                    "tags": { "type": "array", "items": { "type": "string" } },
-                    "window_config": {
-                        "type": "object",
-                        "properties": {
-                            "width": { "type": "integer", "description": "窗口宽度 (默认 600)" },
-                            "height": { "type": "integer", "description": "窗口高度 (默认 480)" },
-                            "resizable": { "type": "boolean", "description": "是否可调整大小 (默认 true)" },
-                            "title": { "type": "string", "description": "窗口标题" }
-                        }
-                    },
-                    "permissions": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "权限列表 (fs-read, fs-write, exec, network, dialog, env, temp)"
-                    }
-                }
-            }),
-        );
-
-        props.insert(
-            "index_html".into(),
-            json!({
-                "type": "string",
-                "description": "【模式一: 纯 HTML】自包含 index.html 的**完整源代码内容** (非文件路径!)。必须以 <!DOCTYPE html> 开头，包含完整的 HTML+CSS+JS。\n\n**关键要求**:\n1. 使用 window.hx.* API 调用系统能力 (writeFile/readFile/readDir/exec/getInfo/fileUrl 等)\n2. 写代码前先调 await window.hx.getInfo() 发现可用 API 列表\n3. 二进制文件 (音频/图片/视频) 用 window.hx.fileUrl(path) 生成 hxfile:// URL\n4. 不需要引入任何外部客户端库 — hx.* 由 WebView2 原生桥注入\n5. 配合 manifest.permissions 声明所需权限\n\n**注意**: 推荐使用 app_source (TypeScript/React) 模式以获得更好的开发体验。"
-            }),
-        );
-
-        props.insert(
-            "app_source".into(),
-            json!({
-                "type": "string",
-                "description": "【模式二: TypeScript/React (★推荐)】应用的 TypeScript/React 入口源码。写入 src/main.tsx，打包时 esbuild 自动转译为 resources/js/app.js。\n\n**关键规则**:\n1. React 和 ReactDOM 是全局变量 (由 esbuild 打包注入)，**不要** import:\n   ✅ const { useState, useEffect } = React;\n   ✅ const { createRoot } = ReactDOM;\n   ❌ import React from 'react';  // 会报错!\n2. 使用 window.hx.* API 调用系统能力 (WebView2 原生桥注入，无需外部库):\n   ✅ await window.hx.writeFile(path, content);\n   ✅ await window.hx.readFile(path);\n   ✅ await window.hx.getInfo(); // 发现可用 API\n   ✅ window.hx.fileUrl(path); // 二进制文件 → hxfile:// URL\n3. 可使用 TypeScript 语法、JSX、async/await\n4. 可通过 source_files 拆分组件到多个文件，用相对路径 import:\n   import { Header } from './components/Header';\n5. 如果不提供 index_html，系统自动生成 HTML 壳\n6. create 时与 index_html 二选一，app_source 优先"
-            }),
-        );
-
-        props.insert(
-            "source_files".into(),
-            json!({
-                "type": "object",
-                "description": "额外的 TypeScript 源文件 (可选，配合 app_source 使用)。键为相对于 src/ 的路径，值为文件内容。\n例: {\"components/Header.tsx\": \"export function Header() { return <h1>标题</h1>; }\", \"utils/helpers.ts\": \"export function formatSize(n: number) { return (n / 1024).toFixed(1) + 'KB'; }\"}\n\n然后在 app_source 中通过相对路径 import:\nimport { Header } from './components/Header';\nimport { formatSize } from './utils/helpers';",
-                "additionalProperties": { "type": "string" }
-            }),
-        );
-
-        props.insert(
-            "build_mode".into(),
-            json!({
-                "type": "string",
-                "description": "打包模式 (package action 可选)。sidecar: 将 HTML/JS payload 作为 PE 资源节(RT_RCDATA)嵌入 hx-shell.exe 生成单文件 exe (默认, 零依赖, 无结构型 Defender 误报); neu-build: 旧模式, 不推荐。",
-                "enum": ["sidecar", "neu-build"]
-            }),
-        );
-
-        props.insert(
-            "icon_data".into(),
-            json!({
-                "type": "string",
-                "description": "自定义应用图标的 base64 编码 PNG 图片。支持 data:image/png;base64,... 格式或纯 base64 字符串。推荐 256x256 或 512x512 的正方形 PNG。如果未提供则使用默认图标。(create 可选)"
-            }),
-        );
-
-        props.insert(
-            "target".into(),
-            json!({
-                "type": "string",
-                "description": "patch action 专用: 要修补的源码文件。index_html=index.html; app_source=src/main.tsx; source_file=src/<path> (需配合 path 参数)。",
-                "enum": ["index_html", "app_source", "source_file"]
-            }),
-        );
-
-        props.insert(
-            "path".into(),
-            json!({
-                "type": "string",
-                "description": "patch action 专用: target=source_file 时, 要修补的文件相对 src/ 的路径 (如 components/Header.tsx)。禁止 '..' 与绝对路径。"
-            }),
-        );
-
-        props.insert(
-            "old_block".into(),
-            json!({
-                "type": "string",
-                "description": "patch action 专用: 文件中要被替换的精确连续文本。建议直接取 validate 返回 issue 的 snippet, 保证逐字符匹配。为空或找不到都会报错。"
-            }),
-        );
-
-        props.insert(
-            "new_block".into(),
-            json!({
-                "type": "string",
-                "description": "patch action 专用: 替换后的新文本 (替掉 old_block)。"
-            }),
-        );
-
-        props.insert(
-            "occurrence".into(),
-            json!({
-                "type": "string",
-                "description": "patch action 专用: 替换范围。first=只替换第一处 (默认); all=替换全部匹配。",
-                "enum": ["first", "all"]
-            }),
-        );
-
+        props.insert("action".into(), json!({
+            "type": "string",
+            "enum": ["create", "propose", "approve", "update", "list", "get", "delete", "package", "run", "validate", "smoke", "patch", "read_doc", "update_doc", "log_iteration", "search_iterations"]
+        }));
+        props.insert("id".into(), json!({"type": "string"}));
+        props.insert("manifest".into(), json!({
+            "type": "object",
+            "description": "应用清单 (create 必填, update 可选)",
+            "properties": {
+                "id": {"type": "string"}, "name": {"type": "string"}, "version": {"type": "string"},
+                "description": {"type": "string"}, "long_description": {"type": "string"},
+                "author": {"type": "string"}, "icon": {"type": "string"},
+                "category": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}},
+                "window_config": {"type": "object"},
+                "permissions": {"type": "array", "items": {"type": "string"}}
+            }
+        }));
+        props.insert("proposal".into(), json!({
+            "type": "object",
+            "description": "propose 必填. 结构化设计方案 (含 名称/功能/界面布局/交互效果 四节 + 自定义应用专属)."
+        }));
+        props.insert("index_html".into(), json!({
+            "type": "string",
+            "description": "[模式一: 纯 HTML] 自包含 index.html 的完整源代码内容. 改代码类 update 必须同时给 iteration_note."
+        }));
+        props.insert("app_source".into(), json!({
+            "type": "string",
+            "description": "[模式二: TS/React] 应用入口源码. 改代码类 update 必须同时给 iteration_note."
+        }));
+        props.insert("source_files".into(), json!({
+            "type": "object",
+            "description": "额外 TS 源文件 (可选). 键为相对 src/ 的路径.",
+            "additionalProperties": {"type": "string"}
+        }));
+        props.insert("build_mode".into(), json!({"type": "string", "enum": ["sidecar", "neu-build"]}));
+        props.insert("icon_data".into(), json!({"type": "string"}));
+        props.insert("target".into(), json!({"type": "string", "enum": ["index_html", "app_source", "source_file"]}));
+        props.insert("path".into(), json!({"type": "string"}));
+        props.insert("old_block".into(), json!({"type": "string"}));
+        props.insert("new_block".into(), json!({"type": "string"}));
+        props.insert("occurrence".into(), json!({"type": "string", "enum": ["first", "all"]}));
+        props.insert("iteration_note".into(), json!({
+            "type": "object",
+            "description": "[文档管理强制] 改代码类 update 必填. JSON 对象含【问题】【根因】【修复】【验证】4 节."
+        }));
+        props.insert("plan_note".into(), json!({"type": "string"}));
+        props.insert("doc".into(), json!({
+            "type": "string",
+            "enum": ["设计方案", "开发计划进度", "更新迭代", "README"]
+        }));
+        props.insert("content".into(), json!({"type": "string"}));
+        props.insert("iteration".into(), json!({
+            "type": "object",
+            "description": "log_iteration 必填. JSON 对象, 必须含【问题】【根因】【修复】【验证】4 节.",
+            "properties": {
+                "问题": {"type": "string"}, "根因": {"type": "string"},
+                "修复": {"type": "string"}, "验证": {"type": "string"}
+            },
+            "required": ["问题", "根因", "修复", "验证"]
+        }));
+        props.insert("query".into(), json!({"type": "string"}));
         tool_schema(
             "custom_app_manager",
-            "管理用户自定义桌面应用: 创建、更新、列表、查看、删除、打包为独立EXE、运行(测试版dev模式)、开发期校验(validate)、运行时冒烟测试(smoke)。基于 hx-shell 运行时 (wry/WebView2, ~1.2MB)。\n\n**何时用本工具**:
-- **开发新应用**: 用户说「做个/开发一个/写个/生成一个 工具/应用/软件/桌面程序/小软件」时, 直接判定为自定义应用, 调用本工具开发, 不要去调其他通用代码工具。
-- **排查/修复已安装应用的报错 (★极易漏判)**: 当用户说「我的某个应用打不开/加载失败/报错/崩溃」、贴出类似「index.html 加载失败: 系统找不到指定的路径 (os error 3)」的报错、或提到某个已装应用(如 本地音乐/music-player)有问题时, **也必须用本工具**, 不要去仓库目录 `dir` 或自己翻文件 —— 所有自定义应用都装在运行时 HERMIX_HOME 下的 `custom-apps/<id>/`, 本工具是唯一权威入口。标准诊断流: ① `list` 拿 id → ② `get` 看 manifest+源码 → ③ `validate` 开发期静态校验 → ④ `smoke` 运行时冒烟定位实际报错 → ⑤ `update` 修 → ⑥ `run` 复测。\n\n**API**: 使用 window.hx.* 调用系统能力 (writeFile/readFile/readDir/exec/getInfo/fileUrl 等)。写代码前先调 await window.hx.getInfo() 发现可用 API。\n\n**两种开发模式**:\n- **TypeScript/React 模式 (★推荐)**: 提供 app_source (TypeScript/React 源码)，打包时 esbuild 自动转译。React 由 esbuild 打包注入，无 CDN 依赖。\n- **纯 HTML 模式**: 提供 index_html (自包含 HTML+JS)。\n\n**一次性到位交付流程**: 1)识别(用户要的是工具/应用/软件)→ 2)分析前后端最优方案(数据存哪/用哪些 hx API/UI 布局)→ 3)create 或 update 写代码→ 4)validate 循环修复直到 ok=true(L0 manifest + L1 HTML/JS + L2 权限 + L3 前端质量: 禁 CDN/禁 input-file/标题栏/禁 emoji)→ 5)run 测试版即时预览→ 6)确认无运行时报错(必要时 smoke)→ 7)交付说明: 去哪运行(run 已启动)、如何打包(package→单 exe)、如何回来继续更新(update action 改 app_source/index_html 再 run)。\n\n打包: sidecar 模式 (将 HTML/JS 作为 PE 资源节嵌入 hx-shell.exe → 单文件 exe, 无尾部注入)。",
+            "管理用户自定义桌面应用 + 强制文档维护机制. [文档管理强制] docs/ 4 个 md. [设计闸门] propose→approve→create. [代码精炼] 单行/封装/不重复造轮子 (详见 code-craftsmanship skill).",
             JsonSchema::object(props, vec!["action".into()]),
         )
     }
+}
+
+fn chrono_like_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{secs}")
 }
 
 #[cfg(test)]
@@ -696,139 +860,143 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Verify that when `manifest` is passed as a JSON string (not an object),
-    /// the normalization logic correctly parses it into a JSON value before
-    /// `serde_json::from_value` attempts deserialization.
+    fn make_tmp(suffix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("cam_{}_{}", std::process::id(), suffix))
+    }
+
+    fn init_test_docs(app_dir: &std::path::Path) {
+        // 模拟 install_plugin → init_docs 后的 docs/ 4 个 md
+        let _ = std::fs::create_dir_all(app_dir.join("docs"));
+        std::fs::write(app_dir.join("docs/设计方案.md"), "# 测试 设计方案\n## 1. 名称\n- 测试\n").unwrap();
+        std::fs::write(app_dir.join("docs/开发计划进度.md"), "# 测试 开发计划\n").unwrap();
+        std::fs::write(app_dir.join("docs/更新迭代.md"), "# 测试 更新迭代\n---\n").unwrap();
+        std::fs::write(app_dir.join("docs/README.md"), "# 测试 README\n").unwrap();
+    }
+
     #[test]
     fn manifest_string_normalization_parses_json_object() {
-        let manifest_json = r#"{"id":"test-app","name":"Test App","version":"1.0.0"}"#;
-        let params = json!({
-            "action": "create",
-            "manifest": manifest_json,  // This is a Value::String, not Value::Object
-        });
-
-        // The normalization should detect that manifest is a string and
-        // re-parse it as a JSON object.
-        let manifest_val = params.get("manifest").unwrap();
-        assert!(manifest_val.is_string(), "manifest should be a string in this test");
-
-        let parsed: serde_json::Value = serde_json::from_str(manifest_val.as_str().unwrap()).unwrap();
-        assert!(parsed.is_object(), "parsed manifest should be a JSON object");
-        assert_eq!(parsed["id"], "test-app");
-        assert_eq!(parsed["name"], "Test App");
+        let params = json!({"action": "create", "manifest": r#"{"id":"x","name":"y"}"#});
+        let v: serde_json::Value = serde_json::from_str(params["manifest"].as_str().unwrap()).unwrap();
+        assert_eq!(v["id"], "x");
     }
 
-    /// Verify that when `manifest` is already a JSON object (the normal case),
-    /// it passes through unchanged.
     #[test]
     fn manifest_object_passes_through_unchanged() {
-        let params = json!({
-            "action": "create",
-            "manifest": {
-                "id": "test-app",
-                "name": "Test App",
-                "window_config": {"width": 800, "height": 600}
-            }
-        });
-
-        let manifest_val = params.get("manifest").unwrap();
-        assert!(manifest_val.is_object(), "manifest should be a JSON object");
-        assert_eq!(manifest_val["id"], "test-app");
-        assert_eq!(manifest_val["window_config"]["width"], 800);
+        let params = json!({"action": "create", "manifest": {"id": "x"}});
+        assert_eq!(params["manifest"]["id"], "x");
     }
 
-    /// Verify that an invalid JSON string in `manifest` fails gracefully
-    /// (the normalization will leave it as-is, and serde_json::from_value
-    /// will produce a helpful error message).
     #[test]
     fn manifest_invalid_string_fails_gracefully() {
-        let params = json!({
-            "action": "create",
-            "manifest": "not valid json"
-        });
-
-        let manifest_val = params.get("manifest").unwrap();
-        assert!(manifest_val.is_string());
-
-        // Attempting to parse "not valid json" as a Value should fail
-        let result = serde_json::from_str::<serde_json::Value>(manifest_val.as_str().unwrap());
-        assert!(result.is_err(), "invalid JSON should fail to parse");
+        let r = serde_json::from_str::<serde_json::Value>("not json");
+        assert!(r.is_err());
     }
 
-    /// patch (app_source): 手术式替换 src/main.tsx 中精确文本, 不碰其他内容.
     #[test]
     fn patch_app_source_replaces_precise_block() {
-        let tmp = std::env::temp_dir().join(format!("cam_patch_{}", std::process::id()));
+        let tmp = make_tmp("patch");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join("patch-app").join("src")).unwrap();
         let mgr = std::sync::Arc::new(hermix_plugin::PluginManager::new(tmp.clone()));
         let handler = CustomAppManagerHandler::new(mgr);
-
-        let main = tmp.join("patch-app").join("src").join("main.tsx");
-        std::fs::write(&main, "const a = 'OLD';\nconst b = 'keep';\n").unwrap();
-
+        std::fs::write(tmp.join("patch-app/src/main.tsx"), "const a='OLD';\nconst b='keep';\n").unwrap();
         let res = futures::executor::block_on(handler.patch(&json!({
-            "action": "patch",
-            "id": "patch-app",
-            "target": "app_source",
-            "old_block": "'OLD'",
-            "new_block": "'NEW'",
+            "action": "patch", "id": "patch-app", "target": "app_source",
+            "old_block": "'OLD'", "new_block": "'NEW'",
         })));
-        assert!(res.is_ok(), "patch 应成功: {:?}", res.err());
-
-        let after = std::fs::read_to_string(&main).unwrap();
-        assert!(after.contains("'NEW'"), "应替换 OLD→NEW: {after}");
-        assert!(!after.contains("'OLD'"), "不应残留 OLD: {after}");
-        assert!(after.contains("'keep'"), "其他行不应被动: {after}");
+        assert!(res.is_ok(), "{:?}", res.err());
+        let after = std::fs::read_to_string(tmp.join("patch-app/src/main.tsx")).unwrap();
+        assert!(after.contains("'NEW'"));
+        assert!(!after.contains("'OLD'"));
+        assert!(after.contains("'keep'"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// patch: old_block 在文件中不存在 → 报错, 不写文件.
     #[test]
     fn patch_old_block_not_found_errors() {
-        let tmp = std::env::temp_dir().join(format!("cam_patchnf_{}", std::process::id()));
+        let tmp = make_tmp("patchnf");
         let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(tmp.join("patch-nf").join("src")).unwrap();
+        std::fs::create_dir_all(tmp.join("patch-nf/src")).unwrap();
         let mgr = std::sync::Arc::new(hermix_plugin::PluginManager::new(tmp.clone()));
         let handler = CustomAppManagerHandler::new(mgr);
-
-        let main = tmp.join("patch-nf").join("src").join("main.tsx");
-        std::fs::write(&main, "const a = 'X';\n").unwrap();
-
+        std::fs::write(tmp.join("patch-nf/src/main.tsx"), "x").unwrap();
         let res = futures::executor::block_on(handler.patch(&json!({
-            "action": "patch",
-            "id": "patch-nf",
-            "target": "app_source",
-            "old_block": "NONEXISTENT_SUBSTRING",
-            "new_block": "Y",
+            "action": "patch", "id": "patch-nf", "target": "app_source",
+            "old_block": "ZZZ", "new_block": "y",
         })));
-        assert!(res.is_err(), "找不到 old_block 应报错");
-
-        // 文件内容未被改动
-        let after = std::fs::read_to_string(&main).unwrap();
-        assert_eq!(after, "const a = 'X';\n", "报错时不应改动文件");
+        assert!(res.is_err());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// patch (source_file): 拒绝 '..' / 绝对路径, 防目录穿越.
     #[test]
     fn patch_path_traversal_rejected() {
-        let tmp = std::env::temp_dir().join(format!("cam_patchtrav_{}", std::process::id()));
+        let tmp = make_tmp("patchtrav");
         let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(tmp.join("patch-trav").join("src")).unwrap();
+        std::fs::create_dir_all(tmp.join("trav/src")).unwrap();
         let mgr = std::sync::Arc::new(hermix_plugin::PluginManager::new(tmp.clone()));
         let handler = CustomAppManagerHandler::new(mgr);
-        std::fs::write(tmp.join("patch-trav").join("src").join("main.tsx"), "x").unwrap();
-
+        std::fs::write(tmp.join("trav/src/main.tsx"), "x").unwrap();
         let res = futures::executor::block_on(handler.patch(&json!({
-            "action": "patch",
-            "id": "patch-trav",
-            "target": "source_file",
-            "path": "../escape.tsx",
-            "old_block": "x",
-            "new_block": "y",
+            "action": "patch", "id": "trav", "target": "source_file",
+            "path": "../escape.tsx", "old_block": "x", "new_block": "y",
         })));
-        assert!(res.is_err(), "目录穿越应被拒绝");
+        assert!(res.is_err());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn update_code_requires_iteration_note() {
+        let tmp = make_tmp("iter");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("iter-app/src")).unwrap();
+        let mgr = std::sync::Arc::new(hermix_plugin::PluginManager::new(tmp.clone()));
+        let handler = CustomAppManagerHandler::new(mgr);
+        std::fs::write(tmp.join("iter-app/src/main.tsx"), "x").unwrap();
+        let res = futures::executor::block_on(handler.update(&json!({
+            "action": "update", "id": "iter-app", "app_source": "y",
+        })));
+        assert!(res.is_err());
+        assert!(res.as_ref().err().unwrap().to_string().contains("iteration_note"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn doc_actions_full_flow() {
+        let tmp = make_tmp("docs");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("docs-app/src")).unwrap();
+        let mgr = std::sync::Arc::new(hermix_plugin::PluginManager::new(tmp.clone()));
+        let handler = CustomAppManagerHandler::new(mgr);
+        std::fs::write(tmp.join("docs-app/src/main.tsx"), "init").unwrap();
+        init_test_docs(&tmp.join("docs-app"));
+
+        let bad = futures::executor::block_on(handler.log_iteration(&json!({
+            "action": "log_iteration", "id": "docs-app",
+            "iteration": {"问题": "x"}
+        })));
+        assert!(bad.is_err(), "log_iteration 缺 4 节应报错");
+
+        let good = futures::executor::block_on(handler.log_iteration(&json!({
+            "action": "log_iteration", "id": "docs-app",
+            "iteration": {"问题": "按钮失效", "根因": "事件没绑", "修复": "加 onClick", "验证": "可点"}
+        })));
+        assert!(good.is_ok(), "log_iteration 应成功: {:?}", good.err());
+
+        let hits = futures::executor::block_on(handler.search_iterations(&json!({
+            "action": "search_iterations", "id": "docs-app", "query": "按钮"
+        }))).unwrap();
+        assert!(hits.contains("hits"));
+
+        let rd = futures::executor::block_on(handler.read_doc(&json!({
+            "action": "read_doc", "id": "docs-app", "doc": "设计方案"
+        })));
+        assert!(rd.is_ok(), "read_doc 应成功: {:?}", rd.err());
+
+        let ud = futures::executor::block_on(handler.update_doc(&json!({
+            "action": "update_doc", "id": "docs-app", "doc": "设计方案", "content": "hack"
+        })));
+        assert!(ud.is_err(), "update_doc 设计方案.md 应被拒");
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

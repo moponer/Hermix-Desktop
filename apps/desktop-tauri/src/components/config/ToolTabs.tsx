@@ -15,17 +15,13 @@ import {
   AlertTriangle,
   X,
   Network,
-  RotateCcw,
   Trash2,
   ArrowUpRight,
-  Package,
   Wand2,
 } from "lucide-react";
-import * as api from "../api";
-import type { PluginInspect, PluginManifest, PluginSettings, SkillInfo, ToolsetInfo } from "../api";
+import * as api from "../../api";
+import type { PluginSettings, SkillInfo, ToolsetInfo } from "../../api";
 import type { LucideIcon } from "lucide-react";
-
-type Tab = "plugins" | "skills" | "connectors" | "toolsets";
 
 // Plugin toggles map to the backend's DashboardPluginSettings (5 hard slots).
 // The icon is purely cosmetic — the source of truth is the boolean on the server.
@@ -52,89 +48,17 @@ const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
   tool_code_exec: true,
 };
 
-export function PluginsView() {
-  const [tab, setTab] = useState<Tab>("plugins");
-  const [query, setQuery] = useState("");
-
-  return (
-    <div className="flex-1 overflow-y-auto px-8 py-6 min-h-0">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-center gap-4 mb-6 text-sm">
-          <TabButton active={tab === "plugins"} onClick={() => setTab("plugins")} icon={Plug} label="插件" />
-          <TabButton active={tab === "skills"} onClick={() => setTab("skills")} icon={Sparkles} label="技能" />
-          <TabButton active={tab === "connectors"} onClick={() => setTab("connectors")} icon={Network} label="连接器" />
-          <TabButton active={tab === "toolsets"} onClick={() => setTab("toolsets")} icon={Boxes} label="工具集" />
-        </div>
-
-        <div className="text-center mb-6">
-          <h1 className="text-3xl font-semibold text-text-primary">
-            {tab === "plugins" && "插件"}
-            {tab === "skills" && "技能"}
-            {tab === "connectors" && "连接器"}
-            {tab === "toolsets" && "工具集"}
-          </h1>
-          <p className="text-sm text-text-muted mt-2">
-            {tab === "plugins" && "启用插件，扩展 AI 助手能力。"}
-            {tab === "skills" && "启用技能，让 AI 助手掌握特定场景的工作流。"}
-            {tab === "connectors" && "启用连接器，让 AI 助手能访问外部数据源。"}
-            {tab === "toolsets" && "启用工具集，组合多个工具形成完整能力。"}
-          </p>
-        </div>
-
-        {tab === "plugins" && <PluginsTab query={query} onQuery={setQuery} />}
-        {tab === "skills" && <SkillsTab query={query} onQuery={setQuery} />}
-        {tab === "connectors" && <ConnectorsTab query={query} onQuery={setQuery} />}
-        {tab === "toolsets" && <ToolsetsTab query={query} onQuery={setQuery} />}
-      </div>
-    </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  icon: Icon,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: LucideIcon;
-  label: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-1.5 ${
-        active ? "text-text-primary font-medium" : "text-text-muted hover:text-text-secondary"
-      }`}
-    >
-      <Icon size={14} />
-      {label}
-    </button>
-  );
-}
-
 // ── Plugins tab: built-in toggles + discovered manifests ────────────
 
-function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
+export function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
   const [settings, setSettings] = useState<PluginSettings>(DEFAULT_PLUGIN_SETTINGS);
-  const [manifests, setManifests] = useState<PluginManifest[]>([]);
-  const [inspectMap, setInspectMap] = useState<Record<string, PluginInspect>>({});
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
-  const [rescanning, setRescanning] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, m, im] = await Promise.all([
-        api.getPluginSettings(),
-        api.getPluginManifests(),
-        api.inspectAllPlugins(),
-      ]);
-      setSettings(s);
-      setManifests(m);
-      setInspectMap(im);
+      setSettings(await api.getPluginSettings());
     } finally {
       setLoading(false);
     }
@@ -159,43 +83,14 @@ function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: string) =>
     [settings],
   );
 
-  const handleRescan = useCallback(async () => {
-    setRescanning(true);
-    try {
-      await api.rescanPlugins();
-      const m = await api.getPluginManifests();
-      setManifests(m);
-    } finally {
-      setRescanning(false);
-    }
-  }, []);
-
   const q = query.trim().toLowerCase();
   const filteredBuiltins = q
     ? BUILTIN_PLUGINS.filter((p) => `${p.name} ${p.description} ${p.category}`.toLowerCase().includes(q))
     : BUILTIN_PLUGINS;
-  const filteredManifests = q
-    ? manifests.filter((m) =>
-        `${m.name} ${m.description ?? ""} ${m.category ?? ""}`.toLowerCase().includes(q),
-      )
-    : manifests;
 
   return (
     <>
-      <SearchBar
-        query={query}
-        onQuery={onQuery}
-        right={
-          <button
-            onClick={handleRescan}
-            disabled={rescanning || loading}
-            className="h-9 px-3 rounded-lg bg-bg-card border border-border-primary text-xs text-text-secondary hover:text-text-primary disabled:opacity-50 flex items-center gap-1.5"
-          >
-            <RefreshCw size={12} className={rescanning ? "animate-spin" : ""} />
-            重新扫描
-          </button>
-        }
-      />
+      <SearchBar query={query} onQuery={onQuery} />
 
       <Section title="内置工具" hint="由后端持久化保存于 dashboard_plugins.json">
         <Grid empty={!loading && filteredBuiltins.length === 0} emptyText="没有匹配的内置工具。">
@@ -220,74 +115,6 @@ function PluginsTab({ query, onQuery }: { query: string; onQuery: (q: string) =>
         </Grid>
       </Section>
 
-      <Section
-        title="官方插件市场"
-        hint={`来自 NousResearch/hermix-agent，首次启动自动 seed，共 ${manifests.length} 个`}
-      >
-        {loading ? (
-          <SkeletonGrid count={3} />
-        ) : filteredManifests.length === 0 ? (
-          <EmptyHint
-            icon={Layers}
-            text={
-              manifests.length === 0
-                ? "还没有发现任何插件清单。点“重新扫描”会触发服务端 seed 18 个官方插件。"
-                : "没有匹配的清单。"
-            }
-          />
-        ) : (
-          <Grid empty={false}>
-            {filteredManifests.map((m, i) => {
-              // PluginManifest is intentionally open (index signature is unknown),
-              // so read the extra backend fields via `as unknown` first to keep
-              // the cast intentional.
-              const extra = m as unknown as {
-                availability?: string;
-                display_name?: string;
-                tools?: unknown;
-                tags?: unknown;
-              };
-              const availability = extra.availability ?? "seeded";
-              const displayName = extra.display_name ?? m.name;
-              const declaredTools = Array.isArray(extra.tools)
-                ? (extra.tools as unknown[]).filter((x): x is string => typeof x === "string")
-                : [];
-              const pluginId = (m.id as string) ?? m.name;
-              const runtime = inspectMap[pluginId];
-              const runtimeTools = runtime?.tools ?? [];
-              const isWired = availability === "ready" && runtimeTools.length > 0;
-              const description = isWired
-                ? `✓ 后端已挂接 ${runtimeTools.length} 个工具：${runtimeTools.slice(0, 3).join(", ")}${runtimeTools.length > 3 ? "…" : ""}`
-                : (m.description as string) ||
-                  (declaredTools.length > 0
-                    ? `${declaredTools.length} 工具 · ${declaredTools.slice(0, 3).join(", ")}…`
-                    : "（无描述）");
-              return (
-                <PluginCard
-                  key={m.id ?? m.name ?? i}
-                  icon={<Package size={16} />}
-                  name={displayName}
-                  description={description}
-                  badge={
-                    isWired
-                      ? `${m.category ?? "plugin"} · 已挂接`
-                      : availability === "ready"
-                        ? `${m.category ?? "plugin"} · 可用`
-                        : `${m.category ?? "plugin"} · 待实装`
-                  }
-                  highlight={isWired}
-                  enabled
-                  saving={false}
-                  disabled
-                  noBorder
-                  rightIcon={<ArrowUpRight size={12} />}
-                  onToggle={() => undefined}
-                />
-              );
-            })}
-          </Grid>
-        )}
-      </Section>
     </>
   );
 }
@@ -304,7 +131,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   office: "Office",
 };
 
-function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
+export function SkillsTab({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -660,12 +487,53 @@ function ConfirmDialog({
 
 // ── Connectors tab: user-configured MCP servers ──────────────────────
 
-function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
+type McpSpec = Omit<api.McpServerEntry, "id" | "createdAt">;
+
+// 解析 Claude Desktop / Cursor 风格的 mcpServers JSON，自动拆成 stdio / http 条目。
+export function parseMcpJson(raw: string): McpSpec[] {
+  const data = JSON.parse(raw) as unknown;
+  const root = (
+    data && typeof data === "object" && "mcpServers" in (data as Record<string, unknown>)
+      ? (data as { mcpServers: Record<string, unknown> }).mcpServers
+      : data
+  ) as Record<string, unknown>;
+  if (!root || typeof root !== "object") {
+    throw new Error("配置格式不正确：期望 mcpServers 对象");
+  }
+  const specs: McpSpec[] = [];
+  for (const [name, cfgRaw] of Object.entries(root)) {
+    const c = cfgRaw as Record<string, unknown>;
+    const base = {
+      name,
+      enabled: true,
+      description: typeof c.description === "string" ? c.description : undefined,
+      env: typeof c.env === "object" && c.env ? (c.env as Record<string, string>) : undefined,
+    };
+    if (typeof c.url === "string" && c.url) {
+      specs.push({ ...base, transport: "http", url: c.url });
+    } else if (typeof c.command === "string" && c.command) {
+      const args = Array.isArray(c.args)
+        ? (c.args as unknown[]).filter((x): x is string => typeof x === "string")
+        : typeof c.args === "string" && c.args
+          ? c.args.split(/\s+/)
+          : undefined;
+      specs.push({ ...base, transport: "stdio", command: c.command, args });
+    } else {
+      throw new Error(`条目 "${name}" 缺少 command 或 url`);
+    }
+  }
+  if (specs.length === 0) throw new Error("未解析到任何 MCP 服务");
+  return specs;
+}
+
+export function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
   const [servers, setServers] = useState<api.McpServerEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [addMode, setAddMode] = useState<"paste" | "manual">("paste");
+  const [pasteJson, setPasteJson] = useState("");
   const [newServer, setNewServer] = useState({
     name: "",
     transport: "stdio" as api.McpTransport,
@@ -690,10 +558,6 @@ function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string)
     await api.deleteMcpServer(id);
     setServers((prev) => prev.filter((s) => s.id !== id));
   };
-  const reset = async () => {
-    const list = await api.resetMcpServersToOfficial();
-    setServers(list);
-  };
   const handleAdd = async () => {
     if (!newServer.name.trim()) { setAddError("名称不能为空"); return; }
     if (newServer.transport === "stdio" && !newServer.command.trim()) { setAddError("stdio 模式需要填写 command"); return; }
@@ -714,6 +578,26 @@ function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string)
       const created = await api.addMcpServer(spec);
       setServers((prev) => [...prev, created]);
       setNewServer({ name: "", transport: "stdio", command: "", args: "", url: "", env: "", description: "" });
+      setShowAddForm(false);
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleImportPaste = async () => {
+    if (!pasteJson.trim()) { setAddError("请先粘贴配置"); return; }
+    setAdding(true);
+    setAddError(null);
+    try {
+      const specs = parseMcpJson(pasteJson);
+      const created: api.McpServerEntry[] = [];
+      for (const spec of specs) {
+        created.push(await api.addMcpServer(spec));
+      }
+      setServers((prev) => [...prev, ...created]);
+      setPasteJson("");
       setShowAddForm(false);
     } catch (e) {
       setAddError(e instanceof Error ? e.message : String(e));
@@ -745,13 +629,6 @@ function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string)
           >
             <Plus size={11} /> 添加 MCP
           </button>
-          <button
-            onClick={reset}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
-            title="恢复为官方示例 5 个 seed"
-          >
-            <RotateCcw size={11} /> 恢复官方示例
-          </button>
         </div>
       </div>
 
@@ -761,52 +638,86 @@ function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string)
           {addError && (
             <div className="text-[11px] text-error bg-error/10 rounded px-2 py-1">{addError}</div>
           )}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[10.5px] text-text-muted">名称</label>
-              <input value={newServer.name} onChange={(e) => setNewServer((p) => ({ ...p, name: e.target.value }))} placeholder="my-mcp-server" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
-            </div>
-            <div>
-              <label className="text-[10.5px] text-text-muted">传输方式</label>
-              <select value={newServer.transport} onChange={(e) => setNewServer((p) => ({ ...p, transport: e.target.value as api.McpTransport }))} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary">
-                <option value="stdio">stdio</option>
-                <option value="http">http</option>
-              </select>
-            </div>
-            {newServer.transport === "stdio" ? (
-              <>
-                <div>
-                  <label className="text-[10.5px] text-text-muted">Command</label>
-                  <input value={newServer.command} onChange={(e) => setNewServer((p) => ({ ...p, command: e.target.value }))} placeholder="npx" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
-                </div>
-                <div>
-                  <label className="text-[10.5px] text-text-muted">Args (空格分隔)</label>
-                  <input value={newServer.args} onChange={(e) => setNewServer((p) => ({ ...p, args: e.target.value }))} placeholder="-y @modelcontextprotocol/server-filesystem /tmp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
-                </div>
-              </>
-            ) : (
-              <div className="col-span-2">
-                <label className="text-[10.5px] text-text-muted">URL</label>
-                <input value={newServer.url} onChange={(e) => setNewServer((p) => ({ ...p, url: e.target.value }))} placeholder="https://example.com/mcp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+
+          <div className="flex gap-2 text-[11px]">
+            <button
+              onClick={() => setAddMode("paste")}
+              className={addMode === "paste" ? "px-2 py-1 rounded-md bg-bg-tertiary text-text-primary" : "px-2 py-1 rounded-md text-text-muted hover:text-text-primary"}
+            >粘贴导入</button>
+            <button
+              onClick={() => setAddMode("manual")}
+              className={addMode === "manual" ? "px-2 py-1 rounded-md bg-bg-tertiary text-text-primary" : "px-2 py-1 rounded-md text-text-muted hover:text-text-primary"}
+            >手动填写（高级）</button>
+          </div>
+
+          {addMode === "paste" ? (
+            <>
+              <div>
+                <label className="text-[10.5px] text-text-muted">粘贴配置（Claude Desktop / Cursor 风格 mcpServers JSON）</label>
+                <textarea
+                  value={pasteJson}
+                  onChange={(e) => setPasteJson(e.target.value)}
+                  rows={7}
+                  placeholder={'{"mcpServers":{"my-fs":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]},"remote":{"url":"https://example.com/mcp"}}}'}
+                  className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary resize-none font-mono"
+                />
+                <p className="mt-1 text-[11px] text-text-muted">支持 mcpServers 对象或单条 server 配置，自动识别 stdio / http。</p>
               </div>
-            )}
-            <div className="col-span-2">
-              <label className="text-[10.5px] text-text-muted">环境变量 (每行 KEY=value)</label>
-              <textarea value={newServer.env} onChange={(e) => setNewServer((p) => ({ ...p, env: e.target.value }))} placeholder={"API_KEY=xxx"} rows={2} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary resize-none" />
-            </div>
-            <div className="col-span-2">
-              <label className="text-[10.5px] text-text-muted">描述 (可选)</label>
-              <input value={newServer.description} onChange={(e) => setNewServer((p) => ({ ...p, description: e.target.value }))} placeholder="自定义文件系统 MCP" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={handleAdd} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:opacity-90 disabled:opacity-50">
-              {adding ? "添加中..." : "确认添加"}
-            </button>
-            <button onClick={() => { setShowAddForm(false); setAddError(null); }} className="px-3 py-1.5 rounded-lg text-xs text-text-muted hover:text-text-primary hover:bg-bg-tertiary">
-              取消
-            </button>
-          </div>
+              <div className="flex items-center gap-2">
+                <button onClick={handleImportPaste} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-accent-on-text text-xs font-medium hover:opacity-90 disabled:opacity-50">导入</button>
+                <button onClick={() => { setShowAddForm(false); setAddError(null); }} className="px-3 py-1.5 rounded-lg text-xs text-text-muted hover:text-text-primary hover:bg-bg-tertiary">取消</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10.5px] text-text-muted">名称</label>
+                  <input value={newServer.name} onChange={(e) => setNewServer((p) => ({ ...p, name: e.target.value }))} placeholder="my-mcp-server" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                </div>
+                <div>
+                  <label className="text-[10.5px] text-text-muted">传输方式</label>
+                  <select value={newServer.transport} onChange={(e) => setNewServer((p) => ({ ...p, transport: e.target.value as api.McpTransport }))} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary">
+                    <option value="stdio">stdio</option>
+                    <option value="http">http</option>
+                  </select>
+                </div>
+                {newServer.transport === "stdio" ? (
+                  <>
+                    <div>
+                      <label className="text-[10.5px] text-text-muted">Command</label>
+                      <input value={newServer.command} onChange={(e) => setNewServer((p) => ({ ...p, command: e.target.value }))} placeholder="npx" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                    </div>
+                    <div>
+                      <label className="text-[10.5px] text-text-muted">Args (空格分隔)</label>
+                      <input value={newServer.args} onChange={(e) => setNewServer((p) => ({ ...p, args: e.target.value }))} placeholder="-y @modelcontextprotocol/server-filesystem /tmp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                    </div>
+                  </>
+                ) : (
+                  <div className="col-span-2">
+                    <label className="text-[10.5px] text-text-muted">URL</label>
+                    <input value={newServer.url} onChange={(e) => setNewServer((p) => ({ ...p, url: e.target.value }))} placeholder="https://example.com/mcp" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                  </div>
+                )}
+                <div className="col-span-2">
+                  <label className="text-[10.5px] text-text-muted">环境变量 (每行 KEY=value)</label>
+                  <textarea value={newServer.env} onChange={(e) => setNewServer((p) => ({ ...p, env: e.target.value }))} placeholder={"API_KEY=xxx"} rows={2} className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary resize-none" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10.5px] text-text-muted">描述 (可选)</label>
+                  <input value={newServer.description} onChange={(e) => setNewServer((p) => ({ ...p, description: e.target.value }))} placeholder="自定义文件系统 MCP" className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg bg-bg-tertiary text-xs text-text-primary border border-border-secondary" />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={handleAdd} disabled={adding} className="px-3 py-1.5 rounded-lg bg-accent text-accent-on-text text-xs font-medium hover:opacity-90 disabled:opacity-50">
+                  {adding ? "添加中..." : "确认添加"}
+                </button>
+                <button onClick={() => { setShowAddForm(false); setAddError(null); }} className="px-3 py-1.5 rounded-lg text-xs text-text-muted hover:text-text-primary hover:bg-bg-tertiary">
+                  取消
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -817,7 +728,7 @@ function ConnectorsTab({ query, onQuery }: { query: string; onQuery: (q: string)
           icon={Network}
           text={
             servers.length === 0
-              ? "没有 MCP 服务。点击「恢复官方示例」可以加载 5 个常用 seed。"
+              ? "你还没有添加任何 MCP 服务，粘贴配置即可添加。"
               : "没有匹配的连接器。"
           }
         />
@@ -893,7 +804,7 @@ function ConnectorRow({
           title={server.enabled ? "停用" : "启用"}
         >
           <span
-            className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${
+            className={`block w-5 h-5 rounded-full bg-bg-card shadow transition-transform ${
               server.enabled ? "translate-x-5" : "translate-x-1"
             }`}
           />
@@ -912,7 +823,7 @@ function ConnectorRow({
 
 // ── Toolsets tab: backend tool registry (a.k.a. toolset groups) ──────
 
-function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
+export function ToolsetsTab({ query, onQuery }: { query: string; onQuery: (q: string) => void }) {
   const [toolsets, setToolsets] = useState<ToolsetInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1144,7 +1055,7 @@ function ToolsetCard({
           } ${saving ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
         >
           <span
-            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-bg-card shadow transition-transform ${
               enabled ? "translate-x-5" : "translate-x-1"
             }`}
           />
@@ -1163,7 +1074,7 @@ function ToolsetCard({
 
 // ── Shared building blocks ──────────────────────────────────────────
 
-function SearchBar({
+export function SearchBar({
   query,
   onQuery,
   right,
