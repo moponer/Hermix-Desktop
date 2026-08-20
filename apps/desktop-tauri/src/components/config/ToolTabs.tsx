@@ -323,14 +323,17 @@ function SkillCard({ skill, catLabel, onToggle }: {
           <button
             onClick={(e) => { e.stopPropagation(); requestToggle(); }}
             disabled={toggling}
-            className="w-6 h-6 rounded-full border border-border-secondary text-text-muted hover:text-text-primary hover:border-text-muted disabled:opacity-50 shrink-0"
+            className={`w-7 h-7 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+              skill.enabled
+                ? "bg-accent border-accent text-white"
+                : "bg-bg-card border-border-secondary text-text-muted hover:border-accent hover:text-accent"
+            } disabled:opacity-50`}
             title={skill.enabled ? "禁用" : "启用"}
           >
-            {skill.enabled ? (
-              <Sparkles size={12} className="mx-auto text-success" />
-            ) : (
-              <Plus size={12} className="mx-auto" />
-            )}
+            {skill.enabled
+              ? <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              : <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2v8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+            }
           </button>
         </div>
       </div>
@@ -1219,14 +1222,17 @@ function PluginCard({
       <button
         onClick={onToggle}
         disabled={saving || disabled}
-        className="w-6 h-6 rounded-full border border-border-secondary text-text-muted hover:text-text-primary hover:border-text-muted disabled:opacity-50 shrink-0"
+        className={`w-7 h-7 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+          enabled
+            ? "bg-accent border-accent text-white"
+            : "bg-bg-card border-border-secondary text-text-muted hover:border-accent hover:text-accent"
+        } disabled:opacity-50`}
         title={disabled ? "只读" : enabled ? "禁用" : "启用"}
       >
-        {enabled ? (
-          <Sparkles size={12} className="mx-auto text-success" />
-        ) : (
-          <Plus size={12} className="mx-auto" />
-        )}
+        {enabled
+          ? <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          : <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2v8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+        }
       </button>
     </div>
   );
