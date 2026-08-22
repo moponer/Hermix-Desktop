@@ -19,6 +19,8 @@ pub mod manifest;
 pub mod scanner;
 pub mod icon_library;
 pub mod validate;
+pub mod app_archive;
+pub use app_archive::{build_archive_bytes, load_archive, AppArchive, ArchiveEntry};
 pub use validate::validate_custom_app;
 pub mod smoke;
 pub use smoke::{run_smoke_test, run_smoke_test_async, SmokeError, SmokeReport};
@@ -180,6 +182,18 @@ pub fn resolve_webview2_loader_path() -> PathBuf {
     .into_iter().flatten();
     for c in candidates { if c.exists() { return c; } }
     home.join("loader").join("WebView2Loader.dll")
+}
+
+/// 已安装 custom app 的根目录 — `~/.hermix/custom-apps/`
+/// 约定每个 app 一个子目录 `<id>/{manifest.json, dist/<id>.exe, ...}`
+/// 由 `hx-packager install` 写入，`hx-shell` 启动时扫描加载
+pub fn resolve_custom_apps_dir() -> PathBuf {
+    hermix_config::paths::hermix_home().join("custom-apps")
+}
+
+/// 单个已安装 app 的目录 — `<custom-apps>/<id>/`
+pub fn resolve_custom_app_dir(id: &str) -> PathBuf {
+    resolve_custom_apps_dir().join(id)
 }
 
 /// The main plugin manager that coordinates all plugin operations.

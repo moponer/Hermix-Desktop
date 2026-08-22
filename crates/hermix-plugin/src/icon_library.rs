@@ -314,6 +314,7 @@ const RT_RCDATA: windows_sys::core::PCWSTR = 10u16 as *const u16;
 /// 自定义应用资源名 (RT_RCDATA 整数 id)。
 const RES_HXAPP: u16 = 1000; // html payload
 const RES_HXICON: u16 = 1001; // 窗口标题栏图标 PNG
+const RES_HXAPPMULTI: u16 = 1002; // 多文件归档 blob (app:// 虚拟协议用)
 
 /// 把自定义应用的 HTML 与图标 PNG 作为 PE 资源 (RT_RCDATA) 嵌入 exe。
 ///
@@ -391,6 +392,134 @@ pub fn embed_app_payload(
     }
     Ok(())
 }
+
+/// 嵌入多文件应用归档 blob（Phase 0，spec §1）。
+///
+/// 与 `embed_app_payload` 区别：本函数只写归档（1002），不写单 HTML（1000）。
+/// 当归档存在时壳优先走 `app://` 多文件加载；壳回退到 `RES_HXAPP`（1000）
+/// 是单文件旧路径，保留兼容性。
+#[cfg(windows)]
+pub fn embed_app_payload_multi(exe_path: &Path, archive: &[u8]) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{BOOL, FALSE, HANDLE, TRUE};
+    use windows_sys::Win32::System::LibraryLoader::{
+        BeginUpdateResourceW, EndUpdateResourceW, UpdateResourceW,
+    };
+
+    let path_w: Vec<u16> = exe_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let h: HANDLE = unsafe { BeginUpdateResourceW(path_w.as_ptr(), FALSE) };
+    if h == 0 {
+        return Err(format!(
+            "BeginUpdateResourceW 失败: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let ok: BOOL = unsafe {
+        UpdateResourceW(
+            h,
+            RT_RCDATA,
+            RES_HXAPPMULTI as *const u16,
+            0,
+            archive.as_ptr() as *const core::ffi::c_void,
+            archive.len() as u32,
+        )
+    };
+    if ok == FALSE {
+        let _ = unsafe { EndUpdateResourceW(h, TRUE) };
+        return Err(format!(
+            "UpdateResourceW(name={RES_HXAPPMULTI}) 失败: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let ok: BOOL = unsafe { EndUpdateResourceW(h, FALSE) };
+    if ok == FALSE {
+        return Err(format!(
+            "EndUpdateResourceW 失败: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+/// 同时嵌入单 HTML（1000）和多文件归档（1002）—— 当 app 既有单 HTML 又有 vendor/
+/// 资源目录时使用。壳启动按优先级：归档存在走 app://，否则回退 RES_HXAPP。
+#[cfg(windows)]
+pub fn embed_app_payload_both(
+    exe_path: &Path,
+    html: &[u8],
+    icon_png: Option<&[u8]>,
+    archive: Option<&[u8]>,
+) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{BOOL, FALSE, HANDLE, TRUE};
+    use windows_sys::Win32::System::LibraryLoader::{
+        BeginUpdateResourceW, EndUpdateResourceW, UpdateResourceW,
+    };
+
+    let path_w: Vec<u16> = exe_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let h: HANDLE = unsafe { BeginUpdateResourceW(path_w.as_ptr(), FALSE) };
+    if h == 0 {
+        return Err(format!(
+            "BeginUpdateResourceW 失败: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let write = |name: u16, data: &[u8]| -> Result<(), String> {
+        let ok: BOOL = unsafe {
+            UpdateResourceW(
+                h,
+                RT_RCDATA,
+                name as *const u16,
+                0,
+                data.as_ptr() as *const core::ffi::c_void,
+                data.len() as u32,
+            )
+        };
+        if ok == FALSE {
+            Err(format!(
+                "UpdateResourceW(name={name}) 失败: {}",
+                std::io::Error::last_os_error()
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    if let Err(e) = write(RES_HXAPP, html) {
+        let _ = unsafe { EndUpdateResourceW(h, TRUE) };
+        return Err(e);
+    }
+    if let Some(icon) = icon_png {
+        if let Err(e) = write(RES_HXICON, icon) {
+            let _ = unsafe { EndUpdateResourceW(h, TRUE) };
+            return Err(e);
+        }
+    }
+    if let Some(arc) = archive {
+        if let Err(e) = write(RES_HXAPPMULTI, arc) {
+            let _ = unsafe { EndUpdateResourceW(h, TRUE) };
+            return Err(e);
+        }
+    }
+    let ok: BOOL = unsafe { EndUpdateResourceW(h, FALSE) };
+    if ok == FALSE {
+        return Err(format!(
+            "EndUpdateResourceW 失败: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+/// 常量供壳端使用（避免在 hx-shell/src/main.rs 中硬编码资源 id）
+pub const HX_RES_APP_MULTI: u16 = RES_HXAPPMULTI;
 
 /// 从当前 exe 的 PE 资源 (RT_RCDATA) 读取自定义应用 payload / 图标。
 /// 找不到（未打包 / 非 Windows）返回 None，调用方回退到 EOF 尾部或默认值。

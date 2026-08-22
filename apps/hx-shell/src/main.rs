@@ -54,6 +54,7 @@ pub const BUILD_PROBE: &str = "BUILD_PROBE_2026_DC_V7";
 const RT_RCDATA: windows_sys::core::PCWSTR = 10u16 as *const u16;
 const RES_HXAPP: u16 = 1000; // html payload
 const RES_HXICON: u16 = 1001; // 图标 PNG/SVG
+const RES_HXAPPMULTI: u16 = 1002; // 多文件归档 (Phase 0, spec §1) — app:// 虚拟协议用
 
 // ------------------------------------------------------------------
 // 调试日志（写 exe 同目录 hx-shell.log）
@@ -85,9 +86,14 @@ fn read_pe_resource(id: u16) -> Option<Vec<u8>> {
     unsafe {
         let module: HMODULE = GetModuleHandleW(std::ptr::null());
         if module == 0 {
+            hx_log(&format!("read_pe_resource({id}): GetModuleHandleW=0"));
             return None;
         }
         let res = FindResourceW(module, id as *const u16, RT_RCDATA);
+        hx_log(&format!(
+            "read_pe_resource({id}): FindResourceW={res}, err={}",
+            std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+        ));
         if res == 0 {
             return None;
         }
@@ -898,6 +904,102 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
 // hxfile:// 自定义协议 — 让 WebView 直接访问本地文件
 // ------------------------------------------------------------------
 
+// ------------------------------------------------------------------
+// 多文件应用归档（Phase 0 / spec §1）：从 PE 资源 1002 读归档 blob，
+// 然后由 `app://` 协议按 relpath 解包给 WebView。
+// 格式与 hermix-plugin/src/app_archive.rs 镜像定义（壳不引 hermix-plugin
+// 以避免循环依赖 — 格式稳定、自包含，用本地复制解析器）。
+// ------------------------------------------------------------------
+
+/// 归档 blob 解析结果。blob 保留全字节，entries 是相对路径→(offset, length) 表。
+struct ParsedArchive {
+    blob: Vec<u8>,
+    entries: Vec<(String, usize, usize)>, // (relpath, offset, length)
+}
+
+fn parse_app_archive(blob: &[u8]) -> Option<ParsedArchive> {
+    if blob.len() < 4 + 1 + 4 + 32 {
+        return None;
+    }
+    if &blob[0..4] != b"HXAM" {
+        return None;
+    }
+    if blob[4] != 0x01 {
+        return None;
+    }
+    let count = u32::from_le_bytes(blob[5..9].try_into().ok()?) as usize;
+    let mut pos = 9usize;
+    let mut entries = Vec::with_capacity(count);
+    for _ in 0..count {
+        if pos + 2 > blob.len() {
+            return None;
+        }
+        let rp_len = u16::from_le_bytes(blob[pos..pos + 2].try_into().ok()?) as usize;
+        pos += 2;
+        if pos + rp_len > blob.len() {
+            return None;
+        }
+        let relpath = std::str::from_utf8(&blob[pos..pos + rp_len])
+            .ok()?
+            .to_string();
+        pos += rp_len;
+        if pos + 4 > blob.len() {
+            return None;
+        }
+        let data_len = u32::from_le_bytes(blob[pos..pos + 4].try_into().ok()?) as usize;
+        pos += 4;
+        if pos + data_len > blob.len() {
+            return None;
+        }
+        entries.push((relpath, pos, data_len));
+        pos += data_len;
+    }
+    Some(ParsedArchive {
+        blob: blob.to_vec(),
+        entries,
+    })
+}
+
+/// 自读归档 blob（PE 资源 1002）。
+fn read_self_archive() -> Option<Vec<u8>> {
+    let v = read_pe_resource(RES_HXAPPMULTI);
+    hx_log(&format!("read_self_archive(1002): {:?}", v.as_ref().map(|b| b.len())));
+    let v = v?;
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+/// 进程内静态归档缓存：startup 时一次性 parse，所有 `app://` 请求查表。
+/// 无锁（启动期单线程，运行时只读）。
+static APP_ARCHIVE: std::sync::OnceLock<Option<ParsedArchive>> = std::sync::OnceLock::new();
+
+/// Phase 6 dev 模式：startup 时若传 --app-dir，写入此 PathBuf，
+/// `app://` 请求查表时优先 PE 归档 fallback 磁盘，相对外联全活。
+static APP_DIR_FOR_DEV: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+
+fn get_app_archive() -> Option<&'static ParsedArchive> {
+    APP_ARCHIVE.get_or_init(|| {
+        let bytes = read_self_archive()?;
+        match parse_app_archive(&bytes) {
+            Some(a) => {
+                hx_log(&format!("app archive parsed: {} entries", a.entries.len()));
+                Some(a)
+            }
+            None => {
+                hx_log("app archive parse failed (bad magic / truncated)");
+                None
+            }
+        }
+    }).as_ref()
+}
+
+fn get_app_dir_for_dev() -> Option<&'static std::path::PathBuf> {
+    APP_DIR_FOR_DEV.get_or_init(|| None).as_ref()
+}
+
 /// 简单 MIME 类型推断（基于文件扩展名）
 fn mime_type(path: &str) -> &'static str {
     let lower = path.to_ascii_lowercase();
@@ -950,6 +1052,64 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
+/// app:// 协议处理器（Phase 1 / spec §1）：从归档里按 relpath 解包返回给 WebView。
+/// Phase 6 dev 模式：先查 PE 归档，miss 再查磁盘 `--app-dir`（dev runner 直接 host app_dir，
+///                跳过 .dev.html 生成、与 prod 共用 app:// handler）。
+/// URL 形式：app://localhost/index.html、app://localhost/vendor/pdf.js 等。
+/// 找不到则 404（WebView 自动 fallback 到 about:blank，但浏览器/前端可拦截此错误）。
+fn app_protocol_handler(_webview_id: &str, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
+    let uri_path = request.uri().path();
+    hx_log(&format!("app:// {}", uri_path));
+    // uri_path = "/index.html" 或 "/vendor/foo.js"
+    let relpath = if let Some(stripped) = uri_path.strip_prefix('/') {
+        stripped
+    } else {
+        uri_path
+    };
+    // 1) prod 模式：PE 归档优先
+    if let Some(archive) = get_app_archive() {
+        for (rp, offset, length) in &archive.entries {
+            if rp == relpath {
+                let start = *offset;
+                let end = start + *length;
+                let body = archive.blob.get(start..end).unwrap_or(&[]);
+                let mime = mime_type(relpath);
+                return http::Response::builder()
+                    .header(CONTENT_TYPE, mime)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(Cow::Owned(body.to_vec()))
+                    .unwrap();
+            }
+        }
+    }
+    // 2) dev 模式：磁盘 host（spec §8.7 Phase 6）
+    if let Some(app_dir) = get_app_dir_for_dev() {
+        let fs_path = app_dir.join(relpath);
+        // 防越界：relpath 含 ".." 拒绝（防 ../etc/passwd）
+        if relpath.contains("..") {
+            return http::Response::builder()
+                .status(403)
+                .header(CONTENT_TYPE, "text/plain")
+                .body(Cow::Owned(b"forbidden: relative path with ..".to_vec()))
+                .unwrap();
+        }
+        if let Ok(bytes) = std::fs::read(&fs_path) {
+            let mime = mime_type(relpath);
+            return http::Response::builder()
+                .header(CONTENT_TYPE, mime)
+                .header("Access-Control-Allow-Origin", "*")
+                .body(Cow::Owned(bytes))
+                .unwrap();
+        }
+    }
+    hx_log(&format!("app:// 404: {relpath}"));
+    http::Response::builder()
+        .status(404)
+        .header(CONTENT_TYPE, "text/plain")
+        .body(Cow::Owned(format!("not found: {relpath}").into_bytes()))
+        .unwrap()
+}
+
 /// hxfile:// 协议处理器：从 URL 路径读取本地文件
 fn hxfile_handler(_webview_id: &str, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let uri_path = request.uri().path();
@@ -987,12 +1147,84 @@ fn hxfile_handler(_webview_id: &str, request: Request<Vec<u8>>) -> Response<Cow<
 // 入口
 // ------------------------------------------------------------------
 fn main() -> wry::Result<()> {
+    // shell 预置前端能力层 (spec §7) — IIFE 已自我执行, 直接 include_str 嵌入 init script
+    // DEV_APP_URL_HELPER_v2 — 改 runtime.js 时同步改此 token 让 cargo 必然重 include_str!
+    const HERMIX_RUNTIME_JS: &str = include_str!("../resources/hermix-runtime.js");
+    let _rt_dev_marker: &str = "DEV_APP_URL_HELPER_v2";
+
+    // 原生 JS init script (raw 字符串, 不参与 format! 以避免 brace 冲突)
+    const INIT_SCRIPT_BASE: &str = r#"
+            (function(){
+              try {
+                window.__hx_id = 0;
+
+                // ── 底层 RPC：window.invoke(cmd, args) → Promise ──
+                window.invoke = function(cmd, args) {
+                  return new Promise(function(resolve) {
+                    var id = 'hx' + (++window.__hx_id);
+                    window['__hx_resolve_' + id] = function(r){
+                      delete window['__hx_resolve_' + id];
+                      resolve(r);
+                    };
+                    try {
+                      window.chrome.webview.postMessage(JSON.stringify({ id: id, m: cmd, a: args || {} }));
+                    } catch (e) { resolve({ok: false, err: String(e)}); }
+                  });
+                };
+
+                // ── 文档化公开 API：window.hx.* ──
+                window.hx = {
+                  writeFile: function(path, content) { return window.invoke('writeFile', [path, content]); },
+                  readFile: function(path) { return window.invoke('readFile', [path]); },
+                  readFileBytes: function(path) { return window.invoke('readFileBytes', [path]); },
+                  writeFileBytes: function(path, b64) { return window.invoke('writeFileBytes', [path, b64]); },
+                  appendFile: function(path, content) { return window.invoke('appendFile', [path, content]); },
+                  removeFile: function(path) { return window.invoke('removeFile', [path]); },
+                  readDir: function(path) { return window.invoke('readDir', [path]); },
+                  readDirDetailed: function(path) { return window.invoke('readDirDetailed', [path]); },
+                  stat: function(path) { return window.invoke('stat', [path]); },
+                  createDir: function(path) { return window.invoke('createDir', [path]); },
+                  removeDir: function(path) { return window.invoke('removeDir', [path]); },
+                  openDialog: function(opts) { return window.invoke('openDialog', opts || {}); },
+                  saveDialog: function(opts) { return window.invoke('saveDialog', opts || {}); },
+                  exec: function(cmd, args) { return window.invoke('exec', {cmd: cmd, args: args || []}); },
+                  getInfo: function() { return window.invoke('getInfo', {}); },
+                  fileUrl: function(path) {
+                    if (!path) return '';
+                    var p = String(path).replace(/\\\\/g, '/');
+                    if (p.charAt(0) === '/') p = p.slice(1);
+                    p = encodeURIComponent(p).replace(/%2F/gi, '/');
+                    return 'hxfile://localhost/' + p;
+                  },
+                  showMessage: function(msg) { return Promise.resolve({ok: true, data: String(msg || '')}); },
+                  win: {
+                    minimize: function() { return window.invoke('win_minimize', {}); },
+                    maximize: function() { return window.invoke('win_maximize', {}); },
+                    toggleMaximize: function() { return window.invoke('win_toggleMaximize', {}); },
+                    close: function() { return window.invoke('win_close', {}); },
+                    setTitle: function(title) { return window.invoke('win_setTitle', [title || '']); },
+                    startDrag: function() { return window.invoke('win_startDrag', {}); },
+                    isMaximized: function() { return window.invoke('win_isMaximized', {}); },
+                  },
+                };
+              } catch(e) {
+                if (typeof console !== 'undefined') console.error('hx init error:', e);
+              }
+            })();
+        "#;
+
     // --html <path>：直接加载外部 html 文件（测试版 / dev 模式），不读 exe 内 payload、
-    // 不在 exe 尾部拼数据，因此不会触发 Defender 对「单文件打包」的结构型误报。
     let args: Vec<String> = std::env::args().collect();
     let html_arg: Option<String> = args
         .iter()
         .position(|a| a == "--html")
+        .and_then(|i| args.get(i + 1).cloned());
+    // --html-url <url>：dev mode 加载远程 HTML（用 std::net::TcpStream 拉 HTTP/1.0，避开 ureq/reqwest 依赖）。
+    //   关键场景：让 WebView2 在 http(s) origin 下加载，能用 localStorage / fetch(app://) / 异步资源。
+    //   --html 用 file:// 或 with_html 都落到 about:blank，无 origin，WebView2 拒绝 localStorage + fetch(app://)。
+    let html_url_arg: Option<String> = args
+        .iter()
+        .position(|a| a == "--html-url")
         .and_then(|i| args.get(i + 1).cloned());
 
     // 应用基准目录：优先 --app-dir（主程序 spawn 时显式传入应用目录），
@@ -1002,8 +1234,15 @@ fn main() -> wry::Result<()> {
         .iter()
         .position(|a| a == "--app-dir")
         .and_then(|i| args.get(i + 1).cloned());
-    let base_dir: Option<std::path::PathBuf> = app_dir_arg
-        .map(std::path::PathBuf::from)
+    // ── app 唯一 id ── Hermix.storage/Hermix.sqlite 的命名空间隔离凭据
+    // 由主程序 spawn 时传 --app-id <id>；缺省（dev 模式）走 "anonymous"。
+    let app_id_arg: Option<String> = args
+        .iter()
+        .position(|a| a == "--app-id")
+        .and_then(|i| args.get(i + 1).cloned());
+    let app_dir_path: Option<std::path::PathBuf> = app_dir_arg.clone().map(std::path::PathBuf::from);
+    let base_dir: Option<std::path::PathBuf> = app_dir_path
+        .clone()
         .or_else(|| {
             html_arg
                 .as_ref()
@@ -1015,7 +1254,13 @@ fn main() -> wry::Result<()> {
                 .and_then(|e| e.parent().map(|p| p.to_path_buf()))
         })
         .filter(|p| !p.as_os_str().is_empty());
-    let _ = APP_BASE_DIR.set(base_dir);
+    let _ = APP_BASE_DIR.set(base_dir.clone());
+    // Phase 6 dev 模式：把 --app-dir 显式值写入 APP_DIR_FOR_DEV，
+    // app:// 协议处理器会把磁盘文件按 relpath 喂 WebView（与 prod 共用 handler）。
+    let _ = APP_DIR_FOR_DEV.set(app_dir_path.clone());
+    if let Some(ref d) = app_dir_path {
+        hx_log(&format!("dev mode: app_dir_for_dev = {}", d.display()));
+    }
 
     // Panic hook：GUI 子系统下没有 stderr，用 MessageBox 显示崩溃信息
     std::panic::set_hook(Box::new(|info| {
@@ -1110,9 +1355,32 @@ fn main() -> wry::Result<()> {
     let webview_ref: std::sync::Arc<std::sync::Mutex<Option<wry::WebView>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
     let wv_ref = webview_ref.clone();
+
+    // ── Phase 3: 准备 init script（基础 + appId + 嵌入 hermix-runtime.js）──
+    // 必须在 builder 之前算完；用 String::from + `+` 拼接而非 format!，
+    // 因为 INIT_SCRIPT_BASE 与 HERMIX_RUNTIME_JS 内部有大量 `{`/`}` JS 语法，
+    // format!() 会扫 brace 把 JS 代码当作 placeholder 报错。
+    let init_app_id_prefix = format!(
+        "\n;window.Hermix = window.Hermix || {{}};\nwindow.Hermix.__appId = {app_id_json};\n",
+        app_id_json = serde_json::to_string(
+            &app_id_arg.clone().unwrap_or_else(|| "anonymous".into())
+        )
+        .unwrap_or_else(|_| "\"anonymous\"".into()),
+    );
+    let init_full: String = String::from(INIT_SCRIPT_BASE)
+        + &init_app_id_prefix
+        + HERMIX_RUNTIME_JS;
+    hx_log(&format!(
+        "init script: {} bytes (runtime {} bytes)",
+        init_full.len(),
+        HERMIX_RUNTIME_JS.len()
+    ));
+
     let builder = WebViewBuilder::new()
         // hxfile:// 自定义协议 — 让 <audio>/<img>/<video> 能直接访问本地文件
         .with_custom_protocol("hxfile".into(), hxfile_handler)
+        // app:// 自定义协议 — Phase 1：从多文件归档按 relpath 解包喂给 WebView
+        .with_custom_protocol("app".into(), app_protocol_handler)
         .with_ipc_handler(move |req| {
             let body = req.body().to_string();
             hx_log(&format!("IPC: {}", body));
@@ -1162,124 +1430,14 @@ fn main() -> wry::Result<()> {
                 }
             }
         })
-        // init_script 在任何页面 JS 之前执行：
-        // 1) 暴露 window.invoke(cmd, args) → Promise — 底层 RPC
-        // 2) 暴露 window.hx.* — 文档化公开 API，包装 window.invoke
-        .with_initialization_script(r#"
-            (function(){
-              try {
-                window.__hx_id = 0;
+        // init_script — Phase 3 拼好的完整 init 串（含 runtime.js）
+        .with_initialization_script(&init_full);
 
-                // ── 底层 RPC：window.invoke(cmd, args) → Promise ──
-                window.invoke = function(cmd, args) {
-                  return new Promise(function(resolve) {
-                    var id = 'hx' + (++window.__hx_id);
-                    window['__hx_resolve_' + id] = function(r){
-                      delete window['__hx_resolve_' + id];
-                      resolve(r);
-                    };
-                    try {
-                      window.chrome.webview.postMessage(JSON.stringify({ id: id, m: cmd, a: args || {} }));
-                    } catch (e) { resolve({ok: false, err: String(e)}); }
-                  });
-                };
-
-                // ── 文档化公开 API：window.hx.* ──
-                window.hx = {
-                  // 文件系统
-                  writeFile: function(path, content) {
-                    return window.invoke('writeFile', [path, content]);
-                  },
-                  readFile: function(path) {
-                    return window.invoke('readFile', [path]);
-                  },
-                  // 二进制读取 → base64（页面端 atob 解码）
-                  readFileBytes: function(path) {
-                    return window.invoke('readFileBytes', [path]);
-                  },
-                  // 二进制写入（base64）
-                  writeFileBytes: function(path, b64) {
-                    return window.invoke('writeFileBytes', [path, b64]);
-                  },
-                  appendFile: function(path, content) {
-                    return window.invoke('appendFile', [path, content]);
-                  },
-                  removeFile: function(path) {
-                    return window.invoke('removeFile', [path]);
-                  },
-                  readDir: function(path) {
-                    return window.invoke('readDir', [path]);
-                  },
-                  // 带元信息的目录列表
-                  readDirDetailed: function(path) {
-                    return window.invoke('readDirDetailed', [path]);
-                  },
-                  stat: function(path) {
-                    return window.invoke('stat', [path]);
-                  },
-                  createDir: function(path) {
-                    return window.invoke('createDir', [path]);
-                  },
-                  removeDir: function(path) {
-                    return window.invoke('removeDir', [path]);
-                  },
-                  // 原生对话框（rfd）
-                  openDialog: function(opts) {
-                    return window.invoke('openDialog', opts || {});
-                  },
-                  saveDialog: function(opts) {
-                    return window.invoke('saveDialog', opts || {});
-                  },
-                  // 进程/系统
-                  exec: function(cmd, args) {
-                    return window.invoke('exec', {cmd: cmd, args: args || []});
-                  },
-                  getInfo: function() {
-                    return window.invoke('getInfo', {});
-                  },
-                  // 本地文件 URL — 把文件路径转成 hxfile:// URL
-                  fileUrl: function(path) {
-                    if (!path) return '';
-                    var p = String(path).replace(/\\\\/g, '/');
-                    if (p.charAt(0) === '/') p = p.slice(1);
-                    p = encodeURIComponent(p).replace(/%2F/gi, '/');
-                    return 'hxfile://localhost/' + p;
-                  },
-                  showMessage: function(msg) {
-                    return Promise.resolve({ok: true, data: String(msg || '')});
-                  },
-                  // ── 窗口控制（无装饰窗口）──
-                  win: {
-                    minimize: function() {
-                      return window.invoke('win_minimize', {});
-                    },
-                    maximize: function() {
-                      return window.invoke('win_maximize', {});
-                    },
-                    toggleMaximize: function() {
-                      return window.invoke('win_toggleMaximize', {});
-                    },
-                    close: function() {
-                      return window.invoke('win_close', {});
-                    },
-                    setTitle: function(title) {
-                      return window.invoke('win_setTitle', [title || '']);
-                    },
-                    startDrag: function() {
-                      return window.invoke('win_startDrag', {});
-                    },
-                    isMaximized: function() {
-                      return window.invoke('win_isMaximized', {});
-                    },
-                  },
-                };
-              } catch(e) {
-                if (typeof console !== 'undefined') console.error('hx init error:', e);
-              }
-            })();
-        "#);
+    // --html <path>：直接加载外部 html 文件（测试版 / dev 模式），不读 exe 内 payload、
 
     // 页面 HTML：单文件模式用尾部 payload，开发模式读外部 html 文件
+    // --html-url <http(s) URL> 时改用 with_url(url) 让 WebView2 在真实 origin 下加载，
+    // 启用 localStorage / fetch(app://) / 跨源等。html_arg / payload / fallback 都用 with_html (about:blank)。
     let html_source: String = if let Some(p) = &html_arg {
         // 测试版 / dev 模式：直接加载外部 html 文件，不落单 exe、不拼 payload
         hx_log(&format!("dev mode (--html): loading {}", p));
@@ -1299,16 +1457,37 @@ fn main() -> wry::Result<()> {
             Ok(s) => s,
             Err(e) => {
                 hx_log(&format!("index.html load failed: {e}"));
-                dev_error_html(&format!("index.html 加载失败: {e}"), &fp.display().to_string())
+                dev_error_html(&format!("index.html load failed: {e}"), &fp.display().to_string())
             }
         }
     };
     hx_log(&format!("html source: {} bytes", html_source.len()));
 
-    let webview = builder
-        .with_html(html_source.clone())
-        .build(&*window)?;
-    hx_log("webview build OK (with_html)");
+    // Phase 1：若多文件归档存在，优先走 app:// 加载（多文件）
+    // --html-url 提供远程 origin 时也走 with_url（带 origin，能 fetch app:// 协议）。
+    let use_app_protocol = read_self_archive().is_some() && html_arg.is_none() && html_url_arg.is_none();
+    let webview = if use_app_protocol {
+        // 用 app:// 协议加载，index.html 由归档提供，其它资源按相对解析
+        hx_log("loading via app:// (multi-file archive present)");
+        builder
+            .with_url("app://localhost/index.html")
+            .build(&*window)?
+    } else if let Some(url) = &html_url_arg {
+        // dev 模式远程 origin：让 WebView2 直接加载 http(s) URL，能用 localStorage / fetch(app://)。
+        hx_log(&format!("loading via with_url (--html-url): {}", url));
+        builder
+            .with_url(url.clone())
+            .build(&*window)?
+    } else {
+        hx_log(&format!(
+            "loading via with_html ({})",
+            if html_arg.is_some() { "dev mode" } else { "single-file fallback" }
+        ));
+        builder
+            .with_html(html_source.clone())
+            .build(&*window)?
+    };
+    hx_log("webview build OK");
     webview_ref.lock().unwrap().replace(webview);
     hx_log("enter event_loop");
 

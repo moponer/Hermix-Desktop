@@ -1,12 +1,12 @@
-//! hx-shell packager — 尾部注入模板壳生成单文件 exe
+//! hx-shell packager — 模板壳 + PE 资源节嵌多文件归档，产单 exe
 //!
-//! 用户机器零编译：打包 = 纯文件拼接（HTML + len:8LE + MAGIC）。
-//! 壳启动时读自身尾部 payload 加载页面，否则加载外部 resources/ 目录（开发模式）。
+//! 用户机器零编译、零 npm、零 esbuild：打包 = walk `app_dir` → 序列化裸清单
+//! → 写 PE `RT_RCDATA 1002`（多文件归档）。壳启动读资源节 → `app://` 虚拟协议
+//! 直喂 WebView2。
 //!
-//! 支持两种 app 形态：
-//! 1. **纯 HTML**：`index.html` 直接作为 payload（内联 CSS+JS）
-//! 2. **TSX/React**：`src/main.tsx` → esbuild 编译 → React UMD + app.js
-//!    inline 进 index.html（Hermix 内置 esbuild.exe + React UMD，完全离线）
+//! 仅支持一种 app 形态：**始终 vanilla HTML/CSS/JS（TSX 退役）**。detect 到
+//! `src/main.tsx` 即直接报错，引导 LLM 改 vanilla（spec §3.7 SKILL 护栏 + §1）。
+//! 复杂 UI 用壳预置原语（`Hermix.store` / `Hermix.defineComponent` / `HermixUI`）。
 //!
 //! 保留 `PackageMode` 枚举是为了与历史 API 兼容（hermix-tools/commands/dashboard
 //! 都引用 `hermix_plugin::PackageMode::Sidecar/NeuBuild`）。本打包器两种模式等价。
@@ -45,12 +45,8 @@ pub enum HxPackError {
     ShellNotFound(String),
     #[error("应用缺少 index.html: {0}")]
     NoIndexHtml(String),
-    #[error("esbuild 未找到: {0}（需要 Hermix 内置 resources/loader/esbuild.exe）")]
-    EsbuildNotFound(String),
-    #[error("esbuild 编译失败: {0}")]
-    EsbuildFailed(String),
-    #[error("React UMD 缺失: {0}")]
-    ReactUmMissing(String),
+    #[error("TSX/React 已退役 (spec §1): 检测到 {0}，请改 vanilla HTML/CSS/JS + 壳预置原语 (Hermix.store / defineComponent / HermixUI)。禁止 npm import。")]
+    TsxDeprecated(String),
     #[error("启动失败: {0}")]
     LaunchFailed(String),
     #[error("io error: {0}")]
@@ -133,61 +129,44 @@ impl HxShellPackager {
         home.join("loader").join(rel)
     }
 
-    /// 用 esbuild 编译 `src/main.tsx` → 返回 inline 的 `<script>...</script>` 块。
+    /// 检测 `src/main.tsx` 是否存在 —— 存在则直接拒绝打包（TSX 已退役）。
     ///
-    /// React/ReactDOM 是全局变量（由 UMD inline 注入），esbuild 只负责
-    /// TSX→JS 转换 + bundle，`--external:react --external:react-dom`
-    /// 跳过它们；`--jsx=transform` 生成 `React.createElement` 调用
-    /// （匹配 UMD 全局）。产物是 IIFE，直接内嵌 HTML。
-    fn compile_tsx(&self, app_dir: &Path) -> Result<String, HxPackError> {
-        let entry = app_dir.join("src").join("main.tsx");
-        if !entry.exists() {
-            return Ok(String::new()); // 无 TSX 源码，纯 HTML 模式
+    /// 历史背景：原版本通过 esbuild.exe + React UMD inline 把 TSX 编进单 HTML。
+    /// spec §1 重定义为「始终 vanilla、TSX 退役」：错误路径变 fail-fast，
+    /// packager 不再持有 esbuild 依赖，壳也不再依赖 React UMD bundle。
+    /// LLM 想用组件 / 状态 → 走壳预置的 `Hermix.*` / Preact 全局。
+    fn detect_tsx(&self, app_dir: &Path) -> Result<(), HxPackError> {
+        let tsx = app_dir.join("src").join("main.tsx");
+        if tsx.exists() {
+            return Err(HxPackError::TsxDeprecated(tsx.display().to_string()));
         }
-
-        let esbuild = Self::resolve_loader_file("esbuild.exe");
-        if !esbuild.exists() {
-            return Err(HxPackError::EsbuildNotFound(esbuild.display().to_string()));
+        // JSX/TS 痕迹也拒：src/*.jsx / src/*.ts 都按 TSX 处理（除纯 vanilla .js）
+        if let Ok(read) = std::fs::read_dir(app_dir.join("src")) {
+            for entry in read.flatten() {
+                if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
+                    if matches!(ext, "jsx" | "ts" | "tsx" | "mjs") {
+                        return Err(HxPackError::TsxDeprecated(
+                            entry.path().display().to_string(),
+                        ));
+                    }
+                }
+            }
         }
-
-        // 临时输出文件（同目录，避免跨盘）
-        let out_js = app_dir.join("dist").join("_app.bundle.js");
-        std::fs::create_dir_all(out_js.parent().unwrap())?;
-        let _ = std::fs::remove_file(&out_js);
-
-        let out = std::process::Command::new(&esbuild)
-            .arg("--bundle")
-            .arg("--format=iife")
-            .arg("--external:react")
-            .arg("--external:react-dom")
-            .arg("--jsx=transform")
-            .arg("--log-level=error")
-            .arg(format!("--outfile={}", out_js.display()))
-            .arg(entry)
-            .output()
-            .map_err(|e| HxPackError::EsbuildFailed(e.to_string()))?;
-
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            return Err(HxPackError::EsbuildFailed(
-                if msg.is_empty() { "unknown esbuild error".into() } else { msg },
-            ));
-        }
-
-        let js = std::fs::read_to_string(&out_js)?;
-        let _ = std::fs::remove_file(&out_js);
-        Ok(format!("<script>\n{js}\n</script>"))
+        Ok(())
     }
 
     /// 构造完整 payload bytes + 可选 icon png bytes：
-    /// - 纯 HTML 模式：`[icon_png?][icon_len:8LE][html][html_len:8LE][MAGIC]`
-    /// - TSX 模式：React UMD + ReactDOM UMD + esbuild 产物 inline 进 HTML 壳后再打包。
-    /// icon 段可选：有就前置，没就省略（保持向后兼容旧 exe）。
-    /// `icon_png_out` 仅在 manifest 有 icon_data 时为 Some(bytes)；None 时不打 icon 段。
+    /// - 始终 vanilla HTML/CSS/JS（spec §1，TSX 已退役，detect_tsx 提前 fail-fast）
+    /// - 多文件归档（Phase 0, spec §1）：
+    ///   - app 目录里有除 `index.html` 外的静态资源（vendor/*.js、*.css、images...）→ 归档非空 → Some(bytes)
+    ///   - 否则 None → 壳走旧单 HTML 路径（完全向后兼容）
     fn build_final_payload(
         &self,
         app_dir: &Path,
-    ) -> Result<(Vec<u8>, Option<Vec<u8>>), HxPackError> {
+    ) -> Result<(Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>), HxPackError> {
+        // TSX/JSX/TS 提前拦截（spec §1）
+        self.detect_tsx(app_dir)?;
+
         let html_path = app_dir.join("index.html");
         let raw_html = std::fs::read(&html_path).map_err(|_| {
             HxPackError::NoIndexHtml(html_path.display().to_string())
@@ -197,41 +176,8 @@ impl HxShellPackager {
         // 返回 bytes + is_svg 标记 (hx-shell read_self_icon 同时支持 SVG/PNG).
         let resolved_icon = resolve_app_icon(app_dir);
 
-        // 是否有 TSX 源码？
-        let has_tsx = app_dir.join("src").join("main.tsx").exists();
-        let html_vec = if !has_tsx {
-            raw_html
-        } else {
-            // TSX 模式：React UMD + 编译产物 inline 进模板
-            let react_umd = std::fs::read_to_string(Self::resolve_loader_file("react/react.production.min.js"))
-                .map_err(|_| HxPackError::ReactUmMissing("react.production.min.js".into()))?;
-            let react_dom_umd = std::fs::read_to_string(Self::resolve_loader_file("react/react-dom.production.min.js"))
-                .map_err(|_| HxPackError::ReactUmMissing("react.dom.production.min.js".into()))?;
-            let compiled = self.compile_tsx(app_dir)?;
-
-            let title = "Hermix App";
-            let html = String::from_utf8_lossy(&raw_html);
-            let has_root = html.contains("id=\"root\"") || html.contains("id='root'");
-            let body = if has_root {
-                let mut s = html.to_string();
-                s = s.replace(r#"<script src="/js/app.js"></script>"#, "");
-                s = s.replace(r#"<script src='/js/app.js'></script>"#, "");
-                let scripts = format!(
-                    "<script>\n{react_umd}\n</script>\n<script>\n{react_dom_umd}\n</script>\n{compiled}"
-                );
-                if let Some(pos) = s.rfind("</body>") {
-                    s.insert_str(pos, &scripts);
-                } else {
-                    s.push_str(&scripts);
-                }
-                s
-            } else {
-                format!(
-                    "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head><meta charset=\"utf-8\" /><title>{title}</title></head>\n<body>\n<div id=\"root\"></div>\n<script>\n{react_umd}\n</script>\n<script>\n{react_dom_umd}\n</script>\n{compiled}\n</body>\n</html>"
-                )
-            };
-            body.into_bytes()
-        };
+        // 始终 vanilla：直接读 index.html 原样进 PE 资源 1000
+        let html_vec = raw_html;
 
         // icon_bytes 是 (bytes, is_svg) — 塞尾部 payload 时 SVG/PNG 都行
         // (hx-shell read_self_icon 双格式解析), 直接取 bytes.
@@ -245,7 +191,26 @@ impl HxShellPackager {
             });
         let icon_bytes = tiled.or_else(|| resolved_icon.map(|(b, _is_svg)| b));
 
-        Ok((html_vec, icon_bytes))
+        // ── 多文件归档（Phase 0）：app 目录里所有静态资源 → 序列化 blob ──
+        // 注意：icon_bytes 不进归档（它经 PE 资源 RT_RCDATA 1001 / 任务栏 ICO 单独走）
+        let archive = match crate::app_archive::build(app_dir) {
+            Ok(a) if !a.entries.is_empty() => {
+                // 仅当除 index.html 外还有其它资源 → 才有意义走 app:// 多文件路径
+                let non_html_count = a.entries.iter().filter(|e| e.relpath != "index.html").count();
+                if non_html_count > 0 {
+                    Some(a.blob)
+                } else {
+                    None
+                }
+            }
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!("app_archive build failed (回退单 HTML): {e}");
+                None
+            }
+        };
+
+        Ok((html_vec, icon_bytes, archive))
     }
 
     /// 打包 app 目录 → dist/<id>.exe（单文件分发）。
@@ -257,7 +222,13 @@ impl HxShellPackager {
             HxPackError::ShellNotFound(self.shell_path.display().to_string())
         })?;
 
-        let (html, icon_png) = self.build_final_payload(app_dir)?;
+        let (html, icon_png, archive) = self.build_final_payload(app_dir)?;
+        eprintln!(
+            "[hx_packager] build_final_payload result: html={}B, icon={}B, archive={:?}",
+            html.len(),
+            icon_png.as_ref().map(|v| v.len()).unwrap_or(0),
+            archive.as_ref().map(|v| v.len())
+        );
 
         let dist_dir = app_dir.join("dist");
         std::fs::create_dir_all(&dist_dir)?;
@@ -268,7 +239,12 @@ impl HxShellPackager {
         // Behavior:Win32/DefenseEvasion.A!ml 的结构型触发点（被识别为
         // packer/cryptor 重叠数据）。改为正规资源节后结构合法。
         std::fs::write(&exe_path, &shell)?;
-        if let Err(e) = crate::icon_library::embed_app_payload(&exe_path, &html, icon_png.as_deref()) {
+        if let Err(e) = crate::icon_library::embed_app_payload_both(
+            &exe_path,
+            &html,
+            icon_png.as_deref(),
+            archive.as_deref(),
+        ) {
             tracing::warn!("嵌入 PE 资源失败, 回退 EOF 尾部注入 (可能触发 Defender 误报): {e}");
             // 回退：保留旧尾部拼接，保证可用（但可能误报）
             let mut out = std::fs::read(&exe_path)?;
@@ -379,19 +355,14 @@ impl HxShellPackager {
     // 部拼数据，因此不会触发 Defender 对「单文件打包」的结构型误报。
     pub fn run_dev(&self, app_dir: &Path, id: &str) -> Result<(), HxPackError> {
         self.ensure_shell_deployed();
-        let (html, _icon) = self.build_final_payload(app_dir)?;
-        let dist_dir = app_dir.join("dist");
-        std::fs::create_dir_all(&dist_dir)?;
-        let html_path = dist_dir.join(format!("{id}.dev.html"));
-        std::fs::write(&html_path, &html)?;
-        // 子进程 cwd 锁定到应用目录（与 run_plugin 一致），避免继承
-        // tauri dev 的 src-tauri/ 工作目录。同时显式传 --app-dir，让
-        // hx-shell 把相对路径写入解析到应用目录，彻底隔离主项目。
+        // Phase 6 dev 模式（spec §8.7）：dev 走虚拟协议 host 磁盘 app_dir，
+        // 与 prod 共用 app:// handler（hx-shell 内部 APP_DIR_FOR_DEV）。
+        // 不再生成 .dev.html、不再走单 HTML 包装，与打包后行为一致。
         let child = std::process::Command::new(&self.shell_path)
-            .arg("--html")
-            .arg(&html_path)
             .arg("--app-dir")
             .arg(app_dir)
+            .arg("--app-id")
+            .arg(id)
             .current_dir(app_dir)
             .spawn()
             .map_err(|e| HxPackError::LaunchFailed(e.to_string()))?;
