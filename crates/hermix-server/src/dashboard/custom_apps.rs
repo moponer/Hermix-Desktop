@@ -39,15 +39,7 @@ pub async fn list_apps(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let manager = get_manager(&state)?;
 
-    manager
-        .scan_plugins()
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("扫描应用失败: {e}") })),
-            )
-        })?;
-
+    // C 修复: 只读内存缓存, 不再每次请求扫盘 (启动首扫 + 写路径 rescan 保证新鲜)
     let entries: Vec<AppSummary> = manager
         .list_plugins()
         .iter()

@@ -61,6 +61,7 @@ pub mod tool_search;
 pub mod tool_chain;
 pub mod tts;
 pub mod url_safety;
+pub mod vendor;
 pub mod video_gen;
 pub mod voice_mode;
 pub mod web;
@@ -143,6 +144,7 @@ pub fn register_all(
             as Arc<dyn code_execution::CodeExecutionBackend>,
     );
     cua::register(registry);
+    vendor::register(registry);
     //P1.3 : file tools (read_file / write_file / patch /
     // search_files) share `terminal_backend` with the terminal tool so
     // every code path that opens files uses the same backend. Patch +

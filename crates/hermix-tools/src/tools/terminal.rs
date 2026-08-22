@@ -15,6 +15,12 @@ use crate::approval::{ApprovalDecision, ApprovalManager, TerminalApprovalContext
 use crate::context::{ContextAware, ToolCallContext};
 use crate::ToolRegistry;
 
+/// A 修复: terminal 工具的硬超时上限 (秒)。
+/// LLM 不传 `timeout` 时兜底到此值; 也防止 backend `default_timeout`
+/// 被改大后, powershell/cmd 去无限等外部 API 而卡死整个对话。
+/// 与 `LocalBackend::default()` 的 120s 对齐。
+const TERMINAL_HARD_TIMEOUT_SECS: u64 = 120;
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -488,7 +494,10 @@ async fn execute_inner(
             }
         }
 
-        let timeout = params.get("timeout").and_then(|v| v.as_u64());
+        let timeout = params
+            .get("timeout")
+            .and_then(|v| v.as_u64())
+            .or(Some(TERMINAL_HARD_TIMEOUT_SECS));
 
         // Resolve effective workdir:
         // 1. explicit `workdir` param from the LLM (highest priority)

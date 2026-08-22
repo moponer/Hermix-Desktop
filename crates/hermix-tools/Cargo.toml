@@ -50,6 +50,7 @@ image = { workspace = true }
 # Link-time plugin/extension registration. See
 # `hermix_tools::factory::ToolFactory` for the usage pattern.
 inventory = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

@@ -332,7 +332,17 @@ pub fn validate_custom_app(app_dir: &Path) -> ValidationReport {
 fn check_frontend_quality(code: &str, issues: &mut Vec<ValidationIssue>) {
     let lower = code.to_lowercase();
 
-    // 1) CDN 外链 → 离线白屏 (error, 阻断交付)
+    // 1) 远程运行时外链 → 断网/内网白屏 (error, 阻断交付, spec §3.7)
+    //
+    // 禁：<script src="http..."> / <link href="http..."> / <img src="http..."> /
+    //     <iframe src="http..."> / CSS @import url("http...")
+    //     常见 CDN 域名黑名单兜底（unpkg / jsdelivr / cdnjs 等）
+    // 放：本地相对 ./vendor/x.js、styles.css、assets/*；
+    //     data: / blob: / 协议相对 //（用本机 webview host 时已分情况）
+    //
+    // 替代之前的「禁一切 CDN」实现 —— 现在允许本地相对外联（vendor + 资源），
+    // 因为多文件归档已在 Phase 0 落地（spec §8.1），app 可以 vendor 外部库走相对外联。
+    let remote_hits = detect_remote_runtime_assets(code);
     let cdn_hosts = [
         "unpkg.com",
         "jsdelivr",
@@ -340,21 +350,35 @@ fn check_frontend_quality(code: &str, issues: &mut Vec<ValidationIssue>) {
         "cdn.tailwindcss",
         "ajax.googleapis",
         "cdn.bootcdn",
-        "jsdelivr.net",
     ];
-    let has_remote_script = code.contains("<script")
-        && (lower.contains("src=\"http") || lower.contains("src='http"));
-    let has_cdn = cdn_hosts.iter().any(|h| lower.contains(h));
-    if has_remote_script || has_cdn {
-        let why = if has_remote_script {
-            "检测到 <script src=\"http...\"> 远程脚本"
+    let cdn_hit = cdn_hosts.iter().find_map(|h| {
+        let idx = lower.find(h)?;
+        // 必须是在属性值或 URL 上下文（避免误中注释/字符串里的描述）
+        // 粗判定：命中的前后 80 字符内至少一个 < 或者 src=/href=
+        let ctx_start = idx.saturating_sub(80);
+        let ctx_end = (idx + h.len() + 80).min(lower.len());
+        let ctx = &lower[ctx_start..ctx_end];
+        if ctx.contains("src=") || ctx.contains("href=") || ctx.contains("@import") {
+            Some(*h)
         } else {
-            "检测到 CDN 域名 (unpkg/jsdelivr/cdnjs 等)"
+            None
+        }
+    });
+    if !remote_hits.is_empty() || cdn_hit.is_some() {
+        let why = if !remote_hits.is_empty() {
+            format!(
+                "检测到运行时远程资源: {}（这些地址用户断网/内网时会白屏）",
+                remote_hits.join(", ")
+            )
+        } else {
+            format!("检测到 CDN 域名 ({}) 在 src=/href= 属性上下文中", cdn_hit.unwrap())
         };
         issues.push(issue("error", "frontend", format!(
-            "{why}。自定义应用必须离线可用: Vue/React 运行时与图标必须内联进单文件 HTML \
-             (app_source 模式由 esbuild 注入, 或把库 UMD 源码直接贴进 <script>), 禁止外链 CDN。\
-             外链在用户断网/内网时会白屏。"
+            "{why}。自定义应用必须离线可用: 框架/状态/组件/图标走壳预置原语 \
+             (window.Hermix.store / defineComponent / icon / route / storage / Preact)，\
+             外部库通过创作期 vendor 到 app_dir/vendor/ 后用相对外联 \
+             (<script src=\"./vendor/x.js\">、<link href=\"styles.css\">), \
+             运行时禁止 http(s)://。"
         )));
     }
 
@@ -425,6 +449,57 @@ fn detect_emoji(s: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// 检测所有 `<tag src|href="http(s)://...">` 与 CSS `@import url(http://...)`，
+/// 返回人类可读命中标签列表。
+///
+/// 设计要点（spec §3.7）：
+/// - 正则：`<(?:script|link|img|iframe|video|audio|source)\\b[^>]*?\\b(?:src|href)\\s*=\\s*["']https?://[^"']+["']`
+/// - `@import\\s+url\\(\\s*["']?https?://[^"')]+["']?\\s*\\)`
+/// - 放行：`./` `/` `data:` `blob:` `mailto:` `#` 协议相对 `//`。
+///
+/// 返回简短人类标签（如 `script src=https://...` / `@import https://...`），
+/// 不超过 3 条（避免错误信息太长）。
+fn detect_remote_runtime_assets(code: &str) -> Vec<String> {
+    use regex_lite::Regex;
+    let tag_re = Regex::new(
+        r#"(?i)<(?:script|link|img|iframe|video|audio|source)\b[^>]*?\b(?:src|href)\s*=\s*["']\s*(https?://[^"']+)["']"#,
+    )
+    .expect("regexp valid");
+    let import_re =
+        Regex::new(r#"(?i)@import\s+url\(\s*["']?\s*(https?://[^"')]+)\s*["']?\s*\)"#)
+            .expect("regexp valid");
+
+    let mut hits: Vec<String> = Vec::new();
+    for cap in tag_re.captures_iter(code) {
+        let url = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        // 截短展示
+        let display = if url.len() > 60 {
+            format!("{}…", &url[..59])
+        } else {
+            url.to_string()
+        };
+        hits.push(display);
+        if hits.len() >= 3 {
+            break;
+        }
+    }
+    if hits.len() < 3 {
+        for cap in import_re.captures_iter(code) {
+            let url = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let display = if url.len() > 60 {
+                format!("{}…", &url[..59])
+            } else {
+                url.to_string()
+            };
+            hits.push(format!("@import {}", display));
+            if hits.len() >= 3 {
+                break;
+            }
+        }
+    }
+    hits
 }
 
 /// 逐段抽取 HTML 中的 `<script>` 内容, 用 esbuild 真 parser 校验,

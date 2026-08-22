@@ -261,7 +261,15 @@ impl Default for SimpleExtractBackend {
 impl WebExtractBackend for SimpleExtractBackend {
     async fn extract(&self, url: &str, _include_links: bool) -> Result<String, ToolError> {
         let resp = self.client.get(url).send().await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to fetch '{}': {}", url, e))
+            let mut msg = format!("Failed to fetch '{}': {}", url, e);
+            // 超时时明确提示 LLM 勿重试, 避免对同一慢/挂 URL 无意义重试累积
+            if e.is_timeout() {
+                msg.push_str(
+                    "\n\n[请勿重试] 该 URL 响应超时, 重复请求大概率仍会超时。请改用其他方式 \
+                     (如换数据源/换工具) 或告知用户该服务暂不可用。",
+                );
+            }
+            ToolError::ExecutionFailed(msg)
         })?;
 
         let status = resp.status();
@@ -332,7 +340,15 @@ impl WebExtractBackend for SimpleExtractBackend {
     ) -> Result<String, ToolError> {
         // Fetch the page (same logic as extract).
         let resp = self.client.get(url).send().await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to fetch '{}': {}", url, e))
+            let mut msg = format!("Failed to fetch '{}': {}", url, e);
+            // 超时时明确提示 LLM 勿重试, 避免对同一慢/挂 URL 无意义重试累积
+            if e.is_timeout() {
+                msg.push_str(
+                    "\n\n[请勿重试] 该 URL 响应超时, 重复请求大概率仍会超时。请改用其他方式 \
+                     (如换数据源/换工具) 或告知用户该服务暂不可用。",
+                );
+            }
+            ToolError::ExecutionFailed(msg)
         })?;
 
         let status = resp.status();

@@ -302,6 +302,8 @@ impl HttpServerState {
         let custom_app_manager = std::sync::Arc::new(hermix_plugin::PluginManager::new(
             hermix_config::paths::hermix_home().join("custom-apps"),
         ));
+        // C 修复: 启动首扫填充内存基线 (list 路径改为只读内存, 不再每次请求扫盘)
+        let _ = custom_app_manager.scan_plugins();
 
         hermix_tools::register_builtin_tools(
             &tool_registry,
@@ -659,6 +661,8 @@ impl HttpServerState {
         let custom_app_manager = std::sync::Arc::new(hermix_plugin::PluginManager::new(
             hermix_config::paths::hermix_home().join("custom-apps"),
         ));
+        // C 修复: 启动首扫填充内存基线 (list 路径改为只读内存, 不再每次请求扫盘)
+        let _ = custom_app_manager.scan_plugins();
 
         hermix_tools::register_builtin_tools(
             &tool_registry,

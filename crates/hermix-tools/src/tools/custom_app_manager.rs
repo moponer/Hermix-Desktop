@@ -162,6 +162,8 @@ impl CustomAppManagerHandler {
                 icon_data,
             )
             .map_err(|e| ToolError::ExecutionFailed(format!("创建应用失败: {e}")))?;
+        // C 修复: 写后刷新内存, 让 list 只读内存也能看到新 app
+        let _ = self.manager.scan_plugins();
 
         let response: AppResponse = (&entry).into();
         let result = json!({
@@ -288,6 +290,8 @@ impl CustomAppManagerHandler {
             .manager
             .update_plugin(id, index_html, app_source, source_files_map.as_ref(), manifest.as_ref())
             .map_err(|e| ToolError::ExecutionFailed(format!("更新应用失败: {e}")))?;
+        // C 修复: 写后刷新内存, 让 list 只读内存也能看到更新
+        let _ = self.manager.scan_plugins();
 
         let mut log_result: Option<String> = None;
         if let Some(note) = iteration_note {
@@ -344,9 +348,7 @@ impl CustomAppManagerHandler {
     }
 
     async fn list(&self) -> Result<String, ToolError> {
-        self.manager
-            .scan_plugins()
-            .map_err(|e| ToolError::ExecutionFailed(format!("扫描应用失败: {e}")))?;
+        // C 修复: 只读内存缓存, 不再每次 list 重新扫盘 (启动首扫 + 写路径 rescan 保证新鲜)
         let plugins = self.manager.list_plugins();
         let summaries: Vec<AppSummary> = {
             let entries: Vec<_> = plugins
@@ -389,6 +391,8 @@ impl CustomAppManagerHandler {
         self.manager
             .uninstall_plugin(id)
             .map_err(|e| ToolError::ExecutionFailed(format!("删除应用失败: {e}")))?;
+        // C 修复: 写后刷新内存, 让 list 只读内存也能移除已删 app
+        let _ = self.manager.scan_plugins();
         Ok(serde_json::to_string_pretty(&json!({
             "success": true,
             "message": format!("应用 '{id}' 已删除 (含 docs/ 与 dist/)"),
