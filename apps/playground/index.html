@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Playground · Todo</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: #f5f5f5; color: #1a1a1a;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+  }
+  body.theme-dark {
+    background: #1c1c20; color: #d0d0dc;
+  }
+  .app { display: grid; grid-template-columns: 220px 1fr; height: 100vh; }
+
+  /* ───── 侧边栏 ───── */
+  aside {
+    background: #f7f7f7; border-right: 1px solid #e5e5e5;
+    padding: 18px 16px; display: flex; flex-direction: column; gap: 4px;
+  }
+  body.theme-dark aside { background: #232328; border-right-color: #2e2e34; }
+  .brand {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 600; color: #1a1a1a; margin-bottom: 16px;
+  }
+  body.theme-dark .brand { color: #fff; }
+  .brand svg { color: #1a1a1a; }
+  body.theme-dark .brand svg { color: #fff; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: 6px; cursor: pointer;
+    color: #333; user-select: none;
+  }
+  body.theme-dark .nav-item { color: #b8b8c4; }
+  .nav-item:hover { background: #efefef; }
+  body.theme-dark .nav-item:hover { background: #2a2a30; }
+  .nav-item.active { background: #1a1a1a; color: #fff; }
+  body.theme-dark .nav-item.active { background: #fff; color: #1a1a1a; }
+  .nav-item .badge { margin-left: auto; font-size: 11px; opacity: 0.7; }
+  .spacer { flex: 1; }
+  .theme-toggle {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 6px; cursor: pointer;
+    background: transparent; border: 1px solid #d0d0d0; color: #333;
+    font-size: 12px;
+  }
+  body.theme-dark .theme-toggle { border-color: #2e2e34; color: #d0d0dc; }
+  .theme-toggle:hover { background: #efefef; }
+  body.theme-dark .theme-toggle:hover { background: #2a2a30; }
+
+  /* ───── 主区 ───── */
+  main { padding: 28px 36px; overflow: auto; }
+  h1 {
+    font-size: 20px; font-weight: 600; margin: 0 0 4px;
+    color: #1a1a1a;
+  }
+  body.theme-dark h1 { color: #fff; }
+  .sub { color: #666; font-size: 12px; margin-bottom: 24px; }
+  body.theme-dark .sub { color: #999; }
+
+  /* 顶部 input */
+  .input-row {
+    display: flex; gap: 8px; margin-bottom: 24px;
+  }
+  .input-row input {
+    flex: 1; padding: 10px 14px; border-radius: 8px;
+    background: #fff; border: 1px solid #d0d0d0;
+    font-size: 14px; color: #1a1a1a; outline: none;
+  }
+  .input-row input:focus { border-color: #1a1a1a; }
+  body.theme-dark .input-row input { background: #232328; border-color: #2e2e34; color: #d0d0dc; }
+  body.theme-dark .input-row input:focus { border-color: #fff; }
+  .btn-primary {
+    display: flex; align-items: center; gap: 6px;
+    padding: 10px 16px; border-radius: 8px; border: none; cursor: pointer;
+    background: #1a1a1a; color: #fff; font-size: 13px; font-weight: 500;
+  }
+  .btn-primary:hover { background: #333; }
+  body.theme-dark .btn-primary { background: #fff; color: #1a1a1a; }
+  body.theme-dark .btn-primary:hover { background: #d0d0dc; }
+
+  /* todo list */
+  .todo-list { display: flex; flex-direction: column; gap: 6px; }
+  .empty {
+    padding: 48px; text-align: center; color: #999; font-size: 13px;
+    border: 1px dashed #d0d0d0; border-radius: 10px;
+  }
+  body.theme-dark .empty { border-color: #2e2e34; color: #666; }
+
+  /* stats footer */
+  .stats {
+    margin-top: 24px; padding: 12px 16px;
+    background: #f7f7f7; border-radius: 8px; font-size: 12px; color: #666;
+    display: flex; gap: 20px;
+  }
+  body.theme-dark .stats { background: #232328; color: #999; }
+  .stats .num { color: #1a1a1a; font-weight: 600; margin-right: 4px; }
+  body.theme-dark .stats .num { color: #fff; }
+
+  /* 自定义组件: todo-item */
+  todo-item {
+    display: block;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand" id="brand-icon"></div>
+    <div class="nav-item" data-route="/">
+      <span id="nav-home-icon"></span> <span>全部</span>
+    </div>
+    <div class="nav-item" data-route="/active">
+      <span id="nav-active-icon"></span> <span>进行中</span>
+    </div>
+    <div class="nav-item" data-route="/done">
+      <span id="nav-done-icon"></span> <span>已完成</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="theme-toggle" id="theme-toggle">
+      <span id="theme-icon"></span>
+      <span id="theme-label">切换主题</span>
+    </div>
+  </aside>
+
+  <main>
+    <h1 id="page-title">全部任务</h1>
+    <div class="sub" id="page-sub">点 + 按钮或按回车添加任务；完成后勾选即可归档</div>
+
+    <div class="input-row">
+      <input id="todo-input" placeholder="添加一个 todo…" />
+      <button class="btn-primary" id="todo-add">
+        <span id="add-icon"></span> 添加
+      </button>
+    </div>
+
+    <div id="todo-list" class="todo-list"></div>
+
+    <div class="stats">
+      <span><span class="num" id="stat-total">0</span> 总数</span>
+      <span><span class="num" id="stat-active">0</span> 进行中</span>
+      <span><span class="num" id="stat-done">0</span> 已完成</span>
+      <span class="spacer" style="flex:1"></span>
+      <span id="stat-meta" style="opacity:0.7">sqlite · appId=playground</span>
+    </div>
+  </main>
+</div>
+
+<script>
+"use strict";
+
+(async function main() {
+  // ─────────── 启动信号 ───────────
+  if (!window.Hermix) { document.body.innerHTML = "<div style='padding:40px'>Hermix runtime 未注入</div>"; return; }
+  const { store, defineComponent, icon, route, storage, sqlite, go } = window.Hermix;
+
+  // ─────────── 1. 主题 (storage) ───────────
+  const themePref = storage.get("theme") || "light";
+  if (themePref === "dark") document.body.classList.add("theme-dark");
+  document.getElementById("theme-icon").innerHTML = icon(themePref === "dark" ? "sun" : "moon", { size: 14 });
+  document.getElementById("theme-label").textContent = themePref === "dark" ? "切到浅色" : "切到深色";
+  document.getElementById("theme-toggle").onclick = () => {
+    const next = document.body.classList.contains("theme-dark") ? "light" : "dark";
+    storage.set("theme", next);
+    document.body.classList.toggle("theme-dark", next === "dark");
+    document.getElementById("theme-icon").innerHTML = icon(next === "dark" ? "sun" : "moon", { size: 14 });
+    document.getElementById("theme-label").textContent = next === "dark" ? "切到浅色" : "切到深色";
+  };
+
+  // ─────────── 2. brand + nav icons ───────────
+  document.getElementById("brand-icon").innerHTML = icon("bookmark", { size: 16 }) + "<span>Playground</span>";
+  document.getElementById("nav-home-icon").innerHTML = icon("list", { size: 14 });
+  document.getElementById("nav-active-icon").innerHTML = icon("clock", { size: 14 });
+  document.getElementById("nav-done-icon").innerHTML = icon("check", { size: 14 });
+  document.getElementById("add-icon").innerHTML = icon("plus", { size: 14 });
+
+  // ─────────── 3. sqlite 持久化 ───────────
+  let db;
+  try {
+    await sqlite.init();
+    db = await sqlite.open("todos");
+    db.run("CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL)");
+    await db.save();
+  } catch (e) {
+    console.warn("[playground] sqlite init failed, 退回内存模式:", e);
+  }
+
+  // ─────────── 4. store + 渲染 ───────────
+  const s = store({
+    todos: [],
+    filter: "all", // all | active | done
+  });
+
+  // 从 sqlite 加载
+  if (db) {
+    const r = db.exec("SELECT id, text, done FROM todos ORDER BY id DESC");
+    const rows = (r[0] && r[0].values) || [];
+    s.patch({ todos: rows.map(([id, text, done]) => ({ id, text, done: !!done })) });
+  }
+
+  // 写一条
+  function persistAdd(text) {
+    if (!db) return;
+    db.run("INSERT INTO todos (text, done, ts) VALUES (?, ?, ?)", [text, 0, Date.now()]);
+    db.save();
+  }
+  function persistToggle(id, done) {
+    if (!db) return;
+    db.run("UPDATE todos SET done = ? WHERE id = ?", [done ? 1 : 0, id]);
+    db.save();
+  }
+  function persistDelete(id) {
+    if (!db) return;
+    db.run("DELETE FROM todos WHERE id = ?", [id]);
+    db.save();
+  }
+
+  // 渲染 list
+  function render() {
+    const list = document.getElementById("todo-list");
+    const all = s.state.todos;
+    const filtered = all.filter((t) => {
+      if (s.state.filter === "active") return !t.done;
+      if (s.state.filter === "done") return t.done;
+      return true;
+    });
+    if (filtered.length === 0) {
+      list.innerHTML = '<div class="empty">还没有 todo · 在上面输入框开始</div>';
+    } else {
+      list.innerHTML = "";
+      for (const t of filtered) {
+        const el = document.createElement("todo-item");
+        el.setAttribute("data-id", t.id);
+        el.setAttribute("data-text", t.text);
+        el.setAttribute("data-done", t.done ? "1" : "0");
+        list.appendChild(el);
+      }
+    }
+    // stats
+    document.getElementById("stat-total").textContent = all.length;
+    document.getElementById("stat-active").textContent = all.filter((t) => !t.done).length;
+    document.getElementById("stat-done").textContent = all.filter((t) => t.done).length;
+    // page title
+    const map = { all: "全部任务", active: "进行中", done: "已完成" };
+    document.getElementById("page-title").textContent = map[s.state.filter] || "全部任务";
+    // nav active
+    document.querySelectorAll(".nav-item").forEach((n) => {
+      n.classList.toggle("active", n.getAttribute("data-route") === "/" + (s.state.filter === "all" ? "" : s.state.filter));
+    });
+  }
+  s.subscribe(render);
+  render();
+
+  // ─────────── 5. defineComponent: <todo-item> ───────────
+  defineComponent("todo-item", {
+    props: ["data-id", "data-text", "data-done"],
+    state: () => ({ hover: false }),
+    render(props, state) {
+      const id = Number(props["data-id"]);
+      const text = props["data-text"] || "";
+      const done = props["data-done"] === "1";
+      const isHover = state.hover;
+      return `
+        <div style="
+          display:flex; align-items:center; gap:12px;
+          padding:10px 14px;
+          background:${done ? "transparent" : "#fff"};
+          border:1px solid ${isHover ? "#999" : "#e5e5e5"};
+          border-radius:8px;
+          transition:all 120ms;
+          ${done ? "opacity:0.55;" : ""}
+        ">
+          <button data-act="toggle" style="
+            width:20px; height:20px; border-radius:50%;
+            border:1.5px solid ${done ? "#1a1a1a" : "#d0d0d0"};
+            background:${done ? "#1a1a1a" : "transparent"};
+            display:flex; align-items:center; justify-content:center;
+            padding:0; cursor:pointer; flex:0 0 20px;
+          ">${done ? this.icon("check", { size: 12, color: "#fff" }) : ""}</button>
+          <span style="
+            flex:1; font-size:13px; line-height:1.4;
+            text-decoration:${done ? "line-through" : "none"};
+            color:${done ? "#999" : "inherit"};
+            word-break:break-word;
+          ">${this.esc(text)}</span>
+          <button data-act="del" style="
+            border:none; background:transparent; cursor:pointer;
+            padding:4px; border-radius:4px; display:flex;
+            color:${isHover ? "#1a1a1a" : "#999"};
+          ">${this.icon("trash", { size: 14 })}</button>
+        </div>
+      `;
+    },
+    icon(name, opts) { return window.Hermix.icon(name, opts); },
+    esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); },
+    on(event, handler) {
+      // Shadow DOM 事件代理
+      this.shadow.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("button[data-act]");
+        if (!btn) return;
+        const act = btn.getAttribute("data-act");
+        const id = Number(this.props["data-id"]);
+        if (act === "toggle") {
+          const t = s.state.todos.find((x) => x.id === id);
+          if (t) {
+            const next = !t.done;
+            s.patch({ todos: s.state.todos.map((x) => x.id === id ? { ...x, done: next } : x) });
+            persistToggle(id, next);
+          }
+        } else if (act === "del") {
+          s.patch({ todos: s.state.todos.filter((x) => x.id !== id) });
+          persistDelete(id);
+        }
+      });
+      this.shadow.addEventListener("mouseenter", () => { this.setState({ hover: true }); this.refresh(); });
+      this.shadow.addEventListener("mouseleave", () => { this.setState({ hover: false }); this.refresh(); });
+    }
+  });
+
+  // ─────────── 6. add input ───────────
+  const input = document.getElementById("todo-input");
+  const add = () => {
+    const text = (input.value || "").trim();
+    if (!text) return;
+    const newId = db ? (db.exec("INSERT INTO todos (text, done, ts) VALUES (?, 0, ?) RETURNING id", [text, Date.now()])[0].values[0][0]) : Date.now();
+    db && db.save();
+    s.patch({ todos: [{ id: newId, text, done: false }, ...s.state.todos] });
+    persistAdd(text); // 双保险
+    input.value = "";
+    input.focus();
+  };
+  document.getElementById("todo-add").onclick = add;
+  input.onkeydown = (e) => { if (e.key === "Enter") add(); };
+
+  // ─────────── 7. 路由 ───────────
+  route("/", () => s.patch({ filter: "all" }));
+  route("/active", () => s.patch({ filter: "active" }));
+  route("/done", () => s.patch({ filter: "done" }));
+  route.start();
+  document.querySelectorAll(".nav-item").forEach((n) => {
+    n.onclick = () => go(n.getAttribute("data-route"));
+  });
+
+  // 标题
+  try {
+    await window.hx.win.setTitle("Playground · Todo");
+  } catch {}
+
+  console.log("[playground] ready, appId=", window.Hermix.__appId);
+})();
+</script>
+</body>
+</html>
