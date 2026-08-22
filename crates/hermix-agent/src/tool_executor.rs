@@ -472,7 +472,9 @@ impl AgentLoop {
                     Err(_elapsed) => ToolResult::err(
                         &tool_call_id,
                         format!(
-                            "per-call timeout after {}s: tool '{}' did not return in time",
+                            "per-call timeout after {}s: tool '{}' did not return in time. \
+                             [请勿重试] 该工具响应超时, 重复调用大概率仍会超时, 请改用其他方式 \
+                             (如换工具/换参数/换数据源) 或告知用户该操作暂不可用。",
                             per_call_timeout.as_secs(),
                             tool_name,
                         ),
@@ -547,7 +549,9 @@ impl AgentLoop {
                         let err = ToolResult::err(
                             &tc.id,
                             format!(
-                                "batch-wide timeout after {}s: tool '{}' did not return in time",
+                                "batch-wide timeout after {}s: tool '{}' did not return in time. \
+                                 [请勿重试] 整批工具执行超时, 重复发起大概率仍会超时, 请改用其他方式 \
+                                 或告知用户该操作暂不可用。",
                                 total_timeout.as_secs(),
                                 tc.function.name,
                             ),

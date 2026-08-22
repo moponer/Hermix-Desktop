@@ -122,7 +122,9 @@ impl LocalBackend {
 
 impl Default for LocalBackend {
     fn default() -> Self {
-        Self::new(120, 1_048_576)
+        // 60s 对齐 tool_executor 的 per-call 超时, 避免双层 timeout 不一致;
+        // 外部 API 慢时 60s 足够判定失败, 不必让用户等满 120s
+        Self::new(60, 1_048_576)
     }
 }
 
