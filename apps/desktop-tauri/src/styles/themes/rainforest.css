@@ -87,6 +87,8 @@
   /* ── 主题背景（实色冷灰，沿用原雨林不透明方案）── */
   --theme-bg-app:      var(--color-bg-app);
   --theme-bg-sidebar:  var(--color-bg-secondary);
-  --theme-bg-titlebar: var(--color-bg-elevated);
-  --theme-bg-chat:     var(--color-bg-card);
+  /* titlebar 比 sidebar 深 1 档，形成原生标题栏视觉 */
+  --theme-bg-titlebar: #1f282f;
+  /* chat 比 sidebar 深 3 档（#141a20 vs #242b32），与左侧菜单栏明显区分 */
+  --theme-bg-chat:     #141a20;
 }

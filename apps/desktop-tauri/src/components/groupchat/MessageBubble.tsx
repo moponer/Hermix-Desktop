@@ -1,7 +1,8 @@
 /**
  * Message bubble component — renders a single chat message.
  *
- * All hardcoded HSL colors replaced with theme tokens.
+ * Supports consecutive message grouping: messages from the same sender
+ * within 5 minutes are collapsed (no repeated avatar/name).
  */
 
 import { useState, memo } from "react";
@@ -12,6 +13,16 @@ import { MarkdownBody } from "../MarkdownBody";
 import { AgentAvatar } from "./AgentAvatar";
 import { agentTone, LEADER_SENDER_ID, SYSTEM_SENDER_ID, withAlpha, type ChatMsg } from "./types";
 import type * as api from "@/api";
+
+const CONSECUTIVE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+function isConsecutiveMsg(prev: ChatMsg | undefined, curr: ChatMsg): boolean {
+  if (!prev) return false;
+  return (
+    prev.senderId === curr.senderId &&
+    curr.timestamp - prev.timestamp < CONSECUTIVE_TIMEOUT_MS
+  );
+}
 
 /* ── Dispatch error card ── */
 export const DispatchErrorCard = memo(function DispatchErrorCard({
@@ -153,15 +164,16 @@ function RawContentToggle({ metadata }: { metadata: string }) {
 }
 
 /* ── Time + copy row ── */
-function MessageMeta({ msg }: { msg: ChatMsg }) {
+function MessageMeta({ msg, showTime = true }: { msg: ChatMsg; showTime?: boolean }) {
+  const time = new Date(msg.timestamp).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
   return (
-    <span className="text-[12px] text-text-faint flex items-center gap-1">
+    <span className="text-[11px] text-text-faint flex items-center gap-1">
       <button type="button" className="hover:text-text-secondary transition-colors"
         title="复制消息"
         onClick={() => navigator.clipboard.writeText(msg.content)}>
         <Copy size={10} />
       </button>
-      {new Date(msg.timestamp).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+      {showTime && time}
     </span>
   );
 }
@@ -183,31 +195,37 @@ const SystemHintBubble = memo(function SystemHintBubble({ msg }: { msg: ChatMsg 
 
 /* ── Leader bubble — uses accent color for crown chip & tint ── */
 const LeaderBubble = memo(function LeaderBubble({
-  msg, displayName,
+  msg, displayName, isConsecutive,
 }: {
-  msg: ChatMsg; displayName: string; compact?: boolean;
+  msg: ChatMsg; displayName: string; isConsecutive: boolean;
 }) {
   const tone = agentTone(LEADER_SENDER_ID);
   return (
-    <div className="flex gap-2 items-start animate-in">
-      {/* Crown avatar — accent tint */}
-      <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
-        style={{ background: "var(--color-accent-soft)", color: "var(--color-accent)" }}
-        title="项目总管">
-        <Crown size={12} strokeWidth={2.4} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 mb-0.5">
-          <span className="text-[13px] text-text-primary font-medium">{displayName}</span>
-          <span className="text-[11px] px-1.5 py-px rounded font-medium"
-            style={{ background: "var(--color-accent-soft)", color: "var(--color-accent)" }}>
-            总管
-          </span>
-          <span className="text-[11px] text-text-faint ml-auto">
-            <MessageMeta msg={msg} />
-          </span>
+    <div className={clsx("flex gap-2.5 items-start animate-in", isConsecutive && "mt-0.5")}>
+      {/* Avatar — hidden for consecutive */}
+      {!isConsecutive && (
+        <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0"
+          style={{ background: "var(--color-accent-soft)", color: "var(--color-accent)" }}
+          title="项目总管">
+          <Crown size={13} strokeWidth={2.4} />
         </div>
-        <div className="rounded-lg px-3 py-1.5 text-[13px] leading-snug whitespace-pre-wrap break-words"
+      )}
+      <div className={clsx("min-w-0 flex-1", isConsecutive && "mt-1")}>
+        {/* Name + badge — hidden for consecutive */}
+        {!isConsecutive && (
+          <div className="flex items-center gap-1.5 mb-1">
+            <span className="text-[13px] text-text-primary font-medium">{displayName}</span>
+            <span className="text-[10.5px] px-1.5 py-0.5 rounded font-medium"
+              style={{ background: "var(--color-accent-soft)", color: "var(--color-accent)" }}>
+              总管
+            </span>
+            <span className="ml-auto">
+              <MessageMeta msg={msg} />
+            </span>
+          </div>
+        )}
+        {/* Bubble */}
+        <div className="rounded-lg px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words"
           style={{
             background: tone.bg,
             color: "var(--color-text-primary)",
@@ -223,47 +241,83 @@ const LeaderBubble = memo(function LeaderBubble({
 
 /* ── Member / user bubble ── */
 const MemberBubble = memo(function MemberBubble({
-  msg, isUser, resolvedAgent, displayName,
+  msg, isUser, resolvedAgent, displayName, isConsecutive,
 }: {
   msg: ChatMsg; isUser: boolean;
-  resolvedAgent: AgentPersona | null; displayName: string;
-  memberRank?: api.GroupChatRank | undefined;
-  memberModelOverride?: string | undefined;
-  compact?: boolean;
+  resolvedAgent: AgentPersona | null; displayName: string; isConsecutive: boolean;
 }) {
   const tone = resolvedAgent ? agentTone(resolvedAgent.id) : null;
   return (
-    <div className={clsx("flex gap-2 items-start animate-in", isUser && "justify-end")}>
-      {!isUser && resolvedAgent && <AgentAvatar agent={resolvedAgent} size={24} />}
-      <div className={clsx("max-w-[80%]", "flex flex-col", isUser && "items-end")}>
-        {!isUser && (
-          <div className="flex items-center gap-1.5 mb-0.5 px-1">
-            <span className="text-[12px] font-medium truncate max-w-[140px]"
-              style={{ color: tone?.text ?? "var(--color-text-secondary)" }}
-              title={displayName}>{displayName}</span>
-            <MessageMeta msg={msg} />
+    <div className={clsx(
+      "flex gap-2.5 items-start animate-in",
+      isUser ? "justify-end" : "",
+      isConsecutive && (isUser ? "" : "mt-0.5"),
+    )}>
+      {/* Avatar — hidden for consecutive (non-user) */}
+      {!isUser && !isConsecutive && resolvedAgent && (
+        <AgentAvatar agent={resolvedAgent} size={28} />
+      )}
+      {/* Right-aligned wrapper for user */}
+      {isUser && (
+        <div className={clsx("max-w-[75%] flex flex-col", isConsecutive && "mt-1")}>
+          {!isConsecutive && (
+            <div className="flex items-center gap-1.5 mb-1 justify-end">
+              <span className="text-[12px] text-text-primary font-medium">你</span>
+              <MessageMeta msg={msg} />
+            </div>
+          )}
+          <div
+            className="rounded-lg rounded-tr-sm px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words"
+            style={{
+              background: "var(--color-accent-soft)",
+              color: "var(--color-text-primary)",
+              border: "1px solid var(--color-accent-soft-strong)",
+            }}
+          >
+            <MarkdownBody content={msg.content} />
+            {msg.metadata && <RawContentToggle metadata={msg.metadata} />}
           </div>
-        )}
-        <div className={clsx(
-          "rounded-lg px-3 py-1.5 text-[13px] leading-snug",
-          isUser ? "rounded-br-sm" : "rounded-bl-sm",
-        )}
-          style={
-            isUser
-              ? { background: "transparent", color: "var(--color-text-primary)" }
-              : tone
-                ? { background: tone.bg, color: "var(--color-text-primary)", boxShadow: `inset 0 0 0 1px ${withAlpha(tone.ring, 0.15)}` }
-                : { background: "var(--color-bg-tertiary)", color: "var(--color-text-primary)" }
-          }>
-          <MarkdownBody content={msg.content} />
-          {!isUser && msg.metadata && <RawContentToggle metadata={msg.metadata} />}
+          {isConsecutive && (
+            <div className="flex items-center gap-1.5 mt-1 justify-end">
+              <MessageMeta msg={msg} />
+            </div>
+          )}
         </div>
-        {isUser && (
-          <span className="text-[11px] text-text-faint mt-0.5 px-1">
-            <MessageMeta msg={msg} />
-          </span>
-        )}
-      </div>
+      )}
+      {/* Left-aligned wrapper for member */}
+      {!isUser && (
+        <div className={clsx("max-w-[75%] flex flex-col", isConsecutive && "mt-1")}>
+          {/* Name + time — hidden for consecutive */}
+          {!isConsecutive && (
+            <div className="flex items-center gap-1.5 mb-1 px-1">
+              <span className="text-[12px] font-medium truncate max-w-[120px]"
+                style={{ color: tone?.text ?? "var(--color-text-secondary)" }}
+                title={displayName}>{displayName}</span>
+              <MessageMeta msg={msg} showTime />
+            </div>
+          )}
+          {/* Bubble */}
+          <div
+            className={clsx(
+              "rounded-lg px-3 py-2 text-[13px] leading-relaxed",
+              isConsecutive ? "" : "rounded-bl-sm",
+            )}
+            style={tone
+              ? { background: tone.bg, color: "var(--color-text-primary)", boxShadow: `inset 0 0 0 1px ${withAlpha(tone.ring, 0.15)}` }
+              : { background: "var(--color-bg-tertiary)", color: "var(--color-text-primary)" }
+            }
+          >
+            <MarkdownBody content={msg.content} />
+            {!isUser && msg.metadata && <RawContentToggle metadata={msg.metadata} />}
+          </div>
+          {/* Time for consecutive */}
+          {isConsecutive && (
+            <div className="flex items-center gap-1.5 mt-1 px-1">
+              <MessageMeta msg={msg} showTime />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 });
@@ -271,15 +325,18 @@ const MemberBubble = memo(function MemberBubble({
 /* ── Dispatcher ── */
 export const MessageBubble = memo(function MessageBubble({
   msg, agents, ranks: _ranks, modelOverrides: _modelOverrides, compact: _compact = false,
+  prevMsg,
 }: {
   msg: ChatMsg; agents: AgentPersona[];
   ranks?: api.GroupChatRank[];
   modelOverrides?: Record<string, string | undefined>;
   compact?: boolean;
+  prevMsg?: ChatMsg;
 }) {
   const isUser = msg.senderId === "user";
   const isLeader = msg.senderId === LEADER_SENDER_ID;
   const isSystem = msg.senderId === SYSTEM_SENDER_ID;
+  const isConsecutive = isConsecutiveMsg(prevMsg, msg);
 
   const resolvedAgent = !isUser && !isLeader
     ? agents.find((a) =>
@@ -294,6 +351,6 @@ export const MessageBubble = memo(function MessageBubble({
       : msg.senderName;
 
   if (isSystem) return <SystemHintBubble msg={msg} />;
-  if (isLeader) return <LeaderBubble msg={msg} displayName={displayName} />;
-  return <MemberBubble msg={msg} isUser={isUser} resolvedAgent={resolvedAgent ?? null} displayName={displayName} />;
+  if (isLeader) return <LeaderBubble msg={msg} displayName={displayName} isConsecutive={isConsecutive} />;
+  return <MemberBubble msg={msg} isUser={isUser} resolvedAgent={resolvedAgent ?? null} displayName={displayName} isConsecutive={isConsecutive} />;
 });

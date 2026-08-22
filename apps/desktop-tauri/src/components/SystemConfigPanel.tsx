@@ -154,7 +154,11 @@ export function SystemConfigPanel({ onClose }: SystemConfigPanelProps) {
             )}
 
             <div className="flex-1 overflow-y-auto min-h-0">
-              {cat === "model" && modelTab === "model" && <Padded><ModelTab /></Padded>}
+              {cat === "model" && modelTab === "model" && (
+                <div className="h-full min-h-0">
+                  <ModelTab />
+                </div>
+              )}
               {cat === "model" && modelTab === "image" && <Padded><ImageSettingsCard /></Padded>}
               {cat === "tools" && (
                 <div className="px-6 py-5 min-h-0">

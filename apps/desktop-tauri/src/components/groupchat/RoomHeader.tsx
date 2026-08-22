@@ -1,28 +1,42 @@
 /**
- * Room header — two-line header with action menu.
+ * RoomHeader — compact single-row header per design spec.
  *
- * Theme-aware: accent bar, mode toggle, all surfaces via tokens.
+ * Design: room name (18px/600) + meta line (members · description)
+ * + "···" menu (task / members / mode / settings / delete).
+ *
+ * No avatar tile, no member chips, no segmented mode control,
+ * no left accent bar — everything secondary lives behind "···".
  */
 
-import { memo, useState, useEffect, useRef, useCallback } from "react";
-import { MoreHorizontal, FileText, ListChecks, Users, Settings, Trash2, MessagesSquare, Zap } from "lucide-react";
+import {
+  memo,
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+} from "react";
+import {
+  MoreHorizontal,
+  ListChecks,
+  Users,
+  Settings,
+  Trash2,
+  MessagesSquare,
+  Zap,
+} from "lucide-react";
 import type { AgentPersona } from "../agents/types";
 import type * as api from "@/api";
 import { RoomDescriptionEditor } from "./RoomDescriptionEditor";
-import { agentTone, type ChatRoom } from "./types";
+import type { ChatRoom } from "./types";
 
-type MenuItem = {
-  key: string;
-  label: string;
-  icon: typeof FileText;
-  onClick: () => void;
-  danger?: boolean;
+const HEADER_STYLE: React.CSSProperties = {
+  background: "var(--color-bg-primary)",
+  borderBottom: "1px solid var(--color-border-primary)",
 };
 
 export const RoomHeader = memo(function RoomHeader({
   room,
   roomAgents,
-  roomTone: _roomTone,
   onOpenTask,
   onOpenMembers,
   onOpenSettings,
@@ -33,7 +47,6 @@ export const RoomHeader = memo(function RoomHeader({
   room: ChatRoom;
   roomAgents: AgentPersona[];
   ranks?: api.GroupChatRank[];
-  roomTone: ReturnType<typeof agentTone>;
   onOpenTask: () => void;
   onOpenMembers: () => void;
   onOpenSettings: () => void;
@@ -47,9 +60,12 @@ export const RoomHeader = memo(function RoomHeader({
   useEffect(() => {
     if (!menuOpen) return;
     const onClickAway = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+      if (menuRef.current && !menuRef.current.contains(e.target as Node))
+        setMenuOpen(false);
     };
-    const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuOpen(false); };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
     window.addEventListener("mousedown", onClickAway);
     window.addEventListener("keydown", onEsc);
     return () => {
@@ -60,108 +76,138 @@ export const RoomHeader = memo(function RoomHeader({
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
 
-  const menuItems: MenuItem[] = [
-    { key: "desc",  label: "编辑描述", icon: FileText,      onClick: closeMenu },
-    { key: "task",  label: "任务",     icon: ListChecks,    onClick: () => { closeMenu(); onOpenTask(); } },
-    { key: "members", label: "成员",   icon: Users,         onClick: () => { closeMenu(); onOpenMembers(); } },
-    { key: "settings", label: "规则",  icon: Settings,      onClick: () => { closeMenu(); onOpenSettings(); } },
-    { key: "delete",  label: "删除房间", icon: Trash2,      onClick: () => { closeMenu(); onDeleteRoom(); }, danger: true },
+  const memberCount = roomAgents.length;
+  const hasMemberChip = memberCount > 0;
+
+  const menuItems = [
+    {
+      key: "task",
+      label: "任务面板",
+      icon: <ListChecks size={14} />,
+      onClick: () => { closeMenu(); onOpenTask(); },
+    },
+    {
+      key: "members",
+      label: "成员",
+      icon: <Users size={14} />,
+      onClick: () => { closeMenu(); onOpenMembers(); },
+    },
+    ...(onChatModeChange ? [{
+      key: "mode",
+      label: room.chatMode === "free_chat" ? "闲聊模式" : "协作模式",
+      icon: room.chatMode === "free_chat"
+        ? <MessagesSquare size={14} />
+        : <Zap size={14} />,
+      toggle: true,
+      active: room.chatMode === "task_collab",
+      onClick: () => {
+        const next = room.chatMode === "free_chat" ? "task_collab" as const : "free_chat" as const;
+        onChatModeChange(next);
+        closeMenu();
+      },
+    }] : []),
+    {
+      key: "settings",
+      label: "房间规则",
+      icon: <Settings size={14} />,
+      onClick: () => { closeMenu(); onOpenSettings(); },
+    },
+    {
+      key: "delete",
+      label: "删除房间",
+      icon: <Trash2 size={14} />,
+      onClick: () => { closeMenu(); onDeleteRoom(); },
+      danger: true,
+    },
   ];
 
-  const memberCount = roomAgents.length;
-  const hasLeader = Boolean(room.leader);
-  const subtitle = hasLeader
-    ? memberCount > 0 ? `${memberCount} 名成员 · 协作中` : "总管已就位 · 等待成员加入"
-    : memberCount > 0 ? `${memberCount} 名成员` : "暂无成员";
-
   return (
-    <div className="relative flex items-start justify-between gap-3 px-6 pt-4 pb-3">
-      <div className="min-w-0 flex-1">
-        {/* Room name with accent bar */}
-        <div className="flex items-center gap-2">
-          <span
-            className="rounded-r-full shrink-0"
-            style={{ width: 4, height: 22, background: "var(--color-accent)" }}
-          />
-          <h3 className="text-[17px] font-semibold text-text-primary truncate">
-            {room.name}
-          </h3>
-        </div>
+    <div className="relative" style={HEADER_STYLE}>
+      {/* Single row: name + meta + ··· */}
+      <div className="px-5 py-3 flex items-start gap-3">
+        {/* Name column */}
+        <div className="flex-1 min-w-0 pt-0.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <h3
+              className="text-[18px] font-semibold text-text-primary truncate"
+              title={room.name}
+            >
+              {room.name}
+            </h3>
+            {room.activeTask && (
+              <span
+                className="shrink-0 flex items-center gap-1 text-[10.5px] px-1.5 py-0.5 rounded-full font-medium"
+                style={{
+                  background: "color-mix(in srgb, var(--color-warning) 14%, transparent)",
+                  color: "var(--color-warning)",
+                }}
+                title={`进行中：${room.activeTask.original_prompt}`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--color-warning)" }} />
+                任务中
+              </span>
+            )}
+          </div>
 
-        {/* Subtitle */}
-        <p className="text-[12px] text-text-muted mt-1 ml-6">
-          {subtitle}
-          {room.activeTask && (
-            <span className="ml-2 inline-flex items-center gap-0.5" style={{ color: "var(--color-warning)" }}>
-              <ListChecks size={10} />
-              <span className="text-[11px]">任务进行中</span>
+          {/* Meta line: members · description */}
+          <div className="mt-0.5 flex items-center gap-1.5 text-[12px] text-text-muted flex-wrap">
+            <span className="flex items-center gap-1">
+              <Users size={11} className="shrink-0 opacity-70" />
+              {hasMemberChip
+                ? `${memberCount} 名成员`
+                : "还没有协作成员"}
             </span>
-          )}
-        </p>
-
-        {/* Description */}
-        <div className="ml-6 mt-1">
-          {room.description ? (
-            <RoomDescriptionEditor description={room.description} onSave={onDescriptionChange} />
-          ) : onDescriptionChange ? (
-            <RoomDescriptionEditor description={null} onSave={onDescriptionChange} />
-          ) : null}
+            {onDescriptionChange && (
+              <RoomDescriptionEditor
+                description={room.description ?? null}
+                onSave={onDescriptionChange}
+              />
+            )}
+          </div>
         </div>
 
-        {/* Mode toggle */}
-        {onChatModeChange && (
-          <div className="ml-6 mt-2.5 flex items-center gap-0.5 p-0.5 rounded-lg"
-            style={{ background: "var(--color-bg-tertiary)" }}>
-            <button type="button"
-              onClick={() => onChatModeChange("free_chat")}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium transition-all"
-              style={{
-                background: room.chatMode === "free_chat" ? "var(--color-bg-primary)" : "transparent",
-                color: room.chatMode === "free_chat" ? "var(--color-text-primary)" : "var(--color-text-muted)",
-                boxShadow: room.chatMode === "free_chat" ? "0 1px 2px rgba(0,0,0,0.06)" : "none",
-              }}
-              title="闲聊模式：所有成员自由对话，无需总管调度"
+        {/* ··· menu */}
+        <div className="shrink-0" ref={menuRef}>
+          <button
+            type="button"
+            onClick={() => setMenuOpen((v) => !v)}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-bg-hover hover:text-text-primary transition-colors"
+            title="更多操作"
+            aria-label="更多操作"
+          >
+            <MoreHorizontal size={15} />
+          </button>
+          {menuOpen && (
+            <div
+              className="absolute right-0 top-full mt-1 min-w-[172px] rounded-lg border border-border-primary bg-bg-elevated shadow-pop py-1 z-[1000]"
+              role="menu"
             >
-              <MessagesSquare size={12} />闲聊
-            </button>
-            <button type="button"
-              onClick={() => onChatModeChange("task_collab")}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium transition-all"
-              style={{
-                background: room.chatMode === "task_collab" ? "var(--color-bg-primary)" : "transparent",
-                color: room.chatMode === "task_collab" ? "var(--color-text-primary)" : "var(--color-text-muted)",
-                boxShadow: room.chatMode === "task_collab" ? "0 1px 2px rgba(0,0,0,0.06)" : "none",
-              }}
-              title="协作模式：总管负责分派任务和汇总结果"
-            >
-              <Zap size={12} />协作
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* ··· dropdown */}
-      <div className="relative shrink-0" ref={menuRef}>
-        <button onClick={() => setMenuOpen((v) => !v)}
-          className="w-8 h-8 rounded-lg flex items-center justify-center text-text-muted hover:bg-bg-hover transition-colors"
-          title="更多操作" aria-label="更多操作">
-          <MoreHorizontal size={16} />
-        </button>
-        {menuOpen && (
-          <div className="absolute right-0 top-full mt-1 min-w-[160px] rounded-lg border border-border-primary bg-bg-elevated shadow-pop py-1 z-[1000]" role="menu">
-            {menuItems.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button key={item.key} type="button" onClick={item.onClick}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] hover:bg-bg-hover transition-colors ${item.danger ? "text-error" : "text-text-primary"}`}
-                  role="menuitem">
-                  <Icon size={14} className="shrink-0 opacity-80" />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
+              {menuItems.map((item) => {
+                const isToggle = "toggle" in item && item.toggle === true;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={item.onClick}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] transition-colors ${
+                      "danger" in item && item.danger
+                        ? "text-error hover:bg-error-soft"
+                        : "text-text-primary hover:bg-bg-hover"
+                    }`}
+                    role={isToggle ? "menuitemcheckbox" : "menuitem"}
+                    aria-checked={isToggle ? ("active" in item && item.active) : undefined}
+                  >
+                    <span className="shrink-0 opacity-70">{item.icon}</span>
+                    <span className={isToggle && ("active" in item) && item.active ? "font-medium" : ""}>{item.label}</span>
+                    {isToggle && ("active" in item) && item.active && (
+                      <span className="ml-auto text-[10px]" style={{ color: "var(--color-accent)" }}>✓</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -8,8 +8,6 @@ interface TitleBarProps {
 }
 
 export function TitleBar({ onToggleSidebar }: TitleBarProps) {
-  // Lazily resolve the window on each interaction so we never hold a
-  // stale proxy (and so the call never happens before Tauri IPC is up).
   const handleMinimize = useCallback(() => {
     try {
       void getCurrentWindow().minimize();

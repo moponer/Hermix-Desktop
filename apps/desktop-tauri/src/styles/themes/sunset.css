@@ -84,6 +84,8 @@
   /* ── Theme vars ── */
   --theme-bg-app:          var(--color-bg-app);
   --theme-bg-sidebar:      var(--color-bg-secondary);
-  --theme-bg-titlebar:     #ede6da;
-  --theme-bg-chat:         var(--color-bg-primary);
+  /* titlebar 比 sidebar 深一档暖米（sunset 主内容更浅，titlebar 更深） */
+  --theme-bg-titlebar:     #d8ccb8;
+  /* chat 比 sidebar 略深（#e8e0d2 vs #f3ede3，Δ~15 RGB），温和区分不刺眼 */
+  --theme-bg-chat:         #e8e0d2;
 }

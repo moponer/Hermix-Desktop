@@ -5,61 +5,58 @@
    Swap this file to re-skin the entire app.
 
    Light default + .dark override follows the "Classic Gray/White" system
-   the user picked on · Light: sidebar/right = #f4f4f5 gray, main = #ffffff pure white
+   the user picked on · Light: sidebar/right = #e2e2e2 gray panel, main = #f7f7f7近白, chat canvas = #f5f5f5
      · Dark:  sidebar = #27272a, main = #18181b
      · No blue, no purple, no gradients
    ════════════════════════════════════════════════════════════════════ */
 
 @theme {
-  /* ── Surfaces ── */
-  /* bg-app = page canvas (主区淡灰,卡片白底浮在上面)
-     bg-primary = 卡片/内层白色容器 (替代旧的"主区纯白"语义)
-     这样 body 用 bg-app 淡灰,卡片用 bg-primary 白底,有清晰层次 */
-  --color-bg-app: #f5f5f7;            /* page canvas: light gray (主区背景) */
+  /* ── Surfaces — 设计稿: bg-primary=#FFFFFF 主内容, bg-secondary=#F7F7F7 侧栏/输入, bg-tertiary=#EFEFEF 控件/分割线, hover=#E5E5E5 ── */
+  --color-bg-app: #f2f2f2;            /* page canvas: 比 secondary 浅一档, 形成主区背景 */
   --color-bg-primary: #ffffff;        /* card / inner white container (浮在 app 上) */
-  --color-bg-secondary: #fafafa;      /* subtle alt surface */
-  --color-bg-tertiary: #ededee;       /* controls, chips, inline code */
-  --color-bg-hover: #f0f0f2;          /* hover over white */
-  --color-bg-active: #e8e8eb;         /* active/selected over white */
+  --color-bg-secondary: #f7f7f7;      /* sidebar, input area — 设计稿二级 */
+  --color-bg-tertiary: #efefef;       /* controls, chips, inline code — 设计稿三级 */
+  --color-bg-hover: #e5e5e5;          /* hover over white — 设计稿四级 */
+  --color-bg-active: #dcdcdc;         /* active/selected over white */
   --color-bg-card: #ffffff;
-  --color-bg-card-hover: #fafafa;
+  --color-bg-card-hover: #f7f7f7;
   --color-bg-elevated: #ffffff;       /* popovers, modals: white over cream */
-  --color-bg-code: #ededee;          /* 浅色独立代码块:明显比卡片白 #ffffff 深一档 (∆L -5), 代码区视觉独立 */
-  --color-bg-code-header: #f5f5f7;    /* 比 code 浅 1 档:header 视觉上"浮"在代码区之上 (呼应 bg-app) */
-  --color-bg-code-border: #e4e4e7;    /* 用 border-primary:清晰但不抢眼 */
+  --color-bg-code: #efefef;          /* 浅色独立代码块: 等同 bg-tertiary */
+  --color-bg-code-header: #f5f5f5;    /* 比 code 浅 1 档 */
+  --color-bg-code-border: #dcdcdc;    /* 清晰但不抢眼 */
   --color-chat-assistant-bg: #ffffff;      /* 主回复气泡 (light: 等同 bg-primary 白底) */
-  --color-chat-tool-bg: #fafafa;          /* 工具调用卡片 (light: 等同 bg-secondary 灰阶,不用 slate-50 微蓝) */
-  --color-chat-terminal-bg: #000000;      /* 终端/代码输出背景 (light 接近黑, 兼容 macOS 风格) */
+  --color-chat-tool-bg: #f7f7f7;          /* 工具调用卡片 (light: 等同 bg-secondary) */
+  --color-chat-terminal-bg: #000000;      /* 终端/代码输出背景 */
 
 
-  /* ── Borders ── */
-  --color-border-primary: #e4e4e7;    /* main divider */
-  --color-border-secondary: #d4d4d8;  /* input outline */
-  --color-border-strong: #18181b;     /* strong emphasis */
-  --color-border-subtle: #ececef;     /* very light hint */
+  /* ── Borders — 设计稿: 分割线=#EFEFEF(三级), 边框=#D0D0D0(五级) ── */
+  --color-border-primary: #e0e0e0;    /* main divider — 接近设计稿 #EFEFEF */
+  --color-border-secondary: #d0d0d0;  /* input outline — 设计稿五级 */
+  --color-border-strong: #1a1a1a;     /* strong emphasis */
+  --color-border-subtle: #ececec;     /* very light hint */
 
-  /* ── Text (4 级层次) ── */
-  --color-text-primary: #2e2e2e;      /* body text: mid-gray, comfortable reading */
-  --color-text-secondary: #52525b;
-  --color-text-tertiary: #6a6a6a;
+  /* ── Text (4 级层次) — 设计稿: 一级#1A1A1A, 二级#333333, 三级#666666, 四级#999999 ── */
+  --color-text-primary: #1a1a1a;      /* 标题、主要文字 */
+  --color-text-secondary: #333333;    /* 正文 */
+  --color-text-tertiary: #666666;     /* 次要信息 */
   --color-text-muted: #71717a;
-  --color-text-faint: #a1a1aa;
+  --color-text-faint: #999999;        /* 占位符、禁用态 */
   --color-text-on-code: #3a3a3c;
 
-  /* ── Accent (中性 zinc 灰, 禁蓝紫) ── */
-  --color-accent: #3f3f46;
-  --color-accent-hover: #27272a;
-  --color-accent-soft: rgba(63, 63, 70, 0.12);
-  --color-accent-soft-strong: rgba(63, 63, 70, 0.20);
+  /* ── Accent (近黑色 #1A1A1A, 设计稿主色) ── */
+  --color-accent: #1a1a1a;
+  --color-accent-hover: #000000;
+  --color-accent-soft: rgba(26, 26, 26, 0.10);
+  --color-accent-soft-strong: rgba(26, 26, 26, 0.18);
   --color-accent-on-text: #ffffff;
 
-  /* ── Link (中性 zinc 灰, 禁蓝紫) ── */
-  --color-link: #3f3f46;
-  --color-link-hover: #27272a;
+  /* ── Link (中性灰, 禁蓝紫) ── */
+  --color-link: #1a1a1a;
+  --color-link-hover: #000000;
 
-  /* ── Link-soft: 中性 zinc（更淡，用于文件变更、引用等不抢重心的场景） ── */
+  /* ── Link-soft ── */
   --color-link-soft: #71717a;
-  --color-link-soft-hover: #3f3f46;
+  --color-link-soft-hover: #1a1a1a;
 
   /* ── Semantic (必要且无蓝紫) ── */
   --color-success: #16a34a;
@@ -69,22 +66,20 @@
   --color-warning: #d97706;
   --color-warning-soft: rgba(217, 119, 6, 0.16);
   --color-text-warning: #d97706;       /* warning text — used by StreamingBubble/InliningThinkingDot */
-  /* 主操作色 = info。设计铁律禁用饱和蓝/紫（no blue/indigo/violet/
-     purple），用与 --color-accent 同族的 slate 中性色，避免"蓝"观感
-     同时和全局 accent 保持一致。 */
-  --color-info: #475569;
-  --color-info-soft: rgba(71, 85, 105, 0.14);
+  /* 主操作色 = info，中性灰族（非饱和蓝） */
+  --color-info: #3f3f46;
+  --color-info-soft: rgba(63, 63, 70, 0.14);
 
-  /* ── Buttons (Cool Slate 工具感,无饱和填充) ── */
-  --color-btn-primary-bg: #475569;
+  /* ── Buttons — 设计稿: 主按钮#1A1A1A白字, 次按钮透明黑字1px#D0D0D0边框 ── */
+  --color-btn-primary-bg: #1a1a1a;
   --color-btn-primary-text: #ffffff;
-  --color-btn-primary-hover: #334155;
-  --color-btn-secondary-bg: #e2e8f0;
-  --color-btn-secondary-text: #334155;
-  --color-btn-secondary-hover: #cbd5e1;
+  --color-btn-primary-hover: #000000;
+  --color-btn-secondary-bg: transparent;
+  --color-btn-secondary-text: #1a1a1a;
+  --color-btn-secondary-hover: #f7f7f7;
   --color-btn-ghost-bg: transparent;
-  --color-btn-ghost-text: #475569;
-  --color-btn-ghost-hover: rgba(71, 85, 105, 0.08);
+  --color-btn-ghost-text: #52525b;
+  --color-btn-ghost-hover: rgba(82, 82, 91, 0.06);
 
   /* ── Type scale (对标 WorkBuddy) ── */
   --font-size-display: 22px;
@@ -121,6 +116,12 @@
   --duration-fast: 120ms;
   --duration-base: 160ms;
   --duration-slow: 240ms;
+
+  /* ── Scene surfaces — 设计稿对齐 ── */
+  --theme-bg-app:     #f7f7f7;                         /* 主区画布: 近白, 与侧栏拉开层次 */
+  --theme-bg-sidebar: #e2e2e2;                        /* 侧栏灰面板, 比主区深一档, 分层明显 */
+  --theme-bg-titlebar: #e0e0e0;                       /* 顶栏, 比侧栏再深一档 */
+  --theme-bg-chat: #f5f5f5;                            /* 会话画布: 白气泡浮于浅灰底, 与侧栏 #e6e6e6 明显分层 */
 }
 
 .dark {
@@ -189,4 +190,13 @@
   --shadow-card: none;
   --shadow-pop: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
   --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.25);
+
+  /* Scene surfaces — dark values as safety net.
+     light 默认在 @theme 块。themes/dark.css 的 :root[data-theme="dark"]
+     特异性 (0,2,0) > .dark (0,1,0) 应当胜出；这里重复声明是为了
+     万一 dark.css 加载失败时仍能保证深色主题右侧面板不变成浅灰。 */
+  --theme-bg-app:     var(--color-bg-app);
+  --theme-bg-sidebar: var(--color-bg-primary);
+  --theme-bg-titlebar: #0e0e10;
+  --theme-bg-chat: var(--color-bg-app);
 }

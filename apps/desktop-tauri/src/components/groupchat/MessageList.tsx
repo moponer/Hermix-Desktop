@@ -162,10 +162,27 @@ export const MessageList = memo(function MessageList({
         </div>
       ) : (
         <>
-          {messages.map((msg) => (
-            <MessageBubble key={msg.id} msg={msg} agents={agents} ranks={ranks}
-              modelOverrides={modelOverrides} compact={isCompact} />
-          ))}
+          {messages.map((msg, i) => {
+            // Show time separator before first message of a new date
+            const showDateSep = i === 0 || !messages[i - 1] ||
+              new Date(msg.timestamp).toDateString() !== new Date(messages[i - 1].timestamp).toDateString();
+            return (
+              <div key={msg.id}>
+                {showDateSep && (
+                  <div className="flex items-center gap-2 py-2">
+                    <div className="flex-1 border-t" style={{ borderColor: "var(--color-border-subtle)" }} />
+                    <span className="text-[11px] text-text-faint whitespace-nowrap">
+                      {new Date(msg.timestamp).toLocaleDateString("zh-CN", { month: "short", day: "numeric" })}
+                    </span>
+                    <div className="flex-1 border-t" style={{ borderColor: "var(--color-border-subtle)" }} />
+                  </div>
+                )}
+                <MessageBubble msg={msg} agents={agents} ranks={ranks}
+                  modelOverrides={modelOverrides} compact={isCompact}
+                  prevMsg={i > 0 ? messages[i - 1] : undefined} />
+              </div>
+            );
+          })}
           {inlineEvents.map((ev) => {
             switch (ev.kind) {
               case "dispatch_failed":

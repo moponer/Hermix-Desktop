@@ -5,13 +5,12 @@ import {
   Boxes, MoreHorizontal, Loader2,
   // Popover icons
   Pencil, Pin, Archive, Trash2, FolderOpenDot, Copy, FolderMinus,
-  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { BackendStatus } from "./BackendStatus";
+import { ConnectionIndicator } from "./ConnectionIndicator";
 import type { Session, NavPage } from "../types";
 import { useWorkspaces } from "../hooks/useWorkspaces";
 import { usePinnedArchived } from "../hooks/usePinnedArchived";
@@ -35,8 +34,9 @@ interface SidebarProps {
   onNewChat: () => void;
   onSelectSession: (id: string) => void;
   onDeleteSession: (id: string) => void;
-  /** Called when a group chat room is selected or created in the sidebar. */
-  onRoomSelect?: (roomId: string) => void;
+  /** Called when a group chat room is selected, created, or deleted in the sidebar.
+   *  Pass `null` to clear the current selection (e.g. after deletion). */
+  onRoomSelect?: (roomId: string | null) => void;
   /** Create a blank chat with this workspace already selected. */
   onNewChatInWorkspace?: (workspacePath: string) => void;
 }
@@ -194,13 +194,13 @@ export function Sidebar({
     onConfirm: (next: string) => void;
   } | null>(null);
 
-  const runDelete = useCallback((id: string, label: string, onConfirm: () => void) => {
+  const runDelete = useCallback((id: string, label: string, onConfirm: () => Promise<void> | void) => {
     if (removingIds.has(id) || deletingIds.has(id)) return;
     setRemovingIds((prev) => new Set(prev).add(id));
-    window.setTimeout(() => {
+    window.setTimeout(async () => {
       setDeletingIds((prev) => new Set(prev).add(id));
       try {
-        onConfirm();
+        await onConfirm();
         toastSuccess(`已删除「${label}」`);
       } catch (e) {
         console.error("[Sidebar] delete failed", e);
@@ -288,8 +288,13 @@ export function Sidebar({
     { key: "delete", label: "删除", icon: Trash2, onClick: () => requestDelete(room.id, room.name, "将解散该聊天室。", doDeleteRoom(room.id)), danger: true },
   ];
 
-  // Local-only helpers ──────────────────────────────────────────────
-  const doDeleteRoom = (id: string) => () => setChatRooms((prev) => prev.filter((r) => r.id !== id));
+  // 聊天室删除:必须先 await 后端 API,否则 GroupChatView 的 rooms 状态(挂在另一个 useState)仍是陈旧列表,
+  // 删除后右侧仍会渲染已删的房间。等后端确认删除后再通知 App 清除 selectedRoomId,触发 GroupChatView 切回空态。
+  const doDeleteRoom = useCallback((id: string) => async () => {
+    await api.deleteGroupChatRoom(id);
+    setChatRooms((prev) => prev.filter((r) => r.id !== id));
+    onRoomSelect?.(null);
+  }, [onRoomSelect]);
 
   const handleCopy = useCallback(async (text: string, successMsg: string) => {
     const ok = await copyText(text);
@@ -633,20 +638,8 @@ export function Sidebar({
         </section>
       </div>
 
-      {/* Bottom: status + toolbox + user + settings */}
+      {/* Bottom: user + settings */}
       <div className="px-3 pb-3 pt-2 stack-v" style={{ gap: 8, flexShrink: 0 }}>
-        <BackendStatus />
-        {/* 系统配置 —— 集成 工具 / 模型 / 后端 / 高级 */}
-        <button
-          type="button"
-          onClick={() => onOpenSettings?.()}
-          className="nav-item"
-          title="系统配置"
-          aria-label="系统配置"
-        >
-          <Wrench size={16} />
-          <span>系统配置</span>
-        </button>
         <div
           className="user-card"
           role="button"
@@ -664,6 +657,7 @@ export function Sidebar({
           <span className="user-card-name" title={profile.displayName}>
             {profile.displayName}
           </span>
+          <ConnectionIndicator />
           <button
             onClick={(e) => {
               e.stopPropagation();

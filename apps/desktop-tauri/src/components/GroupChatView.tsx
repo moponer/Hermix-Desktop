@@ -1,15 +1,13 @@
 /**
  * GroupChatView — container component for the group chat module.
  *
- * Split from the original ~1648-line GroupChatView into modular
- * components under components/groupchat/. This file now handles only
- * state management + layout composition (~300 lines).
- *
- * See docs/GROUPCHAT_REFACTOR_PLAN.md §3.2 for the split plan.
+ * Layout: single card container (bg-primary, border, rounded-xl)
+ * with three sections: header | messages | input.
+ * Background behind the card = theme-bg-chat (recessed).
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Users } from "lucide-react";
+import { Users, Plus } from "lucide-react";
 import type { AgentPersona } from "./agents/types";
 import { BUILTIN_EXPERTS, type ExpertDef } from "../data/builtinExperts";
 import { storage, STORAGE_KEYS } from "../utils/storageCompat";
@@ -20,7 +18,6 @@ import { TaskPanel, type TaskEngineEvent } from "./TaskPanel";
 import { ChatComposerInput, type ChatComposerInputHandle } from "./ChatComposerInput";
 import { ImperativeDialog, type ImperativeDialogHandle } from "./ImperativeDialog";
 
-import { RoomList } from "./groupchat/RoomList";
 import { RoomHeader } from "./groupchat/RoomHeader";
 import { MessageList } from "./groupchat/MessageList";
 import { useGroupChatWebSocket } from "./groupchat/useGroupChatWebSocket";
@@ -81,35 +78,17 @@ interface GroupChatViewProps {
 
 export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
-  // F6 — `agents` is essentially static (computed once from localStorage
-  // + BUILTIN_EXPERTS). We previously kept it in `useState` and polled
-  // every 5s, but the polling added CPU cost for no real-world benefit.
-  // Plain const keeps the API stable (rooms filter against this list)
-  // without the React state churn. To support cross-tab agent edits,
-  // add a `window.storage` listener here that forces a re-derivation.
   const agents: AgentPersona[] = loadAgents();
   const [activeRoomId, setActiveRoomId] = useState<string | null>(initialRoomId ?? null);
 
-  const [showNewRoom, setShowNewRoom] = useState(false);
-  const [newRoomName, setNewRoomName] = useState("");
-  const [newRoomStyle, setNewRoomStyle] = useState<string>("modern");
-  const [createRoomError, setCreateRoomError] = useState<string | null>(null);
-  const [creatingRoom, setCreatingRoom] = useState(false);
-  const [roomSearch, setRoomSearch] = useState("");
-
-  // Per-room rank snapshots
   const [ranksByRoom, setRanksByRoom] = useState<Record<string, api.GroupChatRank[]>>({});
-
-  // Task-engine events per room
   const [engineEventsByRoom, setEngineEventsByRoom] = useState<Record<string, TaskEngineEvent[]>>({});
 
-  // Dialogs
   const memberDialogRef = useRef<ImperativeDialogHandle>(null);
   const settingsDialogRef = useRef<ImperativeDialogHandle>(null);
   const taskDialogRef = useRef<ImperativeDialogHandle>(null);
   const composerRef = useRef<ChatComposerInputHandle>(null);
 
-  // Engine event callback for the WS hook
   const appendEngineEvent = useCallback((roomId: string, ev: TaskEngineEvent) => {
     setEngineEventsByRoom((prev) => {
       const list = prev[roomId] ?? [];
@@ -119,7 +98,6 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
     });
   }, []);
 
-  // WS hook — manages messages, streaming, inline events
   const {
     messages,
     streamingAgents,
@@ -157,9 +135,9 @@ export function GroupChatView({ initialRoomId }: GroupChatViewProps = {}) {
           announcement: r.announcement ?? null,
           announcementPublishedAt: r.announcement_published_at ?? null,
           description: r.description ?? null,
-style: r.style ?? null,
-chatMode: (r.chat_mode === "free_chat" ? "free_chat" : "task_collab") as "task_collab" | "free_chat",
-activeTask: r.active_task ?? null,
+          style: r.style ?? null,
+          chatMode: (r.chat_mode === "free_chat" ? "free_chat" : "task_collab") as "task_collab" | "free_chat",
+          activeTask: r.active_task ?? null,
         })),
       );
     } catch {
@@ -187,90 +165,25 @@ activeTask: r.active_task ?? null,
 
   /* ── Effects ── */
 
+  useEffect(() => { loadRooms(); }, [loadRooms]);
+  useEffect(() => { loadAllRanks(rooms.map((r) => r.id)); }, [rooms, loadAllRanks]);
   useEffect(() => {
-    loadRooms();
-  }, [loadRooms]);
-
-  useEffect(() => {
-    loadAllRanks(rooms.map((r) => r.id));
-  }, [rooms, loadAllRanks]);
-
-  useEffect(() => {
-    if (initialRoomId && initialRoomId !== activeRoomId) {
-      setActiveRoomId(initialRoomId);
-    }
+    if (initialRoomId !== activeRoomId) setActiveRoomId(initialRoomId ?? null);
   }, [initialRoomId]);
-
-  // Re-fetch rooms when activeRoomId points to a room not in the list
+  useEffect(() => { loadRooms(); }, [initialRoomId, loadRooms]);
   useEffect(() => {
-    if (activeRoomId && !rooms.some((r) => r.id === activeRoomId)) {
-      loadRooms();
-    }
+    if (activeRoomId && !rooms.some((r) => r.id === activeRoomId)) loadRooms();
   }, [activeRoomId, rooms, loadRooms]);
-
-  // Auto-select first room
   useEffect(() => {
-    if (!activeRoomId && rooms.length > 0) {
-      setActiveRoomId(rooms[0].id);
-    }
+    if (!activeRoomId && rooms.length > 0) setActiveRoomId(rooms[0].id);
   }, [activeRoomId, rooms]);
 
-  // F6 — agents polling removed. The 5-second interval was a safety
-  // net for localStorage edits in another tab; in practice agents are
-  // created/removed through the chat UI which already calls
-  // `setAgents(...)` directly. The mount-time `useState(loadAgents)`
-  // initializer covers the cold-start case. If cross-tab sync becomes
-  // a real requirement, wire a `window.storage` event listener here.
   void loadAgents;
 
   /* ── Handlers ── */
 
-  const handleCreateRoom = useCallback(async () => {
-    const trimmed = newRoomName.trim();
-    if (!trimmed) return;
-    setCreatingRoom(true);
-    setCreateRoomError(null);
-    try {
-      const room = await api.createGroupChatRoom(trimmed, newRoomStyle);
-      setRooms((prev) => [
-        ...prev,
-        {
-          id: room.id,
-          name: room.name,
-          agentIds: room.agent_ids,
-          leaderId: room.leader_id,
-          leader: room.leader ?? null,
-          memberModels: {},
-          memberDisplayNames: {},
-          announcement: room.announcement ?? null,
-          announcementPublishedAt: room.announcement_published_at ?? null,
-          description: room.description ?? null,
-style: room.style ?? null,
-chatMode: (room.chat_mode === "free_chat" ? "free_chat" : "task_collab") as "task_collab" | "free_chat",
-activeTask: room.active_task ?? null,
-        },
-      ]);
-      setActiveRoomId(room.id);
-      setNewRoomName("");
-      setNewRoomStyle("modern");
-      setShowNewRoom(false);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error("Failed to create room:", e);
-      setCreateRoomError(`创建聊天室失败:${msg}`);
-    } finally {
-      setCreatingRoom(false);
-    }
-  }, [newRoomName]);
-
-  const handleNewRoomNameChange = useCallback((v: string) => {
-    setNewRoomName(v);
-    setCreateRoomError((prev) => (prev ? null : prev));
-  }, []);
-
   const handleDeleteRoom = useCallback(async (id: string) => {
-    if (!window.confirm("确认解散该会话？这将清空全部聊天内容和产物，此操作不可撤销。"))
-      return;
+    if (!window.confirm("确认解散该会话？这将清空全部聊天内容和产物，此操作不可撤销。")) return;
     try {
       await api.deleteGroupChatRoom(id);
       setRooms((prev) => {
@@ -281,14 +194,10 @@ activeTask: room.active_task ?? null,
       setMessages((prev) => prev.filter((m) => m.roomId !== id));
     } catch (e) {
       console.error("Failed to delete room:", e);
-toastError("删除聊天室失败");
+      toastError("删除聊天室失败");
     }
   }, []);
 
-  // used by the announcement setter in TaskPanel's onAnnouncementChanged:
-  // optimistically update local state, then let the server reconcile
-  // via the next list_rooms poll / WebSocket event. Errors surface as
-  // toasts and leave the local state untouched so the user can retry.
   const handleDescriptionChange = useCallback(
     async (roomId: string, next: string | null) => {
       try {
@@ -303,15 +212,12 @@ toastError("删除聊天室失败");
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error("Failed to update description:", e);
-      toastError("更新房间描述失败:" + msg);
-    }
-  },
-  [],
-);
+        toastError("更新房间描述失败:" + msg);
+      }
+    },
+    [],
+  );
 
-  // Chat mode toggle: switch between "task_collab" (leader dispatches)
-  // and "free_chat" (members respond freely). Optimistic local update +
-  // server PATCH. Errors revert and toast.
   const handleChatModeChange = useCallback(
     async (roomId: string, mode: "task_collab" | "free_chat") => {
       const prev = rooms.find((r) => r.id === roomId);
@@ -325,7 +231,6 @@ toastError("删除聊天室失败");
         const msg = e instanceof Error ? e.message : String(e);
         console.error("Failed to update chat mode:", e);
         toastError("切换聊天模式失败:" + msg);
-        // Revert
         if (prev) {
           setRooms((curr) =>
             curr.map((r) => (r.id === roomId ? { ...r, chatMode: prev.chatMode } : r)),
@@ -345,12 +250,9 @@ toastError("删除聊天室失败");
 
   const handleRetry = useCallback(() => {
     const lastUserMsg = [...messages].reverse().find((m) => m.senderId === "user");
-    if (lastUserMsg) {
-      handleSendMessage(lastUserMsg.content);
-    }
+    if (lastUserMsg) handleSendMessage(lastUserMsg.content);
   }, [messages, handleSendMessage]);
 
-  // Stable dialog-open callbacks — prevent child re-renders during streaming
   const openTask = useCallback(() => taskDialogRef.current?.open(), []);
   const openMembers = useCallback(() => memberDialogRef.current?.open(), []);
   const openSettings = useCallback(() => settingsDialogRef.current?.open(), []);
@@ -369,69 +271,53 @@ toastError("删除聊天室失败");
 
   return (
     <>
-      {/* Full-height flex: left sidebar (RoomList) + right chat panel */}
-      <div className="h-full flex overflow-hidden" style={{ background: "var(--color-bg-app)" }}>
-        {/* ── Left sidebar ── */}
-        <RoomList
-          rooms={rooms}
-          agents={agents}
-          activeRoomId={activeRoomId}
-          ranksByRoom={ranksByRoom}
-          roomSearch={roomSearch}
-          showNewRoom={showNewRoom}
-          newRoomName={newRoomName}
-          createRoomError={createRoomError}
-          creatingRoom={creatingRoom}
-          onSelectRoom={setActiveRoomId}
-          onDeleteRoom={handleDeleteRoom}
-          onToggleNewRoom={setShowNewRoom}
-          onNewRoomNameChange={handleNewRoomNameChange}
-          onCreateRoom={handleCreateRoom}
-          onRoomSearchChange={setRoomSearch}
-        />
+      {/* Outer container: recessed chat background */}
+      <div
+        className="h-full flex flex-col overflow-hidden p-3"
+        style={{ background: "var(--theme-bg-chat, var(--color-bg-app))" }}
+      >
+        {activeRoom && roomTone ? (
+          /* Single card container: header + messages + input */
+          <div
+            className="h-full flex flex-col overflow-hidden"
+            style={{
+              background: "var(--color-bg-primary)",
+              border: "1px solid var(--color-border-primary)",
+              borderRadius: "12px",
+            }}
+          >
+            <RoomHeader
+              room={activeRoom}
+              roomAgents={roomAgents}
+              ranks={ranksByRoom[activeRoom.id]}
+              onOpenTask={openTask}
+              onOpenMembers={openMembers}
+              onOpenSettings={openSettings}
+              onDescriptionChange={(next) => handleDescriptionChange(activeRoom.id, next)}
+              onChatModeChange={(mode) => handleChatModeChange(activeRoom.id, mode)}
+              onDeleteRoom={() => handleDeleteRoom(activeRoom.id)}
+            />
 
-        {/* ── Right chat panel ── */}
-        <div
-          className="flex-1 flex flex-col min-w-0 overflow-hidden"
-          style={{ background: "var(--color-bg-primary)" }}
-        >
-          {activeRoom && roomTone ? (
-            <>
-              <RoomHeader
-                room={activeRoom}
-                roomAgents={roomAgents}
-                ranks={ranksByRoom[activeRoom.id]}
-                roomTone={roomTone}
-                onOpenTask={openTask}
-                onOpenMembers={openMembers}
-                onOpenSettings={openSettings}
-                onDescriptionChange={(next) => handleDescriptionChange(activeRoom.id, next)}
-                onChatModeChange={(mode) => handleChatModeChange(activeRoom.id, mode)}
-                onDeleteRoom={() => handleDeleteRoom(activeRoom.id)}
-              />
+            <MessageList
+              messages={roomMessages}
+              agents={agents}
+              streamingAgents={streamingAgents}
+              inlineEvents={roomInlineEvents}
+              roomTone={roomTone}
+              roomAgents={roomAgents}
+              hasLeader={!!activeRoom.leader}
+              roomStyle={activeRoom.style ?? "modern"}
+              onRetry={handleRetry}
+              onOpenMembers={openMembers}
+              ranks={ranksByRoom[activeRoom.id]}
+              modelOverrides={activeRoom.memberModels}
+            />
 
-              {/* Divider between header and messages */}
-              <div className="border-t" style={{ borderColor: "var(--color-border-subtle)" }} />
-
-              <MessageList
-                messages={roomMessages}
-                agents={agents}
-                streamingAgents={streamingAgents}
-                inlineEvents={roomInlineEvents}
-                roomTone={roomTone}
-                roomAgents={roomAgents}
-                hasLeader={!!activeRoom.leader}
-                roomStyle={activeRoom.style ?? "modern"}
-                onRetry={handleRetry}
-                onOpenMembers={openMembers}
-                ranks={ranksByRoom[activeRoom.id]}
-                modelOverrides={activeRoom.memberModels}
-              />
-
-              {/* Input area — bottom border + subtle bg lift */}
+            {/* Input area — integrated, no extra border-top */}
+            <div className="px-4 pb-3 pt-2.5">
               <div
-                className="px-5 py-3 border-t"
-                style={{ borderColor: "var(--color-border-subtle)", background: "var(--color-bg-secondary)" }}
+                className="groupchat-composer"
+                data-disabled={roomAgents.length === 0}
               >
                 <ChatComposerInput
                   ref={composerRef}
@@ -440,39 +326,61 @@ toastError("删除聊天室失败");
                   disabled={roomAgents.length === 0}
                   placeholder={
                     roomAgents.length > 0
-                      ? `给总管发送消息…`
+                      ? "给总管发送消息…"
                       : "添加成员后可发送消息"
                   }
                 />
-                {loading && (
-                  <div className="flex items-center gap-1.5 mt-2 text-[12px] text-text-muted">
+              </div>
+              <div className="mt-1.5 flex items-center justify-between text-[11px] text-text-faint">
+                {loading ? (
+                  <div className="flex items-center gap-1.5" style={{ color: "var(--color-accent)" }}>
                     <span className="flex gap-0.5">
                       {[0, 150, 300].map((d) => (
                         <span
                           key={d}
-                          className="w-1 h-1 rounded-full bg-text-muted animate-bounce"
-                          style={{ animationDelay: `${d}ms` }}
+                          className="w-1 h-1 rounded-full animate-bounce"
+                          style={{ animationDelay: `${d}ms`, background: "var(--color-accent)" }}
                         />
                       ))}
                     </span>
                     <span>成员们正在讨论…</span>
                   </div>
+                ) : (
+                  <span>Enter 发送 · Shift+Enter 换行 · 可拖拽文件到此处</span>
                 )}
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center">
-                <div className="inline-flex items-center justify-center mb-3 rounded-full"
-                  style={{ width: 56, height: 56, background: "var(--color-accent-soft)" }}>
-                  <Users size={24} style={{ color: "var(--color-accent)" }} />
-                </div>
-                <p className="text-[15px] font-semibold text-text-primary mb-1">选择或创建房间</p>
-                <p className="text-[12px] text-text-muted">在左侧创建房间并邀请成员开始协作</p>
+                <span className="shrink-0">{roomAgents.length} 名成员</span>
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          /* Empty state — no room selected */
+          <div
+            className="flex-1 flex items-center justify-center rounded-xl border border-border-primary"
+            style={{ background: "var(--color-bg-primary)" }}
+          >
+            <div className="text-center px-6">
+              <div
+                className="inline-flex items-center justify-center mb-3 rounded-full"
+                style={{ width: 48, height: 48, background: "var(--color-accent-soft)" }}
+              >
+                <Users size={22} style={{ color: "var(--color-accent)" }} strokeWidth={1.5} />
+              </div>
+              <p className="text-[15px] font-semibold text-text-primary mb-1">选择或创建房间</p>
+              <p className="text-[12px] text-text-muted mb-4">在左侧创建房间并邀请成员开始协作</p>
+              <button
+                onClick={() => {
+                  // Trigger sidebar to show the new room input
+                  const btn = document.querySelector("[data-testid='sidebar-new-room-btn']") as HTMLButtonElement | null;
+                  btn?.click();
+                }}
+                className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg text-[13px] font-medium transition-all active:scale-95"
+                style={{ background: "var(--color-accent)", color: "var(--color-accent-on-text)" }}
+              >
+                <Plus size={14} />创建房间
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Dialogs */}

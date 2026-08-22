@@ -1969,9 +1969,10 @@
 }
 .approval-btn--allow {
   border: 0;
-  background: #4b7a5e;
+  background: var(--color-success, #16a34a);
   color: #fff;
 }
+.approval-btn--allow:hover { background: color-mix(in srgb, var(--color-success, #16a34a) 85%, #000); }
 
 .approval-cmd-bar {
   display: flex;
@@ -2118,20 +2119,34 @@
   padding: 0 12px;
   border-radius: 6px;
   cursor: pointer;
-  transition: opacity 120ms ease;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease,
+              color var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
 .approval-btn-deny {
   background: transparent;
   border: 0.5px solid var(--color-border-secondary, rgba(128,128,128,0.3));
   color: var(--color-text-secondary);
 }
+.approval-btn-deny:hover:not(:disabled) {
+  background: var(--color-error, #dc2626);
+  border-color: var(--color-error, #dc2626);
+  color: #ffffff;
+}
 .approval-btn-allow {
   border: 0;
-  background: #4b7a5e;
+  background: var(--color-success, #16a34a);
   color: #fff;
 }
-.approval-btn-deny:hover,
-.approval-btn-allow:hover { opacity: 0.88; }
+.approval-btn-allow:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-success, #16a34a) 85%, #000);
+}
+.approval-btn-deny:active:not(:disabled),
+.approval-btn-allow:active:not(:disabled) { transform: scale(0.96); }
+.approval-btn-deny:focus-visible,
+.approval-btn-allow:focus-visible {
+  outline: 2px solid var(--color-success, #16a34a);
+  outline-offset: 2px;
+}
 
 /* Resolved state — status badge + one-line text */
 .approval-result {
@@ -2283,7 +2298,7 @@
   transform: scale(0.96);
 }
 .approval-btn:focus-visible {
-  outline: 2px solid var(--color-accent, #475569);
+  outline: 2px solid var(--color-success, #16a34a);
   outline-offset: 2px;
 }
 .approval-btn:disabled { opacity: 0.5; cursor: not-allowed; }

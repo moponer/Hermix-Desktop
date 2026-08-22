@@ -16,8 +16,11 @@
   cursor: pointer;
   transition: background var(--duration-fast) ease,
               border-color var(--duration-fast) ease,
-              color var(--duration-fast) ease;
+              color var(--duration-fast) ease,
+              transform var(--duration-fast) ease;
 }
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-sm { padding: 4px 10px; font-size: 12px; }
@@ -63,10 +66,37 @@
   background: transparent;
   border: 0;
   cursor: pointer;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
 .icon-btn:hover  { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.icon-btn:active:not(:disabled) { transform: scale(0.93); }
+.icon-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .icon-btn-active { color: var(--color-accent); background: var(--color-accent-soft); }
+
+/* ── Connection indicator (sidebar dot) ── */
+.connection-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+.connection-indicator:hover { background: var(--color-bg-hover); }
+.connection-indicator:active:not(:disabled) { transform: scale(0.9); }
+.connection-indicator:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  transition: background var(--duration-fast) ease;
+}
 
 /* ════════════════════════════════════════════════════════════════════
    § 9.  FORM FIELDS
@@ -336,8 +366,11 @@
   cursor: pointer;
   border-radius: var(--radius-md);
   text-align: left;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
 .popover-item:hover  { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.popover-item:active:not(:disabled) { transform: scale(0.97); }
+.popover-item:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .popover-item.active { color: var(--color-text-primary); background: var(--color-bg-hover); font-weight: 500; }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -400,9 +433,11 @@
   border: 0;
   cursor: pointer;
   border-radius: var(--radius-sm);
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
 .modal-close:hover { color: var(--color-text-primary); background: var(--color-bg-hover); }
+.modal-close:active:not(:disabled) { transform: scale(0.9); }
+.modal-close:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 
 .modal-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 20px 12px; }
 .modal-args {
@@ -466,8 +501,10 @@
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, color var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
+.modal-btn:active:not(:disabled) { transform: scale(0.97); }
+.modal-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .modal-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .modal-btn-primary {
   background: var(--color-accent);

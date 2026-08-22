@@ -56,10 +56,16 @@ code ::selection,
   color: var(--color-text-primary);
 }
 
-/* ── Focus (no focus border color) ─────────────────────────────── */
-:focus,
-:focus-visible {
+/* ── Focus (reset outline, per-element focus-visible handled separately) ──── */
+:focus {
   outline: none;
+}
+/* Global focus-visible fallback: visible ring for keyboard nav.
+   Individual components override with their own ring colour. */
+:focus-visible {
+  outline: 2px solid var(--color-accent, #475569);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm, 4px);
 }
 
 /* ── Reduced motion ─────────────────────────────────────────────── */

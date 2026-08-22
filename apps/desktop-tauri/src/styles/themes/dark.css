@@ -41,6 +41,11 @@
 /* 在暗色主题里清掉场景背景, 避免让人感觉在白底 + 飘雪 */
 :root[data-theme="dark"] {
   --theme-bg-app: var(--color-bg-app);
-  --theme-bg-sidebar: var(--color-bg-secondary);
-  --theme-bg-titlebar: var(--color-bg-elevated);
+  /* sidebar 用 bg-primary (#1f1f1f) 而不是 bg-secondary (#2c2c2c) —
+     主人的参考配色：侧栏 #1f1f1f 浮在聊天 #141414 之上 */
+  --theme-bg-sidebar: var(--color-bg-primary);
+  /* titlebar 比 sidebar 深 2 档 (#0e vs #1f)，原生标题栏感 */
+  --theme-bg-titlebar: #0e0e10;
+  /* chat 用 bg-app (#141414)，主内容区沉下去与左侧 #1f1f1f 区分 */
+  --theme-bg-chat: var(--color-bg-app);
 }

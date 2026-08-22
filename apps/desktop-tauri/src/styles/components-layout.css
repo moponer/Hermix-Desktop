@@ -135,17 +135,20 @@
    § 2.  TITLE BAR
    ════════════════════════════════════════════════════════════════════ */
 
-.titlebar { background: var(--theme-bg-titlebar, var(--color-bg-secondary)); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+.titlebar {
+  background: var(--theme-bg-titlebar, var(--color-bg-secondary));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   height: 40px;
   position: relative;
   z-index: 100;
-  
   flex-shrink: 0;
   user-select: none;
+  border-bottom: 1px solid var(--color-border-primary);
+  /* 不设 overflow:hidden — 让 titlebar 内下拉（如 ThemeToggle）能向下溢出显示 */
 }
-
 .titlebar-group {
   display: flex;
   align-items: center;
@@ -187,12 +190,72 @@
   color: var(--color-text-muted);
   background: transparent;
   border: 0;
+  border-right: 1px solid var(--color-border-subtle);
   cursor: pointer;
   transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  border-radius: 0;
+}
+.titlebar-btn:last-child { border-right: 0; }
+.titlebar-btn:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--color-accent);
 }
 .titlebar-btn:hover { background: var(--color-bg-hover); color: var(--color-text-secondary); }
 .titlebar-btn-active { color: var(--color-accent); background: var(--color-accent-soft); }
 .titlebar-btn-danger:hover { background: var(--color-error); color: #ffffff; }
+
+/* ── Connection indicator in titlebar ── */
+.titlebar-conn-indicator {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: default;
+  transition: background var(--duration-fast) ease;
+}
+.titlebar-conn-indicator:hover { background: var(--color-bg-hover); }
+.titlebar-conn-indicator:active:not(:disabled) { transform: scale(0.9); }
+.titlebar-conn-indicator:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+}
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  transition: background var(--duration-fast) ease;
+  position: relative;
+  z-index: 1;
+}
+.conn-pulse-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-success);
+  opacity: 0.4;
+  animation: conn-pulse 1.5s ease-in-out infinite;
+}
+.conn-spin {
+  position: absolute;
+  animation: spin 1s linear infinite;
+  color: var(--color-warning);
+}
+@keyframes conn-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.4; }
+  50% { transform: scale(1.6); opacity: 0; }
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
 
 /* (品牌已上移至 TitleBar,Sidebar 不再单独显示 — 避免双层标题栏) */
 
@@ -221,9 +284,11 @@
   border: 0;
   cursor: pointer;
   text-align: left;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
 .nav-item:hover  { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.nav-item:active:not(:disabled) { transform: scale(0.98); }
+.nav-item:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .nav-item-active { background: var(--color-bg-active); color: var(--color-text-primary); }
 .nav-item svg    { flex-shrink: 0; }
 
@@ -253,9 +318,11 @@
   border: 0;
   cursor: pointer;
   text-align: left;
-  transition: color var(--duration-fast) ease;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+  border-radius: var(--radius-sm);
 }
-.section-header-toggle:hover { color: var(--color-text-muted); }
+.section-header-toggle:hover { color: var(--color-text-muted); background: var(--color-bg-hover); }
+.section-header-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .section-header-icon { color: var(--color-text-faint); flex-shrink: 0; }
 .section-header-count {
 font-family: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
@@ -570,9 +637,11 @@ font-size: 12px;
   background: transparent;
   border: 0;
   cursor: pointer;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
 .user-card-action:hover { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.user-card-action:active:not(:disabled) { transform: scale(0.9); }
+.user-card-action:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 
 /* ── Top action (菜单样式的新建对话等) ── */
 .sidebar-topnav {
@@ -886,12 +955,14 @@ height: 26px;
   background: transparent;
   color: var(--color-text-muted);
   cursor: pointer;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
 .sidebar-action-btn:hover {
   background: var(--color-bg-hover);
   color: var(--color-text-primary);
 }
+.sidebar-action-btn:active:not(:disabled) { transform: scale(0.9); }
+.sidebar-action-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 
 /* ── Sidebar Popover (三点 / +号 弹出的菜单) ──
  * 极简卡片：白底圆角 + 细分割 + 阴影。每项带左侧图标，danger 项用 error 红。
@@ -1025,7 +1096,12 @@ height: 26px;
   font-family: inherit;
   font-size: 12.5px;
   text-align: left;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast) ease, transform var(--duration-fast) ease;
 }
+.sidebar-row-main:hover { background: var(--color-bg-hover); }
+.sidebar-row-main:active:not(:disabled) { transform: scale(0.985); }
+.sidebar-row-main:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .sidebar-row-main .truncate-1 {
   flex: 1;
   min-width: 0;
@@ -1131,4 +1207,27 @@ height: 26px;
   flex: 1;
   padding: 5px 10px;
   font-size: 13px;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   GroupChat composer — visible input box with focus-within lift
+   ════════════════════════════════════════════════════════════════════ */
+
+.groupchat-composer {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+}
+.groupchat-composer:focus-within {
+  border-color: var(--color-accent);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 0 0 3px color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.groupchat-composer[data-disabled="true"] {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-border-subtle);
+  box-shadow: none;
 }

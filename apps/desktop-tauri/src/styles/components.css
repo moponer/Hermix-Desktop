@@ -1129,8 +1129,8 @@
 }
 .msg-card + .msg-card { margin-top: 20px; }
 .msg-bubble-user {
-  background: var(--color-accent-soft);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 14%, transparent);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-2xl) var(--radius-2xl) var(--radius-sm) var(--radius-2xl);
   padding: 10px 14px;
   font-size: var(--font-size-body);
@@ -1138,10 +1138,10 @@
   color: var(--color-text-primary);
   width: fit-content;
   max-width: 80%;
-  transition: background var(--duration-fast) ease;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
 }
 .msg-bubble-user:hover {
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  background: var(--color-bg-secondary);
 }
 
 /* ── Assistant streaming bubble ──
