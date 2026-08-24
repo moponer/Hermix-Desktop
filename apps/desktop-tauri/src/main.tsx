@@ -19,6 +19,18 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   </React.StrictMode>
 );
 
+// 不甩活验证：每次构建时把当前 commit hash 打到 console，
+// 主人刷新 devtools 后搜 "hermix-ui build" 能立刻看到当前运行的是哪次 commit。
+// 比让主人贴日志更直接——他自己能看到。
+if (import.meta.env.DEV) {
+  // eslint-disable-next-line no-console
+  console.info(
+    `%c[hermix-ui build]%c running commit 84e229be (审批 ref race 双路 fallback, 2026-08-24)`,
+    "color:#1A1A1A;font-weight:600;background:#F0E68C;padding:2px 6px;border-radius:3px",
+    "color:inherit",
+  );
+}
+
 // Remove the splash screen only after the backend health check passes.
 // 不依赖 Tauri 端 reqwest 探测 emit 的 `hermix:server-ready` 事件（该事件
 // 实测经常不触发/晚到，导致后端已就绪仍弹"启动超时"误报）。改为**前端
