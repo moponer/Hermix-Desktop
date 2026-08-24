@@ -1347,7 +1347,53 @@ streamPhaseRef.current = null;
       //
       // NOTE: do NOT advance `currentAssistantIdRef` here — the
       // resumed LLM stream must target the same assistant.
-      const previousAssistantId = currentAssistantIdRef.current;
+      //
+      // The ref points at the assistant placeholder of the *current*
+      // turn. In normal flow `sendStream` sets it synchronously
+      // (App.tsx:1230) before any WS chunk can arrive, so this read
+      // is non-null. But several paths can leave it null when a
+      // `request_approval` arrives:
+      //   - user fired off a new turn right after the previous one
+      //     `onDone`-ed (line 2304 clears the ref), and the new
+      //     `sendStream` hasn't reached line 1230 yet — but a
+      //     *residual* WS chunk from the previous stream still
+      //     gets routed through this callback (rare race, only if
+      //     the previous WS wasn't actually closed by `cancelStream`).
+      //   - `resetChatStateForModelSwitch` (chatStateReset.ts:95)
+      //     cleared the ref mid-turn and the user re-sent without
+      //     `sendStream` re-priming the placeholder (defensive).
+      // In those cases `prev.map` filters every message out by
+      // `m.id !== null`, so the approval step never lands and the
+      // inline card never renders — the user is left looking at a
+      // stale "调用工具中" chip with no recovery path short of a
+      // hard restart. Falling back to the latest assistant message
+      // in the *same* session restores rendering deterministically;
+      // the warn log keeps the underlying race observable.
+      let previousAssistantId = currentAssistantIdRef.current;
+      if (!previousAssistantId) {
+        const fallbackMsg = sessionsRef.current
+          .find((s) => s.id === req.sessionId)
+          ?.messages
+          .filter((m) => m.role === "assistant")
+          .at(-1);
+        previousAssistantId = fallbackMsg?.id ?? null;
+        if (fallbackMsg) {
+          console.warn(
+            `[approval] currentAssistantIdRef was null for request_approval ` +
+              `tool=${req.tool} requestId=${req.requestId} — fell back to last ` +
+              `assistant message in session ${req.sessionId}: ${fallbackMsg.id}. ` +
+              `This is a race between WS chunk delivery and ref priming; ` +
+              `investigate if the fallback fires frequently.`,
+          );
+        } else {
+          console.error(
+            `[approval] no assistant message exists in session ${req.sessionId} ` +
+              `when request_approval arrived (tool=${req.tool} requestId=${req.requestId}); ` +
+              `the inline approval step will be dropped. Check that sendStream ` +
+              `reached App.tsx:1230 before the WS chunk was routed.`,
+          );
+        }
+      }
       const meta: ApprovalMessageMeta = {
         requestId: req.requestId,
         tool: req.tool,
